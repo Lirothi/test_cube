@@ -1,0 +1,107 @@
+﻿#include "SceneObject.h"
+
+#include <stdexcept>
+#include <cstring>
+
+#include "Renderer.h"
+#include "Helpers.h"
+#include "InputLayoutManager.h"
+
+using namespace DirectX;
+using Microsoft::WRL::ComPtr;
+
+SceneObject::SceneObject(Renderer* renderer,
+    const std::string& cbLayout,
+    const std::string& inputLayout,
+    const std::wstring& graphicsShader)
+    : shaderFile_(graphicsShader)
+    , inputLayoutKey_(inputLayout)
+{
+    if (!renderer) { throw std::runtime_error("SceneObject: renderer is null"); }
+
+    cbLayout_ = renderer->GetCBManager().GetLayout(cbLayout);
+    if (!cbLayout_) { throw std::runtime_error("SceneObject: ConstantBufferLayout not found"); }
+
+    // Создать upload CB под размер layout
+    D3D12_HEAP_PROPERTIES heap = {};
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = cbLayout_->GetSize();
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ThrowIfFailed(renderer->GetDevice()->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&constantBuffer_)));
+
+    D3D12_RANGE range = { 0, 0 };
+    ThrowIfFailed(constantBuffer_->Map(0, &range, reinterpret_cast<void**>(&cbvDataBegin_)));
+
+    // Дефолтный GraphicsDesc (треугольники, depth on, без бленда)
+    graphicsDesc_.shaderFile = shaderFile_;
+    graphicsDesc_.inputLayoutKey = inputLayoutKey_;
+    graphicsDesc_.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    graphicsDesc_.FillDefaultsTriangle();
+
+    mesh_.reset(new Mesh());
+}
+
+SceneObject::~SceneObject()
+{
+    if (constantBuffer_) {
+        constantBuffer_->Unmap(0, nullptr);
+    }
+}
+
+void SceneObject::Init(Renderer* renderer,
+    ID3D12GraphicsCommandList* /*uploadCmdList*/,
+    std::vector<ComPtr<ID3D12Resource>>* /*uploadKeepAlive*/)
+{
+    // Создаём (или забираем из кэша) графический материал по текущему GraphicsDesc
+    graphicsMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, graphicsDesc_);
+    if (!graphicsMaterial_) {
+        throw std::runtime_error("SceneObject::Init: failed to create graphics material");
+    }
+
+    // b0 по-умолчанию — наш CB
+    graphicsCtx_.cbv[0] = constantBuffer_->GetGPUVirtualAddress();
+}
+
+void SceneObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer) { return; }
+    if (!GetMesh()) { return; }
+    if (cl == nullptr) { return; }
+    GetMesh()->Draw(cl);
+}
+
+void SceneObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer) { return; }
+    if (cl == nullptr) { return; }
+    // Установить графический материал
+    graphicsMaterial_->Bind(cl, graphicsCtx_);
+}
+
+void SceneObject::Render(Renderer* renderer,
+    ID3D12GraphicsCommandList* cl,
+    const mat4& view,
+    const mat4& proj)
+{
+    if (!renderer) { return; }
+    if (cl == nullptr) { return; }
+
+    RecordCompute(renderer, cl);
+    UpdateUniforms(renderer, view, proj);
+    PopulateContext(renderer, cl);
+    RecordGraphics(renderer, cl);
+    
+    IssueDraw(renderer, cl);
+}

@@ -1,0 +1,14 @@
+{
+  "speed": { "move": 3.0, "sprintMultiplier": 3.0 },
+  "actions": [
+    { "name": "MoveZ", "positive": ["W","Up"],   "negative": ["S","Down"], "scale": 1.0 },
+    { "name": "MoveX", "positive": ["D","Right"],"negative": ["A","Left"], "scale": 1.0 },
+    { "name": "MoveY", "positive": ["E","PageUp"], "negative": ["Q","PageDown"], "scale": 1.0 },
+
+    { "name": "LookX", "mouseAxis": "X", "sensitivity": 0.01 },
+    { "name": "LookY", "mouseAxis": "Y", "sensitivity": 0.01, "invert": true },
+
+    { "name": "LookToggle", "mouseButton": "Right" },
+    { "name": "Sprint", "keys": ["LShift","RShift"] }
+  ]
+}
