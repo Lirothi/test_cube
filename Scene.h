@@ -21,7 +21,12 @@ public:
     void Render(Renderer* renderer);
 
 private:
-    void RenderObjectBatch(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex, mat4 view, mat4 proj, bool useCommandBundle);
+    void RenderObjectBatchGBuffer(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex, const Math::mat4& view, const Math::mat4& proj, bool useBundles);
+    void RenderObjectBatch(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex, const mat4& view, const mat4& proj, bool useCommandBundle);
+    
+    std::shared_ptr<Material> matLighting_;
+    std::shared_ptr<Material> matCompose_;
+    std::shared_ptr<Material> matTonemap_;
 
     std::vector<std::unique_ptr<SceneObject>> objects_;
     InputManager* input_ = nullptr;

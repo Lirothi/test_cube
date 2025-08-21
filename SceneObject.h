@@ -30,10 +30,8 @@ public:
     virtual void Tick(float /*dt*/) {}
 
     // Базовый отрисовщик: Compute -> Graphics (Bind/IssueDraw)
-    virtual void Render(Renderer* renderer,
-        ID3D12GraphicsCommandList* cl,
-        const mat4& view,
-        const mat4& proj);
+    virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
+    virtual void RenderGBuffer(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Math::mat4& view, const Math::mat4& proj);
 
     // Трансформ
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
@@ -86,6 +84,8 @@ protected:
     RenderContext graphicsCtx_;
     std::shared_ptr<Material> graphicsMaterial_;
     Material::GraphicsDesc graphicsDesc_;
+    std::shared_ptr<Material> gbufferMaterial_;
+    Material::GraphicsDesc gbufferDesc_;
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;

@@ -34,6 +34,10 @@ public:
         // RT/DS
         UINT        numRT = 1;
         DXGI_FORMAT rtvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        DXGI_FORMAT rtvFormats[8] = {
+        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN,
+        DXGI_FORMAT_UNKNOWN,        DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN
+        };
         DXGI_FORMAT dsvFormat = DXGI_FORMAT_D32_FLOAT;
         UINT        sampleCount = 1;
 
@@ -54,7 +58,10 @@ public:
             raster.DepthClipEnable = TRUE;
             // blend
             ZeroMemory(&blend, sizeof(blend));
-            blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+            for (int i = 0; i < 8; ++i)
+            {
+                blend.RenderTarget[i].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+            }
             // depth
             ZeroMemory(&depth, sizeof(depth));
             depth.DepthEnable = TRUE;
@@ -93,10 +100,14 @@ private:
 class MaterialManager {
 public:
     std::shared_ptr<Material> GetOrCreateGraphics(Renderer* r, const Material::GraphicsDesc& gd) {
+        std::wstring fmts = L"";
+        for (UINT i = 0; i < gd.numRT; ++i) {
+            fmts += std::to_wstring((int)(gd.numRT == 1 ? gd.rtvFormat : gd.rtvFormats[i])) + L",";
+        }
         std::wstring key = L"G2|" + gd.shaderFile + L"|" +
             std::wstring(gd.inputLayoutKey.begin(), gd.inputLayoutKey.end()) + L"|" +
             std::to_wstring((int)gd.topologyType) + L"|" +
-            std::to_wstring((int)gd.rtvFormat) + L"|" + std::to_wstring((int)gd.dsvFormat);
+            fmts + L"|" + std::to_wstring((int)gd.dsvFormat);
         auto it = materials_.find(key);
         if (it != materials_.end()) { return it->second; }
         auto m = std::make_shared<Material>();

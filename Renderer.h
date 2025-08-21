@@ -23,6 +23,25 @@ public:
         ID3D12GraphicsCommandList* cl = nullptr;
         D3D12_COMMAND_LIST_TYPE type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     };
+    enum class ClearMode { None, Color, ColorDepth };
+    struct DeferredTargets {
+        // ресурсы
+        ComPtr<ID3D12Resource> gb0;   // R8G8B8A8 (albedo+metal)
+        ComPtr<ID3D12Resource> gb1;   // R10G10G10A2 (normalOcta+rough)
+        ComPtr<ID3D12Resource> gb2;   // R11G11B10 (emissive)
+        ComPtr<ID3D12Resource> depth; // D32
+        ComPtr<ID3D12Resource> light; // R16G16B16A16F
+        ComPtr<ID3D12Resource> scene; // R16G16B16A16F
+
+        // CPU дескрипторы
+        D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,Depth(R32F)
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneSRV{};
+    };
 
     Renderer();
     ~Renderer();
@@ -36,6 +55,25 @@ public:
     void EndFrame();                   // барьер RT->Present, Execute, Present, сигнал фэнса
 
     void Update(float dt);
+
+    void CreateDeferredTargets(UINT width, UINT height);
+    void DestroyDeferredTargets();
+
+    void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
+    void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
+    void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode);
+
+    // готовые SRV-таблицы (в shader-visible heap кадра)
+    D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
+    D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2
+    D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene
+
+    // форматы
+    DXGI_FORMAT GetLightTargetFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
+    DXGI_FORMAT GetSceneColorFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
+    DXGI_FORMAT GetBackbufferFormat() const { return DXGI_FORMAT_R8G8B8A8_UNORM; }
+
+    const DeferredTargets& GetDeferredForFrame() const { return deferred_[currentFrameIndex_]; }
 
     // Сервис
     void WaitForPreviousFrame();       // полная синхронизация (используется при ресайзе/деструкторе)
@@ -129,8 +167,23 @@ private:
     void WaitForFrame(UINT frameIndex);   // ожидание конкретного кадра (по fence value кадра)
     void SignalFrame(UINT frameIndex);    // сигнал на фэнсе для кадра
 
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvAt(UINT idx) const;
+
 private:
-    static constexpr UINT kFrameCount = 3;
+    static constexpr UINT kFrameCount = 2;
+    static constexpr UINT kDeferredRtvPerFrame = 5; // GB0, GB1, GB2, Light, Scene
+    static constexpr UINT kDeferredSrvPerFrame = 6; // GB0, GB1, GB2, Depth, Light, Scene
+    static constexpr UINT kDeferredDsvPerFrame = 1; // Depth
+
+    enum class DeferredRtvSlot : UINT { GB0 = 0, GB1 = 1, GB2 = 2, Light = 3, Scene = 4, Count = kDeferredRtvPerFrame };
+    enum class DeferredSrvSlot : UINT { GB0 = 0, GB1 = 1, GB2 = 2, Depth = 3, Light = 4, Scene = 5, Count = kDeferredSrvPerFrame };
+    enum class DeferredDsvSlot : UINT { Depth = 0, Count = kDeferredDsvPerFrame };
+
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
 
     struct PassBatch_ {
         std::string name;
@@ -140,6 +193,15 @@ private:
     };
     std::vector<PassBatch_> submitTimeline_;
     std::mutex submitMtx_;
+
+    // Heaps CPU для offscreen-ресурсов
+    ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV: на все кадры
+    ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV: на все кадры
+    ComPtr<ID3D12DescriptorHeap> deferredSrvCpuHeap_;// SRV CPU-only
+    UINT deferredRtvIncr_ = 0, deferredDsvIncr_ = 0, deferredSrvIncr_ = 0;
+
+    // per-frame наборы
+    DeferredTargets deferred_[kFrameCount];
 
     // OS / размеры
     HWND  hWnd_ = nullptr;

@@ -187,6 +187,44 @@
     <ClInclude Include="Texture2D.h" />
     <ClInclude Include="UploadManager.h" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="axes.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="compose_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="font_sdf.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="gbuffer.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="instance_anim.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="lighting_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="lines.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shader.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shader2.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shader_comp.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shader_PNTUV.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="tonemap_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

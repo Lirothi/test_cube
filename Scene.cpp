@@ -111,7 +111,7 @@ void Scene::Render(Renderer* renderer) {
             renderer->RecordBindAndClear(t.cl);
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
-
+#if 0
     auto pOpaque = rg.AddPass("Opaque", { pClear },
         [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
             RenderGraph rgOpaque(ctx.batchIndex);
@@ -162,6 +162,169 @@ void Scene::Render(Renderer* renderer) {
                 renderer->EndThreadCommandList(t, ctx.batchIndex);
             }
         });
+#else
+    auto pGBuffer = rg.AddPass("GBuffer", { pClear },
+        [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
+            RenderGraph rgGB(ctx.batchIndex);
+
+            // 1.1 Driver: биндим и чистим один раз. НЕ закрываем driver тут.
+            rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
+                auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
+                renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
+                });
+
+            // 1.2 Opaque simple → bundles
+            rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+                RenderObjectBatchGBuffer(renderer, objectsToRender[ObjectRenderType::OpaqueSimpleRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/true);
+                });
+
+            // 1.3 Opaque complex → direct CL, без очисток
+            rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+                RenderObjectBatchGBuffer(renderer, objectsToRender[ObjectRenderType::OpaqueComplexRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/false);
+                });
+
+            rgGB.Execute(renderer);
+        });
+
+    // 2) LIGHTING — fullscreen → LightTarget (очистка один раз)
+    auto pLighting = rg.AddPass("Lighting", { pGBuffer },
+        [this, renderer](RenderGraph::PassContext ctx) {
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color);
+
+            if (!matLighting_) {
+                Material::GraphicsDesc gd{};
+                gd.shaderFile = L"lighting_ps.hlsl";
+                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+                gd.inputLayoutKey = ""; // fullscreen
+                gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
+                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+                gd.depth.DepthEnable = FALSE;
+                matLighting_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+            }
+
+            RenderContext rc{};
+            // ВАЖНО: ключ t0 => rc.table[0]
+            rc.table[0] = renderer->StageGBufferSrvTable();
+            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+
+            matLighting_->Bind(t.cl, rc);
+            t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            t.cl->DrawInstanced(3, 1, 0, 0);
+
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
+    // 3) COMPOSE — Light + Emissive → SceneColor
+    auto pCompose = rg.AddPass("Compose", { pLighting },
+        [this, renderer](RenderGraph::PassContext ctx) {
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color);
+
+            if (!matCompose_) {
+                Material::GraphicsDesc gd{};
+                gd.shaderFile = L"compose_ps.hlsl";
+                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+                gd.inputLayoutKey = "";
+                gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
+                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+                gd.depth.DepthEnable = FALSE;
+                matCompose_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+            }
+
+            RenderContext rc{};
+            rc.table[0] = renderer->StageComposeSrvTable(); // t0..t1
+            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+
+            matCompose_->Bind(t.cl, rc);
+            t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            t.cl->DrawInstanced(3, 1, 0, 0);
+
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
+    // 4) TRANSPARENT — forward поверх SceneColor, depth test по GBuffer DSV
+    //auto pTransp = rg.AddPass("Transparent", { pCompose },
+    //    [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
+    //        RenderGraph rgTr(ctx.batchIndex);
+
+    //        // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
+    //        rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
+    //            auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    //            renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None);
+    //            const auto& D = renderer->GetDeferredForFrame();
+    //            driver.cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, &D.dsv);
+    //            renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
+    //            });
+
+    //        rgTr.AddPass("Transparent.Simple", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+    //            RenderObjectBatch1(renderer, objectsToRender[ObjectRenderType::TransparentSimpleRender],
+    //                sub.batchIndex, view, proj, /*useBundles=*/true);
+    //            });
+
+    //        rgTr.AddPass("Transparent.Complex", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+    //            const auto& list = objectsToRender[ObjectRenderType::TransparentComplexRender];
+    //            if (list.empty()) return;
+    //            const auto& D = renderer->GetDeferredForFrame();
+    //            const size_t chunkSize = 32;
+    //            for (size_t begin = 0; begin < list.size(); begin += chunkSize) {
+    //                const size_t end = std::min(begin + chunkSize, list.size());
+    //                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    //                renderer->BindSceneColor(t.cl, Renderer::ClearMode::None);
+    //                t.cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, &D.dsv);
+    //                for (size_t i = begin; i < end; ++i) {
+    //                    if (auto* obj = list[i]) obj->Render(renderer, t.cl, view, proj);
+    //                }
+    //                renderer->EndThreadCommandList(t, sub.batchIndex);
+    //            }
+    //            });
+
+    //        rgTr.Execute(renderer);
+    //    });
+
+    // 5) TONEMAP — SceneColor → Backbuffer
+    auto pTonemap = rg.AddPass("Tonemap", { pCompose },
+        [this, renderer](RenderGraph::PassContext ctx) {
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            renderer->RecordBindDefaultsNoClear(t.cl);
+
+            if (!matTonemap_) {
+                Material::GraphicsDesc gd{};
+                gd.shaderFile = L"tonemap_ps.hlsl";
+                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+                gd.inputLayoutKey = "";
+                gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
+                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+                gd.depth.DepthEnable = FALSE;
+                matTonemap_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+            }
+
+            RenderContext rc{};
+            rc.table[0] = renderer->StageTonemapSrvTable(); // t0
+            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+
+            matTonemap_->Bind(t.cl, rc);
+            t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            t.cl->DrawInstanced(3, 1, 0, 0);
+
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
+    // 6) OVERLAY — как было
+    auto pOverlay = rg.AddPass("Overlay", { pTonemap },
+        [this, renderer](RenderGraph::PassContext ctx) {
+            if (auto* tm = renderer->GetTextManager()) {
+                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                renderer->RecordBindDefaultsNoClear(t.cl);
+                tm->Build(renderer, t.cl);
+                tm->Draw(renderer, t.cl);
+                renderer->EndThreadCommandList(t, ctx.batchIndex);
+            }
+        });
+#endif
 
     // Граф только регистрирует бакеты и запускает задачи
     rg.Execute(renderer);
@@ -177,8 +340,7 @@ void Scene::RenderObjectBatch(
     Renderer* renderer,
     const std::vector<SceneObject*>& objects,
     size_t batchIndex,
-    mat4 view,
-    mat4 proj,
+    const mat4& view, const mat4& proj,
     bool useCommandBundle)
 {
     auto& tasks = TaskSystem::Get();
@@ -224,6 +386,42 @@ void Scene::RenderObjectBatch(
                     if (obj) {
                         obj->Render(renderer, t.cl, view, proj);
                     }
+                }
+                renderer->EndThreadCommandList(t, batchIndex);
+            }
+        }, 1);
+}
+
+void Scene::RenderObjectBatchGBuffer(Renderer* renderer,
+    const std::vector<SceneObject*>& objects,
+    size_t batchIndex,
+    const mat4& view, const mat4& proj,
+    bool useBundles)
+{
+    if (objects.empty()) return;
+
+    auto& tasks = TaskSystem::Get();
+    const size_t N = objects.size();
+    const size_t chunkSize = 32;
+
+    tasks.Dispatch((N + chunkSize - 1) / chunkSize,
+        [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex](std::size_t jobIndex)
+        {
+            const size_t begin = jobIndex * chunkSize;
+            const size_t end = std::min(begin + chunkSize, objects.size());
+
+            if (useBundles) {
+                auto b = renderer->BeginThreadCommandBundle(nullptr);
+                for (size_t i = begin; i < end; ++i) {
+                    if (auto* obj = objects[i]) obj->RenderGBuffer(renderer, b.cl, view, proj);
+                }
+                renderer->EndThreadCommandBundle(b, batchIndex);
+            }
+            else {
+                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                for (size_t i = begin; i < end; ++i) {
+                    if (auto* obj = objects[i]) obj->RenderGBuffer(renderer, t.cl, view, proj);
                 }
                 renderer->EndThreadCommandList(t, batchIndex);
             }

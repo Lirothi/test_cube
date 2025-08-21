@@ -29,6 +29,13 @@ inline uint32_t GetCBFieldTypeSize(CBFieldType t) {
 }
 
 inline uint32_t GetCBFieldTypeAlignment(CBFieldType t) {
+    switch (t) {
+    case CBFieldType::Float:     return 4;
+    case CBFieldType::Float2:    return 8;
+    case CBFieldType::Float3:    return 16; // важно!
+    case CBFieldType::Float4:    return 16;
+    case CBFieldType::Matrix4x4: return 16;
+    }
     return 16;
 }
 
@@ -117,6 +124,14 @@ public:
         RegisterLayout("MVP_Axis", {
         {"modelViewProj", CBFieldType::Matrix4x4},
         {"viewportThickness",  CBFieldType::Float4}
+        });
+        RegisterLayout("GBufferPO", {
+        { "world",     CBFieldType::Matrix4x4 },
+        { "view",      CBFieldType::Matrix4x4 },
+        { "proj",      CBFieldType::Matrix4x4 },
+        { "baseColor", CBFieldType::Float4    },
+        { "mr",        CBFieldType::Float2    },
+        { "texFlags",  CBFieldType::Float2    },
         });
     }
 

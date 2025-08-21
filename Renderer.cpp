@@ -54,6 +54,8 @@ void Renderer::InitD3D12(HWND window) {
     // --- Depth ---
     CreateDepthResources(width_, height_);
 
+    CreateDeferredTargets(width_, height_);
+
     // --- Fence + event ---
     if (!fence_) {
         ThrowIfFailed(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_)));
@@ -423,6 +425,7 @@ void Renderer::OnResize(UINT width, UINT height) {
     // Пересоздать RTV и DSV
     CreateSwapChainAndRTVs(width_, height_);
     CreateDepthResources(width_, height_);
+    CreateDeferredTargets(width_, height_);
 }
 
 void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
@@ -516,4 +519,348 @@ void Renderer::RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl) {
     D3D12_RECT sr{ 0, 0, (LONG)width_, (LONG)height_ };
     cl->RSSetViewports(1, &vp);
     cl->RSSetScissorRects(1, &sr);
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredRtvAt(UINT idx) const {
+    auto h = deferredRtvHeap_->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += SIZE_T(idx) * deferredRtvIncr_; return h;
+}
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvAt(UINT idx) const {
+    auto h = deferredDsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += SIZE_T(idx) * deferredDsvIncr_; return h;
+}
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSrvAt(UINT idx) const {
+    auto h = deferredSrvCpuHeap_->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += SIZE_T(idx) * deferredSrvIncr_; return h;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const {
+    const UINT idx = frame * kDeferredRtvPerFrame + static_cast<UINT>(slot);
+    return DeferredRtvAt(idx);
+}
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const {
+    const UINT idx = frame * kDeferredSrvPerFrame + static_cast<UINT>(slot);
+    return DeferredSrvAt(idx);
+}
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const {
+    const UINT idx = frame * kDeferredDsvPerFrame + static_cast<UINT>(slot);
+    return DeferredDsvAt(idx);
+}
+
+void Renderer::CreateDeferredTargets(UINT width, UINT height)
+{
+    // На всякий случай: убираем старые ресурсы/кучи
+    DestroyDeferredTargets();
+
+    ID3D12Device* dev = device_.Get();
+    if (!dev) 
+    {
+        return;
+    }
+
+    // --- инкременты дескрипторов ---
+    deferredRtvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    deferredDsvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    deferredSrvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // --- CPU-only дескрипторные кучи под offscreen (RTV/DSV/SRV) ---
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2, Light, Scene
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        desc.NodeMask = 0;
+        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
+    }
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        desc.NumDescriptors = kFrameCount * kDeferredDsvPerFrame;  // Depth
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        desc.NodeMask = 0;
+        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredDsvHeap_)));
+    }
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,Scene
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;              // CPU-only staging
+        desc.NodeMask = 0;
+        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
+    }
+
+    // --- общие параметры размещения (Default heap) ---
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    auto MakeTex2DDesc = [&](DXGI_FORMAT fmt, D3D12_RESOURCE_FLAGS flags) {
+        D3D12_RESOURCE_DESC rd = {};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Alignment = 0;
+        rd.Width = width ? width : 1;
+        rd.Height = height ? height : 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.Format = fmt;
+        rd.SampleDesc.Count = 1;
+        rd.SampleDesc.Quality = 0;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags = flags;
+        return rd;
+        };
+
+    for (UINT f = 0; f < kFrameCount; ++f)
+    {
+        auto& D = deferred_[f];
+
+        // =========================
+        // GB0: Albedo+Metal (RGBA8)
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.gb0)));
+
+            D.gbRTV[0] = DeferredRtvCPU(f, DeferredRtvSlot::GB0);
+            dev->CreateRenderTargetView(D.gb0.Get(), nullptr, D.gbRTV[0]);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.gbSRV[0] = DeferredSrvCPU(f, DeferredSrvSlot::GB0);
+            dev->CreateShaderResourceView(D.gb0.Get(), &sd, D.gbSRV[0]);
+        }
+
+        // ================================
+        // GB1: NormalOcta+Rough (R10G10B10A2)
+        // ================================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R10G10B10A2_UNORM;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.gb1)));
+
+            D.gbRTV[1] = DeferredRtvCPU(f, DeferredRtvSlot::GB1);
+            dev->CreateRenderTargetView(D.gb1.Get(), nullptr, D.gbRTV[1]);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.gbSRV[1] = DeferredSrvCPU(f, DeferredSrvSlot::GB1);
+            dev->CreateShaderResourceView(D.gb1.Get(), &sd, D.gbSRV[1]);
+        }
+
+        // =========================
+        // GB2: Emissive (R11G11B10F)
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R11G11B10_FLOAT;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.gb2)));
+
+            D.gbRTV[2] = DeferredRtvCPU(f, DeferredRtvSlot::GB2);
+            dev->CreateRenderTargetView(D.gb2.Get(), nullptr, D.gbRTV[2]);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.gbSRV[2] = DeferredSrvCPU(f, DeferredSrvSlot::GB2);
+            dev->CreateShaderResourceView(D.gb2.Get(), &sd, D.gbSRV[2]);
+        }
+
+        // ==============================
+        // Depth: D32_FLOAT (+ SRV R32_FLOAT)
+        // ==============================
+        {
+            const DXGI_FORMAT dsvFmt = DXGI_FORMAT_D32_FLOAT;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = dsvFmt;
+            cv.DepthStencil.Depth = 1.0f;
+            cv.DepthStencil.Stencil = 0;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&D.depth)));
+
+            // DSV
+            D.dsv = DeferredDsvCPU(f, DeferredDsvSlot::Depth);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dv = {};
+            dv.Format = dsvFmt;
+            dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dv.Flags = D3D12_DSV_FLAG_NONE;
+            dv.Texture2D.MipSlice = 0;
+            dev->CreateDepthStencilView(D.depth.Get(), &dv, D.dsv);
+
+            // SRV к depth как R32_FLOAT
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = DXGI_FORMAT_R32_FLOAT;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MostDetailedMip = 0;
+            sd.Texture2D.MipLevels = 1;
+            sd.Texture2D.PlaneSlice = 0;
+            sd.Texture2D.ResourceMinLODClamp = 0.0f;
+
+            D.gbSRV[3] = DeferredSrvCPU(f, DeferredSrvSlot::Depth);
+            dev->CreateShaderResourceView(D.depth.Get(), &sd, D.gbSRV[3]);
+        }
+
+        // =========================
+        // LightTarget: RGBA16F
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.light)));
+
+            D.lightRTV = DeferredRtvCPU(f, DeferredRtvSlot::Light);
+            dev->CreateRenderTargetView(D.light.Get(), nullptr, D.lightRTV);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.lightSRV = DeferredSrvCPU(f, DeferredSrvSlot::Light);
+            dev->CreateShaderResourceView(D.light.Get(), &sd, D.lightSRV);
+        }
+
+        // =========================
+        // SceneColor: RGBA16F
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.scene)));
+
+            D.sceneRTV = DeferredRtvCPU(f, DeferredRtvSlot::Scene);
+            dev->CreateRenderTargetView(D.scene.Get(), nullptr, D.sceneRTV);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.sceneSRV = DeferredSrvCPU(f, DeferredSrvSlot::Scene);
+            dev->CreateShaderResourceView(D.scene.Get(), &sd, D.sceneSRV);
+        }
+    }
+}
+
+void Renderer::DestroyDeferredTargets() {
+    deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
+    for (UINT f = 0; f < kFrameCount; ++f) {
+        auto& D = deferred_[f];
+        D.gb0.Reset(); D.gb1.Reset(); D.gb2.Reset(); D.depth.Reset(); D.light.Reset(); D.scene.Reset();
+    }
+}
+
+void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+    auto& D = deferred_[currentFrameIndex_];
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2] };
+    cl->OMSetRenderTargets(3, rtvs, FALSE, &D.dsv);
+
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        for (int i = 0; i < 3; ++i) cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
+        if (mode == ClearMode::ColorDepth)
+        {
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        }
+    }
+}
+
+void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+    auto& D = deferred_[currentFrameIndex_];
+    cl->OMSetRenderTargets(1, &D.lightRTV, FALSE, nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(D.lightRTV, c, 0, nullptr);
+    }
+}
+
+void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+    auto& D = deferred_[currentFrameIndex_];
+    cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(D.sceneRTV, c, 0, nullptr);
+    }
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageGBufferSrvTable() {
+    auto& D = deferred_[currentFrameIndex_];
+    auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3] });
+    return tbl.gpu; // ключ t0 в шейдере
+}
+D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageComposeSrvTable() {
+    auto& D = deferred_[currentFrameIndex_];
+    auto tbl = StageSrvUavTable({ D.lightSRV, D.gbSRV[2] }); // Light, Emissive
+    return tbl.gpu;
+}
+D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageTonemapSrvTable() {
+    auto& D = deferred_[currentFrameIndex_];
+    auto tbl = StageSrvUavTable({ D.sceneSRV });
+    return tbl.gpu;
 }

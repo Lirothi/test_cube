@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{dfef4da2-2035-4d80-9c22-3eb47ff613ca}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -173,5 +176,43 @@
     <ClInclude Include="Math.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="axes.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="compose_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="font_sdf.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="gbuffer.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="instance_anim.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="lighting_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="lines.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shader.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shader_comp.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shader_PNTUV.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shader2.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="tonemap_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
   </ItemGroup>
 </Project>

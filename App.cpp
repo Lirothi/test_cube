@@ -58,18 +58,44 @@ public:
 
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override
     {
+        //graphicsCtx_.cbv[0] = GetConstantBuffer()->GetGPUVirtualAddress();
+
+        //auto tbl = renderer->StageSrvUavTable({ tex_.GetSRVCPU() });
+        //graphicsCtx_.table[0] = tbl.gpu;
+        //auto lin = SamplerManager::AnisoWrap(16);
+        //graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, lin); // s0
+
+        // CBV b0: пер-объектный буфер
         graphicsCtx_.cbv[0] = GetConstantBuffer()->GetGPUVirtualAddress();
 
-        auto tbl = renderer->StageSrvUavTable({ tex_.GetSRVCPU() });
-        graphicsCtx_.table[0] = tbl.gpu;
-        auto lin = SamplerManager::AnisoWrap(16);
-        graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, lin); // s0
+        // Собираем таблицу SRV t0..t2: Albedo, MR, Normal
+        // У нас пока только Albedo → дублируем его в t1/t2 (MR/Normal), это безопасно:
+        // шейдер семплит, но не использует при texFlags=(1,0)
+        D3D12_CPU_DESCRIPTOR_HANDLE albedoCPU = tex_.GetSRVCPU();
+        auto tbl = renderer->StageSrvUavTable({ albedoCPU, albedoCPU, albedoCPU });
+        graphicsCtx_.table[0] = tbl.gpu;       // TABLE(SRV) в корне шейдера
+
+        // Самплер s0
+        auto aniso = SamplerManager::AnisoWrap(16);
+        graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, aniso);
     }
 
     void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) override
     {
-        mat4 mvp = modelMatrix_ * view * proj;
-        UpdateUniform("modelViewProj", mvp.xm());
+        //mat4 mvp = modelMatrix_ * view * proj;
+        //UpdateUniform("modelViewProj", mvp.xm());
+
+        UpdateUniform("world", modelMatrix_.xm());
+        UpdateUniform("view", view.xm());
+        UpdateUniform("proj", proj.xm());
+
+        // Параметры материала (fallback значения)
+        // baseColor — белый, mr = (metal=0, rough=1)
+        UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
+        UpdateUniform("mr", Math::float2(0.0f, 1.0f).xm());
+
+        // Флаги наличия текстур: Albedo есть (1), MR нет (0)
+        UpdateUniform("texFlags", Math::float2(1.0f, 0.0f).xm());
     }
 
     bool IsSimpleRender() const override {
@@ -80,7 +106,7 @@ private:
     Math::mat4 transformPos_;
     Math::mat4 transformScale_;
     float rotationY_ = 0.0f;
-    float angularSpeed_ = 10.0f * Math::DEG2RAD;
+    float angularSpeed_ = 0.0f;// 10.0f * Math::DEG2RAD;
     std::string modelName_;
     Texture2D tex_;
 };
@@ -190,9 +216,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "MVP", "PosNormTanUV", L"shader_PNTUV.hlsl", float3(0.0f, 0, -2.0f), float3(1,1,1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "MVP", "PosNormTanUV", L"shader_PNTUV.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "MVP", "PosNormTanUV", L"shader_PNTUV.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1,1,1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));
 

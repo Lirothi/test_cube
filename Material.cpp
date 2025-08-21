@@ -108,7 +108,14 @@ void Material::CreateGraphics(Renderer* renderer, const GraphicsDesc& gd) {
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
     pso.pRootSignature = rootSignature_.Get();
-    pso.InputLayout = { inLayout.desc, inLayout.count };
+    if (gd.inputLayoutKey.empty())
+    {
+        pso.InputLayout = { nullptr, 0 };
+    }
+    else
+    {
+        pso.InputLayout = { inLayout.desc, inLayout.count };
+    }
     pso.VS = { vs5->GetBufferPointer(), vs5->GetBufferSize() };
     pso.PS = { ps5->GetBufferPointer(), ps5->GetBufferSize() };
     pso.RasterizerState = gd.raster;
@@ -117,7 +124,9 @@ void Material::CreateGraphics(Renderer* renderer, const GraphicsDesc& gd) {
     pso.SampleMask = UINT_MAX;
     pso.PrimitiveTopologyType = gd.topologyType;
     pso.NumRenderTargets = gd.numRT;
-    pso.RTVFormats[0] = gd.rtvFormat;
+    for (UINT i = 0; i < gd.numRT; ++i) {
+        pso.RTVFormats[i] = (gd.numRT == 1 ? gd.rtvFormat : gd.rtvFormats[i]);
+    }
     pso.DSVFormat = gd.dsvFormat;
     pso.SampleDesc.Count = gd.sampleCount;
 
