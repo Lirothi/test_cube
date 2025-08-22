@@ -92,7 +92,7 @@ public:
         // Параметры материала (fallback значения)
         // baseColor — белый, mr = (metal=0, rough=1)
         UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
-        UpdateUniform("mr", Math::float2(0.0f, 1.0f).xm());
+        UpdateUniform("mr", Math::float2(0.0f, 0.2f).xm());
 
         // Флаги наличия текстур: Albedo есть (1), MR нет (0)
         UpdateUniform("texFlags", Math::float2(1.0f, 0.0f).xm());

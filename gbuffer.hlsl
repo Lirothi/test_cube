@@ -36,18 +36,31 @@ VSOut VSMain(VSIn i)
     float4 wp = mul(float4(i.P, 1), world);
     float4 vp = mul(wp, view);
     o.H = mul(vp, proj);
-    float3 nWS = mul((float3x3) world, i.N);
-    o.N = mul((float3x3) view, nWS); // нормаль во view-space
+    float3 nWS = mul(i.N, (float3x3) world);
+    o.N = nWS;
     o.UV = i.UV;
     return o;
 }
 
+static const float kOctEpsilon = 1e-6;
+
+float2 SignNotZero(float2 v)
+{
+    // В HLSL sign(0)==0 → плохо для окты. Нам нужно ±1.
+    return float2(v.x >= 0.0 ? 1.0 : -1.0,
+                  v.y >= 0.0 ? 1.0 : -1.0);
+}
+
 float2 EncodeOcta(float3 n)
 {
-    n /= (abs(n.x) + abs(n.y) + abs(n.z) + 1e-6);
+    n = normalize(n);
+    // проекция на октаэдр
+    n /= (abs(n.x) + abs(n.y) + abs(n.z) + kOctEpsilon);
     float2 p = n.xy;
     if (n.z < 0.0)
-        p = (1.0 - abs(p.yx)) * sign(p);
+    {
+	    p = (1.0 - abs(p.yx)) * SignNotZero(p);
+    }
     return p * 0.5 + 0.5;
 }
 
@@ -70,8 +83,8 @@ PSOut PSMain(VSOut i)
     const float3 albedoTex = gAlbedo.Sample(gSmp, i.UV).rgb;
     const float2 mrTex = gMR.Sample(gSmp, i.UV).rg;
 
-    const float3 albedo = lerp(baseColor.rgb, albedoTex, useAlbedo);
-    //const float3 albedo = texFlags.xxx;
+    //const float3 albedo = lerp(baseColor.rgb, albedoTex, useAlbedo);
+    const float3 albedo = float3(normalize(i.N) * 0.5 + 0.5);
     const float metal = lerp(mr.x, mrTex.r, useMR);
     const float rough = lerp(mr.y, mrTex.g, useMR);
 
@@ -80,5 +93,6 @@ PSOut PSMain(VSOut i)
     o.RT0 = float4(albedo, saturate(metal));
     o.RT1 = float4(no, saturate(rough), 0.0);
     o.RT2 = float4(0, 0, 0, 0); // emissive подключишь позже
+    //o.RT2 = float4(normalize(i.N), 0);
     return o;
 }

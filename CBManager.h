@@ -133,6 +133,16 @@ public:
         { "mr",        CBFieldType::Float2    },
         { "texFlags",  CBFieldType::Float2    },
         });
+        RegisterLayout("LightingPF", {
+	    { "sunDirWS",        CBFieldType::Float3 }, // куда светит (например (0,-1,0))
+	    { "ambientIntensity",CBFieldType::Float  }, // 0..1
+	    { "lightColor",      CBFieldType::Float3 }, // RGB
+	    { "exposure",        CBFieldType::Float  }, // 1..2
+	    { "cameraPosWS",     CBFieldType::Float3 },
+	    { "_pad0",           CBFieldType::Float  }, // заполнитель (для выравнивания)
+	    { "invView",         CBFieldType::Matrix4x4 },
+	    { "invProj",         CBFieldType::Matrix4x4 },
+        });
     }
 
 private:

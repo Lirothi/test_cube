@@ -21,6 +21,7 @@ float3 TM(float3 x)
 float4 PSMain(VSOut i):SV_Target{
     float3 hdr = HDRColor.Sample(gSmp,i.UV).rgb;
     float  gamma = 2.2;
-    float3 ldr = pow(TM(hdr), 1.0/max(1e-3,gamma));
+    //float3 ldr = pow(TM(hdr), 1.0/max(1e-3,gamma));
+    float3 ldr = pow(hdr, 1.0 / max(1e-3, gamma));
     return float4(ldr,1);
 }

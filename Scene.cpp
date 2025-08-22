@@ -191,7 +191,7 @@ void Scene::Render(Renderer* renderer) {
 
     // 2) LIGHTING — fullscreen → LightTarget (очистка один раз)
     auto pLighting = rg.AddPass("Lighting", { pGBuffer },
-        [this, renderer](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color);
 
@@ -206,10 +206,29 @@ void Scene::Render(Renderer* renderer) {
                 matLighting_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
             }
 
+            const auto* layout = renderer->GetCBManager().GetLayout("LightingPF"); // <- LayoutManager как нужно
+            assert(layout);
+            float3 sunDirWS = Math::float3(-0.5f, -0.7f, -0.5f); // «лучи вниз»
+            sunDirWS = sunDirWS.Normalized();
+            mat4 invView = mat4::Inverse(view);
+            mat4 invProj = mat4::Inverse(proj);
+
+            // аллоцируем динамический CB в аплоад-ринге текущего кадра
+            auto cb = renderer->GetFrame().AllocDynamic(layout->GetSize(), /*align*/256);
+
+            // пишем поля по именам в сгенерированный блок
+            layout->SetField("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
+            layout->SetField("ambientIntensity", 0.01f, (uint8_t*)cb.cpu);
+            layout->SetField("lightColor", float3(1, 1, 1).xm(), (uint8_t*)cb.cpu);
+            layout->SetField("exposure", 1.0f, (uint8_t*)cb.cpu);
+            layout->SetField("cameraPosWS", camera_.GetPosition().xm(), (uint8_t*)cb.cpu);
+            layout->SetField("invView", invView.xm(), (uint8_t*)cb.cpu);
+            layout->SetField("invProj", invProj.xm(), (uint8_t*)cb.cpu);
+
             RenderContext rc{};
-            // ВАЖНО: ключ t0 => rc.table[0]
+            rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
             rc.table[0] = renderer->StageGBufferSrvTable();
-            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
 
             matLighting_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
