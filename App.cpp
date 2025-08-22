@@ -222,7 +222,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));
 
-    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "VP", "PosNormTanUV", L"shader2.hlsl", L"instance_anim.hlsl"));
+    //scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "VP", "PosNormTanUV", L"shader2.hlsl", L"instance_anim.hlsl"));
 
     renderer_.InitFence();
 
