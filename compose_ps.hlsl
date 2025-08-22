@@ -16,5 +16,6 @@ VSOut VSMain(uint vid:SV_VertexID){
 float4 PSMain(VSOut i):SV_Target{
     float3 lit = LightTarget.Sample(gSmp,i.UV).rgb;
     float3 emi = GB2.Sample(gSmp, i.UV).rgb;
+    //return float4(lit, 1.0);
     return float4(lit + emi, 1.0);
 }

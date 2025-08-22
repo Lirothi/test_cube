@@ -15,6 +15,39 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     {
         obj->Init(renderer, uploadCmdList, uploadKeepAlive);
     }
+
+    if (!matLighting_) {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"lighting_ps.hlsl";
+        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+        gd.inputLayoutKey = ""; // fullscreen
+        gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.depth.DepthEnable = FALSE;
+        matLighting_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+    }
+
+    if (!matCompose_) {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"compose_ps.hlsl";
+        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "";
+        gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.depth.DepthEnable = FALSE;
+        matCompose_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+    }
+
+    if (!matTonemap_) {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"tonemap_ps.hlsl";
+        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "";
+        gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.depth.DepthEnable = FALSE;
+        matTonemap_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+    }
 }
 
 void Scene::AddObject(std::unique_ptr<SceneObject> obj) {
@@ -170,6 +203,13 @@ void Scene::Render(Renderer* renderer) {
             // 1.1 Driver: биндим и чистим один раз. НЕ закрываем driver тут.
             rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
                 auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                
+                const auto& D = renderer->GetDeferredForFrame();
+                renderer->Transition(driver.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                renderer->Transition(driver.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                renderer->Transition(driver.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
                 renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
                 renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
                 });
@@ -193,18 +233,13 @@ void Scene::Render(Renderer* renderer) {
     auto pLighting = rg.AddPass("Lighting", { pGBuffer },
         [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color);
-
-            if (!matLighting_) {
-                Material::GraphicsDesc gd{};
-                gd.shaderFile = L"lighting_ps.hlsl";
-                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-                gd.inputLayoutKey = ""; // fullscreen
-                gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
-                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-                gd.depth.DepthEnable = FALSE;
-                matLighting_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
-            }
 
             const auto* layout = renderer->GetCBManager().GetLayout("LightingPF"); // <- LayoutManager как нужно
             assert(layout);
@@ -228,7 +263,7 @@ void Scene::Render(Renderer* renderer) {
             RenderContext rc{};
             rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
             rc.table[0] = renderer->StageGBufferSrvTable();
-            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::PointClamp() });
 
             matLighting_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -241,18 +276,10 @@ void Scene::Render(Renderer* renderer) {
     auto pCompose = rg.AddPass("Compose", { pLighting },
         [this, renderer](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color);
-
-            if (!matCompose_) {
-                Material::GraphicsDesc gd{};
-                gd.shaderFile = L"compose_ps.hlsl";
-                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-                gd.inputLayoutKey = "";
-                gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
-                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-                gd.depth.DepthEnable = FALSE;
-                matCompose_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
-            }
 
             RenderContext rc{};
             rc.table[0] = renderer->StageComposeSrvTable(); // t0..t1
@@ -308,18 +335,9 @@ void Scene::Render(Renderer* renderer) {
     auto pTonemap = rg.AddPass("Tonemap", { pCompose },
         [this, renderer](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->RecordBindDefaultsNoClear(t.cl);
-
-            if (!matTonemap_) {
-                Material::GraphicsDesc gd{};
-                gd.shaderFile = L"tonemap_ps.hlsl";
-                gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-                gd.inputLayoutKey = "";
-                gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
-                gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-                gd.depth.DepthEnable = FALSE;
-                matTonemap_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
-            }
 
             RenderContext rc{};
             rc.table[0] = renderer->StageTonemapSrvTable(); // t0

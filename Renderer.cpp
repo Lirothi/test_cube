@@ -795,6 +795,13 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             D.sceneSRV = DeferredSrvCPU(f, DeferredSrvSlot::Scene);
             dev->CreateShaderResourceView(D.scene.Get(), &sd, D.sceneSRV);
         }
+
+        SetResourceState(D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        SetResourceState(D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 }
 
@@ -803,6 +810,11 @@ void Renderer::DestroyDeferredTargets() {
     for (UINT f = 0; f < kFrameCount; ++f) {
         auto& D = deferred_[f];
         D.gb0.Reset(); D.gb1.Reset(); D.gb2.Reset(); D.depth.Reset(); D.light.Reset(); D.scene.Reset();
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(knownStatesMtx_);
+        knownStates_.clear();
     }
 }
 

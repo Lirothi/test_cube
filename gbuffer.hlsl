@@ -1,6 +1,22 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 
+static const uint kRM_RBits = 5u; // roughness
+static const uint kRM_MBits = 3u; // metallic
+static const uint kRM_MaxU8 = 255u;
+static const uint kRM_MMask = (1u << kRM_MBits) - 1u;
+static const float kRM_RScale = float((1u << kRM_RBits) - 1u);
+static const float kRM_MScale = float((1u << kRM_MBits) - 1u);
+
+// pack [0..1]x[0..1] -> A8_UNORM
+float PackRM(float rough, float metal)
+{
+    uint r = (uint) round(saturate(rough) * kRM_RScale);
+    uint m = (uint) round(saturate(metal) * kRM_MScale);
+    uint packed = (r << kRM_MBits) | m; // [rrrrr][mmm]
+    return float(packed) / float(kRM_MaxU8);
+}
+
 cbuffer PerObject : register(b0)
 {
     float4x4 world;
@@ -42,28 +58,6 @@ VSOut VSMain(VSIn i)
     return o;
 }
 
-static const float kOctEpsilon = 1e-6;
-
-float2 SignNotZero(float2 v)
-{
-    // В HLSL sign(0)==0 → плохо для окты. Нам нужно ±1.
-    return float2(v.x >= 0.0 ? 1.0 : -1.0,
-                  v.y >= 0.0 ? 1.0 : -1.0);
-}
-
-float2 EncodeOcta(float3 n)
-{
-    n = normalize(n);
-    // проекция на октаэдр
-    n /= (abs(n.x) + abs(n.y) + abs(n.z) + kOctEpsilon);
-    float2 p = n.xy;
-    if (n.z < 0.0)
-    {
-	    p = (1.0 - abs(p.yx)) * SignNotZero(p);
-    }
-    return p * 0.5 + 0.5;
-}
-
 struct PSOut
 {
     float4 RT0 : SV_Target0; // Albedo.rgb + Metal
@@ -83,16 +77,24 @@ PSOut PSMain(VSOut i)
     const float3 albedoTex = gAlbedo.Sample(gSmp, i.UV).rgb;
     const float2 mrTex = gMR.Sample(gSmp, i.UV).rg;
 
-    //const float3 albedo = lerp(baseColor.rgb, albedoTex, useAlbedo);
-    const float3 albedo = float3(normalize(i.N) * 0.5 + 0.5);
+    float3 albedo = lerp(baseColor.rgb, albedoTex, useAlbedo);
+    albedo *= normalize(i.N) * 0.5 + 0.5;
+    //const float3 albedo = float3(normalize(i.N) * 0.5 + 0.5);
     const float metal = lerp(mr.x, mrTex.r, useMR);
     const float rough = lerp(mr.y, mrTex.g, useMR);
 
-    const float2 no = EncodeOcta(normalize(i.N));
-
-    o.RT0 = float4(albedo, saturate(metal));
-    o.RT1 = float4(no, saturate(rough), 0.0);
+    o.RT0 = float4(albedo, PackRM(rough, metal));
+    //o.RT1 = float4(no, saturate(rough), 0.0);
+    
+    //float3 n = normalize(i.N);
+    //float2 nxy01 = n.xy * 0.5 + 0.5; // [-1..1] -> [0..1]
+    //float signZ = (n.z >= 0.0) ? 1.0 : 0.0; // 2 бита в альфе (RTV квантует в 0 или 1)
+    //o.RT1 = float4(nxy01, saturate(rough), signZ);
+    
+    float3 n01 = normalize(i.N) * 0.5 + 0.5; // [-1..1] -> [0..1]
+    o.RT1 = float4(n01, 1); 
+    
     o.RT2 = float4(0, 0, 0, 0); // emissive подключишь позже
-    //o.RT2 = float4(normalize(i.N), 0);
+    //o.RT2 = float4(i.N, 0);
     return o;
 }

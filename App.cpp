@@ -218,6 +218,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
     scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1,1,1)));
     scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/sphere.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
     scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));

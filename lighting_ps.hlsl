@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0) SAMPLER(s1))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 
 // ---------- Named constants ----------
@@ -8,14 +8,15 @@ static const float kEpsilon = 1e-5;
 static const float kMinRoughness = 0.03; // нижний порог "ширины" лобе
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
 static const float3 kF0Dielectric = float3(0.04, 0.04, 0.04); // IOR~1.5 для диэлектриков
+static const float kSpecAA_VarianceScale = 1.0; // множитель для вариации нормалей
+static const float kSpecAA_MaxA2 = 1.0; // не давать a^2 > 1
 
 // ---------- GBuffer inputs ----------
 Texture2D GB0 : register(t0); // Albedo.rgb + Metal (a)
 Texture2D GB1 : register(t1); // NormalOcta.rg + Rough (b)
 Texture2D GB2 : register(t2); // Emissive (в compose)
 Texture2D DepthT : register(t3); // R32F (SRV к D32)
-SamplerState gSmp : register(s0);
-SamplerState gSmpPoint : register(s1);
+SamplerState gSmpPoint : register(s0);
 
 // ---------- Per-frame camera/light ----------
 cbuffer PerFrame : register(b0)
@@ -33,6 +34,22 @@ cbuffer PerFrame : register(b0)
     float4x4 invProj; // обратная к proj (view ← clip)
 }
 
+static const uint kRM_RBits = 5u;
+static const uint kRM_MBits = 3u;
+static const uint kRM_MaxU8 = 255u;
+static const uint kRM_MMask = (1u << kRM_MBits) - 1u;
+static const float kRM_RScale = float((1u << kRM_RBits) - 1u);
+static const float kRM_MScale = float((1u << kRM_MBits) - 1u);
+
+// unpack A8_UNORM -> (rough, metal) в [0..1]
+float2 UnpackRM(float a8)
+{
+    uint v = (uint) round(saturate(a8) * float(kRM_MaxU8));
+    uint m = v & kRM_MMask;
+    uint r = (v >> kRM_MBits);
+    return float2(float(r) / kRM_RScale, float(m) / kRM_MScale);
+}
+
 // ---------- VS fullscreen ----------
 struct VSOut
 {
@@ -48,24 +65,6 @@ VSOut VSMain(uint vid : SV_VertexID)
     return o;
 }
 
-// ---------- Helpers ----------
-float2 SignNotZero(float2 v)
-{
-    return float2(v.x >= 0.0 ? 1.0 : -1.0,
-                  v.y >= 0.0 ? 1.0 : -1.0);
-}
-
-float3 DecodeOcta(float2 e)
-{
-    float2 f = e * 2.0 - 1.0;
-    float3 n = float3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    if (n.z < 0.0)
-    {
-	    n.xy = (1.0 - abs(n.yx)) * SignNotZero(n.xy);
-    }
-    return normalize(n);
-}
-
 float2 UVtoNDC(float2 uv)
 {
     return uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
@@ -75,9 +74,6 @@ float2 UVtoNDC(float2 uv)
 float3 ReconstructPosWS(float2 uv, float depth)
 {
     const float2 ndc = UVtoNDC(uv);
-    //float2 ndc;
-    //ndc.x = uv.x * 2 - 1;
-    //ndc.y = (1 - uv.y) * 2 - 1;
     float4 clip = float4(ndc, depth, 1.0);
     float4 vpos = mul(clip, invProj); // → view
     vpos.xyz /= max(kEpsilon, vpos.w);
@@ -105,18 +101,20 @@ float3 F_Schlick(float cosT, float3 F0)
 float4 PSMain(VSOut i) : SV_Target
 {
     // Fetch GBuffer
-    const float4 gb0 = GB0.Sample(gSmp, i.UV);
-    const float4 gb1 = GB1.Sample(gSmp, i.UV);
-    const float3 albedo = gb0.rgb;
-    float metal = saturate(gb0.a);
-    const float2 nEnc = gb1.rg;
-    float rough = saturate(gb1.b);
+    float4 gb0 = GB0.Sample(gSmpPoint, i.UV); // R8G8B8A8_UNORM
+    float4 gb1 = GB1.Sample(gSmpPoint, i.UV); // R10G10B10A2_UNORM
 
+    float3 albedo = gb0.rgb;
+    float2 rm = UnpackRM(gb0.a);
+    float rough = rm.x;
+    float metal = rm.y;
 
     // World-space shading
-    const float3 N = DecodeOcta(nEnc); // нормаль в world-space (так мы её писали в G-буфер!)
+    float3 N = normalize(gb1.rgb*2-1);
     const float z = DepthT.Sample(gSmpPoint, i.UV).r;
     const float3 P = ReconstructPosWS(i.UV, z);
+    
+    //return float4(N, 1);
 
     // !!! ключ: позицию камеры берём из invView, а не из CPU переменной
     const float3 cameraPosWS = camPosWS;//mul(invView, float4(0, 0, 0, 1)).xyz;
@@ -124,28 +122,32 @@ float4 PSMain(VSOut i) : SV_Target
     const float3 L = normalize(-sunDirWS); // от поверхности к источнику
 
     const float NdotL = saturate(dot(N, L));
-    //float3 N2 = GB2.Sample(gSmp, i.UV).rgb;
-	//return float4(N * 0.5 + 0.5, 1.0);
 
 	const float3 ambient = albedo * ambientIntensity;
 
     if (NdotL <= 0.0)
     {
         return float4(ambient * lightRgb * exposure, 1.0);
-        //return float4(0,0,0, 1.0);
     }
 
     // Microfacet
     const float NdotV = saturate(dot(N, V));
-
-    //return float4(V, 1.0);
 
     const float3 H = normalize(L + V);
     const float NdotH = saturate(dot(N, H));
     const float VdotH = saturate(dot(V, H));
 
     const float3 F0 = lerp(kF0Dielectric, albedo, metal);
-    const float alpha = max(kMinAlpha, rough * rough);
+    float alpha = max(kMinAlpha, rough * rough);
+    
+    // === Specular AA: чуть распушим лобе на величину «размазанности» нормали по экрану
+    float3 dNdx = ddx(N);
+    float3 dNdy = ddy(N);
+    float variance = kSpecAA_VarianceScale * max(dot(dNdx, dNdx), dot(dNdy, dNdy));
+// добавляем дисперсию в a^2 (см. Karis, Frostbite PBR)
+    float a2 = saturate(min(kSpecAA_MaxA2, alpha * alpha + variance));
+    alpha = sqrt(a2);
+    
     const float kVis = (alpha + 1.0) * (alpha + 1.0) * 0.125; // (a+1)^2 / 8
 
     const float D = D_GGX(NdotH, alpha);
