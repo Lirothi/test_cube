@@ -216,6 +216,8 @@ void Renderer::BeginFrame() {
     // Ждём GPU по своему backbuffer'у
     WaitForFrame(currentFrameIndex_);
 
+    ++totalFrameNumber_;
+
     // Сброс кадровых пулов
     auto& fr = frameResources_[currentFrameIndex_];
     fr.ResetCommandAllocators(device_.Get());
@@ -240,6 +242,25 @@ void Renderer::Update(float dt)
     else
     {
         fps_ = fps_ * fpsAlpha_ + (1.0f - fpsAlpha_) / dt;
+    }
+
+    // хот-релод: накопим время
+    if (shaderHotReloadEnabled_) {
+        shaderWatchAccumSec_ += dt;
+
+        // 1) раз в N секунд — запустим одноразовую фоновую задачу сканирования ФС
+        if (shaderWatchAccumSec_ >= shaderWatchIntervalSec_) {
+            // не допускаем наложения сканов
+            if (!materialManager_.IsProbeInFlight()) {
+                (void)materialManager_.RequestFSProbeAsync();
+            }
+            // сохраняем остаток, чтоб не терять дробь
+            shaderWatchAccumSec_ -= shaderWatchIntervalSec_;
+            shaderWatchAccumSec_ = std::max(0.0f, shaderWatchAccumSec_);
+        }
+
+        // 2) применим pending-пересборки (если скан что-то нашёл и флаг выставлен)
+        materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/kFrameCount + 1);
     }
 }
 
@@ -849,9 +870,9 @@ void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     }
 }
 
-void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = deferred_[currentFrameIndex_];
-    cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, nullptr);
+    cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);

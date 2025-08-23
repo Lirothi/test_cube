@@ -1,21 +1,7 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 
-static const uint kRM_RBits = 5u; // roughness
-static const uint kRM_MBits = 3u; // metallic
-static const uint kRM_MaxU8 = 255u;
-static const uint kRM_MMask = (1u << kRM_MBits) - 1u;
-static const float kRM_RScale = float((1u << kRM_RBits) - 1u);
-static const float kRM_MScale = float((1u << kRM_MBits) - 1u);
-
-// pack [0..1]x[0..1] -> A8_UNORM
-float PackRM(float rough, float metal)
-{
-    uint r = (uint) round(saturate(rough) * kRM_RScale);
-    uint m = (uint) round(saturate(metal) * kRM_MScale);
-    uint packed = (r << kRM_MBits) | m; // [rrrrr][mmm]
-    return float(packed) / float(kRM_MaxU8);
-}
+#include "utils.hlsl"
 
 cbuffer PerObject : register(b0)
 {
@@ -85,15 +71,10 @@ PSOut PSMain(VSOut i)
 
     o.RT0 = float4(albedo, PackRM(rough, metal));
     //o.RT1 = float4(no, saturate(rough), 0.0);
-    
-    //float3 n = normalize(i.N);
-    //float2 nxy01 = n.xy * 0.5 + 0.5; // [-1..1] -> [0..1]
-    //float signZ = (n.z >= 0.0) ? 1.0 : 0.0; // 2 бита в альфе (RTV квантует в 0 или 1)
-    //o.RT1 = float4(nxy01, saturate(rough), signZ);
-    
+
     float3 n01 = normalize(i.N) * 0.5 + 0.5; // [-1..1] -> [0..1]
-    o.RT1 = float4(n01, 1); 
-    
+    o.RT1 = float4(n01, 1);
+
     o.RT2 = float4(0, 0, 0, 0); // emissive подключишь позже
     //o.RT2 = float4(i.N, 0);
     return o;

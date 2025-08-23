@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 
 #include "SceneObject.h"
 #include "Camera.h"
@@ -21,8 +22,8 @@ public:
     void Render(Renderer* renderer);
 
 private:
-    void RenderObjectBatchGBuffer(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex, const Math::mat4& view, const Math::mat4& proj, bool useBundles);
-    void RenderObjectBatch(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex, const mat4& view, const mat4& proj, bool useCommandBundle);
+    void RenderObjectBatch(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex,
+        const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene);
     
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matCompose_;

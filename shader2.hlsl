@@ -1,6 +1,8 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 
+#include "utils.hlsl"
+
 struct InstanceData
 {
     row_major float4x4 world;
@@ -46,8 +48,24 @@ VSOutput VSMain(VSInput input) {
     return o;
 }
 
-float4 PSMain(VSOutput input) : SV_TARGET {
+struct PSOut
+{
+    float4 RT0 : SV_Target0; // Albedo.rgb + Metal
+    float4 RT1 : SV_Target1; // NormalOcta.rg + Rough + pad
+    float4 RT2 : SV_Target2; // Emissive.rgb
+};
+
+PSOut PSMain(VSOutput input)
+{
+    PSOut o;
+    float rough = 0.4f;
+    float metal = 0.95f;
     float3 n = normalize(input.nrm);
-    float4 c = float4(0.5 + 0.5 * abs(n), 1.0f); // яркая раскраска по нормали для проверки
-    return gTex.Sample(gSmp, input.uv) * c * input.color;
+    float3 c = float4(0.5 + 0.5 * abs(n), 1.0f); // яркая раскраска по нормали для проверки
+    c = gTex.Sample(gSmp, input.uv).rgb * c * input.color.rgb;
+    o.RT0 = float4(c, PackRM(rough, metal));
+    float3 n01 = n * 0.5 + 0.5;
+    o.RT1 = float4(n01, 1);
+    o.RT2 = float4(0, 0, 0, 0); // emissive подключишь позже
+    return o;
 }

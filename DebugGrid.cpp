@@ -19,11 +19,13 @@ DebugGrid::DebugGrid(Renderer* renderer,
 {
     // материал базового объекта — для сетки (LINELIST)
     auto& gd = GetGraphicsDesc();
+    gd.numRT = 1;
+    gd.rtvFormat = renderer->GetSceneColorFormat();
     gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
     gd.raster.CullMode = D3D12_CULL_MODE_NONE;
     //gd.raster.DepthClipEnable = false;
     gd.raster.DepthBias = 0;
-    gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     gd.blend.RenderTarget[0].BlendEnable = TRUE;
     gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
     gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;

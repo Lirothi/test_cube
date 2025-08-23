@@ -16,7 +16,7 @@ public:
     DebugGrid(Renderer* renderer,
         float halfSize = 10.0f, float step = 1.0f,
         float axisLen = 3.0f, float yPlane = 0.0f,
-        float gridAlpha = 0.25f, float axisAlpha = 0.6f,
+        float gridAlpha = 0.1f, float axisAlpha = 0.6f,
         float axisThicknessPx = 3.0f);
 
     void Init(Renderer* renderer,

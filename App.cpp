@@ -89,10 +89,8 @@ public:
         UpdateUniform("view", view.xm());
         UpdateUniform("proj", proj.xm());
 
-        // Параметры материала (fallback значения)
-        // baseColor — белый, mr = (metal=0, rough=1)
         UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
-        UpdateUniform("mr", Math::float2(0.0f, 0.2f).xm());
+        UpdateUniform("mr", Math::float2(1.0f, 0.2f).xm());
 
         // Флаги наличия текстур: Albedo есть (1), MR нет (0)
         UpdateUniform("texFlags", Math::float2(1.0f, 0.0f).xm());
@@ -223,7 +221,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));
 
-    //scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "VP", "PosNormTanUV", L"shader2.hlsl", L"instance_anim.hlsl"));
+    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "VP", "PosNormTanUV", L"shader2.hlsl", L"instance_anim.hlsl"));
 
     renderer_.InitFence();
 

@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 #include "RenderContext.h"
+#include <filesystem>
+#include <mutex>
 
 using namespace Microsoft::WRL;
 
@@ -89,11 +91,58 @@ public:
 
     void Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx) const;
 
+    // Фоновая проверка ФС (быстрая): если есть изменения — ставит pending=true
+    bool FSProbeAndFlagPending();
+    // Вызывать в главном потоке: если pending=true, пересоберёт PSO/RS и сбросит флаг
+    bool HotReloadIfPending(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
+    // Очистка «пенсионеров» (старых PSO/RS) после безопасного количества кадров
+    void CollectRetired(uint64_t frameIndex, uint64_t keepAliveFrames);
+
 private:
     ComPtr<ID3D12RootSignature> rootSignature_;
     ComPtr<ID3D12PipelineState> pipelineState_;
     bool isCompute_ = false;
     std::vector<RootParameterInfo> rootParams_; // соответствует root signature
+
+    // кэш для пересборки
+    GraphicsDesc     cachedGfxDesc_{};
+    std::wstring     shaderFileCS_;
+    std::string      csEntry_ = "main";
+
+    // вотч-лист
+    std::vector<std::wstring>                     watchedFiles_;
+    std::vector<std::filesystem::file_time_type>  watchedTimes_;
+    mutable std::mutex                            watchMtx_;
+
+    // флаг «нужна пересборка»
+    std::atomic<bool> pendingReload_{ false };
+
+    struct RetiredState {
+        ComPtr<ID3D12PipelineState> pso;
+        ComPtr<ID3D12RootSignature> rs;
+        uint64_t retireFrame = 0;
+    };
+    std::vector<RetiredState> retired_;
+
+    // общие билдеры (без дублирования)
+    bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
+        Microsoft::WRL::ComPtr<ID3D12RootSignature>& outRS,
+        Microsoft::WRL::ComPtr<ID3D12PipelineState>& outPSO,
+        std::vector<RootParameterInfo>& outParams,
+        std::vector<std::wstring>& outIncludes);
+
+    bool BuildComputePSO(Renderer* r, const std::wstring& csFile, const char* csEntry,
+        Microsoft::WRL::ComPtr<ID3D12RootSignature>& outRS,
+        Microsoft::WRL::ComPtr<ID3D12PipelineState>& outPSO,
+        std::vector<RootParameterInfo>& outParams,
+        std::vector<std::wstring>& outIncludes);
+
+    static HRESULT CompileWithIncludes(const std::wstring& file,
+        const char* entry, const char* target, UINT flags,
+        Microsoft::WRL::ComPtr<ID3DBlob>& outBlob,
+        std::vector<std::wstring>& outIncludes);
+
+    void RefreshWatchTimes_(); // под мьютексом
 };
 
 // MaterialManager: manages unique materials by key (e.g., shader file name)
@@ -127,10 +176,18 @@ public:
         return mat;
     }
 
+    // Разовое «сканирование» файлов в фоне (если не идёт уже)
+    bool RequestFSProbeAsync();
+    // Применить pending-пересборки и подчистить пенсионеров (звать в кадре)
+    void ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
+    // Узнать, не идёт ли уже сканирование (для Renderer::Update)
+    bool IsProbeInFlight() const { return fsProbeInFlight_.load(std::memory_order_acquire); }
+
     void Clear() {
         materials_.clear();
     }
 
 private:
     std::unordered_map<std::wstring, std::shared_ptr<Material>> materials_;
+    std::atomic<bool> fsProbeInFlight_{ false };
 };

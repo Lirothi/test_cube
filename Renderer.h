@@ -61,7 +61,7 @@ public:
 
     void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
-    void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode);
+    void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
 
     // готовые SRV-таблицы (в shader-visible heap кадра)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
@@ -210,6 +210,11 @@ private:
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.95f; // экспоненциальное сглаживание: 0..1 (чем больше — тем плавнее)
+
+    uint64_t totalFrameNumber_ = 0;
+    bool     shaderHotReloadEnabled_ = true;
+    float    shaderWatchIntervalSec_ = 1.0f; // раз в секунду
+    float    shaderWatchAccumSec_ = 0.0f;
 
     // D3D12 core
     ComPtr<ID3D12Device>              device_;

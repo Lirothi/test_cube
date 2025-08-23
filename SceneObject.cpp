@@ -48,22 +48,12 @@ SceneObject::SceneObject(Renderer* renderer,
     graphicsDesc_.shaderFile = shaderFile_;
     graphicsDesc_.inputLayoutKey = inputLayoutKey_;
     graphicsDesc_.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    graphicsDesc_.numRT = 3;
+    graphicsDesc_.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // GB0: Albedo+Metal
+    graphicsDesc_.rtvFormats[1] = DXGI_FORMAT_R10G10B10A2_UNORM;   // GB1: NormalOcta+Rough
+    graphicsDesc_.rtvFormats[2] = DXGI_FORMAT_R11G11B10_FLOAT;     // GB2: Emissive
+    graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT;
     graphicsDesc_.FillDefaultsTriangle();
-
-    gbufferDesc_ = graphicsDesc_;
-    gbufferDesc_.shaderFile = L"gbuffer.hlsl";
-    gbufferDesc_.inputLayoutKey = "PosNormTanUV";
-    gbufferDesc_.vsEntry = "VSMain";
-    gbufferDesc_.psEntry = "PSMain";
-    gbufferDesc_.numRT = 3;
-    gbufferDesc_.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // GB0: Albedo+Metal
-    gbufferDesc_.rtvFormats[1] = DXGI_FORMAT_R10G10B10A2_UNORM;   // GB1: NormalOcta+Rough
-    gbufferDesc_.rtvFormats[2] = DXGI_FORMAT_R11G11B10_FLOAT;     // GB2: Emissive
-    gbufferDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT;
-    gbufferDesc_.depth.DepthEnable = TRUE;
-    gbufferDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-
-    gbufferMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gbufferDesc_);
 
     mesh_.reset(new Mesh());
 }
@@ -116,21 +106,4 @@ void SceneObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, cons
     RecordGraphics(renderer, cl);
     
     IssueDraw(renderer, cl);
-}
-
-void SceneObject::RenderGBuffer(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj)
-{
-    if (!renderer || !cl) return;
-    if (!gbufferMaterial_) {
-        gbufferMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gbufferDesc_);
-    }
-    RecordCompute(renderer, cl);
-    UpdateUniforms(renderer, view, proj);
-    PopulateContext(renderer, cl);
-
-    auto saved = graphicsMaterial_;
-    graphicsMaterial_ = gbufferMaterial_;
-    RecordGraphics(renderer, cl);
-    IssueDraw(renderer, cl);
-    graphicsMaterial_ = saved;
 }

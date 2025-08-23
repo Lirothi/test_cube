@@ -216,14 +216,14 @@ void Scene::Render(Renderer* renderer) {
 
             // 1.2 Opaque simple → bundles
             rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
-                RenderObjectBatchGBuffer(renderer, objectsToRender[ObjectRenderType::OpaqueSimpleRender],
-                    sub.batchIndex, view, proj, /*useBundles=*/true);
+                RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::OpaqueSimpleRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/true, true);
                 });
 
             // 1.3 Opaque complex → direct CL, без очисток
             rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
-                RenderObjectBatchGBuffer(renderer, objectsToRender[ObjectRenderType::OpaqueComplexRender],
-                    sub.batchIndex, view, proj, /*useBundles=*/false);
+                RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::OpaqueComplexRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/false, true);
                 });
 
             rgGB.Execute(renderer);
@@ -279,7 +279,7 @@ void Scene::Render(Renderer* renderer) {
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color);
+            renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
             RenderContext rc{};
             rc.table[0] = renderer->StageComposeSrvTable(); // t0..t1
@@ -293,43 +293,32 @@ void Scene::Render(Renderer* renderer) {
         });
 
     // 4) TRANSPARENT — forward поверх SceneColor, depth test по GBuffer DSV
-    //auto pTransp = rg.AddPass("Transparent", { pCompose },
-    //    [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
-    //        RenderGraph rgTr(ctx.batchIndex);
+    auto pTransp = rg.AddPass("Transparent", { pCompose },
+        [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
+            RenderGraph rgTr(ctx.batchIndex);
 
-    //        // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
-    //        rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
-    //            auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    //            renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None);
-    //            const auto& D = renderer->GetDeferredForFrame();
-    //            driver.cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, &D.dsv);
-    //            renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
-    //            });
+            // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
+            rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
+                auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                const auto& D = renderer->GetDeferredForFrame();
+                renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
+                renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
+                });
 
-    //        rgTr.AddPass("Transparent.Simple", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
-    //            RenderObjectBatch1(renderer, objectsToRender[ObjectRenderType::TransparentSimpleRender],
-    //                sub.batchIndex, view, proj, /*useBundles=*/true);
-    //            });
+            rgTr.AddPass("Transparent.Simple", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+                RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::TransparentSimpleRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/true, false);
+                });
 
-    //        rgTr.AddPass("Transparent.Complex", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
-    //            const auto& list = objectsToRender[ObjectRenderType::TransparentComplexRender];
-    //            if (list.empty()) return;
-    //            const auto& D = renderer->GetDeferredForFrame();
-    //            const size_t chunkSize = 32;
-    //            for (size_t begin = 0; begin < list.size(); begin += chunkSize) {
-    //                const size_t end = std::min(begin + chunkSize, list.size());
-    //                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    //                renderer->BindSceneColor(t.cl, Renderer::ClearMode::None);
-    //                t.cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, &D.dsv);
-    //                for (size_t i = begin; i < end; ++i) {
-    //                    if (auto* obj = list[i]) obj->Render(renderer, t.cl, view, proj);
-    //                }
-    //                renderer->EndThreadCommandList(t, sub.batchIndex);
-    //            }
-    //            });
+            rgTr.AddPass("Transparent.Complex", {}, [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext sub) {
+                RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::TransparentComplexRender],
+                    sub.batchIndex, view, proj, /*useBundles=*/false, false);
+                });
 
-    //        rgTr.Execute(renderer);
-    //    });
+            rgTr.Execute(renderer);
+        });
 
     // 5) TONEMAP — SceneColor → Backbuffer
     auto pTonemap = rg.AddPass("Tonemap", { pCompose },
@@ -373,67 +362,12 @@ void Scene::Render(Renderer* renderer) {
     renderer->EndFrame();
 }
 
-void Scene::RenderObjectBatch(
-    Renderer* renderer,
+void Scene::RenderObjectBatch(Renderer* renderer,
     const std::vector<SceneObject*>& objects,
     size_t batchIndex,
     const mat4& view, const mat4& proj,
-    bool useCommandBundle)
-{
-    auto& tasks = TaskSystem::Get();
-    const size_t N = objects.size();
-    const size_t chunkSize = 32;
-
-    if (N == 0) 
-    {
-        return;
-    }
-
-    if (useCommandBundle)
-    {
-        auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        renderer->RegisterPassDriver(driver.cl, batchIndex);
-        renderer->RecordBindDefaultsNoClear(driver.cl);
-    }
-
-    tasks.Dispatch((N + chunkSize - 1) / chunkSize,
-        [renderer, view, proj, &objects, batchIndex, chunkSize, useCommandBundle](size_t gi) {
-            const size_t begin = gi * chunkSize;
-            const size_t end = std::min(begin + chunkSize, objects.size());
-            if (begin >= end)
-            {
-                return;
-            }
-
-            if (useCommandBundle) {
-                auto b = renderer->BeginThreadCommandBundle();
-                for (size_t i = begin; i < end; ++i) {
-                    auto* obj = objects[i];
-                    if (obj) {
-                        obj->Render(renderer, b.cl, view, proj);
-                    }
-                }
-                renderer->EndThreadCommandBundle(b, batchIndex);
-            }
-            else {
-                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-                renderer->RecordBindDefaultsNoClear(t.cl);
-                for (size_t i = begin; i < end; ++i) {
-                    auto* obj = objects[i];
-                    if (obj) {
-                        obj->Render(renderer, t.cl, view, proj);
-                    }
-                }
-                renderer->EndThreadCommandList(t, batchIndex);
-            }
-        }, 1);
-}
-
-void Scene::RenderObjectBatchGBuffer(Renderer* renderer,
-    const std::vector<SceneObject*>& objects,
-    size_t batchIndex,
-    const mat4& view, const mat4& proj,
-    bool useBundles)
+    bool useBundles,
+    bool bindGbufOrScene)
 {
     if (objects.empty()) return;
 
@@ -442,7 +376,7 @@ void Scene::RenderObjectBatchGBuffer(Renderer* renderer,
     const size_t chunkSize = 32;
 
     tasks.Dispatch((N + chunkSize - 1) / chunkSize,
-        [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex](std::size_t jobIndex)
+        [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
         {
             const size_t begin = jobIndex * chunkSize;
             const size_t end = std::min(begin + chunkSize, objects.size());
@@ -450,15 +384,23 @@ void Scene::RenderObjectBatchGBuffer(Renderer* renderer,
             if (useBundles) {
                 auto b = renderer->BeginThreadCommandBundle(nullptr);
                 for (size_t i = begin; i < end; ++i) {
-                    if (auto* obj = objects[i]) obj->RenderGBuffer(renderer, b.cl, view, proj);
+                    if (auto* obj = objects[i]) obj->Render(renderer, b.cl, view, proj);
                 }
                 renderer->EndThreadCommandBundle(b, batchIndex);
             }
             else {
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-                renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                if (bindGbufOrScene)
+                {
+                    renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                }
+                else
+                {
+                    renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                }
+                
                 for (size_t i = begin; i < end; ++i) {
-                    if (auto* obj = objects[i]) obj->RenderGBuffer(renderer, t.cl, view, proj);
+                    if (auto* obj = objects[i]) obj->Render(renderer, t.cl, view, proj);
                 }
                 renderer->EndThreadCommandList(t, batchIndex);
             }
