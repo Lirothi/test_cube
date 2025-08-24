@@ -212,9 +212,6 @@
     <Text Include="shader.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="shader2.hlsl">
-      <FileType>Document</FileType>
-    </Text>
     <Text Include="shader_comp.hlsl">
       <FileType>Document</FileType>
     </Text>
@@ -222,6 +219,21 @@
       <FileType>Document</FileType>
     </Text>
     <Text Include="tonemap_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="utils.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="gbuffer_common.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="gbuffer_inst.hlsl">
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>

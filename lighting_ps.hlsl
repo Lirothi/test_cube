@@ -1,11 +1,12 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 
+#include "utils.hlsl"
+
 // ---------- Named constants ----------
 static const float kPi = 3.14159265359;
 static const float kInvPi = 1.0 / kPi;
-static const float kEpsilon = 1e-5;
-static const float kMinRoughness = 0.03; // нижний порог "ширины" лобе
+static const float kMinRoughness = 0.03;
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
 static const float3 kF0Dielectric = float3(0.04, 0.04, 0.04); // IOR~1.5 для диэлектриков
 static const float kSpecAA_VarianceScale = 1.0; // множитель для вариации нормалей
@@ -32,22 +33,6 @@ cbuffer PerFrame : register(b0)
     // Матрицы (те же, что были в рендере G-буфера!)
     float4x4 invView; // обратная к view (world ← view)
     float4x4 invProj; // обратная к proj (view ← clip)
-}
-
-static const uint kRM_RBits = 5u;
-static const uint kRM_MBits = 3u;
-static const uint kRM_MaxU8 = 255u;
-static const uint kRM_MMask = (1u << kRM_MBits) - 1u;
-static const float kRM_RScale = float((1u << kRM_RBits) - 1u);
-static const float kRM_MScale = float((1u << kRM_MBits) - 1u);
-
-// unpack A8_UNORM -> (rough, metal) в [0..1]
-float2 UnpackRM(float a8)
-{
-    uint v = (uint) round(saturate(a8) * float(kRM_MaxU8));
-    uint m = v & kRM_MMask;
-    uint r = (v >> kRM_MBits);
-    return float2(float(r) / kRM_RScale, float(m) / kRM_MScale);
 }
 
 // ---------- VS fullscreen ----------
@@ -141,12 +126,12 @@ float4 PSMain(VSOut i) : SV_Target
     float alpha = max(kMinAlpha, rough * rough);
     
     // === Specular AA: чуть распушим лобе на величину «размазанности» нормали по экрану
-    float3 dNdx = ddx(N);
-    float3 dNdy = ddy(N);
-    float variance = kSpecAA_VarianceScale * max(dot(dNdx, dNdx), dot(dNdy, dNdy));
-// добавляем дисперсию в a^2 (см. Karis, Frostbite PBR)
-    float a2 = saturate(min(kSpecAA_MaxA2, alpha * alpha + variance));
-    alpha = sqrt(a2);
+//    float3 dNdx = ddx(N);
+//    float3 dNdy = ddy(N);
+//    float variance = kSpecAA_VarianceScale * max(dot(dNdx, dNdx), dot(dNdy, dNdy));
+//// добавляем дисперсию в a^2 (см. Karis, Frostbite PBR)
+//    float a2 = saturate(min(kSpecAA_MaxA2, alpha * alpha + variance));
+//    alpha = sqrt(a2);
     
     const float kVis = (alpha + 1.0) * (alpha + 1.0) * 0.125; // (a+1)^2 / 8
 

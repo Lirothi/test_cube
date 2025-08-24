@@ -208,10 +208,16 @@
     <Text Include="shader_PNTUV.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="shader2.hlsl">
+    <Text Include="tonemap_ps.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="tonemap_ps.hlsl">
+    <Text Include="utils.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="gbuffer_common.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="gbuffer_inst.hlsl">
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>

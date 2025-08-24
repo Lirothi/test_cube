@@ -109,7 +109,15 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
 
 void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj)
 {
-    UpdateUniform("viewProj", view * proj);
+    UpdateUniform("world", modelMatrix_.xm());
+    UpdateUniform("view", view.xm());
+    UpdateUniform("proj", proj.xm());
+
+    UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
+    UpdateUniform("mr", Math::float2(0.95f, 0.4f).xm());
+
+    // Флаги наличия текстур: Albedo есть (1), MR нет (0)
+    UpdateUniform("texFlags", Math::float2(1.0f, 0.0f).xm());
 }
 
 void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
