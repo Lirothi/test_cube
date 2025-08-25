@@ -131,7 +131,7 @@ public:
         { "proj",      CBFieldType::Matrix4x4 },
         { "baseColor", CBFieldType::Float4    },
         { "mr",        CBFieldType::Float2    },
-        { "texFlags",  CBFieldType::Float2    },
+        { "texFlags",  CBFieldType::Float4    },
         });
         RegisterLayout("LightingPF", {
 	    { "sunDirWS",        CBFieldType::Float3 }, // куда светит (например (0,-1,0))

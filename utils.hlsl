@@ -68,4 +68,61 @@ inline float2 UnpackRM(float a8)
     return float2(float(r) / kRM_RScale, float(m) / kRM_MScale);
 }
 
+// --- Derivative/cotangent frame (без TBN) ---
+inline float3 PerturbNormal_Deriv(float3 nTS, float3 Nws, float3 Pvs, float2 uv)
+{
+    //float3 N0 = Nws; //normalize(Nws);
+
+    //// БЕРЁМ FINE-деривативы — устойчиво на границах примитива
+    //float3 dpdx = ddx_fine(Pws);
+    //float3 dpdy = ddy_fine(Pws);
+    //float2 duvdx = ddx_fine(uv);
+    //float2 duvdy = ddy_fine(uv);
+
+    //// детерминант параметризации; адаптивный порог
+    //float det = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+    //float eps = 1e-12;
+    //if (abs(det) < eps)
+    //{
+    //    return N0; // плохо обусловлено — вернём базовую нормаль
+    //}
+
+    //float3 r1 = cross(dpdy, N0);
+    //float3 r2 = cross(N0, dpdx);
+
+    //float3 T = r1 * duvdx.x + r2 * duvdy.x;
+    //float3 B = r1 * duvdx.y + r2 * duvdy.y;
+
+    //return normalize(T * nTS.x + B * nTS.y + N0 * nTS.z);
+    
+    
+    // Базовая нормаль (world)
+    float3 N = Nws;
+
+    // Fine-деривативы (устойчиво у края треугольников)
+    float3 dp1 = ddx_fine(Pvs);
+    float3 dp2 = ddy_fine(Pvs);
+    float2 du1 = ddx_fine(uv);
+    float2 du2 = ddy_fine(uv);
+
+    // Cotangent frame (Mikk's trick) без деления на det
+    float3 dp2perp = cross(dp2, N);
+    float3 dp1perp = cross(N, dp1);
+    float3 T = dp2perp * du1.x + dp1perp * du2.x;
+    float3 B = dp2perp * du1.y + dp1perp * du2.y;
+
+    // Баланс масштаба T/B → сила нормалки независима от масштаба UV/проекции
+    float len2 = max(dot(T, T), dot(B, B));
+    if (len2 < 1e-18)
+    {
+        return N; // вырожденная параметризация
+    }
+    float invMax = rsqrt(len2);
+    T *= invMax;
+    B *= invMax;
+
+    // Применяем tangent-space нормаль
+    return normalize(T * nTS.x + B * nTS.y + N * nTS.z);
+}
+
 #endif // UTILS_HLSL

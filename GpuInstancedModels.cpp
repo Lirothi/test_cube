@@ -46,15 +46,9 @@ void GpuInstancedModels::Init(Renderer* renderer,
         }
     }
 
-    // Тестовая текстура (шахматка)
-    std::vector<uint32_t> cpuRGBA(256 * 256);
-    for (int y = 0; y < 256; ++y) {
-        for (int x = 0; x < 256; ++x) {
-            bool c = ((x >> 5) ^ (y >> 5)) & 1;
-            cpuRGBA[y * 256 + x] = c ? 0xFFFFFFFFu : 0xFF000000u;
-        }
-    }
-    tex_.CreateFromRGBA8(renderer, uploadCmdList, cpuRGBA.data(), 256, 256, uploadKeepAlive);
+    albedoTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_albedo.png", Texture2D::Usage::AlbedoSRGB }, uploadKeepAlive);
+    mrTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_mr.png", Texture2D::Usage::MetalRough }, uploadKeepAlive);
+    normalTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_normal_rg.png", Texture2D::Usage::NormalMap }, uploadKeepAlive);
 
     // Instance-buffer (DEFAULT, UAV)
     instanceBuffer_.Create(renderer->GetDevice(), instanceCount_, uploadCmdList, uploadKeepAlive);
@@ -89,8 +83,12 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
 
 void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
-    // Таблица SRV(t0..): t0 = instanceBuffer SRV, t1 = texture SRV
-    auto tbl = renderer->StageSrvUavTable({ instanceBuffer_.GetSRVCPU(), tex_.GetSRVCPU() });
+    auto tbl = renderer->StageSrvUavTable({
+        instanceBuffer_.GetSRVCPU(), // t0
+        albedoTex_.GetSRVCPU(),      // t1
+        mrTex_.GetSRVCPU(),          // t2
+        normalTex_.GetSRVCPU()       // t3
+    });
     graphicsCtx_.table[0] = tbl.gpu;
 
     // Самплер s0
@@ -117,7 +115,7 @@ void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, co
     UpdateUniform("mr", Math::float2(0.95f, 0.4f).xm());
 
     // Флаги наличия текстур: Albedo есть (1), MR нет (0)
-    UpdateUniform("texFlags", Math::float2(1.0f, 0.0f).xm());
+    UpdateUniform("texFlags", Math::float4(1.0f, 1.0f, 1.0f, 0.0f).xm());
 }
 
 void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)

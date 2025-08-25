@@ -83,15 +83,14 @@ void Scene::Render(Renderer* renderer) {
 	int textY = 8;
     tb->AddTextf(8, textY, TextManager::RGBA(1, 1, 1, 0.5), 32.0f, "FPS:%.0f", renderer->GetFPS());
 
-    //tb->AddText(8, textY, TextManager::RGBA(1,1,1), 32.0f, "FPS 144");
-    textY += 32;
-    tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 32.0f, "Some text with size 32!!!");
-    textY += 32;
-    tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 16.0f, "Some text with size 16!!!");
-    textY += 32;
-    tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 12.0f, "Some text with size 12!!!");
-    textY += 32;
-    tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 8.0f, "Some text with size 8!!!");
+    //textY += 32;
+    //tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 32.0f, "Some text with size 32!!!");
+    //textY += 32;
+    //tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 16.0f, "Some text with size 16!!!");
+    //textY += 32;
+    //tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 12.0f, "Some text with size 12!!!");
+    //textY += 32;
+    //tb->AddText(8, textY, TextManager::RGBA(1, 1, 1), 8.0f, "Some text with size 8!!!");
 
     renderer->BeginFrame();
     renderer->BeginSubmitTimeline();

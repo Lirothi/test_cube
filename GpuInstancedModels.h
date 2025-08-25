@@ -47,5 +47,7 @@ private:
 
     // модель/текстура
     std::string modelName_;
-    Texture2D tex_;
+    Texture2D albedoTex_;
+    Texture2D mrTex_;
+    Texture2D normalTex_;
 };

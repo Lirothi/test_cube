@@ -1,31 +1,32 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
-
 #include "gbuffer_common.hlsl"
 
 Texture2D gAlbedo : register(t0);
-Texture2D gMR : register(t1);
-Texture2D gNormalMap : register(t2); // на будущее
+Texture2D gMR : register(t1); // R=metal, G=rough
+Texture2D gNormalMap : register(t2); // tangent-space, +Z
 SamplerState gSmp : register(s0);
 
 VSOut VSMain(VSIn i)
 {
-    return BaseVS(i.P, world, view, proj, i.N, i.UV);
+    return BaseVS(i.P, world, view, proj, i.N, i.T, i.UV);
 }
 
 PSOut PSMain(VSOut i)
 {
-    PSOut o;
+    float3 NNorm = normalize(i.NWS);
     
-    // выбор материала
-    float3 albedoTex = gAlbedo.Sample(gSmp, i.UV).rgb;
-    float2 mrTex = gMR.Sample(gSmp, i.UV).rg;
+    float3 albedo;
+    float2 mr;
+    float3 N = NNorm;
+    FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, albedo, mr, N);
 
-    float3 albedo = lerp(baseColor.rgb, albedoTex, texFlags.x);
-    float2 mr = lerp(metalRough.xy, mrTex.rg, texFlags.y);
-
-    albedo *= NrmTo01(normalize(i.NWS));
-    o = BasePS(albedo, mr, float4(0, 0, 0, 0), i.NWS);
-
-    return o;
+    albedo = lerp(baseColor.rgb, albedo, texFlags.x);
+    mr = lerp(metalRough.xy, mr, texFlags.y);
+    if (texFlags.z < 0.5)
+    {
+        N = NNorm;
+    }
+    //albedo = N * 0.5 + 0.5;
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0));
 }
