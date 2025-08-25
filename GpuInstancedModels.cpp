@@ -23,6 +23,7 @@ GpuInstancedModels::GpuInstancedModels(Renderer* renderer,
     , modelName_(std::move(modelName))
     , instanceCount_(numInstances)
 {
+    graphicsDesc_.defines = { {"NORMALMAP_IS_RG","1"} };
 }
 
 void GpuInstancedModels::Init(Renderer* renderer,

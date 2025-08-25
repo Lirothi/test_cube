@@ -17,6 +17,7 @@ public:
         transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
         transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
         modelName_ = modelName;
+        graphicsDesc_.defines = { {"NORMALMAP_IS_RG","1"}};
     }
 
     void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)

@@ -75,9 +75,9 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
     return o;
 }
 
-#ifndef NORMALMAP_IS_RG   // 0 = RGB(A) normal map, 1 = RG/BC5
-#define NORMALMAP_IS_RG 1
-#endif
+//#ifndef NORMALMAP_IS_RG   // 0 = RGB(A) normal map, 1 = RG/BC5
+//#define NORMALMAP_IS_RG 1
+//#endif
 
 inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
                                 out float3 albedo, out float2 mr, inout float3 norm)

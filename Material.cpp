@@ -4,14 +4,17 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
 
 #include "Helpers.h"
 #include "RootSignatureLayout.h"
 #include "RootSignatureParser.h"
 #include "TaskSystem.h"
 
+using Microsoft::WRL::ComPtr;
+
 // ----------------------------------------
-// Общие утилиты для обоих Create* методов
+// Утилиты
 // ----------------------------------------
 static std::string ReadFileToString(const std::wstring& path) {
     std::ifstream file(path);
@@ -31,10 +34,8 @@ static void BuildRootFromLayout(
     std::vector<Material::RootParameterInfo>& outParams)
 {
     RootSignatureLayout layout = inLayout;
-    // flags из аргумента имеют приоритет
     layout.flags = rsFlags;
 
-    // Сформировать RootParameterInfo для Bind()
     outParams.clear();
     outParams.reserve(layout.params.size());
     for (size_t i = 0; i < layout.params.size(); ++i) {
@@ -60,7 +61,6 @@ static void BuildRootFromLayout(
             info.bindingRegister = p.shaderRegister; // uN
             break;
         case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
-            // Ключ таблицы — base регистр первой полосы (см. наш layout.AddTable)
             info.type = p.hasSamplerRanges ? Material::RootParameterInfo::TableSampler : Material::RootParameterInfo::Table;
             info.bindingRegister = p.ranges.empty() ? 0u : p.ranges.front().BaseShaderRegister;
             break;
@@ -68,7 +68,6 @@ static void BuildRootFromLayout(
         outParams.push_back(info);
     }
 
-    // Сериализовать и создать RS
     D3D12_ROOT_SIGNATURE_DESC desc = MakeRootSignatureDesc(layout);
     ComPtr<ID3DBlob> sigBlob, errBlob;
     ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
@@ -99,20 +98,15 @@ struct IncludeCapture : public ID3DInclude {
                 base = it->second;
             }
         }
-
         std::filesystem::path req = Widen(pFileName);
         std::filesystem::path full = (req.is_absolute() ? req : (base / req)).lexically_normal();
 
         std::ifstream f(full, std::ios::binary);
-        if (!f) {
-            return E_FAIL;
-        }
+        if (!f) { return E_FAIL; }
 
         std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         char* mem = (char*)::malloc(bytes.size());
-        if (!mem) {
-            return E_OUTOFMEMORY;
-        }
+        if (!mem) { return E_OUTOFMEMORY; }
         std::memcpy(mem, bytes.data(), bytes.size());
 
         *ppData = mem;
@@ -130,6 +124,84 @@ struct IncludeCapture : public ID3DInclude {
     }
 };
 
+// ---- macros → D3D_SHADER_MACRO ----
+static void BuildMacros(const Material::DefineList& defines,
+    std::vector<D3D_SHADER_MACRO>& outMacros,
+    std::vector<std::string>& storage) // для владения char*
+{
+    outMacros.clear();
+    storage.clear();
+    storage.reserve(defines.size() * 2);
+
+    for (const auto& kv : defines) {
+        storage.push_back(kv.first);
+        storage.push_back(kv.second);
+        D3D_SHADER_MACRO m{};
+        m.Name = storage[storage.size() - 2].c_str();
+        m.Definition = storage[storage.size() - 1].c_str();
+        outMacros.push_back(m);
+    }
+    outMacros.push_back({ nullptr, nullptr }); // terminator
+}
+
+// ===== компиляция =====
+HRESULT Material::CompileWithIncludes(const std::wstring& file,
+    const char* entry, const char* target, UINT flags,
+    const DefineList& defines,
+    ComPtr<ID3DBlob>& outBlob,
+    std::vector<std::wstring>& outIncludes)
+{
+    std::filesystem::path p = std::filesystem::path(file).lexically_normal();
+    IncludeCapture inc(p.parent_path().wstring(), outIncludes);
+    ComPtr<ID3DBlob> errs;
+
+    std::vector<D3D_SHADER_MACRO> macros;
+    std::vector<std::string>      macroStorage;
+    BuildMacros(defines, macros, macroStorage);
+
+    HRESULT hr = D3DCompileFromFile(p.c_str(), macros.empty() ? nullptr : macros.data(),
+        &inc, entry, target, flags, 0, &outBlob, &errs);
+    if (FAILED(hr) && errs) {
+        OutputDebugStringA((const char*)errs->GetBufferPointer());
+    }
+    return hr;
+}
+
+// ===== watch utils =====
+void Material::RefreshWatchTimes_()
+{
+    std::lock_guard<std::mutex> lk(watchMtx_);
+    watchedTimes_.resize(watchedFiles_.size());
+    for (size_t i = 0; i < watchedFiles_.size(); ++i) {
+        std::error_code ec{};
+        watchedTimes_[i] = std::filesystem::last_write_time(watchedFiles_[i], ec);
+    }
+}
+
+bool Material::FSProbeAndFlagPending()
+{
+    std::lock_guard<std::mutex> lk(watchMtx_);
+    if (watchedFiles_.empty()) { return false; }
+
+    bool changed = false;
+    for (size_t i = 0; i < watchedFiles_.size(); ++i) {
+        std::error_code ec{};
+        auto t = std::filesystem::last_write_time(watchedFiles_[i], ec);
+        if (!ec && i < watchedTimes_.size()) {
+            if (t != watchedTimes_[i]) { changed = true; break; }
+        }
+    }
+
+    if (changed) {
+        pendingReload_.store(true, std::memory_order_release);
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+// ===== public API =====
 void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
 {
     isCompute_ = false;
@@ -156,18 +228,17 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
     RefreshWatchTimes_();
 }
 
-void Material::CreateCompute(Renderer* r, const std::wstring& csFile)
+void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
 {
     isCompute_ = true;
-    shaderFileCS_ = csFile;
-    csEntry_ = "main";
+    cachedCmpDesc_ = cd;
 
     ComPtr<ID3D12RootSignature> rs;
     ComPtr<ID3D12PipelineState> pso;
     std::vector<RootParameterInfo> params;
     std::vector<std::wstring> inc;
 
-    if (!BuildComputePSO(r, csFile, csEntry_.c_str(), rs, pso, params, inc)) {
+    if (!BuildComputePSO(r, cd, rs, pso, params, inc)) {
         OutputDebugStringA("[Material] CreateCompute failed\n");
         return;
     }
@@ -196,18 +267,16 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
 
     bool ok = false;
     if (isCompute_) {
-        ok = BuildComputePSO(r, shaderFileCS_, csEntry_.c_str(), newRS, newPSO, newParams, inc);
+        ok = BuildComputePSO(r, cachedCmpDesc_, newRS, newPSO, newParams, inc);
     }
     else {
         ok = BuildGraphicsPSO(r, cachedGfxDesc_, newRS, newPSO, newParams, inc);
     }
 
     if (!ok) {
-        // оставим pending=true — попробуем на следующем тике
-        return false;
+        return false; // оставим pending=true — попробуем на следующем тике
     }
 
-    // отложенная утилизация
     retired_.push_back({ pipelineState_, rootSignature_, frameNumber });
 
     pipelineState_ = newPSO;
@@ -239,12 +308,8 @@ void Material::CollectRetired(uint64_t frameNumber, uint64_t keepAliveFrames)
 
 void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx) const
 {
-    if (isCompute_) {
-        cmdList->SetComputeRootSignature(rootSignature_.Get());
-    }
-    else {
-        cmdList->SetGraphicsRootSignature(rootSignature_.Get());
-    }
+    if (isCompute_) { cmdList->SetComputeRootSignature(rootSignature_.Get()); }
+    else { cmdList->SetGraphicsRootSignature(rootSignature_.Get()); }
 
     cmdList->SetPipelineState(pipelineState_.Get());
 
@@ -255,12 +320,8 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         {
             auto it = ctx.constants.find(reg);
             if (it != ctx.constants.end() && !it->second.empty()) {
-                if (isCompute_) {
-                    cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0);
-                }
-                else {
-                    cmdList->SetGraphicsRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0);
-                }
+                if (isCompute_) { cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0); }
+                else { cmdList->SetGraphicsRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0); }
             }
             break;
         }
@@ -268,12 +329,8 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         {
             auto it = ctx.cbv.find(reg);
             if (it != ctx.cbv.end()) {
-                if (isCompute_) {
-                    cmdList->SetComputeRootConstantBufferView(p.rootIndex, it->second);
-                }
-                else {
-                    cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, it->second);
-                }
+                if (isCompute_) { cmdList->SetComputeRootConstantBufferView(p.rootIndex, it->second); }
+                else { cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, it->second); }
             }
             break;
         }
@@ -281,12 +338,8 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         {
             auto it = ctx.srv.find(reg);
             if (it != ctx.srv.end()) {
-                if (isCompute_) {
-                    cmdList->SetComputeRootShaderResourceView(p.rootIndex, it->second);
-                }
-                else {
-                    cmdList->SetGraphicsRootShaderResourceView(p.rootIndex, it->second);
-                }
+                if (isCompute_) { cmdList->SetComputeRootShaderResourceView(p.rootIndex, it->second); }
+                else { cmdList->SetGraphicsRootShaderResourceView(p.rootIndex, it->second); }
             }
             break;
         }
@@ -294,12 +347,8 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         {
             auto it = ctx.uav.find(reg);
             if (it != ctx.uav.end()) {
-                if (isCompute_) {
-                    cmdList->SetComputeRootUnorderedAccessView(p.rootIndex, it->second);
-                }
-                else {
-                    cmdList->SetGraphicsRootUnorderedAccessView(p.rootIndex, it->second);
-                }
+                if (isCompute_) { cmdList->SetComputeRootUnorderedAccessView(p.rootIndex, it->second); }
+                else { cmdList->SetGraphicsRootUnorderedAccessView(p.rootIndex, it->second); }
             }
             break;
         }
@@ -307,12 +356,8 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         {
             auto it = ctx.table.find(reg);
             if (it != ctx.table.end()) {
-                if (isCompute_) {
-                    cmdList->SetComputeRootDescriptorTable(p.rootIndex, it->second);
-                }
-                else {
-                    cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, it->second);
-                }
+                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, it->second); }
+                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, it->second); }
             }
             break;
         }
@@ -329,63 +374,6 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     }
 }
 
-// ===== Компиляция с include’ами =====
-HRESULT Material::CompileWithIncludes(const std::wstring& file,
-    const char* entry, const char* target,
-    UINT flags,
-    ComPtr<ID3DBlob>& outBlob,
-    std::vector<std::wstring>& outIncludes)
-{
-    std::filesystem::path p = std::filesystem::path(file).lexically_normal();
-    IncludeCapture inc(p.parent_path().wstring(), outIncludes);
-    ComPtr<ID3DBlob> errs;
-
-    HRESULT hr = D3DCompileFromFile(p.c_str(), nullptr, &inc, entry, target, flags, 0, &outBlob, &errs);
-    if (FAILED(hr) && errs) {
-        OutputDebugStringA((const char*)errs->GetBufferPointer());
-    }
-    return hr;
-}
-
-// ===== watch utils =====
-void Material::RefreshWatchTimes_()
-{
-    std::lock_guard<std::mutex> lk(watchMtx_);
-    watchedTimes_.resize(watchedFiles_.size());
-    for (size_t i = 0; i < watchedFiles_.size(); ++i) {
-        std::error_code ec{};
-        watchedTimes_[i] = std::filesystem::last_write_time(watchedFiles_[i], ec);
-    }
-}
-
-bool Material::FSProbeAndFlagPending()
-{
-    std::lock_guard<std::mutex> lk(watchMtx_);
-    if (watchedFiles_.empty()) {
-        return false;
-    }
-
-    bool changed = false;
-    for (size_t i = 0; i < watchedFiles_.size(); ++i) {
-        std::error_code ec{};
-        auto t = std::filesystem::last_write_time(watchedFiles_[i], ec);
-        if (!ec && i < watchedTimes_.size()) {
-            if (t != watchedTimes_[i]) {
-                changed = true;
-                break;
-            }
-        }
-    }
-
-    if (changed) {
-        pendingReload_.store(true, std::memory_order_release);
-        return true;
-    }
-    else {
-        return false;
-    }
-}
-
 // ===== Общий билдер: Graphics =====
 bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3D12RootSignature>& outRS,
@@ -393,14 +381,12 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
-    // 1) RS из исходника
     RootSignatureLayout layoutParsed;
     {
         std::string src = ReadFileToString(gd.shaderFile);
         ParseRootSignatureFromSource(src, layoutParsed);
     }
 
-    // 2) компиляция
     UINT cf =
 #ifdef _DEBUG
     (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -410,17 +396,15 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
 
     ComPtr<ID3DBlob> vs5, ps5;
     std::vector<std::wstring> incVS, incPS;
-    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.vsEntry, "vs_5_0", cf, vs5, incVS))) {
+    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.vsEntry, "vs_5_0", cf, gd.defines, vs5, incVS))) {
         return false;
     }
-    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.psEntry, "ps_5_0", cf, ps5, incPS))) {
+    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.psEntry, "ps_5_0", cf, gd.defines, ps5, incPS))) {
         return false;
     }
 
-    // 3) RS
     BuildRootFromLayout(r->GetDevice(), layoutParsed, gd.rsFlags, outRS, outParams);
 
-    // 4) PSO
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
 
@@ -450,7 +434,6 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         return false;
     }
 
-    // 5) watch-лист
     outIncludes.clear();
     outIncludes.push_back(gd.shaderFile);
     outIncludes.insert(outIncludes.end(), incVS.begin(), incVS.end());
@@ -462,7 +445,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
 }
 
 // ===== Общий билдер: Compute =====
-bool Material::BuildComputePSO(Renderer* r, const std::wstring& csFile, const char* csEntry,
+bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
     std::vector<RootParameterInfo>& outParams,
@@ -477,16 +460,16 @@ bool Material::BuildComputePSO(Renderer* r, const std::wstring& csFile, const ch
 
     ComPtr<ID3DBlob> cs5;
     std::vector<std::wstring> incCS;
-    if (FAILED(CompileWithIncludes(csFile, csEntry, "cs_5_0", cf, cs5, incCS))) {
+    if (FAILED(CompileWithIncludes(cd.shaderFile, cd.csEntry, "cs_5_0", cf, cd.defines, cs5, incCS))) {
         return false;
     }
 
     RootSignatureLayout layoutParsed;
     {
-        std::string src = ReadFileToString(csFile);
+        std::string src = ReadFileToString(cd.shaderFile);
         ParseRootSignatureFromSource(src, layoutParsed);
     }
-    BuildRootFromLayout(r->GetDevice(), layoutParsed, D3D12_ROOT_SIGNATURE_FLAG_NONE, outRS, outParams);
+    BuildRootFromLayout(r->GetDevice(), layoutParsed, cd.rsFlags, outRS, outParams);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
@@ -496,18 +479,76 @@ bool Material::BuildComputePSO(Renderer* r, const std::wstring& csFile, const ch
     }
 
     outIncludes = incCS;
-    outIncludes.push_back(csFile);
+    outIncludes.push_back(cd.shaderFile);
     std::sort(outIncludes.begin(), outIncludes.end());
     outIncludes.erase(std::unique(outIncludes.begin(), outIncludes.end()), outIncludes.end());
 
     return true;
 }
 
+// ====== Manager ======
+static std::wstring JoinDefines(const Material::DefineList& defs) {
+    std::vector<std::string> s;
+    s.reserve(defs.size());
+    for (auto& kv : defs) {
+        s.push_back(kv.first + "=" + kv.second);
+    }
+    std::sort(s.begin(), s.end());
+    std::wstring out;
+    for (auto& e : s) {
+        out += std::wstring(e.begin(), e.end());
+        out += L";";
+    }
+    return out;
+}
+
+std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
+{
+    std::wstring fmts = L"";
+    for (UINT i = 0; i < gd.numRT; ++i) {
+        fmts += std::to_wstring((int)(gd.numRT == 1 ? gd.rtvFormat : gd.rtvFormats[i])) + L",";
+    }
+    std::wstring key = L"G2|" + gd.shaderFile + L"|" +
+        std::wstring(gd.inputLayoutKey.begin(), gd.inputLayoutKey.end()) + L"|" +
+        std::to_wstring((int)gd.topologyType) + L"|" +
+        fmts + L"|" + std::to_wstring((int)gd.dsvFormat) + L"|" +
+        JoinDefines(gd.defines);
+    return key;
+}
+
+std::wstring MaterialManager::BuildKey(const Material::ComputeDesc& cd)
+{
+    std::wstring key = L"C2|" + cd.shaderFile + L"|" + std::wstring(cd.csEntry, cd.csEntry + strlen(cd.csEntry)) + L"|" + JoinDefines(cd.defines);
+    return key;
+}
+
+std::shared_ptr<Material> MaterialManager::GetOrCreateGraphics(Renderer* r, const Material::GraphicsDesc& gd)
+{
+    std::wstring key = BuildKey(gd);
+    auto it = materials_.find(key);
+    if (it != materials_.end()) { return it->second; }
+    auto m = std::make_shared<Material>();
+    m->CreateGraphics(r, gd);
+    materials_[key] = m;
+    return m;
+}
+
+std::shared_ptr<Material> MaterialManager::GetOrCreateCompute(Renderer* r, const Material::ComputeDesc& cd)
+{
+    std::wstring key = BuildKey(cd);
+    auto it = materials_.find(key);
+    if (it != materials_.end()) { return it->second; }
+    auto m = std::make_shared<Material>();
+    m->CreateCompute(r, cd);
+    materials_[key] = m;
+    return m;
+}
+
 bool MaterialManager::RequestFSProbeAsync()
 {
     bool expected = false;
     if (!fsProbeInFlight_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return false; // уже идёт
+        return false;
     }
 
     TaskSystem::Get().Submit([this]() {
@@ -529,7 +570,7 @@ void MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, 
         auto& mat = kv.second;
         if (mat) {
             if (mat->HotReloadIfPending(r, frameNumber, keepAliveFrames)) {
-                // можно залогировать успех
+                // лог: пересобрали
             }
             mat->CollectRetired(frameNumber, keepAliveFrames);
         }
