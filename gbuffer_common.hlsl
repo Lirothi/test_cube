@@ -88,12 +88,13 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
 #if NORMALMAP_IS_RG
     // --- RG (BC5/R8G8_UNORM): n.xy в [-1..1], n.z восстанавливаем ---
     float2 nrg = txNorm.Sample(samp, uv).rg * 2.0 - 1.0;
-    //nrg *= 1.5;
+    nrg *= texFlags.w;
     float  nz2 = saturate(1.0 - dot(nrg, nrg));
     float3 nTS = float3(nrg, sqrt(nz2));
 #else
     // --- RGB(A): классика ---
     float3 nTS = txNorm.Sample(samp, uv).xyz * 2.0 - 1.0;
+    nTS.xy *= texFlags.w;
 #endif
     //norm = PerturbNormal_Deriv(nTS, norm, PVS, uv);
     float3 T = normalize(TWS.xyz);

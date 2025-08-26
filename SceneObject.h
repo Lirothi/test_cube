@@ -7,6 +7,7 @@
 
 #include "CBManager.h"
 #include "Material.h"
+#include "MaterialData.h"
 #include "Mesh.h"
 #include "RenderContext.h"
 #include "Math.h"
@@ -18,6 +19,7 @@ public:
     // База создаёт CB по указанному layout (в б0 кладём "modelViewProj")
     // inputLayout/shaderFile — только для первичного графического материала (его можно заменить/править через GraphicsDesc)
     SceneObject(Renderer* renderer,
+        const std::string& matPreset,
         const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
@@ -42,6 +44,10 @@ public:
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m) { graphicsMaterial_.reset(m); } // если хочешь вручную
+
+    // пер-объектные параметры (b0)
+    MaterialParams& MaterialParamsRef() { return matParams_; }
+    const MaterialParams& MaterialParamsRef() const { return matParams_; }
 
     // GraphicsDesc — правим пайплайн (топология/блендинг/растр/DS)
     Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
@@ -78,11 +84,16 @@ protected:
         return cbLayout_->SetField<T>(name, value, cbvDataBegin_);
     }
 
+    void ApplyMaterialParamsToCB();
+
 protected:
     // Данные рендера
-    RenderContext graphicsCtx_;
-    std::shared_ptr<Material> graphicsMaterial_;
-    Material::GraphicsDesc graphicsDesc_;
+    std::shared_ptr<MaterialData> matData_;          // ассет: текстуры+фичи (shared)
+    MaterialParams                matParams_;        // пер-объект в b0
+    std::shared_ptr<Material>     graphicsMaterial_; // вариант шейдера (PSO/RS)
+    Material::GraphicsDesc        graphicsDesc_;
+    RenderContext                 graphicsCtx_;
+    std::string                   matPreset_;
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
@@ -91,10 +102,6 @@ protected:
     const ConstantBufferLayout* cbLayout_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer_;
     uint8_t* cbvDataBegin_ = nullptr;
-
-    // Первичные настройки (из конструктора)
-    std::wstring shaderFile_;
-    std::string inputLayoutKey_;
 
 private:
     SceneObject(const SceneObject&) = delete;

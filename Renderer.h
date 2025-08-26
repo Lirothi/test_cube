@@ -13,6 +13,7 @@
 #include "MeshManager.h"
 #include "TextManager.h"
 #include "FontManager.h"
+#include "MaterialDataManager.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -114,6 +115,7 @@ public:
 	MeshManager& GetMeshManager() { return meshManager_; }
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
+    MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
 
 	float GetFPS() const { return fps_; }
 
@@ -121,41 +123,47 @@ public:
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
-    template<class Alloc>
-    inline GpuDescHandle StageDescriptorTable(
-        Alloc& alloc,                                        // DescriptorAllocator ИЛИ DescriptorAllocatorSampler
-        D3D12_DESCRIPTOR_HEAP_TYPE heapType,                 // D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV или _SAMPLER
-        std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srcCpuHandles)
+    template<class Alloc, class It>
+    inline GpuDescHandle StageDescriptorTableRange(
+        Alloc& alloc,
+        D3D12_DESCRIPTOR_HEAP_TYPE heapType,
+        It first, It last)
     {
-        const UINT n = static_cast<UINT>(srcCpuHandles.size());
-        if (n == 0) {
-            return {}; // пусто
+        const UINT count = static_cast<UINT>(std::distance(first, last));
+        if (count == 0) {
+            return {};
         }
 
-        // 1) Выделяем подряд n слотов в shader-visible heap
-        GpuDescHandle block = alloc.Alloc(n);
+        GpuDescHandle block = alloc.Alloc(count);
         const UINT incr = alloc.GetIncr();
 
-        // 2) Копируем дескрипторы «стенка-в-стенку»
         D3D12_CPU_DESCRIPTOR_HANDLE dst = block.cpu;
-        for (auto h : srcCpuHandles) {
-            device_->CopyDescriptorsSimple(1, dst, h, heapType);
+        for (It it = first; it != last; ++it) {
+            const D3D12_CPU_DESCRIPTOR_HANDLE src = *it;
+            device_->CopyDescriptorsSimple(1, dst, src, heapType);
             dst.ptr += incr;
         }
-
-        // 3) Возвращаем старт таблицы (gpu указывает на t0/s0 и т.д.)
         return block;
     }
 
-    // Удобные врапперы под твой Renderer с глобальными аллокаторами
-    inline GpuDescHandle StageSrvUavTable(std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srcCpuHandles)
+    inline GpuDescHandle StageSrvUavTable(std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> src)
     {
-        return StageDescriptorTable(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, srcCpuHandles);
+        return StageDescriptorTableRange(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, src.begin(), src.end());
     }
 
-    inline GpuDescHandle StageSamplerTable(std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srcCpuHandles)
+    inline GpuDescHandle StageSrvUavTable(const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& src)
     {
-        return StageDescriptorTable(GetSamplerAlloc(),D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, srcCpuHandles);
+        return StageDescriptorTableRange(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, src.begin(), src.end());
+    }
+
+    inline GpuDescHandle StageSamplerTable(std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> src)
+    {
+        return StageDescriptorTableRange(GetSamplerAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, src.begin(), src.end());
+    }
+
+    inline GpuDescHandle StageSamplerTable(const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& src)
+    {
+        return StageDescriptorTableRange(GetSamplerAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, src.begin(), src.end());
     }
 
 private:
@@ -250,4 +258,5 @@ private:
 	MeshManager meshManager_;
     FontManager fontManager_;
     TextManager textManager_;
+    MaterialDataManager materialDataManager_;
 };

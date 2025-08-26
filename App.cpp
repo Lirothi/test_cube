@@ -7,17 +7,17 @@ public:
     RotatingObject(
         Renderer* renderer,
         const std::string& modelName,
+        const std::string& matPreset,
         const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader,
         float3 pos,
         float3 scale)
-        :SceneObject(renderer, cbLayout, inputLayout, graphicsShader)
+        :SceneObject(renderer, matPreset, cbLayout, inputLayout, graphicsShader)
     {
         transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
         transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
         modelName_ = modelName;
-        graphicsDesc_.defines = { {"NORMALMAP_IS_RG","1"}};
     }
 
     void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
@@ -35,13 +35,6 @@ public:
 
             GetMesh()->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, cubeVerts, cubeIndices.data(), (UINT)cubeIndices.size(), true);
         }
-
-        //std::vector<uint32_t> cpuRGBA;
-        //CreateCheckerTex(cpuRGBA);
-        //tex_.CreateFromRGBA8(renderer, uploadCmdList, cpuRGBA.data(), 256, 256, uploadKeepAlive);
-        albedoTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/brick_albedo.png", Texture2D::Usage::AlbedoSRGB }, uploadKeepAlive);
-        mrTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/brick_mr.png", Texture2D::Usage::MetalRough }, uploadKeepAlive);
-        normalTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/brick_normal_rg.png", Texture2D::Usage::NormalMap }, uploadKeepAlive);
     }
 
     void Tick(float deltaTime) override {
@@ -58,19 +51,7 @@ public:
 
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override
     {
-        // CBV b0: пер-объектный буфер
-        graphicsCtx_.cbv[0] = GetConstantBuffer()->GetGPUVirtualAddress();
-
-        auto tbl = renderer->StageSrvUavTable({
-            albedoTex_.GetSRVCPU(),   // t0
-            mrTex_.GetSRVCPU(),       // t1
-            normalTex_.GetSRVCPU()    // t2
-        });
-        graphicsCtx_.table[0] = tbl.gpu;
-
-        // Самплер s0
-        auto aniso = SamplerManager::AnisoWrap(16);
-        graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, aniso);
+        matData_->StageGBufferBindings(renderer, graphicsCtx_, 0, 0);
     }
 
     void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) override
@@ -79,10 +60,7 @@ public:
         UpdateUniform("view", view.xm());
         UpdateUniform("proj", proj.xm());
 
-        UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
-        UpdateUniform("mr", Math::float2(0.0f, 0.35f).xm());
-
-        UpdateUniform("texFlags", Math::float4(1.0f, 1.0f, 1.0f, 0.0f).xm());
+        ApplyMaterialParamsToCB();
     }
 
     bool IsSimpleRender() const override {
@@ -95,9 +73,6 @@ private:
     float rotationY_ = 0.0f;
     float angularSpeed_ = 0.0f;// 10.0f * Math::DEG2RAD;
     std::string modelName_;
-    Texture2D albedoTex_;
-    Texture2D mrTex_;
-    Texture2D normalTex_;
 };
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -185,6 +160,9 @@ void App::InitScene()
 	scene_.SetActions(&actions_);
     actions_.LoadFromJsonFile(L"bindings.json");
 
+    renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.png",  L"textures/brick_mr.png",  L"textures/brick_normal_rg.png",  /*RG*/true, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.png", L"textures/bronze_mr.png", L"textures/bronze_normal_rg.png", /*RG*/true, /*TBN*/true });
+
     // Заранее создаем upload command list
     ComPtr<ID3D12CommandAllocator> uploadAlloc;
     ComPtr<ID3D12GraphicsCommandList> uploadCmdList;
@@ -205,14 +183,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1,1,1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/sphere.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
+    auto box = std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "brick", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
+    box->MaterialParamsRef().texFlags.w = 2;
+    scene_.AddObject(std::move(box));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/sphere.obj", "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "brick", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));
 
-    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "GBufferPO", "PosNormTanUV", L"gbuffer_inst.hlsl", L"instance_anim.hlsl"));
+    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer_inst.hlsl", L"instance_anim.hlsl"));
 
     renderer_.InitFence();
 

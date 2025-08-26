@@ -11,11 +11,11 @@ using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
 SceneObject::SceneObject(Renderer* renderer,
+    const std::string& matPreset,
     const std::string& cbLayout,
     const std::string& inputLayout,
-    const std::wstring& graphicsShader)
-    : shaderFile_(graphicsShader)
-    , inputLayoutKey_(inputLayout)
+    const std::wstring& graphicsShader):
+    matPreset_(matPreset)
 {
     if (!renderer) { throw std::runtime_error("SceneObject: renderer is null"); }
 
@@ -45,8 +45,8 @@ SceneObject::SceneObject(Renderer* renderer,
     ThrowIfFailed(constantBuffer_->Map(0, &range, reinterpret_cast<void**>(&cbvDataBegin_)));
 
     // Дефолтный GraphicsDesc (треугольники, depth on, без бленда)
-    graphicsDesc_.shaderFile = shaderFile_;
-    graphicsDesc_.inputLayoutKey = inputLayoutKey_;
+    graphicsDesc_.shaderFile = graphicsShader;
+    graphicsDesc_.inputLayoutKey = inputLayout;
     graphicsDesc_.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     graphicsDesc_.numRT = 3;
     graphicsDesc_.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // GB0: Albedo+Metal
@@ -66,16 +66,19 @@ SceneObject::~SceneObject()
 }
 
 void SceneObject::Init(Renderer* renderer,
-    ID3D12GraphicsCommandList* /*uploadCmdList*/,
-    std::vector<ComPtr<ID3D12Resource>>* /*uploadKeepAlive*/)
+    ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    // Создаём (или забираем из кэша) графический материал по текущему GraphicsDesc
-    graphicsMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, graphicsDesc_);
-    if (!graphicsMaterial_) {
-        throw std::runtime_error("SceneObject::Init: failed to create graphics material");
+    if (!matData_)
+    {
+        matData_ = renderer->GetMaterialDataManager()->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, matPreset_);
+        if (matData_)
+        {
+	        matData_->ConfigureDefinesForGBuffer(graphicsDesc_);
+        }
     }
 
-    // b0 по-умолчанию — наш CB
+    graphicsMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, graphicsDesc_);
     graphicsCtx_.cbv[0] = constantBuffer_->GetGPUVirtualAddress();
 }
 
@@ -106,4 +109,12 @@ void SceneObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, cons
     RecordGraphics(renderer, cl);
     
     IssueDraw(renderer, cl);
+}
+
+void SceneObject::ApplyMaterialParamsToCB()
+{
+    const auto& p = matParams_;
+    UpdateUniform("baseColor", p.baseColor.xm());
+    UpdateUniform("metalRough", p.metalRough.xm());
+    UpdateUniform("texFlags", p.texFlags.xm());
 }

@@ -14,16 +14,16 @@ using Microsoft::WRL::ComPtr;
 GpuInstancedModels::GpuInstancedModels(Renderer* renderer,
     std::string modelName,
     UINT numInstances,
+    const std::string& matPreset,
     const std::string& cbLayout,
     const std::string& inputLayout,
     const std::wstring& graphicsShader,
     const std::wstring& computeShader)
-    : SceneObject(renderer, cbLayout, inputLayout, graphicsShader)
+    : SceneObject(renderer, matPreset, cbLayout, inputLayout, graphicsShader)
     , computeShader_(computeShader)
     , modelName_(std::move(modelName))
     , instanceCount_(numInstances)
 {
-    graphicsDesc_.defines = { {"NORMALMAP_IS_RG","1"} };
 }
 
 void GpuInstancedModels::Init(Renderer* renderer,
@@ -46,10 +46,6 @@ void GpuInstancedModels::Init(Renderer* renderer,
             renderer->SetResourceState(ib, D3D12_RESOURCE_STATE_INDEX_BUFFER);
         }
     }
-
-    albedoTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_albedo.png", Texture2D::Usage::AlbedoSRGB }, uploadKeepAlive);
-    mrTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_mr.png", Texture2D::Usage::MetalRough }, uploadKeepAlive);
-    normalTex_.CreateFromFile(renderer, uploadCmdList, { L"textures/bronze_normal_rg.png", Texture2D::Usage::NormalMap }, uploadKeepAlive);
 
     // Instance-buffer (DEFAULT, UAV)
     instanceBuffer_.Create(renderer->GetDevice(), instanceCount_, uploadCmdList, uploadKeepAlive);
@@ -84,17 +80,16 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
 
 void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
-    auto tbl = renderer->StageSrvUavTable({
-        instanceBuffer_.GetSRVCPU(), // t0
-        albedoTex_.GetSRVCPU(),      // t1
-        mrTex_.GetSRVCPU(),          // t2
-        normalTex_.GetSRVCPU()       // t3
-    });
+    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+    srvs.reserve(4);
+    srvs.push_back(instanceBuffer_.GetSRVCPU()); // t0: инстансы
+    if (matData_) { matData_->AppendGBufferSRVs(srvs); } // t1..t3: albedo/mr/normal
+
+    auto tbl = renderer->StageSrvUavTable(srvs);
     graphicsCtx_.table[0] = tbl.gpu;
 
-    // Самплер s0
-    auto lin = SamplerManager::AnisoWrap(16);
-    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, lin);
+    auto aniso = SamplerManager::AnisoWrap(16);
+    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, aniso);
 }
 
 void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -112,11 +107,7 @@ void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, co
     UpdateUniform("view", view.xm());
     UpdateUniform("proj", proj.xm());
 
-    UpdateUniform("baseColor", Math::float4(1, 1, 1, 1).xm());
-    UpdateUniform("mr", Math::float2(0.95f, 0.4f).xm());
-
-    // Флаги наличия текстур: Albedo есть (1), MR нет (0)
-    UpdateUniform("texFlags", Math::float4(1.0f, 1.0f, 1.0f, 0.0f).xm());
+    ApplyMaterialParamsToCB();
 }
 
 void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)

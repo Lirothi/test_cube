@@ -145,6 +145,8 @@
     <ClCompile Include="InstanceBuffer.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Material.cpp" />
+    <ClCompile Include="MaterialData.cpp" />
+    <ClCompile Include="MaterialDataManager.cpp" />
     <ClCompile Include="Mesh.cpp" />
     <ClCompile Include="MeshManager.cpp" />
     <ClCompile Include="Renderer.cpp" />
@@ -171,6 +173,8 @@
     <ClInclude Include="InputManager.h" />
     <ClInclude Include="InstanceBuffer.h" />
     <ClInclude Include="Material.h" />
+    <ClInclude Include="MaterialData.h" />
+    <ClInclude Include="MaterialDataManager.h" />
     <ClInclude Include="Math.h" />
     <ClInclude Include="Mesh.h" />
     <ClInclude Include="MeshManager.h" />

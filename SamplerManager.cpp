@@ -98,7 +98,7 @@ D3D12_SAMPLER_DESC SamplerManager::LinearWrap() {
     s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     s.MaxAnisotropy = 1;
     return s;
 }
@@ -107,7 +107,7 @@ D3D12_SAMPLER_DESC SamplerManager::LinearClamp() {
     s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     s.MaxAnisotropy = 1;
     return s;
 }
@@ -116,7 +116,7 @@ D3D12_SAMPLER_DESC SamplerManager::PointClamp() {
     s.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
     s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     s.MaxAnisotropy = 1;
     return s;
 }
@@ -125,7 +125,7 @@ D3D12_SAMPLER_DESC SamplerManager::AnisoWrap(UINT aniso) {
     s.Filter = D3D12_FILTER_ANISOTROPIC;
     s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     s.MaxAnisotropy = aniso ? aniso : 8;
     return s;
 }
@@ -135,7 +135,7 @@ D3D12_SAMPLER_DESC SamplerManager::FontMinPointMagLinearClamp() {
     d.AddressU = d.AddressV = d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     d.MipLODBias = 0.0f;
     d.MaxAnisotropy = 1;
-    d.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+    d.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
     d.MinLOD = 0.0f;
     d.MaxLOD = D3D12_FLOAT32_MAX;
     return d;

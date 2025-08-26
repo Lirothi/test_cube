@@ -13,6 +13,7 @@ public:
     GpuInstancedModels(Renderer* renderer,
         std::string modelName,
         UINT numInstances,
+        const std::string& matPreset,
         const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader,
@@ -47,7 +48,4 @@ private:
 
     // модель/текстура
     std::string modelName_;
-    Texture2D albedoTex_;
-    Texture2D mrTex_;
-    Texture2D normalTex_;
 };
