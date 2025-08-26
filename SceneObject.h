@@ -78,8 +78,21 @@ protected:
 
     // Утилита записи в CB по имени из layout (b0)
     template<typename T> bool UpdateUniform(const std::string& name, const T& value) {
-        if (!cbLayout_ || !cbvDataBegin_) { return false; }
-        return cbLayout_->SetField<T>(name, value, cbvDataBegin_);
+        if (!cbvDataBegin_) { return false; }
+        if (cbLayout_)
+        {
+	        return cbLayout_->SetField<T>(name, value, cbvDataBegin_);
+        }
+        else
+        {
+            UINT off = 0, sz = 0, bytes = sizeof(T);
+            if (graphicsMaterial_->GetCBFieldOffset(0, name, off, sz)) {
+                std::memcpy(cbvDataBegin_ + off, &value, (bytes < sz ? bytes : sz));
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void ApplyMaterialParamsToCB();

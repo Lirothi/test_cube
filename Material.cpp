@@ -6,6 +6,18 @@
 #include <stdexcept>
 #include <algorithm>
 
+#include <d3d12shader.h>    // ID3D12ShaderReflection
+#include <d3dcompiler.h>    // D3DReflect (DXBC)
+#include <dxcapi.h>         // DXC reflection (DXIL)
+
+// Опционально: если доступен заголовок с FourCC для DXIL
+#if __has_include(<dxc/dxilcontainer.h>)
+#include <dxc/dxilcontainer.h> // hlsl::DFCC_DXIL
+#endif
+
+#pragma comment(lib, "d3dcompiler.lib") // D3DReflect
+#pragma comment(lib, "dxcompiler.lib")
+
 #include "Helpers.h"
 #include "RootSignatureLayout.h"
 #include "RootSignatureParser.h"
@@ -403,6 +415,10 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         return false;
     }
 
+    cbInfos_.clear();
+    ReflectShaderBlob(vs5.Get(), cbInfos_);
+    ReflectShaderBlob(ps5.Get(), cbInfos_);
+
     BuildRootFromLayout(r->GetDevice(), layoutParsed, gd.rsFlags, outRS, outParams);
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
@@ -463,6 +479,9 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     if (FAILED(CompileWithIncludes(cd.shaderFile, cd.csEntry, "cs_5_0", cf, cd.defines, cs5, incCS))) {
         return false;
     }
+
+    cbInfos_.clear();
+    ReflectShaderBlob(cs5.Get(), cbInfos_);
 
     RootSignatureLayout layoutParsed;
     {
@@ -575,4 +594,132 @@ void MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, 
             mat->CollectRetired(frameNumber, keepAliveFrames);
         }
     }
+}
+
+const Material::CBufferInfo* Material::GetCBInfo(UINT bRegister) const {
+    auto it = cbInfos_.find(bRegister);
+    return (it == cbInfos_.end()) ? nullptr : &it->second;
+}
+bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const {
+    auto* cb = GetCBInfo(bRegister);
+    if (!cb) return false;
+    auto it = cb->fieldsByName.find(name);
+    if (it == cb->fieldsByName.end()) return false;
+    outOffset = it->second.offset;
+    outSize = it->second.size;
+    return true;
+}
+
+void Material::ProcessReflection(ID3D12ShaderReflection* refl,
+    std::unordered_map<UINT, CBufferInfo>& io)
+{
+    if (!refl) return;
+
+    D3D12_SHADER_DESC sd{};
+    if (FAILED(refl->GetDesc(&sd))) return;
+
+    // cbuffer name -> bRegister (bN)
+    std::unordered_map<std::string, UINT> bindOfCB;
+    for (UINT r = 0; r < sd.BoundResources; ++r) {
+        D3D12_SHADER_INPUT_BIND_DESC bd{};
+        if (SUCCEEDED(refl->GetResourceBindingDesc(r, &bd))) {
+            if (bd.Type == D3D_SIT_CBUFFER) {
+                bindOfCB[bd.Name ? bd.Name : ""] = bd.BindPoint; // bN
+            }
+        }
+    }
+
+    for (UINT i = 0; i < sd.ConstantBuffers; ++i) {
+        ID3D12ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByIndex(i);
+        D3D12_SHADER_BUFFER_DESC cbd{};
+        if (FAILED(cb->GetDesc(&cbd))) continue;
+
+        std::string cbName = cbd.Name ? cbd.Name : "";
+        auto itBind = bindOfCB.find(cbName);
+        if (itBind == bindOfCB.end()) continue; // пропускаем $Globals и пр.
+
+        const UINT bReg = itBind->second;
+        auto& dst = io[bReg];
+        dst.bindRegister = bReg;
+        dst.sizeBytes = std::max<UINT>(dst.sizeBytes, cbd.Size);
+
+        for (UINT v = 0; v < cbd.Variables; ++v) {
+            ID3D12ShaderReflectionVariable* var = cb->GetVariableByIndex(v);
+            D3D12_SHADER_VARIABLE_DESC vd{};
+            if (FAILED(var->GetDesc(&vd))) continue;
+
+            CBufferField f{};
+            f.name = vd.Name ? vd.Name : "";
+            f.offset = vd.StartOffset;
+            f.size = vd.Size;
+
+            dst.fieldsByName[f.name] = f; // объединяем поля с других стадий, offset должен совпадать
+        }
+    }
+}
+
+#define DXIL_FOURCC(ch0, ch1, ch2, ch3)                                        \
+  ((uint32_t)(uint8_t)(ch0) | (uint32_t)(uint8_t)(ch1) << 8 |                  \
+   (uint32_t)(uint8_t)(ch2) << 16 | (uint32_t)(uint8_t)(ch3) << 24)
+
+void Material::ReflectShaderBlob(ID3DBlob* blob,
+    std::unordered_map<UINT, CBufferInfo>& io)
+{
+    if (!blob) return;
+
+    // ===== Попытка №1: DXIL через DXC =====
+    {
+        Microsoft::WRL::ComPtr<IDxcContainerReflection> crefl;
+        if (SUCCEEDED(DxcCreateInstance(CLSID_DxcContainerReflection, IID_PPV_ARGS(&crefl)))) {
+            if (SUCCEEDED(crefl->Load(reinterpret_cast<IDxcBlob*>(blob)))) {
+
+                // FourCC DXIL (берём из заголовка, либо формируем сами)
+                UINT32 fourccDXIL = DXIL_FOURCC('D', 'X', 'I', 'L');
+//#if __has_include(<dxc/dxilcontainer.h>)
+//                    hlsl::DFCC_DXIL;
+//#else
+//                    // MAKEFOURCC('D','X','I','L')
+//                    ((UINT32)'D')
+//                    | ((UINT32)'X' << 8)
+//                    | ((UINT32)'I' << 16)
+//                    | ((UINT32)'L' << 24);
+//#endif
+
+                UINT partIndex = 0;
+                if (SUCCEEDED(crefl->FindFirstPartKind(fourccDXIL, &partIndex))) {
+                    Microsoft::WRL::ComPtr<IDxcBlob> part;
+                    if (SUCCEEDED(crefl->GetPartContent(partIndex, &part))) {
+                        Microsoft::WRL::ComPtr<IDxcUtils> utils;
+                        if (SUCCEEDED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))) {
+                            DxcBuffer buf{};
+                            buf.Ptr = part->GetBufferPointer();
+                            buf.Size = part->GetBufferSize();
+                            buf.Encoding = 0u; // бинарь: кодировка не важна, 0 (DXC_CP_ACP) ок
+
+                            Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
+                            if (SUCCEEDED(utils->CreateReflection(&buf, IID_PPV_ARGS(&refl)))) {
+                                ProcessReflection(refl.Get(), io);
+                                return; // успех: DXIL
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== Попытка №2: DXBC через D3DReflect =====
+    {
+        Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
+        if (SUCCEEDED(D3DReflect(blob->GetBufferPointer(),
+            blob->GetBufferSize(),
+            __uuidof(ID3D12ShaderReflection),
+            (void**)refl.GetAddressOf())))
+        {
+            ProcessReflection(refl.Get(), io);
+            return; // успех: DXBC
+        }
+    }
+
+    // Если сюда дошли — рефлексия не получилась (оставляем io как есть)
 }

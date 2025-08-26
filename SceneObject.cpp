@@ -20,7 +20,6 @@ SceneObject::SceneObject(Renderer* renderer,
     if (!renderer) { throw std::runtime_error("SceneObject: renderer is null"); }
 
     cbLayout_ = renderer->GetCBManager().GetLayout(cbLayout);
-    if (!cbLayout_) { throw std::runtime_error("SceneObject: ConstantBufferLayout not found"); }
 
     // Дефолтный GraphicsDesc (треугольники, depth on, без бленда)
     graphicsDesc_.shaderFile = graphicsShader;
@@ -77,14 +76,26 @@ void SceneObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, cons
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
 
-    constexpr UINT align = 256;
-    const UINT rawSize = cbLayout_->GetSize();
-    const UINT cbSize = (rawSize + (align - 1)) & ~(align - 1);
+    UINT cbSizeBytes = 0;
 
-    auto alloc = renderer->GetFrameResource().AllocDynamic(cbSize, align);
+	if (cbLayout_) {
+        cbSizeBytes = cbLayout_->GetSize();
+    }
+
+    if (cbSizeBytes == 0) {
+        cbSizeBytes = graphicsMaterial_->GetCBSizeBytes(0);
+    }
+    // страховка: минимум 256 байт
+    constexpr UINT kAlign = 256;
+    if (cbSizeBytes == 0)
+    {
+	    cbSizeBytes = kAlign;
+    }
+    const UINT cbSizeAligned = (cbSizeBytes + (kAlign - 1)) & ~(kAlign - 1);
+
+    // 2) выделить слайс в ринг-буфере кадра и прописать CBV
+    auto alloc = renderer->GetFrameResource().AllocDynamic(cbSizeAligned, kAlign); // <- как просили
     cbvDataBegin_ = static_cast<uint8_t*>(alloc.cpu);
-
-    // 2) проставить b0 в RenderContext
     graphicsCtx_.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);

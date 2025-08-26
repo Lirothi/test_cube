@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <mutex>
 #include <atomic>
+#include <d3d12shader.h>
 
 #include "RenderContext.h"
 
@@ -115,6 +116,21 @@ public:
     bool HotReloadIfPending(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
     void CollectRetired(uint64_t frameIndex, uint64_t keepAliveFrames);
 
+    struct CBufferField {
+        std::string name;
+        UINT        offset = 0;
+        UINT        size = 0;
+    };
+    struct CBufferInfo {
+        UINT bindRegister = 0;    // bN
+        UINT sizeBytes = 0;
+        std::unordered_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
+    };
+
+    const CBufferInfo* GetCBInfo(UINT bRegister) const;
+    bool GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const;
+    UINT GetCBSizeBytes(UINT bRegister) const {const CBufferInfo* cb = GetCBInfo(bRegister); return cb ? cb->sizeBytes : 0u; }
+
 private:
     ComPtr<ID3D12RootSignature> rootSignature_;
     ComPtr<ID3D12PipelineState> pipelineState_;
@@ -137,6 +153,13 @@ private:
         uint64_t retireFrame = 0;
     };
     std::vector<RetiredState> retired_;
+
+    std::unordered_map<UINT, CBufferInfo> cbInfos_; // bReg -> info
+
+    static void ReflectShaderBlob(ID3DBlob* blob,
+        std::unordered_map<UINT, CBufferInfo>& io);
+    static void ProcessReflection(ID3D12ShaderReflection* refl,
+        std::unordered_map<UINT, CBufferInfo>& io);
 
     // общие билдеры
     bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,

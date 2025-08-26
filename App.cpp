@@ -183,7 +183,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
-    auto box = std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "brick", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
+    auto box = std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "brick", "", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
     box->MaterialParamsRef().texFlags.w = 2;
     scene_.AddObject(std::move(box));
     scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
