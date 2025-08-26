@@ -12,14 +12,13 @@ using Microsoft::WRL::ComPtr;
 
 SceneObject::SceneObject(Renderer* renderer,
     const std::string& matPreset,
-    const std::string& cbLayout,
     const std::string& inputLayout,
     const std::wstring& graphicsShader):
     matPreset_(matPreset)
 {
     if (!renderer) { throw std::runtime_error("SceneObject: renderer is null"); }
 
-    cbLayout_ = renderer->GetCBManager().GetLayout(cbLayout);
+    //cbLayout_ = renderer->GetCBManager().GetLayout(cbLayout);
 
     // Дефолтный GraphicsDesc (треугольники, depth on, без бленда)
     graphicsDesc_.shaderFile = graphicsShader;
@@ -52,7 +51,7 @@ void SceneObject::Init(Renderer* renderer,
         }
     }
 
-    graphicsMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, graphicsDesc_);
+    graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc_);
 }
 
 void SceneObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)

@@ -130,6 +130,23 @@ public:
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
     bool GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const;
     UINT GetCBSizeBytes(UINT bRegister) const {const CBufferInfo* cb = GetCBInfo(bRegister); return cb ? cb->sizeBytes : 0u; }
+    UINT GetCBSizeBytesAligned(UINT bRegister, UINT alignment) const {
+        return (GetCBSizeBytes(bRegister) + (alignment - 1)) & ~(alignment - 1);
+    }
+    template<typename T> bool UpdateCBField(UINT bRegister, const std::string& name, const T& value, uint8_t* destCB)
+    {
+        UINT off = 0, sz = 0, bytes = sizeof(T);
+        if (GetCBFieldOffset(bRegister, name, off, sz)) {
+            std::memcpy(destCB + off, &value, (bytes < sz ? bytes : sz));
+            return true;
+        }
+
+        return false;
+    }
+    template<typename T> bool UpdateCB0Field(const std::string& name, const T& value, uint8_t* destCB)
+    {
+        return UpdateCBField(0, name, value, destCB);
+    }
 
 private:
     ComPtr<ID3D12RootSignature> rootSignature_;

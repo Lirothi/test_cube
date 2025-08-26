@@ -24,7 +24,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
-        matLighting_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+        matLighting_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 
     if (!matCompose_) {
@@ -35,7 +35,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
-        matCompose_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+        matCompose_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 
     if (!matTonemap_) {
@@ -46,7 +46,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
-        matTonemap_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, gd);
+        matTonemap_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 }
 
@@ -189,29 +189,26 @@ void Scene::Render(Renderer* renderer) {
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color);
 
-            const auto* layout = renderer->GetCBManager().GetLayout("LightingPF"); // <- LayoutManager как нужно
-            assert(layout);
             float3 sunDirWS = Math::float3(-0.5f, -0.7f, -0.5f); // «лучи вниз»
             sunDirWS = sunDirWS.Normalized();
             mat4 invView = mat4::Inverse(view);
             mat4 invProj = mat4::Inverse(proj);
 
             // аллоцируем динамический CB в аплоад-ринге текущего кадра
-            auto cb = renderer->GetFrameResource().AllocDynamic(layout->GetSize(), /*align*/256);
+            auto cb = renderer->GetFrameResource().AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
-            // пишем поля по именам в сгенерированный блок
-            layout->SetField("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
-            layout->SetField("ambientIntensity", 0.01f, (uint8_t*)cb.cpu);
-            layout->SetField("lightColor", float3(1, 1, 1).xm(), (uint8_t*)cb.cpu);
-            layout->SetField("exposure", 1.0f, (uint8_t*)cb.cpu);
-            layout->SetField("cameraPosWS", camera_.GetPosition().xm(), (uint8_t*)cb.cpu);
-            layout->SetField("invView", invView.xm(), (uint8_t*)cb.cpu);
-            layout->SetField("invProj", invProj.xm(), (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("ambientIntensity", 0.01f, (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("lightRgb", float3(1, 1, 1).xm(), (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("exposure", 1.0f, (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition().xm(), (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("invView", invView.xm(), (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("invProj", invProj.xm(), (uint8_t*)cb.cpu);
 
             RenderContext rc{};
             rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
             rc.table[0] = renderer->StageGBufferSrvTable();
-            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::PointClamp() });
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::PointClamp() });
 
             matLighting_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -231,7 +228,7 @@ void Scene::Render(Renderer* renderer) {
 
             RenderContext rc{};
             rc.table[0] = renderer->StageComposeSrvTable(); // t0..t1
-            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
             matCompose_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -278,7 +275,7 @@ void Scene::Render(Renderer* renderer) {
 
             RenderContext rc{};
             rc.table[0] = renderer->StageTonemapSrvTable(); // t0
-            rc.samplerTable[0] = renderer->GetSamplerManager().GetTable(renderer, { SamplerManager::LinearClamp() });
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
             matTonemap_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

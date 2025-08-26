@@ -220,7 +220,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     rc_.constants[1] = std::move(k);
 
     // Самплер (linear clamp)
-    rc_.samplerTable[0] = r->GetSamplerManager().GetTable(r, { SamplerManager::LinearClamp() });
+    rc_.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
 
     mat_.Bind(cl, rc_);
 

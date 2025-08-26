@@ -8,12 +8,11 @@ public:
         Renderer* renderer,
         const std::string& modelName,
         const std::string& matPreset,
-        const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader,
         float3 pos,
         float3 scale)
-        :SceneObject(renderer, matPreset, cbLayout, inputLayout, graphicsShader)
+        :SceneObject(renderer, matPreset, inputLayout, graphicsShader)
     {
         transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
         transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
@@ -25,7 +24,7 @@ public:
         SceneObject::Init(renderer, uploadCmdList, uploadKeepAlive);
         if (!modelName_.empty())
         {
-            mesh_ = renderer->GetMeshManager().Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+            mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
         }
         else
         {
@@ -183,16 +182,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
-    auto box = std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "brick", "", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
+    auto box = std::make_unique<RotatingObject>(&renderer_, "models/box.obj", "brick", "PosNormTanUV", L"gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
     box->MaterialParamsRef().texFlags.w = 2;
     scene_.AddObject(std::move(box));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/sphere.obj", "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "brick", "GBufferPO", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/teapot.obj", "bronze", "PosNormTanUV", L"gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/sphere.obj", "bronze", "PosNormTanUV", L"gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>(&renderer_, "models/corgi.obj", "brick", "PosNormTanUV", L"gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
 
     scene_.AddObject(std::make_unique<DebugGrid>(&renderer_, 100.0f));
 
-    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "bronze", "GBufferPO", "PosNormTanUV", L"gbuffer_inst.hlsl", L"instance_anim.hlsl"));
+    scene_.AddObject(std::make_unique<GpuInstancedModels>(&renderer_, "models/teapot.obj", 100, "bronze", "PosNormTanUV", L"gbuffer_inst.hlsl", L"instance_anim.hlsl"));
 
     renderer_.InitFence();
 

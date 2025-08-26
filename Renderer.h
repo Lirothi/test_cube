@@ -108,11 +108,11 @@ public:
 
     void InitTextSystem(ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, const std::wstring& folder);
 
-    SamplerManager& GetSamplerManager() { return samplerManager_; }
-	ConstantBufferLayoutManager& GetCBManager() { return cbManager_; }
-	MaterialManager& GetMaterialManager() { return materialManager_; }
-	InputLayoutManager& GetInputLayoutManager() { return inputLayoutManager_; }
-	MeshManager& GetMeshManager() { return meshManager_; }
+    SamplerManager* GetSamplerManager() { return &samplerManager_; }
+	ConstantBufferLayoutManager* GetCBManager() { return &cbManager_; }
+	MaterialManager* GetMaterialManager() { return &materialManager_; }
+	InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
+	MeshManager* GetMeshManager() { return &meshManager_; }
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }

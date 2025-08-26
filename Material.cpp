@@ -428,7 +428,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         pso.InputLayout = { nullptr, 0 };
     }
     else {
-        auto il = r->GetInputLayoutManager().Get(gd.inputLayoutKey);
+        auto il = r->GetInputLayoutManager()->Get(gd.inputLayoutKey);
         pso.InputLayout = { il.desc, il.count };
     }
 

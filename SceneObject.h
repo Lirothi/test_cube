@@ -20,7 +20,6 @@ public:
     // inputLayout/shaderFile — только для первичного графического материала (его можно заменить/править через GraphicsDesc)
     SceneObject(Renderer* renderer,
         const std::string& matPreset,
-        const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     virtual ~SceneObject();

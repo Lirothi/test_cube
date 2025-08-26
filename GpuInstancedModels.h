@@ -14,7 +14,6 @@ public:
         std::string modelName,
         UINT numInstances,
         const std::string& matPreset,
-        const std::string& cbLayout,
         const std::string& inputLayout,
         const std::wstring& graphicsShader,
         const std::wstring& computeShader);

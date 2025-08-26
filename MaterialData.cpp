@@ -79,5 +79,5 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
         }
     }
     auto aniso = SamplerManager::AnisoWrap(16);
-    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager().Get(r, aniso);
+    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, aniso);
 }

@@ -15,11 +15,10 @@ GpuInstancedModels::GpuInstancedModels(Renderer* renderer,
     std::string modelName,
     UINT numInstances,
     const std::string& matPreset,
-    const std::string& cbLayout,
     const std::string& inputLayout,
     const std::wstring& graphicsShader,
     const std::wstring& computeShader)
-    : SceneObject(renderer, matPreset, cbLayout, inputLayout, graphicsShader)
+    : SceneObject(renderer, matPreset, inputLayout, graphicsShader)
     , computeShader_(computeShader)
     , modelName_(std::move(modelName))
     , instanceCount_(numInstances)
@@ -34,10 +33,10 @@ void GpuInstancedModels::Init(Renderer* renderer,
     SceneObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     // Compute-материал
-    computeMaterial_ = renderer->GetMaterialManager().GetOrCreateCompute(renderer, computeShader_);
+    computeMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, computeShader_);
 
     // Модель
-    mesh_ = renderer->GetMeshManager().Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+    mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
     {   // ресурсные состояния VB/IB
         if (ID3D12Resource* vb = mesh_->GetVertexBufferResource()) {
             renderer->SetResourceState(vb, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
@@ -89,7 +88,7 @@ void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsComma
     graphicsCtx_.table[0] = tbl.gpu;
 
     auto aniso = SamplerManager::AnisoWrap(16);
-    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager().Get(renderer, aniso);
+    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
 }
 
 void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl)

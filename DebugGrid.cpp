@@ -12,7 +12,7 @@ DebugGrid::DebugGrid(Renderer* renderer,
     float axisLen, float yPlane,
     float gridAlpha, float axisAlpha,
     float axisThicknessPx)
-    : SceneObject(renderer, "", /*cbLayout*/"MVP_Axis", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
+    : SceneObject(renderer, "", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
     , halfSize_(halfSize), step_(step), axisLen_(axisLen)
     , yPlane_(yPlane), gridAlpha_(gridAlpha), axisAlpha_(axisAlpha)
     , axisThicknessPx_(axisThicknessPx)
@@ -33,6 +33,8 @@ DebugGrid::DebugGrid(Renderer* renderer,
     gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+    cbLayout_ = renderer->GetCBManager()->GetLayout("MVP_Axis");
 }
 
 void DebugGrid::BuildGridCPU(std::vector<LineVertex>& out)
@@ -145,7 +147,7 @@ void DebugGrid::Init(Renderer* renderer,
     agd.inputLayoutKey = "AxisLine";
     agd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     agd.raster.DepthBias = -150;
-    axisMat_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, agd);
+    axisMat_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, agd);
 }
 
 void DebugGrid::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj)

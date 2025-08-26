@@ -55,7 +55,7 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
     if (align == 0u) {
         align = 16u;
     }
-    // выравнивание к степени 2
+    
     auto AlignUp_ = [](UINT v, UINT a) -> UINT {
         const UINT m = a - 1u;
         return (v + m) & ~m;
