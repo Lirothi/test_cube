@@ -102,7 +102,7 @@ public:
     // Доступ к глобальному аллокатору дескрипторов и текущему кадру
     DescriptorAllocator& GetDescAlloc() { return frameResources_[currentFrameIndex_].GetDescAlloc(); }
     DescriptorAllocator& GetSamplerAlloc() { return frameResources_[currentFrameIndex_].GetSamplerAlloc(); }
-    FrameResource& GetFrame() { return frameResources_[currentFrameIndex_]; }
+    FrameResource& GetFrameResource() { return frameResources_[currentFrameIndex_]; }
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
 

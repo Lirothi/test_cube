@@ -58,18 +58,26 @@ void MaterialData::AppendGBufferSRVs(std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& d
 }
 
 void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
-                                        UINT srvTableRegister, UINT samplerTableRegister) const
+                                        UINT srvTableRegister, UINT samplerTableRegister)
 {
-    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-    srvs.reserve(3);
-    // при желании можно поставить заглушки из renderer, но ты их пока не держишь — кладём только то, что есть
-    if (hasAlbedo) { srvs.push_back(albedo.GetSRVCPU()); }
-    if (hasMR)     { srvs.push_back(mr.GetSRVCPU()); }
-    if (hasNormal) { srvs.push_back(normal.GetSRVCPU()); }
-
-    auto tbl = r->StageSrvUavTable(srvs);
-    ctx.table[srvTableRegister] = tbl.gpu;
-
+    const UINT fi = r->GetCurrentFrameIndex();
+    std::lock_guard lck(cacheMtx_);
+    if (gbufferSrvCache_.frame == fi && gbufferSrvCache_.gpu.ptr != 0) {
+        ctx.table[srvTableRegister] = gbufferSrvCache_.gpu;
+    }
+    else {
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+        srvs.reserve(3);
+        if (hasAlbedo) srvs.push_back(albedo.GetSRVCPU());
+        if (hasMR)     srvs.push_back(mr.GetSRVCPU());
+        if (hasNormal) srvs.push_back(normal.GetSRVCPU());
+        if (!srvs.empty()) {
+            auto tbl = r->StageSrvUavTable(srvs);
+            ctx.table[srvTableRegister] = tbl.gpu;
+            gbufferSrvCache_.frame = fi;
+            gbufferSrvCache_.gpu = tbl.gpu;
+        }
+    }
     auto aniso = SamplerManager::AnisoWrap(16);
     ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager().Get(r, aniso);
 }

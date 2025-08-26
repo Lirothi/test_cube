@@ -197,7 +197,7 @@ void Scene::Render(Renderer* renderer) {
             mat4 invProj = mat4::Inverse(proj);
 
             // аллоцируем динамический CB в аплоад-ринге текущего кадра
-            auto cb = renderer->GetFrame().AllocDynamic(layout->GetSize(), /*align*/256);
+            auto cb = renderer->GetFrameResource().AllocDynamic(layout->GetSize(), /*align*/256);
 
             // пишем поля по именам в сгенерированный блок
             layout->SetField("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);

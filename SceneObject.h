@@ -53,8 +53,6 @@ public:
     Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
     void SetGraphicsDesc(const Material::GraphicsDesc& gd) { graphicsDesc_ = gd; }
 
-    // CB access
-    ID3D12Resource* GetConstantBuffer() const { return constantBuffer_.Get(); }
     const ConstantBufferLayout* GetCBLayout() const { return cbLayout_; }
 
     bool IsTransparent() const {
@@ -100,7 +98,6 @@ protected:
 
     // CB (upload, пер-объектный)
     const ConstantBufferLayout* cbLayout_ = nullptr;
-    Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer_;
     uint8_t* cbvDataBegin_ = nullptr;
 
 private:

@@ -60,8 +60,15 @@ public:
     // собрать SRV-таблицу и сэмплер для стандартного GBuffer-пасса:
     // TABLE(SRV(t0) SRV(t1) SRV(t2)) + TABLE(SAMPLER(s0))
     void StageGBufferBindings(Renderer* r, RenderContext& ctx,
-                              UINT srvTableRegister = 0, UINT samplerTableRegister = 0) const;
+                              UINT srvTableRegister = 0, UINT samplerTableRegister = 0);
 
     // для инстанс-пути (t0 = instances), дописать t1..t3
     void AppendGBufferSRVs(std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& dst) const;
+
+private:
+    struct SrvCache {
+        UINT frame = UINT_MAX;
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    } gbufferSrvCache_;
+    std::mutex cacheMtx_;
 };

@@ -22,28 +22,6 @@ SceneObject::SceneObject(Renderer* renderer,
     cbLayout_ = renderer->GetCBManager().GetLayout(cbLayout);
     if (!cbLayout_) { throw std::runtime_error("SceneObject: ConstantBufferLayout not found"); }
 
-    // Создать upload CB под размер layout
-    D3D12_HEAP_PROPERTIES heap = {};
-    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC desc = {};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = cbLayout_->GetSize();
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    ThrowIfFailed(renderer->GetDevice()->CreateCommittedResource(
-        &heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&constantBuffer_)));
-
-    D3D12_RANGE range = { 0, 0 };
-    ThrowIfFailed(constantBuffer_->Map(0, &range, reinterpret_cast<void**>(&cbvDataBegin_)));
-
     // Дефолтный GraphicsDesc (треугольники, depth on, без бленда)
     graphicsDesc_.shaderFile = graphicsShader;
     graphicsDesc_.inputLayoutKey = inputLayout;
@@ -60,9 +38,6 @@ SceneObject::SceneObject(Renderer* renderer,
 
 SceneObject::~SceneObject()
 {
-    if (constantBuffer_) {
-        constantBuffer_->Unmap(0, nullptr);
-    }
 }
 
 void SceneObject::Init(Renderer* renderer,
@@ -79,7 +54,6 @@ void SceneObject::Init(Renderer* renderer,
     }
 
     graphicsMaterial_ = renderer->GetMaterialManager().GetOrCreateGraphics(renderer, graphicsDesc_);
-    graphicsCtx_.cbv[0] = constantBuffer_->GetGPUVirtualAddress();
 }
 
 void SceneObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -102,6 +76,16 @@ void SceneObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, cons
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
+
+    constexpr UINT align = 256;
+    const UINT rawSize = cbLayout_->GetSize();
+    const UINT cbSize = (rawSize + (align - 1)) & ~(align - 1);
+
+    auto alloc = renderer->GetFrameResource().AllocDynamic(cbSize, align);
+    cbvDataBegin_ = static_cast<uint8_t*>(alloc.cpu);
+
+    // 2) проставить b0 в RenderContext
+    graphicsCtx_.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);
     UpdateUniforms(renderer, view, proj);

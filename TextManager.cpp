@@ -175,7 +175,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         return;
     }
 
-    FrameResource& fr = r->GetFrame();
+    FrameResource& fr = r->GetFrameResource();
 
     const UINT vbBytes = static_cast<UINT>(verts_.size() * sizeof(Vertex));
     const UINT ibBytes = static_cast<UINT>(idx_.size() * sizeof(uint32_t));

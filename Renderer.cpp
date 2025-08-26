@@ -73,7 +73,7 @@ void Renderer::InitD3D12(HWND window) {
         frameResources_[i].GetDescAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
         frameResources_[i].GetSamplerAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 256);
         frameFenceValues_[i] = 0;
-        frameResources_[i].InitUpload(device_.Get(), /*bytes*/ 2 * 1024 * 1024); // 2MB на кадр, под текст/мелочь
+        frameResources_[i].InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
     }
 
     samplerManager_.Init(device_.Get(), 512);
