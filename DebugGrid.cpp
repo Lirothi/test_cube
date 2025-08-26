@@ -12,7 +12,7 @@ DebugGrid::DebugGrid(Renderer* renderer,
     float axisLen, float yPlane,
     float gridAlpha, float axisAlpha,
     float axisThicknessPx)
-    : SceneObject(renderer, "brick", /*cbLayout*/"MVP_Axis", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
+    : SceneObject(renderer, "", /*cbLayout*/"MVP_Axis", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
     , halfSize_(halfSize), step_(step), axisLen_(axisLen)
     , yPlane_(yPlane), gridAlpha_(gridAlpha), axisAlpha_(axisAlpha)
     , axisThicknessPx_(axisThicknessPx)

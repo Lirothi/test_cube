@@ -143,58 +143,7 @@ void Scene::Render(Renderer* renderer) {
             renderer->RecordBindAndClear(t.cl);
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
-#if 0
-    auto pOpaque = rg.AddPass("Opaque", { pClear },
-        [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
-            RenderGraph rgOpaque(ctx.batchIndex);
 
-            rgOpaque.AddPass("OpaqueSimpleRender", {},
-                [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx)
-                {
-                    RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::OpaqueSimpleRender], ctx.batchIndex, view, proj, true);
-                });
-
-            rgOpaque.AddPass("OpaqueComplexRender", {},
-                [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx)
-                {
-                    RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::OpaqueComplexRender], ctx.batchIndex, view, proj, false);
-                });
-
-            rgOpaque.Execute(renderer);
-        });
-
-    auto pTransp = rg.AddPass("Transparent", { pOpaque },
-        [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
-            RenderGraph rgTransparent(ctx.batchIndex);
-
-            rgTransparent.AddPass("TransparentSimpleRender", {},
-                [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx)
-                {
-                    RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::TransparentSimpleRender], ctx.batchIndex, view, proj, true);
-                });
-
-            rgTransparent.AddPass("TransparentComplexRender", {},
-                [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx)
-                {
-                    RenderObjectBatch(renderer, objectsToRender[ObjectRenderType::TransparentComplexRender], ctx.batchIndex, view, proj, false);
-                });
-
-            rgTransparent.Execute(renderer);
-        });
-
-    // 4) Оверлей
-    auto pOverlay = rg.AddPass("Overlay", { pTransp },
-        [this, renderer](RenderGraph::PassContext ctx) {
-            // HUD-текст
-            if (auto* tm = renderer->GetTextManager()) {
-                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-                renderer->RecordBindDefaultsNoClear(t.cl);
-                tm->Build(renderer, t.cl);
-                tm->Draw(renderer, t.cl);
-                renderer->EndThreadCommandList(t, ctx.batchIndex);
-            }
-        });
-#else
     auto pGBuffer = rg.AddPass("GBuffer", { pClear },
         [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
             RenderGraph rgGB(ctx.batchIndex);
@@ -349,7 +298,6 @@ void Scene::Render(Renderer* renderer) {
                 renderer->EndThreadCommandList(t, ctx.batchIndex);
             }
         });
-#endif
 
     // Граф только регистрирует бакеты и запускает задачи
     rg.Execute(renderer);
