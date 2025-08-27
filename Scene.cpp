@@ -204,7 +204,7 @@ void Scene::Render(Renderer* renderer) {
             auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
             matLighting_->UpdateCB0Field("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
-            matLighting_->UpdateCB0Field("ambientIntensity", 0.01f, (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("ambientIntensity", 0.02f, (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("lightRgb", float3(1, 1, 1).xm(), (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("exposure", 1.0f, (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition().xm(), (uint8_t*)cb.cpu);

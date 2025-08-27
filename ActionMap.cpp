@@ -247,28 +247,119 @@ float ActionMap::GetAxis(const std::string& name, const InputManager& input) con
 
 // === VK helpers ===
 
-static int VkFromNameLower_(const std::string& s) {
-    if (s == "w") { return 'W'; }
-    if (s == "a") { return 'A'; }
-    if (s == "s") { return 'S'; }
-    if (s == "d") { return 'D'; }
-    if (s == "q") { return 'Q'; }
-    if (s == "e") { return 'E'; }
-    if (s == "space") { return VK_SPACE; }
+static int VkFromNameLower_(const std::string& s)
+{
+    // 1) одиночный символ: буквы/цифры
+    if (s.size() == 1) {
+        const char c = s[0];
+        if (c >= 'a' && c <= 'z') { return ('A' + (c - 'a')); } // 'A'..'Z'
+        if (c >= '0' && c <= '9') { return c; }                  // '0'..'9' (VK_0..VK_9)
+        if (c == ' ') { return VK_SPACE; }
+        if (c == ',') { return VK_OEM_COMMA; }
+        if (c == '.') { return VK_OEM_PERIOD; }
+        if (c == '-') { return VK_OEM_MINUS; }
+        if (c == '=') { return VK_OEM_PLUS; }
+        if (c == ';') { return VK_OEM_1; }
+        if (c == '\'') { return VK_OEM_7; }
+        if (c == '/') { return VK_OEM_2; }
+        if (c == '\\') { return VK_OEM_5; }
+        if (c == '[') { return VK_OEM_4; }
+        if (c == ']') { return VK_OEM_6; }
+        if (c == '`' || c == '~') { return VK_OEM_3; }
+    }
 
-    // модификаторы — в общий VK_* (WM_KEYDOWN чаще отдаёт именно их)
-    if (s == "lshift" || s == "rshift" || s == "shift") { return VK_SHIFT; }
-    if (s == "lctrl" || s == "rctrl" || s == "ctrl") { return VK_CONTROL; }
-    if (s == "lalt" || s == "ralt" || s == "alt" || s == "lmenu" || s == "rmenu") { return VK_MENU; }
+    // 2) F1..F24
+    if (!s.empty() && s[0] == 'f' && s.size() <= 3) {
+        int num = 0;
+        for (size_t i = 1; i < s.size(); ++i) {
+            if (s[i] < '0' || s[i] > '9') { num = 0; break; }
+            num = num * 10 + (s[i] - '0');
+        }
+        if (num >= 1 && num <= 24) { return VK_F1 + (num - 1); }
+    }
 
-    if (s == "up") { return VK_UP; }
-    if (s == "down") { return VK_DOWN; }
+    // 3) модификаторы
+    if (s == "shift" || s == "lshift" || s == "rshift") { return VK_SHIFT; }
+    if (s == "ctrl" || s == "control" || s == "lctrl" || s == "rctrl") { return VK_CONTROL; }
+    if (s == "alt" || s == "lalt" || s == "ralt" || s == "menu" || s == "lmenu" || s == "rmenu") { return VK_MENU; }
+    if (s == "lwin" || s == "leftwin" || s == "win" || s == "super" || s == "cmd") { return VK_LWIN; }
+    if (s == "rwin" || s == "rightwin") { return VK_RWIN; }
+    if (s == "apps" || s == "menukey" || s == "app") { return VK_APPS; }
+
+    // 4) управление/сервис
+    if (s == "space" || s == "spacebar") { return VK_SPACE; }
+    if (s == "enter" || s == "return") { return VK_RETURN; }
+    if (s == "escape" || s == "esc") { return VK_ESCAPE; }
+    if (s == "tab") { return VK_TAB; }
+    if (s == "backspace" || s == "bksp") { return VK_BACK; }
+    if (s == "caps" || s == "capslock") { return VK_CAPITAL; }
+
+    if (s == "insert" || s == "ins") { return VK_INSERT; }
+    if (s == "delete" || s == "del") { return VK_DELETE; }
+    if (s == "home") { return VK_HOME; }
+    if (s == "end") { return VK_END; }
+    if (s == "pageup" || s == "pgup" || s == "prior") { return VK_PRIOR; }
+    if (s == "pagedown" || s == "pgdn" || s == "next") { return VK_NEXT; }
     if (s == "left") { return VK_LEFT; }
     if (s == "right") { return VK_RIGHT; }
-    if (s == "pageup") { return VK_PRIOR; }
-    if (s == "pagedown") { return VK_NEXT; }
+    if (s == "up") { return VK_UP; }
+    if (s == "down") { return VK_DOWN; }
 
-    if (s == "f3") { return VK_F3; }
+    if (s == "printscreen" || s == "prtsc" || s == "snapshot") { return VK_SNAPSHOT; }
+    if (s == "scrolllock" || s == "scroll") { return VK_SCROLL; }
+    if (s == "pause" || s == "break") { return VK_PAUSE; }
+
+    // 5) OEM-пункты по названиям
+    if (s == "minus" || s == "dash" || s == "hyphen") { return VK_OEM_MINUS; }    // -
+    if (s == "equals" || s == "equal" || s == "plus") { return VK_OEM_PLUS; }     // =
+    if (s == "comma") { return VK_OEM_COMMA; }                                        // ,
+    if (s == "period" || s == "dot") { return VK_OEM_PERIOD; }                    // .
+    if (s == "slash" || s == "question") { return VK_OEM_2; }                        // / ?
+    if (s == "semicolon" || s == "semi") { return VK_OEM_1; }                         // ;
+    if (s == "apostrophe" || s == "quote") { return VK_OEM_7; }                        // '
+    if (s == "backslash") { return VK_OEM_5; }                                         // 
+    if (s == "lbracket" || s == "lbrace" || s == "braceleft"  || s == "bracketleft")  { return VK_OEM_4; } // [
+    if (s == "rbracket" || s == "rbrace" || s == "braceright" || s == "bracketright") { return VK_OEM_6; } // ]
+    if (s == "tilde" || s == "grave" || s == "backquote") { return VK_OEM_3; }        // ` ~
+
+    // 6) Numpad
+    if (s == "numlock") { return VK_NUMLOCK; }
+    if (s == "numpad0") { return VK_NUMPAD0; }
+    if (s == "numpad1") { return VK_NUMPAD1; }
+    if (s == "numpad2") { return VK_NUMPAD2; }
+    if (s == "numpad3") { return VK_NUMPAD3; }
+    if (s == "numpad4") { return VK_NUMPAD4; }
+    if (s == "numpad5") { return VK_NUMPAD5; }
+    if (s == "numpad6") { return VK_NUMPAD6; }
+    if (s == "numpad7") { return VK_NUMPAD7; }
+    if (s == "numpad8") { return VK_NUMPAD8; }
+    if (s == "numpad9") { return VK_NUMPAD9; }
+
+    if (s == "numpadadd" || s == "numpad+" || s == "add") { return VK_ADD; }
+    if (s == "numpadsub" || s == "numpad-" || s == "subtract" ||
+        s == "sub" || s == "minusnum") {
+        return VK_SUBTRACT;
+    }
+    if (s == "numpadmul" || s == "numpad*" || s == "multiply" ||
+        s == "mul") {
+        return VK_MULTIPLY;
+    }
+    if (s == "numpaddiv" || s == "numpad/" || s == "divide" ||
+        s == "div") {
+        return VK_DIVIDE;
+    }
+    if (s == "numpaddec" || s == "numpad." || s == "decimal") { return VK_DECIMAL; }
+    if (s == "numpadenter") { return VK_RETURN; } // у Win нет отдельного VK
+
+    // 7) буквы словами (на случай "key_w" и т.п.)
+    if (s.size() == 2 && s[0] == 'k' && s[1] == 'p') { return 0; } // KP* (если встретится — лучше писать "numpad*")
+    if (s.rfind("key_", 0) == 0 && s.size() == 5) {
+        char c = s[4];
+        if (c >= 'a' && c <= 'z') { return ('A' + (c - 'a')); }
+        if (c >= '0' && c <= '9') { return c; }
+    }
+
+    // 8) запасной путь: пусто
     return 0;
 }
 
