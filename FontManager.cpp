@@ -90,3 +90,8 @@ std::vector<std::wstring> FontManager::List() const {
     }
     return out;
 }
+
+void FontManager::Clear()
+{
+    fonts_.clear();
+}

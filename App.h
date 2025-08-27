@@ -31,7 +31,6 @@ public:
 
 private:
     Renderer renderer_;
-	MeshManager meshManager_;
     ActionMap actions_;
     Scene scene_;
     InputManager input_;

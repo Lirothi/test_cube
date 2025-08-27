@@ -89,7 +89,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const UINT cbSizeAligned = (cbSizeBytes + (kAlign - 1)) & ~(kAlign - 1);
 
     // 2) выделить слайс в ринг-буфере кадра и прописать CBV
-    auto alloc = renderer->GetFrameResource().AllocDynamic(cbSizeAligned, kAlign); // <- как просили
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeAligned, kAlign); // <- как просили
     cbvDataBegin_ = static_cast<uint8_t*>(alloc.cpu);
     graphicsCtx_.cbv[0] = alloc.gpu;
 

@@ -18,7 +18,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     if (!matLighting_) {
         Material::GraphicsDesc gd{};
-        gd.shaderFile = L"lighting_ps.hlsl";
+        gd.shaderFile = L"shaders/lighting_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = ""; // fullscreen
         gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
@@ -29,7 +29,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     if (!matCompose_) {
         Material::GraphicsDesc gd{};
-        gd.shaderFile = L"compose_ps.hlsl";
+        gd.shaderFile = L"shaders/compose_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = "";
         gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
@@ -40,7 +40,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     if (!matTonemap_) {
         Material::GraphicsDesc gd{};
-        gd.shaderFile = L"tonemap_ps.hlsl";
+        gd.shaderFile = L"shaders/tonemap_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = "";
         gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
@@ -195,7 +195,7 @@ void Scene::Render(Renderer* renderer) {
             mat4 invProj = mat4::Inverse(proj);
 
             // аллоцируем динамический CB в аплоад-ринге текущего кадра
-            auto cb = renderer->GetFrameResource().AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
+            auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
             matLighting_->UpdateCB0Field("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("ambientIntensity", 0.01f, (uint8_t*)cb.cpu);

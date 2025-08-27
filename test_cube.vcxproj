@@ -194,52 +194,46 @@
     <ClInclude Include="UploadManager.h" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="axes.hlsl">
+    <Text Include="shaders\axes.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="compose_ps.hlsl">
+    <Text Include="shaders\compose_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="font_sdf.hlsl">
+    <Text Include="shaders\font_sdf.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="gbuffer.hlsl">
+    <Text Include="shaders\gbuffer.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="instance_anim.hlsl">
+    <Text Include="shaders\gbuffer_common.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="lighting_ps.hlsl">
+    <Text Include="shaders\gbuffer_inst.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="lines.hlsl">
+    <Text Include="shaders\instance_anim.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="shader.hlsl">
+    <Text Include="shaders\lighting_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="shader_comp.hlsl">
+    <Text Include="shaders\lines.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="shader_PNTUV.hlsl">
+    <Text Include="shaders\shader.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="tonemap_ps.hlsl">
+    <Text Include="shaders\shader_comp.hlsl">
       <FileType>Document</FileType>
     </Text>
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="utils.hlsl">
+    <Text Include="shaders\shader_PNTUV.hlsl">
       <FileType>Document</FileType>
     </Text>
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="gbuffer_common.hlsl">
+    <Text Include="shaders\tonemap_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="gbuffer_inst.hlsl">
+    <Text Include="shaders\utils.hlsl">
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>

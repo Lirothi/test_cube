@@ -36,6 +36,8 @@ public:
         return (R << 24) | (G << 16) | (B << 8) | (A);
     }
 
+    void Clear();
+
 private:
     struct Vertex {
         float x, y, z;
@@ -44,7 +46,7 @@ private:
     };
 
     FontAtlas* font_ = nullptr;
-    Material    mat_;
+    std::shared_ptr<Material> mat_;
     RenderContext rc_;
 
 	std::vector<Vertex>      verts_;

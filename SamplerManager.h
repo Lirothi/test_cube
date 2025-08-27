@@ -44,6 +44,8 @@ public:
     // Сформировать ТАБЛИЦУ из нескольких самплеров подряд и вернуть base GPU handle таблицы.
     D3D12_GPU_DESCRIPTOR_HANDLE GetTable(Renderer* renderer, std::initializer_list<D3D12_SAMPLER_DESC> descs);
 
+    void Clear();
+
     // Быстрые пресеты
     static D3D12_SAMPLER_DESC LinearWrap();
     static D3D12_SAMPLER_DESC LinearClamp();

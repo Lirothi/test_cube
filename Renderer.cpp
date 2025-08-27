@@ -45,6 +45,10 @@ void Renderer::Shutdown()
 
     materialManager_.Clear();
     materialDataManager_.ClearAll();
+    meshManager_.Clear();
+    textManager_.Clear();
+    fontManager_.Clear();
+    samplerManager_.Clear();
 
     // 1) Остановить «таймлайн» команд: никому ничего больше не сабмитим
     {
@@ -84,9 +88,10 @@ void Renderer::Shutdown()
     // 6) Кадровые ресурсы: сбросить использование пулов, обнулить аплоад-ринг
     // (их реальные ComPtr освободятся при разрушении Renderer, но это снимет связности)
     for (UINT i = 0; i < kFrameCount; ++i) {
-        frameResources_[i].ResetCommandAllocators(device_.Get());
-        frameResources_[i].ResetCommandListsUsage();
-        frameResources_[i].ResetUpload(); // очищает фолбэк-чанки и сбрасывает указатели внутри кадра :contentReference[oaicite:5]{index=5}
+        frameResources_[i]->ResetCommandAllocators(device_.Get());
+        frameResources_[i]->ResetCommandListsUsage();
+        frameResources_[i]->ResetUpload(); // очищает фолбэк-чанки и сбрасывает указатели внутри кадра :contentReference[oaicite:5]{index=5}
+        frameResources_[i].reset();
         frameFenceValues_[i] = 0;
     }
     nextFenceValue_ = 1;
@@ -162,10 +167,11 @@ void Renderer::InitD3D12(HWND window) {
     // --- Frame resources ---
     for (UINT i = 0; i < kFrameCount; ++i) {
         // per-frame shader-visible heaps
-        frameResources_[i].GetDescAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
-        frameResources_[i].GetSamplerAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 256);
+        frameResources_[i] = std::make_unique<FrameResource>();
+        frameResources_[i]->GetDescAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
+        frameResources_[i]->GetSamplerAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 256);
         frameFenceValues_[i] = 0;
-        frameResources_[i].InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
+        frameResources_[i]->InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
     }
 
     samplerManager_.Init(device_.Get(), 512);
@@ -312,13 +318,13 @@ void Renderer::BeginFrame() {
 
     // Сброс кадровых пулов
     auto& fr = frameResources_[currentFrameIndex_];
-    fr.ResetCommandAllocators(device_.Get());
-    fr.ResetCommandListsUsage();
+    fr->ResetCommandAllocators(device_.Get());
+    fr->ResetCommandListsUsage();
 
-    frameResources_[currentFrameIndex_].GetDescAlloc().ResetPerFrame();
-    frameResources_[currentFrameIndex_].GetSamplerAlloc().ResetPerFrame();
-    frameResources_[currentFrameIndex_].ResetCommandListsUsage();
-    frameResources_[currentFrameIndex_].ResetUpload();
+    frameResources_[currentFrameIndex_]->GetDescAlloc().ResetPerFrame();
+    frameResources_[currentFrameIndex_]->GetSamplerAlloc().ResetPerFrame();
+    frameResources_[currentFrameIndex_]->ResetCommandListsUsage();
+    frameResources_[currentFrameIndex_]->ResetUpload();
 }
 
 void Renderer::EndFrame() {
@@ -380,12 +386,12 @@ void Renderer::Tick(float dt)
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type,
     ID3D12PipelineState* pso) {
     auto& fr = frameResources_[currentFrameIndex_];
-    ID3D12CommandAllocator* alloc = fr.AcquireCommandAllocator(device_.Get(), type);
-    ID3D12GraphicsCommandList* cl = fr.AcquireCommandList(device_.Get(), type, alloc, pso);
+    ID3D12CommandAllocator* alloc = fr->AcquireCommandAllocator(device_.Get(), type);
+    ID3D12GraphicsCommandList* cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
 
     ID3D12DescriptorHeap* heaps[] = {
-        frameResources_[currentFrameIndex_].GetDescAlloc().GetShaderVisibleHeap(),
-        frameResources_[currentFrameIndex_].GetSamplerAlloc().GetShaderVisibleHeap()
+        frameResources_[currentFrameIndex_]->GetDescAlloc().GetShaderVisibleHeap(),
+        frameResources_[currentFrameIndex_]->GetSamplerAlloc().GetShaderVisibleHeap()
     };
     cl->SetDescriptorHeaps(_countof(heaps), heaps);
 
@@ -468,9 +474,9 @@ void Renderer::ExecuteTimelineAndPresent() {
                 // fallback: нет driver’а — создадим временный
                 auto& fr = frameResources_[currentFrameIndex_];
                 ID3D12CommandAllocator* alloc =
-                    fr.AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
                 ID3D12GraphicsCommandList* cl =
-                    fr.AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
                 RecordBindDefaultsNoClear(cl);
                 for (auto* b : pb.bundles) {
                     if (b != nullptr) {
@@ -494,9 +500,9 @@ void Renderer::ExecuteTimelineAndPresent() {
     {
         auto& fr = frameResources_[currentFrameIndex_];
         ID3D12CommandAllocator* alloc =
-            fr.AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+            fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         ID3D12GraphicsCommandList* cl =
-            fr.AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+            fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
 
         D3D12_RESOURCE_BARRIER b{};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;

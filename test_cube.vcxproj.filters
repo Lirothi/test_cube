@@ -196,46 +196,46 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="axes.hlsl">
+    <Text Include="shaders\axes.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="compose_ps.hlsl">
+    <Text Include="shaders\compose_ps.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="font_sdf.hlsl">
+    <Text Include="shaders\font_sdf.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="gbuffer.hlsl">
+    <Text Include="shaders\gbuffer.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="instance_anim.hlsl">
+    <Text Include="shaders\gbuffer_common.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="lighting_ps.hlsl">
+    <Text Include="shaders\gbuffer_inst.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="lines.hlsl">
+    <Text Include="shaders\instance_anim.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="shader.hlsl">
+    <Text Include="shaders\lighting_ps.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="shader_comp.hlsl">
+    <Text Include="shaders\lines.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="shader_PNTUV.hlsl">
+    <Text Include="shaders\shader.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="tonemap_ps.hlsl">
+    <Text Include="shaders\shader_comp.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="utils.hlsl">
+    <Text Include="shaders\shader_PNTUV.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="gbuffer_common.hlsl">
+    <Text Include="shaders\tonemap_ps.hlsl">
       <Filter>Shaders</Filter>
     </Text>
-    <Text Include="gbuffer_inst.hlsl">
+    <Text Include="shaders\utils.hlsl">
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>

@@ -102,9 +102,9 @@ public:
     UINT GetHeight() const { return height_; }
 
     // Доступ к глобальному аллокатору дескрипторов и текущему кадру
-    DescriptorAllocator& GetDescAlloc() { return frameResources_[currentFrameIndex_].GetDescAlloc(); }
-    DescriptorAllocator& GetSamplerAlloc() { return frameResources_[currentFrameIndex_].GetSamplerAlloc(); }
-    FrameResource& GetFrameResource() { return frameResources_[currentFrameIndex_]; }
+    DescriptorAllocator& GetDescAlloc() { return frameResources_[currentFrameIndex_]->GetDescAlloc(); }
+    DescriptorAllocator& GetSamplerAlloc() { return frameResources_[currentFrameIndex_]->GetSamplerAlloc(); }
+    FrameResource* GetFrameResource() { return frameResources_[currentFrameIndex_].get(); }
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
 
@@ -247,7 +247,7 @@ private:
     UINT64                            frameFenceValues_[kFrameCount] = {};  // последний сигнал для каждого кадра
 
     // Кадровые ресурсы (аллокатор + upload и т.п.)
-    FrameResource                     frameResources_[kFrameCount];
+	std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
 
     std::mutex knownStatesMtx_;

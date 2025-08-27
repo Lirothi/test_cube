@@ -31,7 +31,7 @@ struct AxisVertex {
 class DebugGrid::GridRO final : public RenderableObject {
 public:
     GridRO(float halfSize, float step, float yPlane, float alpha)
-        : RenderableObject(/*matPreset*/"", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
+        : RenderableObject(/*matPreset*/"", /*inputLayout*/"PosColor", /*shader*/L"shaders/lines.hlsl")
         , halfSize_(halfSize), step_(step), yPlane_(yPlane), alpha_(alpha)
     {
     }
@@ -137,7 +137,7 @@ private:
 class DebugGrid::AxesRO final : public RenderableObject {
 public:
     AxesRO(float axisLen, float yPlane, float alpha, float thicknessPx)
-        : RenderableObject(/*matPreset*/"", /*inputLayout*/"AxisLine", /*shader*/L"axes.hlsl")
+        : RenderableObject(/*matPreset*/"", /*inputLayout*/"AxisLine", /*shader*/L"shaders/axes.hlsl")
         , axisLen_(axisLen), yPlane_(yPlane), alpha_(alpha), thicknessPx_(thicknessPx)
     {
     }

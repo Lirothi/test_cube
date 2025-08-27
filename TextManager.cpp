@@ -28,7 +28,7 @@ static std::string VFormat_(const char* fmt, va_list args) {
 void TextManager::Init(Renderer* r) {
     // материал под SDF
     Material::GraphicsDesc gd;
-    gd.shaderFile = L"font_sdf.hlsl";
+    gd.shaderFile = L"shaders/font_sdf.hlsl";
     gd.inputLayoutKey = "PosColorUV";
     gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     gd.depth.DepthEnable = FALSE;
@@ -42,7 +42,7 @@ void TextManager::Init(Renderer* r) {
     gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     gd.blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    mat_.CreateGraphics(r, gd);
+    mat_ = r->GetMaterialManager()->GetOrCreateGraphics(r, gd);
 }
 
 void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
@@ -175,13 +175,13 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         return;
     }
 
-    FrameResource& fr = r->GetFrameResource();
+    FrameResource* fr = r->GetFrameResource();
 
     const UINT vbBytes = static_cast<UINT>(verts_.size() * sizeof(Vertex));
     const UINT ibBytes = static_cast<UINT>(idx_.size() * sizeof(uint32_t));
 
-    auto v = fr.AllocDynamic(vbBytes, 16);
-    auto i = fr.AllocDynamic(ibBytes, 16);
+    auto v = fr->AllocDynamic(vbBytes, 16);
+    auto i = fr->AllocDynamic(ibBytes, 16);
 
     if (vbBytes > 0u) {
         std::memcpy(v.cpu, verts_.data(), vbBytes);
@@ -222,10 +222,17 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     // Самплер (linear clamp)
     rc_.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
 
-    mat_.Bind(cl, rc_);
+    mat_->Bind(cl, rc_);
 
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->IASetVertexBuffers(0, 1, &vbv_);
     cl->IASetIndexBuffer(&ibv_);
     cl->DrawIndexedInstanced((UINT)idx_.size(), 1, 0, 0, 0);
+}
+
+void TextManager::Clear()
+{
+	mat_.reset();
+    verts_.clear();
+    idx_.clear();
 }

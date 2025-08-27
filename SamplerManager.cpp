@@ -15,6 +15,7 @@ void SamplerManager::Init(ID3D12Device* device, UINT capacity) {
     if (FAILED(device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpuHeap_)))) {
         throw std::runtime_error("SamplerManager: CreateDescriptorHeap CPU failed");
     }
+    cpuHeap_->SetName(L"SampManager_DESCRIPTOR_HEAP");
     cpuIncr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     cpuCursor_ = 0;
     cache_.clear();
@@ -90,6 +91,12 @@ D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::GetTable(Renderer* renderer, std::in
     }
 
     return block.gpu; // base GPU handle таблицы
+}
+
+void SamplerManager::Clear()
+{
+    cache_.clear();
+    cpuHeap_.Reset();
 }
 
 // Presets

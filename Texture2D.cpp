@@ -184,6 +184,7 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
 
     ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
+    tex_->SetName(L"Tex2D_RESOURCE");
 
     // Footprint
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
@@ -261,6 +262,7 @@ void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt)
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only
     ThrowIfFailed(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeapCPU_)));
     srvCPU_ = srvHeapCPU_->GetCPUDescriptorHandleForHeapStart();
+    srvHeapCPU_->SetName(L"Tex2D_DESC_HEAP");
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = srvFmt; // UNORM или SRGB

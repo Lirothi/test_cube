@@ -29,6 +29,8 @@ public:
     // Для UI/отладки — список загруженных имён
     std::vector<std::wstring> List() const;
 
+    void Clear();
+
 private:
     Renderer* renderer_ = nullptr;
     std::unordered_map<std::wstring, std::unique_ptr<FontAtlas>> fonts_;
