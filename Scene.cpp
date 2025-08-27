@@ -3,6 +3,7 @@
 #include <memory>
 #include <algorithm>
 
+#include "ActionMap.h"
 #include "Camera.h"
 #include "Renderer.h"
 #include "RenderGraph.h"
@@ -75,6 +76,11 @@ void Scene::Tick(float deltaTime) {
 void Scene::Render(Renderer* renderer) {
     if (renderer == nullptr) {
         return;
+    }
+
+    if (actions_->WasActionPressed("Wireframe", *input_))
+    {
+        renderer->SetWireframeMode(!renderer->GetWireframeMode()); //toggle
     }
 
     auto* tb = renderer->GetTextManager();

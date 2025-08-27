@@ -267,6 +267,8 @@ static int VkFromNameLower_(const std::string& s) {
     if (s == "right") { return VK_RIGHT; }
     if (s == "pageup") { return VK_PRIOR; }
     if (s == "pagedown") { return VK_NEXT; }
+
+    if (s == "f3") { return VK_F3; }
     return 0;
 }
 

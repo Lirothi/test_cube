@@ -214,18 +214,14 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
     isCompute_ = false;
     cachedGfxDesc_ = gd;
 
-    ComPtr<ID3D12RootSignature> rs;
-    ComPtr<ID3D12PipelineState> pso;
     std::vector<RootParameterInfo> params;
     std::vector<std::wstring> inc;
 
-    if (!BuildGraphicsPSO(r, gd, rs, pso, params, inc)) {
+    if (!BuildGraphicsPSO(r, gd, rootSignature_, pipelineState_, pipelineStateWire_, params, inc)) {
         OutputDebugStringA("[Material] CreateGraphics failed\n");
         return;
     }
 
-    rootSignature_ = rs;
-    pipelineState_ = pso;
     rootParams_ = std::move(params);
 
     {
@@ -269,6 +265,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
 
     ComPtr<ID3D12RootSignature> newRS;
     ComPtr<ID3D12PipelineState> newPSO;
+    ComPtr<ID3D12PipelineState> newPSOWire;
     std::vector<RootParameterInfo> newParams;
     std::vector<std::wstring> inc;
 
@@ -277,7 +274,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
         ok = BuildComputePSO(r, cachedCmpDesc_, newRS, newPSO, newParams, inc);
     }
     else {
-        ok = BuildGraphicsPSO(r, cachedGfxDesc_, newRS, newPSO, newParams, inc);
+        ok = BuildGraphicsPSO(r, cachedGfxDesc_, newRS, newPSO, newPSOWire, newParams, inc);
     }
 
     if (!ok) {
@@ -287,6 +284,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
     retired_.push_back({ pipelineState_, rootSignature_, frameNumber });
 
     pipelineState_ = newPSO;
+    pipelineStateWire_ = newPSOWire;
     rootSignature_ = newRS;
     rootParams_ = std::move(newParams);
 
@@ -313,12 +311,18 @@ void Material::CollectRetired(uint64_t frameNumber, uint64_t keepAliveFrames)
     }
 }
 
-void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx) const
+void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe) const
 {
     if (isCompute_) { cmdList->SetComputeRootSignature(rootSignature_.Get()); }
     else { cmdList->SetGraphicsRootSignature(rootSignature_.Get()); }
 
-    cmdList->SetPipelineState(pipelineState_.Get());
+    if (wireframe && pipelineStateWire_)
+    {
+        cmdList->SetPipelineState(pipelineStateWire_.Get());
+    }else
+    {
+	    cmdList->SetPipelineState(pipelineState_.Get());
+    }
 
     for (const auto& p : rootParams_) {
         uint32_t reg = p.bindingRegister;
@@ -385,6 +389,7 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
 bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
+    ComPtr<ID3D12PipelineState>& outPSOWire,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
@@ -443,6 +448,16 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
 
     if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
         return false;
+    }
+
+    if (pso.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+    {
+	    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    	pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+
+    	if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSOWire)))) {
+    		return false;
+    	}
     }
 
     outIncludes.clear();

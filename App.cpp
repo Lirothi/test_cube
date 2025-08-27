@@ -154,7 +154,10 @@ void App::InitScene()
     std::vector<ComPtr<ID3D12Resource>> pendingUploads;
     scene_.SetInput(&input_);
 	scene_.SetActions(&actions_);
-    actions_.LoadFromJsonFile(L"bindings.json");
+    if (!actions_.LoadFromJsonFile(L"bindings.json"))
+    {
+        assert(false && "No bindings.json found!");
+    }
 
     renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.png",  L"textures/brick_mr.png",  L"textures/brick_normal_rg.png",  /*RG*/true, /*TBN*/true });
     renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.png", L"textures/bronze_mr.png", L"textures/bronze_normal_rg.png", /*RG*/true, /*TBN*/true });

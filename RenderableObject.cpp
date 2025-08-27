@@ -63,7 +63,7 @@ void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandL
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
     // Установить графический материал
-    graphicsMaterial_->Bind(cl, graphicsCtx_);
+    graphicsMaterial_->Bind(cl, graphicsCtx_, renderer->GetWireframeMode());
 }
 
 void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj)

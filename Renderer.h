@@ -120,6 +120,8 @@ public:
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
 
 	float GetFPS() const { return fps_; }
+    void SetWireframeMode(bool w) { wireframeMode_ = w; }
+    bool GetWireframeMode() const { return wireframeMode_; }
 
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
@@ -217,6 +219,8 @@ private:
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
+
+    bool wireframeMode_ = false;
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.95f; // экспоненциальное сглаживание: 0..1 (чем больше — тем плавнее)

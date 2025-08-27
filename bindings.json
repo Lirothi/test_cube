@@ -9,6 +9,8 @@
     { "name": "LookY", "mouseAxis": "Y", "sensitivity": 0.01, "invert": true },
 
     { "name": "LookToggle", "mouseButton": "Right" },
-    { "name": "Sprint", "keys": ["LShift","RShift"] }
+    { "name": "Sprint", "keys": ["LShift","RShift"] },
+
+    { "name": "Wireframe", "keys": ["F3"] }
   ]
 }

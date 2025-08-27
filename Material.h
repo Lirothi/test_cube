@@ -109,7 +109,7 @@ public:
     ID3D12RootSignature* GetRootSignature() const { return rootSignature_.Get(); }
     ID3D12PipelineState* GetPipelineState() const { return pipelineState_.Get(); }
 
-    void Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx) const;
+    void Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe = false) const;
 
     // Хот-релоад
     bool FSProbeAndFlagPending();
@@ -151,6 +151,7 @@ public:
 private:
     ComPtr<ID3D12RootSignature> rootSignature_;
     ComPtr<ID3D12PipelineState> pipelineState_;
+    ComPtr<ID3D12PipelineState> pipelineStateWire_;
     bool isCompute_ = false;
     std::vector<RootParameterInfo> rootParams_;
 
@@ -180,14 +181,15 @@ private:
 
     // общие билдеры
     bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
-        Microsoft::WRL::ComPtr<ID3D12RootSignature>& outRS,
-        Microsoft::WRL::ComPtr<ID3D12PipelineState>& outPSO,
+        ComPtr<ID3D12RootSignature>& outRS,
+        ComPtr<ID3D12PipelineState>& outPSO,
+        ComPtr<ID3D12PipelineState>& outPSOWire,
         std::vector<RootParameterInfo>& outParams,
         std::vector<std::wstring>& outIncludes);
 
     bool BuildComputePSO(Renderer* r, const ComputeDesc& cd,
-        Microsoft::WRL::ComPtr<ID3D12RootSignature>& outRS,
-        Microsoft::WRL::ComPtr<ID3D12PipelineState>& outPSO,
+        ComPtr<ID3D12RootSignature>& outRS,
+        ComPtr<ID3D12PipelineState>& outPSO,
         std::vector<RootParameterInfo>& outParams,
         std::vector<std::wstring>& outIncludes);
 
@@ -195,7 +197,7 @@ private:
     static HRESULT CompileWithIncludes(const std::wstring& file,
         const char* entry, const char* target, UINT flags,
         const DefineList& defines,
-        Microsoft::WRL::ComPtr<ID3DBlob>& outBlob,
+        ComPtr<ID3DBlob>& outBlob,
         std::vector<std::wstring>& outIncludes);
 
     void RefreshWatchTimes_();
