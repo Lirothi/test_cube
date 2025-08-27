@@ -38,7 +38,7 @@ static void ClipEndToNear(inout float4 P, float4 Q)
     }
 }
 
-VSOut VSMainAxis(VSIn i)
+VSOut VSMain(VSIn i)
 {
     VSOut o;
 
@@ -86,7 +86,7 @@ VSOut VSMainAxis(VSIn i)
     return o;
 }
 
-float4 PSMainAxis(VSOut i) : SV_Target
+float4 PSMain(VSOut i) : SV_Target
 {
     return i.color;
 }

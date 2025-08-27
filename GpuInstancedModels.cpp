@@ -11,14 +11,14 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
-GpuInstancedModels::GpuInstancedModels(Renderer* renderer,
+GpuInstancedModels::GpuInstancedModels(
     std::string modelName,
     UINT numInstances,
     const std::string& matPreset,
     const std::string& inputLayout,
     const std::wstring& graphicsShader,
     const std::wstring& computeShader)
-    : SceneObject(renderer, matPreset, inputLayout, graphicsShader)
+    : RenderableObject(matPreset, inputLayout, graphicsShader)
     , computeShader_(computeShader)
     , modelName_(std::move(modelName))
     , instanceCount_(numInstances)
@@ -29,8 +29,8 @@ void GpuInstancedModels::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    // Инициализация SceneObject (создаёт GraphicsMaterial, ставит b0)
-    SceneObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+    // Инициализация RenderableObject (создаёт GraphicsMaterial, ставит b0)
+    RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     // Compute-материал
     computeMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, computeShader_);
@@ -97,7 +97,7 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
 
-	SceneObject::RecordGraphics(renderer, cl);
+	RenderableObject::RecordGraphics(renderer, cl);
 }
 
 void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj)

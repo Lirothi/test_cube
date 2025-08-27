@@ -46,6 +46,8 @@ public:
 
     Renderer();
     ~Renderer();
+    void Shutdown();
+    void ReportLiveObjects();
 
     // Инициализация устройства/очереди/свапа/RTV/DSV + кадровые ресурсы/фэнс
     void InitD3D12(HWND window);
@@ -55,7 +57,7 @@ public:
     void BeginFrame();                 // ждёт свой кадр, ресетит allocator и командный лист
     void EndFrame();                   // барьер RT->Present, Execute, Present, сигнал фэнса
 
-    void Update(float dt);
+    void Tick(float dt);
 
     void CreateDeferredTargets(UINT width, UINT height);
     void DestroyDeferredTargets();

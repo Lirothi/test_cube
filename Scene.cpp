@@ -50,11 +50,11 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     }
 }
 
-void Scene::AddObject(std::unique_ptr<SceneObject> obj) {
+void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
     objects_.push_back(std::move(obj));
 }
 
-void Scene::Update(float deltaTime) {
+void Scene::Tick(float deltaTime) {
     if (input_ != nullptr && actions_ != nullptr) {
         camera_.UpdateFromActions(*input_, *actions_, deltaTime);
     }
@@ -109,7 +109,7 @@ void Scene::Render(Renderer* renderer) {
 		TransparentComplexRender
 	};
 
-	std::unordered_map<ObjectRenderType, std::vector<SceneObject*>> objectsToRender;
+	std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>> objectsToRender;
 
     for (const auto& obj : objects_) {
         if (obj) {
@@ -307,7 +307,7 @@ void Scene::Render(Renderer* renderer) {
 }
 
 void Scene::RenderObjectBatch(Renderer* renderer,
-    const std::vector<SceneObject*>& objects,
+    const std::vector<RenderableObjectBase*>& objects,
     size_t batchIndex,
     const mat4& view, const mat4& proj,
     bool useBundles,
@@ -349,4 +349,12 @@ void Scene::RenderObjectBatch(Renderer* renderer,
                 renderer->EndThreadCommandList(t, batchIndex);
             }
         }, 1);
+}
+
+void Scene::Clear()
+{
+    matLighting_.reset();
+    matCompose_.reset();
+    matTonemap_.reset();
+    objects_.clear();
 }

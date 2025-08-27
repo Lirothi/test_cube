@@ -1,183 +1,295 @@
 #include "DebugGrid.h"
+
+#include <DirectXMath.h>
+#include "RenderableObject.h"
 #include "Renderer.h"
-#include "SamplerManager.h"
+#include "UploadManager.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
 static inline XMFLOAT4 RGBA(float r, float g, float b, float a) { return XMFLOAT4(r, g, b, a); }
 
-DebugGrid::DebugGrid(Renderer* renderer,
-    float halfSize, float step,
-    float axisLen, float yPlane,
-    float gridAlpha, float axisAlpha,
-    float axisThicknessPx)
-    : SceneObject(renderer, "", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
-    , halfSize_(halfSize), step_(step), axisLen_(axisLen)
-    , yPlane_(yPlane), gridAlpha_(gridAlpha), axisAlpha_(axisAlpha)
-    , axisThicknessPx_(axisThicknessPx)
-{
-    // материал базового объекта — для сетки (LINELIST)
-    auto& gd = GetGraphicsDesc();
-    gd.numRT = 1;
-    gd.rtvFormat = renderer->GetSceneColorFormat();
-    gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-    gd.raster.CullMode = D3D12_CULL_MODE_NONE;
-    //gd.raster.DepthClipEnable = false;
-    gd.raster.DepthBias = 0;
-    gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    gd.blend.RenderTarget[0].BlendEnable = TRUE;
-    gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-    gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-    gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-    gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-    gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+// ──────────────────────────────────────────────────────────────
+// ВЕРШИННЫЕ ТИПЫ (локально, чтобы не плодить инклуды)
+// ──────────────────────────────────────────────────────────────
+struct LineVertex {
+    XMFLOAT3 pos;
+    XMFLOAT4 col;
+};
 
-    cbLayout_ = renderer->GetCBManager()->GetLayout("MVP_Axis");
-}
+struct AxisVertex {
+    XMFLOAT3 a;           // начало отрезка в мире
+    XMFLOAT3 b;           // конец   отрезка в мире
+    XMFLOAT3 cornerBias;  // xy = (-1/+1), z = edgeBiasPx
+    XMFLOAT4 col;         // цвет линии
+};
 
-void DebugGrid::BuildGridCPU(std::vector<LineVertex>& out)
-{
-    out.clear();
-    if (step_ <= 0.0f) { step_ = 1.0f; }
+// ──────────────────────────────────────────────────────────────
+// GridRO — сетка (линии)
+// ──────────────────────────────────────────────────────────────
+class DebugGrid::GridRO final : public RenderableObject {
+public:
+    GridRO(float halfSize, float step, float yPlane, float alpha)
+        : RenderableObject(/*matPreset*/"", /*inputLayout*/"PosColor", /*shader*/L"lines.hlsl")
+        , halfSize_(halfSize), step_(step), yPlane_(yPlane), alpha_(alpha)
+    {
+    }
 
-    const float hs = (halfSize_ > 0.0f) ? halfSize_ : 10.0f;
-    const int   n = int(std::floor(hs / step_));
+    void Init(Renderer* renderer,
+        ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive) override
+    {
+        auto& gd = GetGraphicsDesc();
+        gd.numRT = 1;
+        gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.blend.RenderTarget[0].BlendEnable = TRUE;
+        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 
-    const XMFLOAT4 gridCol = RGBA(1, 1, 1, gridAlpha_);
+        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
-    for (int i = -n; i <= n; ++i) {
-        const float z = i * step_;
+        std::vector<LineVertex> verts;
+        BuildGridCPU(verts);
+
+        UploadManager um(renderer->GetDevice(), uploadCmdList);
         {
-            LineVertex a{ XMFLOAT3(-hs, yPlane_, z), gridCol };
-            LineVertex b{ XMFLOAT3(+hs, yPlane_, z), gridCol };
-            out.push_back(a); out.push_back(b);
+            ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
+                verts.data(), static_cast<UINT>(verts.size() * sizeof(LineVertex)),
+                D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            vb_ = vb;
         }
-        const float x = i * step_;
-        {
-            LineVertex a{ XMFLOAT3(x, yPlane_, -hs), gridCol };
-            LineVertex b{ XMFLOAT3(x, yPlane_, +hs), gridCol };
-            out.push_back(a); out.push_back(b);
+        vbv_.BufferLocation = vb_->GetGPUVirtualAddress();
+        vbv_.StrideInBytes = sizeof(LineVertex);
+        vbv_.SizeInBytes = static_cast<UINT>(verts.size() * sizeof(LineVertex));
+        vertexCount_ = static_cast<UINT>(verts.size());
+
+        um.StealKeepAlive(uploadKeepAlive);
+    }
+
+    void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj) override
+    {
+        mat4 mvp = (GetModelMatrix() * view * proj);
+        UpdateUniform("modelViewProj", mvp.xm());
+    }
+
+    void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
+    {
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        cl->IASetVertexBuffers(0, 1, &vbv_);
+        if (vertexCount_ > 0u) {
+            cl->DrawInstanced(vertexCount_, 1, 0, 0);
         }
     }
+
+    bool IsTransparent() const override { return true; }
+    bool IsSimpleRender() const override { return true; }
+
+private:
+    void BuildGridCPU(std::vector<LineVertex>& out)
+    {
+        out.clear();
+        if (step_ <= 0.0f) {
+            step_ = 1.0f;
+        }
+
+        const float hs = (halfSize_ > 0.0f) ? halfSize_ : 10.0f;
+        const int   n = static_cast<int>(std::floor(hs / step_));
+
+        const XMFLOAT4 c = RGBA(1, 1, 1, alpha_);
+
+        for (int i = -n; i <= n; ++i) {
+            const float z = i * step_;
+            {
+                out.push_back({ XMFLOAT3(-hs, yPlane_, z), c });
+                out.push_back({ XMFLOAT3(+hs, yPlane_, z), c });
+            }
+            const float x = i * step_;
+            {
+                out.push_back({ XMFLOAT3(x, yPlane_, -hs), c });
+                out.push_back({ XMFLOAT3(x, yPlane_, +hs), c });
+            }
+        }
+    }
+
+private:
+    float halfSize_;
+    float step_;
+    float yPlane_;
+    float alpha_;
+
+    ComPtr<ID3D12Resource> vb_;
+    D3D12_VERTEX_BUFFER_VIEW vbv_{};
+    UINT vertexCount_ = 0;
+};
+
+// ──────────────────────────────────────────────────────────────
+// AxesRO — оси (толстые линии в экранных пикселях, треугольники)
+// ──────────────────────────────────────────────────────────────
+class DebugGrid::AxesRO final : public RenderableObject {
+public:
+    AxesRO(float axisLen, float yPlane, float alpha, float thicknessPx)
+        : RenderableObject(/*matPreset*/"", /*inputLayout*/"AxisLine", /*shader*/L"axes.hlsl")
+        , axisLen_(axisLen), yPlane_(yPlane), alpha_(alpha), thicknessPx_(thicknessPx)
+    {
+    }
+
+    void Init(Renderer* renderer,
+        ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive) override
+    {
+        auto& gd = GetGraphicsDesc();
+        gd.numRT = 1;
+        gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        gd.raster.DepthBias = -150;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.blend.RenderTarget[0].BlendEnable = TRUE;
+        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+
+        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+
+        std::vector<AxisVertex> verts;
+        BuildAxesCPU(verts);
+
+        UploadManager um(renderer->GetDevice(), uploadCmdList);
+        {
+            ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
+                verts.data(), static_cast<UINT>(verts.size() * sizeof(AxisVertex)),
+                D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            vb_ = vb;
+        }
+        vbv_.BufferLocation = vb_->GetGPUVirtualAddress();
+        vbv_.StrideInBytes = sizeof(AxisVertex);
+        vbv_.SizeInBytes = static_cast<UINT>(verts.size() * sizeof(AxisVertex));
+        vertexCount_ = static_cast<UINT>(verts.size());
+
+        um.StealKeepAlive(uploadKeepAlive);
+    }
+
+    void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj) override
+    {
+        mat4 mvp = (GetModelMatrix() * view * proj);
+        UpdateUniform("modelViewProj", mvp.xm());
+
+        const UINT w = r->GetWidth();
+        const UINT h = r->GetHeight();
+        UpdateUniform("viewportThickness", XMFLOAT4(float(w), float(h), thicknessPx_, 0.0f));
+    }
+
+    void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
+    {
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cl->IASetVertexBuffers(0, 1, &vbv_);
+        if (vertexCount_ > 0u) {
+            cl->DrawInstanced(vertexCount_, 1, 0, 0);
+        }
+    }
+
+    bool IsTransparent() const override { return true; }
+    bool IsSimpleRender() const override { return true; }
+
+private:
+    void BuildAxesCPU(std::vector<AxisVertex>& out)
+    {
+        out.clear();
+        const float L = axisLen_;
+        const XMFLOAT4 xC = RGBA(1, 0, 0, alpha_);
+        const XMFLOAT4 yC = RGBA(0, 1, 0, alpha_);
+        const XMFLOAT4 zC = RGBA(0, 0, 1, alpha_);
+        const float eps = 2.25f;
+
+        auto push = [&](XMFLOAT3 A, XMFLOAT3 B, const XMFLOAT4& C) {
+            // два треугольника (= шесть вершин) на «толстую» линию в экранных координатах
+            {
+                out.push_back({ A, B, XMFLOAT3(-1,-1, +eps), C });
+                out.push_back({ A, B, XMFLOAT3(-1,+1, +eps), C });
+                out.push_back({ A, B, XMFLOAT3(+1,+1, +eps), C });
+            }
+            {
+                out.push_back({ A, B, XMFLOAT3(-1,-1, -eps), C });
+                out.push_back({ A, B, XMFLOAT3(+1,+1, -eps), C });
+                out.push_back({ A, B, XMFLOAT3(+1,-1, -eps), C });
+            }
+            };
+
+        // X, Z в плоскости yPlane_, и Y вверх
+        push(XMFLOAT3(0.0f, yPlane_, 0.0f), XMFLOAT3(L, yPlane_, 0.0f), xC);
+        push(XMFLOAT3(0.0f, yPlane_, 0.0f), XMFLOAT3(0.0f, yPlane_, L), zC);
+        push(XMFLOAT3(0.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, L, 0.0f), yC);
+    }
+
+private:
+    float axisLen_;
+    float yPlane_;
+    float alpha_;
+    float thicknessPx_;
+
+    ComPtr<ID3D12Resource> vb_;
+    D3D12_VERTEX_BUFFER_VIEW vbv_{};
+    UINT vertexCount_ = 0;
+};
+
+// ──────────────────────────────────────────────────────────────
+// DebugGrid — контейнер из двух рендераблов
+// ──────────────────────────────────────────────────────────────
+DebugGrid::DebugGrid(float halfSize, float step, float axisLen, float yPlane,
+    float gridAlpha, float axisAlpha, float axisThicknessPx)
+    : halfSize_(halfSize)
+    , step_(step)
+    , axisLen_(axisLen)
+    , yPlane_(yPlane)
+    , gridAlpha_(gridAlpha)
+    , axisAlpha_(axisAlpha)
+    , axisThicknessPx_(axisThicknessPx)
+{
 }
 
-void DebugGrid::BuildAxesScreenCPU(std::vector<AxisVertex>& out)
+DebugGrid::~DebugGrid()
 {
-    out.clear();
-    const float L = axisLen_;
-    const XMFLOAT4 xCol = RGBA(1, 0, 0, axisAlpha_);
-    const XMFLOAT4 yCol = RGBA(0, 1, 0, axisAlpha_);
-    const XMFLOAT4 zCol = RGBA(0, 0, 1, axisAlpha_);
-
-    auto pushList = [&](const XMFLOAT3& A, const XMFLOAT3& B, const XMFLOAT4& C) {
-        const float eps = 2.25f;
-        //// Первый треугольник: A-left, B-left, B-right
-        //out.push_back({ A, B, XMFLOAT2(-1,-1), C });
-        //out.push_back({ A, B, XMFLOAT2(-1,+1), C });
-        //out.push_back({ A, B, XMFLOAT2(+1,+1), C });
-        //// Второй треугольник: A-left, B-right, A-right
-        //out.push_back({ A, B, XMFLOAT2(-1,-1), C });
-        //out.push_back({ A, B, XMFLOAT2(+1,+1), C });
-        //out.push_back({ A, B, XMFLOAT2(+1,-1), C });
-
-        out.push_back({ A, B, XMFLOAT3(-1,-1, +eps), C });  // AL
-        out.push_back({ A, B, XMFLOAT3(-1,+1, +eps), C });  // BL (shared +)
-        out.push_back({ A, B, XMFLOAT3(+1,+1, +eps), C });  // BR (shared +)
-
-        // T2: AR, BR(-eps), BL(-eps)
-        out.push_back({ A, B, XMFLOAT3(-1,-1, -eps), C });  // AR
-        out.push_back({ A, B, XMFLOAT3(+1,+1, -eps), C });  // BR (shared -)
-        out.push_back({ A, B, XMFLOAT3(+1,-1, -eps), C });  // BL (shared -)
-        };
-
-    // X, Z, Y
-    pushList(XMFLOAT3(0.0, yPlane_, 0.0f), XMFLOAT3(L, yPlane_, 0.0f), xCol);
-    pushList(XMFLOAT3(0.0f, yPlane_, 0.0), XMFLOAT3(0.0f, yPlane_, L), zCol);
-    pushList(XMFLOAT3(0.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, L, 0.0f), yCol);
+	
 }
 
 void DebugGrid::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    // базовый материал (сеточный)
-    SceneObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+    grid_ = std::make_unique<GridRO>(halfSize_, step_, yPlane_, gridAlpha_);
+    axes_ = std::make_unique<AxesRO>(axisLen_, yPlane_, axisAlpha_, axisThicknessPx_);
 
-    UploadManager um(renderer->GetDevice(), uploadCmdList);
-
-    // --- VB сетки ---
-    std::vector<LineVertex> gridCpu;
-    BuildGridCPU(gridCpu);
-    gridVertexCount_ = (UINT)gridCpu.size();
-    {
-        ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
-            gridCpu.data(), (UINT)gridCpu.size() * sizeof(LineVertex),
-            D3D12_RESOURCE_FLAG_NONE,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-        vbGrid_ = vb;
-        vbvGrid_.BufferLocation = vbGrid_->GetGPUVirtualAddress();
-        vbvGrid_.StrideInBytes = sizeof(LineVertex);
-        vbvGrid_.SizeInBytes = (UINT)gridCpu.size() * sizeof(LineVertex);
-    }
-
-    // --- VB осей (экраная толщина) ---
-    std::vector<AxisVertex> axesCpu;
-    BuildAxesScreenCPU(axesCpu);
-    axesVertexCount_ = (UINT)axesCpu.size();
-    {
-        ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
-            axesCpu.data(), (UINT)axesCpu.size() * sizeof(AxisVertex),
-            D3D12_RESOURCE_FLAG_NONE,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-        vbAxes_ = vb;
-        vbvAxes_.BufferLocation = vbAxes_->GetGPUVirtualAddress();
-        vbvAxes_.StrideInBytes = sizeof(AxisVertex);
-        vbvAxes_.SizeInBytes = (UINT)axesCpu.size() * sizeof(AxisVertex);
-    }
-
-    um.StealKeepAlive(uploadKeepAlive);
-
-    // --- Материал для осей (axes.hlsl, TRIANGLES, input=AxisLine) ---
-    Material::GraphicsDesc agd = GetGraphicsDesc(); // копируем состояния (бленд, depth, raster)
-    agd.shaderFile = L"axes.hlsl";
-    agd.vsEntry = "VSMainAxis";
-    agd.psEntry = "PSMainAxis";
-    agd.inputLayoutKey = "AxisLine";
-    agd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    agd.raster.DepthBias = -150;
-    axisMat_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, agd);
+    grid_->Init(renderer, uploadCmdList, uploadKeepAlive);
+    axes_->Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
-void DebugGrid::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj)
+void DebugGrid::Tick(float dt)
 {
-    mat4 mvp = (GetModelMatrix() * view * proj);
-    UpdateUniform("modelViewProj", mvp.xm());
-
-    UINT w = renderer->GetWidth(), h = renderer->GetHeight();
-
-    UpdateUniform("viewportThickness", DirectX::XMFLOAT4(float(w), float(h), axisThicknessPx_, 0.0f));
+    (void)dt; // сейчас нечего анимировать, но оставим хук
 }
 
-void DebugGrid::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void DebugGrid::Render(Renderer* renderer,
+    ID3D12GraphicsCommandList* cl,
+    const mat4& view,
+    const mat4& proj)
 {
-    if (!renderer) { return; }
-    if (cl == nullptr) { return; }
-
-    // 1) Сетка
-    {
-        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        cl->IASetVertexBuffers(0, 1, &vbvGrid_);
-        if (gridVertexCount_ > 0u) { cl->DrawInstanced(gridVertexCount_, 1, 0, 0); }
+    if (grid_) {
+        grid_->Render(renderer, cl, view, proj);
     }
-    // 2) Оси
-    {
-        if (axisMat_) { axisMat_->Bind(cl, graphicsCtx_); }
-        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cl->IASetVertexBuffers(0, 1, &vbvAxes_);
-        cl->DrawInstanced(6, 1, 0, 0);
-        cl->DrawInstanced(6, 1, 6, 0);
-        cl->DrawInstanced(6, 1, 12, 0);
+    if (axes_) {
+        axes_->Render(renderer, cl, view, proj);
     }
 }

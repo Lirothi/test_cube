@@ -3,7 +3,7 @@
 #include <memory>
 #include <functional>
 
-#include "SceneObject.h"
+#include "RenderableObject.h"
 #include "Camera.h"
 #include "InputManager.h"
 
@@ -17,19 +17,21 @@ public:
     const Camera& CameraRef() const { return camera_; }
 
     void InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
-    void AddObject(std::unique_ptr<SceneObject> obj);
-    void Update(float deltaTime);
+    void AddObject(std::unique_ptr<RenderableObjectBase> obj);
+    void Tick(float deltaTime);
     void Render(Renderer* renderer);
 
+    void Clear();
+
 private:
-    void RenderObjectBatch(Renderer* renderer, const std::vector<SceneObject*>& objects, size_t batchIndex,
+    void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene);
     
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matCompose_;
     std::shared_ptr<Material> matTonemap_;
 
-    std::vector<std::unique_ptr<SceneObject>> objects_;
+    std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     InputManager* input_ = nullptr;
     ActionMap* actions_ = nullptr;
     Camera camera_;

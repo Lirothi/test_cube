@@ -152,7 +152,8 @@
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="SamplerManager.cpp" />
     <ClCompile Include="Scene.cpp" />
-    <ClCompile Include="SceneObject.cpp" />
+    <ClCompile Include="RenderableObject.cpp" />
+    <ClCompile Include="RenderableObjectBase.cpp" />
     <ClCompile Include="TaskSystem.cpp" />
     <ClCompile Include="TextManager.cpp" />
     <ClCompile Include="Texture2D.cpp" />
@@ -185,7 +186,8 @@
     <ClInclude Include="RootSignatureParser.h" />
     <ClInclude Include="SamplerManager.h" />
     <ClInclude Include="Scene.h" />
-    <ClInclude Include="SceneObject.h" />
+    <ClInclude Include="RenderableObject.h" />
+    <ClInclude Include="RenderableObjectBase.h" />
     <ClInclude Include="TaskSystem.h" />
     <ClInclude Include="TextManager.h" />
     <ClInclude Include="Texture2D.h" />

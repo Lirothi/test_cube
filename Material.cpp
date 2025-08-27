@@ -10,11 +10,6 @@
 #include <d3dcompiler.h>    // D3DReflect (DXBC)
 #include <dxcapi.h>         // DXC reflection (DXIL)
 
-// Опционально: если доступен заголовок с FourCC для DXIL
-#if __has_include(<dxc/dxilcontainer.h>)
-#include <dxc/dxilcontainer.h> // hlsl::DFCC_DXIL
-#endif
-
 #pragma comment(lib, "d3dcompiler.lib") // D3DReflect
 #pragma comment(lib, "dxcompiler.lib")
 
@@ -602,9 +597,15 @@ const Material::CBufferInfo* Material::GetCBInfo(UINT bRegister) const {
 }
 bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const {
     auto* cb = GetCBInfo(bRegister);
-    if (!cb) return false;
+    if (!cb)
+    {
+	    return false;
+    }
     auto it = cb->fieldsByName.find(name);
-    if (it == cb->fieldsByName.end()) return false;
+    if (it == cb->fieldsByName.end())
+    {
+	    return false;
+    }
     outOffset = it->second.offset;
     outSize = it->second.size;
     return true;
@@ -613,10 +614,10 @@ bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& o
 void Material::ProcessReflection(ID3D12ShaderReflection* refl,
     std::unordered_map<UINT, CBufferInfo>& io)
 {
-    if (!refl) return;
+    if (!refl) {return;}
 
     D3D12_SHADER_DESC sd{};
-    if (FAILED(refl->GetDesc(&sd))) return;
+    if (FAILED(refl->GetDesc(&sd))) {return;}
 
     // cbuffer name -> bRegister (bN)
     std::unordered_map<std::string, UINT> bindOfCB;
@@ -632,11 +633,11 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
     for (UINT i = 0; i < sd.ConstantBuffers; ++i) {
         ID3D12ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByIndex(i);
         D3D12_SHADER_BUFFER_DESC cbd{};
-        if (FAILED(cb->GetDesc(&cbd))) continue;
+        if (FAILED(cb->GetDesc(&cbd))) {continue;}
 
         std::string cbName = cbd.Name ? cbd.Name : "";
         auto itBind = bindOfCB.find(cbName);
-        if (itBind == bindOfCB.end()) continue; // пропускаем $Globals и пр.
+        if (itBind == bindOfCB.end()) {continue;} // пропускаем $Globals и пр.
 
         const UINT bReg = itBind->second;
         auto& dst = io[bReg];
@@ -646,7 +647,7 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
         for (UINT v = 0; v < cbd.Variables; ++v) {
             ID3D12ShaderReflectionVariable* var = cb->GetVariableByIndex(v);
             D3D12_SHADER_VARIABLE_DESC vd{};
-            if (FAILED(var->GetDesc(&vd))) continue;
+            if (FAILED(var->GetDesc(&vd))) {continue;}
 
             CBufferField f{};
             f.name = vd.Name ? vd.Name : "";
@@ -675,15 +676,6 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
 
                 // FourCC DXIL (берём из заголовка, либо формируем сами)
                 UINT32 fourccDXIL = DXIL_FOURCC('D', 'X', 'I', 'L');
-//#if __has_include(<dxc/dxilcontainer.h>)
-//                    hlsl::DFCC_DXIL;
-//#else
-//                    // MAKEFOURCC('D','X','I','L')
-//                    ((UINT32)'D')
-//                    | ((UINT32)'X' << 8)
-//                    | ((UINT32)'I' << 16)
-//                    | ((UINT32)'L' << 24);
-//#endif
 
                 UINT partIndex = 0;
                 if (SUCCEEDED(crefl->FindFirstPartKind(fourccDXIL, &partIndex))) {
@@ -720,6 +712,4 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
             return; // успех: DXBC
         }
     }
-
-    // Если сюда дошли — рефлексия не получилась (оставляем io как есть)
 }

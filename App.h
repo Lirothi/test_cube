@@ -17,7 +17,7 @@
 #include "Material.h"
 #include "Mesh.h"
 #include "Scene.h"
-#include "SceneObject.h"
+#include "RenderableObject.h"
 #include "GpuInstancedModels.h"
 #include "MeshManager.h"
 #include "DebugGrid.h"

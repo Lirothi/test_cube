@@ -1,5 +1,5 @@
 ﻿#pragma once
-#include "SceneObject.h"
+#include "RenderableObject.h"
 #include "InstanceBuffer.h"
 #include "Material.h"
 #include "Texture2D.h"
@@ -8,9 +8,9 @@
 #include <string>
 #include <memory>
 
-class GpuInstancedModels : public SceneObject {
+class GpuInstancedModels : public RenderableObject {
 public:
-    GpuInstancedModels(Renderer* renderer,
+    GpuInstancedModels(
         std::string modelName,
         UINT numInstances,
         const std::string& matPreset,
@@ -23,10 +23,10 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
-    bool IsSimpleRender() const override {return false;}
+    bool IsSimpleRender() const {return false;}
 
 protected:
-    // хук SceneObject
+    // хук RenderableObject
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;

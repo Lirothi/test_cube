@@ -33,7 +33,7 @@
     <ClCompile Include="Scene.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="SceneObject.cpp">
+    <ClCompile Include="RenderableObject.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="InstanceBuffer.cpp">
@@ -90,6 +90,9 @@
     <ClCompile Include="MaterialData.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RenderableObjectBase.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CBManager.h">
@@ -113,7 +116,7 @@
     <ClInclude Include="Scene.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="SceneObject.h">
+    <ClInclude Include="RenderableObject.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="InstanceBuffer.h">
@@ -186,6 +189,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MaterialData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderableObjectBase.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

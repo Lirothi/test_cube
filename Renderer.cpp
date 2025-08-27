@@ -1,6 +1,9 @@
 #include "Renderer.h"
 #include "Helpers.h"
 #include <cassert>
+#include <dxgidebug.h>
+#pragma comment(lib, "dxguid.lib")
+#include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
 
 Renderer::Renderer()
 {
@@ -8,11 +11,100 @@ Renderer::Renderer()
 }
 
 Renderer::~Renderer() {
-    WaitForPreviousFrame();
+    // 1) Полный аккуратный teardown
+    Shutdown();
+
+    // 2) Теперь отчёт — уже после того, как мы всё обнулили
+    ReportLiveObjects(); // если у тебя есть эта функция в сборке дебага
+
+    // 3) Закрываем событие в самом конце
     if (fenceEvent_ != nullptr) {
         CloseHandle(fenceEvent_);
         fenceEvent_ = nullptr;
     }
+}
+
+void Renderer::Shutdown()
+{
+    // Защита от повторных вызовов
+    static bool inShutdown = false;
+    if (inShutdown) {
+        return;
+    }
+    inShutdown = true;
+
+    // Если девайса нет — делать нечего
+    const bool hasDevice = (device_ != nullptr);
+    const bool hasQueue = (commandQueue_ != nullptr);
+    const bool hasFence = (fence_ != nullptr);
+
+    // 0) Полностью дождаться GPU (и закрыть все незавершённые CL)
+    if (hasDevice && hasQueue && hasFence) {
+        WaitForPreviousFrame(); // твой метод полной синхронизации :contentReference[oaicite:2]{index=2}
+    }
+
+    materialManager_.Clear();
+    materialDataManager_.ClearAll();
+
+    // 1) Остановить «таймлайн» команд: никому ничего больше не сабмитим
+    {
+        std::lock_guard<std::mutex> lk(submitMtx_);
+        submitTimeline_.clear(); // PassBatch_ ссылается только на CL из кадровых пулов :contentReference[oaicite:3]{index=3}
+    }
+
+    // 2) Offscreen (G-Buffer/Light/Scene/Depth) — уничтожаем первыми
+    DestroyDeferredTargets(); // корректно резетит ресурсы и их heap’ы + чистит knownStates_ :contentReference[oaicite:4]{index=4}
+
+    // 3) Backbuffer’ы и RTV/DSV heap’ы
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        renderTargets_[i].Reset();
+    }
+    depthBuffer_.Reset();
+    dsvHeap_.Reset();
+    rtvHeap_.Reset();
+    rtvDescriptorSize_ = 0;
+    dsvDescriptorSize_ = 0;
+
+    // 4) Перестраховка: очистить трекинг состояний ресурсов
+    {
+        std::lock_guard<std::mutex> lk(knownStatesMtx_);
+        knownStates_.clear();
+    }
+
+    // 5) SwapChain — выводим из fullscreen (если вдруг) и освобождаем
+    if (swapChain_) {
+        BOOL fs = FALSE;
+        Microsoft::WRL::ComPtr<IDXGIOutput> out;
+        if (SUCCEEDED(swapChain_->GetFullscreenState(&fs, &out)) && fs) {
+            (void)swapChain_->SetFullscreenState(FALSE, nullptr);
+        }
+        swapChain_.Reset();
+    }
+
+    // 6) Кадровые ресурсы: сбросить использование пулов, обнулить аплоад-ринг
+    // (их реальные ComPtr освободятся при разрушении Renderer, но это снимет связности)
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        frameResources_[i].ResetCommandAllocators(device_.Get());
+        frameResources_[i].ResetCommandListsUsage();
+        frameResources_[i].ResetUpload(); // очищает фолбэк-чанки и сбрасывает указатели внутри кадра :contentReference[oaicite:5]{index=5}
+        frameFenceValues_[i] = 0;
+    }
+    nextFenceValue_ = 1;
+
+    // 7) Fence/Queue
+    if (fence_) {
+        fence_.Reset();
+    }
+    if (commandQueue_) {
+        commandQueue_.Reset();
+    }
+
+    // 8) Девайс — последним
+    if (device_) {
+        device_.Reset();
+    }
+
+    inShutdown = false;
 }
 
 void Renderer::InitD3D12(HWND window) {
@@ -233,7 +325,28 @@ void Renderer::EndFrame() {
     ExecuteTimelineAndPresent();
 }
 
-void Renderer::Update(float dt)
+void Renderer::ReportLiveObjects()
+{
+#if defined(_DEBUG)
+    // 1) Детальный отчёт от устройства
+    if (device_) {
+        Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev;
+        if (SUCCEEDED(device_.As(&ddev))) {
+            ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL);
+        }
+    }
+    // 2) DXGI-отчёт (дополнительно)
+    {
+        Microsoft::WRL::ComPtr<IDXGIDebug1> dxgiDbg;
+        if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDbg)))) {
+            dxgiDbg->ReportLiveObjects(DXGI_DEBUG_ALL,
+                (DXGI_DEBUG_RLO_FLAGS)(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
+        }
+    }
+#endif
+}
+
+void Renderer::Tick(float dt)
 {
     if (fps_ <= 0.0f)
     {
