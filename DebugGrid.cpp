@@ -8,21 +8,19 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
-static inline XMFLOAT4 RGBA(float r, float g, float b, float a) { return XMFLOAT4(r, g, b, a); }
-
 // ──────────────────────────────────────────────────────────────
 // ВЕРШИННЫЕ ТИПЫ (локально, чтобы не плодить инклуды)
 // ──────────────────────────────────────────────────────────────
 struct LineVertex {
-    XMFLOAT3 pos;
-    XMFLOAT4 col;
+    float3 pos;
+    float4 col;
 };
 
 struct AxisVertex {
-    XMFLOAT3 a;           // начало отрезка в мире
-    XMFLOAT3 b;           // конец   отрезка в мире
-    XMFLOAT3 cornerBias;  // xy = (-1/+1), z = edgeBiasPx
-    XMFLOAT4 col;         // цвет линии
+    float3 a;           // начало отрезка в мире
+    float3 b;           // конец   отрезка в мире
+    float3 cornerBias;  // xy = (-1/+1), z = edgeBiasPx
+    float4 col;         // цвет линии
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -104,18 +102,18 @@ private:
         const float hs = (halfSize_ > 0.0f) ? halfSize_ : 10.0f;
         const int   n = static_cast<int>(std::floor(hs / step_));
 
-        const XMFLOAT4 c = RGBA(1, 1, 1, alpha_);
+        const float4 c(1, 1, 1, alpha_);
 
         for (int i = -n; i <= n; ++i) {
             const float z = i * step_;
             {
-                out.push_back({ XMFLOAT3(-hs, yPlane_, z), c });
-                out.push_back({ XMFLOAT3(+hs, yPlane_, z), c });
+                out.push_back({ float3(-hs, yPlane_, z), c });
+                out.push_back({ float3(+hs, yPlane_, z), c });
             }
             const float x = i * step_;
             {
-                out.push_back({ XMFLOAT3(x, yPlane_, -hs), c });
-                out.push_back({ XMFLOAT3(x, yPlane_, +hs), c });
+                out.push_back({ float3(x, yPlane_, -hs), c });
+                out.push_back({ float3(x, yPlane_, +hs), c });
             }
         }
     }
@@ -209,29 +207,29 @@ private:
     {
         out.clear();
         const float L = axisLen_;
-        const XMFLOAT4 xC = RGBA(1, 0, 0, alpha_);
-        const XMFLOAT4 yC = RGBA(0, 1, 0, alpha_);
-        const XMFLOAT4 zC = RGBA(0, 0, 1, alpha_);
+        const float4 xC(1, 0, 0, alpha_);
+        const float4 yC(0, 1, 0, alpha_);
+        const float4 zC(0, 0, 1, alpha_);
         const float eps = 2.25f;
 
-        auto push = [&](XMFLOAT3 A, XMFLOAT3 B, const XMFLOAT4& C) {
+        auto push = [&](float3 A, float3 B, const float4& C) {
             // два треугольника (= шесть вершин) на «толстую» линию в экранных координатах
             {
-                out.push_back({ A, B, XMFLOAT3(-1,-1, +eps), C });
-                out.push_back({ A, B, XMFLOAT3(-1,+1, +eps), C });
-                out.push_back({ A, B, XMFLOAT3(+1,+1, +eps), C });
+                out.push_back({ A, B, float3(-1,-1, +eps), C });
+                out.push_back({ A, B, float3(-1,+1, +eps), C });
+                out.push_back({ A, B, float3(+1,+1, +eps), C });
             }
             {
-                out.push_back({ A, B, XMFLOAT3(-1,-1, -eps), C });
-                out.push_back({ A, B, XMFLOAT3(+1,+1, -eps), C });
-                out.push_back({ A, B, XMFLOAT3(+1,-1, -eps), C });
+                out.push_back({ A, B, float3(-1,-1, -eps), C });
+                out.push_back({ A, B, float3(+1,+1, -eps), C });
+                out.push_back({ A, B, float3(+1,-1, -eps), C });
             }
             };
 
         // X, Z в плоскости yPlane_, и Y вверх
-        push(XMFLOAT3(0.0f, yPlane_, 0.0f), XMFLOAT3(L, yPlane_, 0.0f), xC);
-        push(XMFLOAT3(0.0f, yPlane_, 0.0f), XMFLOAT3(0.0f, yPlane_, L), zC);
-        push(XMFLOAT3(0.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, L, 0.0f), yC);
+        push(float3(0.0f, yPlane_, 0.0f), float3(L, yPlane_, 0.0f), xC);
+        push(float3(0.0f, yPlane_, 0.0f), float3(0.0f, yPlane_, L), zC);
+        push(float3(0.0f, 0.0f, 0.0f), float3(0.0f, L, 0.0f), yC);
     }
 
 private:
