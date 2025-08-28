@@ -21,6 +21,8 @@ public:
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
+    const TextureCube* GetTex() const { return &cube_; }
+
     bool IsSimpleRender() const { return true; }
 
 protected:

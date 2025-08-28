@@ -6,7 +6,6 @@ cbuffer PerFrame : register(b0)
 {
     float4x4 view;      // обычная view
     float4x4 proj;
-    float4x4 invView;
 }
 
 struct VSIn {

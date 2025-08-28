@@ -992,9 +992,9 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     }
 }
 
-void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = deferred_[currentFrameIndex_];
-    cl->OMSetRenderTargets(1, &D.lightRTV, FALSE, nullptr);
+    cl->OMSetRenderTargets(1, &D.lightRTV, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);

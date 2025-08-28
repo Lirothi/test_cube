@@ -36,7 +36,6 @@ void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4
 {
     // CB0: ожидаем имена "view" и "proj" в cbuffer'е (см. skybox.hlsl)
     UpdateUniform("view", view.xm());
-    UpdateUniform("invView", mat4::Inverse(view).xm());
     UpdateUniform("proj", proj.xm());
 }
 

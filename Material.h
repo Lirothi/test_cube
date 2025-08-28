@@ -11,6 +11,7 @@
 #include <d3d12shader.h>
 
 #include "RenderContext.h"
+#include <cassert>
 
 using namespace Microsoft::WRL;
 
@@ -144,7 +145,12 @@ public:
     }
     template<typename T> bool UpdateCB0Field(const std::string& name, const T& value, uint8_t* destCB)
     {
-        return UpdateCBField(0, name, value, destCB);
+        bool res = UpdateCBField(0, name, value, destCB);
+        if (!res)
+        {
+            assert(false && "Uniform not found");
+        }
+        return res;
     }
 
 private:

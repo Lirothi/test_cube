@@ -63,7 +63,7 @@ public:
     void DestroyDeferredTargets();
 
     void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
-    void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
+    void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
 
     // готовые SRV-таблицы (в shader-visible heap кадра)

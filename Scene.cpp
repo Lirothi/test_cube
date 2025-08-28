@@ -109,7 +109,12 @@ void Scene::Render(Renderer* renderer) {
     const mat4 view = camera_.GetViewMatrix();
     constexpr float HFOV = XMConvertToRadians(90.f);
     const float VFOV = 2.f * atan(tan(HFOV * 0.5f) / aspect);
-    const mat4 proj = mat4::PerspectiveFovLH(VFOV, aspect, 0.01f, 500.f);
+    const float zNear = 0.01f;
+    const float zFar = 1000.0f;
+    const mat4 proj = mat4::PerspectiveFovLH(VFOV, aspect, zNear, zFar);
+
+    const mat4 invView = mat4::Inverse(view);
+    const mat4 invProj = mat4::Inverse(proj);
 
     enum class ObjectRenderType {
         OpaqueSimpleRender,
@@ -188,7 +193,7 @@ void Scene::Render(Renderer* renderer) {
 
     // 2) LIGHTING — fullscreen → LightTarget (очистка один раз)
     auto pLighting = rg.AddPass("Lighting", { pGBuffer },
-        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -196,13 +201,11 @@ void Scene::Render(Renderer* renderer) {
             renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color);
+            renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color, false);
 
             float3 sunDirWS = Math::float3(-0.5f, -0.7f, -0.5f); // «лучи вниз»
             sunDirWS = sunDirWS.Normalized();
-            mat4 invView = mat4::Inverse(view);
-            mat4 invProj = mat4::Inverse(proj);
-
+            
             // аллоцируем динамический CB в аплоад-ринге текущего кадра
             auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
@@ -226,18 +229,66 @@ void Scene::Render(Renderer* renderer) {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
+    auto pSky = rg.AddPass("Skybox", { pLighting },
+        [this, renderer, view, proj](RenderGraph::PassContext ctx) {
+            if (!skyBox_) { return; }
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+
+            // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
+            renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
+
+            skyBox_->Render(renderer, t.cl, view, proj);
+
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
     // 3) COMPOSE — Light + Emissive → SceneColor
-    auto pCompose = rg.AddPass("Compose", { pLighting },
-        [this, renderer](RenderGraph::PassContext ctx) {
+    auto pCompose = rg.AddPass("Compose", { pSky },
+        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
+            // === CB для compose_ps ===
+
+            auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
+            matCompose_->UpdateCB0Field("view", view.xm(), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("proj", proj.xm(), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("invView", invView.xm(), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("invProj", invProj.xm(), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("skyboxIntensity", 1.0f, (uint8_t*)cb.cpu);
+
+            // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
+            std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+            srvs.push_back(D.lightSRV);   // t0
+            srvs.push_back(D.gbSRV[2]);   // t1 (GB2)
+            srvs.push_back(D.gbSRV[0]);   // t2 (GB0)
+            srvs.push_back(D.gbSRV[1]);   // t3 (GB1)
+            srvs.push_back(D.gbSRV[3]);   // t4 (Depth)
+
+            // t5 — Skybox cubemap (см. примечание ниже про доступ к SRV)
+            if (skyBox_) {
+                srvs.push_back(skyBox_->GetTex()->GetSRVCPU()); // <— нужен accessor из Skybox
+            }
+
             RenderContext rc{};
-            rc.table[0] = renderer->StageComposeSrvTable(); // t0..t1
-            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+            rc.cbv[0] = cb.gpu; // b0
+            rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
 
             matCompose_->Bind(t.cl, rc);
             t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -246,25 +297,8 @@ void Scene::Render(Renderer* renderer) {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
-    auto pSky = rg.AddPass("Skybox", { pCompose },
-        [this, renderer, view, proj](RenderGraph::PassContext ctx) {
-            if (!skyBox_) { return; }
-            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-
-            const auto& D = renderer->GetDeferredForFrame();
-            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
-
-            // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
-            renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
-
-            skyBox_->Render(renderer, t.cl, view, proj);
-
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
-        });
-
     // 4) TRANSPARENT — forward поверх SceneColor, depth test по GBuffer DSV
-    auto pTransp = rg.AddPass("Transparent", { pSky },
+    auto pTransp = rg.AddPass("Transparent", { pCompose },
         [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
             RenderGraph rgTr(ctx.batchIndex);
 

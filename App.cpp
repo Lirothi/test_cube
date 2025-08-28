@@ -182,12 +182,22 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
-    auto box = std::make_unique<RotatingObject>("models/box.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
-    box->MaterialParamsRef().texFlags.w = 2;
-    scene_.AddObject(std::move(box));
+    {
+        auto box = std::make_unique<RotatingObject>("models/box.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
+        box->MaterialParamsRef().texFlags.w = 1;
+        box->MaterialParamsRef().SetUseMR(false);
+        box->MaterialParamsRef().metalRough = float2(0.0f, 0.8f);
+        scene_.AddObject(std::move(box));
+    }
     scene_.AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
     scene_.AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
     scene_.AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
+
+    {
+        auto floor = std::make_unique<RotatingObject>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -5.0f, -10.0f), float3(10.0f, 10.0f, 10.0f));
+        floor->MaterialParamsRef().texFlags.w = 0.01f;
+        scene_.AddObject(std::move(floor));
+    }
 
     scene_.AddObject(std::make_unique<DebugGrid>(100.0f));
 
