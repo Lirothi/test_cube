@@ -90,6 +90,8 @@ protected:
     const ConstantBufferLayout* cbLayout_ = nullptr;
     uint8_t* cbvDataBegin_ = nullptr;
 
+    bool allowWireframe_ = true;
+
 private:
     RenderableObject(const RenderableObject&) = delete;
     RenderableObject& operator=(const RenderableObject&) = delete;

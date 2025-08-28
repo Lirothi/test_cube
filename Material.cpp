@@ -365,7 +365,9 @@ bool Material::FSProbeAndFlagPending()
         std::error_code ec{};
         auto t = std::filesystem::last_write_time(watchedFiles_[i], ec);
         if (!ec && i < watchedTimes_.size()) {
-            if (t != watchedTimes_[i]) { changed = true; break; }
+            if (t != watchedTimes_[i]) {
+                changed = true; break;
+            }
         }
     }
 

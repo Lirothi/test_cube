@@ -9,7 +9,9 @@
 class Skybox : public RenderableObject {
 public:
     Skybox(): RenderableObject(/*matPreset*/"", /*inputLayout*/"PosOnly", /*graphicsShader*/L"shaders/skybox.hlsl")
-    {}
+    {
+        allowWireframe_ = false;
+    }
 
     ~Skybox() override = default;
 
