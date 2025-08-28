@@ -38,7 +38,7 @@ float4 PSMain(VSOut i) : SV_Target
     float3 hdr = HDRColor.Sample(gSmp, i.UV).rgb;
 
     float3 mapped = TonemapACES(hdr);
-    float3 ldr = pow(max(mapped, 0.0.xxx), 1.0 / max(kEps, kGammaOut));
+    float3 ldr = mapped;//pow(max(mapped, 0.0.xxx), 1.0 / max(kEps, kGammaOut));
 
     // добавим одинаковый шум на каналы — достаточно, чтобы сломать полосы
     //uint2 pix = (uint2) i.H.xy;

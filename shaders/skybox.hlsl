@@ -1,5 +1,6 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
+#include "utils.hlsl"
 
 cbuffer PerFrame : register(b0)
 {
@@ -29,12 +30,8 @@ VSOut VSMain(VSIn i)
     o.pos = mul(viewPos, proj);
     o.pos.z = o.pos.w;
 
-    //float3x3 R = (float3x3) view;
-    //float3 dirWS = mul(i.pos, transpose(R));
-    
-    float3 dirWS = mul(viewPos.xyz, (float3x3) invView).xyz;
-    //float3 dirWS = mul(i.pos, (float3x3) invView).xyz;
-    //dirWS.y = -dirWS.y;
+    //float3 dirWS = mul(viewPos.xyz, (float3x3) invView).xyz;
+    float3 dirWS = i.pos;
     o.dir = normalize(dirWS);
     
     return o;
@@ -46,5 +43,6 @@ SamplerState samLinear : register(s0);
 float4 PSMain(VSOut i) : SV_Target
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb;
+    //c = SRGBToLinear(c);
     return float4(c, 1.0);
 }

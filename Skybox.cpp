@@ -54,11 +54,8 @@ void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/)
 {
-    // Каждый кадр стадим SRV кубкарты в GPU heap: t0
-    if (cube_.GetResource() != nullptr) {
-        graphicsCtx_.table[0] = renderer->StageSrvUavTable({ cube_.GetSRVCPU() }).gpu;
-    }
-    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+    graphicsCtx_.table[0] = cube_.GetSRVForFrame(renderer);
+    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, SamplerManager::LinearClamp());
 }
 
 void Skybox::BuildCubeMesh_(Renderer* r,

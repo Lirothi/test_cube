@@ -254,7 +254,14 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < kFrameCount; ++i) {
         ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
-        device_->CreateRenderTargetView(renderTargets_[i].Get(), nullptr, rtv);
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
+        rtvFmt.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;        // <- ключ
+        rtvFmt.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        rtvFmt.Texture2D.MipSlice   = 0;
+        rtvFmt.Texture2D.PlaneSlice = 0;
+
+        device_->CreateRenderTargetView(renderTargets_[i].Get(), &rtvFmt, rtv);
         rtv.ptr += rtvDescriptorSize_;
     }
 }

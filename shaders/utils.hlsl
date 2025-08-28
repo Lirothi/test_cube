@@ -125,4 +125,68 @@ inline float3 PerturbNormal_Deriv(float3 nTS, float3 Nws, float3 Pvs, float2 uv)
     return normalize(T * nTS.x + B * nTS.y + N * nTS.z);
 }
 
+
+// sRGB <-> Linear (точные piecewise функции, без трогания альфы)
+// Источник формулы: IEC 61966-2-1
+static const float SRGB_EPS_INV = 0.04045; // sRGB -> Linear порог
+static const float SRGB_EPS_FWD = 0.0031308; // Linear -> sRGB порог
+static const float SRGB_A = 0.055;
+static const float SRGB_GAMMA = 2.4;
+static const float SRGB_IGAMMA = 1.0 / 2.4;
+
+float3 SRGBToLinear(float3 c)
+{
+    float3 low = c / 12.92;
+    float3 high = pow((c + SRGB_A) / (1.0 + SRGB_A), SRGB_GAMMA);
+    return lerp(low, high, step(SRGB_EPS_INV, c));
+}
+
+float4 SRGBToLinear(float4 c)  // альфу не трогаем
+{
+    return float4(SRGBToLinear(c.rgb), c.a);
+}
+
+float3 LinearToSRGB(float3 c)
+{
+    c = max(c, 0.0); // защита от отрицательных после тонмапа
+    float3 low = c * 12.92;
+    float3 high = (1.0 + SRGB_A) * pow(c, SRGB_IGAMMA) - SRGB_A;
+    return lerp(low, high, step(SRGB_EPS_FWD, c));
+}
+
+float4 LinearToSRGB(float4 c)  // альфу не трогаем
+{
+    return float4(LinearToSRGB(c.rgb), c.a);
+}
+
+// Быстрые приближения (если очень надо): pow-близко, но нет piecewise
+float3 SRGBToLinear_Fast(float3 c)
+{
+    return pow(saturate(c), 2.2);
+}
+float3 LinearToSRGB_Fast(float3 c)
+{
+    return pow(max(c, 0.0), 1.0 / 2.2);
+}
+
+// Произвольная "гамма": линейный <-> гамма-энкод (не sRGB, а просто pow)
+float3 LinearToGamma(float3 c, float gammaOut)
+{
+    return pow(max(c, 0.0), 1.0 / max(1e-6, gammaOut));
+}
+
+float3 GammaToLinear(float3 c, float gammaIn)
+{
+    return pow(saturate(c), max(1e-6, gammaIn));
+}
+
+float4 LinearToGamma(float4 c, float g)
+{
+    return float4(LinearToGamma(c.rgb, g), c.a);
+}
+float4 GammaToLinear(float4 c, float g)
+{
+    return float4(GammaToLinear(c.rgb, g), c.a);
+}
+
 #endif // UTILS_HLSL
