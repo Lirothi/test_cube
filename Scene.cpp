@@ -50,8 +50,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         matTonemap_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 
-    skyBox_ = std::make_unique<Skybox>();
-    skyBox_->LoadDDS(renderer, uploadCmdList, uploadKeepAlive, L"textures/skybox.dds");
+    skyBox_ = std::make_unique<Skybox>(L"textures/skybox.dds");
     skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
@@ -384,4 +383,5 @@ void Scene::Clear()
     matCompose_.reset();
     matTonemap_.reset();
     objects_.clear();
+    skyBox_.reset();
 }

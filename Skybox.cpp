@@ -5,18 +5,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-bool Skybox::LoadDDS(Renderer* renderer,
-    ID3D12GraphicsCommandList* uploadCmdList,
-    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
-    const std::wstring& ddsPath)
-{
-    path_ = ddsPath;
-    if (!renderer || !uploadCmdList) {
-        return false;
-    }
-    return cube_.CreateFromDDS(renderer, uploadCmdList, ddsPath, uploadKeepAlive);
-}
-
 void Skybox::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)

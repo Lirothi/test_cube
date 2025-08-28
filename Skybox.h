@@ -8,18 +8,13 @@
 
 class Skybox : public RenderableObject {
 public:
-    Skybox(): RenderableObject(/*matPreset*/"", /*inputLayout*/"PosOnly", /*graphicsShader*/L"shaders/skybox.hlsl")
+    Skybox(const std::wstring& filePath): RenderableObject(/*matPreset*/"", /*inputLayout*/"PosOnly", /*graphicsShader*/L"shaders/skybox.hlsl"),
+        path_(filePath)
     {
         allowWireframe_ = false;
     }
 
     ~Skybox() override = default;
-
-    // Загрузка DDS-кубмапы
-    bool LoadDDS(Renderer* renderer,
-        ID3D12GraphicsCommandList* uploadCmdList,
-        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
-        const std::wstring& ddsPath);
 
     // Init: достраиваем PSO и геометрию (куб)
     void Init(Renderer* renderer,
