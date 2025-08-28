@@ -81,6 +81,176 @@ static void BuildRootFromLayout(
     ThrowIfFailed(device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&outRS)));
 }
 
+static D3D_SHADER_MODEL QueryMaxShaderModel(ID3D12Device* dev)
+{
+    D3D12_FEATURE_DATA_SHADER_MODEL data = { D3D_SHADER_MODEL_6_9 };
+    if (SUCCEEDED(dev->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &data, sizeof(data))))
+    {
+        // data.HighestShaderModel может быть 0x60..0x67 даже если в SDK нет enum-имен
+        return data.HighestShaderModel;
+    }
+    return D3D_SHADER_MODEL_6_0; // самый безопасный fallback
+}
+
+static std::wstring BuildProfile(const char* stage4cc, D3D_SHADER_MODEL sm)
+{
+    // В D3D12 SM кодируют как 0xMN (6_0=0x60, 6_7=0x67)
+    unsigned v = static_cast<unsigned>(sm);
+    unsigned major = (v >> 4) & 0xF;   // 6
+    unsigned minor = v & 0xF;          // 0..7
+    // на всякий случай кламп
+    if (major < 6) { major = 6; minor = 0; }
+    if (minor > 9) { minor = 9; }
+
+    wchar_t buf[16];
+    swprintf_s(buf, L"%hs_%u_%u", stage4cc, major, minor);
+    return std::wstring(buf);
+}
+
+// Include handler для DXC с захватом списка файлов
+struct IncludeCaptureDXC : public IDxcIncludeHandler
+{
+    std::atomic<ULONG> refcnt{ 1 };
+    std::filesystem::path baseDir;
+    Microsoft::WRL::ComPtr<IDxcUtils> utils;
+    std::vector<std::wstring>& outFiles;
+
+    IncludeCaptureDXC(IDxcUtils* u, const std::filesystem::path& base, std::vector<std::wstring>& out)
+        : baseDir(base), utils(u), outFiles(out) {
+    }
+
+    // IUnknown
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == __uuidof(IDxcIncludeHandler) || riid == __uuidof(IUnknown)) {
+            *ppv = static_cast<IDxcIncludeHandler*>(this);
+            AddRef(); return S_OK;
+        }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refcnt; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG v = --refcnt; if (v == 0) delete this; return v;
+    }
+
+    // IDxcIncludeHandler
+    HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) override
+    {
+        std::filesystem::path req(pFilename ? pFilename : L"");
+        std::filesystem::path full = req.is_absolute() ? req : (baseDir / req);
+        full = full.lexically_normal();
+        outFiles.push_back(full.wstring());
+
+        Microsoft::WRL::ComPtr<IDxcBlobEncoding> enc;
+        HRESULT hr = utils->LoadFile(full.c_str(), nullptr, &enc);
+        if (FAILED(hr)) return hr;
+        *ppIncludeSource = enc.Detach();
+        return S_OK;
+    }
+};
+
+static HRESULT CompileDXC(const std::wstring& file,
+    const char* entry,
+    const char* stage4cc,   // "vs","ps","cs"
+    ID3D12Device* device,
+    const Material::DefineList& defines,
+    ComPtr<ID3DBlob>& outBlob,
+    std::vector<std::wstring>& outIncludes)
+{
+    outBlob.Reset();
+    outIncludes.clear();
+
+    // DXC utils/compiler
+    ComPtr<IDxcUtils>     utils;
+    ComPtr<IDxcCompiler3> compiler;
+    HRESULT hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
+    if (FAILED(hr)) return hr;
+    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
+    if (FAILED(hr)) return hr;
+
+    // Загружаем исходник
+    std::filesystem::path path = std::filesystem::path(file).lexically_normal();
+    ComPtr<IDxcBlobEncoding> src;
+    hr = utils->LoadFile(path.c_str(), nullptr, &src);
+    if (FAILED(hr)) return hr;
+
+    // Include handler с захватом
+    IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(), outIncludes);
+
+    // Target: max supported SM
+    const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
+    const std::wstring target = BuildProfile(stage4cc, sm);
+
+    // Строим устойчиво: все wchar-строки живут до конца функции
+    std::wstring wEntry(entry, entry + std::strlen(entry));
+    std::vector<std::wstring> owned; owned.reserve(16 + defines.size());
+
+    // Базовые аргументы
+    owned.push_back(L"-E");           // 0
+    owned.push_back(wEntry);          // 1
+    owned.push_back(L"-T");           // 2
+    owned.push_back(target);          // 3
+    owned.push_back(L"-Zpr");         // 4 (row-major)
+    owned.push_back(L"-HV");          // 5
+    owned.push_back(L"2021");         // 6
+#ifdef _DEBUG
+    owned.push_back(L"-Zi");          // 7
+    owned.push_back(L"-Qembed_debug");// 8
+    owned.push_back(L"-Od");          // 9
+#else
+    owned.push_back(L"-O3");
+    owned.push_back(L"-Qstrip_debug");
+    //owned.push_back(L"-Qstrip_reflect");
+#endif
+
+    // Дефайны
+    for (auto& kv : defines) {
+        std::wstring w = L"-D";
+        w += std::wstring(kv.first.begin(), kv.first.end());
+        if (!kv.second.empty()) {
+            w += L"=" + std::wstring(kv.second.begin(), kv.second.end());
+        }
+        owned.push_back(std::move(w));
+    }
+
+    // Собираем массив LPCWSTR
+    std::vector<LPCWSTR> args; args.reserve(owned.size());
+    {
+        for (auto& s : owned) args.push_back(s.c_str());
+    }
+
+    // Компиляция
+    DxcBuffer buf{}; buf.Ptr = src->GetBufferPointer(); buf.Size = src->GetBufferSize(); buf.Encoding = 0;
+    ComPtr<IDxcResult> result;
+    hr = compiler->Compile(&buf, args.data(), (UINT)args.size(), inc, IID_PPV_ARGS(&result));
+    inc->Release();
+
+    if (FAILED(hr)) return hr;
+
+    // errors
+    ComPtr<IDxcBlobUtf8> errs;
+    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
+    if (errs && errs->GetStringLength() > 0) {
+        OutputDebugStringA(errs->GetStringPointer());
+    }
+
+    HRESULT status = S_OK;
+    result->GetStatus(&status);
+    if (FAILED(status)) return status;
+
+    // DXIL
+    ComPtr<IDxcBlob> dxil;
+    result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxil), nullptr);
+    if (!dxil) return E_FAIL;
+
+    // Приводим к ID3DBlob через копию (чтобы остальной код не менять)
+    ComPtr<ID3DBlob> blob;
+    ThrowIfFailed(D3DCreateBlob(dxil->GetBufferSize(), &blob));
+    std::memcpy(blob->GetBufferPointer(), dxil->GetBufferPointer(), dxil->GetBufferSize());
+    outBlob = blob;
+
+    return S_OK;
+}
+
 struct IncludeCapture : public ID3DInclude {
     std::wstring rootDir;
     std::vector<std::wstring>& outFiles;
@@ -399,25 +569,39 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         ParseRootSignatureFromSource(src, layoutParsed);
     }
 
-    UINT cf =
-#ifdef _DEBUG
-    (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
-#else
-        D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-
-    ComPtr<ID3DBlob> vs5, ps5;
+    ComPtr<ID3DBlob> vs, ps;
     std::vector<std::wstring> incVS, incPS;
-    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.vsEntry, "vs_5_0", cf, gd.defines, vs5, incVS))) {
-        return false;
+
+    // SM6+ через DXC
+    if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
+        OutputDebugStringA("[Material] DXC VS failed, fallback to D3DCompile SM5\n");
+        UINT cf =
+#ifdef _DEBUG
+        (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
+#else
+            D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+        if (FAILED(CompileWithIncludes(gd.shaderFile, gd.vsEntry, "vs_5_0", cf, gd.defines, vs, incVS))) {
+            return false;
+        }
     }
-    if (FAILED(CompileWithIncludes(gd.shaderFile, gd.psEntry, "ps_5_0", cf, gd.defines, ps5, incPS))) {
-        return false;
+    if (FAILED(CompileDXC(gd.shaderFile, gd.psEntry, "ps", r->GetDevice(), gd.defines, ps, incPS))) {
+        OutputDebugStringA("[Material] DXC PS failed, fallback to D3DCompile SM5\n");
+        UINT cf =
+#ifdef _DEBUG
+        (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
+#else
+            D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+        if (FAILED(CompileWithIncludes(gd.shaderFile, gd.psEntry, "ps_5_0", cf, gd.defines, ps, incPS))) {
+            return false;
+        }
     }
 
+    // рефлексия (работает для DXIL и DXBC)
     cbInfos_.clear();
-    ReflectShaderBlob(vs5.Get(), cbInfos_);
-    ReflectShaderBlob(ps5.Get(), cbInfos_);
+    ReflectShaderBlob(vs.Get(), cbInfos_);
+    ReflectShaderBlob(ps.Get(), cbInfos_);
 
     BuildRootFromLayout(r->GetDevice(), layoutParsed, gd.rsFlags, outRS, outParams);
 
@@ -432,8 +616,8 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         pso.InputLayout = { il.desc, il.count };
     }
 
-    pso.VS = { vs5->GetBufferPointer(), vs5->GetBufferSize() };
-    pso.PS = { ps5->GetBufferPointer(), ps5->GetBufferSize() };
+    pso.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    pso.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
     pso.RasterizerState = gd.raster;
     pso.BlendState = gd.blend;
     pso.DepthStencilState = gd.depth;
@@ -477,21 +661,23 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
-    UINT cf =
-#ifdef _DEBUG
-    (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
-#else
-        D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-
-    ComPtr<ID3DBlob> cs5;
+    ComPtr<ID3DBlob> cs;
     std::vector<std::wstring> incCS;
-    if (FAILED(CompileWithIncludes(cd.shaderFile, cd.csEntry, "cs_5_0", cf, cd.defines, cs5, incCS))) {
-        return false;
+    if (FAILED(CompileDXC(cd.shaderFile, cd.csEntry, "cs", r->GetDevice(), cd.defines, cs, incCS))) {
+        OutputDebugStringA("[Material] DXC CS failed, fallback to D3DCompile SM5\n");
+        UINT cf =
+#ifdef _DEBUG
+        (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
+#else
+            D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+        if (FAILED(CompileWithIncludes(cd.shaderFile, cd.csEntry, "cs_5_0", cf, cd.defines, cs, incCS))) {
+            return false;
+        }
     }
 
     cbInfos_.clear();
-    ReflectShaderBlob(cs5.Get(), cbInfos_);
+    ReflectShaderBlob(cs.Get(), cbInfos_);
 
     RootSignatureLayout layoutParsed;
     {
@@ -502,7 +688,7 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
-    pso.CS = { cs5->GetBufferPointer(), cs5->GetBufferSize() };
+    pso.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
     if (FAILED(r->GetDevice()->CreateComputePipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
         return false;
     }
@@ -674,48 +860,29 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
     }
 }
 
-#define DXIL_FOURCC(ch0, ch1, ch2, ch3)                                        \
-  ((uint32_t)(uint8_t)(ch0) | (uint32_t)(uint8_t)(ch1) << 8 |                  \
-   (uint32_t)(uint8_t)(ch2) << 16 | (uint32_t)(uint8_t)(ch3) << 24)
-
 void Material::ReflectShaderBlob(ID3DBlob* blob,
     std::unordered_map<UINT, CBufferInfo>& io)
 {
     if (!blob) return;
 
-    // ===== Попытка №1: DXIL через DXC =====
+    // Сначала попробуем DXIL (DXC)
     {
-        Microsoft::WRL::ComPtr<IDxcContainerReflection> crefl;
-        if (SUCCEEDED(DxcCreateInstance(CLSID_DxcContainerReflection, IID_PPV_ARGS(&crefl)))) {
-            if (SUCCEEDED(crefl->Load(reinterpret_cast<IDxcBlob*>(blob)))) {
+        Microsoft::WRL::ComPtr<IDxcUtils> utils;
+        if (SUCCEEDED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))) {
+            DxcBuffer db{};
+            db.Ptr = blob->GetBufferPointer();
+            db.Size = blob->GetBufferSize();
+            db.Encoding = 0;
 
-                // FourCC DXIL (берём из заголовка, либо формируем сами)
-                UINT32 fourccDXIL = DXIL_FOURCC('D', 'X', 'I', 'L');
-
-                UINT partIndex = 0;
-                if (SUCCEEDED(crefl->FindFirstPartKind(fourccDXIL, &partIndex))) {
-                    Microsoft::WRL::ComPtr<IDxcBlob> part;
-                    if (SUCCEEDED(crefl->GetPartContent(partIndex, &part))) {
-                        Microsoft::WRL::ComPtr<IDxcUtils> utils;
-                        if (SUCCEEDED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))) {
-                            DxcBuffer buf{};
-                            buf.Ptr = part->GetBufferPointer();
-                            buf.Size = part->GetBufferSize();
-                            buf.Encoding = 0u; // бинарь: кодировка не важна, 0 (DXC_CP_ACP) ок
-
-                            Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
-                            if (SUCCEEDED(utils->CreateReflection(&buf, IID_PPV_ARGS(&refl)))) {
-                                ProcessReflection(refl.Get(), io);
-                                return; // успех: DXIL
-                            }
-                        }
-                    }
-                }
+            Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
+            if (SUCCEEDED(utils->CreateReflection(&db, IID_PPV_ARGS(&refl))) && refl) {
+                ProcessReflection(refl.Get(), io);
+                return;
             }
         }
     }
 
-    // ===== Попытка №2: DXBC через D3DReflect =====
+    // Если это не DXIL, пробуем старый DXBC путь
     {
         Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
         if (SUCCEEDED(D3DReflect(blob->GetBufferPointer(),
@@ -724,7 +891,7 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
             (void**)refl.GetAddressOf())))
         {
             ProcessReflection(refl.Get(), io);
-            return; // успех: DXBC
+            return;
         }
     }
 }
