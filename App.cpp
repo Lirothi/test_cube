@@ -160,7 +160,7 @@ void App::InitScene()
     }
 
     renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal_rg.dds",  /*RG*/true, /*TBN*/true });
-    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.png", L"textures/bronze_mr.png", L"textures/bronze_normal_rg.png", /*RG*/true, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal_rg.dds", /*RG*/true, /*TBN*/true });
 
     // Заранее создаем upload command list
     ComPtr<ID3D12CommandAllocator> uploadAlloc;
