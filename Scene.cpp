@@ -22,7 +22,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.shaderFile = L"shaders/lighting_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = ""; // fullscreen
-        gd.numRT = 1; gd.rtvFormat = renderer->GetLightTargetFormat();
+        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetLightTargetFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
         matLighting_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
@@ -33,7 +33,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.shaderFile = L"shaders/compose_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = "";
-        gd.numRT = 1; gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSceneColorFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
         matCompose_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
@@ -44,11 +44,15 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.shaderFile = L"shaders/tonemap_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
         gd.inputLayoutKey = "";
-        gd.numRT = 1; gd.rtvFormat = renderer->GetBackbufferFormat();
+        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetBackbufferFormat();
         gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
         gd.depth.DepthEnable = FALSE;
         matTonemap_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+
+    skyBox_ = std::make_unique<Skybox>();
+    skyBox_->LoadDDS(renderer, uploadCmdList, uploadKeepAlive, L"textures/skybox.dds");
+    skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
@@ -243,8 +247,25 @@ void Scene::Render(Renderer* renderer) {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
+    auto pSky = rg.AddPass("Skybox", { pCompose },
+        [this, renderer, view, proj](RenderGraph::PassContext ctx) {
+            if (!skyBox_) { return; }
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+
+            // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
+            renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+
+            skyBox_->Render(renderer, t.cl, view, proj);
+
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
     // 4) TRANSPARENT — forward поверх SceneColor, depth test по GBuffer DSV
-    auto pTransp = rg.AddPass("Transparent", { pCompose },
+    auto pTransp = rg.AddPass("Transparent", { pSky },
         [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
             RenderGraph rgTr(ctx.batchIndex);
 
@@ -272,7 +293,7 @@ void Scene::Render(Renderer* renderer) {
         });
 
     // 5) TONEMAP — SceneColor → Backbuffer
-    auto pTonemap = rg.AddPass("Tonemap", { pCompose },
+    auto pTonemap = rg.AddPass("Tonemap", { pTransp },
         [this, renderer](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             const auto& D = renderer->GetDeferredForFrame();

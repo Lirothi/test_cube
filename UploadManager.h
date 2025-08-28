@@ -33,9 +33,10 @@ public:
         desc.Flags = flags;
 
         ComPtr<ID3D12Resource> defaultBuf;
+        // ВАЖНО: для буферов InitialState = COMMON
         ThrowIfFailed(device_->CreateCommittedResource(
             &heapDefault, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&defaultBuf)));
 
         // --- Upload ---
@@ -51,23 +52,37 @@ public:
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
             IID_PPV_ARGS(&uploadBuf)));
 
-        // Map+memcpy
+        // Map + memcpy
         void* dst = nullptr;
         D3D12_RANGE range{ 0, 0 };
         ThrowIfFailed(uploadBuf->Map(0, &range, &dst));
         std::memcpy(dst, srcData, byteSize);
         uploadBuf->Unmap(0, nullptr);
 
-        // Copy + barrier
-        cmdList_->CopyResource(defaultBuf.Get(), uploadBuf.Get());
+        // Barriers: COMMON -> COPY_DEST
+        {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = defaultBuf.Get();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+            b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            cmdList_->ResourceBarrier(1, &b);
+        }
 
-        D3D12_RESOURCE_BARRIER barrier{};
-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Transition.pResource = defaultBuf.Get();
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barrier.Transition.StateAfter = afterCopy;
-        cmdList_->ResourceBarrier(1, &barrier);
+        // Копирование буфера (предпочтительно CopyBufferRegion)
+        cmdList_->CopyBufferRegion(defaultBuf.Get(), 0, uploadBuf.Get(), 0, byteSize);
+
+        // Barriers: COPY_DEST -> afterCopy (если нужно)
+        if (afterCopy != D3D12_RESOURCE_STATE_COPY_DEST) {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = defaultBuf.Get();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            b.Transition.StateAfter = afterCopy;
+            cmdList_->ResourceBarrier(1, &b);
+        }
 
         keepAlive_.push_back(uploadBuf);
         return defaultBuf;

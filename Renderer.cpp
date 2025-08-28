@@ -4,6 +4,7 @@
 #include <dxgidebug.h>
 #pragma comment(lib, "dxguid.lib")
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
+#include <mimalloc.h>
 
 Renderer::Renderer()
 {
@@ -23,6 +24,8 @@ Renderer::~Renderer() {
         fenceEvent_ = nullptr;
     }
 }
+
+static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 
 void Renderer::Shutdown()
 {
@@ -110,6 +113,11 @@ void Renderer::Shutdown()
     }
 
     inShutdown = false;
+
+    mi_register_output(MiOut, nullptr);
+    mi_collect(true);
+    mi_option_set(mi_option_show_stats, 1);
+    //mi_stats_print(nullptr);
 }
 
 void Renderer::InitD3D12(HWND window) {

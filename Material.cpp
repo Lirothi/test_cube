@@ -441,7 +441,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     pso.PrimitiveTopologyType = gd.topologyType;
     pso.NumRenderTargets = gd.numRT;
     for (UINT i = 0; i < gd.numRT; ++i) {
-        pso.RTVFormats[i] = (gd.numRT == 1 ? gd.rtvFormat : gd.rtvFormats[i]);
+        pso.RTVFormats[i] = gd.rtvFormats[i];
     }
     pso.DSVFormat = gd.dsvFormat;
     pso.SampleDesc.Count = gd.sampleCount;
@@ -535,7 +535,7 @@ std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
 {
     std::wstring fmts = L"";
     for (UINT i = 0; i < gd.numRT; ++i) {
-        fmts += std::to_wstring((int)(gd.numRT == 1 ? gd.rtvFormat : gd.rtvFormats[i])) + L",";
+        fmts += std::to_wstring((int)(gd.rtvFormats[i])) + L",";
     }
     std::wstring key = L"G2|" + gd.shaderFile + L"|" +
         std::wstring(gd.inputLayoutKey.begin(), gd.inputLayoutKey.end()) + L"|" +

@@ -16,9 +16,9 @@ VSOut VSMain(uint vid:SV_VertexID){
 float4 PSMain(VSOut i):SV_Target{
     float3 lit = LightTarget.Sample(gSmp,i.UV).rgb;
     float3 emi = GB2.Sample(gSmp, i.UV).rgb;
-    if ((lit.r + lit.g + lit.b) <= 0.0)
-    {
-        lit = float3(0.1f, 0.1f, 0.3f) * 0.6; //hack: smth not black while we dont have sky
-    }
+    //if ((lit.r + lit.g + lit.b) <= 0.0)
+    //{
+    //    lit = float3(0.1f, 0.1f, 0.3f) * 0.6; //hack: smth not black while we dont have sky
+    //}
     return float4(lit + emi, 1.0);
 }

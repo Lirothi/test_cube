@@ -6,6 +6,7 @@
 #include "RenderableObject.h"
 #include "Camera.h"
 #include "InputManager.h"
+#include "Skybox.h"
 
 class Renderer;
 
@@ -35,4 +36,6 @@ private:
     InputManager* input_ = nullptr;
     ActionMap* actions_ = nullptr;
     Camera camera_;
+
+    std::unique_ptr<Skybox> skyBox_;
 };

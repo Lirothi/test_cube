@@ -40,7 +40,7 @@ public:
     {
         auto& gd = GetGraphicsDesc();
         gd.numRT = 1;
-        gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
         gd.raster.CullMode = D3D12_CULL_MODE_NONE;
         gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -146,7 +146,7 @@ public:
     {
         auto& gd = GetGraphicsDesc();
         gd.numRT = 1;
-        gd.rtvFormat = renderer->GetSceneColorFormat();
+        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         gd.raster.CullMode = D3D12_CULL_MODE_NONE;
         gd.raster.DepthBias = -150;
