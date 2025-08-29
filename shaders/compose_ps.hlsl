@@ -38,12 +38,14 @@ cbuffer PerFrame : register(b0)
 }
 
     // Lettier SSR params (см. статью)
-static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
-static const float ssrResolution = 0.5f; // 0..1 (шаг coarse-pass по экрану)
+static const float ssrMaxDistanceVS = 50.0f; // maxDistance (view units)
+static const float ssrResolution = 0.9f; // 0..1 (шаг coarse-pass по экрану)
 static const int ssrRefineSteps = 8; // steps (итерации refinement)
-static const float ssrThicknessVS = 1.5f; // thickness (view units)
-
+static const float ssrThicknessVS = 1.0f; // thickness (view units)
 static const float roughCutoff = 0.95f; // отключать SSR, если rough > cutoff (напр. 0.95)
+static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
+static const float ssrGrazingMinZ = 0.05f; // при Rv.z ниже этого — начинаем гасить отражение
+static const float ssrGrazingMaxZ = 0.25f; // к этому значению — полностью включаем
 
 static const float kEps = 1e-6;
 static const int SSR_BINARY_MAX = 8;
@@ -107,6 +109,14 @@ struct SSRHit
     float visibility;
     int hit;
 };
+
+float EdgeFadePx(float2 uv)
+{
+    // расстояние до ближайшего края экрана в пикселях
+    float2 dist = min(uv, 1.0 - uv) * screenSize;
+    float m = min(dist.x, dist.y);
+    return saturate(m / ssrEdgeFadePx);
+}
 
 SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 {
@@ -251,6 +261,14 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         {
             visibility *= ((uv.x < 0.0 || uv.x > 1.0) ? 0.0 : 1.0) * ((uv.y < 0.0 || uv.y > 1.0) ? 0.0 : 1.0);
         }
+
+        {
+            visibility *= EdgeFadePx(uv);
+			// фейд на скользящих углах (по направлению «pivot», которое мы же использовали для трассировки)
+            float grazing = saturate((pivot.z - ssrGrazingMinZ) / (ssrGrazingMaxZ - ssrGrazingMinZ));
+            visibility *= grazing;
+        }
+
         {
             visibility = clamp(visibility, 0.0, 1.0);
         }
@@ -269,49 +287,52 @@ float4 PSMain(VSOut i) : SV_Target
     float3 lit = LightTarget.SampleLevel(gSmp, i.UV, 0).rgb;
     float3 emi = GB2.SampleLevel(gSmp, i.UV, 0).rgb;
 
-    float4 gb0 = GB0.SampleLevel(gSmp, i.UV, 0);
-    float4 gb1 = GB1.SampleLevel(gSmp, i.UV, 0);
-
-    float3 albedo = gb0.rgb;
-    float2 rm = UnpackRM(gb0.a);
-    float rough = saturate(rm.x);
-    float metal = saturate(rm.y);
-
-    float3 N_ws = normalize(gb1.rgb * 2.0 - 1.0);
-    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
-
-    float z = ReadDepth(i.UV);
+	float z = ReadDepth(i.UV);
     if (z < 1.0 - kEps)
     {
+        float4 gb0 = GB0.SampleLevel(gSmp, i.UV, 0);
+        float4 gb1 = GB1.SampleLevel(gSmp, i.UV, 0);
+
+        float3 albedo = gb0.rgb;
+        float2 rm = UnpackRM(gb0.a);
+        float rough = saturate(rm.x);
+        float metal = saturate(rm.y);
+
+        float3 N_ws = normalize(gb1.rgb * 2.0 - 1.0);
+        float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
+
         float3 Pv = ReconstructPosVS(i.UV, z);
         float3 Vv = normalize(-Pv);
         float3 Nv = normalize(mul(N_ws, (float3x3) view));
         float3 Rv = normalize(reflect(-Vv, Nv));
         float3 Rw = normalize(mul(Rv, (float3x3) invView));
+
         float doSSR = step(rough, roughCutoff);
         float3 refl;
         SSRHit ssr;
         ssr.hit = 0.0f;
+        ssr.uv = float2(0.0f, 0.0f);
 
         if (doSSR > 0.5f)
         {
 	        ssr = TraceSSR_Lettier(Pv, Nv);
         }
 
+        float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
+        refl = skyCol;
+
         if (ssr.hit >= 1)
         {
-            int2 ip = int2(ssr.uv * screenSize + 0.5);
-            ip = clamp(ip, int2(0, 0), int2(screenSize) - int2(1, 1));
-            float3 reflCol = LightTarget.Load(int3(ip, 0)).rgb * ssr.visibility;
+            float3 ssrCol = LightTarget.Sample(gSmp, ssr.uv).rgb;
 
-            //return float4(h.visibility.xxx, 1);
+        	//float2 dx = float2(1.0f, 0.0f) * 2 / screenSize;
+            //float2 dy = float2(0.0f, 1.0f) * 2 / screenSize;
+            //float3 ssrCol1 = LightTarget.Sample(gSmp, ssr.uv + dx).rgb;
+            //float3 ssrCol2 = LightTarget.Sample(gSmp, ssr.uv + dy).rgb;
+            //float3 ssrCol3 = LightTarget.Sample(gSmp, ssr.uv + dx + dy).rgb;
+            //ssrCol = (ssrCol + ssrCol1 + ssrCol2 + ssrCol3) * 0.25f;
 
-            refl = reflCol;
-        }
-		else
-		{
-            float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
-            refl = skyCol;
+            refl = lerp(refl, ssrCol, ssr.visibility);
         }
 
         float cosT = saturate(dot(Nv, Vv));
