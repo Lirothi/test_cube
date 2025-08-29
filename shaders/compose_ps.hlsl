@@ -34,21 +34,20 @@ cbuffer PerFrame : register(b0)
     float zFar;
     float skyboxIntensity; // 1.0
     float2 screenSize;
-
 }
 
     // Lettier SSR params (см. статью)
-static const float ssrMaxDistanceVS = 50.0f; // maxDistance (view units)
-static const float ssrResolution = 0.9f; // 0..1 (шаг coarse-pass по экрану)
-static const int ssrRefineSteps = 8; // steps (итерации refinement)
-static const float ssrThicknessVS = 1.0f; // thickness (view units)
+static const float ssrMaxDistanceVS = 80.0f; // maxDistance (view units)
+static const float ssrResolution = 0.8f; // 0..1 (шаг coarse-pass по экрану)
+static const int ssrRefineSteps = 16; // steps (итерации refinement)
+static const float ssrThicknessVS = 0.5f; // thickness (view units)
 static const float roughCutoff = 0.95f; // отключать SSR, если rough > cutoff (напр. 0.95)
 static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
 static const float ssrGrazingMinZ = 0.05f; // при Rv.z ниже этого — начинаем гасить отражение
 static const float ssrGrazingMaxZ = 0.25f; // к этому значению — полностью включаем
+static const float ssrJitterStrength = 0.5f; // 0..1 — сколько пикселей сдвигаем старт
 
 static const float kEps = 1e-6;
-static const int SSR_BINARY_MAX = 8;
 
 struct VSOut
 {
@@ -63,6 +62,13 @@ VSOut VSMain(uint vid : SV_VertexID)
     o.H = float4(p, 0, 1);
     o.UV = float2(p.x * 0.5 + 0.5, 1 - (p.y * 0.5 + 0.5));
     return o;
+}
+
+float Hash12(float2 p)
+{
+    p = frac(p * float2(0.1031, 0.11369));
+    p += dot(p, p.yx + 33.33);
+    return frac((p.x + p.y) * p.x);
 }
 
 float DepthToViewZ(float d)
@@ -169,6 +175,9 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     float depthDiff = ssrThicknessVS;
 
     float2 frag = sFrag; // текущая экранная точка (в пикселях)
+    float jitter = (Hash12(sFrag) - 0.5) * ssrJitterStrength;
+    frag += incr * jitter;
+
     float2 uv; // текущие uv (0..1)
 
     // Первый проход: быстрый — шагами по экрану
@@ -207,6 +216,8 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
             search0 = search1;
         }
     }
+
+    search1 = search0 + ((search1 - search0) / 2.0);
 
     // Второй проход: уточнение (бинарный поиск)
     int refineSteps = hit0 * ssrRefineSteps;
@@ -318,6 +329,8 @@ float4 PSMain(VSOut i) : SV_Target
 	        ssr = TraceSSR_Lettier(Pv, Nv);
         }
 
+        //return float4(ssr.visibility.xxx, 1);
+
         float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
         refl = skyCol;
 
@@ -325,12 +338,23 @@ float4 PSMain(VSOut i) : SV_Target
         {
             float3 ssrCol = LightTarget.Sample(gSmp, ssr.uv).rgb;
 
-        	//float2 dx = float2(1.0f, 0.0f) * 2 / screenSize;
-            //float2 dy = float2(0.0f, 1.0f) * 2 / screenSize;
-            //float3 ssrCol1 = LightTarget.Sample(gSmp, ssr.uv + dx).rgb;
-            //float3 ssrCol2 = LightTarget.Sample(gSmp, ssr.uv + dy).rgb;
-            //float3 ssrCol3 = LightTarget.Sample(gSmp, ssr.uv + dx + dy).rgb;
-            //ssrCol = (ssrCol + ssrCol1 + ssrCol2 + ssrCol3) * 0.25f;
+            float count = 1.0f;
+            float separation = 1.5f;
+            int size = 3;
+
+            for (int i = -size; i <= size; ++i)
+            {
+                for (int j = -size; j <= size; ++j)
+                {
+                    float2 newUV = ssr.uv + (float2(i, j) * separation)/screenSize;
+                    newUV = saturate(newUV);
+                    ssrCol.rgb += LightTarget.Sample(gSmp, newUV).rgb;
+
+                    count += 1.0;
+                }
+            }
+
+            ssrCol.rgb /= count;
 
             refl = lerp(refl, ssrCol, ssr.visibility);
         }
