@@ -42,6 +42,8 @@ public:
         }
 
         SetModelMatrix(transformScale_ * Math::mat4::RotationY(rotationY_) * transformPos_);
+        //matParams_.texOffsScale.x += deltaTime * 1.0f;
+        //matParams_.texOffsScale.y += deltaTime * 1.0f;
     }
 
     float GetRotationY() const { return rotationY_; }
@@ -199,11 +201,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         auto floor = std::make_unique<RotatingObject>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -0.5f, 0.0f), float3(20.0f, 1.0f, 20.0f));
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 10.0f, 10.0f);
         scene_.AddObject(std::move(floor));
+
+        floor = std::make_unique<RotatingObject>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-5.0f, -0.4f, 0.0f), float3(5.0f, 1.0f, 5.0f));
+        floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);
+        floor->MaterialParamsRef().texFlags.w = 0.01f;
+        scene_.AddObject(std::move(floor));
     }
 
-    scene_.AddObject(std::make_unique<DebugGrid>(100.0f));
-
     scene_.AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
+
+    scene_.AddObject(std::make_unique<DebugGrid>(100.0f));
 
     renderer_.InitFence();
 

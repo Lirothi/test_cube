@@ -118,8 +118,10 @@ public:
 
     struct CBufferField {
         std::string name;
-        UINT        offset = 0;
-        UINT        size = 0;
+        UINT        offset = 0;         // байтовый сдвиг поля в cbuffer
+        UINT        size = 0;         // общий размер поля (если массив — размер всего массива)
+        UINT        elementStride = 0;  // шаг одного элемента массива в байтах (или size, если не массив)
+        UINT        elementCount = 1;  // ёмкость массива (1 — если не массив)
     };
     struct CBufferInfo {
         UINT bindRegister = 0;    // bN
@@ -128,29 +130,49 @@ public:
     };
 
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
+    bool GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferField& out) const;
     bool GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const;
     UINT GetCBSizeBytes(UINT bRegister) const {const CBufferInfo* cb = GetCBInfo(bRegister); return cb ? cb->sizeBytes : 0u; }
     UINT GetCBSizeBytesAligned(UINT bRegister, UINT alignment) const {
         return (GetCBSizeBytes(bRegister) + (alignment - 1)) & ~(alignment - 1);
     }
-    template<typename T> bool UpdateCBField(UINT bRegister, const std::string& name, const T& value, uint8_t* destCB)
+
+    template<typename T>
+    bool UpdateCBField(UINT bRegister, const std::string& name,
+        const T& value, uint8_t* destCB,
+        std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        UINT off = 0, sz = 0, bytes = sizeof(T);
-        if (GetCBFieldOffset(bRegister, name, off, sz)) {
-            std::memcpy(destCB + off, &value, (bytes < sz ? bytes : sz));
-            return true;
+        UINT destCBSizeBytes = GetCBSizeBytes(bRegister);
+        if (!destCB || destCBSizeBytes == 0) { return false; }
+
+        CBufferField info{};
+        if (!GetCBFieldInfo(bRegister, name, info)) {
+            return false;
         }
 
-        return false;
+        const UINT stride = (info.elementStride ? info.elementStride : info.size);
+        const UINT count = (info.elementCount ? info.elementCount : 1);
+
+        UINT idx = 0;
+        if (arrayIdxParam) { idx = *arrayIdxParam; }
+        if (idx >= count) { return false; }
+
+        const size_t dstOff = size_t(info.offset) + size_t(idx) * size_t(stride);
+        if (dstOff >= destCBSizeBytes) { return false; }
+        if (dstOff + stride > destCBSizeBytes) { return false; }
+
+        uint8_t* dst = destCB + dstOff;
+        const size_t copyBytes = std::min<size_t>(sizeof(T), stride);
+        std::memcpy(dst, &value, copyBytes);
+        return true;
     }
-    template<typename T> bool UpdateCB0Field(const std::string& name, const T& value, uint8_t* destCB)
+
+    template<typename T>
+    bool UpdateCB0Field(const std::string& name,
+        const T& value, uint8_t* destCB,
+        std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        bool res = UpdateCBField(0, name, value, destCB);
-        if (!res)
-        {
-            //assert(false && "Uniform not found");
-        }
-        return res;
+        return UpdateCBField(0, name, value, destCB, arrayIdxParam);
     }
 
 private:

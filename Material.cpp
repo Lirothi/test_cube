@@ -228,7 +228,8 @@ static HRESULT CompileDXC(const std::wstring& file,
 
     // errors
     ComPtr<IDxcBlobUtf8> errs;
-    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
+    ComPtr<IDxcBlobUtf16> dummyNameErr;
+    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), dummyNameErr.ReleaseAndGetAddressOf());
     if (errs && errs->GetStringLength() > 0) {
         OutputDebugStringA(errs->GetStringPointer());
     }
@@ -239,7 +240,8 @@ static HRESULT CompileDXC(const std::wstring& file,
 
     // DXIL
     ComPtr<IDxcBlob> dxil;
-    result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxil), nullptr);
+    ComPtr<IDxcBlobUtf16> dummyNameObj;
+    result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxil), dummyNameObj.ReleaseAndGetAddressOf());
     if (!dxil) return E_FAIL;
 
     // Приводим к ID3DBlob через копию (чтобы остальной код не менять)
@@ -798,6 +800,22 @@ const Material::CBufferInfo* Material::GetCBInfo(UINT bRegister) const {
     auto it = cbInfos_.find(bRegister);
     return (it == cbInfos_.end()) ? nullptr : &it->second;
 }
+
+bool Material::GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferField& out) const
+{
+    const CBufferInfo* cb = GetCBInfo(bRegister);
+    if (!cb) { return false; }
+    auto it = cb->fieldsByName.find(name);
+    if (it == cb->fieldsByName.end()) { return false; }
+    out = it->second;
+    // safety: если stride не заполнен (старые шейдеры) — подстрахуемся
+    if (out.elementStride == 0) {
+        out.elementStride = (out.size > 0 ? out.size : 16);
+        out.elementCount = 1;
+    }
+    return true;
+}
+
 bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const {
     auto* cb = GetCBInfo(bRegister);
     if (!cb)
@@ -817,12 +835,11 @@ bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& o
 void Material::ProcessReflection(ID3D12ShaderReflection* refl,
     std::unordered_map<UINT, CBufferInfo>& io)
 {
-    if (!refl) {return;}
+    if (!refl) { return; }
 
     D3D12_SHADER_DESC sd{};
-    if (FAILED(refl->GetDesc(&sd))) {return;}
+    if (FAILED(refl->GetDesc(&sd))) { return; }
 
-    // cbuffer name -> bRegister (bN)
     std::unordered_map<std::string, UINT> bindOfCB;
     for (UINT r = 0; r < sd.BoundResources; ++r) {
         D3D12_SHADER_INPUT_BIND_DESC bd{};
@@ -836,11 +853,11 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
     for (UINT i = 0; i < sd.ConstantBuffers; ++i) {
         ID3D12ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByIndex(i);
         D3D12_SHADER_BUFFER_DESC cbd{};
-        if (FAILED(cb->GetDesc(&cbd))) {continue;}
+        if (FAILED(cb->GetDesc(&cbd))) { continue; }
 
         std::string cbName = cbd.Name ? cbd.Name : "";
         auto itBind = bindOfCB.find(cbName);
-        if (itBind == bindOfCB.end()) {continue;} // пропускаем $Globals и пр.
+        if (itBind == bindOfCB.end()) { continue; }
 
         const UINT bReg = itBind->second;
         auto& dst = io[bReg];
@@ -850,14 +867,29 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
         for (UINT v = 0; v < cbd.Variables; ++v) {
             ID3D12ShaderReflectionVariable* var = cb->GetVariableByIndex(v);
             D3D12_SHADER_VARIABLE_DESC vd{};
-            if (FAILED(var->GetDesc(&vd))) {continue;}
+            if (FAILED(var->GetDesc(&vd))) { continue; }
 
             CBufferField f{};
             f.name = vd.Name ? vd.Name : "";
             f.offset = vd.StartOffset;
             f.size = vd.Size;
 
-            dst.fieldsByName[f.name] = f; // объединяем поля с других стадий, offset должен совпадать
+            // === NEW: stride / length из типа ===
+            UINT elements = 1;
+            UINT stride = vd.Size;
+            if (ID3D12ShaderReflectionType* ty = var->GetType()) {
+                D3D12_SHADER_TYPE_DESC td{};
+                if (SUCCEEDED(ty->GetDesc(&td))) {
+                    elements = (td.Elements > 0 ? td.Elements : 1);
+                    if (elements > 0) {
+                        stride = vd.Size / elements; // в HLSL Size уже кратен 16 и включает паддинг на элемент
+                    }
+                }
+            }
+            f.elementCount = elements;
+            f.elementStride = stride;
+
+            dst.fieldsByName[f.name] = f;
         }
     }
 }

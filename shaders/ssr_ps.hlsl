@@ -20,10 +20,10 @@ cbuffer PerFrame : register(b0)
     float2   screenSize;
 }
 
-static const float ssrMaxDistanceVS = 80.0f; // maxDistance (view units)
-static const float ssrResolution = 0.8f; // 0..1 (шаг coarse-pass по экрану)
+static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
+static const float ssrResolution = 0.9f; // 0..1 (шаг coarse-pass по экрану)
 static const int ssrRefineSteps = 16; // steps (итерации refinement)
-static const float ssrThicknessVS = 0.5f; // thickness (view units)
+static const float ssrThicknessVS = 0.15f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — сколько пикселей сдвигаем старт
 static const float kEps = 1e-6;

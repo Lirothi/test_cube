@@ -18,7 +18,8 @@ cbuffer PerObject : register(b0)
 
 float2 tfUV(float2 rawUV)
 {
-    return float2((rawUV + texOffsScale.xy) * texOffsScale.zw);
+    //return float2((rawUV + texOffsScale.xy) * texOffsScale.zw);
+    return float2((rawUV * texOffsScale.zw) + texOffsScale.xy);
 }
 
 struct VSIn
@@ -74,6 +75,7 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
     float metal = mr.x;
     float rough = mr.y;
 
+    //albedo = test[0].rgb;
     o.RT0 = float4(albedo, PackRM(rough, metal));
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
     o.RT1 = float4(NrmTo01(NWS), 1.0);

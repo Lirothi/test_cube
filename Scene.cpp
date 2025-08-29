@@ -58,6 +58,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+
     if (!matBlur_) {
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/blur_ps.hlsl";
@@ -229,7 +230,7 @@ void Scene::Render(Renderer* renderer) {
             auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
             matLighting_->UpdateCB0Field("sunDirWS", sunDirWS.xm(), (uint8_t*)cb.cpu);
-            matLighting_->UpdateCB0Field("ambientIntensity", 0.02f, (uint8_t*)cb.cpu);
+            matLighting_->UpdateCB0Field("ambientIntensity", 0.05f, (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("lightRgb", float3(1, 1, 1).xm(), (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("exposure", 1.5f, (uint8_t*)cb.cpu);
             matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition().xm(), (uint8_t*)cb.cpu);
@@ -474,7 +475,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
-    const size_t chunkSize = 32;
+    const size_t chunkSize = 8;
 
     tasks.Dispatch((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
@@ -513,6 +514,8 @@ void Scene::Clear()
     matLighting_.reset();
     matCompose_.reset();
     matTonemap_.reset();
+    matBlur_.reset();
+    matSSR_.reset();
     objects_.clear();
     skyBox_.reset();
 }
