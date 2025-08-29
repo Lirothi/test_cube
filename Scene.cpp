@@ -271,6 +271,7 @@ void Scene::Render(Renderer* renderer) {
             matCompose_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
             matCompose_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
             matCompose_->UpdateCB0Field("skyboxIntensity", 1.0f, (uint8_t*)cb.cpu);
+            matCompose_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()).xm(), (uint8_t*)cb.cpu);
 
             // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
             std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;

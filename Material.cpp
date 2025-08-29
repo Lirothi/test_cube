@@ -83,7 +83,7 @@ static void BuildRootFromLayout(
 
 static D3D_SHADER_MODEL QueryMaxShaderModel(ID3D12Device* dev)
 {
-    D3D12_FEATURE_DATA_SHADER_MODEL data = { D3D_SHADER_MODEL_6_9 };
+    D3D12_FEATURE_DATA_SHADER_MODEL data = { D3D_SHADER_MODEL_6_7 };
     if (SUCCEEDED(dev->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &data, sizeof(data))))
     {
         // data.HighestShaderModel может быть 0x60..0x67 даже если в SDK нет enum-имен
