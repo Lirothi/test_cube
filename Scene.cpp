@@ -301,14 +301,14 @@ void Scene::Render(Renderer* renderer) {
         });
 
     // --- BLUR X ---
-    auto pBlurX = rg.AddPass("SSR.BlurX", { pSSR }, [this, renderer](RenderGraph::PassContext ctx) {
+    auto pBlur = rg.AddPass("SSR.Blur", { pSSR }, [this, renderer](RenderGraph::PassContext ctx) {
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
         const auto& D = renderer->GetDeferredForFrame();
+        // X Pass---
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-        // bind RT = ssrBlur
         renderer->BindSSRBlurTarget(t.cl, Renderer::ClearMode::Color);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
@@ -323,24 +323,18 @@ void Scene::Render(Renderer* renderer) {
         matBlur_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
-        renderer->EndThreadCommandList(t, ctx.batchIndex);
-        });
-
-    // --- BLUR Y (в финал пишем обратно в ssr) ---
-    auto pBlurY = rg.AddPass("SSR.BlurY", { pBlurX }, [this, renderer](RenderGraph::PassContext ctx) {
-        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-        const auto& D = renderer->GetDeferredForFrame();
+        // ---
+        // Y Pass---
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
         renderer->BindSSRTarget(t.cl, Renderer::ClearMode::None); // RT=ssr
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
-        float2 dir = float2(0.0f, 1.0f / renderer->GetHeight());
+        cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        dir = float2(0.0f, 1.0f / renderer->GetHeight());
         matBlur_->UpdateCB0Field("dir", dir.xm(), (uint8_t*)cb.cpu);
         matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
-        RenderContext rc{};
+        
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
@@ -348,11 +342,12 @@ void Scene::Render(Renderer* renderer) {
         matBlur_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
+        //---
         renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
     // 3) COMPOSE — Light + Emissive → SceneColor
-    auto pCompose = rg.AddPass("Compose", { pBlurY },
+    auto pCompose = rg.AddPass("Compose", { pBlur },
         [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
