@@ -20,6 +20,7 @@ struct MaterialParams
     // линейные значения; для альбедо sRGB-выборка делает SRV
     float4 baseColor   = {1.f, 1.f, 1.f, 1.f};  // .rgb — tint
     float2 metalRough  = {0.0f, 0.35f};         // x=metallic, y=roughness
+    float4 texOffsScale = { 0.0f, 0.0f, 1.0f, 1.0f };
     // x=useAlbedo, y=useMR, z=useNormal, w=normalStrength (XY до восстановления Z)
     float4 texFlags    = {1.f, 1.f, 1.f, 1.f};
 

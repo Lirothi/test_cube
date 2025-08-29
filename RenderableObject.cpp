@@ -106,5 +106,6 @@ void RenderableObject::ApplyMaterialParamsToCB()
     const auto& p = matParams_;
     UpdateUniform("baseColor", p.baseColor.xm());
     UpdateUniform("metalRough", p.metalRough.xm());
+    UpdateUniform("texOffsScale", p.texOffsScale.xm());
     UpdateUniform("texFlags", p.texFlags.xm());
 }

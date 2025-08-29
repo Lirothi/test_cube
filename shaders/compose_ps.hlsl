@@ -114,7 +114,7 @@ float4 PSMain(VSOut i) : SV_Target
         float3 F = FresnelSchlick(cosT, F0);
         float gloss = saturate(1.0 - rough);
 
-        float3 spec = refl * F * pow(gloss, 2);
+        float3 spec = refl * F * pow(gloss, 1);
 
         return float4(lit + spec + emi, 1.0);
     }

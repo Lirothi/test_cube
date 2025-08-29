@@ -159,8 +159,10 @@ void App::InitScene()
         assert(false && "No bindings.json found!");
     }
 
-    renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal_rg.dds",  /*RG*/true, /*TBN*/true });
-    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal_rg.dds", /*RG*/true, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal.dds",  /*RG*/false, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal.dds", /*RG*/false, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
+    renderer_.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
 
     // Заранее создаем upload command list
     ComPtr<ID3D12CommandAllocator> uploadAlloc;
@@ -183,19 +185,19 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
 
     {
-        auto box = std::make_unique<RotatingObject>("models/box.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0, -2.0f), float3(1, 1, 1));
+        auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
         box->MaterialParamsRef().texFlags.w = 1;
-        box->MaterialParamsRef().SetUseMR(false);
-        box->MaterialParamsRef().metalRough = float2(0.0f, 0.8f);
+        //box->MaterialParamsRef().SetUseMR(false);
+        //box->MaterialParamsRef().metalRough = float2(0.0f, 0.8f);
         scene_.AddObject(std::move(box));
     }
-    scene_.AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0, -1.0f), float3(1, 1, 1)));
-    scene_.AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+    scene_.AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
 
     {
-        auto floor = std::make_unique<RotatingObject>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -5.0f, -10.0f), float3(10.0f, 10.0f, 10.0f));
-        floor->MaterialParamsRef().texFlags.w = 0.01f;
+        auto floor = std::make_unique<RotatingObject>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -0.5f, 0.0f), float3(20.0f, 1.0f, 20.0f));
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 10.0f, 10.0f);
         scene_.AddObject(std::move(floor));
     }
 

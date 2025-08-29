@@ -26,7 +26,6 @@ public:
     bool IsSimpleRender() const {return false;}
 
 protected:
-    // хук RenderableObject
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;

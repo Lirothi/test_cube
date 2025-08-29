@@ -12,8 +12,14 @@ cbuffer PerObject : register(b0)
 
     float4 baseColor; // fallback Albedo (linear)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
+    float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
 };
+
+float2 tfUV(float2 rawUV)
+{
+    return float2((rawUV + texOffsScale.xy) * texOffsScale.zw);
+}
 
 struct VSIn
 {
@@ -82,19 +88,19 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
 inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
                                 out float3 albedo, out float2 mr, inout float3 norm)
 {
-    albedo = txAlbedo.Sample(samp, uv).rgb;
-    mr = txMR.Sample(samp, uv).rg;
+    albedo = txAlbedo.Sample(samp, tfUV(uv)).rgb;
+    mr = txMR.Sample(samp, tfUV(uv)).rg;
     
 #if NORMALMAP_IS_RG
     // --- RG (BC5/R8G8_UNORM): n.xy в [-1..1], n.z восстанавливаем ---
-    float2 nrg = txNorm.Sample(samp, uv).rg * 2.0 - 1.0;
+    float2 nrg = txNorm.Sample(samp, tfUV(uv)).rg * 2.0 - 1.0;
     nrg *= texFlags.w;
     float  nz2 = saturate(1.0 - dot(nrg, nrg));
     float3 nTS = float3(nrg, sqrt(nz2));
 #else
     // --- RGB(A): классика ---
-    float3 nTS = txNorm.Sample(samp, uv).xyz * 2.0 - 1.0;
-    nTS.xy *= texFlags.w;
+    float3 nTS = txNorm.Sample(samp, tfUV(uv)).xyz * 2.0 - 1.0;
+    nTS.xy *= texFlags.w * 1;
 #endif
     //norm = PerturbNormal_Deriv(nTS, norm, PVS, uv);
     float3 T = normalize(TWS.xyz);
