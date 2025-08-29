@@ -33,15 +33,17 @@ public:
         ComPtr<ID3D12Resource> depth; // D32
         ComPtr<ID3D12Resource> light; // R16G16B16A16F
         ComPtr<ID3D12Resource> scene; // R16G16B16A16F
+        ComPtr<ID3D12Resource> ssr;     // R16G16B16A16F premultiplied
+        ComPtr<ID3D12Resource> ssrBlur; // R16G16B16A16F
 
         // CPU дескрипторы
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,Depth(R32F)
-        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE lightSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE sceneSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrRTV{}, ssrSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurRTV{}, ssrBlurSRV{};
     };
 
     Renderer();
@@ -65,6 +67,8 @@ public:
     void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
+    void BindSSRTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
+    void BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
 
     // готовые SRV-таблицы (в shader-visible heap кадра)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
@@ -185,13 +189,13 @@ private:
 
 private:
     static constexpr UINT kFrameCount = 2;
-    static constexpr UINT kDeferredRtvPerFrame = 5; // GB0, GB1, GB2, Light, Scene
-    static constexpr UINT kDeferredSrvPerFrame = 6; // GB0, GB1, GB2, Depth, Light, Scene
+    static constexpr UINT kDeferredRtvPerFrame = 7; // GB0,GB1,GB2, Light, Scene, SSR, SSRBlur
+    static constexpr UINT kDeferredSrvPerFrame = 8; // GB0,GB1,GB2, Depth, Light, Scene, SSR, SSRBlur
     static constexpr UINT kDeferredDsvPerFrame = 1; // Depth
 
-    enum class DeferredRtvSlot : UINT { GB0 = 0, GB1 = 1, GB2 = 2, Light = 3, Scene = 4, Count = kDeferredRtvPerFrame };
-    enum class DeferredSrvSlot : UINT { GB0 = 0, GB1 = 1, GB2 = 2, Depth = 3, Light = 4, Scene = 5, Count = kDeferredSrvPerFrame };
-    enum class DeferredDsvSlot : UINT { Depth = 0, Count = kDeferredDsvPerFrame };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, SSR, SSRBlur, Count = kDeferredRtvPerFrame };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, Scene, SSR, SSRBlur, Count = kDeferredSrvPerFrame };
+    enum class DeferredDsvSlot : UINT { Depth, Count = kDeferredDsvPerFrame };
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;

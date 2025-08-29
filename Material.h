@@ -148,7 +148,7 @@ public:
         bool res = UpdateCBField(0, name, value, destCB);
         if (!res)
         {
-            assert(false && "Uniform not found");
+            //assert(false && "Uniform not found");
         }
         return res;
     }

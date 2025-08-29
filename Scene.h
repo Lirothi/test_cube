@@ -31,6 +31,8 @@ private:
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matCompose_;
     std::shared_ptr<Material> matTonemap_;
+    std::shared_ptr<Material> matSSR_;
+    std::shared_ptr<Material> matBlur_;
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     InputManager* input_ = nullptr;

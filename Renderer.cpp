@@ -951,12 +951,70 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             dev->CreateShaderResourceView(D.scene.Get(), &sd, D.sceneSRV);
         }
 
+        // =========================
+        // SSR: RGBA16F
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.ssr)));
+
+            D.ssrRTV = DeferredRtvCPU(f, DeferredRtvSlot::SSR);
+            dev->CreateRenderTargetView(D.ssr.Get(), nullptr, D.ssrRTV);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.ssrSRV = DeferredSrvCPU(f, DeferredSrvSlot::SSR);
+            dev->CreateShaderResourceView(D.ssr.Get(), &sd, D.ssrSRV);
+        }
+
+        // =========================
+        // SSRBlur: RGBA16F (выход блюра / пинг-понг)
+        // =========================
+        {
+            const DXGI_FORMAT fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv = {};
+            cv.Format = fmt;
+            cv.Color[0] = 0.0f; cv.Color[1] = 0.0f; cv.Color[2] = 0.0f; cv.Color[3] = 0.0f;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.ssrBlur)));
+
+            D.ssrBlurRTV = DeferredRtvCPU(f, DeferredRtvSlot::SSRBlur);
+            dev->CreateRenderTargetView(D.ssrBlur.Get(), nullptr, D.ssrBlurRTV);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            D.ssrBlurSRV = DeferredSrvCPU(f, DeferredSrvSlot::SSRBlur);
+            dev->CreateShaderResourceView(D.ssrBlur.Get(), &sd, D.ssrBlurSRV);
+        }
+
         SetResourceState(D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         SetResourceState(D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         SetResourceState(D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         SetResourceState(D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         SetResourceState(D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         SetResourceState(D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        SetResourceState(D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 }
 
@@ -964,7 +1022,14 @@ void Renderer::DestroyDeferredTargets() {
     deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
     for (UINT f = 0; f < kFrameCount; ++f) {
         auto& D = deferred_[f];
-        D.gb0.Reset(); D.gb1.Reset(); D.gb2.Reset(); D.depth.Reset(); D.light.Reset(); D.scene.Reset();
+        D.gb0.Reset();
+        D.gb1.Reset();
+        D.gb2.Reset();
+        D.depth.Reset();
+        D.light.Reset();
+        D.scene.Reset();
+        D.ssr.Reset();
+        D.ssrBlur.Reset();
     }
 
     {
@@ -1013,6 +1078,29 @@ void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, boo
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.sceneRTV, c, 0, nullptr);
+    }
+}
+
+void Renderer::BindSSRTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+    auto& D = deferred_[currentFrameIndex_];
+    cl->OMSetRenderTargets(1, &D.ssrRTV, FALSE, nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(D.ssrRTV, c, 0, nullptr);
+    }
+}
+void Renderer::BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
+    auto& D = deferred_[currentFrameIndex_];
+    cl->OMSetRenderTargets(1, &D.ssrBlurRTV, FALSE, nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(D.ssrBlurRTV, c, 0, nullptr);
     }
 }
 

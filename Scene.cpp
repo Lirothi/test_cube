@@ -50,6 +50,23 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         matTonemap_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 
+    if (!matSSR_) {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/ssr_ps.hlsl";
+        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+        gd.numRT = 1; gd.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;// renderer->GetSceneColorFormat();
+        gd.depth.DepthEnable = FALSE;
+        matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    }
+    if (!matBlur_) {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/blur_ps.hlsl";
+        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
+        gd.numRT = 1; gd.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;// renderer->GetSceneColorFormat();
+        gd.depth.DepthEnable = FALSE;
+        matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    }
+
     skyBox_ = std::make_unique<Skybox>(L"textures/skybox.dds");
     skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
 }
@@ -154,12 +171,13 @@ void Scene::Render(Renderer* renderer) {
     auto pClear = rg.AddPass("PrologueClear", {},
         [renderer](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
             renderer->RecordBindAndClear(t.cl);
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
     auto pGBuffer = rg.AddPass("GBuffer", { pClear },
-        [this, renderer, view, proj, &objectsToRender](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj, &objectsToRender](RenderGraph::PassContext ctx) {
             RenderGraph rgGB(ctx.batchIndex);
 
             // 1.1 Driver: биндим и чистим один раз. НЕ закрываем driver тут.
@@ -195,6 +213,7 @@ void Scene::Render(Renderer* renderer) {
     auto pLighting = rg.AddPass("Lighting", { pGBuffer },
         [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -230,9 +249,10 @@ void Scene::Render(Renderer* renderer) {
         });
 
     auto pSky = rg.AddPass("Skybox", { pLighting },
-        [this, renderer, view, proj](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
             if (!skyBox_) { return; }
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
 
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -246,16 +266,103 @@ void Scene::Render(Renderer* renderer) {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
         });
 
+    // --- SSR ---
+    auto pSSR = rg.AddPass("SSR", { pSky }, [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        const auto& D = renderer->GetDeferredForFrame();
+        
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::Color);
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
+        matSSR_->UpdateCB0Field("view", view.xm(), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("proj", proj.xm(), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("invView", invView.xm(), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("invProj", invProj.xm(), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()).xm(), (uint8_t*)cb.cpu);
+
+        RenderContext rc{};
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+
+        matSSR_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+        renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
+    // --- BLUR X ---
+    auto pBlurX = rg.AddPass("SSR.BlurX", { pSSR }, [this, renderer](RenderGraph::PassContext ctx) {
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+        // bind RT = ssrBlur
+        renderer->BindSSRBlurTarget(t.cl, Renderer::ClearMode::Color);
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
+        matBlur_->UpdateCB0Field("dir", dir.xm(), (uint8_t*)cb.cpu);
+        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        RenderContext rc{};
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+
+        matBlur_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+        renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
+    // --- BLUR Y (в финал пишем обратно в ssr) ---
+    auto pBlurY = rg.AddPass("SSR.BlurY", { pBlurX }, [this, renderer](RenderGraph::PassContext ctx) {
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::None); // RT=ssr
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        float2 dir = float2(0.0f, 1.0f / renderer->GetHeight());
+        matBlur_->UpdateCB0Field("dir", dir.xm(), (uint8_t*)cb.cpu);
+        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        RenderContext rc{};
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+
+        matBlur_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+        renderer->EndThreadCommandList(t, ctx.batchIndex);
+        });
+
     // 3) COMPOSE — Light + Emissive → SceneColor
-    auto pCompose = rg.AddPass("Compose", { pSky },
+    auto pCompose = rg.AddPass("Compose", { pBlurY },
         [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
@@ -266,12 +373,7 @@ void Scene::Render(Renderer* renderer) {
             matCompose_->UpdateCB0Field("proj", proj.xm(), (uint8_t*)cb.cpu);
             matCompose_->UpdateCB0Field("invView", invView.xm(), (uint8_t*)cb.cpu);
             matCompose_->UpdateCB0Field("invProj", invProj.xm(), (uint8_t*)cb.cpu);
-            matCompose_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
-            matCompose_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
-            matCompose_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
-            matCompose_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
             matCompose_->UpdateCB0Field("skyboxIntensity", 1.0f, (uint8_t*)cb.cpu);
-            matCompose_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()).xm(), (uint8_t*)cb.cpu);
 
             // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
             std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
@@ -280,11 +382,8 @@ void Scene::Render(Renderer* renderer) {
             srvs.push_back(D.gbSRV[0]);   // t2 (GB0)
             srvs.push_back(D.gbSRV[1]);   // t3 (GB1)
             srvs.push_back(D.gbSRV[3]);   // t4 (Depth)
-
-            // t5 — Skybox cubemap (см. примечание ниже про доступ к SRV)
-            if (skyBox_) {
-                srvs.push_back(skyBox_->GetTex()->GetSRVCPU()); // <— нужен accessor из Skybox
-            }
+            srvs.push_back(skyBox_->GetTex()->GetSRVCPU());
+            srvs.push_back(D.ssrSRV);
 
             RenderContext rc{};
             rc.cbv[0] = cb.gpu; // b0
@@ -330,6 +429,7 @@ void Scene::Render(Renderer* renderer) {
     auto pTonemap = rg.AddPass("Tonemap", { pTransp },
         [this, renderer](RenderGraph::PassContext ctx) {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
             const auto& D = renderer->GetDeferredForFrame();
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             renderer->RecordBindDefaultsNoClear(t.cl);
@@ -350,6 +450,7 @@ void Scene::Render(Renderer* renderer) {
         [this, renderer](RenderGraph::PassContext ctx) {
             if (auto* tm = renderer->GetTextManager()) {
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
                 renderer->RecordBindDefaultsNoClear(t.cl);
                 tm->Build(renderer, t.cl);
                 tm->Draw(renderer, t.cl);
