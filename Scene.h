@@ -33,11 +33,25 @@ private:
     std::shared_ptr<Material> matTonemap_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matBlur_;
+    std::shared_ptr<Material> matShadowCSM_;   // depth-only
+    std::shared_ptr<Material> matDebug_;
+    static constexpr int kCascades = 4;
+
+    // кэш для лайт-пасса
+    mat4  cachedLightView_[kCascades];
+    mat4  cachedLightProj_[kCascades];
+    float2 cachedScale_[kCascades];  // atlas scale
+    float2 cachedBias_[kCascades];   // atlas bias
+    float  cachedSplitsVS_[kCascades + 1] = {}; // near..far в view-space
+    float  cachedNormalBiasWS_[kCascades] = {};
+    float  cachedDepthBiasNDC_[kCascades] = {};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     InputManager* input_ = nullptr;
     ActionMap* actions_ = nullptr;
     Camera camera_;
+
+    bool debugTexMode_ = false;
 
     std::unique_ptr<Skybox> skyBox_;
 };

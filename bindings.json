@@ -11,6 +11,7 @@
     { "name": "LookToggle", "mouseButton": "Right" },
     { "name": "Sprint", "keys": ["LShift","RShift"] },
 
-    { "name": "Wireframe", "keys": ["F3"] }
+    { "name": "Wireframe", "keys": ["F3"] },
+    { "name": "DebugTex", "keys": ["F4"] }
   ]
 }

@@ -147,6 +147,7 @@ public:
 
         CBufferField info{};
         if (!GetCBFieldInfo(bRegister, name, info)) {
+            assert(false && "Bad uniform name!");
             return false;
         }
 

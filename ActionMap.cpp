@@ -6,7 +6,7 @@
 // nlohmann/json — single header
 #pragma warning(push)
 #pragma warning(disable: 26819)
-#include "json/json.hpp"
+#include "third_party/json/json.hpp"
 #pragma warning(pop)
 using nlohmann::json;
 

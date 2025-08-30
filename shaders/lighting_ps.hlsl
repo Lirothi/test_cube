@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4)) TABLE(SAMPLER(s0) SAMPLER(s1))
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -17,7 +17,10 @@ Texture2D GB0 : register(t0); // Albedo.rgb + Metal (a)
 Texture2D GB1 : register(t1); // NormalOcta.rg + Rough (b)
 Texture2D GB2 : register(t2); // Emissive (в compose)
 Texture2D DepthT : register(t3); // R32F (SRV к D32)
+Texture2D ShadowAtlas : register(t4);
+
 SamplerState gSmpPoint : register(s0);
+SamplerState gSmpLinear : register(s1); // для PCF (shadow)
 
 // ---------- Per-frame camera/light ----------
 cbuffer PerFrame : register(b0)
@@ -30,10 +33,21 @@ cbuffer PerFrame : register(b0)
     float3 camPosWS;
     float pad_;
 
-    // Матрицы (те же, что были в рендере G-буфера!)
-    float4x4 invView; // обратная к view (world ← view)
-    float4x4 invProj; // обратная к proj (view ← clip)
+    float4x4 view;
+    float4x4 invView;
+    float4x4 invProj;
+    
+    // === CSM ===
+    float4x4 lightViewProj[4]; // мир -> клип света (на каждый каскад)
+    float4 cascadeScaleBias[4]; // (scale.xy, bias.xy) в атлас
+    float4 cascadeSplitsVS; // z_view границы: [near, split1, split2, far]
+    float2 shadowAtlasSize; // (W,H) = (4096,4096)
+    float4 shadowBiasNDC; // xyz: depth bias (в НОРМАЛИЗОВАННЫХ координатах z) по каскадам 0..2
+    float4 normalBiasWS; // xyz: normal offset (в МИРОВЫХ юнитах) по каскадам 0..2
 }
+
+static const float shadowBias = 0.0015f; // базовый bias в 0..1 depth
+static const float pcfRadius = 1.0f; // в пикселях тайла
 
 // ---------- VS fullscreen ----------
 struct VSOut
@@ -82,6 +96,75 @@ float3 F_Schlick(float cosT, float3 F0)
     return F0 + (1.0 - F0) * m;
 }
 
+int ChooseCascadeIndex(float3 Pws)
+{
+    // берём view-space z через invView
+    float4 Pv = mul(float4(Pws, 1), view); // если нет inverse(...) — передай view и умножь world->view
+    float z = Pv.z; // LH: +Z вперёд
+    // сравниваем с границами
+    int idx = 0;
+    if (z > cascadeSplitsVS.y)
+    {
+        idx = 1;
+    }
+    if (z > cascadeSplitsVS.z)
+    {
+        idx = 2;
+    }
+    if (z > cascadeSplitsVS.w)
+    {
+        idx = 3;
+    }
+    return idx;
+}
+
+float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
+{
+    int idx = ChooseCascadeIndex(Pws);
+    //idx = 1;
+
+    float4x4 LVP = lightViewProj[idx];
+    float4 sb = cascadeScaleBias[idx];
+    float2 scale = sb.xy;
+    float2 bias = sb.zw;
+
+    // --- NORMAL OFFSET: двигаем точку вдоль нормали, чтобы убрать “отставание”
+    float3 Poff = Pws + Nws * normalBiasWS[idx];
+
+    float4 lc = mul(float4(Poff, 1), LVP);
+
+    float2 uv = (lc.xy / max(1e-6, lc.w)) * float2(0.5, -0.5) + float2(0.5, 0.5);
+    float z = lc.z / max(1e-6, lc.w);
+
+    uv = uv * scale + bias;
+
+    if (any(uv < 0.0) || any(uv > 1.0))
+    {
+        return 1.0;
+    }
+
+    float2 texel = 1.0 / shadowAtlasSize;
+
+    // depth bias в NDC z (пер-каскадно) + немного slope-scaled по NdotL
+    float bBase = shadowBiasNDC[idx];
+    float b = bBase + (1.0 - saturate(NdotL)) * bBase; // мягкое усиление под острым углом
+
+    // PCF 3x3
+    const int K = 2;
+    float sum = 0.0;
+    [unroll]
+    for (int y = -K; y <= K; ++y)
+    {
+        [unroll]
+        for (int x = -K; x <= K; ++x)
+        {
+            float d = ShadowAtlas.SampleLevel(gSmpLinear, uv + float2(x, y) * texel * pcfRadius, 0).r;
+            sum += (z <= d + b) ? 1.0 : 0.0;
+        }
+    }
+    return sum / ((2 * K + 1) * (2 * K + 1));
+}
+
 // ---------- PS ----------
 float4 PSMain(VSOut i) : SV_Target
 {
@@ -99,8 +182,6 @@ float4 PSMain(VSOut i) : SV_Target
     const float z = DepthT.Sample(gSmpPoint, i.UV).r;
     const float3 P = ReconstructPosWS(i.UV, z);
     
-    //return float4(N, 1);
-
     // !!! ключ: позицию камеры берём из invView, а не из CPU переменной
     const float3 cameraPosWS = camPosWS;//mul(invView, float4(0, 0, 0, 1)).xyz;
     const float3 V = normalize(cameraPosWS - P);
@@ -142,8 +223,10 @@ float4 PSMain(VSOut i) : SV_Target
     const float3 specBRDF = (D * G * F) / max(kEpsilon, 4.0 * NdotL * NdotV);
     const float3 kd = (1.0 - F) * (1.0 - metal);
     const float3 diffBRDF = kd * albedo * kInvPi;
+    
+    float shadow = SampleShadowCSM(P, NdotL, N);
 
-    const float3 direct = (diffBRDF + specBRDF) * NdotL * lightRgb;
+    const float3 direct = (diffBRDF + specBRDF) * NdotL * lightRgb * shadow;
     const float3 color = direct + ambient;
 
     return float4(color * exposure, 1.0);

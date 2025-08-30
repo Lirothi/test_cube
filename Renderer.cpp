@@ -851,6 +851,52 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
+    auto CreateShadow = [&](UINT f,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& outRes,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+        UINT resolution)
+        {
+            // Тень создаём типлесс, с DSV=D32F и SRV=R32F
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            rd.Width = resolution;
+            rd.Height = resolution;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels = 1;
+            rd.Format = DXGI_FORMAT_R32_TYPELESS;
+            rd.SampleDesc.Count = 1;
+            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+            D3D12_CLEAR_VALUE cv{};
+            cv.Format = DXGI_FORMAT_D32_FLOAT;
+            cv.DepthStencil.Depth = 1.0f;
+            cv.DepthStencil.Stencil = 0;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
+
+            // DSV — В СВОЙ SHADOW-СЛОТ
+            outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+            dsv.Format = DXGI_FORMAT_D32_FLOAT;
+            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV);
+
+            // SRV — тоже в свой shadow-слот
+            outSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = DXGI_FORMAT_R32_FLOAT;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
+
+            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        };
+
     for (UINT f = 0; f < kFrameCount; ++f)
     {
         auto& D = deferred_[f];
@@ -859,7 +905,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateRT(DXGI_FORMAT_R10G10B10A2_UNORM, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(DXGI_FORMAT_R11G11B10_FLOAT, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
 
-        CreateDepth(DXGI_FORMAT_D32_FLOAT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
+        CreateDepth(DXGI_FORMAT_D32_FLOAT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);  
+
+        D.shadowRes = 4096; // или конфиг/параметр
+        CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
         CreateRT(DXGI_FORMAT_R16G16B16A16_FLOAT, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(DXGI_FORMAT_R16G16B16A16_FLOAT, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, f, D.scene, D.sceneRTV, D.sceneSRV);
@@ -880,6 +929,7 @@ void Renderer::DestroyDeferredTargets() {
         D.scene.Reset();
         D.ssr.Reset();
         D.ssrBlur.Reset();
+        D.shadow.Reset();
     }
 
     {
@@ -951,6 +1001,33 @@ void Renderer::BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) 
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.ssrBlurRTV, c, 0, nullptr);
+    }
+}
+
+void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth)
+{
+    auto& D = deferred_[currentFrameIndex_];
+    Transition(cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+    // один DSV на весь атлас
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);
+
+    const float tile = float(D.shadowRes) * 0.5f; // 2048
+    // раскладка: 0:(0,0)  1:(2048,0)  2:(0,2048)
+    float topLeftX = 0.0f;
+    float topLeftY = 0.0f;
+    if (cascadeIndex == 1) { topLeftX = tile; topLeftY = 0.0f; }
+    if (cascadeIndex == 2) { topLeftX = 0.0f; topLeftY = tile; }
+    if (cascadeIndex == 3) { topLeftX = tile; topLeftY = tile; }
+
+    D3D12_VIEWPORT vp{ topLeftX, topLeftY, tile, tile, 0.0f, 1.0f };
+    D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + tile), (LONG)(topLeftY + tile) };
+    cl->RSSetViewports(1, &vp);
+    cl->RSSetScissorRects(1, &sc);
+
+    if (clearDepth)
+    {
+        cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
 }
 

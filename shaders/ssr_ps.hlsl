@@ -26,6 +26,8 @@ static const int ssrRefineSteps = 16; // steps (итерации refinement)
 static const float ssrThicknessVS = 0.15f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — сколько пикселей сдвигаем старт
+static const float ssrGrazingMinZ = 0.01f; // при Rv.z ниже этого — начинаем гасить отражение
+static const float ssrGrazingMaxZ = 0.05f; // к этому значению — полностью включаем
 static const float kEps = 1e-6;
 
 struct VSOut { float4 H:SV_POSITION; float2 UV:TEXCOORD0; };
@@ -203,6 +205,8 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 
         {
             visibility *= EdgeFadePx(uv);
+            float grazing = saturate((pivot.z - ssrGrazingMinZ) / (ssrGrazingMaxZ - ssrGrazingMinZ));
+            visibility *= grazing;
         }
 
         {

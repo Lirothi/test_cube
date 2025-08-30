@@ -55,6 +55,7 @@ namespace Math
         float x, y;
         float2() : x(0), y(0) {}
         float2(float _x, float _y) : x(_x), y(_y) {}
+        float2(float _v) : x(_v), y(_v) {}
         explicit float2(const XMFLOAT2& v) : x(v.x), y(v.y) {}
         XMFLOAT2 xf() const { return XMFLOAT2(x, y); }
         XMVECTOR xm() const { return DirectX::XMVectorSet(x, y, 0.0f, 0.0f); }
@@ -78,15 +79,24 @@ namespace Math
         float x, y, z;
         float3() : x(0), y(0), z(0) {}
         float3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
+        float3(float _v) : x(_v), y(_v), z(_v) {}
         explicit float3(const XMFLOAT3& v) : x(v.x), y(v.y), z(v.z) {}
+        float2 xy() const { return { x,y }; }
         XMFLOAT3 xf() const { return XMFLOAT3(x, y, z); }
         XMVECTOR xm() const { return DirectX::XMVectorSet(x, y, z, 0.0f); }
         static float3 FromXM(XMVECTOR v) { XMFLOAT3 t{}; XMStoreFloat3(&t, v); return float3(t); }
 
         float3 operator+(const float3& o) const { return { x + o.x, y + o.y, z + o.z }; }
+        float3& operator+=(const float3& o) { x += o.x; y += o.y; z += o.z; return *this; }
+        
         float3 operator-(const float3& o) const { return { x - o.x, y - o.y, z - o.z }; }
+        float3& operator-=(const float3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
+        
         float3 operator*(float s) const { return { x * s, y * s, z * s }; }
+        float3& operator*= (const float3 & o){ x *= o.x; y *= o.y; z *= o.z; return *this; }
+        
         float3 operator/(float s) const { return { x / s, y / s, z / s }; }
+        float3& operator/= (const float3& o) { x /= o.x; y /= o.y; z /= o.z; return *this; }
 
         float  Dot(const float3& o) const { return x * o.x + y * o.y + z * o.z; }
         float3 Cross(const float3& o) const { return FromXM(XMVector3Cross(xm(), o.xm())); }
@@ -105,7 +115,10 @@ namespace Math
         float x, y, z, w;
         float4() : x(0), y(0), z(0), w(0) {}
         float4(float _x, float _y, float _z, float _w) : x(_x), y(_y), z(_z), w(_w) {}
+        float4(const float3& _v, float _w) : x(_v.x), y(_v.y), z(_v.z), w(_w) {}
         explicit float4(const XMFLOAT4& v) : x(v.x), y(v.y), z(v.z), w(v.w) {}
+        float2 xy() const { return { x,y }; }
+        float3 xyz() const { return { x,y,z }; }
         XMFLOAT4 xf() const { return XMFLOAT4(x, y, z, w); }
         XMVECTOR xm() const { return DirectX::XMVectorSet(x, y, z, w); }
         static float4 FromXM(XMVECTOR v) { XMFLOAT4 t{}; XMStoreFloat4(&t, v); return float4(t); }
@@ -113,6 +126,7 @@ namespace Math
         float4 operator+(const float4& o) const { return { x + o.x, y + o.y, z + o.z, w + o.w }; }
         float4 operator-(const float4& o) const { return { x - o.x, y - o.y, z - o.z, w - o.w }; }
         float4 operator*(float s) const { return { x * s, y * s, z * s, w * s }; }
+        float4 operator/(float s) const { return { x / s, y / s, z / s, w / s }; }
     };
 
     // --- Цвет (float и RGBA8) ---
@@ -211,6 +225,9 @@ namespace Math
         static mat4 OrthoLH(float w, float h, float zn, float zf) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixOrthographicLH(w, h, zn, zf)); return r;
         }
+        static mat4 OrthoOffCenterLH(float ViewLeft, float ViewRight, float ViewBottom, float ViewTop, float NearZ, float FarZ) {
+            mat4 r; XMStoreFloat4x4(&r.m, XMMatrixOrthographicOffCenterLH(ViewLeft, ViewRight, ViewBottom, ViewTop, NearZ, FarZ)); return r;
+        }
 
         XMMATRIX xm() const { return XMLoadFloat4x4(&m); }
         static mat4 Multiply(const mat4& a, const mat4& b) {
@@ -296,6 +313,8 @@ namespace Math
 
     inline float3 Lerp(const float3& a, const float3& b, float t) { return float3::Lerp(a, b, t); }
     inline float2 Lerp(const float2& a, const float2& b, float t) { return float2::Lerp(a, b, t); }
+    inline float2 Abs(const float2& a) { return float2{ std::abs(a.x), std::abs(a.y) }; }
+    inline float3 Abs(const float3& a) { return float3{ std::abs(a.x), std::abs(a.y), std::abs(a.z) }; }
 
     // --- Свободные функции (аналоги DirectXMath) ---
     inline float3 TransformPoint(const float3& p, const mat4& m) {
@@ -308,14 +327,6 @@ namespace Math
         return m.TransformNormalSafe(n);
     }
     inline float4 Transform(const float4& v, const mat4& m) {
-        return m.Transform(v);
-    }
-
-    // --- Перегрузки операторов (если хочется "m * p") ---
-    inline float3 operator*(const mat4& m, const float3& p) { // точка
-        return m.TransformPoint(p);
-    }
-    inline float4 operator*(const mat4& m, const float4& v) { // 4D
         return m.Transform(v);
     }
 
