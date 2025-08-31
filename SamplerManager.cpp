@@ -147,3 +147,17 @@ D3D12_SAMPLER_DESC SamplerManager::FontMinPointMagLinearClamp() {
     d.MaxLOD = D3D12_FLOAT32_MAX;
     return d;
 }
+D3D12_SAMPLER_DESC SamplerManager::ComparisonLinearClamp() {
+    D3D12_SAMPLER_DESC d{};
+    d.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT; // или POINT
+    d.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    d.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    d.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    d.MipLODBias = 0.0f;
+    d.MaxAnisotropy = 1;
+    d.MinLOD = 0.0f;
+    d.MaxLOD = 0.0f;   // будем звать SampleCmpLevelZero
+    d.BorderColor[0] = d.BorderColor[1] = d.BorderColor[2] = d.BorderColor[3] = 1.0f;
+    return d;
+}

@@ -20,7 +20,7 @@ Texture2D DepthT : register(t3); // R32F (SRV к D32)
 Texture2D ShadowAtlas : register(t4);
 
 SamplerState gSmpPoint : register(s0);
-SamplerState gSmpLinear : register(s1); // для PCF (shadow)
+SamplerComparisonState gSmpLinear : register(s1); // для PCF (shadow)
 
 // ---------- Per-frame camera/light ----------
 cbuffer PerFrame : register(b0)
@@ -31,7 +31,7 @@ cbuffer PerFrame : register(b0)
     float3 lightRgb;
     float exposure; // обычно 1..2
     float3 camPosWS;
-    float pad_;
+    float3 camDirWS;
 
     float4x4 view;
     float4x4 invView;
@@ -97,31 +97,39 @@ float3 F_Schlick(float cosT, float3 F0)
 }
 
 int ChooseCascadeIndex(float3 Pws)
+{ 
+    float z;
+    //z = mul(float4(Pws, 1), view).z;
+    z = dot(Pws - camPosWS, camDirWS);
+    float3 gt = saturate(sign(z.xxx - cascadeSplitsVS.yzw));
+    return (int) (gt.x + gt.y + gt.z);
+}
+
+float ShadowPCF(float2 uv, float zRef)
 {
-    // берём view-space z через invView
-    float4 Pv = mul(float4(Pws, 1), view); // если нет inverse(...) — передай view и умножь world->view
-    float z = Pv.z; // LH: +Z вперёд
-    // сравниваем с границами
-    int idx = 0;
-    if (z > cascadeSplitsVS.y)
-    {
-        idx = 1;
-    }
-    if (z > cascadeSplitsVS.z)
-    {
-        idx = 2;
-    }
-    if (z > cascadeSplitsVS.w)
-    {
-        idx = 3;
-    }
-    return idx;
+    // базовый «hardware PCF» = 2x2 с билинеарными весами
+    return ShadowAtlas.SampleCmp(gSmpLinear, uv, zRef).r;
+}
+
+// 3x3 поверх hardware PCF (рекомендую для ближнего каскада)
+float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
+{
+    float s = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float2 off = float2(x, y) * texel * radiusPx;
+            s += ShadowAtlas.SampleCmp(gSmpLinear, uv + off, zRef).r;
+        }
+    return s / 9.0;
 }
 
 float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 {
     int idx = ChooseCascadeIndex(Pws);
-    //idx = 1;
+    //idx = 2;
 
     float4x4 LVP = lightViewProj[idx];
     float4 sb = cascadeScaleBias[idx];
@@ -149,20 +157,11 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
     float bBase = shadowBiasNDC[idx];
     float b = bBase + (1.0 - saturate(NdotL)) * bBase; // мягкое усиление под острым углом
 
-    // PCF 3x3
-    const int K = 2;
-    float sum = 0.0;
-    [unroll]
-    for (int y = -K; y <= K; ++y)
+    if (idx < 3)
     {
-        [unroll]
-        for (int x = -K; x <= K; ++x)
-        {
-            float d = ShadowAtlas.SampleLevel(gSmpLinear, uv + float2(x, y) * texel * pcfRadius, 0).r;
-            sum += (z <= d + b) ? 1.0 : 0.0;
-        }
+        return ShadowPCF3x3(uv, z - b, texel, pcfRadius);
     }
-    return sum / ((2 * K + 1) * (2 * K + 1));
+    return ShadowPCF(uv, z - b);
 }
 
 // ---------- PS ----------
@@ -205,14 +204,6 @@ float4 PSMain(VSOut i) : SV_Target
 
     const float3 F0 = lerp(kF0Dielectric, albedo, metal);
     float alpha = max(kMinAlpha, rough * rough);
-    
-    // === Specular AA: чуть распушим лобе на величину «размазанности» нормали по экрану
-//    float3 dNdx = ddx(N);
-//    float3 dNdy = ddy(N);
-//    float variance = kSpecAA_VarianceScale * max(dot(dNdx, dNdx), dot(dNdy, dNdy));
-//// добавляем дисперсию в a^2 (см. Karis, Frostbite PBR)
-//    float a2 = saturate(min(kSpecAA_MaxA2, alpha * alpha + variance));
-//    alpha = sqrt(a2);
     
     const float kVis = (alpha + 1.0) * (alpha + 1.0) * 0.125; // (a+1)^2 / 8
 

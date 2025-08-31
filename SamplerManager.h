@@ -52,6 +52,7 @@ public:
     static D3D12_SAMPLER_DESC PointClamp();
     static D3D12_SAMPLER_DESC FontMinPointMagLinearClamp();
     static D3D12_SAMPLER_DESC AnisoWrap(UINT aniso = 8);
+    static D3D12_SAMPLER_DESC ComparisonLinearClamp();
 
 private:
     struct Entry {

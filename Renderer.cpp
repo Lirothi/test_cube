@@ -864,13 +864,13 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             rd.Height = resolution;
             rd.DepthOrArraySize = 1;
             rd.MipLevels = 1;
-            rd.Format = DXGI_FORMAT_R32_TYPELESS;
+            rd.Format = DXGI_FORMAT_R16_TYPELESS;
             rd.SampleDesc.Count = 1;
             rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
             D3D12_CLEAR_VALUE cv{};
-            cv.Format = DXGI_FORMAT_D32_FLOAT;
+            cv.Format = DXGI_FORMAT_D16_UNORM;
             cv.DepthStencil.Depth = 1.0f;
             cv.DepthStencil.Stencil = 0;
 
@@ -881,14 +881,14 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             // DSV — В СВОЙ SHADOW-СЛОТ
             outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
             D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-            dsv.Format = DXGI_FORMAT_D32_FLOAT;
+            dsv.Format = DXGI_FORMAT_D16_UNORM;
             dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
             dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV);
 
             // SRV — тоже в свой shadow-слот
             outSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = DXGI_FORMAT_R32_FLOAT;
+            sd.Format = DXGI_FORMAT_R16_UNORM;
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels = 1;

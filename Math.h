@@ -315,6 +315,7 @@ namespace Math
     inline float2 Lerp(const float2& a, const float2& b, float t) { return float2::Lerp(a, b, t); }
     inline float2 Abs(const float2& a) { return float2{ std::abs(a.x), std::abs(a.y) }; }
     inline float3 Abs(const float3& a) { return float3{ std::abs(a.x), std::abs(a.y), std::abs(a.z) }; }
+    inline float3 Floor(const float3& a) { return float3{ std::floor(a.x), std::floor(a.y), std::floor(a.z) }; }
 
     // --- Свободные функции (аналоги DirectXMath) ---
     inline float3 TransformPoint(const float3& p, const mat4& m) {
