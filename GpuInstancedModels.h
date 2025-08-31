@@ -23,7 +23,8 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
-    bool IsSimpleRender() const {return false;}
+    bool IsSimpleRender() const { return false; }
+    bool CastsShadow() const override { return true; }
 
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
@@ -31,6 +32,7 @@ protected:
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) override;
     void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
+    void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj) override;
 
 private:
     // данные инстансинга

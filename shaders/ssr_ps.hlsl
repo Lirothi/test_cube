@@ -22,7 +22,7 @@ cbuffer PerFrame : register(b0)
 
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
 static const float ssrResolution = 0.9f; // 0..1 (шаг coarse-pass по экрану)
-static const int ssrRefineSteps = 16; // steps (итерации refinement)
+static const int ssrRefineSteps = 12; // steps (итерации refinement)
 static const float ssrThicknessVS = 0.15f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — сколько пикселей сдвигаем старт
@@ -75,6 +75,10 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         r.hit = 0;
         return r;
     }
+    
+    float bias = saturate((1.0f - dot(pivot, Nv)));
+    bias = bias * 0.5f;
+    float thickness = ssrThicknessVS + bias;
 
     // Старт/финиш луча в view
     float3 startView = Pv + pivot * 0.0;
@@ -104,7 +108,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     int hit1 = 0;
 
     float viewDistance = startView.z; // у нас вью-дистанция = z (LH: +Z вперёд)
-    float depthDiff = ssrThicknessVS;
+    float depthDiff = thickness;
 
     float2 frag = sFrag; // текущая экранная точка (в пикселях)
 
@@ -136,7 +140,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     // 4) сравнение в view-z (толщина — в тех же единицах)
         depthDiff = viewDistance - dLin;
 
-        if (depthDiff > 0.0 && depthDiff < ssrThicknessVS)
+        if (depthDiff > 0.0 && depthDiff < thickness)
         {
             hit0 = 1;
             break;
@@ -167,7 +171,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         viewDistance = (startView.z * endView.z) / lerp(endView.z, startView.z, search1);
         depthDiff = viewDistance - dLin;
 
-        if (depthDiff > 0.0 && depthDiff < ssrThicknessVS)
+        if (depthDiff > 0.0 && depthDiff < thickness)
         {
             hit1 = 1;
             search1 = search0 + ((search1 - search0) * 0.5);
@@ -192,7 +196,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         }
         // близость к найденному «хиту»
         {
-            visibility *= (1.0 - clamp(depthDiff / ssrThicknessVS, 0.0, 1.0));
+            visibility *= (1.0 - clamp(depthDiff / thickness, 0.0, 1.0));
         }
         // дистанционный фейд
         {

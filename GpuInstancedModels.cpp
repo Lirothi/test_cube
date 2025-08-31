@@ -52,7 +52,7 @@ void GpuInstancedModels::Init(Renderer* renderer,
     // Регистрируем текущее состояние (после Create — UAV)
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    modelMatrix_ = mat4::Translation({0.0f, 5.0f, 0.0f});
+    modelMatrix_ = mat4::Translation({0.0f, 5.0f, 10.0f});
 }
 
 void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -116,6 +116,16 @@ void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList
     if (!renderer) { return; }
 	if (!cl) { return; }
     mesh_->DrawInstanced(cl, instanceCount_);
+}
+
+void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj)
+{
+    const D3D12_RESOURCE_STATES kSRV =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
+    shadowCtx_.table[0] = instanceBuffer_.GetSRVForFrame(renderer);
+
+    RenderableObject::RecordShadow(renderer, cl, lightView, lightProj);
 }
 
 void GpuInstancedModels::Tick(float deltaTime)

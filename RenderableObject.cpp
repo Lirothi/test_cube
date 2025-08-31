@@ -27,6 +27,18 @@ RenderableObject::RenderableObject(
     graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT;
     graphicsDesc_.FillDefaultsTriangle();
 
+    if (CastsShadow())
+    {
+        shadowDesc_ = graphicsDesc_;
+        shadowDesc_.shaderFile = AppendSuffixBeforeExt(graphicsDesc_.shaderFile, L"_csm");
+        shadowDesc_.inputLayoutKey = graphicsDesc_.inputLayoutKey;
+        shadowDesc_.numRT = 0;
+        shadowDesc_.dsvFormat = DXGI_FORMAT_D16_UNORM;
+        shadowDesc_.depth.DepthEnable = TRUE;
+        shadowDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        shadowDesc_.raster.CullMode = D3D12_CULL_MODE_BACK;
+    }
+
     mesh_.reset(new Mesh());
 }
 
@@ -48,6 +60,10 @@ void RenderableObject::Init(Renderer* renderer,
     }
 
     graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc_);
+    if (CastsShadow())
+    {
+        shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc_);
+    }
 }
 
 void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -108,4 +124,44 @@ void RenderableObject::ApplyMaterialParamsToCB()
     UpdateUniform("metalRough", p.metalRough.xm());
     UpdateUniform("texOffsScale", p.texOffsScale.xm());
     UpdateUniform("texFlags", p.texFlags.xm());
+}
+
+std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
+    const std::wstring& suffix)
+{
+    auto pos = file.find_last_of(L'.');
+    if (pos == std::wstring::npos) return file + suffix;
+    return file.substr(0, pos) + suffix + file.substr(pos);
+}
+
+void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const mat4& lightView, const mat4& lightProj)
+{
+    if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
+
+    // per-object CB для shadowMaterial (b0)
+    UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, 256);
+
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, 256);
+    uint8_t* cb = static_cast<uint8_t*>(alloc.cpu);
+
+    // world/view/proj — именами, как ожидает _csm шейдер
+    shadowMaterial_->UpdateCB0Field("world", GetModelMatrix(), cb);
+    shadowMaterial_->UpdateCB0Field("view", lightView, cb);
+    shadowMaterial_->UpdateCB0Field("proj", lightProj, cb);
+
+    shadowCtx_.cbv[0] = alloc.gpu;
+    shadowMaterial_->Bind(cl, shadowCtx_, false);
+}
+
+void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const mat4& lightView, const mat4& lightProj)
+{
+    if (!CastsShadow())
+    {
+        return;
+    }
+
+    RecordShadow(renderer, cl, lightView, lightProj);
+    IssueDraw(renderer, cl);
 }

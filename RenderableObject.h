@@ -29,6 +29,7 @@ public:
 
     // Базовый отрисовщик: Compute -> Graphics (Bind/IssueDraw)
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
 
     // Трансформ
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
@@ -55,12 +56,16 @@ public:
         return graphicsDesc_.blend.RenderTarget[0].BlendEnable;
 	}
 
+    virtual bool CastsShadow() const { return true; }
+
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
 	virtual void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) {}
     virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    
+    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
 
     // Утилита записи в CB по имени из layout (b0)
     template<typename T> bool UpdateUniform(const std::string& name, const T& value) {
@@ -82,6 +87,9 @@ protected:
     Material::GraphicsDesc        graphicsDesc_;
     RenderContext                 graphicsCtx_;
     std::string                   matPreset_;
+    std::shared_ptr<Material>     shadowMaterial_;
+    Material::GraphicsDesc        shadowDesc_;
+    RenderContext                 shadowCtx_;
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
@@ -93,6 +101,8 @@ protected:
     bool allowWireframe_ = true;
 
 private:
+    static std::wstring AppendSuffixBeforeExt(const std::wstring& file, const std::wstring& suffix);
+
     RenderableObject(const RenderableObject&) = delete;
     RenderableObject& operator=(const RenderableObject&) = delete;
 };

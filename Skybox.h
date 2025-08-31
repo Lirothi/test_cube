@@ -24,6 +24,7 @@ public:
     const TextureCube* GetTex() const { return &cube_; }
 
     bool IsSimpleRender() const { return true; }
+    bool CastsShadow() const { return false; }
 
 protected:
     // пер-кадровые константы и дескрипторы

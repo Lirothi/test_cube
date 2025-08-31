@@ -207,6 +207,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
 
+    D3D12_RESOURCE_STATES GetGlobalKnownState(ID3D12Resource* res);
+
     struct PassBatch_ {
         std::string name;
         ID3D12GraphicsCommandList* driver = nullptr;              // DIRECT
@@ -266,6 +268,14 @@ private:
 
     std::mutex knownStatesMtx_;
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
+    std::mutex clStatesMtx_;
+    struct CLState {
+        // первый требуемый стейт ресурса в данном CL (мы его не барьерим внутри CL)
+        std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
+        // текущий (последний) стейт ресурса внутри ЭТОГО CL (для внутренних переходов и финала)
+        std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
+    };
+    std::unordered_map<ID3D12CommandList*, CLState> clStates_;
 
     SamplerManager samplerManager_;
     ConstantBufferLayoutManager cbManager_;

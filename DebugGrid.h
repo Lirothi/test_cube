@@ -9,7 +9,7 @@
 class Renderer;
 struct ID3D12GraphicsCommandList;
 
-class DebugGrid final : public RenderableObjectBase {
+class DebugGrid : public RenderableObjectBase {
 public:
     DebugGrid(float halfSize = 10.0f, float step = 1.0f,
         float axisLen = 3.0f, float yPlane = 0.0f,
@@ -29,8 +29,11 @@ public:
         const mat4& view,
         const mat4& proj) override;
 
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj) override {}
+
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }
+    bool CastsShadow() const override { return false; }
 
 private:
     // два внутренних рендерабла

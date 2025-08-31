@@ -64,6 +64,7 @@ public:
     }
 
     bool IsSimpleRender() const { return true; }
+    bool CastsShadow() const override { return true; }
 
 private:
     Math::mat4 transformPos_;

@@ -25,8 +25,44 @@ public:
     void Clear();
 
 private:
+    enum class ObjectRenderType { OpaqueSimple, OpaqueComplex, TransparentSimple, TransparentComplex };
+
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene);
+    void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
+        const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize = 32);
+
+    void Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_CSM(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const mat4& invView, const mat4& invProj,
+        float zNear, float zFar,
+        const float3& sunDirWS, const float3& camDir,
+        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+    void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+    void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const mat4& invView, const mat4& invProj,
+        const float3& sunDirWS, const float3& camDir);
+    void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj);
+    void Pass_SSR(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const mat4& invView, const mat4& invProj,
+        float zNear, float zFar);
+    void Pass_SSR_Blur(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_Compose(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const mat4& invView, const mat4& invProj,
+        float zNear, float zFar);
+    void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj,
+        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+    void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
     
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matCompose_;

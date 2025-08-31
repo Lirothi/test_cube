@@ -510,6 +510,74 @@ void Renderer::ExecuteTimelineAndPresent() {
         submitTimeline_.clear();
     }
 
+    std::vector<ID3D12CommandList*> fixedLists;
+    fixedLists.reserve(lists.size() * 2);
+
+    {
+        std::lock_guard<std::mutex> lkG(knownStatesMtx_);
+        std::lock_guard<std::mutex> lkC(clStatesMtx_);
+
+        // локальная копия глобальных стейтов на момент сабмита
+        auto global = knownStates_;
+
+        for (auto* cmd : lists) {
+            // найдём запись про этот CL (если он ставил Transition)
+            auto it = clStates_.find(cmd);
+
+            // 3.1: если CL что-то «хочет» на первом использовании — вставим пролог с барьерами prev→firstUse
+            if (it != clStates_.end() && !it->second.firstUse.empty()) {
+                auto& first = it->second.firstUse;
+
+                auto& fr = frameResources_[currentFrameIndex_];
+                ID3D12CommandAllocator* alloc =
+                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                ID3D12GraphicsCommandList* prologue =
+                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+
+                for (auto& kv : first) {
+                    ID3D12Resource* res = kv.first;
+                    D3D12_RESOURCE_STATES desired = kv.second;
+
+                    D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
+                    if (auto ig = global.find(res); ig != global.end()) 
+                    {
+                        before = ig->second;
+                    }
+
+                    if (before != desired) {
+                        D3D12_RESOURCE_BARRIER b{};
+                        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                        b.Transition.pResource = res;
+                        b.Transition.StateBefore = before;
+                        b.Transition.StateAfter = desired;
+                        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                        prologue->ResourceBarrier(1, &b);
+                    }
+                    global[res] = desired; // теперь «в мир» ресурс входит с нужного стейта
+                }
+                ThrowIfFailed(prologue->Close());
+                fixedLists.push_back(prologue);
+            }
+
+            // 3.2: сам CL
+            fixedLists.push_back(cmd);
+
+            // 3.3: после CL обновим «глобальный» финальный стейт его ресурсов
+            if (it != clStates_.end()) {
+                for (auto& kv : it->second.current) {
+                    global[kv.first] = kv.second;
+                }
+                clStates_.erase(it);
+            }
+        }
+
+        // обновим knownStates_ итогами сабмита
+        knownStates_ = std::move(global);
+
+        // на будущее не должно остаться хвостов
+        assert(clStates_.empty());
+    }
+
     // Эпилог: RT→Present
     ID3D12GraphicsCommandList* epilogueCL = nullptr;
     {
@@ -530,12 +598,14 @@ void Renderer::ExecuteTimelineAndPresent() {
         ThrowIfFailed(cl->Close());
         epilogueCL = cl;
     }
-    if (epilogueCL != nullptr) {
-        lists.push_back(epilogueCL);
+    if (epilogueCL) 
+    {
+        fixedLists.push_back(epilogueCL);
     }
 
-    if (!lists.empty()) {
-        commandQueue_->ExecuteCommandLists((UINT)lists.size(), lists.data());
+    // Выполняем уже «починенный» список
+    if (!fixedLists.empty()) {
+        commandQueue_->ExecuteCommandLists((UINT)fixedLists.size(), fixedLists.data());
     }
 
     ThrowIfFailed(swapChain_->Present(1, 0));
@@ -591,28 +661,51 @@ void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state
     knownStates_[res] = state;
 }
 
-void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
-    if (cl == nullptr || res == nullptr) {
-        return;
-    }
+D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
+{
+    std::lock_guard<std::mutex> lk(knownStatesMtx_);
+    auto it = knownStates_.find(res);
+    return (it == knownStates_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second;
+}
 
-    D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
+void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
+    if (!cl || !res) return;
+    ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
+
+    D3D12_RESOURCE_STATES before;
+    bool needBarrier = false;
+
     {
-        std::lock_guard<std::mutex> lk(knownStatesMtx_);
-        auto it = knownStates_.find(res);
-        before = (it == knownStates_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second;
-        if (before == after) {
+        std::lock_guard<std::mutex> lk(clStatesMtx_);
+        auto& st = clStates_[base];
+        auto itCur = st.current.find(res);
+
+        if (itCur == st.current.end()) {
+            // ПЕРВОЕ упоминание ресурса в этом CL:
+            // ничего не барьерим внутри CL; просто фиксируем желаемый «стартовый» стейт
+            st.firstUse.emplace(res, after);
+            st.current.emplace(res, after);
             return;
         }
-        knownStates_[res] = after;
+        else {
+            before = itCur->second;
+            if (before == after) {
+                return; // no-op
+            }
+            // это ВНУТРЕННИЙ переход внутри того же CL → ставим барьер
+            st.current[res] = after;
+            needBarrier = true;
+        }
     }
+
+    if (!needBarrier) return;
 
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition.pResource = res;
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     b.Transition.StateBefore = before;
     b.Transition.StateAfter = after;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
 }
 

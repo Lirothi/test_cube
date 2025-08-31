@@ -90,6 +90,7 @@ public:
 
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }
+    bool CastsShadow() const override { return false; }
 
 private:
     void BuildGridCPU(std::vector<LineVertex>& out)
@@ -201,6 +202,7 @@ public:
 
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }
+    bool CastsShadow() const override { return false; }
 
 private:
     void BuildAxesCPU(std::vector<AxisVertex>& out)
