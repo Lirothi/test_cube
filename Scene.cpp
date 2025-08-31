@@ -111,20 +111,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
 
-    if (!matShadowCSM_)
-    {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/gbuffer_csm.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "PosNormTanUV";
-        gd.numRT = 0;
-        gd.dsvFormat = DXGI_FORMAT_D16_UNORM;
-        gd.depth.DepthEnable = TRUE;
-        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-        gd.raster.CullMode = D3D12_CULL_MODE_BACK; // при acne — попробуй FRONT
-        matShadowCSM_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
-    }
-
     if (!matDebug_) {
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/debug_texture.hlsl";
@@ -360,7 +346,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM.Driver");
-    //renderer->RegisterPassDriver(d.cl, ctx.batchIndex);
+    renderer->RegisterPassDriver(d.cl, ctx.batchIndex);
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
     renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
@@ -468,12 +454,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             }
         }
     }
-    renderer->EndThreadCommandList(d, ctx.batchIndex);
+    //renderer->EndThreadCommandList(d, ctx.batchIndex);
 
 #if 0
     size_t batchIndex = ctx.batchIndex;
     auto& tasks = TaskSystem::Get();
-    tasks.Dispatch(2, [this, renderer, &buckets, batchIndex, lViews, lProjs](std::size_t idx)
+    tasks.Dispatch(2, [this, renderer, &buckets, batchIndex](std::size_t idx)
         {
             //auto it = buckets.find(ObjectRenderType::OpaqueSimple);
             //if (it != buckets.end())
@@ -511,8 +497,9 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
             renderer->EndThreadCommandList(t, batchIndex);
         }, /*batchSize*/1);
+    tasks.WaitForAll();
 #endif
-    //tasks.WaitForAll();
+    
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
@@ -864,7 +851,6 @@ void Scene::Clear()
     matTonemap_.reset();
     matBlur_.reset();
     matSSR_.reset();
-    matShadowCSM_.reset();
     matDebug_.reset();
     objects_.clear();
     skyBox_.reset();

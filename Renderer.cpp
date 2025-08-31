@@ -1108,7 +1108,7 @@ void Renderer::BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) 
 void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth)
 {
     auto& D = deferred_[currentFrameIndex_];
-    Transition(cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    //Transition(cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     // один DSV на весь атлас
     cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);

@@ -69,7 +69,6 @@ private:
     std::shared_ptr<Material> matTonemap_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matBlur_;
-    std::shared_ptr<Material> matShadowCSM_;   // depth-only
     std::shared_ptr<Material> matDebug_;
     static constexpr int kCascades = 4;
 
