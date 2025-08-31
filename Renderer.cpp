@@ -525,38 +525,46 @@ void Renderer::ExecuteTimelineAndPresent() {
             auto it = clStates_.find(cmd);
 
             // 3.1: если CL что-то «хочет» на первом использовании — вставим пролог с барьерами prev→firstUse
-            if (it != clStates_.end() && !it->second.firstUse.empty()) {
-                auto& first = it->second.firstUse;
+            if ((it != clStates_.end()) && !it->second.firstUse.empty()) {
 
-                auto& fr = frameResources_[currentFrameIndex_];
-                ID3D12CommandAllocator* alloc =
-                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-                ID3D12GraphicsCommandList* prologue =
-                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                // соберём набор барьеров
+                std::vector<D3D12_RESOURCE_BARRIER> barriers;
+                barriers.reserve(it->second.firstUse.size());
 
-                for (auto& kv : first) {
+                for (auto& kv : it->second.firstUse) {
                     ID3D12Resource* res = kv.first;
-                    D3D12_RESOURCE_STATES desired = kv.second;
+                    const D3D12_RESOURCE_STATES want = kv.second;
 
                     D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
-                    if (auto ig = global.find(res); ig != global.end()) 
-                    {
+                    if (auto ig = global.find(res); ig != global.end()) {
                         before = ig->second;
                     }
 
-                    if (before != desired) {
+                    if (before != want) {
                         D3D12_RESOURCE_BARRIER b{};
                         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
                         b.Transition.pResource = res;
                         b.Transition.StateBefore = before;
-                        b.Transition.StateAfter = desired;
+                        b.Transition.StateAfter = want;
                         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                        prologue->ResourceBarrier(1, &b);
+                        barriers.push_back(b);
+
                     }
-                    global[res] = desired; // теперь «в мир» ресурс входит с нужного стейта
+                    global[res] = want;
                 }
-                ThrowIfFailed(prologue->Close());
-                fixedLists.push_back(prologue);
+
+                // создадим пролог ТОЛЬКО если есть, что барьерить
+                if (!barriers.empty()) {
+                    auto& fr = frameResources_[currentFrameIndex_];
+                    ID3D12CommandAllocator* alloc =
+                        fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                    ID3D12GraphicsCommandList* prologue =
+                        fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+
+                    prologue->ResourceBarrier(UINT(barriers.size()), barriers.data());
+                    ThrowIfFailed(prologue->Close());
+                    fixedLists.push_back(prologue);
+                }
             }
 
             // 3.2: сам CL

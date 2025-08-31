@@ -360,12 +360,11 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM.Driver");
+    //renderer->RegisterPassDriver(d.cl, ctx.batchIndex);
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-    // ВАЖНО: единоразовая очистка всего атласа.
-    // У тебя раньше было BindShadowTarget(d.cl, 0, true) — оставим тот же контракт,
-    // т.к. внутри рендера он очищает весь атлас.
     renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
+
     //renderer->EndThreadCommandList(d, ctx.batchIndex);
 
     // те же параметры, что и в твоём коде сейчас
@@ -454,7 +453,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             auto& objects = it->second;
             for (size_t i = 0; i < objects.size(); ++i) {
                 if (auto* obj = objects[i]) {
-                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
+                    obj->RenderShadow(renderer, d.cl, cachedLightView_[c], cachedLightProj_[c]);
                 }
             }
         }
@@ -471,23 +470,49 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     }
     renderer->EndThreadCommandList(d, ctx.batchIndex);
 
-    //size_t batchIndex = ctx.batchIndex;
-    //auto& tasks = TaskSystem::Get();
-    //tasks.Dispatch(kCascades, [this, renderer, &buckets, batchIndex](std::size_t c)
-    //    {
-    //        // для каждого каскада — две параллельные пачки: simple и complex
-    //        // (внутри каждая дробится на чанки и пишет свои CL)
-    //        auto it = buckets.find(ObjectRenderType::OpaqueSimple);
-    //        if (it != buckets.end())
-    //        {
-    //            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
-    //        }
-    //        it = buckets.find(ObjectRenderType::OpaqueComplex);
-    //        if (it != buckets.end())
-    //        {
-    //            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
-    //        }
-    //    }, /*batchSize*/1);
+#if 0
+    size_t batchIndex = ctx.batchIndex;
+    auto& tasks = TaskSystem::Get();
+    tasks.Dispatch(2, [this, renderer, &buckets, batchIndex, lViews, lProjs](std::size_t idx)
+        {
+            //auto it = buckets.find(ObjectRenderType::OpaqueSimple);
+            //if (it != buckets.end())
+            //{
+            //    RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
+            //}
+            //it = buckets.find(ObjectRenderType::OpaqueComplex);
+            //if (it != buckets.end())
+            //{
+            //    RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
+            //}
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
+
+            auto it = buckets.find(ObjectRenderType::OpaqueSimple);
+            if (it != buckets.end())
+            {
+                auto& objects = it->second;
+                for (size_t i = 0; i < objects.size(); ++i) {
+                    if (auto* obj = objects[i]) {
+                        obj->RenderShadow(renderer, t.cl, cachedLightView_[idx], cachedLightProj_[idx]);
+                    }
+                }
+            }
+            //it = buckets.find(ObjectRenderType::OpaqueComplex);
+            //if (it != buckets.end())
+            //{
+            //    auto& objects = it->second;
+            //    for (size_t i = 0; i < objects.size(); ++i) {
+            //        if (auto* obj = objects[i]) {
+            //            obj->RenderShadow(renderer, t.cl, cachedLightView_[c], cachedLightProj_[c]);
+            //        }
+            //    }
+            //}
+
+            renderer->EndThreadCommandList(t, batchIndex);
+        }, /*batchSize*/1);
+#endif
+    //tasks.WaitForAll();
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
