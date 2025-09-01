@@ -12,4 +12,13 @@ struct RenderContext {
     std::unordered_map<uint32_t, D3D12_GPU_VIRTUAL_ADDRESS> uav;
     std::unordered_map<uint32_t, D3D12_GPU_DESCRIPTOR_HANDLE> table;
     std::unordered_map<uint32_t, D3D12_GPU_DESCRIPTOR_HANDLE> samplerTable;
+
+    void ClearFast() {
+        cbv.clear();
+        constants.clear();
+        srv.clear();
+        uav.clear();
+        table.clear();
+        samplerTable.clear();
+    }
 };

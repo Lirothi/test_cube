@@ -340,6 +340,8 @@ void Renderer::BeginFrame() {
     frameResources_[currentFrameIndex_]->GetSamplerAlloc().ResetPerFrame();
     frameResources_[currentFrameIndex_]->ResetCommandListsUsage();
     frameResources_[currentFrameIndex_]->ResetUpload();
+
+    ctxPool_.ResetForFrame();
 }
 
 void Renderer::EndFrame() {

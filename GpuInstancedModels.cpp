@@ -59,7 +59,9 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
 {
     // Переход в UAV (если нужно)
     renderer->Transition(cl, instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    RenderContext ctx;
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
+
     // constants(b0) для CS
     uint32_t dtBits = 0, angBits = 0;
     memcpy(&dtBits, &deltaTime_, sizeof(float));

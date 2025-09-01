@@ -101,13 +101,14 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // 2) выделить слайс в ринг-буфере кадра и прописать CBV
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign); // <- как просили
     uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
-    RenderContext gfxCtx;
-    gfxCtx.cbv[0] = alloc.gpu;
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
+    ctx.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);
     UpdateUniforms(renderer, view, proj, cbData);
-    PopulateContext(renderer, cl, gfxCtx);
-    RecordGraphics(renderer, cl, gfxCtx);
+    PopulateContext(renderer, cl, ctx);
+    RecordGraphics(renderer, cl, ctx);
     
     IssueDraw(renderer, cl);
 }
@@ -153,9 +154,11 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, 256);
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, 256);
     uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
-    RenderContext shadowCtx;
-    shadowCtx.cbv[0] = alloc.gpu;
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
 
-    RecordShadow(renderer, cl, lightView, lightProj, shadowCtx, cbData);
+    ctx.cbv[0] = alloc.gpu;
+
+    RecordShadow(renderer, cl, lightView, lightProj, ctx, cbData);
     IssueDraw(renderer, cl);
 }

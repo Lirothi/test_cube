@@ -154,7 +154,7 @@ void Scene::Render(Renderer* renderer) {
     const mat4 view = camera_.GetViewMatrix();
     constexpr float HFOV = XMConvertToRadians(90.f);
     const float VFOV = 2.f * atan(tan(HFOV * 0.5f) / aspect);
-    const float zNear = 0.01f, zFar = 500.0f;
+    const float zNear = 0.01f, zFar = 1000.0f;
     const mat4 proj = mat4::PerspectiveFovLH(VFOV, aspect, zNear, zFar);
     const mat4 invView = mat4::Inverse(view);
     const mat4 invProj = mat4::Inverse(proj);
@@ -540,7 +540,9 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     //matLighting_->UpdateCB0Field("shadowBias", 0.0015f, (uint8_t*)cb.cpu);
     //matLighting_->UpdateCB0Field("pcfRadius", 1.0f, (uint8_t*)cb.cpu);
 
-    RenderContext rc{};
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
     rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
     srvs.push_back(D.gbSRV[0]);
@@ -603,7 +605,9 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
     matSSR_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
     matSSR_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
 
-    RenderContext rc{};
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
     rc.cbv[0] = cb.gpu;
     rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
     rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
@@ -629,8 +633,11 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
     float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
     matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
     matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
-    RenderContext rc{};
-    rc.cbv[0] = cb.gpu;
+
+	auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
+	rc.cbv[0] = cb.gpu;
     rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
     rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
@@ -696,7 +703,9 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
     srvs.push_back(skyBox_->GetTex()->GetSRVCPU());
     srvs.push_back(D.ssrSRV);
 
-    RenderContext rc{};
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
     rc.cbv[0] = cb.gpu; // b0
     rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
     rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
@@ -751,7 +760,9 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
     renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderer->RecordBindDefaultsNoClear(t.cl);
 
-    RenderContext rc{};
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
     rc.table[0] = renderer->StageTonemapSrvTable(); // t0
     rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
@@ -773,7 +784,9 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     renderer->RecordBindDefaultsNoClear(t.cl);
 
-    RenderContext rc{};
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
     rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
     rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 

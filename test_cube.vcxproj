@@ -159,6 +159,7 @@
     <ClCompile Include="MaterialDataManager.cpp" />
     <ClCompile Include="Mesh.cpp" />
     <ClCompile Include="MeshManager.cpp" />
+    <ClCompile Include="RenderContextPool.cpp" />
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="SamplerManager.cpp" />
     <ClCompile Include="Scene.cpp" />
@@ -192,6 +193,7 @@
     <ClInclude Include="Mesh.h" />
     <ClInclude Include="MeshManager.h" />
     <ClInclude Include="RenderContext.h" />
+    <ClInclude Include="RenderContextPool.h" />
     <ClInclude Include="Renderer.h" />
     <ClInclude Include="RenderGraph.h" />
     <ClInclude Include="RootSignatureLayout.h" />

@@ -14,6 +14,7 @@
 #include "TextManager.h"
 #include "FontManager.h"
 #include "MaterialDataManager.h"
+#include "RenderContextPool.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -127,6 +128,7 @@ public:
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
+    RenderContextPool* GetRenderContextPool() { return &ctxPool_; }
 
 	float GetFPS() const { return fps_; }
     void SetWireframeMode(bool w) { wireframeMode_ = w; }
@@ -285,4 +287,5 @@ private:
     FontManager fontManager_;
     TextManager textManager_;
     MaterialDataManager materialDataManager_;
+    RenderContextPool ctxPool_;
 };

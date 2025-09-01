@@ -47,8 +47,7 @@ private:
 
     FontAtlas* font_ = nullptr;
     std::shared_ptr<Material> mat_;
-    RenderContext rc_;
-
+    
 	std::vector<Vertex>      verts_;
     std::vector<uint32_t>    idx_;
 

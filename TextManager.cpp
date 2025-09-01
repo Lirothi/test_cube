@@ -197,16 +197,18 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     ibv_.BufferLocation = i.gpu;
     ibv_.Format = DXGI_FORMAT_R32_UINT;
     ibv_.SizeInBytes = ibBytes;
-
-    // t0 — SRV атласа
-    auto tbl = r->StageSrvUavTable({ font_->GetSRVCPU() });
-    rc_.table[0] = tbl.gpu;
 }
 
 void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     if (verts_.empty() || idx_.empty() || font_ == nullptr) {
         return;
     }
+
+    auto h = r->GetRenderContextPool()->Acquire();
+    auto& rc = h.ref();
+
+    auto tbl = r->StageSrvUavTable({ font_->GetSRVCPU() });
+    rc.table[0] = tbl.gpu;
 
     // root constants: viewport.xy, dummy, spread, pxSize
     std::vector<uint32_t> k;
@@ -217,12 +219,12 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     k.push_back(f2u((float)font_->Spread()));
     k.push_back(f2u((float)font_->PxSize()));
     k.push_back(0); k.push_back(0);
-    rc_.constants[1] = std::move(k);
+    rc.constants[1] = std::move(k);
 
     // Самплер (linear clamp)
-    rc_.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
+    rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
 
-    mat_->Bind(cl, rc_);
+    mat_->Bind(cl, rc);
 
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->IASetVertexBuffers(0, 1, &vbv_);
