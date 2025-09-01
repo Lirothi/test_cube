@@ -333,10 +333,6 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
     renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
 
-    //renderer->EndThreadCommandList(d, ctx.batchIndex);
-
-    // те же параметры, что и в твоём коде сейчас
-    const UINT  tileRes = D.shadowRes / 2;
     const float shadowMaxDistance = 300.0f;
     const float zFarShadow = std::min(zFar, shadowMaxDistance);
 
@@ -347,110 +343,104 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[3] = 100.0f;
     cachedSplitsVS_[4] = zFarShadow;
 
-    // расчёт каскадов (оставляю твой текущий блок, укорочен здесь для краткости)
-    for (int c = 0; c < kCascades; ++c)
-    {
-        float sliceNear = cachedSplitsVS_[c], sliceFar = cachedSplitsVS_[c + 1];
-
-        // 8 углов фрустума (твоя функция)
-        std::array<float3, 8> cornersWS;
-        BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
-
-        const float tanH = 1.0f / proj.m._11;
-        const float tanV = 1.0f / proj.m._22;
-
-        float4 cFar = invProj.Transform(float4(1, 1, 1, 1));
-        float3 dirFar = cFar.xyz() / cFar.w;                  // точка на far-плоскости во view
-        float2 tanXY = Abs(float2(dirFar.x, dirFar.y) / std::max(1e-6f, dirFar.z));
-
-        const float halfSlice = 0.5f * (sliceFar - sliceNear);
-        const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
-
-        const float kForward = 0.5f;          // как у тебя сейчас
-        float delta = kForward * halfSlice;
-
-        auto radiusFor = [&](float d) {
-            const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
-            return std::sqrt(rf2);
-            };
-        const float overlap = 2.0f;
-        float radius = radiusFor(delta) + overlap; // +padding
-        radius -= halfSlice;
-
-        const float3 camPos = camera_.GetPosition();
-        float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
-        float spatialStep = radius * 0.1f;
-        center = Floor(center / spatialStep) * spatialStep;
-
-        // view света
-        const float3 up(0, 1, 0);
-        mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
-
-        // AABB по Z + стабилизация XY
-        float2 centerLS = (lightView * float4(center, 1)).xy();
-        float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
-        for (int k = 0; k < 8; ++k) {
-            float3 ls = (lightView * float4(cornersWS[k], 1)).xyz();
-            rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
-            minZ = std::min(minZ, ls.z);
-            maxZ = std::max(maxZ, ls.z);
-        }
-        radius = std::max(radius, rLS);
-
-        float unitsPerTexel = (2.0f * radius) / float(tileRes);
-        centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-        centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-
-        float minX = centerLS.x - radius, maxX = centerLS.x + radius;
-        float minY = centerLS.y - radius, maxY = centerLS.y + radius;
-
-        const float zPad = 25.0f;
-        float nearLS = std::max(0.001f, minZ - zPad);
-        float farLS = maxZ + zPad;
-
-        mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
-
-        const float normalBiasInTexels = 0.75f;
-        const float depthBiasInTexels = 2.0f;
-        cachedNormalBiasWS_[c] = normalBiasInTexels * unitsPerTexel;
-        cachedDepthBiasNDC_[c] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
-
-        const float2 scale = float2(float(tileRes) / float(D.shadowRes));
-        const float2 bias = float2((c % 2) * scale.x, (c / 2) * scale.y);
-        cachedScale_[c] = scale; cachedBias_[c] = bias;
-        cachedLightView_[c] = lightView; cachedLightProj_[c] = lightProj;
-
-#if 0
-        renderer->BindShadowTarget(d.cl, c, /*clear=*/false);
-
-        auto it = buckets.find(ObjectRenderType::OpaqueSimple);
-        if (it != buckets.end())
-        {
-            auto& objects = it->second;
-            for (size_t i = 0; i < objects.size(); ++i) {
-                if (auto* obj = objects[i]) {
-                    obj->RenderShadow(renderer, d.cl, cachedLightView_[c], cachedLightProj_[c]);
-                }
-            }
-        }
-        it = buckets.find(ObjectRenderType::OpaqueComplex);
-        if (it != buckets.end())
-        {
-            auto& objects = it->second;
-            for (size_t i = 0; i < objects.size(); ++i) {
-                if (auto* obj = objects[i]) {
-                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
-                }
-            }
-        }
-#endif
-    }
-    //renderer->EndThreadCommandList(d, ctx.batchIndex);
-#if 1
     size_t batchIndex = ctx.batchIndex;
     auto& tasks = TaskSystem::Get();
-    tasks.Dispatch(kCascades, [this, renderer, &buckets, batchIndex](std::size_t idx)
+    tasks.Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS, batchIndex](std::size_t idx)
         {
+            const auto& D = renderer->GetDeferredForFrame();
+
+            float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
+            const UINT  tileRes = D.shadowRes / 2;
+
+            // 8 углов фрустума (твоя функция)
+            std::array<float3, 8> cornersWS;
+            BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
+
+            const float tanH = 1.0f / proj.m._11;
+            const float tanV = 1.0f / proj.m._22;
+
+            const float halfSlice = 0.5f * (sliceFar - sliceNear);
+            const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
+
+            const float kForward = 1.0f;
+            float delta = kForward * halfSlice;
+
+            auto radiusFor = [&](float d) {
+                const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
+                return std::sqrt(rf2);
+                };
+            const float overlap = 2.0f;
+            float radius = radiusFor(delta) + overlap; // +padding
+            //radius -= halfSlice;
+
+            const float3 camPos = camera_.GetPosition();
+            float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
+            float spatialStep = radius * 0.1f;
+            center = Floor(center / spatialStep) * spatialStep;
+
+            // view света
+            const float3 up(0, 1, 0);
+            mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
+
+            // AABB по Z + стабилизация XY
+            float2 centerLS = (lightView * float4(center, 1)).xy();
+            float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
+            for (int k = 0; k < 8; ++k) {
+                float3 ls = (lightView * float4(cornersWS[k], 1)).xyz();
+                rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
+                minZ = std::min(minZ, ls.z);
+                maxZ = std::max(maxZ, ls.z);
+            }
+            radius = std::min(radius, rLS);
+
+            float unitsPerTexel = (2.0f * radius) / float(tileRes);
+            centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+            centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+
+            float minX = centerLS.x - radius, maxX = centerLS.x + radius;
+            float minY = centerLS.y - radius, maxY = centerLS.y + radius;
+
+            const float zPad = 25.0f;
+            float nearLS = std::max(0.001f, minZ - zPad);
+            float farLS = maxZ + zPad;
+
+            mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+
+            const float normalBiasInTexels = 0.75f;
+            const float depthBiasInTexels = 2.0f;
+            cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
+            cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
+
+            const float2 scale = float2(float(tileRes) / float(D.shadowRes));
+            const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
+            cachedScale_[idx] = scale; cachedBias_[idx] = bias;
+            cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
+
+#if 0
+            renderer->BindShadowTarget(d.cl, c, /*clear=*/false);
+
+            auto it = buckets.find(ObjectRenderType::OpaqueSimple);
+            if (it != buckets.end())
+            {
+                auto& objects = it->second;
+                for (size_t i = 0; i < objects.size(); ++i) {
+                    if (auto* obj = objects[i]) {
+                        obj->RenderShadow(renderer, d.cl, cachedLightView_[c], cachedLightProj_[c]);
+                    }
+                }
+            }
+            it = buckets.find(ObjectRenderType::OpaqueComplex);
+            if (it != buckets.end())
+            {
+                auto& objects = it->second;
+                for (size_t i = 0; i < objects.size(); ++i) {
+                    if (auto* obj = objects[i]) {
+                        obj->RenderShadow(renderer, d.cl, lightView, lightProj);
+                    }
+                }
+            }
+#endif
+
             auto it = buckets.find(ObjectRenderType::OpaqueSimple);
             if (it != buckets.end())
             {
@@ -461,36 +451,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             {
                 RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/8);
             }
-            //auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-            //renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
-
-
-    		//auto it = buckets.find(ObjectRenderType::OpaqueSimple);
-            //if (it != buckets.end())
-            //{
-            //    auto& objects = it->second;
-            //    for (size_t i = 0; i < objects.size(); ++i) {
-            //        if (auto* obj = objects[i]) {
-            //            obj->RenderShadow(renderer, t.cl, cachedLightView_[idx], cachedLightProj_[idx]);
-            //        }
-            //    }
-            //}
-            //it = buckets.find(ObjectRenderType::OpaqueComplex);
-            //if (it != buckets.end())
-            //{
-            //    auto& objects = it->second;
-            //    for (size_t i = 0; i < objects.size(); ++i) {
-            //        if (auto* obj = objects[i]) {
-            //            obj->RenderShadow(renderer, t.cl, cachedLightView_[c], cachedLightProj_[c]);
-            //        }
-            //    }
-            //}
-
-            //renderer->EndThreadCommandList(t, batchIndex);
         }, /*batchSize*/1);
-    //tasks.WaitForAll();
-#endif
-    
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
