@@ -27,19 +27,7 @@ RenderableObject::RenderableObject(
     graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT;
     graphicsDesc_.FillDefaultsTriangle();
 
-    if (CastsShadow())
-    {
-        shadowDesc_ = graphicsDesc_;
-        shadowDesc_.shaderFile = AppendSuffixBeforeExt(graphicsDesc_.shaderFile, L"_csm");
-        shadowDesc_.inputLayoutKey = graphicsDesc_.inputLayoutKey;
-        shadowDesc_.numRT = 0;
-        shadowDesc_.dsvFormat = DXGI_FORMAT_D16_UNORM;
-        shadowDesc_.depth.DepthEnable = TRUE;
-        shadowDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-        shadowDesc_.raster.CullMode = D3D12_CULL_MODE_BACK;
-    }
-
-    mesh_.reset(new Mesh());
+	mesh_.reset(new Mesh());
 }
 
 RenderableObject::~RenderableObject()
@@ -62,6 +50,15 @@ void RenderableObject::Init(Renderer* renderer,
     graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc_);
     if (CastsShadow())
     {
+        shadowDesc_ = graphicsDesc_;
+        shadowDesc_.shaderFile = AppendSuffixBeforeExt(graphicsDesc_.shaderFile, L"_csm");
+        shadowDesc_.inputLayoutKey = graphicsDesc_.inputLayoutKey;
+        shadowDesc_.numRT = 0;
+        shadowDesc_.dsvFormat = DXGI_FORMAT_D16_UNORM;
+        shadowDesc_.depth.DepthEnable = TRUE;
+        shadowDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        shadowDesc_.raster.CullMode = D3D12_CULL_MODE_BACK;
+
         shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc_);
     }
 }

@@ -8,6 +8,30 @@
 #include <atomic>
 #include <cstddef>
 
+struct TaskGroup {
+    struct State {
+        std::atomic<std::size_t> pending{ 0 };
+        std::mutex               m;
+        std::condition_variable  cv;
+    };
+
+    // разделяемое ядро группы — переживёт сам TaskGroup
+    std::shared_ptr<State> state;
+
+    TaskGroup() : state(std::make_shared<State>()) {}
+
+    void Wait() {
+        std::unique_lock<std::mutex> lk(state->m);
+        state->cv.wait(lk, [this]() {
+            return state->pending.load(std::memory_order_acquire) == 0;
+            });
+    }
+
+    bool IsDone() const {
+        return state->pending.load(std::memory_order_acquire) == 0;
+    }
+};
+
 class TaskSystem {
 public:
     using Task = std::function<void()>;
@@ -18,6 +42,32 @@ public:
     // Запуск/остановка пула
     void Start(unsigned threadCount = 0);
     void Stop();
+
+    void Submit(const Task& t, TaskGroup* group);
+    void Submit(Task&& t, TaskGroup* group);
+
+    void Dispatch(std::size_t jobCount,
+        std::function<void(std::size_t)> fn,
+        std::size_t batchSize,
+        TaskGroup* group);
+
+    void WaitGroup(struct TaskGroup* group);
+
+	template<class F>
+    static void ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
+    {
+        TaskGroup g;
+        Get().Dispatch(jobCount, std::forward<F>(fn), batchSize, &g);
+        Get().WaitGroup(&g);
+    }
+
+    template<class F>
+    static void ParallelForNoHelp(std::size_t jobCount, F&& fn, std::size_t batchSize)
+    {
+        TaskGroup g;
+        Get().Dispatch(jobCount, std::forward<F>(fn), batchSize, &g);
+        g.Wait();
+    }
 
     // Постановка задач
     void Submit(const Task& t);

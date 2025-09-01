@@ -223,6 +223,7 @@ void Scene::Render(Renderer* renderer) {
     rg.AddPass("Overlay", { pTone },
         [this, renderer](RenderGraph::PassContext ctx) { Pass_Overlay(renderer, ctx); });
 
+    //rg.ExecuteParallel(renderer, TaskSystem::Get());
     rg.Execute(renderer);
     TaskSystem::Get().WaitForAll();
     renderer->EndFrame();
@@ -327,11 +328,11 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    d.cl->SetName(L"CSM.Driver");
-    renderer->RegisterPassDriver(d.cl, ctx.batchIndex);
+    d.cl->SetName(L"CSM");
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
     renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
+    renderer->EndThreadCommandList(d, ctx.batchIndex);
 
     const float shadowMaxDistance = 300.0f;
     const float zFarShadow = std::min(zFar, shadowMaxDistance);
@@ -417,7 +418,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
 
 #if 0
-            renderer->BindShadowTarget(d.cl, c, /*clear=*/false);
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
 
             auto it = buckets.find(ObjectRenderType::OpaqueSimple);
             if (it != buckets.end())
@@ -425,7 +427,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 auto& objects = it->second;
                 for (size_t i = 0; i < objects.size(); ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->RenderShadow(renderer, d.cl, cachedLightView_[c], cachedLightProj_[c]);
+                        obj->RenderShadow(renderer, t.cl, cachedLightView_[idx], cachedLightProj_[idx]);
                     }
                 }
             }
@@ -435,12 +437,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 auto& objects = it->second;
                 for (size_t i = 0; i < objects.size(); ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->RenderShadow(renderer, d.cl, lightView, lightProj);
+                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
                     }
                 }
             }
+            renderer->EndThreadCommandList(t, batchIndex);
 #endif
-
             auto it = buckets.find(ObjectRenderType::OpaqueSimple);
             if (it != buckets.end())
             {
@@ -449,7 +451,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             it = buckets.find(ObjectRenderType::OpaqueComplex);
             if (it != buckets.end())
             {
-                RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/8);
+                RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/16);
             }
         }, /*batchSize*/1);
 }

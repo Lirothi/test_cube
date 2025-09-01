@@ -4,31 +4,32 @@
 #include <vector>
 #include <queue>
 #include <cassert>
-#include <unordered_set>
 #include "Renderer.h"
-
+#include "TaskSystem.h"
 
 class RenderGraph {
 public:
     struct PassContext {
         Renderer* renderer = nullptr;
-        size_t    batchIndex = (size_t)-1;
-        std::string passName;
+        size_t       batchIndex = (size_t)-1;
+        std::string  passName;
     };
 
     using ExecFn = std::function<void(PassContext)>;
 
-    RenderGraph(size_t submitBatchIndex = (size_t)-1)
-		: submitBatchIndex_(submitBatchIndex) {
-	}
+    explicit RenderGraph(size_t submitBatchIndex = (size_t)-1)
+        : submitBatchIndex_(submitBatchIndex) {
+    }
 
     struct Pass {
-        std::string name;
-        std::vector<size_t> prereqs; // индексы пассов, которые должны быть ДО этого
-        ExecFn exec;
+        std::string           name;
+        std::vector<size_t>   prereqs;   // индексы пассов, которые должны быть ДО этого
+        ExecFn                exec;      // может быть пустым — «барьер/алиас» без работы
     };
 
-    // Добавить пасс, вернуть его индекс — используйте для зависимостей следующих пассов.
+    // плоский узел — используется при параллельном выполнении
+    struct FlatNode { size_t pass; size_t batch; };
+
     size_t AddPass(const std::string& name,
         const std::vector<size_t>& prereqs,
         ExecFn fn) {
@@ -36,29 +37,71 @@ public:
         return passes_.size() - 1;
     }
 
-    // Выполнить: топологическая сортировка (Kahn), без внутренних вейтов.
+    // Однопоточное исполнение «как раньше».
     void Execute(Renderer* renderer) {
         if (renderer == nullptr) {
             return;
         }
+        Unroll(renderer, /*executeInplace=*/true, nullptr);
+    }
+
+    // Построить плоский план (batch уже открыт), без выполнения.
+    std::vector<FlatNode> BuildSchedule(Renderer* renderer) {
+        std::vector<FlatNode> flat;
+        if (renderer == nullptr) {
+            return flat;
+        }
+        Unroll(renderer, /*executeInplace=*/false, &flat);
+        return flat;
+    }
+
+    // Параллельное выполнение: разворачиваем → кидаем в ParallelFor.
+    void ExecuteParallel(Renderer* renderer, TaskSystem& tasks) {
+        auto flat = BuildSchedule(renderer);
+        if (flat.empty()) {
+            return;
+        }
+
+        tasks.ParallelFor(flat.size(), [this, renderer, &flat](size_t i) {
+            const auto& n = flat[i];
+            const auto& p = passes_[n.pass];
+            if (!p.exec) {
+                return;
+            }
+            PassContext ctx;
+            ctx.renderer = renderer;
+            ctx.batchIndex = n.batch;
+            ctx.passName = p.name;
+            p.exec(ctx);
+            }, /*batchSize=*/1);
+    }
+
+    void Clear() {
+        passes_.clear();
+    }
+
+private:
+    // Общая развёртка: строим топологию, для каждого узла (по порядку):
+    // - если executeInplace=true и есть exec → создаём batch (если нужен) и вызываем exec сразу;
+    // - если executeInplace=false и есть exec → создаём batch (если нужен) и кладём FlatNode в outFlat.
+    void Unroll(Renderer* renderer, bool executeInplace, std::vector<FlatNode>* outFlat) {
         const size_t N = passes_.size();
         if (N == 0u) {
             return;
         }
 
-        // посчитаем входящие рёбра
+        // in-degree и список смежности
         std::vector<size_t> indeg(N, 0);
-        std::vector<std::vector<size_t>> out(N);
+        std::vector<std::vector<size_t>> adj(N);
         for (size_t i = 0; i < N; ++i) {
             for (size_t d : passes_[i].prereqs) {
                 if (d < N) {
                     ++indeg[i];
-                    out[d].push_back(i);
+                    adj[d].push_back(i);
                 }
             }
         }
 
-        // очередь «готовых» (in-degree == 0) — стабильно по порядку добавления
         std::queue<size_t> q;
         for (size_t i = 0; i < N; ++i) {
             if (indeg[i] == 0u) {
@@ -66,26 +109,42 @@ public:
             }
         }
 
-        size_t done = 0;
+        if (!executeInplace && outFlat != nullptr) {
+            outFlat->clear();
+            outFlat->reserve(N);
+        }
+
+        size_t produced = 0;
         while (!q.empty()) {
             const size_t u = q.front();
             q.pop();
 
-            // регистрируем бакет под этот пасс
-            const size_t batch = submitBatchIndex_ == (size_t)-1 ? renderer->BeginSubmitBatch(passes_[u].name) : submitBatchIndex_;
+            const auto& pass = passes_[u];
 
-            // исполняем лямбду
-            if (passes_[u].exec) {
-                PassContext ctx;
-                ctx.renderer = renderer;
-                ctx.batchIndex = batch;
-                ctx.passName = passes_[u].name;
-                passes_[u].exec(ctx);
+            // только если у пасса есть работа — создаём/берём batch
+            if (pass.exec) {
+                const size_t batch =
+                    (submitBatchIndex_ == (size_t)-1)
+                    ? renderer->BeginSubmitBatch(pass.name)
+                    : submitBatchIndex_;
+
+                if (executeInplace) {
+                    PassContext ctx;
+                    ctx.renderer = renderer;
+                    ctx.batchIndex = batch;
+                    ctx.passName = pass.name;
+                    pass.exec(ctx);
+                }
+                else {
+                    if (outFlat != nullptr) {
+                        outFlat->push_back(FlatNode{ u, batch });
+                    }
+                }
             }
-            ++done;
 
-            // раскрываем зависящие
-            for (size_t v : out[u]) {
+            ++produced;
+
+            for (size_t v : adj[u]) {
                 if (v < N) {
                     if (indeg[v] > 0u) {
                         --indeg[v];
@@ -97,17 +156,12 @@ public:
             }
         }
 
-        // если цикл — лучше упасть ассершкой (в дебаге)
-        if (done != N) {
+        if (produced != N) {
             assert(false && "RenderGraph has a cycle!");
         }
     }
 
-    void Clear() {
-        passes_.clear();
-    }
-
 private:
     std::vector<Pass> passes_;
-	size_t submitBatchIndex_ = (size_t)-1;
+    size_t submitBatchIndex_ = (size_t)-1; // «родительский» batch; если -1 — открываем сами
 };
