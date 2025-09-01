@@ -28,11 +28,11 @@ public:
 
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) override;
+    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override;
     void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj) override;
+    void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData) override;
 
 private:
     // данные инстансинга
@@ -43,7 +43,6 @@ private:
 
     // compute
     std::shared_ptr<Material> computeMaterial_;
-    RenderContext computeCtx_;
     std::wstring computeShader_;
 
     // модель/текстура

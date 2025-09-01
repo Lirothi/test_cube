@@ -32,17 +32,17 @@ void Skybox::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
-void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj)
+void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     // CB0: ожидаем имена "view" и "proj" в cbuffer'е (см. skybox.hlsl)
-    UpdateUniform("view", view.xm());
-    UpdateUniform("proj", proj.xm());
+    UpdateUniform("view", view, cbData);
+    UpdateUniform("proj", proj, cbData);
 }
 
-void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/)
+void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
-    graphicsCtx_.table[0] = cube_.GetSRVForFrame(renderer);
-    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, SamplerManager::LinearClamp());
+    ctx.table[0] = cube_.GetSRVForFrame(renderer);
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, SamplerManager::LinearClamp());
 }
 
 void Skybox::BuildCubeMesh_(Renderer* r,

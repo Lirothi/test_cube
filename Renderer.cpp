@@ -1108,25 +1108,26 @@ void Renderer::BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) 
 void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth)
 {
     auto& D = deferred_[currentFrameIndex_];
-    //Transition(cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     // один DSV на весь атлас
     cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);
 
-    const float tile = float(D.shadowRes) * 0.5f; // 2048
-    // раскладка: 0:(0,0)  1:(2048,0)  2:(0,2048)
-    float topLeftX = 0.0f;
-    float topLeftY = 0.0f;
-    if (cascadeIndex == 1) { topLeftX = tile; topLeftY = 0.0f; }
-    if (cascadeIndex == 2) { topLeftX = 0.0f; topLeftY = tile; }
-    if (cascadeIndex == 3) { topLeftX = tile; topLeftY = tile; }
+    if (!clearDepth)
+    {
+	    const float tile = float(D.shadowRes) * 0.5f; // 2048
+    	// раскладка: 0:(0,0)  1:(2048,0)  2:(0,2048)
+    	float topLeftX = 0.0f;
+    	float topLeftY = 0.0f;
+    	if (cascadeIndex == 1) { topLeftX = tile; topLeftY = 0.0f; }
+    	if (cascadeIndex == 2) { topLeftX = 0.0f; topLeftY = tile; }
+    	if (cascadeIndex == 3) { topLeftX = tile; topLeftY = tile; }
 
-    D3D12_VIEWPORT vp{ topLeftX, topLeftY, tile, tile, 0.0f, 1.0f };
-    D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + tile), (LONG)(topLeftY + tile) };
-    cl->RSSetViewports(1, &vp);
-    cl->RSSetScissorRects(1, &sc);
-
-    if (clearDepth)
+    	D3D12_VIEWPORT vp{ topLeftX, topLeftY, tile, tile, 0.0f, 1.0f };
+    	D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + tile), (LONG)(topLeftY + tile) };
+    	cl->RSSetViewports(1, &vp);
+    	cl->RSSetScissorRects(1, &sc);
+    }
+	else
     {
         cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }

@@ -52,26 +52,26 @@ void GpuInstancedModels::Init(Renderer* renderer,
     // Регистрируем текущее состояние (после Create — UAV)
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    modelMatrix_ = mat4::Translation({0.0f, 5.0f, 10.0f});
+    modelMatrix_ = mat4::Translation({0.0f, 6.0f, 10.0f});
 }
 
 void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
     // Переход в UAV (если нужно)
     renderer->Transition(cl, instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
+    RenderContext ctx;
     // constants(b0) для CS
     uint32_t dtBits = 0, angBits = 0;
     memcpy(&dtBits, &deltaTime_, sizeof(float));
     memcpy(&angBits, &angularSpeed_, sizeof(float));
-    computeCtx_.constants[0] = { dtBits, angBits, instanceCount_ };
+    ctx.constants[0] = { dtBits, angBits, instanceCount_ };
 
     // таблица UAV/SRV для CS: u0 = instanceBuffer UAV
     auto uavTbl = renderer->StageSrvUavTable({ instanceBuffer_.GetUAVCPU() });
-    computeCtx_.table[0] = uavTbl.gpu;
+    ctx.table[0] = uavTbl.gpu;
 
     // Запуск CS
-    computeMaterial_->Bind(cl, computeCtx_);
+    computeMaterial_->Bind(cl, ctx);
     constexpr UINT THREADS_PER_GROUP = 64;
     const UINT groups = (instanceCount_ + THREADS_PER_GROUP - 1u) / THREADS_PER_GROUP;
     cl->Dispatch(groups, 1, 1);
@@ -79,7 +79,7 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
     renderer->UAVBarrier(cl, instanceBuffer_.GetResource());
 }
 
-void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
     srvs.reserve(4);
@@ -87,28 +87,28 @@ void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsComma
     if (matData_) { matData_->AppendGBufferSRVs(srvs); } // t1..t3: albedo/mr/normal
 
     auto tbl = renderer->StageSrvUavTable(srvs);
-    graphicsCtx_.table[0] = tbl.gpu;
+    ctx.table[0] = tbl.gpu;
 
     auto aniso = SamplerManager::AnisoWrap(16);
-    graphicsCtx_.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
 }
 
-void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
 
-	RenderableObject::RecordGraphics(renderer, cl);
+	RenderableObject::RecordGraphics(renderer, cl, ctx);
 }
 
-void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj)
+void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
-    UpdateUniform("world", modelMatrix_.xm());
-    UpdateUniform("view", view.xm());
-    UpdateUniform("proj", proj.xm());
+    UpdateUniform("world", modelMatrix_, cbData);
+    UpdateUniform("view", view, cbData);
+    UpdateUniform("proj", proj, cbData);
 
-    ApplyMaterialParamsToCB();
+    ApplyMaterialParamsToCB(cbData);
 }
 
 void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -118,14 +118,14 @@ void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList
     mesh_->DrawInstanced(cl, instanceCount_);
 }
 
-void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj)
+void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData)
 {
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
-    shadowCtx_.table[0] = instanceBuffer_.GetSRVForFrame(renderer);
+    ctx.table[0] = instanceBuffer_.GetSRVForFrame(renderer);
 
-    RenderableObject::RecordShadow(renderer, cl, lightView, lightProj);
+    RenderableObject::RecordShadow(renderer, cl, lightView, lightProj, ctx, cbData);
 }
 
 void GpuInstancedModels::Tick(float deltaTime)

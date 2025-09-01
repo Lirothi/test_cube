@@ -60,24 +60,23 @@ public:
 
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
-	virtual void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) {}
-    virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
-    virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+	virtual void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) {}
+    virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) {}
+    virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
-    
-    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
+    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);
 
     // Утилита записи в CB по имени из layout (b0)
-    template<typename T> bool UpdateUniform(const std::string& name, const T& value) {
-        if (!cbvDataBegin_) { return false; }
+    template<typename T> bool UpdateUniform(const std::string& name, const T& value, uint8_t* cbData) {
+        if (!cbData) { return false; }
         if (cbLayout_)
         {
-	        return cbLayout_->SetField<T>(name, value, cbvDataBegin_);
+	        return cbLayout_->SetField<T>(name, value, cbData);
         }
-        return graphicsMaterial_->UpdateCB0Field(name, value, cbvDataBegin_);
+        return graphicsMaterial_->UpdateCB0Field(name, value, cbData);
     }
 
-    void ApplyMaterialParamsToCB();
+    void ApplyMaterialParamsToCB(uint8_t* cbData);
 
 protected:
     // Данные рендера
@@ -85,18 +84,15 @@ protected:
     MaterialParams                matParams_;        // пер-объект в b0
     std::shared_ptr<Material>     graphicsMaterial_; // вариант шейдера (PSO/RS)
     Material::GraphicsDesc        graphicsDesc_;
-    RenderContext                 graphicsCtx_;
     std::string                   matPreset_;
     std::shared_ptr<Material>     shadowMaterial_;
     Material::GraphicsDesc        shadowDesc_;
-    RenderContext                 shadowCtx_;
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
 
     // CB (upload, пер-объектный)
     const ConstantBufferLayout* cbLayout_ = nullptr;
-    uint8_t* cbvDataBegin_ = nullptr;
 
     bool allowWireframe_ = true;
 

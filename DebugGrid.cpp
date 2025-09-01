@@ -73,10 +73,10 @@ public:
         um.StealKeepAlive(uploadKeepAlive);
     }
 
-    void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj) override
+    void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateUniform("modelViewProj", mvp.xm());
+        UpdateUniform("modelViewProj", mvp, cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
@@ -181,14 +181,14 @@ public:
         um.StealKeepAlive(uploadKeepAlive);
     }
 
-    void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj) override
+    void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateUniform("modelViewProj", mvp.xm());
+        UpdateUniform("modelViewProj", mvp, cbData);
 
         const UINT w = r->GetWidth();
         const UINT h = r->GetHeight();
-        UpdateUniform("viewportThickness", XMFLOAT4(float(w), float(h), thicknessPx_, 0.0f));
+        UpdateUniform("viewportThickness", float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override

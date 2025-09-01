@@ -49,18 +49,18 @@ public:
     float GetRotationY() const { return rotationY_; }
     void SetRotationY(float angle) { rotationY_ = angle; }
 
-    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl) override
+    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override
     {
-        matData_->StageGBufferBindings(renderer, graphicsCtx_, 0, 0);
+        matData_->StageGBufferBindings(renderer, ctx, 0, 0);
     }
 
-    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj) override
+    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
-        UpdateUniform("world", modelMatrix_.xm());
-        UpdateUniform("view", view.xm());
-        UpdateUniform("proj", proj.xm());
+        UpdateUniform("world", modelMatrix_, cbData);
+        UpdateUniform("view", view, cbData);
+        UpdateUniform("proj", proj, cbData);
 
-        ApplyMaterialParamsToCB();
+        ApplyMaterialParamsToCB(cbData);
     }
 
     bool IsSimpleRender() const { return true; }

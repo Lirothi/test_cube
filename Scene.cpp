@@ -35,24 +35,6 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     }
 }
 
-// стабилизация проекции по размеру текселя (убирает shimmering)
-static void StabilizeOrthoBounds(float3& minLS, float3& maxLS, float unitsPerTexel)
-{
-    // округляем min к сетке и расширяем max так, чтобы размер кратно шагу
-    float2 sizeXY = float2(maxLS.x - minLS.x, maxLS.y - minLS.y);
-    float2 minXY = float2(
-        floor(minLS.x / unitsPerTexel) * unitsPerTexel,
-        floor(minLS.y / unitsPerTexel) * unitsPerTexel);
-    float2 snapsz = float2(
-        ceil(sizeXY.x / unitsPerTexel) * unitsPerTexel,
-        ceil(sizeXY.y / unitsPerTexel) * unitsPerTexel);
-
-    minLS.x = minXY.x; minLS.y = minXY.y;
-    maxLS.x = minXY.x + snapsz.x;
-    maxLS.y = minXY.y + snapsz.y;
-    // z оставляем как есть — паддинг добавим отдельно
-}
-
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     for (auto& obj : objects_)
@@ -377,6 +359,10 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         const float tanH = 1.0f / proj.m._11;
         const float tanV = 1.0f / proj.m._22;
 
+        float4 cFar = invProj.Transform(float4(1, 1, 1, 1));
+        float3 dirFar = cFar.xyz() / cFar.w;                  // точка на far-плоскости во view
+        float2 tanXY = Abs(float2(dirFar.x, dirFar.y) / std::max(1e-6f, dirFar.z));
+
         const float halfSlice = 0.5f * (sliceFar - sliceNear);
         const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
 
@@ -384,10 +370,11 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         float delta = kForward * halfSlice;
 
         auto radiusFor = [&](float d) {
-            const float rf2 = farCoef + (halfSlice + d) * (halfSlice + d);
+            const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
             return std::sqrt(rf2);
             };
-        float radius = radiusFor(delta) + 1.0f; // +padding
+        const float overlap = 2.0f;
+        float radius = radiusFor(delta) + overlap; // +padding
         radius -= halfSlice;
 
         const float3 camPos = camera_.GetPosition();
@@ -408,6 +395,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             minZ = std::min(minZ, ls.z);
             maxZ = std::max(maxZ, ls.z);
         }
+        radius = std::max(radius, rLS);
+
         float unitsPerTexel = (2.0f * radius) / float(tileRes);
         centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
         centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
@@ -431,6 +420,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         cachedScale_[c] = scale; cachedBias_[c] = bias;
         cachedLightView_[c] = lightView; cachedLightProj_[c] = lightProj;
 
+#if 0
         renderer->BindShadowTarget(d.cl, c, /*clear=*/false);
 
         auto it = buckets.find(ObjectRenderType::OpaqueSimple);
@@ -453,37 +443,38 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 }
             }
         }
+#endif
     }
     //renderer->EndThreadCommandList(d, ctx.batchIndex);
-
-#if 0
+#if 1
     size_t batchIndex = ctx.batchIndex;
     auto& tasks = TaskSystem::Get();
-    tasks.Dispatch(2, [this, renderer, &buckets, batchIndex](std::size_t idx)
+    tasks.Dispatch(kCascades, [this, renderer, &buckets, batchIndex](std::size_t idx)
         {
-            //auto it = buckets.find(ObjectRenderType::OpaqueSimple);
-            //if (it != buckets.end())
-            //{
-            //    RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
-            //}
-            //it = buckets.find(ObjectRenderType::OpaqueComplex);
-            //if (it != buckets.end())
-            //{
-            //    RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[c], cachedLightProj_[c], (UINT)c, /*chunk*/8);
-            //}
-            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-            renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
-
             auto it = buckets.find(ObjectRenderType::OpaqueSimple);
             if (it != buckets.end())
             {
-                auto& objects = it->second;
-                for (size_t i = 0; i < objects.size(); ++i) {
-                    if (auto* obj = objects[i]) {
-                        obj->RenderShadow(renderer, t.cl, cachedLightView_[idx], cachedLightProj_[idx]);
-                    }
-                }
+                RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/16);
             }
+            it = buckets.find(ObjectRenderType::OpaqueComplex);
+            if (it != buckets.end())
+            {
+                RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/8);
+            }
+            //auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            //renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
+
+
+    		//auto it = buckets.find(ObjectRenderType::OpaqueSimple);
+            //if (it != buckets.end())
+            //{
+            //    auto& objects = it->second;
+            //    for (size_t i = 0; i < objects.size(); ++i) {
+            //        if (auto* obj = objects[i]) {
+            //            obj->RenderShadow(renderer, t.cl, cachedLightView_[idx], cachedLightProj_[idx]);
+            //        }
+            //    }
+            //}
             //it = buckets.find(ObjectRenderType::OpaqueComplex);
             //if (it != buckets.end())
             //{
@@ -495,9 +486,9 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             //    }
             //}
 
-            renderer->EndThreadCommandList(t, batchIndex);
+            //renderer->EndThreadCommandList(t, batchIndex);
         }, /*batchSize*/1);
-    tasks.WaitForAll();
+    //tasks.WaitForAll();
 #endif
     
 }

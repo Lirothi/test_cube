@@ -74,12 +74,12 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
     GetMesh()->Draw(cl);
 }
 
-void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
     // Установить графический материал
-    graphicsMaterial_->Bind(cl, graphicsCtx_, renderer->GetWireframeMode() && allowWireframe_);
+    graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
 void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj)
@@ -93,37 +93,32 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         cbSizeBytes = cbLayout_->GetSize();
     }
 
-    if (cbSizeBytes == 0) {
-        cbSizeBytes = graphicsMaterial_->GetCBSizeBytes(0);
-    }
-    // страховка: минимум 256 байт
     constexpr UINT kAlign = 256;
-    if (cbSizeBytes == 0)
-    {
-	    cbSizeBytes = kAlign;
+    if (cbSizeBytes == 0) {
+        cbSizeBytes = graphicsMaterial_->GetCBSizeBytesAligned(0, kAlign);
     }
-    const UINT cbSizeAligned = (cbSizeBytes + (kAlign - 1)) & ~(kAlign - 1);
-
+    
     // 2) выделить слайс в ринг-буфере кадра и прописать CBV
-    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeAligned, kAlign); // <- как просили
-    cbvDataBegin_ = static_cast<uint8_t*>(alloc.cpu);
-    graphicsCtx_.cbv[0] = alloc.gpu;
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign); // <- как просили
+    uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+    RenderContext gfxCtx;
+    gfxCtx.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);
-    UpdateUniforms(renderer, view, proj);
-    PopulateContext(renderer, cl);
-    RecordGraphics(renderer, cl);
+    UpdateUniforms(renderer, view, proj, cbData);
+    PopulateContext(renderer, cl, gfxCtx);
+    RecordGraphics(renderer, cl, gfxCtx);
     
     IssueDraw(renderer, cl);
 }
 
-void RenderableObject::ApplyMaterialParamsToCB()
+void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
-    UpdateUniform("baseColor", p.baseColor.xm());
-    UpdateUniform("metalRough", p.metalRough.xm());
-    UpdateUniform("texOffsScale", p.texOffsScale.xm());
-    UpdateUniform("texFlags", p.texFlags.xm());
+    UpdateUniform("baseColor", p.baseColor, cbData);
+    UpdateUniform("metalRough", p.metalRough, cbData);
+    UpdateUniform("texOffsScale", p.texOffsScale, cbData);
+    UpdateUniform("texFlags", p.texFlags, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -135,23 +130,16 @@ std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
 }
 
 void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj)
+    const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData)
 {
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
 
-    // per-object CB для shadowMaterial (b0)
-    UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, 256);
-
-    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, 256);
-    uint8_t* cb = static_cast<uint8_t*>(alloc.cpu);
-
     // world/view/proj — именами, как ожидает _csm шейдер
-    shadowMaterial_->UpdateCB0Field("world", GetModelMatrix(), cb);
-    shadowMaterial_->UpdateCB0Field("view", lightView, cb);
-    shadowMaterial_->UpdateCB0Field("proj", lightProj, cb);
+    shadowMaterial_->UpdateCB0Field("world", GetModelMatrix(), cbData);
+    shadowMaterial_->UpdateCB0Field("view", lightView, cbData);
+    shadowMaterial_->UpdateCB0Field("proj", lightProj, cbData);
 
-    shadowCtx_.cbv[0] = alloc.gpu;
-    shadowMaterial_->Bind(cl, shadowCtx_, false);
+    shadowMaterial_->Bind(cl, ctx, false);
 }
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -162,6 +150,12 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
         return;
     }
 
-    RecordShadow(renderer, cl, lightView, lightProj);
+    UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, 256);
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, 256);
+    uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+    RenderContext shadowCtx;
+    shadowCtx.cbv[0] = alloc.gpu;
+
+    RecordShadow(renderer, cl, lightView, lightProj, shadowCtx, cbData);
     IssueDraw(renderer, cl);
 }
