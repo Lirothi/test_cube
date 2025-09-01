@@ -254,30 +254,22 @@
     </Text>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="shaders\skybox.hlsl">
-      <FileType>Document</FileType>
-    </Text>
-  </ItemGroup>
-  <ItemGroup>
     <Text Include="shaders\blur_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
-    <Text Include="shaders\ssr_ps.hlsl">
-      <FileType>Document</FileType>
-    </Text>
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="shaders\gbuffer_csm.hlsl">
-      <FileType>Document</FileType>
-    </Text>
-  </ItemGroup>
-  <ItemGroup>
     <Text Include="shaders\debug_texture.hlsl">
       <FileType>Document</FileType>
     </Text>
-  </ItemGroup>
-  <ItemGroup>
+    <Text Include="shaders\gbuffer_csm.hlsl">
+      <FileType>Document</FileType>
+    </Text>
     <Text Include="shaders\gbuffer_inst_csm.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\skybox.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\ssr_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>

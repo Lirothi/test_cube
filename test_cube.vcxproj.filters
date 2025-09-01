@@ -93,6 +93,15 @@
     <ClCompile Include="RenderableObjectBase.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RenderContextPool.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Skybox.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TextureCube.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CBManager.h">
@@ -194,6 +203,15 @@
     <ClInclude Include="RenderableObjectBase.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RenderContextPool.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Skybox.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureCube.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="shaders\axes.hlsl">
@@ -236,6 +254,24 @@
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\utils.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\blur_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\debug_texture.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\gbuffer_csm.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\gbuffer_inst_csm.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\skybox.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ssr_ps.hlsl">
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>
