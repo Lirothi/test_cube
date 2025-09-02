@@ -13,6 +13,7 @@
 #include "StaticMesh.h"
 #include "TaskSystem.h"
 #include "TextManager.h"
+#include "Profiler.h"
 
 static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     float zNearVS, float zFarVS, std::array<float3, 8>& outCornersWS)
@@ -39,7 +40,7 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     }
 }
 
-class RotatingObject : public RenderableObject {
+class RotatingObject : public StaticMesh {
 public:
     RotatingObject(
         const std::string& modelName,
@@ -49,28 +50,10 @@ public:
         float3 pos,
         float3 scale,
         float angSpeed = 10.0f * DEG2RAD)
-        :RenderableObject(matPreset, inputLayout, graphicsShader), angularSpeed_(angSpeed)
+        :StaticMesh(modelName, matPreset, inputLayout, graphicsShader), angularSpeed_(angSpeed)
     {
-        transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
-        transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
-        modelName_ = modelName;
-    }
-
-    void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
-    {
-        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
-        if (!modelName_.empty())
-        {
-            mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
-        }
-        else
-        {
-            std::vector<VertexPNTUV> cubeVerts;
-            std::vector<uint32_t> cubeIndices;
-            BuildCubeCW(cubeVerts, cubeIndices);
-
-            GetMesh()->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, cubeVerts, cubeIndices.data(), (UINT)cubeIndices.size(), true);
-        }
+        SetPosition(pos);
+        SetScale(scale);
     }
 
     void Tick(float deltaTime) override {
@@ -79,32 +62,15 @@ public:
             rotationY_ -= XM_2PI;
         }
 
-        SetModelMatrix(transformScale_ * Math::mat4::RotationY(rotationY_) * transformPos_);
-        //matParams_.texOffsScale.x += deltaTime * 1.0f;
-        //matParams_.texOffsScale.y += deltaTime * 1.0f;
+        SetRotationEulerRad({ 0.0f, rotationY_, 0.0f });
     }
 
     float GetRotationY() const { return rotationY_; }
     void SetRotationY(float angle) { rotationY_ = angle; }
 
-    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
-    {
-        UpdateUniform("world", modelMatrix_, cbData);
-        UpdateUniform("view", view, cbData);
-        UpdateUniform("proj", proj, cbData);
-
-        ApplyMaterialParamsToCB(cbData);
-    }
-
-    bool IsSimpleRender() const { return true; }
-    bool CastsShadow() const override { return true; }
-
 private:
-    Math::mat4 transformPos_;
-    Math::mat4 transformScale_;
     float rotationY_ = 0.0f;
     float angularSpeed_ = 10.0f * Math::DEG2RAD;
-    std::string modelName_;
 };
 
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
@@ -178,9 +144,9 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     pointLights_.emplace_back(); pointLights_.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
     pointLights_.emplace_back(); pointLights_.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
 
-    dirLight_ = { float3(-0.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
-    dirLight_.exposure *= 0.2f;
-    dirLight_.ambient *= 0.2f;
+    dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
+    //dirLight_.exposure *= 0.2f;
+    //dirLight_.ambient *= 0.2f;
 
     {
         auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
@@ -198,11 +164,11 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     {
         auto floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
-        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 10.0f, 10.0f);
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
         floor->SetPosition(float3(0.0f, -0.5f, 0.0f));
-        floor->SetScale(float3(20.0f, 1.0f, 20.0f));
+        floor->SetScale(float3(40.0f, 1.0f, 40.0f));
         AddObject(std::move(floor));
-
+            
         floor = std::make_unique<StaticMesh>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);
         floor->MaterialParamsRef().texFlags.w = 0.01f;
@@ -211,12 +177,27 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         AddObject(std::move(floor));
     }
 
+    {
+        int width = 10;
+        int height = 5;
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                auto sphere = std::make_unique<StaticMesh>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+                sphere->MaterialParamsRef().SetUseMR(false);
+                sphere->MaterialParamsRef().metalRough = float2((float)y / (height - 1), (float)x / (width - 1));
+                sphere->SetPosition(float3((float)x + x * (0.2f), (float)y + y *(0.2f) + 1.0f, -(float)x + x * (0.2f) -12.0f));
+                AddObject(std::move(sphere));
+            }
+        }
+    }
+
     AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
 
     AddObject(std::make_unique<DebugGrid>(100.0f));
 
     camera_.SetPosition({ 0.f, 1.f, -10.f });
-
 
     for (auto& obj : pointLights_)
     {
@@ -234,6 +215,8 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 }
 
 void Scene::Tick(float deltaTime) {
+    CPU_SCOPE("Scene::Tick");
+
     if (input_ != nullptr && actions_ != nullptr)
     {
         camera_.UpdateFromActions(*input_, *actions_, deltaTime);
@@ -242,22 +225,28 @@ void Scene::Tick(float deltaTime) {
         {
             debugTexMode_ = !debugTexMode_;
         }
+        if (actions_->WasActionPressed("ToggleProfiler", *input_))
+        {
+            showProfiler_ = !showProfiler_;
+        }
     }
     auto& tasks = TaskSystem::Get();
 
+    size_t batchSize = 16;
     tasks.Dispatch(objects_.size(),
         [this, deltaTime](size_t index) {
             if (index >= objects_.size()) {
                 return;
 			}
             objects_[index]->Tick(deltaTime);
-		}, 1);
+		}, batchSize);
 
 	tasks.WaitForAll();
 }
 
 void Scene::Render(Renderer* renderer) {
     if (!renderer) return;
+    CPU_SCOPE("Scene::Render");
 
     if (actions_->WasActionPressed("Wireframe", *input_)) {
         renderer->SetWireframeMode(!renderer->GetWireframeMode());
@@ -265,7 +254,7 @@ void Scene::Render(Renderer* renderer) {
 
     auto* tb = renderer->GetTextManager();
     tb->Begin(renderer->GetWidth(), renderer->GetHeight(), 1.0f);
-    tb->AddTextf(8, 8, TextManager::RGBA(1, 1, 1, 0.5f), 32.0f, "FPS:%.0f", renderer->GetFPS());
+    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, "FPS:%.0f", renderer->GetFPS());
 
     renderer->BeginFrame();
     renderer->BeginSubmitTimeline();
@@ -365,7 +354,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
-    const size_t chunkSize = 8;
+    const size_t chunkSize = 64;
 
     tasks.Dispatch((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
@@ -544,12 +533,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         auto it = buckets.find(ObjectRenderType::OpaqueSimple);
         if (it != buckets.end())
         {
-            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/16);
+            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
         it = buckets.find(ObjectRenderType::OpaqueComplex);
         if (it != buckets.end())
         {
-            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/16);
+            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
     }, 1, ctx.group);
 }
@@ -940,6 +929,10 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
         renderer->RecordBindDefaultsNoClear(t.cl);
+        if (showProfiler_)
+        {
+            Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/16);
+        }
         tm->Build(renderer, t.cl);
         tm->Draw(renderer, t.cl);
         renderer->EndThreadCommandList(t, ctx.batchIndex);

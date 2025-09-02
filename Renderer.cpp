@@ -5,6 +5,7 @@
 #pragma comment(lib, "dxguid.lib")
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
 #include <mimalloc.h>
+#include "Profiler.h"
 
 Renderer::Renderer()
 {
@@ -332,7 +333,7 @@ void Renderer::BeginFrame() {
     WaitForFrame(currentFrameIndex_);
 
     ++totalFrameNumber_;
-
+    
     // Сброс кадровых пулов
     auto& fr = frameResources_[currentFrameIndex_];
     fr->ResetCommandAllocators(device_.Get());
@@ -402,8 +403,9 @@ void Renderer::Tick(float dt)
     }
 }
 
-Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type,
-    ID3D12PipelineState* pso) {
+Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
+{
+    CPU_SCOPE("Renderer::BeginThreadCommandList");
     auto& fr = frameResources_[currentFrameIndex_];
     ID3D12CommandAllocator* alloc = fr->AcquireCommandAllocator(device_.Get(), type);
     ID3D12GraphicsCommandList* cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
@@ -473,6 +475,8 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 }
 
 void Renderer::ExecuteTimelineAndPresent() {
+    CPU_SCOPE("Renderer::ExecuteTimelineAndPresent");
+
     std::vector<ID3D12CommandList*> lists;
 
     // собрать по порядку батчей
@@ -682,6 +686,8 @@ D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
     if (!cl || !res) return;
+    CPU_SCOPE("Renderer::Transition");
+
     ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
 
     D3D12_RESOURCE_STATES before;

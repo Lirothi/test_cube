@@ -93,6 +93,7 @@ private:
     Camera camera_;
 
     bool debugTexMode_ = false;
+    bool showProfiler_ = false;
 
     struct DirectionalLight
     {

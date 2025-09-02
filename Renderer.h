@@ -117,6 +117,7 @@ public:
     FrameResource* GetFrameResource() { return frameResources_[currentFrameIndex_].get(); }
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
+    uint64_t GetTotalFrameNumber() const { return totalFrameNumber_; }
 
     void InitTextSystem(ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, const std::wstring& folder);
 

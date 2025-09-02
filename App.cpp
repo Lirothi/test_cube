@@ -1,5 +1,5 @@
 #include "App.h"
-#include "Math.h"
+#include "Profiler.h"
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -139,9 +139,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         
 		deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
+        Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber() + 1); //will be increased in Renderer::BeginFrame
+
 		renderer_.Tick(deltaTime);
         scene_.Tick(deltaTime);
         scene_.Render(&renderer_);
+
+        Profiler::Get().EndFrame();
     }
 
     scene_.Clear();

@@ -24,7 +24,7 @@ public:
     float3 GetScale() const { return scale_; }
     const mat4& GetOrientationMatrix() const { return rot_; }
 
-bool IsSimpleRender() const { return true; }
+    bool IsSimpleRender() const { return true; }
     bool CastsShadow() const override { return true; }
 
 private:

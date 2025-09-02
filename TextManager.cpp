@@ -61,15 +61,10 @@ static std::wstring UTF8toW(const std::string& s) {
     return w;
 }
 
-void TextManager::AddText(int x, int y, uint32_t rgba, float px, const std::string& utf8) {
+void TextManager::AddText(int x, int y, const float4& color, float px, const std::string& utf8) {
     if (font_ == nullptr) {
         return;
     }
-
-    const float r = ((rgba >> 24) & 0xFF) / 255.f;
-    const float g = ((rgba >> 16) & 0xFF) / 255.f;
-    const float b = ((rgba >> 8) & 0xFF) / 255.f;
-    const float a = (rgba & 0xFF) / 255.f;
 
     const float scale = px / float(font_->PxSize());
     float       penX = float(x);
@@ -131,10 +126,10 @@ void TextManager::AddText(int x, int y, uint32_t rgba, float px, const std::stri
         const float gh = float(gph->h) * scale;
 
         const uint32_t base = (uint32_t)verts_.size();
-        verts_.push_back({ gx,      gy,      0, r,g,b,a, gph->u0, gph->v0 });
-        verts_.push_back({ gx + gw, gy,      0, r,g,b,a, gph->u1, gph->v0 });
-        verts_.push_back({ gx + gw, gy + gh, 0, r,g,b,a, gph->u1, gph->v1 });
-        verts_.push_back({ gx,      gy + gh, 0, r,g,b,a, gph->u0, gph->v1 });
+        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
+        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
+        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
+        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
 
         idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
         idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
@@ -144,7 +139,7 @@ void TextManager::AddText(int x, int y, uint32_t rgba, float px, const std::stri
     }
 }
 
-void TextManager::AddTextf(int x, int y, uint32_t rgba, float px, const char* fmt, ...) {
+void TextManager::AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...) {
     if (fmt == nullptr) {
         return;
     }
@@ -153,20 +148,7 @@ void TextManager::AddTextf(int x, int y, uint32_t rgba, float px, const char* fm
     std::string s = VFormat_(fmt, args);
     va_end(args);
     if (!s.empty()) {
-        AddText(x, y, rgba, px, s);
-    }
-}
-
-void TextManager::AddTextf(int x, int y, float r, float g, float b, float a, float px, const char* fmt, ...) {
-    if (fmt == nullptr) {
-        return;
-    }
-    va_list args;
-    va_start(args, fmt);
-    std::string s = VFormat_(fmt, args);
-    va_end(args);
-    if (!s.empty()) {
-        AddText(x, y, RGBA(r, g, b, a), px, s);
+        AddText(x, y, color, px, s);
     }
 }
 

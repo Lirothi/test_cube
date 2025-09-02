@@ -52,7 +52,7 @@ void GpuInstancedModels::Init(Renderer* renderer,
     // Регистрируем текущее состояние (после Create — UAV)
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    modelMatrix_ = mat4::Translation({0.0f, 6.0f, 10.0f});
+    modelMatrix_ = mat4::RotationY(45.0f * DEG2RAD) * mat4::Translation({0.0f, 6.0f, 10.0f});
 }
 
 void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
