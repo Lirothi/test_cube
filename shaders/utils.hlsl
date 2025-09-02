@@ -5,6 +5,11 @@
 
 // ================== constants ==================
 static const float kEpsilon = 1e-6;
+static const float kPi = 3.14159265359;
+static const float kInvPi = 1.0 / kPi;
+static const float kMinRoughness = 0.03;
+static const float kMinAlpha = kMinRoughness * kMinRoughness;
+static const float3 kF0Dielectric = float3(0.04, 0.04, 0.04); // IOR~1.5 для диэлектриков
 
 // ============ normalize helpers ============
 inline float3 NormalizeSafe(float3 v, float3 fallback)
@@ -29,6 +34,20 @@ inline float4 TransformPositionH(float3 p, float4x4 world, float4x4 view, float4
 inline float3 TransformDirectionWS(float3 n, float3x3 world3x3)
 {
     return mul(n, world3x3);
+}
+
+float2 UVtoNDC(float2 uv)
+{
+    return uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
+}
+
+float3 ReconstructPosWS(float2 uv, float depth, float4x4 invProj, float4x4 invView)
+{
+    const float2 ndc = UVtoNDC(uv);
+    float4 clip = float4(ndc, depth, 1.0);
+    float4 vpos = mul(clip, invProj); // → view
+    vpos.xyz /= max(kEpsilon, vpos.w);
+    return mul(float4(vpos.xyz, 1.0), invView).xyz; // → world
 }
 
 // =============== normal remap [-1..1] <-> [0..1] ===============
@@ -187,6 +206,69 @@ float4 LinearToGamma(float4 c, float g)
 float4 GammaToLinear(float4 c, float g)
 {
     return float4(GammaToLinear(c.rgb, g), c.a);
+}
+
+// GGX + Schlick
+float D_GGX(float NdotH, float a)
+{
+    float a2 = a * a;
+    float d = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    return a2 / max(kEpsilon, kPi * d * d);
+}
+float G_SchlickGGX(float NdotX, float k)
+{
+    return NdotX / max(kEpsilon, NdotX * (1.0 - k) + k);
+}
+float3 F_Schlick(float cosT, float3 F0)
+{
+    float m = pow(1.0 - cosT, 5.0);
+    return F0 + (1.0 - F0) * m;
+}
+
+// ===== Унифицированный BRDF =====
+struct BRDFInput
+{
+    float3 albedo;
+    float rough;
+    float metal;
+    float3 N;
+    float3 V;
+    float3 L;
+};
+
+struct BRDFResult
+{
+    float3 diffBRDF; // ламберт с energy compensation
+    float3 specBRDF; // GGX Cook-Torrance
+    float NdotL;
+    float NdotV;
+};
+
+inline BRDFResult EvalBRDF(BRDFInput bi)
+{
+    BRDFResult o;
+    o.NdotL = saturate(dot(bi.N, bi.L));
+    o.NdotV = saturate(dot(bi.N, bi.V));
+    o.diffBRDF = 0.0.xxx;
+    o.specBRDF = 0.0.xxx;
+
+    float3 H = normalize(bi.L + bi.V);
+    float NdotH = saturate(dot(bi.N, H));
+    float VdotH = saturate(dot(bi.V, H));
+
+    float3 F0 = lerp(kF0Dielectric, bi.albedo, bi.metal);
+    float a = max(kMinAlpha, bi.rough * bi.rough);
+    float kv = (a + 1.0) * (a + 1.0) * 0.125; // (a+1)^2 / 8
+
+    float3 F = F_Schlick(VdotH, F0);
+    float D = D_GGX(NdotH, a);
+    float G = G_SchlickGGX(o.NdotV, kv) * G_SchlickGGX(o.NdotL, kv);
+
+    float3 kd = (1.0 - F) * (1.0 - bi.metal);
+    o.diffBRDF = kd * bi.albedo * kInvPi;
+    o.specBRDF = (D * G * F) / max(kEpsilon, 4.0 * o.NdotL * o.NdotV);
+
+    return o;
 }
 
 #endif // UTILS_HLSL

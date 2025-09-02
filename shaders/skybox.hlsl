@@ -6,6 +6,7 @@ cbuffer PerFrame : register(b0)
 {
     float4x4 view;      // обычная view
     float4x4 proj;
+    float exposure;
 }
 
 struct VSIn {
@@ -41,7 +42,7 @@ SamplerState samLinear : register(s0);
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float3 c = sky.Sample(samLinear, i.dir).rgb;
+    float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
     //c = SRGBToLinear(c);
     return float4(c, 1.0);
 }

@@ -10,8 +10,9 @@ public:
         const std::string& inputLayout,
         const std::wstring& graphicsShader,
         float3 pos,
-        float3 scale)
-        :RenderableObject(matPreset, inputLayout, graphicsShader)
+        float3 scale,
+        float angSpeed = 10.0f * DEG2RAD)
+        :RenderableObject(matPreset, inputLayout, graphicsShader),angularSpeed_(angSpeed)
     {
         transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
         transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
@@ -70,7 +71,7 @@ private:
     Math::mat4 transformPos_;
     Math::mat4 transformScale_;
     float rotationY_ = 0.0f;
-    float angularSpeed_ = 0.0f;// 10.0f * Math::DEG2RAD;
+    float angularSpeed_ = 10.0f * Math::DEG2RAD;
     std::string modelName_;
 };
 
@@ -193,17 +194,20 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         //box->MaterialParamsRef().SetUseMR(false);
         //box->MaterialParamsRef().metalRough = float2(0.0f, 0.8f);
         scene_.AddObject(std::move(box));
+
+        box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -4.0f), float3(1, 1, 1), 0.0f);
+        scene_.AddObject(std::move(box));
     }
     scene_.AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0.5f, -1.0f), float3(1, 1, 1)));
     scene_.AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
     scene_.AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
 
     {
-        auto floor = std::make_unique<RotatingObject>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -0.5f, 0.0f), float3(20.0f, 1.0f, 20.0f));
+        auto floor = std::make_unique<RotatingObject>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, -0.5f, 0.0f), float3(20.0f, 1.0f, 20.0f), 0.0f);
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 10.0f, 10.0f);
         scene_.AddObject(std::move(floor));
 
-        floor = std::make_unique<RotatingObject>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-5.0f, -0.4f, 0.0f), float3(5.0f, 1.0f, 5.0f));
+        floor = std::make_unique<RotatingObject>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-5.0f, -0.4f, 0.0f), float3(5.0f, 1.0f, 5.0f), 0.0f);
         floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);
         floor->MaterialParamsRef().texFlags.w = 0.01f;
         scene_.AddObject(std::move(floor));

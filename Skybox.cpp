@@ -37,6 +37,7 @@ void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4
     // CB0: ожидаем имена "view" и "proj" в cbuffer'е (см. skybox.hlsl)
     UpdateUniform("view", view, cbData);
     UpdateUniform("proj", proj, cbData);
+    UpdateUniform("exposure", exposure_, cbData);
 }
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)

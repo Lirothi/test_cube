@@ -102,6 +102,9 @@
     <ClCompile Include="TextureCube.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="PointLight.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CBManager.h">
@@ -212,6 +215,9 @@
     <ClInclude Include="TextureCube.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="PointLight.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="shaders\axes.hlsl">
@@ -272,6 +278,12 @@
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\ssr_ps.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\pointlight_color_fs.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\pointlight_zfail.hlsl">
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>

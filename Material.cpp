@@ -721,23 +721,111 @@ static std::wstring JoinDefines(const Material::DefineList& defs) {
     return out;
 }
 
+static inline void HashMem(uint64_t& h, const void* data, size_t len)
+{
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+}
+static inline void HashU32(uint64_t& h, uint32_t v) { HashMem(h, &v, sizeof(v)); }
+static inline void HashU64(uint64_t& h, uint64_t v) { HashMem(h, &v, sizeof(v)); }
+static inline void HashStrA(uint64_t& h, const char* s)
+{
+    if (!s) { return; }
+    const size_t n = std::strlen(s);
+    if (n > 0) { HashMem(h, s, n); }
+}
+static inline void HashStrW(uint64_t& h, const std::wstring& s)
+{
+    if (s.empty()) { return; }
+    HashMem(h, s.data(), s.size() * sizeof(wchar_t));
+}
+
+template<typename T>
+static inline void HashStruct(uint64_t& h, const T& s) { HashMem(h, &s, sizeof(T)); }
+
 std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
 {
-    std::wstring fmts = L"";
-    for (UINT i = 0; i < gd.numRT; ++i) {
-        fmts += std::to_wstring((int)(gd.rtvFormats[i])) + L",";
+    // Стабильный ключ, зависящий от *всего* значимого состояния PSO.
+    uint64_t H = 1469598103934665603ull; // FNV-1a offset basis
+
+    // Файл и точки входа
+    HashStrW(H, gd.shaderFile);
+    HashStrA(H, gd.vsEntry);
+    HashStrA(H, gd.psEntry);
+
+    // Defines (отсортированы для детерминизма)
+    auto defs = gd.defines;
+    std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
+        if (a.first == b.first) { return a.second < b.second; }
+        return a.first < b.first;
+        });
+    for (const auto& kv : defs) {
+        HashStrA(H, kv.first.c_str());
+        HashStrA(H, kv.second.c_str());
     }
-    std::wstring key = L"G2|" + gd.shaderFile + L"|" +
-        std::wstring(gd.inputLayoutKey.begin(), gd.inputLayoutKey.end()) + L"|" +
-        std::to_wstring((int)gd.topologyType) + L"|" +
-        fmts + L"|" + std::to_wstring((int)gd.dsvFormat) + L"|" +
-        JoinDefines(gd.defines);
+
+    // IA / топология / RS флаги
+    HashStrA(H, gd.inputLayoutKey.c_str());
+    HashU32(H, (uint32_t)gd.topologyType);
+    HashU32(H, (uint32_t)gd.rsFlags);
+
+    // RT/DS
+    HashU32(H, (uint32_t)gd.numRT);
+    for (UINT i = 0; i < gd.numRT; ++i) { HashU32(H, (uint32_t)gd.rtvFormats[i]); }
+    HashU32(H, (uint32_t)gd.dsvFormat);
+    HashU32(H, (uint32_t)gd.sampleCount);
+
+    // Полный Raster/Blend/DepthStencil — целиком как структуры
+    // (они ZeroMemory по умолчанию в FillDefaultsTriangle, так что паддинг детерминирован)
+    HashStruct(H, gd.raster);
+    HashStruct(H, gd.blend);
+    HashStruct(H, gd.depth);
+
+    // Сделаем читаемый wstring-ключ: префикс + hex-хеш
+    wchar_t hex[32] = {};
+    swprintf_s(hex, L"%016llX", (unsigned long long)H);
+
+    // Немного человекочитаемости в начале — файл/входы.
+    std::wstring key = L"GFX3|";
+    key += gd.shaderFile;
+    key += L"|";
+    key += std::wstring(gd.vsEntry, gd.vsEntry + std::strlen(gd.vsEntry));
+    key += L"/";
+    key += std::wstring(gd.psEntry, gd.psEntry + std::strlen(gd.psEntry));
+    key += L"|";
+    key += hex;
+
     return key;
 }
 
 std::wstring MaterialManager::BuildKey(const Material::ComputeDesc& cd)
 {
-    std::wstring key = L"C2|" + cd.shaderFile + L"|" + std::wstring(cd.csEntry, cd.csEntry + strlen(cd.csEntry)) + L"|" + JoinDefines(cd.defines);
+    uint64_t H = 1469598103934665603ull;
+
+    HashStrW(H, cd.shaderFile);
+    HashStrA(H, cd.csEntry);
+    HashU32(H, (uint32_t)cd.rsFlags);
+
+    auto defs = cd.defines;
+    std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
+        if (a.first == b.first) { return a.second < b.second; }
+        return a.first < b.first;
+        });
+    for (const auto& kv : defs) {
+        HashStrA(H, kv.first.c_str());
+        HashStrA(H, kv.second.c_str());
+    }
+
+    wchar_t hex[32] = {};
+    swprintf_s(hex, L"%016llX", (unsigned long long)H);
+
+    std::wstring key = L"CMP3|";
+    key += cd.shaderFile;
+    key += L"|";
+    key += std::wstring(cd.csEntry, cd.csEntry + std::strlen(cd.csEntry));
+    key += L"|";
+    key += hex;
+
     return key;
 }
 

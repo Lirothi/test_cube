@@ -24,7 +24,7 @@ RenderableObject::RenderableObject(
     graphicsDesc_.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // GB0: Albedo+Metal
     graphicsDesc_.rtvFormats[1] = DXGI_FORMAT_R10G10B10A2_UNORM;   // GB1: NormalOcta+Rough
     graphicsDesc_.rtvFormats[2] = DXGI_FORMAT_R11G11B10_FLOAT;     // GB2: Emissive
-    graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT;
+    graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
     graphicsDesc_.FillDefaultsTriangle();
 
 	mesh_.reset(new Mesh());

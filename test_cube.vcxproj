@@ -159,6 +159,7 @@
     <ClCompile Include="MaterialDataManager.cpp" />
     <ClCompile Include="Mesh.cpp" />
     <ClCompile Include="MeshManager.cpp" />
+    <ClCompile Include="PointLight.cpp" />
     <ClCompile Include="RenderContextPool.cpp" />
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="SamplerManager.cpp" />
@@ -192,6 +193,7 @@
     <ClInclude Include="Math.h" />
     <ClInclude Include="Mesh.h" />
     <ClInclude Include="MeshManager.h" />
+    <ClInclude Include="PointLight.h" />
     <ClInclude Include="RenderContext.h" />
     <ClInclude Include="RenderContextPool.h" />
     <ClInclude Include="Renderer.h" />
@@ -268,6 +270,12 @@
       <FileType>Document</FileType>
     </Text>
     <Text Include="shaders\ssr_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\pointlight_color_fs.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\pointlight_zfail.hlsl">
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>

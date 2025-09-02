@@ -50,11 +50,6 @@ VSOut VSMain(uint vid : SV_VertexID)
     return o;
 }
 
-float2 UVtoNDC(float2 uv)
-{
-    return uv * float2(2, -2) + float2(-1, 1);
-}
-
 float3 ReconstructPosVS(float2 uv, float depth)
 {
     float2 ndc = UVtoNDC(uv);

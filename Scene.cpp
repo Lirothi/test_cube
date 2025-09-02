@@ -37,11 +37,6 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
 
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    for (auto& obj : objects_)
-    {
-        obj->Init(renderer, uploadCmdList, uploadKeepAlive);
-    }
-
     if (!matLighting_) {
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/lighting_ps.hlsl";
@@ -106,6 +101,24 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     skyBox_ = std::make_unique<Skybox>(L"textures/skybox.dds");
     skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
+    skyBox_->SetExposure(0.2f);
+
+    pointLights_.emplace_back(); pointLights_.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
+    pointLights_.emplace_back(); pointLights_.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
+
+    dirLight_ = { float3(-0.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
+    dirLight_.exposure *= 0.2f;
+    dirLight_.ambient *= 0.2f;
+
+    for (auto& obj : pointLights_)
+    {
+        obj.Init(renderer, uploadCmdList, uploadKeepAlive);
+    }
+
+    for (auto& obj : objects_)
+    {
+        obj->Init(renderer, uploadCmdList, uploadKeepAlive);
+    }
 }
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
@@ -159,7 +172,6 @@ void Scene::Render(Renderer* renderer) {
     const mat4 invView = mat4::Inverse(view);
     const mat4 invProj = mat4::Inverse(proj);
     const float3 camDir = invView.TransformDirection(float3(0, 0, 1)).Normalized();
-    float3 sunDirWS = Math::float3(-0.5f, -0.7f, -0.5f).Normalized();
 
     // бакеты объектов (ровно как у тебя, просто в компактном виде)
     std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>> buckets;
@@ -176,9 +188,9 @@ void Scene::Render(Renderer* renderer) {
         [this, renderer](RenderGraph::PassContext ctx) { Pass_PrologueClear(renderer, ctx); });
 
     auto pShadow = rg.AddPass("CSM", { pClear },
-        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar, sunDirWS, camDir, &buckets]
+        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar, camDir, &buckets]
         (RenderGraph::PassContext ctx) {
-            Pass_CSM(renderer, ctx, view, proj, invView, invProj, zNear, zFar, sunDirWS, camDir, buckets);
+            Pass_CSM(renderer, ctx, view, proj, invView, invProj, zNear, zFar, camDir, buckets);
         });
 
     auto pGbuf = rg.AddPass("GBuffer", { pShadow },
@@ -187,11 +199,16 @@ void Scene::Render(Renderer* renderer) {
         });
 
     auto pLight = rg.AddPassMT("Lighting", { pGbuf }, { pShadow },
-        [this, renderer, &view, &proj, &invView, &invProj, sunDirWS, camDir](RenderGraph::PassContext ctx) {
-            Pass_Lighting(renderer, ctx, view, proj, invView, invProj, sunDirWS, camDir);
+        [this, renderer, &view, &proj, &invView, &invProj, camDir](RenderGraph::PassContext ctx) {
+            Pass_Lighting(renderer, ctx, view, proj, invView, invProj, camDir);
         });
 
-    auto pSky = rg.AddPass("Skybox", { pLight },
+    auto pPointLights = rg.AddPass("PointLights", { pLight },
+        [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
+            Pass_PointLights(renderer, ctx, view, proj, invView, invProj);
+        });
+
+    auto pSky = rg.AddPass("Skybox", { pPointLights },
         [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
             Pass_Skybox(renderer, ctx, view, proj);
         });
@@ -324,7 +341,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
-    float zNear, float zFar, const float3& sunDirWS, const float3& camDir,
+    float zNear, float zFar, const float3& camDir,
     const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -345,7 +362,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[3] = 100.0f;
     cachedSplitsVS_[4] = zFarShadow;
 
-    TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS, batchIndex](std::size_t idx)
+    TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
         const auto& D = renderer->GetDeferredForFrame();
 
@@ -471,7 +488,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
 void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
     const mat4& invView, const mat4& invProj,
-    const float3& sunDirWS, const float3& camDir)
+    const float3& camDir)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
@@ -487,10 +504,10 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     // аллоцируем динамический CB в аплоад-ринге текущего кадра
     auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
-    matLighting_->UpdateCB0Field("sunDirWS", sunDirWS, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("ambientIntensity", 0.05f, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("lightRgb", float3(1, 1, 1), (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("exposure", 1.5f, (uint8_t*)cb.cpu);
+    matLighting_->UpdateCB0Field("sunDirWS", dirLight_.dir, (uint8_t*)cb.cpu);
+    matLighting_->UpdateCB0Field("ambientIntensity", dirLight_.ambient, (uint8_t*)cb.cpu);
+    matLighting_->UpdateCB0Field("lightRgb", dirLight_.color, (uint8_t*)cb.cpu);
+    matLighting_->UpdateCB0Field("exposure", dirLight_.exposure, (uint8_t*)cb.cpu);
     matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition(), (uint8_t*)cb.cpu);
     matLighting_->UpdateCB0Field("camDirWS", camDir, (uint8_t*)cb.cpu);
     matLighting_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
@@ -531,6 +548,43 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     matLighting_->Bind(t.cl, rc);
     t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     t.cl->DrawInstanced(3, 1, 0, 0);
+
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
+}
+
+void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
+    const mat4& view, const mat4& proj,
+    const mat4& invView, const mat4& invProj)
+{
+    if (pointLights_.empty()) { return; }
+
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+
+    const auto& D = renderer->GetDeferredForFrame();
+
+    // Light RT и Depth (с подключённым DSV) — будем писать только стэнсил в Z-FAIL и аддитив в цвет в COLOR
+    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, /*withDepth*/true);
+
+    // Обнуляем только STENCIL перед каждым светом
+    for (auto& L : pointLights_)
+    {
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        // clear stencil=0
+        t.cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+        // 1) Z-FAIL два прохода по объёму
+        L.RenderZFail(renderer, t.cl, view, proj);
+
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+        // 2) Цвет: полноэкранный, stencil!=0, аддитив
+        L.RenderColor(renderer, t.cl, view, proj, invView, invProj, camera_.GetPosition());
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -666,7 +720,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
     matCompose_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
     matCompose_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
     matCompose_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
-    matCompose_->UpdateCB0Field("skyboxIntensity", 1.0f, (uint8_t*)cb.cpu);
+    matCompose_->UpdateCB0Field("skyboxIntensity", skyBox_->GetExposure(), (uint8_t*)cb.cpu);
 
     // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;

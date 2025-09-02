@@ -757,7 +757,7 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     cl->RSSetScissorRects(1, &sr);
 
     // Clear
-    const float clear[4] = { 0.3f, 0.3f, 0.8f, 1.0f };
+    const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     cl->ClearRenderTargetView(rtv, clear, 0, nullptr);
     cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 }
@@ -943,7 +943,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
             // SRV к depth как R32_FLOAT
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = DXGI_FORMAT_R32_FLOAT;
+            sd.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels = 1;
@@ -1008,7 +1008,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateRT(DXGI_FORMAT_R10G10B10A2_UNORM, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(DXGI_FORMAT_R11G11B10_FLOAT, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
 
-        CreateDepth(DXGI_FORMAT_D32_FLOAT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);  
+        CreateDepth(DXGI_FORMAT_D32_FLOAT_S8X24_UINT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
 
         D.shadowRes = 4096; // или конфиг/параметр
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);

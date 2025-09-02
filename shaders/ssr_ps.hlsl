@@ -36,7 +36,6 @@ VSOut VSMain(uint vid:SV_VertexID){
     o.H=float4(p,0,1); o.UV=float2(p.x*0.5+0.5, 1-(p.y*0.5+0.5)); return o;
 }
 
-float2 UVtoNDC(float2 uv){ return uv*float2(2,-2)+float2(-1,1); }
 float  DepthToViewZ_Fast(float d){ return depthB / (d - depthA); }
 float3 ReconstructPosVS(float2 uv, float d){
     float2 ndc=UVtoNDC(uv); float4 clip=float4(ndc,d,1);

@@ -7,6 +7,7 @@
 #include "Camera.h"
 #include "InputManager.h"
 #include "Skybox.h"
+#include "PointLight.h"
 
 class Renderer;
 
@@ -37,7 +38,7 @@ private:
         const mat4& view, const mat4& proj,
         const mat4& invView, const mat4& invProj,
         float zNear, float zFar,
-        const float3& sunDirWS, const float3& camDir,
+        const float3& camDir,
         const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
     void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
@@ -45,7 +46,10 @@ private:
     void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
         const mat4& invView, const mat4& invProj,
-        const float3& sunDirWS, const float3& camDir);
+        const float3& camDir);
+    void Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
+        const mat4& view, const Math::mat4& proj,
+        const mat4& invView, const Math::mat4& invProj);
     void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj);
     void Pass_SSR(Renderer* r, RenderGraph::PassContext ctx,
@@ -82,11 +86,22 @@ private:
     float  cachedDepthBiasNDC_[kCascades] = {};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
+    std::vector<PointLight> pointLights_;
+
     InputManager* input_ = nullptr;
     ActionMap* actions_ = nullptr;
     Camera camera_;
 
     bool debugTexMode_ = false;
+
+    struct DirectionalLight
+    {
+        float3 dir;
+        float3 color;
+        float exposure = 1.0f;
+        float ambient = 0.05f;
+    };
+    DirectionalLight dirLight_;
 
     std::unique_ptr<Skybox> skyBox_;
 };
