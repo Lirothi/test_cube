@@ -6,6 +6,7 @@
 #include <cassert>
 #include "Renderer.h"
 #include "TaskSystem.h"
+#include "Profiler.h"
 
 class RenderGraph {
 public:
@@ -55,6 +56,7 @@ public:
     // Старое: последовательное исполнение (на место)
     void Execute(Renderer* renderer)
     {
+        CPU_SCOPE("RenderGraph::Execute");
         if (renderer == nullptr) { return; }
         Unroll(renderer, /*executeInplace=*/true, nullptr);
     }
@@ -72,6 +74,7 @@ public:
     // сабмитим РЕАЛЬНЫЕ таски пассов с ожиданием их mt-deps.
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
     {
+        CPU_SCOPE("RenderGraph::ExecuteParallel");
         auto flat = BuildSchedule(renderer);
         if (flat.empty()) { return; }
 

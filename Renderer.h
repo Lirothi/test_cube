@@ -238,7 +238,7 @@ private:
     bool wireframeMode_ = false;
 
     float fps_ = 0.0f;
-    float fpsAlpha_ = 0.95f; // экспоненциальное сглаживание: 0..1 (чем больше — тем плавнее)
+    float fpsAlpha_ = 0.99f; // экспоненциальное сглаживание: 0..1 (чем больше — тем плавнее)
 
     uint64_t totalFrameNumber_ = 0;
     bool     shaderHotReloadEnabled_ = true;
