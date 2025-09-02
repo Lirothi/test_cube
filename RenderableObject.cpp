@@ -71,6 +71,14 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
     GetMesh()->Draw(cl);
 }
 
+void RenderableObject::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
+{
+	if (matData_)
+	{
+        matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+	}
+}
+
 void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
     if (!renderer) { return; }

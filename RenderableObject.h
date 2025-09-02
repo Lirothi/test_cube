@@ -61,7 +61,7 @@ public:
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
 	virtual void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) {}
-    virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) {}
+    virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);

@@ -5,8 +5,12 @@
 
 #include "ActionMap.h"
 #include "Camera.h"
+#include "DebugGrid.h"
+#include "GpuInstancedModels.h"
+#include "Helpers.h"
 #include "Renderer.h"
 #include "RenderGraph.h"
+#include "StaticMesh.h"
 #include "TaskSystem.h"
 #include "TextManager.h"
 
@@ -34,6 +38,74 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
         outCornersWS[idx++] = farWS;
     }
 }
+
+class RotatingObject : public RenderableObject {
+public:
+    RotatingObject(
+        const std::string& modelName,
+        const std::string& matPreset,
+        const std::string& inputLayout,
+        const std::wstring& graphicsShader,
+        float3 pos,
+        float3 scale,
+        float angSpeed = 10.0f * DEG2RAD)
+        :RenderableObject(matPreset, inputLayout, graphicsShader), angularSpeed_(angSpeed)
+    {
+        transformPos_ = Math::mat4::Translation({ pos.x, pos.y, pos.z });
+        transformScale_ = Math::mat4::Scaling(scale.x, scale.y, scale.z);
+        modelName_ = modelName;
+    }
+
+    void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
+    {
+        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+        if (!modelName_.empty())
+        {
+            mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+        }
+        else
+        {
+            std::vector<VertexPNTUV> cubeVerts;
+            std::vector<uint32_t> cubeIndices;
+            BuildCubeCW(cubeVerts, cubeIndices);
+
+            GetMesh()->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, cubeVerts, cubeIndices.data(), (UINT)cubeIndices.size(), true);
+        }
+    }
+
+    void Tick(float deltaTime) override {
+        rotationY_ += angularSpeed_ * deltaTime;
+        if (rotationY_ > XM_2PI) {
+            rotationY_ -= XM_2PI;
+        }
+
+        SetModelMatrix(transformScale_ * Math::mat4::RotationY(rotationY_) * transformPos_);
+        //matParams_.texOffsScale.x += deltaTime * 1.0f;
+        //matParams_.texOffsScale.y += deltaTime * 1.0f;
+    }
+
+    float GetRotationY() const { return rotationY_; }
+    void SetRotationY(float angle) { rotationY_ = angle; }
+
+    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    {
+        UpdateUniform("world", modelMatrix_, cbData);
+        UpdateUniform("view", view, cbData);
+        UpdateUniform("proj", proj, cbData);
+
+        ApplyMaterialParamsToCB(cbData);
+    }
+
+    bool IsSimpleRender() const { return true; }
+    bool CastsShadow() const override { return true; }
+
+private:
+    Math::mat4 transformPos_;
+    Math::mat4 transformScale_;
+    float rotationY_ = 0.0f;
+    float angularSpeed_ = 10.0f * Math::DEG2RAD;
+    std::string modelName_;
+};
 
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
@@ -109,6 +181,42 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     dirLight_ = { float3(-0.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
     dirLight_.exposure *= 0.2f;
     dirLight_.ambient *= 0.2f;
+
+    {
+        auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
+        box->MaterialParamsRef().texFlags.w = 1;
+        //box->MaterialParamsRef().SetUseMR(false);
+        //box->MaterialParamsRef().metalRough = float2(0.0f, 0.8f);
+        AddObject(std::move(box));
+
+        box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -4.0f), float3(1, 1, 1), 0.0f);
+        AddObject(std::move(box));
+    }
+    AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+    AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+    AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+
+    {
+        auto floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 10.0f, 10.0f);
+        floor->SetPosition(float3(0.0f, -0.5f, 0.0f));
+        floor->SetScale(float3(20.0f, 1.0f, 20.0f));
+        AddObject(std::move(floor));
+
+        floor = std::make_unique<StaticMesh>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+        floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);
+        floor->MaterialParamsRef().texFlags.w = 0.01f;
+        floor->SetPosition(float3(-5.0f, -0.4f, 0.0f));
+        floor->SetScale(float3(5.0f, 1.0f, 5.0f));
+        AddObject(std::move(floor));
+    }
+
+    AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
+
+    AddObject(std::make_unique<DebugGrid>(100.0f));
+
+    camera_.SetPosition({ 0.f, 1.f, -10.f });
+
 
     for (auto& obj : pointLights_)
     {

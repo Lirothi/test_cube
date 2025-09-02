@@ -183,6 +183,8 @@ void Renderer::InitD3D12(HWND window) {
     }
 
     samplerManager_.Init(device_.Get(), 512);
+
+    InitFence();
 }
 
 void Renderer::InitFence() {

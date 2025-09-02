@@ -188,6 +188,9 @@ namespace Math
         static mat4 Scaling(float sx, float sy, float sz) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixScaling(sx, sy, sz)); return r;
         }
+        static mat4 Scaling(float3 s) {
+            return Scaling(s.x, s.y, s.z);
+        }
         static mat4 RotationX(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationX(r)); return o; }
         static mat4 RotationY(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationY(r)); return o; }
         static mat4 RotationZ(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationZ(r)); return o; }
@@ -203,6 +206,16 @@ namespace Math
         }
         static mat4 RotationYawPitchRollDegrees(float yawDeg, float pitchDeg, float rollDeg) {
             return RotationRollPitchYawDegrees(pitchDeg, yawDeg, rollDeg);
+        }
+        static mat4 RotationFromEulerXYZRad(const float3& e)
+        {
+            const XMMATRIX Rx = XMMatrixRotationX(e.x);
+            const XMMATRIX Ry = XMMatrixRotationY(e.y);
+            const XMMATRIX Rz = XMMatrixRotationZ(e.z);
+
+            mat4 out;
+            XMStoreFloat4x4(&out.m, XMMatrixMultiply(XMMatrixMultiply(Rx, Ry), Rz));
+            return out;
         }
         static mat4 FromQuaternion(const quat& q) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixRotationQuaternion(q.xm())); return r;
