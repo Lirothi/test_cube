@@ -282,10 +282,15 @@ private:
     struct CLStateEntry {
         ID3D12CommandList* cmd = nullptr;
         CLState st;
+        uint64_t epoch = 0;
     };
 
     static constexpr uint32_t kCLStateLanes = 64;
-    struct CLStateLane { std::vector<CLStateEntry> entries; };
+    //struct CLStateLane { std::vector<CLStateEntry> entries; };
+    struct CLStateLane {
+        std::unordered_map<ID3D12CommandList*, CLStateEntry> entries;
+        uint64_t epoch = 0;
+    };
 
     std::atomic<uint32_t> clLaneCount_{ 0 };
     CLStateLane           clLanes_[kCLStateLanes];

@@ -337,7 +337,7 @@ void Renderer::BeginFrame() {
     WaitForFrame(currentFrameIndex_);
 
     ++totalFrameNumber_;
-    
+
     // Сброс кадровых пулов
     auto& fr = frameResources_[currentFrameIndex_];
     fr->ResetCommandAllocators(device_.Get());
@@ -421,7 +421,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     cl->SetDescriptorHeaps(_countof(heaps), heaps);
 
     // регистрируем CL в lock-free трекере состояний
-    RegisterCurrentThreadCL(cl);
+    //RegisterCurrentThreadCL(cl);
 
     ThreadCL t{};
     t.alloc = alloc;
@@ -449,7 +449,7 @@ void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
     }
 
     // снимаем TLS-привязку к этому CL
-    UnregisterCurrentThreadCL();
+    //UnregisterCurrentThreadCL();
 
     t.cl = nullptr;
     t.alloc = nullptr;
@@ -635,6 +635,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
     for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
         clLanes_[i].entries.clear();
+        clLanes_[i].epoch++;
     }
 
     ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
@@ -705,21 +706,34 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
 
     // быстрый путь — активный CL лежит в TLS
     CLStateEntry* entry = tlCurrentEntry_;
-    if (entry == nullptr || entry->cmd != base) {
-        const uint32_t lane = tlLaneIndex_;
+    const uint32_t lane = tlLaneIndex_;
+    if (entry == nullptr || lane == UINT32_MAX ||
+        entry->epoch != clLanes_[lane].epoch || entry->cmd != base) {
         if (lane != UINT32_MAX) {
             CLStateLane& ln = clLanes_[lane];
-            for (auto& e : ln.entries) {
-                if (e.cmd == base) { entry = &e; break; }
+            auto found = ln.entries.find(base);
+            if (found != ln.entries.end())
+            {
+                entry = &found->second;
+            }
+            else
+            {
+                RegisterCurrentThreadCL(cl);
+                entry = tlCurrentEntry_;
             }
         }
-        if (entry == nullptr) {
+        else
+        {
             // CL ещё не зарегистрирован в этом потоке — регистрируем на лету
             RegisterCurrentThreadCL(cl);
             entry = tlCurrentEntry_;
         }
     }
 
+    //CLStateLane& ln = clLanes_[tlLaneIndex_];
+    //auto itEntry = ln.entries.find(static_cast<ID3D12CommandList*>(cl));
+    //auto& st = itEntry->second.st;
+    
     auto& st = entry->st;
 
     auto itCur = st.current.find(res);
@@ -1184,11 +1198,14 @@ void Renderer::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl) {
         tlLaneIndex_ = lane;
     }
     CLStateLane& ln = clLanes_[lane];
-    ln.entries.push_back({});
-    CLStateEntry& e = ln.entries.back();
+    if (ln.entries.size() == 0)
+    {
+        ln.entries.reserve(32);
+    }
+    CLStateEntry& e = ln.entries[static_cast<ID3D12CommandList*>(cl)];
     e.cmd = static_cast<ID3D12CommandList*>(cl);
-    e.st.firstUse.clear();
-    e.st.current.clear();
+    e.st.firstUse.clear(); e.st.firstUse.reserve(8);
+    e.st.current.clear(); e.st.current.reserve(16);
     tlCurrentEntry_ = &e;
 }
 
@@ -1199,10 +1216,9 @@ void Renderer::UnregisterCurrentThreadCL() {
 const Renderer::CLState* Renderer::FindCLStateForCmd(ID3D12CommandList* cmd) const {
     const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
     for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
-        for (const auto& e : clLanes_[i].entries) {
-            if (e.cmd == cmd) {
-                return &e.st;
-            }
+        auto found = clLanes_[i].entries.find(cmd);
+        if (found != clLanes_[i].entries.end()) {
+            return &found->second.st;
         }
     }
     return nullptr;
