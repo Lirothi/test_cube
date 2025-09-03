@@ -237,6 +237,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     scd.SampleDesc.Count = 1;
+    scd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
 
     ComPtr<IDXGISwapChain1> swap1;
     ThrowIfFailed(factory->CreateSwapChainForHwnd(
@@ -463,6 +464,7 @@ void Renderer::RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchInd
 
 void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 {
+    CPU_SCOPE("Renderer::EndThreadCommandBundle");
     if (b.cl != nullptr) {
         ThrowIfFailed(b.cl->Close());
         std::lock_guard<std::mutex> lk(submitMtx_);
@@ -624,7 +626,8 @@ void Renderer::ExecuteTimelineAndPresent() {
         commandQueue_->ExecuteCommandLists((UINT)fixedLists.size(), fixedLists.data());
     }
 
-    ThrowIfFailed(swapChain_->Present(1, 0));
+    ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+    //ThrowIfFailed(swapChain_->Present(1, 0));
     SignalFrame(currentFrameIndex_);
     currentFrameIndex_ = swapChain_->GetCurrentBackBufferIndex();
 }

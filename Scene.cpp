@@ -283,71 +283,71 @@ void Scene::Render(Renderer* renderer) {
 
     RenderGraph rg;
     auto pClear = rg.AddPass("PrologueClear", {},
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("PrologueClear"); Pass_PrologueClear(renderer, ctx); });
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_PrologueClear"); Pass_PrologueClear(renderer, ctx); });
 
     auto pShadow = rg.AddPass("CSM", { pClear },
         [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar, camDir, &buckets]
         (RenderGraph::PassContext ctx) {
-            CPU_SCOPE("CSM");
+            CPU_SCOPE("Pass_CSM");
             Pass_CSM(renderer, ctx, view, proj, invView, invProj, zNear, zFar, camDir, buckets);
         });
 
     auto pGbuf = rg.AddPass("GBuffer", { pShadow },
         [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("GBuffer");
+            CPU_SCOPE("Pass_GBuffer");
             Pass_GBuffer(renderer, ctx, view, proj, buckets);
         });
 
     auto pLight = rg.AddPassMT("Lighting", { pGbuf }, { pShadow },
         [this, renderer, &view, &proj, &invView, &invProj, camDir](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("Lighting");
+            CPU_SCOPE("Pass_Lighting");
             Pass_Lighting(renderer, ctx, view, proj, invView, invProj, camDir);
         });
 
     auto pPointLights = rg.AddPass("PointLights", { pLight },
         [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("PointLights");
+            CPU_SCOPE("Pass_PointLights");
             Pass_PointLights(renderer, ctx, view, proj, invView, invProj);
         });
 
     auto pSky = rg.AddPass("Skybox", { pPointLights },
         [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("Skybox");
+            CPU_SCOPE("Pass_Skybox");
             Pass_Skybox(renderer, ctx, view, proj);
         });
 
     auto pSSR = rg.AddPass("SSR", { pSky },
         [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("SSR");
+            CPU_SCOPE("Pass_SSR");
             Pass_SSR(renderer, ctx, view, proj, invView, invProj, zNear, zFar);
         });
 
     auto pBlur = rg.AddPass("SSR.Blur", { pSSR },
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("SSR.Blur"); Pass_SSR_Blur(renderer, ctx); });
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_SSR.Blur"); Pass_SSR_Blur(renderer, ctx); });
 
     auto pCompose = rg.AddPass("Compose", { pBlur },
         [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("Compose");
+            CPU_SCOPE("Pass_Compose");
             Pass_Compose(renderer, ctx, view, proj, invView, invProj, zNear, zFar);
         });
 
     auto pTransp = rg.AddPass("Transparent", { pCompose },
         [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext ctx) {
-            CPU_SCOPE("Transparent");
+            CPU_SCOPE("Pass_Transparent");
             Pass_Transparent(renderer, ctx, view, proj, buckets);
         });
 
     auto pTone = rg.AddPass("Tonemap", { pTransp },
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Tonemap"); Pass_Tonemap(renderer, ctx); });
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Tonemap"); Pass_Tonemap(renderer, ctx); });
 
     rg.AddPass("Debug", { pTone },
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Debug"); Pass_Debug(renderer, ctx); });
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Debug"); Pass_Debug(renderer, ctx); });
 
     rg.AddPass("Overlay", { pTone },
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Overlay"); Pass_Overlay(renderer, ctx); });
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Overlay"); Pass_Overlay(renderer, ctx); });
 
-    //rg.ExecuteParallel(renderer, TaskSystem::Get());
-    rg.Execute(renderer);
+    rg.ExecuteParallel(renderer, TaskSystem::Get());
+    //rg.Execute(renderer);
     TaskSystem::Get().WaitForAll();
     renderer->EndFrame();
 }
@@ -470,6 +470,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
     TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
+        CPU_SCOPE("CSM.PerCascade");
         const auto& D = renderer->GetDeferredForFrame();
 
         float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
@@ -940,7 +941,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->RecordBindDefaultsNoClear(t.cl);
         if (showProfiler_)
         {
-            Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/16);
+            Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/20);
         }
         tm->Build(renderer, t.cl);
         tm->Draw(renderer, t.cl);

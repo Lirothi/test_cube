@@ -14,6 +14,7 @@
 #pragma comment(lib, "dxcompiler.lib")
 
 #include "Helpers.h"
+#include "Profiler.h"
 #include "RootSignatureLayout.h"
 #include "RootSignatureParser.h"
 #include "TaskSystem.h"
@@ -359,6 +360,7 @@ void Material::RefreshWatchTimes_()
 
 bool Material::FSProbeAndFlagPending()
 {
+    CPU_SCOPE("Material::FSProbeAndFlagPending");
     std::lock_guard<std::mutex> lk(watchMtx_);
     if (watchedFiles_.empty()) { return false; }
 

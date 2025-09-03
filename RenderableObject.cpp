@@ -91,6 +91,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
+    CPU_SCOPE("RenderableObject::Render");
 
     UINT cbSizeBytes = 0;
 
@@ -151,6 +152,7 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj)
 {
+    CPU_SCOPE("RenderableObject::RenderShadow");
     if (!CastsShadow())
     {
         return;
