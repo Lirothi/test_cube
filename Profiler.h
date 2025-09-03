@@ -94,8 +94,10 @@ public:
     void EmitOverlay(TextManager* tm, int x = 8, int y = 48, int maxLines = 16);
 
     // Управление
+#if PROF_ENABLED
     void SetEnabled(bool v) { enabled_.store(v, std::memory_order_relaxed); }
     bool GetEnabled() const { return enabled_.load(std::memory_order_relaxed); }
+#endif
 
     // Кулдаун сброса максимумов
     void   SetMaxCooldownSeconds(double sec);

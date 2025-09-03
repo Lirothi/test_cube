@@ -126,8 +126,8 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }
         tm->AddTextf(reg, 16.0f, (shown & 1) ? colOdd : colEven,
-            "%-40s  avg:%6.2f  max:%6.2f  usages:%u",
-            r.name.c_str(), r.avgMs, r.maxMs, r.usages);
+            "%-40s avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
+            r.name.c_str(), r.avgMs, r.maxMs, r.avgMs/r.usages, r.usages);
         shown++;
     }
 }

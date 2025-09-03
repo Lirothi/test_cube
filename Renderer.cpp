@@ -7,6 +7,9 @@
 #include <mimalloc.h>
 #include "Profiler.h"
 
+thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
+thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
+
 Renderer::Renderer()
 {
 
@@ -417,6 +420,9 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     };
     cl->SetDescriptorHeaps(_countof(heaps), heaps);
 
+    // регистрируем CL в lock-free трекере состояний
+    RegisterCurrentThreadCL(cl);
+
     ThreadCL t{};
     t.alloc = alloc;
     t.cl = cl;
@@ -430,15 +436,23 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
 }
 
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
-    if (t.cl != nullptr) {
-        ThrowIfFailed(t.cl->Close());
+    CPU_SCOPE("Renderer::EndThreadCommandList");
+    if (!t.cl) { return; }
+    ThrowIfFailed(t.cl->Close());
+
+    {
         std::lock_guard<std::mutex> lk(submitMtx_);
         if (batchIndex < submitTimeline_.size()) {
-            submitTimeline_[batchIndex].directs.push_back(t.cl);
+            auto& b = submitTimeline_[batchIndex];
+            b.directs.push_back(t.cl);
         }
-        t.cl = nullptr;
-        t.alloc = nullptr;
     }
+
+    // снимаем TLS-привязку к этому CL
+    UnregisterCurrentThreadCL();
+
+    t.cl = nullptr;
+    t.alloc = nullptr;
 }
 
 void Renderer::BeginSubmitTimeline() {
@@ -524,24 +538,20 @@ void Renderer::ExecuteTimelineAndPresent() {
     fixedLists.reserve(lists.size() * 2);
 
     {
-        std::lock_guard<std::mutex> lkG(knownStatesMtx_);
-        std::lock_guard<std::mutex> lkC(clStatesMtx_);
-
         // локальная копия глобальных стейтов на момент сабмита
         auto global = knownStates_;
 
         for (auto* cmd : lists) {
-            // найдём запись про этот CL (если он ставил Transition)
-            auto it = clStates_.find(cmd);
+            const CLState* st = FindCLStateForCmd(cmd);
 
             // 3.1: если CL что-то «хочет» на первом использовании — вставим пролог с барьерами prev→firstUse
-            if ((it != clStates_.end()) && !it->second.firstUse.empty()) {
+            if (st && !st->firstUse.empty()) {
 
                 // соберём набор барьеров
                 std::vector<D3D12_RESOURCE_BARRIER> barriers;
-                barriers.reserve(it->second.firstUse.size());
+                barriers.reserve(st->firstUse.size());
 
-                for (auto& kv : it->second.firstUse) {
+                for (auto& kv : st->firstUse) {
                     ID3D12Resource* res = kv.first;
                     const D3D12_RESOURCE_STATES want = kv.second;
 
@@ -581,19 +591,15 @@ void Renderer::ExecuteTimelineAndPresent() {
             fixedLists.push_back(cmd);
 
             // 3.3: после CL обновим «глобальный» финальный стейт его ресурсов
-            if (it != clStates_.end()) {
-                for (auto& kv : it->second.current) {
+            if (st && !st->current.empty()) {
+                for (auto& kv : st->current) {
                     global[kv.first] = kv.second;
                 }
-                clStates_.erase(it);
             }
         }
 
         // обновим knownStates_ итогами сабмита
         knownStates_ = std::move(global);
-
-        // на будущее не должно остаться хвостов
-        assert(clStates_.empty());
     }
 
     // Эпилог: RT→Present
@@ -624,6 +630,11 @@ void Renderer::ExecuteTimelineAndPresent() {
     // Выполняем уже «починенный» список
     if (!fixedLists.empty()) {
         commandQueue_->ExecuteCommandLists((UINT)fixedLists.size(), fixedLists.data());
+    }
+
+    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
+    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
+        clLanes_[i].entries.clear();
     }
 
     ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
@@ -688,38 +699,39 @@ D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
 }
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
-    if (!cl || !res) return;
+    if (!cl || !res) { return; }
     CPU_SCOPE("Renderer::Transition");
-
     ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
 
-    D3D12_RESOURCE_STATES before;
-    bool needBarrier = false;
-
-    {
-        std::lock_guard<std::mutex> lk(clStatesMtx_);
-        auto& st = clStates_[base];
-        auto itCur = st.current.find(res);
-
-        if (itCur == st.current.end()) {
-            // ПЕРВОЕ упоминание ресурса в этом CL:
-            // ничего не барьерим внутри CL; просто фиксируем желаемый «стартовый» стейт
-            st.firstUse.emplace(res, after);
-            st.current.emplace(res, after);
-            return;
-        }
-        else {
-            before = itCur->second;
-            if (before == after) {
-                return; // no-op
+    // быстрый путь — активный CL лежит в TLS
+    CLStateEntry* entry = tlCurrentEntry_;
+    if (entry == nullptr || entry->cmd != base) {
+        const uint32_t lane = tlLaneIndex_;
+        if (lane != UINT32_MAX) {
+            CLStateLane& ln = clLanes_[lane];
+            for (auto& e : ln.entries) {
+                if (e.cmd == base) { entry = &e; break; }
             }
-            // это ВНУТРЕННИЙ переход внутри того же CL → ставим барьер
-            st.current[res] = after;
-            needBarrier = true;
+        }
+        if (entry == nullptr) {
+            // CL ещё не зарегистрирован в этом потоке — регистрируем на лету
+            RegisterCurrentThreadCL(cl);
+            entry = tlCurrentEntry_;
         }
     }
 
-    if (!needBarrier) return;
+    auto& st = entry->st;
+
+    auto itCur = st.current.find(res);
+    if (itCur == st.current.end()) {
+        // первое упоминание в этом CL — барьер внутри CL не нужен
+        st.firstUse.emplace(res, after);
+        st.current.emplace(res, after);
+        return;
+    }
+
+    const D3D12_RESOURCE_STATES before = itCur->second;
+    if (before == after) { return; }
 
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -728,6 +740,8 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
     b.Transition.StateAfter = after;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
+
+    st.current[res] = after;
 }
 
 void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
@@ -1160,4 +1174,36 @@ D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageTonemapSrvTable() {
     auto& D = deferred_[currentFrameIndex_];
     auto tbl = StageSrvUavTable({ D.sceneSRV });
     return tbl.gpu;
+}
+
+void Renderer::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl) {
+    uint32_t lane = tlLaneIndex_;
+    if (lane == UINT32_MAX) {
+        lane = clLaneCount_.fetch_add(1, std::memory_order_relaxed);
+        if (lane >= kCLStateLanes) { lane = kCLStateLanes - 1; }
+        tlLaneIndex_ = lane;
+    }
+    CLStateLane& ln = clLanes_[lane];
+    ln.entries.push_back({});
+    CLStateEntry& e = ln.entries.back();
+    e.cmd = static_cast<ID3D12CommandList*>(cl);
+    e.st.firstUse.clear();
+    e.st.current.clear();
+    tlCurrentEntry_ = &e;
+}
+
+void Renderer::UnregisterCurrentThreadCL() {
+    tlCurrentEntry_ = nullptr;
+}
+
+const Renderer::CLState* Renderer::FindCLStateForCmd(ID3D12CommandList* cmd) const {
+    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
+    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
+        for (const auto& e : clLanes_[i].entries) {
+            if (e.cmd == cmd) {
+                return &e.st;
+            }
+        }
+    }
+    return nullptr;
 }

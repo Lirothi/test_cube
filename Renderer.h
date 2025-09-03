@@ -211,6 +211,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
 
     D3D12_RESOURCE_STATES GetGlobalKnownState(ID3D12Resource* res);
+    void RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl);
+    void UnregisterCurrentThreadCL();
 
     struct PassBatch_ {
         std::string name;
@@ -271,14 +273,28 @@ private:
 
     std::mutex knownStatesMtx_;
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
-    std::mutex clStatesMtx_;
     struct CLState {
         // первый требуемый стейт ресурса в данном CL (мы его не барьерим внутри CL)
         std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
         // текущий (последний) стейт ресурса внутри ЭТОГО CL (для внутренних переходов и финала)
         std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
     };
-    std::unordered_map<ID3D12CommandList*, CLState> clStates_;
+    struct CLStateEntry {
+        ID3D12CommandList* cmd = nullptr;
+        CLState st;
+    };
+
+    static constexpr uint32_t kCLStateLanes = 64;
+    struct CLStateLane { std::vector<CLStateEntry> entries; };
+
+    std::atomic<uint32_t> clLaneCount_{ 0 };
+    CLStateLane           clLanes_[kCLStateLanes];
+
+    // TLS: какой lane у потока и какой CL сейчас активен
+    static thread_local uint32_t      tlLaneIndex_;
+    static thread_local CLStateEntry* tlCurrentEntry_;
+
+    const CLState* FindCLStateForCmd(ID3D12CommandList* cmd) const;
 
     SamplerManager samplerManager_;
     ConstantBufferLayoutManager cbManager_;

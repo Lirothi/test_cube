@@ -108,6 +108,9 @@
     <ClCompile Include="StaticMesh.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Profiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CBManager.h">
@@ -224,6 +227,9 @@
     <ClInclude Include="StaticMesh.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Profiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="shaders\axes.hlsl">
@@ -290,6 +296,9 @@
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\pointlight_zfail.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ui_rect.hlsl">
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>
