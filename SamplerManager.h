@@ -1,7 +1,7 @@
 #pragma once
 #include <wrl.h>
 #include <d3d12.h>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <vector>
 #include <initializer_list>
 #include <cstdint>
@@ -71,7 +71,7 @@ private:
 
     ID3D12Device* device_ = nullptr;
 
-    std::unordered_map<SamplerKey, Entry, SamplerKeyHasher> cache_;
+    robin_hood::unordered_map<SamplerKey, Entry, SamplerKeyHasher> cache_;
 
     UINT ensureCpu_(const D3D12_SAMPLER_DESC& desc);
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandleAt_(UINT idx) const;

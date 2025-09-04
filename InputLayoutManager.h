@@ -2,7 +2,7 @@
 #include <d3d12.h>
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <cstdint>
 
 class InputLayoutManager {
@@ -71,5 +71,5 @@ private:
         std::vector<std::string>   names; // чтобы .SemanticName жили вечно
         std::vector<D3D12_INPUT_ELEMENT_DESC> descs;
     };
-    std::unordered_map<std::string, Stored> map_;
+    robin_hood::unordered_map<std::string, Stored> map_;
 };
