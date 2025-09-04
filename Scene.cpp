@@ -255,7 +255,7 @@ void Scene::Render(Renderer* renderer) {
     auto* tb = renderer->GetTextManager();
     tb->Begin(renderer->GetWidth(), renderer->GetHeight(), 1.0f);
     int y = 8;
-    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, "FPS:%.0f", renderer->GetFPS());
+    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, "FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
 
     renderer->BeginFrame();
     renderer->BeginSubmitTimeline();
