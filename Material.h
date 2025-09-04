@@ -127,7 +127,7 @@ public:
     struct CBufferInfo {
         UINT bindRegister = 0;    // bN
         UINT sizeBytes = 0;
-        robin_hood::unordered_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
+        robin_hood::unordered_flat_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
     };
 
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
@@ -143,7 +143,7 @@ public:
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        CPU_SCOPE("Material::UpdateCBField");
+        //CPU_SCOPE("Material::UpdateCBField");
         UINT destCBSizeBytes = GetCBSizeBytes(bRegister);
         if (!destCB || destCBSizeBytes == 0) { return false; }
 
