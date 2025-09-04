@@ -7,12 +7,11 @@
 #include <condition_variable>
 #include <atomic>
 #include <cstddef>
+#include <memory>
 
 struct TaskGroup {
     struct State {
         std::atomic<std::size_t> pending{ 0 };
-        std::mutex               m;
-        std::condition_variable  cv;
     };
 
     // разделяемое ядро группы — переживёт сам TaskGroup
@@ -21,10 +20,11 @@ struct TaskGroup {
     TaskGroup() : state(std::make_shared<State>()) {}
 
     void Wait() {
-        std::unique_lock<std::mutex> lk(state->m);
-        state->cv.wait(lk, [this]() {
-            return state->pending.load(std::memory_order_acquire) == 0;
-            });
+        for (std::size_t expected = state->pending.load(std::memory_order_acquire);
+             expected != 0;
+             expected = state->pending.load(std::memory_order_acquire)) {
+            state->pending.wait(expected, std::memory_order_acquire);
+        }
     }
 
     bool IsDone() const {
@@ -93,16 +93,29 @@ private:
     void WorkerLoop_(std::size_t index);
 
 private:
-    std::vector<std::thread>        workers_;
-    std::vector<std::deque<Task>>   queues_;
-    std::deque<Task>                globalQueue_;
-    mutable std::mutex              mtx_;
-    std::condition_variable         cvWork_;
-    std::condition_variable         cvIdle_;
-    std::atomic<bool>               running_{ false };
-    std::atomic<std::size_t>        inFlight_{ 0 };
+    struct WorkerQueue {
+        std::deque<Task> q;
+        std::mutex m;
+        WorkerQueue() = default;
+        WorkerQueue(const WorkerQueue&) = delete;
+        WorkerQueue& operator=(const WorkerQueue&) = delete;
+        WorkerQueue(WorkerQueue&& other) noexcept : q(std::move(other.q)) {}
+        WorkerQueue& operator=(WorkerQueue&& other) noexcept {
+            q = std::move(other.q);
+            return *this;
+        }
+    };
+
+    std::vector<std::thread>      workers_;
+    std::vector<WorkerQueue>      queues_;
+    std::deque<Task>              globalQueue_;
+    std::mutex                    globalMtx_;
+    std::mutex                    workMtx_;
+    std::condition_variable       cvWork_;
+    std::atomic<bool>             running_{ false };
+    std::atomic<std::size_t>      inFlight_{ 0 };
 
     static thread_local std::size_t tlsIndex_;
 
-    bool HasTasksLocked_() const;
+    std::mutex startStopMtx_;
 };
