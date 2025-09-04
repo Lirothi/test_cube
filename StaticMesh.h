@@ -11,7 +11,6 @@ public:
         const std::wstring& graphicsShader);
 
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
-    virtual void UpdateUniforms(Renderer* renderer, const Math::mat4& view, const Math::mat4& proj, uint8_t* cbData) override;
 
     // --- Трансформы ---
     void SetPosition(const float3& p);

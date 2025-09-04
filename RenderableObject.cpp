@@ -71,6 +71,19 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
     GetMesh()->Draw(cl);
 }
 
+void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
+{
+    if (!cbData) { return; }
+    static constexpr CBFieldID worldID = CB_FIELD_ID("world");
+    static constexpr CBFieldID viewID = CB_FIELD_ID("view");
+    static constexpr CBFieldID projID = CB_FIELD_ID("proj");
+    UpdateUniform(worldID, GetModelMatrix(), cbData);
+    UpdateUniform(viewID, view, cbData);
+    UpdateUniform(projID, proj, cbData);
+
+    ApplyMaterialParamsToCB(cbData);
+}
+
 void RenderableObject::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
 	if (matData_)
@@ -112,7 +125,10 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ctx.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);
-    UpdateUniforms(renderer, view, proj, cbData);
+    {
+        //CPU_SCOPE("RenderableObject::Render.UpdateUniforms");
+        UpdateUniforms(renderer, view, proj, cbData);
+    }
     PopulateContext(renderer, cl, ctx);
     RecordGraphics(renderer, cl, ctx);
     
