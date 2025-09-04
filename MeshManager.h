@@ -1,7 +1,7 @@
 #pragma once
 #include <memory>
 #include <string>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <vector>
 #include <wrl.h>
 #include "Mesh.h"
@@ -61,5 +61,5 @@ private:
                       const MeshLoadOptions& opt);
 
 private:
-    std::unordered_map<std::string, std::shared_ptr<Mesh>> cache_;
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>> cache_;
 };

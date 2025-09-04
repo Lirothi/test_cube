@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <cstdint>
 #include <cstring>   // memcpy
 #include <cassert>
@@ -95,7 +95,7 @@ public:
 
 private:
     std::vector<CBField> fields_;
-    std::unordered_map<std::string, size_t> nameToIndex_;
+    robin_hood::unordered_map<std::string, size_t> nameToIndex_;
     uint32_t size_ = 0;
 };
 
@@ -146,5 +146,5 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, ConstantBufferLayout> layouts_;
+    robin_hood::unordered_map<std::string, ConstantBufferLayout> layouts_;
 };

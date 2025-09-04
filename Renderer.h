@@ -5,7 +5,6 @@
 
 #include "DescriptorAllocator.h"
 #include "FrameResource.h"
-#include <unordered_map>
 #include "third_party/robin_hood.h"
 #include "Samplermanager.h"
 #include "CBManager.h"
@@ -273,7 +272,7 @@ private:
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
 
     std::mutex knownStatesMtx_;
-    std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
+    robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
     struct CLState {
         // первый требуемый стейт ресурса в данном CL (мы его не барьерим внутри CL)
         robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;

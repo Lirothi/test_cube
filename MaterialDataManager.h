@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <memory>
 #include <vector>
 #include <wrl/client.h>
@@ -44,6 +44,6 @@ public:
     void ClearAll();
 
 private:
-    std::unordered_map<std::string, MaterialPreset> presets_;
-    std::unordered_map<std::string, std::shared_ptr<MaterialData>> cache_;
+    robin_hood::unordered_map<std::string, MaterialPreset> presets_;
+    robin_hood::unordered_map<std::string, std::shared_ptr<MaterialData>> cache_;
 };

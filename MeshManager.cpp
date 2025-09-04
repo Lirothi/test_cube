@@ -4,7 +4,7 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <cstring> // strchr, atoi
 #include <DirectXMath.h>
 #include <queue>
@@ -60,7 +60,7 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
-    std::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -84,7 +84,7 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
-    std::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -110,7 +110,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     bool generateTangentSpace)
 {
-    std::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(key);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(key);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -124,7 +124,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
 }
 
 std::shared_ptr<Mesh> MeshManager::Get(const std::string& key) const {
-    std::unordered_map<std::string, std::shared_ptr<Mesh>>::const_iterator it = cache_.find(key);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::const_iterator it = cache_.find(key);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -257,7 +257,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
     std::vector<DirectX::XMFLOAT2> uv;
     std::vector<DirectX::XMFLOAT3> nrm;
 
-    std::unordered_map<OBJKey, uint32_t, OBJKeyHash> vmap;
+    robin_hood::unordered_map<OBJKey, uint32_t, OBJKeyHash> vmap;
     outVerts.clear();
     outIndices.clear();
 
@@ -327,7 +327,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
             // выдаёт ID для (v/vt/vn), создавая уникальную вершину
             std::vector<uint32_t> id(face.size());
             for (size_t i = 0; i < face.size(); ++i) {
-                std::unordered_map<OBJKey, uint32_t, OBJKeyHash>::iterator it = vmap.find(face[i]);
+                robin_hood::unordered_map<OBJKey, uint32_t, OBJKeyHash>::iterator it = vmap.find(face[i]);
                 if (it != vmap.end()) {
                     id[i] = it->second;
                 }

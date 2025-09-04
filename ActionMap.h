@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <vector>
 #include <cstdint>
 
@@ -49,7 +49,7 @@ private:
     static int  MouseButtonFromString(const std::string& s);
 
 private:
-    std::unordered_map<std::string, Action> actions_;
+    robin_hood::unordered_map<std::string, Action> actions_;
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
 };

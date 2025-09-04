@@ -1,5 +1,5 @@
 #pragma once
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +33,6 @@ public:
 
 private:
     Renderer* renderer_ = nullptr;
-    std::unordered_map<std::wstring, std::unique_ptr<FontAtlas>> fonts_;
+    robin_hood::unordered_map<std::wstring, std::unique_ptr<FontAtlas>> fonts_;
     std::wstring defaultName_;
 };
