@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <string_view>
 #include <cstdint>
 #include <optional>
 #include <wrl/client.h>
@@ -19,9 +20,11 @@ public:
     void Init(Renderer* r);
     void Begin(UINT vpW, UINT vpH, float dpiScale = 1.0f);
 
-    // Старые позиционные API — оставлены как были
-    void AddText(int x, int y, const float4& color, float px, const std::string& utf8);
+    // Позиционные API
+    void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
+    void AddText(int x, int y, const float4& color, float px, std::string_view utf8);
     void AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...);
+    void AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...);
 
     // -------------------- Регионы --------------------
     RegionId CreateRegion(int x, int y, Align align = Align::Left);
@@ -36,8 +39,10 @@ public:
     // НОВОЕ: отключить измерение ширины строк внутри региона (ускорение для Align::Left)
     void RegionSetAutoMeasure(RegionId id, bool enabled);
 
-    void AddText(RegionId id, float px, const float4& color, const std::string& utf8);
+    void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
+    void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
     void AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...);
+    void AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...);
 
     void Build(Renderer* r, ID3D12GraphicsCommandList* cl);
     void Draw(Renderer* r, ID3D12GraphicsCommandList* cl);
@@ -49,10 +54,10 @@ private:
     struct Vertex { float3 pos; float4 col; float2 uv; };
 
     struct RegionLine {
-        std::string text;
-        float4      color;
-        float       px = 16.0f;
-        float       widthPx = 0; // при AutoMeasure=false может быть 0
+        std::wstring text;        // кешированная широкая строка
+        float4       color;
+        float        px = 16.0f;
+        float        widthPx = 0; // при AutoMeasure=false может быть 0
     };
 
     struct Region {
@@ -71,10 +76,10 @@ private:
     };
 
 private:
-    static std::wstring UTF8toW(const std::string& s);
-    float MeasureTextWidthPx(const std::string& utf8, float px) const;
-    void  EmitTextImmediate(int x, int y, const float4& color, float px, const std::string& utf8);
-    void  EmitTextAt(int x, int y, float xOffset, const float4& color, float px, const std::string& utf8);
+    static std::wstring UTF8toW(std::string_view s);
+    float MeasureTextWidthPx(std::wstring_view text, float px) const;
+    void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text);
+    void  EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text);
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
 private:
