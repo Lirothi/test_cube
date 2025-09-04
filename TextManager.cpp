@@ -196,21 +196,26 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::Build");
 
-    // 1) фоны регионов
-    for (const Region& rg : regions_) {
-        if (!rg.bg.has_value() || rg.totalLines <= 0) { continue; }
-        const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
-            : rg.maxLineWidth)
-            + float(rg.padX * 2);
-        const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
-        const int   bx = rg.x - rg.padX;
-        const int   by = rg.y - rg.padY;
-        EmitRect(bx, by, w, h, rg.bg.value());
-    }
+    // резервируем место под потенциальные фоновые прямоугольники
+    rectVerts_.reserve(rectVerts_.size() + regions_.size() * 4);
+    rectIdx_.reserve(rectIdx_.size() + regions_.size() * 6);
 
-    // 2) строки
+    // один проход по регионам: фоны и строки
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
+
+        // фон
+        if (rg.bg.has_value()) {
+            const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
+                : rg.maxLineWidth)
+                + float(rg.padX * 2);
+            const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
+            const int   bx = rg.x - rg.padX;
+            const int   by = rg.y - rg.padY;
+            EmitRect(bx, by, w, h, rg.bg.value());
+        }
+
+        // строки
         const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
             : rg.maxLineWidth);
         int y = rg.y;
