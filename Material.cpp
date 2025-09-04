@@ -900,6 +900,20 @@ bool Material::GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferFi
     return true;
 }
 
+bool Material::GetCBFieldInfo(UINT bRegister, CBFieldID id, CBufferField& out) const
+{
+    const CBufferInfo* cb = GetCBInfo(bRegister);
+    if (!cb) { return false; }
+    auto it = cb->fieldsById.find(id);
+    if (it == cb->fieldsById.end()) { return false; }
+    out = it->second;
+    if (out.elementStride == 0) {
+        out.elementStride = (out.size > 0 ? out.size : 16);
+        out.elementCount = 1;
+    }
+    return true;
+}
+
 bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const {
     auto* cb = GetCBInfo(bRegister);
     if (!cb)
@@ -972,8 +986,10 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
             }
             f.elementCount = elements;
             f.elementStride = stride;
+            f.id = ComputeCBFieldID(f.name);
 
             dst.fieldsByName[f.name] = f;
+            dst.fieldsById[f.id] = f;
         }
     }
 }
