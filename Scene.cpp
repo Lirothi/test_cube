@@ -12,7 +12,6 @@
 #include "RenderGraph.h"
 #include "StaticMesh.h"
 #include "TaskSystem.h"
-#include "Material.h"
 #include "TextManager.h"
 #include "Profiler.h"
 
@@ -344,9 +343,7 @@ void Scene::Render(Renderer* renderer) {
 
     rg.ExecuteParallel(renderer, TaskSystem::Get());
     //rg.Execute(renderer);
-
-    Material::FlushPendingCBUpdates();
-
+    
     {
         CPU_SCOPE("Main Wait");
         TaskSystem::Get().WaitForAll();
