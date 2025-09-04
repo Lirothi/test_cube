@@ -58,8 +58,8 @@ private:
         pitch_ = Clamp(pitch_, -limit, limit);
     }
     void WrapYaw() {
-        if (yaw_ > XM_PI) {yaw_ -= XM_2PI;}
-        if (yaw_ < -XM_PI) {yaw_ += XM_2PI;}
+        while (yaw_ > XM_PI) { yaw_ -= XM_2PI; }
+        while (yaw_ < -XM_PI) { yaw_ += XM_2PI; }
     }
 
     // Локальное смещение (forward/right/up в системе камеры)

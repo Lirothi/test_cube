@@ -733,7 +733,10 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
     //CLStateLane& ln = clLanes_[tlLaneIndex_];
     //auto itEntry = ln.entries.find(static_cast<ID3D12CommandList*>(cl));
     //auto& st = itEntry->second.st;
-    
+    if (!tlCurrentEntry_)
+    {
+        return;
+    }
     auto& st = entry->st;
 
     auto itCur = st.current.find(res);
