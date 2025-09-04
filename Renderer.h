@@ -6,6 +6,7 @@
 #include "DescriptorAllocator.h"
 #include "FrameResource.h"
 #include <unordered_map>
+#include "third_party/robin_hood.h"
 #include "Samplermanager.h"
 #include "CBManager.h"
 #include "Material.h"
@@ -275,9 +276,9 @@ private:
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
     struct CLState {
         // первый требуемый стейт ресурса в данном CL (мы его не барьерим внутри CL)
-        std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
+        robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
         // текущий (последний) стейт ресурса внутри ЭТОГО CL (для внутренних переходов и финала)
-        std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
+        robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
     };
     struct CLStateEntry {
         ID3D12CommandList* cmd = nullptr;
@@ -288,7 +289,7 @@ private:
     static constexpr uint32_t kCLStateLanes = 64;
     //struct CLStateLane { std::vector<CLStateEntry> entries; };
     struct CLStateLane {
-        std::unordered_map<ID3D12CommandList*, CLStateEntry> entries;
+        robin_hood::unordered_flat_map<ID3D12CommandList*, CLStateEntry> entries;
         uint64_t epoch = 0;
     };
 
