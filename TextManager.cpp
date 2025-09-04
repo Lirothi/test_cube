@@ -3,6 +3,7 @@
 #include <optional>
 #include <algorithm>
 #include <cmath>
+#include <array>
 #include "TextManager.h"
 #include "UploadManager.h"
 #include "SamplerManager.h"
@@ -231,12 +232,17 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto& rc = h.ref();
 
         // viewport как root-constants (b1)
-        std::vector<uint32_t> k;
-        k.reserve(8);
-        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
-        k.push_back(f2u((float)vpW_)); k.push_back(f2u((float)vpH_));
-        k.push_back(0u); k.push_back(0u); k.push_back(0u); k.push_back(0u); k.push_back(0u); k.push_back(0u);
-        rc.constants[1] = std::move(k);
+        std::array<uint32_t, 8> k;
+        auto f2u = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
+        k[0] = f2u((float)vpW_);
+        k[1] = f2u((float)vpH_);
+        k[2] = 0u;
+        k[3] = 0u;
+        k[4] = 0u;
+        k[5] = 0u;
+        k[6] = 0u;
+        k[7] = 0u;
+        rc.constants[1] = {k.begin(), k.end()};
 
         matRect_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -254,15 +260,17 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         rc.table[0] = tbl.gpu;
 
         // b1: viewport.xy, spread, pxSize
-        std::vector<uint32_t> k;
-        k.reserve(8);
-        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
-        k.push_back(f2u((float)vpW_)); k.push_back(f2u((float)vpH_));
-        k.push_back(0u); k.push_back(0u);
-        k.push_back(f2u((float)font_->Spread()));
-        k.push_back(f2u((float)font_->PxSize()));
-        k.push_back(0u); k.push_back(0u);
-        rc.constants[1] = std::move(k);
+        std::array<uint32_t, 8> k;
+        auto f2u = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
+        k[0] = f2u((float)vpW_);
+        k[1] = f2u((float)vpH_);
+        k[2] = 0u;
+        k[3] = 0u;
+        k[4] = f2u((float)font_->Spread());
+        k[5] = f2u((float)font_->PxSize());
+        k[6] = 0u;
+        k[7] = 0u;
+        rc.constants[1] = {k.begin(), k.end()};
 
         rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
 
