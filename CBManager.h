@@ -146,5 +146,5 @@ public:
     }
 
 private:
-    robin_hood::unordered_map<std::string, ConstantBufferLayout> layouts_;
+    std::unordered_map<std::string, ConstantBufferLayout> layouts_; //std impl guarantees returned pointers to data to be stable in mem
 };
