@@ -505,55 +505,50 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         switch (p.type) {
         case RootParameterInfo::Constants:
         {
-            auto it = ctx.constants.find(reg);
-            if (it != ctx.constants.end() && !it->second.empty()) {
-                if (isCompute_) { cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0); }
-                else { cmdList->SetGraphicsRoot32BitConstants(p.rootIndex, (UINT)it->second.size(), it->second.data(), 0); }
+            if (reg < RenderContext::kMaxBindings && !ctx.constants[reg].empty()) {
+                auto& vals = ctx.constants[reg];
+                if (isCompute_) { cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)vals.size(), vals.data(), 0); }
+                else { cmdList->SetGraphicsRoot32BitConstants(p.rootIndex, (UINT)vals.size(), vals.data(), 0); }
             }
             break;
         }
         case RootParameterInfo::CBV:
         {
-            auto it = ctx.cbv.find(reg);
-            if (it != ctx.cbv.end()) {
-                if (isCompute_) { cmdList->SetComputeRootConstantBufferView(p.rootIndex, it->second); }
-                else { cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, it->second); }
+            if (reg < RenderContext::kMaxBindings && ctx.cbv[reg] != 0) {
+                if (isCompute_) { cmdList->SetComputeRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
+                else { cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
             }
             break;
         }
         case RootParameterInfo::SRV:
         {
-            auto it = ctx.srv.find(reg);
-            if (it != ctx.srv.end()) {
-                if (isCompute_) { cmdList->SetComputeRootShaderResourceView(p.rootIndex, it->second); }
-                else { cmdList->SetGraphicsRootShaderResourceView(p.rootIndex, it->second); }
+            if (reg < RenderContext::kMaxBindings && ctx.srv[reg] != 0) {
+                if (isCompute_) { cmdList->SetComputeRootShaderResourceView(p.rootIndex, ctx.srv[reg]); }
+                else { cmdList->SetGraphicsRootShaderResourceView(p.rootIndex, ctx.srv[reg]); }
             }
             break;
         }
         case RootParameterInfo::UAV:
         {
-            auto it = ctx.uav.find(reg);
-            if (it != ctx.uav.end()) {
-                if (isCompute_) { cmdList->SetComputeRootUnorderedAccessView(p.rootIndex, it->second); }
-                else { cmdList->SetGraphicsRootUnorderedAccessView(p.rootIndex, it->second); }
+            if (reg < RenderContext::kMaxBindings && ctx.uav[reg] != 0) {
+                if (isCompute_) { cmdList->SetComputeRootUnorderedAccessView(p.rootIndex, ctx.uav[reg]); }
+                else { cmdList->SetGraphicsRootUnorderedAccessView(p.rootIndex, ctx.uav[reg]); }
             }
             break;
         }
         case RootParameterInfo::Table:
         {
-            auto it = ctx.table.find(reg);
-            if (it != ctx.table.end()) {
-                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, it->second); }
-                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, it->second); }
+            if (reg < RenderContext::kMaxBindings && ctx.table[reg].ptr != 0) {
+                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.table[reg]); }
+                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.table[reg]); }
             }
             break;
         }
         case RootParameterInfo::TableSampler:
         {
-            auto it = ctx.samplerTable.find(reg);
-            if (it != ctx.samplerTable.end()) {
-                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, it->second); }
-                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, it->second); }
+            if (reg < RenderContext::kMaxBindings && ctx.samplerTable[reg].ptr != 0) {
+                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
+                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
             }
             break;
         }
