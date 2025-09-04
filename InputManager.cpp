@@ -1,5 +1,6 @@
 #include "InputManager.h"
 #include <hidusage.h>
+#include <vector>
 
 void InputManager::Initialize(HWND hwnd) {
     hwnd_ = hwnd;
@@ -49,12 +50,14 @@ void InputManager::HandleRawInput_(HRAWINPUT hRaw) {
     if (GetRawInputData(hRaw, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) != 0) {
         return;
     }
-    BYTE* buffer = new BYTE[size];
-    if (GetRawInputData(hRaw, RID_INPUT, buffer, &size, sizeof(RAWINPUTHEADER)) != size) {
-        delete[] buffer;
+    thread_local std::vector<BYTE> buffer;
+    if (buffer.size() < size) {
+        buffer.resize(size);
+    }
+    if (GetRawInputData(hRaw, RID_INPUT, buffer.data(), &size, sizeof(RAWINPUTHEADER)) != size) {
         return;
     }
-    RAWINPUT* ri = reinterpret_cast<RAWINPUT*>(buffer);
+    RAWINPUT* ri = reinterpret_cast<RAWINPUT*>(buffer.data());
     if (ri->header.dwType == RIM_TYPEMOUSE && mouseCaptured_) {
         const RAWMOUSE& m = ri->data.mouse;
         mouseDX_ += static_cast<int>(m.lLastX);
@@ -63,7 +66,6 @@ void InputManager::HandleRawInput_(HRAWINPUT hRaw) {
         if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) { rButtonDown_ = true; }
         if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)   { rButtonDown_ = false; }
     }
-    delete[] buffer;
 }
 
 void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
