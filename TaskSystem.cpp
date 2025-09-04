@@ -1,5 +1,6 @@
 #include "TaskSystem.h"
 #include <algorithm>
+#include "Profiler.h"
 
 thread_local std::size_t TaskSystem::tlsIndex_ = static_cast<std::size_t>(-1);
 

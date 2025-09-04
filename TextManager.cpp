@@ -16,7 +16,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-// форматтер
+// форматтеры
 static std::string VFormat_(const char* fmt, va_list args) {
     if (fmt == nullptr) { return std::string(); }
     va_list copy; va_copy(copy, args);
@@ -27,7 +27,6 @@ static std::string VFormat_(const char* fmt, va_list args) {
     std::vsnprintf(s.data(), (size_t)needed + 1, fmt, args);
     return s;
 }
-
 static std::wstring VFormatW_(const wchar_t* fmt, va_list args) {
     if (fmt == nullptr) { return std::wstring(); }
     va_list copy; va_copy(copy, args);
@@ -103,23 +102,13 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
     regions_.clear();
 }
 
-// позиционные
+// позиционные (не кэшируем — как было)
 void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text) {
     EmitTextImmediate(x, y, color, px, text);
 }
-
 void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8) {
     AddText(x, y, color, px, UTF8toW(utf8));
 }
-
-//void TextManager::AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...) {
-//    if (fmt == nullptr) { return; }
-//    va_list args; va_start(args, fmt);
-//    std::string s = VFormat_(fmt, args);
-//    va_end(args);
-//    if (!s.empty()) { AddText(x, y, color, px, std::string_view(s)); }
-//}
-
 void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
@@ -159,14 +148,20 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
-    RegionLine ln; ln.text = std::wstring(text); ln.color = color; ln.px = px;
+    RegionLine ln;
+    ln.text = std::wstring(text);
+    ln.color = color;
+    ln.px = px;
+
+    BuildGlyphRun(ln.text, ln.px, ln.run, ln.widthPx);
+
     if (rg.autoMeasure || (rg.align != Align::Left)) {
-        ln.widthPx = MeasureTextWidthPx(ln.text, px);
         rg.maxLineWidth = std::max(rg.maxLineWidth, ln.widthPx);
     }
     else {
-        ln.widthPx = 0.0f; // не нужен; фон/выравнивание берём из fixedWidthPx
+        // для Align::Left + fixedWidth измерение не обязательно (ширина уже в ln.widthPx)
     }
+
     rg.lines.push_back(std::move(ln));
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
@@ -174,15 +169,6 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
 void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
     AddText(id, px, color, UTF8toW(utf8));
 }
-
-//void TextManager::AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...) {
-//    if (fmt == nullptr) { return; }
-//    va_list args; va_start(args, fmt);
-//    std::string s = VFormat_(fmt, args);
-//    va_end(args);
-//    if (!s.empty()) { AddText(id, px, color, std::string_view(s)); }
-//}
-
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
@@ -191,23 +177,35 @@ void TextManager::AddTextf(RegionId id, float px, const float4& color, const wch
     if (!s.empty()) { AddText(id, px, color, std::wstring_view(s)); }
 }
 
-// сборка/отрисовка
+// ======== СБОРКА / ОТРИСОВКА ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::Build");
 
-    // резервируем место под потенциальные фоновые прямоугольники
+    // 0) Предподсчёт глифов для единого reserve
+    size_t totalGlyphs = 0;
+    for (const Region& rg : regions_) {
+        if (rg.totalLines <= 0) { continue; }
+        for (const RegionLine& ln : rg.lines) {
+            totalGlyphs += ln.run.ready ? ln.run.glyphs.size() : ln.text.size();
+        }
+    }
+    if (totalGlyphs) {
+        verts_.reserve(verts_.size() + totalGlyphs * 4);
+        idx_.reserve(idx_.size() + totalGlyphs * 6);
+    }
+
+    // 1) Резерв под потенциальные фоновые прямоугольники
     rectVerts_.reserve(rectVerts_.size() + regions_.size() * 4);
     rectIdx_.reserve(rectIdx_.size() + regions_.size() * 6);
 
-    // один проход по регионам: фоны и строки
+    // 2) Один проход по регионам: фоны и строки
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
 
         // фон
         if (rg.bg.has_value()) {
-            const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
-                : rg.maxLineWidth)
+            const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth)
                 + float(rg.padX * 2);
             const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
             const int   bx = rg.x - rg.padX;
@@ -216,22 +214,21 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         }
 
         // строки
-        const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
-            : rg.maxLineWidth);
+        const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth);
         int y = rg.y;
         for (const RegionLine& ln : rg.lines) {
             float xOff = 0.0f;
             switch (rg.align) {
-            case Align::Left:   xOff = 0.0f; break;
-            case Align::Center: xOff = std::max(0.0f, 0.5f * (regionW - ln.widthPx)); break;
-            case Align::Right:  xOff = std::max(0.0f, (regionW - ln.widthPx)); break;
+            case Align::Left: { xOff = 0.0f; break; }
+            case Align::Center: { xOff = std::max(0.0f, 0.5f * (regionW - ln.widthPx)); break; }
+            case Align::Right: { xOff = std::max(0.0f, (regionW - ln.widthPx)); break; }
             }
-            EmitTextAt(rg.x, y, xOff, ln.color, ln.px, ln.text);
+            EmitGlyphRun(rg.x, y, xOff, ln.color, ln.run);
             y += rg.lineStepPx;
         }
     }
 
-    // 3) аплоад
+    // 3) Аплоад
     FrameResource* fr = r->GetFrameResource();
 
     // rects
@@ -274,18 +271,11 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        // viewport как root-constants (b1)
-        std::array<uint32_t, 8> k;
-        auto f2u = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
+        std::array<uint32_t, 8> k{};
+        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
         k[0] = f2u((float)vpW_);
         k[1] = f2u((float)vpH_);
-        k[2] = 0u;
-        k[3] = 0u;
-        k[4] = 0u;
-        k[5] = 0u;
-        k[6] = 0u;
-        k[7] = 0u;
-        rc.constants[1] = {k.begin(), k.end()};
+        rc.constants[1] = { k.begin(), k.end() };
 
         matRect_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -302,18 +292,13 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto tbl = r->StageSrvUavTable({ font_->GetSRVCPU() });
         rc.table[0] = tbl.gpu;
 
-        // b1: viewport.xy, spread, pxSize
-        std::array<uint32_t, 8> k;
-        auto f2u = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
+        std::array<uint32_t, 8> k{};
+        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
         k[0] = f2u((float)vpW_);
         k[1] = f2u((float)vpH_);
-        k[2] = 0u;
-        k[3] = 0u;
         k[4] = f2u((float)font_->Spread());
         k[5] = f2u((float)font_->PxSize());
-        k[6] = 0u;
-        k[7] = 0u;
-        rc.constants[1] = {k.begin(), k.end()};
+        rc.constants[1] = { k.begin(), k.end() };
 
         rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
 
@@ -333,11 +318,19 @@ void TextManager::Clear() {
 
 // ===== приватные =====
 
-float TextManager::MeasureTextWidthPx(std::wstring_view text, float px) const {
-    if (font_ == nullptr || text.empty()) { return 0.0f; }
-    CPU_SCOPE("TextManager::MeasureTextWidthPx");
+// Общий хелпер построения глиф-рана + ширины (один проход)
+void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {
+    outRun.glyphs.clear();
+    outRun.xOffsets.clear();
+    outRun.scale = px / float(font_->PxSize());
+    outRun.ready = false;
+    outWidthPx = 0.0f;
 
-    const float scale = px / float(font_->PxSize());
+    if (font_ == nullptr || text.empty()) { return; }
+
+    outRun.glyphs.reserve(text.size());
+    outRun.xOffsets.reserve(text.size());
+
     float penX = 0.0f;
     uint32_t prev = 0;
 
@@ -346,146 +339,77 @@ float TextManager::MeasureTextWidthPx(std::wstring_view text, float px) const {
         if (wc == L' ' || wc == L'\t') {
             const FontGlyph* gsp = font_->Find((uint32_t)wc);
             float adv = 0.0f;
-            if (gsp) { adv = float(gsp->xadv) * scale; }
+            if (gsp) { adv = float(gsp->xadv) * outRun.scale; }
             else {
                 const FontGlyph* gn = font_->Find((uint32_t)'n');
                 const float em = (gn ? float(gn->xadv) : float(font_->PxSize()));
-                adv = (wc == L'\t' ? em * 2.0f : em * 0.5f) * scale;
+                adv = (wc == L'\t' ? em * 2.0f : em * 0.5f) * outRun.scale;
             }
             penX += adv; prev = 0; continue;
         }
+
         const uint32_t cp = (uint32_t)wc;
         const FontGlyph* gph = font_->Find(cp);
         if (!gph) { prev = 0; continue; }
-        if (prev) { penX += float(font_->Kerning(prev, cp)) * scale; }
-        penX += float(gph->xadv) * scale;
+
+        if (prev) {
+            penX += float(font_->Kerning(prev, cp)) * outRun.scale;
+        }
+
+        outRun.xOffsets.push_back(penX);
+        outRun.glyphs.push_back(gph);
+
+        penX += float(gph->xadv) * outRun.scale;
         prev = cp;
     }
-    return penX;
+
+    outWidthPx = penX;
+    outRun.ready = true;
 }
 
+// Быстрый эмит с подготовленного глиф-рана
+void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run) {
+    if (!run.ready || run.glyphs.empty()) { return; }
+
+    const float scale = run.scale;
+    const float penY = (float)y + float(font_->Ascent()) * scale;
+
+    const size_t n = run.glyphs.size();
+    verts_.reserve(verts_.size() + n * 4);
+    idx_.reserve(idx_.size() + n * 6);
+
+    for (size_t i = 0; i < n; ++i) {
+        const FontGlyph* gph = run.glyphs[i];
+        if (!gph || gph->w == 0 || gph->h == 0) { continue; }
+        const float penX = (float)x + xOffset + run.xOffsets[i];
+
+        const float gx = penX + float(gph->xoff) * scale;
+        const float gy = penY + float(gph->yoff) * scale;
+        const float gw = float(gph->w) * scale;
+        const float gh = float(gph->h) * scale;
+
+        const uint32_t base = (uint32_t)verts_.size();
+        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
+        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
+        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
+        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
+
+        idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
+        idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
+    }
+}
+
+// Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
 void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::EmitTextImmediate");
-
-    const float scale = px / float(font_->PxSize());
-    float penX = (float)x;
-    float penY = (float)y + float(font_->Ascent()) * scale;
-
-    uint32_t prev = 0;
-
-    if (!text.empty()) {
-        verts_.reserve(verts_.size() + text.size() * 4);
-        idx_.reserve(idx_.size() + text.size() * 6);
-    }
-
-    for (wchar_t wc : text) {
-        if (wc == L'\n') {
-            penX = (float)x;
-            penY += float(font_->LineAdvance()) * scale;
-            prev = 0; continue;
-        }
-        if (wc == L' ' || wc == L'\t') {
-            const FontGlyph* gsp = font_->Find((uint32_t)wc);
-            float adv = 0.0f;
-            if (gsp) { adv = float(gsp->xadv) * scale; }
-            else {
-                const FontGlyph* gn = font_->Find((uint32_t)'n');
-                const float em = (gn ? float(gn->xadv) : float(font_->PxSize()));
-                adv = (wc == L'\t' ? em * 2.0f : em * 0.5f) * scale;
-            }
-            penX += adv; prev = 0; continue;
-        }
-
-        const uint32_t cp = (uint32_t)wc;
-        const FontGlyph* gph = font_->Find(cp);
-        if (!gph) { prev = 0; continue; }
-        if (prev) { penX += float(font_->Kerning(prev, cp)) * scale; }
-
-        if (gph->w == 0 || gph->h == 0) {
-            penX += float(gph->xadv) * scale;
-            prev = cp; continue;
-        }
-
-        const float gx = penX + float(gph->xoff) * scale;
-        const float gy = penY + float(gph->yoff) * scale;
-        const float gw = float(gph->w) * scale;
-        const float gh = float(gph->h) * scale;
-
-        const uint32_t base = (uint32_t)verts_.size();
-        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
-        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
-        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
-        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
-
-        idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
-        idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
-
-        penX += float(gph->xadv) * scale;
-        prev = cp;
-    }
-}
-
-void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text) {
-    if (font_ == nullptr) { return; }
-    CPU_SCOPE("TextManager::EmitTextAt");
-
-    const float scale = px / float(font_->PxSize());
-    float penX = (float)x + xOffset;
-    float penY = (float)y + float(font_->Ascent()) * scale;
-
-    uint32_t prev = 0;
-
-    if (!text.empty()) {
-        verts_.reserve(verts_.size() + text.size() * 4);
-        idx_.reserve(idx_.size() + text.size() * 6);
-    }
-
-    for (wchar_t wc : text) {
-        if (wc == L'\n') { break; } // одна строка
-        if (wc == L' ' || wc == L'\t') {
-            const FontGlyph* gsp = font_->Find((uint32_t)wc);
-            float adv = 0.0f;
-            if (gsp) { adv = float(gsp->xadv) * scale; }
-            else {
-                const FontGlyph* gn = font_->Find((uint32_t)'n');
-                const float em = (gn ? float(gn->xadv) : float(font_->PxSize()));
-                adv = (wc == L'\t' ? em * 2.0f : em * 0.5f) * scale;
-            }
-            penX += adv; prev = 0; continue;
-        }
-
-        const uint32_t cp = (uint32_t)wc;
-        const FontGlyph* gph = font_->Find(cp);
-        if (!gph) { prev = 0; continue; }
-        if (prev) { penX += float(font_->Kerning(prev, cp)) * scale; }
-
-        if (gph->w == 0 || gph->h == 0) {
-            penX += float(gph->xadv) * scale;
-            prev = cp; continue;
-        }
-
-        const float gx = penX + float(gph->xoff) * scale;
-        const float gy = penY + float(gph->yoff) * scale;
-        const float gw = float(gph->w) * scale;
-        const float gh = float(gph->h) * scale;
-
-        const uint32_t base = (uint32_t)verts_.size();
-        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
-        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
-        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
-        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
-
-        idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
-        idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
-
-        penX += float(gph->xadv) * scale;
-        prev = cp;
-    }
+    GlyphRun run;
+    float width = 0.0f;
+    BuildGlyphRun(text, px, run, width);
+    EmitGlyphRun(x, y, 0.0f, color, run);
 }
 
 void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) {
-    CPU_SCOPE("TextManager::EmitRect");
     const float gx = (float)x, gy = (float)y;
     const float gw = w, gh = h;
     const uint32_t base = (uint32_t)rectVerts_.size();

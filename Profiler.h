@@ -8,6 +8,9 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#include <optional>
+
+#include "TaskSystem.h"
 
 #ifndef PROF_ENABLED
 #define PROF_ENABLED 1
@@ -16,12 +19,12 @@
 class TextManager; // forward
 
 // Профайлер CPU: скоупы, EMA-среднее, кулдаун сброса максимумов,
-// темпоральная сортировка (сглаженный ранг) и дешёвый оверлей.
+// подготовка оверлея в EndFrame (дабл-буфер), редкая сортировка по среднему.
 class Profiler {
 public:
     struct ScopeSample {
         const char* name = nullptr; // ожидается литерал/статическая строка
-        uint64_t    nameId = 0;     // резерв под быстрый id (не обязателен)
+        uint64_t    nameId = 0;     // зарезервировано под быстрый id
         double      ms = 0.0;
     };
 
@@ -31,9 +34,9 @@ public:
         uint32_t frameCount = 0;
 
         // Показатели
-        double   avgMs = 0.0;  // EMA
-        double   maxMs = 0.0;  // сбрасывается по кулдауну
-        uint32_t lastCount = 0; // сколько раз встретился скоуп в прошлом кадре (для usages)
+        double   avgMs = 0.0;   // EMA
+        double   maxMs = 0.0;   // сбрасывается по кулдауну
+        uint32_t lastCount = 0; // сколько раз встретился скоуп в прошлом кадре
 
         void Accumulate(double ms) {
             frameMsSum += ms;
@@ -90,7 +93,7 @@ public:
 #define CPU_SCOPE_N(nameLiteral, id) do { } while (0)
 #endif
 
-    // Оверлей с табличкой
+    // Оверлей с табличкой (читает дабл-буфер без локов)
     void EmitOverlay(TextManager* tm, int x = 8, int y = 48, int maxLines = 16);
 
     // Управление
@@ -104,32 +107,21 @@ public:
     double GetMaxCooldownSeconds() const;
     void   ResetMaxNow();
 
-    // Темпоральная сортировка (0..1): чем больше — тем инерционнее порядок
-    void   SetRankSmoothing(double alpha) {
+    // Интервал пересортировки строк в оверлее (сек)
+    void   SetOverlayResortIntervalSeconds(double sec) {
 #if PROF_ENABLED
-        if (alpha < 0.0) { alpha = 0.0; }
-        if (alpha > 0.99) { alpha = 0.99; }
+        if (sec < 0.05) { sec = 0.05; }
         std::lock_guard<std::mutex> lk(mtx_);
-        rankAlpha_ = alpha;
+        overlayResortIntervalSec_ = sec;
 #else
-        (void)alpha;
+        (void)sec;
 #endif
     }
-    double GetRankSmoothing() const {
+    double GetOverlayResortIntervalSeconds() const {
 #if PROF_ENABLED
-        return rankAlpha_;
+        return overlayResortIntervalSec_;
 #else
         return 0.0;
-#endif
-    }
-
-    // Необязательно: имя потока (на будущее)
-    void SetThreadName(const std::string& n) {
-#if PROF_ENABLED
-        std::lock_guard<std::mutex> lk(mtx_);
-        threadNames_[std::this_thread::get_id()] = n;
-#else
-        (void)n;
 #endif
     }
 
@@ -139,11 +131,19 @@ private:
 
 #if PROF_ENABLED
     void ResetMax_Unsafe(); // вызывать под mtx_
-    void UpdateSmoothRanks_Unsafe(const std::vector<std::pair<std::string, double>>& ranked); // под mtx_
 #endif
+
+    // --- данные оверлея (снэпшот) ---
+    struct OverlayRow {
+        std::wstring name; // уже wide, чтобы не конвертировать при отрисовке
+        double   avgMs = 0.0;
+        double   maxMs = 0.0;
+        uint32_t usages = 0;
+    };
 
 private:
 #if PROF_ENABLED
+    // сбор статистики
     std::mutex mtx_;
     std::unordered_map<std::string, ScopeStats> stats_;
     std::unordered_map<std::thread::id, std::string> threadNames_;
@@ -162,12 +162,22 @@ private:
     CoolClock::time_point lastMaxReset_{};
     double maxResetIntervalSec_ = 3.0;
 
-    // Темпоральная сортировка
-    std::unordered_map<std::string, double> rankSmooth_; // сглаженный ранг (0 — верх)
-    double rankAlpha_ = 0.99;
+    double endFrameAsyncLastMs_ = 0.0;
+    double endFrameAsyncAvgMs_ = 0.0;
+    double endFrameAsyncMaxMs_ = 0.0;
 
-    // Ширина оверлей-региона (фикс) — оцениваем и сглаживаем, чтобы не мерить строки
+    // Оверлей: дабл-буфер строк (EndFrame пишет, EmitOverlay читает)
+    std::vector<OverlayRow> overlayRows_[2];
+    std::atomic<int>        overlayReadBuf_{ 0 }; // 0 или 1
+
+    // Переcортировка по avgMs раз в N сек
+    CoolClock::time_point lastOverlaySort_{};
+    double overlayResortIntervalSec_ = 1.0; // по умолчанию раз в секунду
+
+    // Ширина оверлей-региона (фикс) — сглаженная оценка, чтобы не мерить строки
     double overlayWidthPx_ = 640.0;
+
+    TaskGroup overlayGroup_;
 #endif
 };
 

@@ -119,31 +119,36 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     MSG msg = {};
     double lastTime = GetTimeSeconds();
     while (isRunning_) {
-        input_.NewFrame();
-
-        // Не блокируемся, просто обрабатываем все сообщения, если есть
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-            if (msg.message == WM_QUIT) {
-                break; // Прерываем цикл, не рендерим больше!
-            }
-        }
-        if (msg.message == WM_QUIT) {
-            break;
-        }
-
-        double now = GetTimeSeconds();
-        float deltaTime = static_cast<float>(now - lastTime);
-        lastTime = now;
-        
-		deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
-
         Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber() + 1); //will be increased in Renderer::BeginFrame
+        
+        {
+            CPU_SCOPE("Whole Cycle");
+            input_.NewFrame();
 
-		renderer_.Tick(deltaTime);
-        scene_.Tick(deltaTime);
-        scene_.Render(&renderer_);
+            {
+                CPU_SCOPE("Win Messages");
+                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
+                    if (msg.message == WM_QUIT) {
+                        break; // Прерываем цикл, не рендерим больше!
+                    }
+                }
+                if (msg.message == WM_QUIT) {
+                    break;
+                }
+            }
+
+            double now = GetTimeSeconds();
+            float deltaTime = static_cast<float>(now - lastTime);
+            lastTime = now;
+
+            deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
+
+            renderer_.Tick(deltaTime);
+            scene_.Tick(deltaTime);
+            scene_.Render(&renderer_);
+        }
 
         Profiler::Get().EndFrame();
     }

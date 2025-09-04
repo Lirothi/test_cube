@@ -233,15 +233,13 @@ void Scene::Tick(float deltaTime) {
     auto& tasks = TaskSystem::Get();
 
     size_t batchSize = 16;
-    tasks.Dispatch(objects_.size(),
+    TaskSystem::ParallelFor(objects_.size(),
         [this, deltaTime](size_t index) {
             if (index >= objects_.size()) {
                 return;
 			}
             objects_[index]->Tick(deltaTime);
 		}, batchSize);
-
-	tasks.WaitForAll();
 }
 
 void Scene::Render(Renderer* renderer) {
@@ -344,14 +342,22 @@ void Scene::Render(Renderer* renderer) {
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Debug"); Pass_Debug(renderer, ctx); });
 
     rg.ExecuteParallel(renderer, TaskSystem::Get());
-    TaskSystem::Get().WaitForAll();
+    //rg.Execute(renderer);
+    
+    {
+        CPU_SCOPE("Main Wait");
+        TaskSystem::Get().WaitForAll();
+    }
 
     RenderGraph epilogueRG;
     epilogueRG.AddPass("Overlay", {},
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Overlay"); Pass_Overlay(renderer, ctx); });
     epilogueRG.Execute(renderer);
     
-    TaskSystem::Get().WaitForAll();
+    {
+        CPU_SCOPE("Last Wait");
+        TaskSystem::Get().WaitForAll();
+    }
     renderer->EndFrame();
 }
 

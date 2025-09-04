@@ -23,7 +23,6 @@ public:
     // Позиционные API
     void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
     void AddText(int x, int y, const float4& color, float px, std::string_view utf8);
-    //void AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...);
     void AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...);
 
     // -------------------- Регионы --------------------
@@ -33,15 +32,14 @@ public:
     void RegionSetPadding(RegionId id, int padX, int padY);
     void RegionSetAlign(RegionId id, Align a);
 
-    // НОВОЕ: фиксированная ширина региона (px). Если задана, фон рисуем по ней.
+    // фиксированная ширина региона (если задана — фон рисуем по ней)
     void RegionSetFixedWidth(RegionId id, float wPx);
 
-    // НОВОЕ: отключить измерение ширины строк внутри региона (ускорение для Align::Left)
+    // отключить измерение ширины строк внутри региона (ускорение для Align::Left)
     void RegionSetAutoMeasure(RegionId id, bool enabled);
 
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
-    //void AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...);
     void AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...);
 
     void Build(Renderer* r, ID3D12GraphicsCommandList* cl);
@@ -53,11 +51,20 @@ public:
 private:
     struct Vertex { float3 pos; float4 col; float2 uv; };
 
+    // Предподсчитанный «глиф-ран» одной строки
+    struct GlyphRun {
+        std::vector<const struct FontGlyph*> glyphs; // ptr на глифы в атласе
+        std::vector<float> xOffsets;                 // кумулятивные X до каждого глифа (с кернингом)
+        float scale = 1.0f;                          // px / fontPx
+        bool  ready = false;
+    };
+
     struct RegionLine {
-        std::wstring text;        // кешированная широкая строка
+        std::wstring text;        // исходная широкая строка
         float4       color;
         float        px = 16.0f;
-        float        widthPx = 0; // при AutoMeasure=false может быть 0
+        float        widthPx = 0; // ширина строки (для Center/Right)
+        GlyphRun     run;         // кэш глифов/офсетов
     };
 
     struct Region {
@@ -77,9 +84,17 @@ private:
 
 private:
     static std::wstring UTF8toW(std::string_view s);
-    float MeasureTextWidthPx(std::wstring_view text, float px) const;
+
+    // === Общий хелпер построения глиф-рана и ширины ===
+    void  BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const;
+
+    // Быстрый вывод подготовленного глиф-рана
+    void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run);
+
+    // Старая «неподготовленная» отрисовка (позиционная) — теперь через BuildGlyphRun
     void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text);
-    void  EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text);
+
+    // Рисунок прямоугольника (фон)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
 private:
