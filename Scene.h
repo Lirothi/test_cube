@@ -39,10 +39,10 @@ private:
         const mat4& invView, const mat4& invProj,
         float zNear, float zFar,
         const float3& camDir,
-        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
     void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
-        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
     void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
         const mat4& invView, const mat4& invProj,
@@ -63,7 +63,7 @@ private:
         float zNear, float zFar);
     void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
-        const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);

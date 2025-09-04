@@ -166,14 +166,16 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData)
 {
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
+    //CPU_SCOPE("RenderableObject::RecordShadow");
 
-    // world/view/proj — хешированные идентификаторы
+    //TaskSystem::Get().Submit([this, &lightProj, &lightView, cbData]()
     {
-        //CPU_SCOPE("RenderableObject::RecordShadow.Unis");
+        CPU_SCOPE("RenderableObject::RecordShadow.Unis");
         shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
         shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
         shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
     }
+    //});
 
     shadowMaterial_->Bind(cl, ctx, false);
 }

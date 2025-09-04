@@ -931,7 +931,7 @@ bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& o
 }
 
 void Material::ProcessReflection(ID3D12ShaderReflection* refl,
-    std::unordered_map<UINT, CBufferInfo>& io)
+    robin_hood::unordered_map<UINT, CBufferInfo>& io)
 {
     if (!refl) { return; }
 
@@ -995,7 +995,7 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
 }
 
 void Material::ReflectShaderBlob(ID3DBlob* blob,
-    std::unordered_map<UINT, CBufferInfo>& io)
+    robin_hood::unordered_map<UINT, CBufferInfo>& io)
 {
     if (!blob) return;
 

@@ -270,7 +270,7 @@ void Scene::Render(Renderer* renderer) {
     const float3 camDir = invView.TransformDirection(float3(0, 0, 1)).Normalized();
 
     // бакеты объектов (ровно как у тебя, просто в компактном виде)
-    std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>> buckets;
+    robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>> buckets;
     for (const auto& obj : objects_) {
         if (!obj) continue;
         bool tr = obj->IsTransparent();
@@ -457,7 +457,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
     float zNear, float zFar, const float3& camDir,
-    const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
@@ -564,7 +564,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
 {
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
@@ -864,7 +864,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const std::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
 {
     RenderGraph rgTr(ctx.batchIndex);
 

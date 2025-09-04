@@ -146,7 +146,7 @@ private:
 #if PROF_ENABLED
     // сбор статистики
     std::mutex mtx_;
-    robin_hood::unordered_flat_map<std::string, ScopeStats> stats_;
+    robin_hood::unordered_map<std::string, ScopeStats> stats_;
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
 
     std::vector<ScopeSample> frameSamples_;

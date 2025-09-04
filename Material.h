@@ -166,14 +166,17 @@ public:
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        //CPU_SCOPE("Material::UpdateCBField");
-        UINT destCBSizeBytes = GetCBSizeBytes(bRegister);
-        if (!destCB || destCBSizeBytes == 0) { return false; }
-
+        UINT destCBSizeBytes = 0;
         CBufferField info{};
-        if (!GetCBFieldInfo(bRegister, name, info)) {
-            assert(false && "Bad uniform name!");
-            return false;
+        {
+            destCBSizeBytes = GetCBSizeBytes(bRegister);
+            if (!destCB || destCBSizeBytes == 0) { return false; }
+
+            
+            if (!GetCBFieldInfo(bRegister, name, info)) {
+                assert(false && "Bad uniform name!");
+                return false;
+            }
         }
 
         return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
@@ -184,13 +187,16 @@ public:
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        UINT destCBSizeBytes = GetCBSizeBytes(bRegister);
-        if (!destCB || destCBSizeBytes == 0) { return false; }
-
+        UINT destCBSizeBytes = 0;
         CBufferField info{};
-        if (!GetCBFieldInfo(bRegister, id, info)) {
-            assert(false && "Bad uniform id!");
-            return false;
+        {
+            destCBSizeBytes = GetCBSizeBytes(bRegister);
+            if (!destCB || destCBSizeBytes == 0) { return false; }
+
+            if (!GetCBFieldInfo(bRegister, id, info)) {
+                assert(false && "Bad uniform id!");
+                return false;
+            }
         }
 
         return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
@@ -236,12 +242,12 @@ private:
     };
     std::vector<RetiredState> retired_;
 
-    std::unordered_map<UINT, CBufferInfo> cbInfos_; // bReg -> info
+    robin_hood::unordered_map<UINT, CBufferInfo> cbInfos_; // bReg -> info
 
     static void ReflectShaderBlob(ID3DBlob* blob,
-        std::unordered_map<UINT, CBufferInfo>& io);
+        robin_hood::unordered_map<UINT, CBufferInfo>& io);
     static void ProcessReflection(ID3D12ShaderReflection* refl,
-        std::unordered_map<UINT, CBufferInfo>& io);
+        robin_hood::unordered_map<UINT, CBufferInfo>& io);
 
     // общие билдеры
     bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
