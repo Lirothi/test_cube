@@ -1,9 +1,11 @@
 #include <cstdarg>
 #include <cstdio>
+#include <cwchar>
 #include <optional>
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <string_view>
 #include "TextManager.h"
 #include "UploadManager.h"
 #include "SamplerManager.h"
@@ -26,12 +28,23 @@ static std::string VFormat_(const char* fmt, va_list args) {
     return s;
 }
 
+static std::wstring VFormatW_(const wchar_t* fmt, va_list args) {
+    if (fmt == nullptr) { return std::wstring(); }
+    va_list copy; va_copy(copy, args);
+    int needed = std::vswprintf(nullptr, 0, fmt, copy);
+    va_end(copy);
+    if (needed <= 0) { return std::wstring(); }
+    std::wstring s; s.resize((size_t)needed);
+    std::vswprintf(s.data(), (size_t)needed + 1, fmt, args);
+    return s;
+}
+
 // utf8 → wide
-std::wstring TextManager::UTF8toW(const std::string& s) {
+std::wstring TextManager::UTF8toW(std::string_view s) {
     if (s.empty()) { return L""; }
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
     std::wstring w; w.resize((size_t)wlen);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), wlen);
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), wlen);
     return w;
 }
 
@@ -91,15 +104,25 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
 }
 
 // позиционные
-void TextManager::AddText(int x, int y, const float4& color, float px, const std::string& utf8) {
-    EmitTextImmediate(x, y, color, px, utf8);
+void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text) {
+    EmitTextImmediate(x, y, color, px, text);
+}
+void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8) {
+    AddText(x, y, color, px, UTF8toW(utf8));
 }
 void TextManager::AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
     std::string s = VFormat_(fmt, args);
     va_end(args);
-    if (!s.empty()) { EmitTextImmediate(x, y, color, px, s); }
+    if (!s.empty()) { AddText(x, y, color, px, std::string_view(s)); }
+}
+void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    va_list args; va_start(args, fmt);
+    std::wstring s = VFormatW_(fmt, args);
+    va_end(args);
+    if (!s.empty()) { AddText(x, y, color, px, std::wstring_view(s)); }
 }
 
 // регионы
@@ -129,13 +152,13 @@ void TextManager::RegionSetAutoMeasure(RegionId id, bool enabled) {
     regions_[id].autoMeasure = enabled;
 }
 
-void TextManager::AddText(RegionId id, float px, const float4& color, const std::string& utf8) {
-    if (id >= regions_.size() || font_ == nullptr || utf8.empty()) { return; }
+void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text) {
+    if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
-    RegionLine ln; ln.text = utf8; ln.color = color; ln.px = px;
+    RegionLine ln; ln.text = std::wstring(text); ln.color = color; ln.px = px;
     if (rg.autoMeasure || (rg.align != Align::Left)) {
-        ln.widthPx = MeasureTextWidthPx(utf8, px);
+        ln.widthPx = MeasureTextWidthPx(ln.text, px);
         rg.maxLineWidth = std::max(rg.maxLineWidth, ln.widthPx);
     }
     else {
@@ -145,12 +168,22 @@ void TextManager::AddText(RegionId id, float px, const float4& color, const std:
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
 }
+void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
+    AddText(id, px, color, UTF8toW(utf8));
+}
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
     std::string s = VFormat_(fmt, args);
     va_end(args);
-    if (!s.empty()) { AddText(id, px, color, s); }
+    if (!s.empty()) { AddText(id, px, color, std::string_view(s)); }
+}
+void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    va_list args; va_start(args, fmt);
+    std::wstring s = VFormatW_(fmt, args);
+    va_end(args);
+    if (!s.empty()) { AddText(id, px, color, std::wstring_view(s)); }
 }
 
 // сборка/отрисовка
@@ -290,16 +323,15 @@ void TextManager::Clear() {
 
 // ===== приватные =====
 
-float TextManager::MeasureTextWidthPx(const std::string& utf8, float px) const {
-    if (font_ == nullptr || utf8.empty()) { return 0.0f; }
+float TextManager::MeasureTextWidthPx(std::wstring_view text, float px) const {
+    if (font_ == nullptr || text.empty()) { return 0.0f; }
     CPU_SCOPE("TextManager::MeasureTextWidthPx");
 
     const float scale = px / float(font_->PxSize());
     float penX = 0.0f;
-    std::wstring w = UTF8toW(utf8);
     uint32_t prev = 0;
 
-    for (wchar_t wc : w) {
+    for (wchar_t wc : text) {
         if (wc == L'\n') { break; }
         if (wc == L' ' || wc == L'\t') {
             const FontGlyph* gsp = font_->Find((uint32_t)wc);
@@ -322,7 +354,7 @@ float TextManager::MeasureTextWidthPx(const std::string& utf8, float px) const {
     return penX;
 }
 
-void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, const std::string& utf8) {
+void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::EmitTextImmediate");
 
@@ -330,15 +362,14 @@ void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px,
     float penX = (float)x;
     float penY = (float)y + float(font_->Ascent()) * scale;
 
-    std::wstring w = UTF8toW(utf8);
     uint32_t prev = 0;
 
-    if (!w.empty()) {
-        verts_.reserve(verts_.size() + w.size() * 4);
-        idx_.reserve(idx_.size() + w.size() * 6);
+    if (!text.empty()) {
+        verts_.reserve(verts_.size() + text.size() * 4);
+        idx_.reserve(idx_.size() + text.size() * 6);
     }
 
-    for (wchar_t wc : w) {
+    for (wchar_t wc : text) {
         if (wc == L'\n') {
             penX = (float)x;
             penY += float(font_->LineAdvance()) * scale;
@@ -385,7 +416,7 @@ void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px,
     }
 }
 
-void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, float px, const std::string& utf8) {
+void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::EmitTextAt");
 
@@ -393,15 +424,14 @@ void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, f
     float penX = (float)x + xOffset;
     float penY = (float)y + float(font_->Ascent()) * scale;
 
-    std::wstring w = UTF8toW(utf8);
     uint32_t prev = 0;
 
-    if (!w.empty()) {
-        verts_.reserve(verts_.size() + w.size() * 4);
-        idx_.reserve(idx_.size() + w.size() * 6);
+    if (!text.empty()) {
+        verts_.reserve(verts_.size() + text.size() * 4);
+        idx_.reserve(idx_.size() + text.size() * 6);
     }
 
-    for (wchar_t wc : w) {
+    for (wchar_t wc : text) {
         if (wc == L'\n') { break; } // одна строка
         if (wc == L' ' || wc == L'\t') {
             const FontGlyph* gsp = font_->Find((uint32_t)wc);
