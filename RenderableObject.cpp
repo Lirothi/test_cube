@@ -10,6 +10,16 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
+namespace {
+    constexpr CBFieldID kBaseColorID = CB_FIELD_ID("baseColor");
+    constexpr CBFieldID kMetalRoughID = CB_FIELD_ID("metalRough");
+    constexpr CBFieldID kTexOffsScaleID = CB_FIELD_ID("texOffsScale");
+    constexpr CBFieldID kTexFlagsID = CB_FIELD_ID("texFlags");
+    constexpr CBFieldID kWorldID = CB_FIELD_ID("world");
+    constexpr CBFieldID kViewID = CB_FIELD_ID("view");
+    constexpr CBFieldID kProjID = CB_FIELD_ID("proj");
+}
+
 RenderableObject::RenderableObject(
     const std::string& matPreset,
     const std::string& inputLayout,
@@ -74,12 +84,10 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
 void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     if (!cbData) { return; }
-    static constexpr CBFieldID worldID = CB_FIELD_ID("world");
-    static constexpr CBFieldID viewID = CB_FIELD_ID("view");
-    static constexpr CBFieldID projID = CB_FIELD_ID("proj");
-    UpdateUniform(worldID, GetModelMatrix(), cbData);
-    UpdateUniform(viewID, view, cbData);
-    UpdateUniform(projID, proj, cbData);
+    CPU_SCOPE("RenderableObject::UpdateUniforms");
+    UpdateUniform(kWorldID, GetModelMatrix(), cbData);
+    UpdateUniform(kViewID, view, cbData);
+    UpdateUniform(kProjID, proj, cbData);
 
     ApplyMaterialParamsToCB(cbData);
 }
@@ -135,16 +143,6 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     IssueDraw(renderer, cl);
 }
 
-namespace {
-constexpr CBFieldID kBaseColorID   = CB_FIELD_ID("baseColor");
-constexpr CBFieldID kMetalRoughID  = CB_FIELD_ID("metalRough");
-constexpr CBFieldID kTexOffsScaleID = CB_FIELD_ID("texOffsScale");
-constexpr CBFieldID kTexFlagsID    = CB_FIELD_ID("texFlags");
-constexpr CBFieldID kWorldID       = CB_FIELD_ID("world");
-constexpr CBFieldID kViewID        = CB_FIELD_ID("view");
-constexpr CBFieldID kProjID        = CB_FIELD_ID("proj");
-}
-
 void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
@@ -170,7 +168,7 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 
     //TaskSystem::Get().Submit([this, &lightProj, &lightView, cbData]()
     {
-        CPU_SCOPE("RenderableObject::RecordShadow.Unis");
+        //CPU_SCOPE("RenderableObject::RecordShadow.Unis");
         shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
         shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
         shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
