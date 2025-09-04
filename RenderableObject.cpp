@@ -119,13 +119,23 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     IssueDraw(renderer, cl);
 }
 
+namespace {
+constexpr CBFieldID kBaseColorID   = CB_FIELD_ID("baseColor");
+constexpr CBFieldID kMetalRoughID  = CB_FIELD_ID("metalRough");
+constexpr CBFieldID kTexOffsScaleID = CB_FIELD_ID("texOffsScale");
+constexpr CBFieldID kTexFlagsID    = CB_FIELD_ID("texFlags");
+constexpr CBFieldID kWorldID       = CB_FIELD_ID("world");
+constexpr CBFieldID kViewID        = CB_FIELD_ID("view");
+constexpr CBFieldID kProjID        = CB_FIELD_ID("proj");
+}
+
 void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
-    UpdateUniform("baseColor", p.baseColor, cbData);
-    UpdateUniform("metalRough", p.metalRough, cbData);
-    UpdateUniform("texOffsScale", p.texOffsScale, cbData);
-    UpdateUniform("texFlags", p.texFlags, cbData);
+    UpdateUniform(kBaseColorID, p.baseColor, cbData);
+    UpdateUniform(kMetalRoughID, p.metalRough, cbData);
+    UpdateUniform(kTexOffsScaleID, p.texOffsScale, cbData);
+    UpdateUniform(kTexFlagsID, p.texFlags, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -141,10 +151,10 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 {
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
 
-    // world/view/proj — именами, как ожидает _csm шейдер
-    shadowMaterial_->UpdateCB0Field("world", GetModelMatrix(), cbData);
-    shadowMaterial_->UpdateCB0Field("view", lightView, cbData);
-    shadowMaterial_->UpdateCB0Field("proj", lightProj, cbData);
+    // world/view/proj — хешированные идентификаторы
+    shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
+    shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
+    shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
 
     shadowMaterial_->Bind(cl, ctx, false);
 }

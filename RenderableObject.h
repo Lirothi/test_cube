@@ -7,6 +7,7 @@
 
 #include "CBManager.h"
 #include "Material.h"
+#include "CBFieldID.h"
 #include "MaterialData.h"
 #include "Mesh.h"
 #include "RenderContext.h"
@@ -69,11 +70,19 @@ protected:
     // Утилита записи в CB по имени из layout (b0)
     template<typename T> bool UpdateUniform(const std::string& name, const T& value, uint8_t* cbData) {
         if (!cbData) { return false; }
-        if (cbLayout_)
-        {
-	        return cbLayout_->SetField<T>(name, value, cbData);
+        if (cbLayout_) {
+            return cbLayout_->SetField<T>(name, value, cbData);
         }
         return graphicsMaterial_->UpdateCB0Field(name, value, cbData);
+    }
+
+    // Обновление поля по хешированному идентификатору
+    template<typename T> bool UpdateUniform(CBFieldID id, const T& value, uint8_t* cbData) {
+        if (!cbData) { return false; }
+        if (cbLayout_) {
+            return false;
+        }
+        return graphicsMaterial_->UpdateCB0Field(id, value, cbData);
     }
 
     void ApplyMaterialParamsToCB(uint8_t* cbData);

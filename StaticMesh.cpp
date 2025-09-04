@@ -27,10 +27,13 @@ void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdLi
 void StaticMesh::UpdateUniforms(Renderer* renderer, const Math::mat4& view, const Math::mat4& proj, uint8_t* cbData)
 {
     if (!cbData) { return; }
-    UpdateUniform("world", GetModelMatrix(), cbData);
-    UpdateUniform("view", view, cbData);
-    UpdateUniform("proj", proj, cbData);
-    
+    static constexpr CBFieldID worldID = CB_FIELD_ID("world");
+    static constexpr CBFieldID viewID  = CB_FIELD_ID("view");
+    static constexpr CBFieldID projID  = CB_FIELD_ID("proj");
+    UpdateUniform(worldID, GetModelMatrix(), cbData);
+    UpdateUniform(viewID, view, cbData);
+    UpdateUniform(projID, proj, cbData);
+
     ApplyMaterialParamsToCB(cbData);
 }
 

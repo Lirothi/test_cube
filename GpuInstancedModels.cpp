@@ -106,9 +106,12 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
 
 void GpuInstancedModels::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
-    UpdateUniform("world", modelMatrix_, cbData);
-    UpdateUniform("view", view, cbData);
-    UpdateUniform("proj", proj, cbData);
+    static constexpr CBFieldID worldID = CB_FIELD_ID("world");
+    static constexpr CBFieldID viewID  = CB_FIELD_ID("view");
+    static constexpr CBFieldID projID  = CB_FIELD_ID("proj");
+    UpdateUniform(worldID, modelMatrix_, cbData);
+    UpdateUniform(viewID, view, cbData);
+    UpdateUniform(projID, proj, cbData);
 
     ApplyMaterialParamsToCB(cbData);
 }
