@@ -168,9 +168,12 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
 
     // world/view/proj — хешированные идентификаторы
-    shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
-    shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
-    shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
+    {
+        //CPU_SCOPE("RenderableObject::RecordShadow.Unis");
+        shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
+        shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
+        shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
+    }
 
     shadowMaterial_->Bind(cl, ctx, false);
 }

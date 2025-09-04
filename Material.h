@@ -144,6 +144,24 @@ public:
     }
 
     template<typename T>
+    bool CopyData(const CBufferField& info, const T& value, uint8_t* destCB, UINT destCBSizeBytes, UINT idx)
+    {
+        const UINT stride = (info.elementStride ? info.elementStride : info.size);
+        const UINT count = (info.elementCount ? info.elementCount : 1);
+
+        if (idx >= count) { return false; }
+
+        const size_t dstOff = size_t(info.offset) + size_t(idx) * size_t(stride);
+        if (dstOff >= destCBSizeBytes) { return false; }
+        if (dstOff + stride > destCBSizeBytes) { return false; }
+
+        uint8_t* dst = destCB + dstOff;
+        const size_t copyBytes = std::min<size_t>(sizeof(T), stride);
+        std::memcpy(dst, &value, copyBytes);
+        return true;
+    }
+
+    template<typename T>
     bool UpdateCBField(UINT bRegister, const std::string& name,
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
@@ -158,21 +176,7 @@ public:
             return false;
         }
 
-        const UINT stride = (info.elementStride ? info.elementStride : info.size);
-        const UINT count = (info.elementCount ? info.elementCount : 1);
-
-        UINT idx = 0;
-        if (arrayIdxParam) { idx = *arrayIdxParam; }
-        if (idx >= count) { return false; }
-
-        const size_t dstOff = size_t(info.offset) + size_t(idx) * size_t(stride);
-        if (dstOff >= destCBSizeBytes) { return false; }
-        if (dstOff + stride > destCBSizeBytes) { return false; }
-
-        uint8_t* dst = destCB + dstOff;
-        const size_t copyBytes = std::min<size_t>(sizeof(T), stride);
-        std::memcpy(dst, &value, copyBytes);
-        return true;
+        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
     }
 
     template<typename T>
@@ -189,21 +193,7 @@ public:
             return false;
         }
 
-        const UINT stride = (info.elementStride ? info.elementStride : info.size);
-        const UINT count = (info.elementCount ? info.elementCount : 1);
-
-        UINT idx = 0;
-        if (arrayIdxParam) { idx = *arrayIdxParam; }
-        if (idx >= count) { return false; }
-
-        const size_t dstOff = size_t(info.offset) + size_t(idx) * size_t(stride);
-        if (dstOff >= destCBSizeBytes) { return false; }
-        if (dstOff + stride > destCBSizeBytes) { return false; }
-
-        uint8_t* dst = destCB + dstOff;
-        const size_t copyBytes = std::min<size_t>(sizeof(T), stride);
-        std::memcpy(dst, &value, copyBytes);
-        return true;
+        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
     }
 
     template<typename T>
