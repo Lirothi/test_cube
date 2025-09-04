@@ -13,6 +13,7 @@
 #include "Renderer.h"
 #include "FontAtlas.h"
 #include "Profiler.h"
+#include "TaskSystem.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -196,33 +197,56 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE("TextManager::Build");
 
-    // 1) фоны регионов
-    for (const Region& rg : regions_) {
-        if (!rg.bg.has_value() || rg.totalLines <= 0) { continue; }
-        const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
-            : rg.maxLineWidth)
-            + float(rg.padX * 2);
-        const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
-        const int   bx = rg.x - rg.padX;
-        const int   by = rg.y - rg.padY;
-        EmitRect(bx, by, w, h, rg.bg.value());
-    }
+    // резервируем место под потенциальные фоновые прямоугольники
+    rectVerts_.reserve(rectVerts_.size() + regions_.size() * 4);
+    rectIdx_.reserve(rectIdx_.size() + regions_.size() * 6);
 
-    // 2) строки
+    // один проход по регионам: фоны и строки
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
+
+        // фон
+        if (rg.bg.has_value()) {
+            const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
+                : rg.maxLineWidth)
+                + float(rg.padX * 2);
+            const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
+            const int   bx = rg.x - rg.padX;
+            const int   by = rg.y - rg.padY;
+            EmitRect(bx, by, w, h, rg.bg.value());
+        }
+
+        // строки
         const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value()
             : rg.maxLineWidth);
-        int y = rg.y;
-        for (const RegionLine& ln : rg.lines) {
-            float xOff = 0.0f;
-            switch (rg.align) {
-            case Align::Left:   xOff = 0.0f; break;
-            case Align::Center: xOff = std::max(0.0f, 0.5f * (regionW - ln.widthPx)); break;
-            case Align::Right:  xOff = std::max(0.0f, (regionW - ln.widthPx)); break;
-            }
-            EmitTextAt(rg.x, y, xOff, ln.color, ln.px, ln.text);
-            y += rg.lineStepPx;
+        const size_t lineCount = rg.lines.size();
+        std::vector<std::vector<Vertex>> lineVerts(lineCount);
+        std::vector<std::vector<uint32_t>> lineIdx(lineCount);
+        TaskGroup group;
+        auto& tasks = TaskSystem::Get();
+        tasks.Dispatch(lineCount,
+            [&, regionW, rx = rg.x, ry = rg.y, step = rg.lineStepPx, align = rg.align](std::size_t i)
+            {
+                if (i >= lineCount) return;
+                const RegionLine& ln = rg.lines[i];
+                float xOff = 0.0f;
+                switch (align) {
+                case Align::Left:   xOff = 0.0f; break;
+                case Align::Center: xOff = std::max(0.0f, 0.5f * (regionW - ln.widthPx)); break;
+                case Align::Right:  xOff = std::max(0.0f, (regionW - ln.widthPx)); break;
+                }
+                int y = ry + int(i) * step;
+                EmitTextLine(rx, y, xOff, ln.color, ln.px, ln.text, lineVerts[i], lineIdx[i]);
+            }, 1, &group);
+        tasks.WaitGroup(&group);
+
+        for (size_t i = 0; i < lineCount; ++i) {
+            auto& lv = lineVerts[i];
+            auto& li = lineIdx[i];
+            uint32_t base = (uint32_t)verts_.size();
+            verts_.insert(verts_.end(), lv.begin(), lv.end());
+            idx_.reserve(idx_.size() + li.size());
+            for (uint32_t ix : li) { idx_.push_back(base + ix); }
         }
     }
 
@@ -421,9 +445,11 @@ void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px,
     }
 }
 
-void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text) {
+void TextManager::EmitTextLine(int x, int y, float xOffset, const float4& color, float px,
+                               std::wstring_view text, std::vector<Vertex>& outVerts,
+                               std::vector<uint32_t>& outIdx) {
     if (font_ == nullptr) { return; }
-    CPU_SCOPE("TextManager::EmitTextAt");
+    CPU_SCOPE("TextManager::EmitTextLine");
 
     const float scale = px / float(font_->PxSize());
     float penX = (float)x + xOffset;
@@ -432,8 +458,8 @@ void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, f
     uint32_t prev = 0;
 
     if (!text.empty()) {
-        verts_.reserve(verts_.size() + text.size() * 4);
-        idx_.reserve(idx_.size() + text.size() * 6);
+        outVerts.reserve(outVerts.size() + text.size() * 4);
+        outIdx.reserve(outIdx.size() + text.size() * 6);
     }
 
     for (wchar_t wc : text) {
@@ -465,18 +491,22 @@ void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, f
         const float gw = float(gph->w) * scale;
         const float gh = float(gph->h) * scale;
 
-        const uint32_t base = (uint32_t)verts_.size();
-        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
-        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
-        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
-        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
+        const uint32_t base = (uint32_t)outVerts.size();
+        outVerts.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
+        outVerts.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
+        outVerts.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
+        outVerts.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
 
-        idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
-        idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
+        outIdx.push_back(base + 0u); outIdx.push_back(base + 1u); outIdx.push_back(base + 2u);
+        outIdx.push_back(base + 0u); outIdx.push_back(base + 2u); outIdx.push_back(base + 3u);
 
         penX += float(gph->xadv) * scale;
         prev = cp;
     }
+}
+
+void TextManager::EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text) {
+    EmitTextLine(x, y, xOffset, color, px, text, verts_, idx_);
 }
 
 void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) {
