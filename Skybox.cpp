@@ -34,10 +34,13 @@ void Skybox::Init(Renderer* renderer,
 
 void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
-    // CB0: ожидаем имена "view" и "proj" в cbuffer'е (см. skybox.hlsl)
-    UpdateUniform("view", view, cbData);
-    UpdateUniform("proj", proj, cbData);
-    UpdateUniform("exposure", exposure_, cbData);
+    // CB0: ожидаем идентификаторы "view" и "proj" в cbuffer'е (см. skybox.hlsl)
+    static constexpr CBFieldID viewID     = CB_FIELD_ID("view");
+    static constexpr CBFieldID projID     = CB_FIELD_ID("proj");
+    static constexpr CBFieldID exposureID = CB_FIELD_ID("exposure");
+    UpdateUniform(viewID, view, cbData);
+    UpdateUniform(projID, proj, cbData);
+    UpdateUniform(exposureID, exposure_, cbData);
 }
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
