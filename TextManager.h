@@ -79,8 +79,6 @@ private:
     static std::wstring UTF8toW(std::string_view s);
     float MeasureTextWidthPx(std::wstring_view text, float px) const;
     void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text);
-    void  EmitTextLine(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text,
-                       std::vector<Vertex>& outVerts, std::vector<uint32_t>& outIdx);
     void  EmitTextAt(int x, int y, float xOffset, const float4& color, float px, std::wstring_view text);
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
