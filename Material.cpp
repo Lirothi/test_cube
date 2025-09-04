@@ -14,7 +14,6 @@
 #pragma comment(lib, "dxcompiler.lib")
 
 #include "Helpers.h"
-#include "Profiler.h"
 #include "RootSignatureLayout.h"
 #include "RootSignatureParser.h"
 #include "TaskSystem.h"

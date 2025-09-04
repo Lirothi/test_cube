@@ -68,7 +68,7 @@ void Profiler::EndFrame() {
             const double perUse = (row.usages ? (row.avgMs / (double)row.usages) : 0.0);
             wchar_t buf[128];
             std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
+                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
                 row.name.c_str(), row.avgMs, row.maxMs, perUse, row.usages);
             row.formatted = buf;
             current.emplace(row.name, std::move(row));

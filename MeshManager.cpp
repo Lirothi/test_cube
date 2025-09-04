@@ -349,7 +349,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
                     }
                     uint32_t newId = (uint32_t)outVerts.size();
                     outVerts.push_back(vx);
-                    vmap.insert(std::make_pair(face[i], newId));
+                    vmap.emplace(std::make_pair(face[i], newId));
                     id[i] = newId;
                 }
             }

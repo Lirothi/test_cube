@@ -9,8 +9,9 @@
 #include <mutex>
 #include <atomic>
 #include <d3d12shader.h>
-
+#include "Profiler.h"
 #include "RenderContext.h"
+#include "robin_hood.h"
 #include <cassert>
 
 using namespace Microsoft::WRL;
@@ -126,7 +127,7 @@ public:
     struct CBufferInfo {
         UINT bindRegister = 0;    // bN
         UINT sizeBytes = 0;
-        std::unordered_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
+        robin_hood::unordered_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
     };
 
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
@@ -142,6 +143,7 @@ public:
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
+        CPU_SCOPE("Material::UpdateCBField");
         UINT destCBSizeBytes = GetCBSizeBytes(bRegister);
         if (!destCB || destCBSizeBytes == 0) { return false; }
 
