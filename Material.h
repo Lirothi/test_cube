@@ -15,6 +15,7 @@
 #include <cassert>
 #include <algorithm>
 #include "CBFieldID.h"
+#include "CBUpdateBatcher.h"
 
 using namespace Microsoft::WRL;
 
@@ -179,7 +180,11 @@ public:
             }
         }
 
-        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
+        UINT arrayIdx = arrayIdxParam ? *arrayIdxParam : 0;
+        CBUpdateBatcher::Get().Enqueue([=, this]() {
+            this->CopyData(info, value, destCB, destCBSizeBytes, arrayIdx);
+        });
+        return true;
     }
 
     template<typename T>
@@ -199,7 +204,11 @@ public:
             }
         }
 
-        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
+        UINT arrayIdx = arrayIdxParam ? *arrayIdxParam : 0;
+        CBUpdateBatcher::Get().Enqueue([=, this]() {
+            this->CopyData(info, value, destCB, destCBSizeBytes, arrayIdx);
+        });
+        return true;
     }
 
     template<typename T>
@@ -216,6 +225,12 @@ public:
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
         return UpdateCBField(0, id, value, destCB, arrayIdxParam);
+    }
+
+    // Process any pending UpdateCBField operations immediately.
+    static void FlushPendingCBUpdates()
+    {
+        CBUpdateBatcher::Get().Flush();
     }
 
 private:
