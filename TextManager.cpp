@@ -96,15 +96,6 @@ void TextManager::AddTextf(int x, int y, const float4& color, float px, const wc
     if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
 }
 
-void TextManager::AddTextFmt(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
-    if (fmt == nullptr) { return; }
-    wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
-    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
-}
-
 // регионы
 TextManager::RegionId TextManager::CreateRegion(int x, int y, Align align) {
     Region r; r.x = x; r.y = y; r.align = align;
@@ -158,15 +149,6 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::strin
     AddText(id, px, color, UTF8toW(utf8));
 }
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
-    if (fmt == nullptr) { return; }
-    wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
-    if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len)); }
-}
-
-void TextManager::AddTextFmt(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     wchar_t buf[256];
     va_list args; va_start(args, fmt);

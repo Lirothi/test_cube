@@ -185,10 +185,10 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->RegionSetAutoMeasure(reg, false);
 
     // заголовок
-    tm->AddTextFmt(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
+    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
         L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-    tm->AddTextFmt(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
+    tm->AddText(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
     // строки
     int shown = 0;
