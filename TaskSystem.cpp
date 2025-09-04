@@ -14,7 +14,7 @@ TaskSystem::~TaskSystem() {
 }
 
 void TaskSystem::Start(unsigned threadCount) {
-    std::lock_guard<std::mutex> lk(mtx_);
+    std::lock_guard<std::mutex> lk(startStopMtx_);
     if (running_) {
         return;
     }
@@ -29,7 +29,7 @@ void TaskSystem::Start(unsigned threadCount) {
         if (hc == 0u) {
             hc = 4u;
         }
-        threadCount = std::max(1u, hc - 1u); // один поток оставим главному
+        threadCount = std::max(1u, hc - 1u);
     }
 
     workers_.reserve(threadCount);
@@ -44,13 +44,14 @@ void TaskSystem::Start(unsigned threadCount) {
 
 void TaskSystem::Stop() {
     {
-        std::lock_guard<std::mutex> lk(mtx_);
+        std::lock_guard<std::mutex> lk(startStopMtx_);
         if (!running_) {
             return;
         }
         running_ = false;
     }
     cvWork_.notify_all();
+    inFlight_.notify_all();
 
     for (auto& th : workers_) {
         if (th.joinable()) {
@@ -59,46 +60,57 @@ void TaskSystem::Stop() {
     }
     workers_.clear();
 
+    for (auto& q : queues_) {
+        std::lock_guard<std::mutex> lk(q.m);
+        q.q.clear();
+    }
+    queues_.clear();
     {
-        std::lock_guard<std::mutex> lk(mtx_);
-        for (auto& q : queues_) { q.clear(); }
-        queues_.clear();
+        std::lock_guard<std::mutex> lk(globalMtx_);
         globalQueue_.clear();
     }
 }
 
 void TaskSystem::Submit(const Task& t) {
     std::size_t idx = ThreadIndex();
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!running_) {
-            return;
+    if (!running_) {
+        return;
+    }
+
+    inFlight_.fetch_add(1, std::memory_order_relaxed);
+
+    if (idx < queues_.size()) {
+        auto& q = queues_[idx];
+        {
+            std::lock_guard<std::mutex> lk(q.m);
+            q.q.push_back(t);
         }
-        if (idx < queues_.size()) {
-            queues_[idx].push_back(t);
-        }
-        else {
-            globalQueue_.push_back(t);
-        }
-        inFlight_.fetch_add(1, std::memory_order_relaxed);
+    }
+    else {
+        std::lock_guard<std::mutex> lg(globalMtx_);
+        globalQueue_.push_back(t);
     }
     cvWork_.notify_one();
 }
 
 void TaskSystem::Submit(Task&& t) {
     std::size_t idx = ThreadIndex();
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!running_) {
-            return;
+    if (!running_) {
+        return;
+    }
+
+    inFlight_.fetch_add(1, std::memory_order_relaxed);
+
+    if (idx < queues_.size()) {
+        auto& q = queues_[idx];
+        {
+            std::lock_guard<std::mutex> lk(q.m);
+            q.q.push_back(std::move(t));
         }
-        if (idx < queues_.size()) {
-            queues_[idx].push_back(std::move(t));
-        }
-        else {
-            globalQueue_.push_back(std::move(t));
-        }
-        inFlight_.fetch_add(1, std::memory_order_relaxed);
+    }
+    else {
+        std::lock_guard<std::mutex> lg(globalMtx_);
+        globalQueue_.push_back(std::move(t));
     }
     cvWork_.notify_one();
 }
@@ -133,35 +145,35 @@ void TaskSystem::Submit(const Task& t, TaskGroup* group) {
     std::shared_ptr<TaskGroup::State> st = group ? group->state : nullptr;
 
     std::size_t idx = ThreadIndex();
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!running_) { return; }
-        if (st) { st->pending.fetch_add(1, std::memory_order_relaxed); }
+    if (!running_) { return; }
+    if (st) { st->pending.fetch_add(1, std::memory_order_relaxed); }
 
-        Task wrapped = [self = this, t, st]() {
-            if (t) { t(); }
+    Task wrapped = [self = this, t, st]() {
+        if (t) { t(); }
 
-            if (st) {
-                st->pending.fetch_sub(1, std::memory_order_acq_rel);
-                // Будим ЖДУЩИХ ИМЕННО ЭТУ ГРУППУ — сигнал не потеряется
-                {
-                    std::lock_guard<std::mutex> lg(st->m);
-                    st->cv.notify_all();
-                }
+        if (st) {
+            auto prev = st->pending.fetch_sub(1, std::memory_order_acq_rel);
+            if (prev == 1) {
+                st->pending.notify_all();
             }
-            // Параллельно будим «помогающих» (WaitGroup, воркеров)
-            self->cvWork_.notify_all();
-        };
-
-        if (idx < queues_.size()) {
-            queues_[idx].push_back(std::move(wrapped));
         }
-        else {
-            globalQueue_.push_back(std::move(wrapped));
-        }
+        self->cvWork_.notify_all();
+    };
 
-        inFlight_.fetch_add(1, std::memory_order_relaxed);
+    inFlight_.fetch_add(1, std::memory_order_relaxed);
+
+    if (idx < queues_.size()) {
+        auto& q = queues_[idx];
+        {
+            std::lock_guard<std::mutex> lk(q.m);
+            q.q.push_back(std::move(wrapped));
+        }
     }
+    else {
+        std::lock_guard<std::mutex> lg(globalMtx_);
+        globalQueue_.push_back(std::move(wrapped));
+    }
+
     cvWork_.notify_one();
 }
 
@@ -169,33 +181,35 @@ void TaskSystem::Submit(Task&& t, TaskGroup* group) {
     std::shared_ptr<TaskGroup::State> st = group ? group->state : nullptr;
 
     std::size_t idx = ThreadIndex();
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!running_) { return; }
-        if (st) { st->pending.fetch_add(1, std::memory_order_relaxed); }
+    if (!running_) { return; }
+    if (st) { st->pending.fetch_add(1, std::memory_order_relaxed); }
 
-        Task wrapped = [self = this, tt = std::move(t), st]() mutable {
-            if (tt) { tt(); }
+    Task wrapped = [self = this, tt = std::move(t), st]() mutable {
+        if (tt) { tt(); }
 
-            if (st) {
-                st->pending.fetch_sub(1, std::memory_order_acq_rel);
-                {
-                    std::lock_guard<std::mutex> lg(st->m);
-                    st->cv.notify_all();
-                }
+        if (st) {
+            auto prev = st->pending.fetch_sub(1, std::memory_order_acq_rel);
+            if (prev == 1) {
+                st->pending.notify_all();
             }
-            self->cvWork_.notify_all();
-        };
-
-        if (idx < queues_.size()) {
-            queues_[idx].push_back(std::move(wrapped));
         }
-        else {
-            globalQueue_.push_back(std::move(wrapped));
-        }
+        self->cvWork_.notify_all();
+    };
 
-        inFlight_.fetch_add(1, std::memory_order_relaxed);
+    inFlight_.fetch_add(1, std::memory_order_relaxed);
+
+    if (idx < queues_.size()) {
+        auto& q = queues_[idx];
+        {
+            std::lock_guard<std::mutex> lk(q.m);
+            q.q.push_back(std::move(wrapped));
+        }
     }
+    else {
+        std::lock_guard<std::mutex> lg(globalMtx_);
+        globalQueue_.push_back(std::move(wrapped));
+    }
+
     cvWork_.notify_one();
 }
 
@@ -236,51 +250,48 @@ void TaskSystem::WaitGroup(TaskGroup* group) {
         }
 
         Task task;
-        {   // попробуем украсть работу из очередей
-            std::lock_guard<std::mutex> lk(mtx_);
+        {
+            std::lock_guard<std::mutex> lg(globalMtx_);
             if (!globalQueue_.empty()) {
                 task = std::move(globalQueue_.front());
                 globalQueue_.pop_front();
             }
-            else {
-                for (auto& q : queues_) {
-                    if (!q.empty()) {
-                        task = std::move(q.front());
-                        q.pop_front();
-                        break;
-                    }
+        }
+        if (!task) {
+            for (std::size_t i = 0; i < queues_.size(); ++i) {
+                auto& q = queues_[i];
+                std::lock_guard<std::mutex> lk(q.m);
+                if (!q.q.empty()) {
+                    task = std::move(q.q.front());
+                    q.q.pop_front();
+                    break;
                 }
             }
         }
 
         if (task) {
-            task(); // выполняем вне лока
-
+            task();
             const std::size_t left =
                 inFlight_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-            if (left == 0) {
-                std::lock_guard<std::mutex> lk(mtx_);
-                if (!HasTasksLocked_()) {
-                    cvIdle_.notify_all();
-                }
-            }
-            continue; // снова проверим pending
+            inFlight_.notify_all();
+            (void)left;
+            continue;
         }
 
-        // работы нет — ждём прогресса ИМЕННО по этой группе
-        std::unique_lock<std::mutex> glk(st->m);
-        st->cv.wait(glk, [&] {
-            return st->pending.load(std::memory_order_acquire) == 0 || !running_;
-            });
+        std::size_t expected = st->pending.load(std::memory_order_acquire);
+        if (expected != 0) {
+            st->pending.wait(expected, std::memory_order_acquire);
+        }
         if (!running_) { return; }
     }
 }
 
 void TaskSystem::WaitForAll() {
-    std::unique_lock<std::mutex> lk(mtx_);
-    cvIdle_.wait(lk, [this]() {
-        return (inFlight_.load(std::memory_order_acquire) == 0) && !HasTasksLocked_();
-    });
+    for (std::size_t expected = inFlight_.load(std::memory_order_acquire);
+         expected != 0;
+         expected = inFlight_.load(std::memory_order_acquire)) {
+        inFlight_.wait(expected, std::memory_order_acquire);
+    }
 }
 
 std::size_t TaskSystem::ThreadIndex() const {
@@ -292,61 +303,51 @@ void TaskSystem::WorkerLoop_(std::size_t index) {
         Task task;
 
         {
-            std::unique_lock<std::mutex> lk(mtx_);
-            auto get_task = [&]() -> bool {
-                if (!queues_[index].empty()) {
-                    task = std::move(queues_[index].back());
-                    queues_[index].pop_back();
-                    return true;
-                }
-                if (!globalQueue_.empty()) {
-                    task = std::move(globalQueue_.front());
-                    globalQueue_.pop_front();
-                    return true;
-                }
-                for (std::size_t i = 0; i < queues_.size(); ++i) {
-                    if (i == index) { continue; }
-                    if (!queues_[i].empty()) {
-                        task = std::move(queues_[i].front());
-                        queues_[i].pop_front();
-                        return true;
-                    }
-                }
-                return false;
-            };
-
-            while (!get_task()) {
-                cvWork_.wait(lk, [this]() {
-                    return !running_ || HasTasksLocked_();
-                });
-                if (!running_ && !HasTasksLocked_()) {
-                    return;
+            auto& q = queues_[index];
+            std::lock_guard<std::mutex> lk(q.m);
+            if (!q.q.empty()) {
+                task = std::move(q.q.back());
+                q.q.pop_back();
+            }
+        }
+        if (!task) {
+            std::lock_guard<std::mutex> lg(globalMtx_);
+            if (!globalQueue_.empty()) {
+                task = std::move(globalQueue_.front());
+                globalQueue_.pop_front();
+            }
+        }
+        if (!task) {
+            for (std::size_t i = 0; i < queues_.size(); ++i) {
+                if (i == index) { continue; }
+                auto& q = queues_[i];
+                std::lock_guard<std::mutex> lk(q.m);
+                if (!q.q.empty()) {
+                    task = std::move(q.q.front());
+                    q.q.pop_front();
+                    break;
                 }
             }
         }
-
-        if (task) {
-            task();
+        if (!task) {
+            std::unique_lock<std::mutex> lk(workMtx_);
+            cvWork_.wait(lk, [this]() {
+                return !running_.load(std::memory_order_acquire) ||
+                    inFlight_.load(std::memory_order_acquire) > 0;
+            });
+            if (!running_.load(std::memory_order_acquire) &&
+                inFlight_.load(std::memory_order_acquire) == 0) {
+                return;
+            }
+            else {
+                continue;
+            }
         }
+
+        task();
 
         const std::size_t left = inFlight_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        if (left == 0) {
-            std::lock_guard<std::mutex> lk(mtx_);
-            if (!HasTasksLocked_()) {
-                cvIdle_.notify_all();
-            }
-        }
+        inFlight_.notify_all();
+        (void)left;
     }
-}
-
-bool TaskSystem::HasTasksLocked_() const {
-    if (!globalQueue_.empty()) {
-        return true;
-    }
-    for (auto const& q : queues_) {
-        if (!q.empty()) {
-            return true;
-        }
-    }
-    return false;
 }
