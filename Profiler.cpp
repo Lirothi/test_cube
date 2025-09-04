@@ -1,6 +1,6 @@
 #include "Profiler.h"
-#include<unordered_set>
-#include"third_party/robin_hood.h"
+#include <cwchar>
+#include "third_party/robin_hood.h"
 #include "TextManager.h"
 
 
@@ -65,6 +65,12 @@ void Profiler::EndFrame() {
             row.avgMs = kv.second.avgMs;
             row.maxMs = kv.second.maxMs;
             row.usages = kv.second.lastCount;
+            const double perUse = (row.usages ? (row.avgMs / (double)row.usages) : 0.0);
+            wchar_t buf[128];
+            std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
+                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
+                row.name.c_str(), row.avgMs, row.maxMs, perUse, row.usages);
+            row.formatted = buf;
             current.emplace(row.name, std::move(row));
         }
 
@@ -93,7 +99,7 @@ void Profiler::EndFrame() {
             lastOverlaySort_ = now;
         }
         else {
-            std::unordered_set<std::wstring> used; used.reserve(current.size());
+            robin_hood::unordered_flat_set<std::wstring> used; used.reserve(current.size());
             for (const OverlayRow& prev : readRows) {
                 const std::wstring& key = prev.name;
                 auto it = current.find(key);
@@ -133,6 +139,11 @@ void Profiler::EndFrame() {
             self.avgMs = endFrameAsyncAvgMs_;
             self.maxMs = endFrameAsyncMaxMs_;
             self.usages = 1u;
+            wchar_t buf[128];
+            std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
+                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
+                self.name.c_str(), self.avgMs, self.maxMs, self.avgMs, self.usages);
+            self.formatted = buf;
             writeRows.insert(writeRows.begin(), std::move(self));
         }
 
@@ -174,10 +185,10 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->RegionSetAutoMeasure(reg, false);
 
     // заголовок
-    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
+    tm->AddTextFmt(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
         L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
+    tm->AddTextFmt(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
     // строки
     int shown = 0;
@@ -185,10 +196,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }
-        const double perUse = (r.usages ? (r.avgMs / (double)r.usages) : 0.0);
-        tm->AddTextf(reg, 16.0f, (shown & 1) ? colOdd : colEven,
-            L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
-            r.name.c_str(), r.avgMs, r.maxMs, perUse, r.usages);
+        tm->AddText(reg, 16.0f, (shown & 1) ? colOdd : colEven, r.formatted);
         shown++;
     }
 }

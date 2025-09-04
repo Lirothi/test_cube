@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <mutex>
 #include <chrono>
 #include <thread>
@@ -139,14 +139,15 @@ private:
         double   avgMs = 0.0;
         double   maxMs = 0.0;
         uint32_t usages = 0;
+        std::wstring formatted; // заранее отформатированная строка
     };
 
 private:
 #if PROF_ENABLED
     // сбор статистики
     std::mutex mtx_;
-    std::unordered_map<std::string, ScopeStats> stats_;
-    std::unordered_map<std::thread::id, std::string> threadNames_;
+    robin_hood::unordered_flat_map<std::string, ScopeStats> stats_;
+    robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
 
     std::vector<ScopeSample> frameSamples_;
     uint64_t  frameNo_ = 0;
