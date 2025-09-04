@@ -712,29 +712,22 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
         if (lane != UINT32_MAX) {
             CLStateLane& ln = clLanes_[lane];
             auto found = ln.entries.find(base);
-            if (found != ln.entries.end())
-            {
+            if (found != ln.entries.end()) {
                 entry = &found->second;
-            }
-            else
-            {
+                entry->epoch = ln.epoch;
+                tlCurrentEntry_ = entry;
+            } else {
                 RegisterCurrentThreadCL(cl);
                 entry = tlCurrentEntry_;
             }
-        }
-        else
-        {
+        } else {
             // CL ещё не зарегистрирован в этом потоке — регистрируем на лету
             RegisterCurrentThreadCL(cl);
             entry = tlCurrentEntry_;
         }
     }
 
-    //CLStateLane& ln = clLanes_[tlLaneIndex_];
-    //auto itEntry = ln.entries.find(static_cast<ID3D12CommandList*>(cl));
-    //auto& st = itEntry->second.st;
-    if (!tlCurrentEntry_)
-    {
+    if (!entry) {
         return;
     }
     auto& st = entry->st;
@@ -758,7 +751,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
 
-    st.current[res] = after;
+    itCur->second = after;
 }
 
 void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
@@ -1209,6 +1202,7 @@ void Renderer::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl) {
     e.cmd = static_cast<ID3D12CommandList*>(cl);
     e.st.firstUse.clear(); e.st.firstUse.reserve(8);
     e.st.current.clear(); e.st.current.reserve(16);
+    e.epoch = ln.epoch;
     tlCurrentEntry_ = &e;
 }
 
