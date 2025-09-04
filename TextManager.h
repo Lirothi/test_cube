@@ -23,7 +23,7 @@ public:
     // Позиционные API
     void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
     void AddText(int x, int y, const float4& color, float px, std::string_view utf8);
-    void AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...);
+    //void AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...);
     void AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...);
 
     // -------------------- Регионы --------------------
@@ -41,7 +41,7 @@ public:
 
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
-    void AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...);
+    //void AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...);
     void AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...);
 
     void Build(Renderer* r, ID3D12GraphicsCommandList* cl);

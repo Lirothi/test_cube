@@ -68,7 +68,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     CPU_SCOPE("Profiler::EmitOverlay");
 
     // Снимок под локом (имена, stats, сглаженные ранги)
-    struct Row { std::string name; double avgMs = 0.0; double maxMs = 0.0; uint32_t usages = 0; double r = 0.0; };
+    struct Row { std::wstring name; double avgMs = 0.0; double maxMs = 0.0; uint32_t usages = 0; double r = 0.0; };
     std::vector<Row> rows;
     rows.reserve(32);
     size_t maxNameLen = 0;
@@ -77,7 +77,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         rows.reserve(stats_.size());
         for (const auto& kv : stats_) {
             Row r;
-            r.name = kv.first;
+            r.name = std::wstring(kv.first.begin(), kv.first.end());
             r.avgMs = kv.second.avgMs;
             r.maxMs = kv.second.maxMs;
             r.usages = kv.second.lastCount;
@@ -115,9 +115,9 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 
     // заголовок
     tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
-        "[CPU profiler] frame=%llu  (max reset: %.1fs, rankSmooth=%.2f)",
+        L"[CPU profiler] frame=%llu  (max reset: %.1fs, rankSmooth=%.2f)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetRankSmoothing());
-    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), " ");
+    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
     // строки
     int shown = 0;
@@ -126,7 +126,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }
         tm->AddTextf(reg, 16.0f, (shown & 1) ? colOdd : colEven,
-            "%-40s avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
+            L"%-40s avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
             r.name.c_str(), r.avgMs, r.maxMs, r.avgMs/r.usages, r.usages);
         shown++;
     }

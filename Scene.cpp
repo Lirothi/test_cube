@@ -255,7 +255,7 @@ void Scene::Render(Renderer* renderer) {
     auto* tb = renderer->GetTextManager();
     tb->Begin(renderer->GetWidth(), renderer->GetHeight(), 1.0f);
     int y = 8;
-    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, "FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
+    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, L"FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
 
     renderer->BeginFrame();
     renderer->BeginSubmitTimeline();
@@ -343,11 +343,14 @@ void Scene::Render(Renderer* renderer) {
     rg.AddPass("Debug", { pTone },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Debug"); Pass_Debug(renderer, ctx); });
 
-    rg.AddPass("Overlay", { pTone },
-        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Overlay"); Pass_Overlay(renderer, ctx); });
-
     rg.ExecuteParallel(renderer, TaskSystem::Get());
-    //rg.Execute(renderer);
+    TaskSystem::Get().WaitForAll();
+
+    RenderGraph epilogueRG;
+    epilogueRG.AddPass("Overlay", {},
+        [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE("Pass_Overlay"); Pass_Overlay(renderer, ctx); });
+    epilogueRG.Execute(renderer);
+    
     TaskSystem::Get().WaitForAll();
     renderer->EndFrame();
 }

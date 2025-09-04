@@ -107,16 +107,19 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
 void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text) {
     EmitTextImmediate(x, y, color, px, text);
 }
+
 void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8) {
     AddText(x, y, color, px, UTF8toW(utf8));
 }
-void TextManager::AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...) {
-    if (fmt == nullptr) { return; }
-    va_list args; va_start(args, fmt);
-    std::string s = VFormat_(fmt, args);
-    va_end(args);
-    if (!s.empty()) { AddText(x, y, color, px, std::string_view(s)); }
-}
+
+//void TextManager::AddTextf(int x, int y, const float4& color, float px, const char* fmt, ...) {
+//    if (fmt == nullptr) { return; }
+//    va_list args; va_start(args, fmt);
+//    std::string s = VFormat_(fmt, args);
+//    va_end(args);
+//    if (!s.empty()) { AddText(x, y, color, px, std::string_view(s)); }
+//}
+
 void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
@@ -171,13 +174,15 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
 void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
     AddText(id, px, color, UTF8toW(utf8));
 }
-void TextManager::AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...) {
-    if (fmt == nullptr) { return; }
-    va_list args; va_start(args, fmt);
-    std::string s = VFormat_(fmt, args);
-    va_end(args);
-    if (!s.empty()) { AddText(id, px, color, std::string_view(s)); }
-}
+
+//void TextManager::AddTextf(RegionId id, float px, const float4& color, const char* fmt, ...) {
+//    if (fmt == nullptr) { return; }
+//    va_list args; va_start(args, fmt);
+//    std::string s = VFormat_(fmt, args);
+//    va_end(args);
+//    if (!s.empty()) { AddText(id, px, color, std::string_view(s)); }
+//}
+
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     va_list args; va_start(args, fmt);
