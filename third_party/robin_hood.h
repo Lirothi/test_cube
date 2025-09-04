@@ -52,6 +52,10 @@
 #    include <string_view>
 #endif
 
+#pragma warning(push)
+#pragma warning(disable: 26819)
+#pragma warning(disable: 6305)
+
 // #define ROBIN_HOOD_LOG_ENABLED
 #ifdef ROBIN_HOOD_LOG_ENABLED
 #    include <iostream>
@@ -2540,5 +2544,7 @@ using unordered_set = detail::Table<sizeof(Key) <= sizeof(size_t) * 6 &&
                                     MaxLoadFactor100, Key, void, Hash, KeyEqual>;
 
 } // namespace robin_hood
+
+#pragma warning(pop)
 
 #endif

@@ -1,7 +1,6 @@
 #include "Profiler.h"
-
 #include<unordered_set>
-
+#include"third_party/robin_hood.h"
 #include "TextManager.h"
 
 
@@ -48,29 +47,25 @@ void Profiler::EndFrame() {
         const auto t0 = CoolClock::now();
 
         // A) свёртка сэмплов в stats_ (под мьютексом) + EMA/lastCount
-        {
-            for (const auto& s : samples) {
-                auto& st = stats_[s.name ? s.name : "unknown"];
-                st.Accumulate(s.ms);
-            }
-            for (auto& kv : stats_) {
-                kv.second.CommitFrame(emaAlpha_);
-            }
+        for (const auto& s : samples) {
+            auto& st = stats_[s.name ? s.name : "unknown"];
+            st.Accumulate(s.ms);
+        }
+        for (auto& kv : stats_) {
+            kv.second.CommitFrame(emaAlpha_);
         }
         samples.clear();
 
         // B) формируем текущий набор строк (без лока)
-        std::unordered_map<std::wstring, OverlayRow> current;
-        {
-            current.reserve(stats_.size() * 2u);
-            for (const auto& kv : stats_) {
-                OverlayRow row;
-                row.name.assign(kv.first.begin(), kv.first.end());
-                row.avgMs = kv.second.avgMs;
-                row.maxMs = kv.second.maxMs;
-                row.usages = kv.second.lastCount;
-                current.emplace(row.name, std::move(row));
-            }
+        robin_hood::unordered_flat_map<std::wstring, OverlayRow> current;
+        current.reserve(stats_.size() * 2u);
+        for (const auto& kv : stats_) {
+            OverlayRow row;
+            row.name.assign(kv.first.begin(), kv.first.end());
+            row.avgMs = kv.second.avgMs;
+            row.maxMs = kv.second.maxMs;
+            row.usages = kv.second.lastCount;
+            current.emplace(row.name, std::move(row));
         }
 
         // C) редкая сортировка или стабильное обновление порядка
@@ -121,6 +116,7 @@ void Profiler::EndFrame() {
                 std::lock_guard<std::mutex> lk(mtx_);
                 ResetMax_Unsafe();
                 lastMaxReset_ = now;
+                endFrameAsyncMaxMs_ = 0.0;
             }
         }
 
