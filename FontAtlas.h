@@ -1,5 +1,5 @@
 #pragma once
-#include <unordered_map>
+#include "third_party/robin_hood.h"
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -32,6 +32,6 @@ public:
 private:
     Texture2D tex_;
     int pxSize_=0, spread_=0, atlasW_=0, atlasH_=0, ascent_=0, descent_=0, lineAdvance_=0;
-    std::unordered_map<uint32_t, FontGlyph> map_;
-    std::unordered_map<uint64_t, int> kern_;
+    robin_hood::unordered_flat_map<uint32_t, FontGlyph> map_;
+    robin_hood::unordered_flat_map<uint64_t, int> kern_;
 };

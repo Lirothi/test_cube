@@ -16,28 +16,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-// форматтеры
-static std::string VFormat_(const char* fmt, va_list args) {
-    if (fmt == nullptr) { return std::string(); }
-    va_list copy; va_copy(copy, args);
-    int needed = std::vsnprintf(nullptr, 0, fmt, copy);
-    va_end(copy);
-    if (needed <= 0) { return std::string(); }
-    std::string s; s.resize((size_t)needed);
-    std::vsnprintf(s.data(), (size_t)needed + 1, fmt, args);
-    return s;
-}
-static std::wstring VFormatW_(const wchar_t* fmt, va_list args) {
-    if (fmt == nullptr) { return std::wstring(); }
-    va_list copy; va_copy(copy, args);
-    int needed = std::vswprintf(nullptr, 0, fmt, copy);
-    va_end(copy);
-    if (needed <= 0) { return std::wstring(); }
-    std::wstring s; s.resize((size_t)needed);
-    std::vswprintf(s.data(), (size_t)needed + 1, fmt, args);
-    return s;
-}
-
 // utf8 → wide
 std::wstring TextManager::UTF8toW(std::string_view s) {
     if (s.empty()) { return L""; }
@@ -111,10 +89,20 @@ void TextManager::AddText(int x, int y, const float4& color, float px, std::stri
 }
 void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    wchar_t buf[256];
     va_list args; va_start(args, fmt);
-    std::wstring s = VFormatW_(fmt, args);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
-    if (!s.empty()) { AddText(x, y, color, px, std::wstring_view(s)); }
+    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
+}
+
+void TextManager::AddTextFmt(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    wchar_t buf[256];
+    va_list args; va_start(args, fmt);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+    va_end(args);
+    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
 }
 
 // регионы
@@ -171,10 +159,20 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::strin
 }
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    wchar_t buf[256];
     va_list args; va_start(args, fmt);
-    std::wstring s = VFormatW_(fmt, args);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
-    if (!s.empty()) { AddText(id, px, color, std::wstring_view(s)); }
+    if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len)); }
+}
+
+void TextManager::AddTextFmt(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    wchar_t buf[256];
+    va_list args; va_start(args, fmt);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+    va_end(args);
+    if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len)); }
 }
 
 // ======== СБОРКА / ОТРИСОВКА ========
