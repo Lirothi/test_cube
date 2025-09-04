@@ -2,7 +2,7 @@
 #include <functional>
 #include <vector>
 #include <thread>
-#include <queue>
+#include <deque>
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
@@ -94,7 +94,8 @@ private:
 
 private:
     std::vector<std::thread>        workers_;
-    std::queue<Task>                queue_;
+    std::vector<std::deque<Task>>   queues_;
+    std::deque<Task>                globalQueue_;
     mutable std::mutex              mtx_;
     std::condition_variable         cvWork_;
     std::condition_variable         cvIdle_;
@@ -102,4 +103,6 @@ private:
     std::atomic<std::size_t>        inFlight_{ 0 };
 
     static thread_local std::size_t tlsIndex_;
+
+    bool HasTasksLocked_() const;
 };
