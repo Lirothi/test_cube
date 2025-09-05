@@ -1,59 +1,39 @@
 #pragma once
+
 #include <functional>
 #include <vector>
-#include <thread>
-#include <deque>
-#include <mutex>
-#include <condition_variable>
-#include <atomic>
 #include <cstddef>
+#include <memory>
+
+#include "third_party/enkiTS/src/TaskScheduler.h"
+
+class TaskSystem;
 
 struct TaskGroup {
-    struct State {
-        std::atomic<std::size_t> pending{ 0 };
-        std::mutex               m;
-        std::condition_variable  cv;
-    };
-
-    // разделяемое ядро группы — переживёт сам TaskGroup
-    std::shared_ptr<State> state;
-
-    TaskGroup() : state(std::make_shared<State>()) {}
-
-    void Wait() {
-        std::unique_lock<std::mutex> lk(state->m);
-        state->cv.wait(lk, [this]() {
-            return state->pending.load(std::memory_order_acquire) == 0;
-            });
-    }
-
-    bool IsDone() const {
-        return state->pending.load(std::memory_order_acquire) == 0;
-    }
+    std::vector<std::shared_ptr<enki::ITaskSet>> tasks;
+    void Wait();
 };
 
 class TaskSystem {
 public:
     using Task = std::function<void()>;
 
-    // Глобальный доступ
     static TaskSystem& Get();
 
-    // Запуск/остановка пула
     void Start(unsigned threadCount = 0);
     void Stop();
 
-    void Submit(const Task& t, TaskGroup* group);
-    void Submit(Task&& t, TaskGroup* group);
+    void Submit(const Task& t, TaskGroup* group = nullptr);
+    void Submit(Task&& t, TaskGroup* group = nullptr);
 
     void Dispatch(std::size_t jobCount,
-        std::function<void(std::size_t)> fn,
-        std::size_t batchSize,
-        TaskGroup* group);
+                  std::function<void(std::size_t)> fn,
+                  std::size_t batchSize = 1,
+                  TaskGroup* group = nullptr);
 
-    void WaitGroup(struct TaskGroup* group);
+    void WaitGroup(TaskGroup* group);
 
-	template<class F>
+    template<class F>
     static void ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
         TaskGroup g;
@@ -66,21 +46,11 @@ public:
     {
         TaskGroup g;
         Get().Dispatch(jobCount, std::forward<F>(fn), batchSize, &g);
-        g.Wait();
+        Get().WaitGroup(&g);
     }
-
-    // Постановка задач
-    void Submit(const Task& t);
-    void Submit(Task&& t);
-
-    // Распараллеливание "N одинаковых работ" батчами (по умолчанию по 1)
-    void Dispatch(std::size_t jobCount,
-        std::function<void(std::size_t)> fn,
-        std::size_t batchSize = 1);
 
     void WaitForAll();
 
-    // Индекс воркера (0..threads-1) или SIZE_MAX, если внешний поток
     std::size_t ThreadIndex() const;
 
 private:
@@ -90,19 +60,9 @@ private:
     TaskSystem(const TaskSystem&) = delete;
     TaskSystem& operator=(const TaskSystem&) = delete;
 
-    void WorkerLoop_(std::size_t index);
-
 private:
-    std::vector<std::thread>        workers_;
-    std::vector<std::deque<Task>>   queues_;
-    std::deque<Task>                globalQueue_;
-    mutable std::mutex              mtx_;
-    std::condition_variable         cvWork_;
-    std::condition_variable         cvIdle_;
-    std::atomic<bool>               running_{ false };
-    std::atomic<std::size_t>        inFlight_{ 0 };
-
-    static thread_local std::size_t tlsIndex_;
-
-    bool HasTasksLocked_() const;
+    enki::TaskScheduler scheduler_;
 };
+
+inline void TaskGroup::Wait() { TaskSystem::Get().WaitGroup(this); }
+
