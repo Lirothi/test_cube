@@ -10,7 +10,7 @@
 class TaskSystem;
 
 struct TaskGroup {
-    std::vector<std::shared_ptr<enki::ITaskSet>> tasks;
+    std::vector<std::unique_ptr<enki::ITaskSet>> tasks;
     void Wait();
 };
 
@@ -62,7 +62,7 @@ private:
 
 private:
     enki::TaskScheduler scheduler_;
-};
+}; 
 
 inline void TaskGroup::Wait() { TaskSystem::Get().WaitGroup(this); }
 
