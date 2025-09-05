@@ -56,7 +56,6 @@ struct AutoDelete : enki::ICompletable {
         delete this;
     }
 };
-}
 
 void TaskSystem::Submit(const Task& t, TaskGroup* group) { Submit(Task(t), group); }
 

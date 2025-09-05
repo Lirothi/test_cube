@@ -95,6 +95,7 @@ void Profiler::EndFrame() {
                 if (a.avgMs == b.avgMs) { return a.name < b.name; }
                 return a.avgMs > b.avgMs;
             });
+
             writeRows = std::move(tmp);
             lastOverlaySort_ = now;
         }
