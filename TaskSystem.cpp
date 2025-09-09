@@ -61,7 +61,7 @@ struct AutoDelete : enki::ICompletable {
 };
 }
 
-TaskSystem::TaskHandle TaskSystem::Submit(Task t, std::initializer_list<TaskHandle> deps) {
+TaskSystem::TaskHandle TaskSystem::Submit(Task t, const std::vector<TaskHandle>& deps) {
     if (!t) { return nullptr; }
     auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
     size_t i = 0;
@@ -73,7 +73,7 @@ TaskSystem::TaskHandle TaskSystem::Submit(Task t, std::initializer_list<TaskHand
     return taskPtr;
 }
 
-void TaskSystem::SubmitDetach(Task t, std::initializer_list<TaskHandle> deps) {
+void TaskSystem::SubmitDetach(Task t, const std::vector<TaskHandle>& deps) {
     if (!t) { return; }
     auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
     size_t i = 0;
@@ -88,7 +88,7 @@ void TaskSystem::SubmitDetach(Task t, std::initializer_list<TaskHandle> deps) {
 TaskSystem::TaskHandle TaskSystem::Dispatch(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
                           std::size_t batchSize,
-                          std::initializer_list<TaskHandle> deps) {
+                          const std::vector<TaskHandle>& deps) {
     if (jobCount == 0 || !fn) { return nullptr; }
     if (batchSize == 0) { batchSize = 1; }
     auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());
@@ -105,7 +105,7 @@ TaskSystem::TaskHandle TaskSystem::Dispatch(std::size_t jobCount,
 void TaskSystem::DispatchDetach(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
                           std::size_t batchSize,
-                          std::initializer_list<TaskHandle> deps) {
+                          const std::vector<TaskHandle>& deps) {
     if (jobCount == 0 || !fn) { return; }
     if (batchSize == 0) { batchSize = 1; }
     auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());

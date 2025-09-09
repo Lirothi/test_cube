@@ -19,18 +19,18 @@ public:
     void Stop();
 
     // manual handle-returning versions
-    TaskHandle Submit(Task t, std::initializer_list<TaskHandle> deps = {});
+    TaskHandle Submit(Task t, const std::vector<TaskHandle>& deps = {});
     TaskHandle Dispatch(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
                         std::size_t batchSize = 1,
-                        std::initializer_list<TaskHandle> deps = {});
+                        const std::vector<TaskHandle>& deps = {});
 
     // fire-and-forget versions (auto delete)
-    void SubmitDetach(Task t, std::initializer_list<TaskHandle> deps = {});
+    void SubmitDetach(Task t, const std::vector<TaskHandle>& deps = {});
     void DispatchDetach(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
                         std::size_t batchSize = 1,
-                        std::initializer_list<TaskHandle> deps = {});
+                        const std::vector<TaskHandle>& deps = {});
 
     void Wait(TaskHandle handle);
 
