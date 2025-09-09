@@ -22,11 +22,16 @@ void TaskSystem::Stop() {
 }
 
 namespace {
-struct LambdaTaskSet : enki::ITaskSet {
-    TaskSystem::Task fn;
+struct TaskWithDeps : enki::ITaskSet {
     std::vector<enki::Dependency> deps;
+    TaskWithDeps(uint32_t range, size_t depCount)
+        : enki::ITaskSet(range), deps(depCount) {}
+};
+
+struct LambdaTaskSet : TaskWithDeps {
+    TaskSystem::Task fn;
     LambdaTaskSet(TaskSystem::Task&& f, size_t depCount)
-        : enki::ITaskSet(1), fn(std::move(f)), deps(depCount) {}
+        : TaskWithDeps(1, depCount), fn(std::move(f)) {}
     void ExecuteRange(enki::TaskSetPartition, uint32_t) override {
         if (fn) {
             fn();
@@ -34,11 +39,10 @@ struct LambdaTaskSet : enki::ITaskSet {
     }
 };
 
-struct RangeTaskSet : enki::ITaskSet {
+struct RangeTaskSet : TaskWithDeps {
     std::function<void(std::size_t)> fn;
-    std::vector<enki::Dependency> deps;
     RangeTaskSet(std::size_t count, std::function<void(std::size_t)> f, size_t depCount)
-        : enki::ITaskSet(static_cast<uint32_t>(count)), fn(std::move(f)), deps(depCount) {}
+        : TaskWithDeps(static_cast<uint32_t>(count), depCount), fn(std::move(f)) {}
     void ExecuteRange(enki::TaskSetPartition range, uint32_t) override {
         for (uint32_t i = range.start; i < range.end; ++i) {
             fn(i);
@@ -61,60 +65,69 @@ struct AutoDelete : enki::ICompletable {
 };
 }
 
-TaskSystem::TaskHandle TaskSystem::Submit(Task t, const std::vector<TaskHandle>& deps) {
+TaskSystem::TaskHandle TaskSystem::Submit(Task t) {
     if (!t) { return nullptr; }
-    auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
-    size_t i = 0;
-    for (auto* d : deps) {
-        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
-        ++i;
-    }
+    auto* taskPtr = new LambdaTaskSet(std::move(t), 0);
     scheduler_.AddTaskSetToPipe(taskPtr);
     return taskPtr;
 }
 
-void TaskSystem::SubmitDetach(Task t, const std::vector<TaskHandle>& deps) {
-    if (!t) { return; }
-    auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
+TaskSystem::TaskHandle TaskSystem::CreateTask(Task t, std::size_t depCount) {
+    if (!t) { return nullptr; }
+    auto* taskPtr = new LambdaTaskSet(std::move(t), depCount);
+    return taskPtr;
+}
+
+TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
+                         std::function<void(std::size_t)> fn,
+                         std::size_t batchSize,
+                         std::size_t depCount) {
+    if (jobCount == 0 || !fn) { return nullptr; }
+    if (batchSize == 0) { batchSize = 1; }
+    auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), depCount);
+    taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
+    return taskPtr;
+}
+
+void TaskSystem::SetDependencies(TaskHandle handle, const std::vector<TaskHandle>& deps) {
+    if (!handle) { return; }
+    auto* taskPtr = static_cast<TaskWithDeps*>(handle);
+    if (taskPtr->deps.size() < deps.size()) {
+        taskPtr->deps.resize(deps.size());
+    }
     size_t i = 0;
     for (auto* d : deps) {
         if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
         ++i;
     }
+}
+
+void TaskSystem::Submit(TaskHandle handle) {
+    if (handle) {
+        scheduler_.AddTaskSetToPipe(static_cast<enki::ITaskSet*>(handle));
+    }
+}
+
+void TaskSystem::SubmitDetach(Task t) {
+    if (!t) { return; }
+    auto* taskPtr = new LambdaTaskSet(std::move(t), 0);
     new AutoDelete(taskPtr);
     scheduler_.AddTaskSetToPipe(taskPtr);
 }
 
 TaskSystem::TaskHandle TaskSystem::Dispatch(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
-                          std::size_t batchSize,
-                          const std::vector<TaskHandle>& deps) {
-    if (jobCount == 0 || !fn) { return nullptr; }
-    if (batchSize == 0) { batchSize = 1; }
-    auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());
-    taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
-    size_t i = 0;
-    for (auto* d : deps) {
-        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
-        ++i;
-    }
-    scheduler_.AddTaskSetToPipe(taskPtr);
-    return taskPtr;
+                          std::size_t batchSize) {
+    TaskHandle handle = CreateRangeTask(jobCount, std::move(fn), batchSize);
+    Submit(handle);
+    return handle;
 }
 
 void TaskSystem::DispatchDetach(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
-                          std::size_t batchSize,
-                          const std::vector<TaskHandle>& deps) {
-    if (jobCount == 0 || !fn) { return; }
-    if (batchSize == 0) { batchSize = 1; }
-    auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());
-    taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
-    size_t i = 0;
-    for (auto* d : deps) {
-        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
-        ++i;
-    }
+                          std::size_t batchSize) {
+    auto* taskPtr = static_cast<enki::ITaskSet*>(CreateRangeTask(jobCount, std::move(fn), batchSize));
+    if (!taskPtr) { return; }
     new AutoDelete(taskPtr);
     scheduler_.AddTaskSetToPipe(taskPtr);
 }

@@ -81,6 +81,23 @@ public:
 
         std::vector<TaskSystem::TaskHandle> passDone(N, nullptr);
 
+        // create all tasks first
+        for (const auto& n : flat) {
+            const size_t passIdx = n.pass;
+            if (!passes_[passIdx].exec) { continue; }
+
+            auto handle = tasks.CreateTask([this, renderer, n, passIdx]() {
+                PassContext ctx;
+                ctx.renderer = renderer;
+                ctx.batchIndex = n.batch;
+                ctx.passName = passes_[passIdx].name;
+                passes_[passIdx].exec(ctx);
+            }, passes_[passIdx].mtDeps.size());
+
+            passDone[passIdx] = handle;
+        }
+
+        // set up dependencies between created tasks
         for (const auto& n : flat) {
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
@@ -92,15 +109,14 @@ public:
                 }
             }
 
-            auto handle = tasks.Submit([this, renderer, n, passIdx]() {
-                PassContext ctx;
-                ctx.renderer = renderer;
-                ctx.batchIndex = n.batch;
-                ctx.passName = passes_[passIdx].name;
-                passes_[passIdx].exec(ctx);
-            }, deps);
+            tasks.SetDependencies(passDone[passIdx], deps);
+        }
 
-            passDone[passIdx] = handle;
+        // finally submit tasks for execution
+        for (const auto& n : flat) {
+            const size_t passIdx = n.pass;
+            if (!passes_[passIdx].exec) { continue; }
+            tasks.Submit(passDone[passIdx]);
         }
 
         for (size_t i = 0; i < N; ++i) {
