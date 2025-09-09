@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstddef>
 #include <memory>
+#include <initializer_list>
 
 #include "third_party/enkiTS/src/TaskScheduler.h"
 
