@@ -14,7 +14,6 @@ public:
         Renderer* renderer = nullptr;
         size_t      batchIndex = (size_t)-1;
         std::string passName;
-        TaskGroup* group = nullptr;   // группа для внутренних тасок пасса (опц.)
     };
 
     using ExecFn = std::function<void(PassContext)>;
@@ -80,42 +79,32 @@ public:
 
         const size_t N = passes_.size();
 
-        // Группа «готовности пасса»: именно эти группы используются как зависимости
-        std::vector<std::unique_ptr<TaskGroup>> passDone(N);
-        for (size_t i = 0; i < N; ++i) {
-            passDone[i] = std::make_unique<TaskGroup>();
-        }
+        std::vector<TaskSystem::TaskHandle> passDone(N, nullptr);
 
         for (const auto& n : flat) {
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
 
-            // Обёртка-пасс: ждём mt-deps, исполняем тело, ждём внутренние саб-таски пасса
-            tasks.Submit([this, renderer, n, passIdx, &passDone]() {
-                // 1) дождаться всех указанных рантайм-зависимостей
-                for (size_t dep : passes_[passIdx].mtDeps) {
-                    if (dep < passDone.size()) {
-                        passDone[dep]->Wait();
-                    }
+            std::vector<TaskSystem::TaskHandle> deps;
+            for (size_t dep : passes_[passIdx].mtDeps) {
+                if (dep < passDone.size() && passDone[dep]) {
+                    deps.push_back(passDone[dep]);
                 }
+            }
 
-                // 2) собственная группа этого пасса (для внутренних Dispatch’ей)
+            auto handle = tasks.Submit([this, renderer, n, passIdx]() {
                 PassContext ctx;
                 ctx.renderer = renderer;
                 ctx.batchIndex = n.batch;
                 ctx.passName = passes_[passIdx].name;
-                ctx.group = passDone[passIdx].get();
-
-                // тело пасса (внутри можно вызывать Dispatch(..., ctx.group))
                 passes_[passIdx].exec(ctx);
+            }, deps);
 
-                }, passDone[passIdx].get()); // эта таска завершится — пасс «готов»
+            passDone[passIdx] = handle;
         }
 
         for (size_t i = 0; i < N; ++i) {
-            if (passDone[i]) {
-                passDone[i]->Wait();
-            }
+            tasks.Wait(passDone[i]);
         }
     }
 
@@ -165,7 +154,6 @@ private:
                     ctx.renderer = renderer;
                     ctx.batchIndex = batch;
                     ctx.passName = p.name;
-                    ctx.group = nullptr; // последовательный путь: группе тут делать нечего
                     p.exec(ctx);
                 }
                 else if (outFlat != nullptr) {

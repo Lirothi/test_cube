@@ -374,7 +374,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     const size_t N = objects.size();
     const size_t chunkSize = 64;
 
-    tasks.Dispatch((N + chunkSize - 1) / chunkSize,
+    tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
         {
             const size_t begin = jobIndex * chunkSize;
@@ -424,7 +424,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
         chunkSize = 32;
     }
 
-    tasks.Dispatch((N + chunkSize - 1) / chunkSize,
+    tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
         [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
         {
             const size_t begin = jobIndex * chunkSize;
@@ -477,7 +477,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[3] = 100.0f;
     cachedSplitsVS_[4] = zFarShadow;
 
-    TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+    TaskSystem::Get().DispatchDetach(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
         CPU_SCOPE("CSM.PerCascade");
         const auto& D = renderer->GetDeferredForFrame();
@@ -559,7 +559,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         {
             RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
-    }, 1, ctx.group);
+    }, 1);
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,

@@ -4,49 +4,48 @@
 #include <vector>
 #include <cstddef>
 #include <memory>
+#include <initializer_list>
 
 #include "third_party/enkiTS/src/TaskScheduler.h"
-
-class TaskSystem;
-
-struct TaskGroup {
-    std::vector<std::unique_ptr<enki::ITaskSet>> tasks;
-    void Wait();
-};
 
 class TaskSystem {
 public:
     using Task = std::function<void()>;
+    using TaskHandle = enki::ICompletable*;
 
     static TaskSystem& Get();
 
     void Start(unsigned threadCount = 0);
     void Stop();
 
-    void Submit(const Task& t, TaskGroup* group = nullptr);
-    void Submit(Task&& t, TaskGroup* group = nullptr);
+    // manual handle-returning versions
+    TaskHandle Submit(Task t, std::initializer_list<TaskHandle> deps = {});
+    TaskHandle Dispatch(std::size_t jobCount,
+                        std::function<void(std::size_t)> fn,
+                        std::size_t batchSize = 1,
+                        std::initializer_list<TaskHandle> deps = {});
 
-    void Dispatch(std::size_t jobCount,
-                  std::function<void(std::size_t)> fn,
-                  std::size_t batchSize = 1,
-                  TaskGroup* group = nullptr);
+    // fire-and-forget versions (auto delete)
+    void SubmitDetach(Task t, std::initializer_list<TaskHandle> deps = {});
+    void DispatchDetach(std::size_t jobCount,
+                        std::function<void(std::size_t)> fn,
+                        std::size_t batchSize = 1,
+                        std::initializer_list<TaskHandle> deps = {});
 
-    void WaitGroup(TaskGroup* group);
+    void Wait(TaskHandle handle);
 
     template<class F>
     static void ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
-        TaskGroup g;
-        Get().Dispatch(jobCount, std::forward<F>(fn), batchSize, &g);
-        Get().WaitGroup(&g);
+        auto h = Get().Dispatch(jobCount, std::forward<F>(fn), batchSize);
+        Get().Wait(h);
     }
 
     template<class F>
     static void ParallelForNoHelp(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
-        TaskGroup g;
-        Get().Dispatch(jobCount, std::forward<F>(fn), batchSize, &g);
-        Get().WaitGroup(&g);
+        auto h = Get().Dispatch(jobCount, std::forward<F>(fn), batchSize);
+        Get().Wait(h);
     }
 
     void WaitForAll();
@@ -62,7 +61,5 @@ private:
 
 private:
     enki::TaskScheduler scheduler_;
-}; 
-
-inline void TaskGroup::Wait() { TaskSystem::Get().WaitGroup(this); }
+};
 

@@ -854,7 +854,7 @@ bool MaterialManager::RequestFSProbeAsync()
         return false;
     }
 
-    TaskSystem::Get().Submit([this]() {
+    TaskSystem::Get().SubmitDetach([this]() {
         for (auto& kv : materials_) {
             auto& mat = kv.second;
             if (mat) {
