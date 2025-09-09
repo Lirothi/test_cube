@@ -24,8 +24,9 @@ void TaskSystem::Stop() {
 namespace {
 struct LambdaTaskSet : enki::ITaskSet {
     TaskSystem::Task fn;
-    LambdaTaskSet(TaskSystem::Task&& f)
-        : enki::ITaskSet(1), fn(std::move(f)) {}
+    std::vector<enki::Dependency> deps;
+    LambdaTaskSet(TaskSystem::Task&& f, size_t depCount)
+        : enki::ITaskSet(1), fn(std::move(f)), deps(depCount) {}
     void ExecuteRange(enki::TaskSetPartition, uint32_t) override {
         if (fn) {
             fn();
@@ -35,8 +36,9 @@ struct LambdaTaskSet : enki::ITaskSet {
 
 struct RangeTaskSet : enki::ITaskSet {
     std::function<void(std::size_t)> fn;
-    RangeTaskSet(std::size_t count, std::function<void(std::size_t)> f)
-        : enki::ITaskSet(static_cast<uint32_t>(count)), fn(std::move(f)) {}
+    std::vector<enki::Dependency> deps;
+    RangeTaskSet(std::size_t count, std::function<void(std::size_t)> f, size_t depCount)
+        : enki::ITaskSet(static_cast<uint32_t>(count)), fn(std::move(f)), deps(depCount) {}
     void ExecuteRange(enki::TaskSetPartition range, uint32_t) override {
         for (uint32_t i = range.start; i < range.end; ++i) {
             fn(i);
@@ -51,52 +53,77 @@ struct AutoDelete : enki::ICompletable {
     explicit AutoDelete(enki::ITaskSet* t) : task(t) {
         SetDependency(dep, task);
     }
-    void OnDependenciesComplete(enki::TaskScheduler*, uint32_t) override {
+    void OnDependenciesComplete(enki::TaskScheduler* pTS, uint32_t thread) override {
+        ICompletable::OnDependenciesComplete(pTS, thread);
         delete task;
         delete this;
     }
 };
 }
 
-void TaskSystem::Submit(const Task& t, TaskGroup* group) { Submit(Task(t), group); }
-
-void TaskSystem::Submit(Task&& t, TaskGroup* group) {
-    if (group) {
-        auto taskPtr = std::make_unique<LambdaTaskSet>(std::move(t));
-        scheduler_.AddTaskSetToPipe(taskPtr.get());
-        group->tasks.push_back(std::move(taskPtr));
-    } else {
-        auto* taskPtr = new LambdaTaskSet(std::move(t));
-        new AutoDelete(taskPtr);
-        scheduler_.AddTaskSetToPipe(taskPtr);
+TaskSystem::TaskHandle TaskSystem::Submit(Task t, std::initializer_list<TaskHandle> deps) {
+    if (!t) { return nullptr; }
+    auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
+    size_t i = 0;
+    for (auto* d : deps) {
+        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
+        ++i;
     }
+    scheduler_.AddTaskSetToPipe(taskPtr);
+    return taskPtr;
 }
 
-void TaskSystem::Dispatch(std::size_t jobCount,
+void TaskSystem::SubmitDetach(Task t, std::initializer_list<TaskHandle> deps) {
+    if (!t) { return; }
+    auto* taskPtr = new LambdaTaskSet(std::move(t), deps.size());
+    size_t i = 0;
+    for (auto* d : deps) {
+        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
+        ++i;
+    }
+    new AutoDelete(taskPtr);
+    scheduler_.AddTaskSetToPipe(taskPtr);
+}
+
+TaskSystem::TaskHandle TaskSystem::Dispatch(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
                           std::size_t batchSize,
-                          TaskGroup* group) {
-    if (jobCount == 0 || !fn) { return; }
+                          std::initializer_list<TaskHandle> deps) {
+    if (jobCount == 0 || !fn) { return nullptr; }
     if (batchSize == 0) { batchSize = 1; }
-    if (group) {
-        auto taskPtr = std::make_unique<RangeTaskSet>(jobCount, std::move(fn));
-        taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
-        scheduler_.AddTaskSetToPipe(taskPtr.get());
-        group->tasks.push_back(std::move(taskPtr));
-    } else {
-        auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn));
-        taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
-        new AutoDelete(taskPtr);
-        scheduler_.AddTaskSetToPipe(taskPtr);
+    auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());
+    taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
+    size_t i = 0;
+    for (auto* d : deps) {
+        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
+        ++i;
     }
+    scheduler_.AddTaskSetToPipe(taskPtr);
+    return taskPtr;
 }
 
-void TaskSystem::WaitGroup(TaskGroup* group) {
-    if (!group) { return; }
-    for (auto& t : group->tasks) {
-        scheduler_.WaitforTask(t.get());
+void TaskSystem::DispatchDetach(std::size_t jobCount,
+                          std::function<void(std::size_t)> fn,
+                          std::size_t batchSize,
+                          std::initializer_list<TaskHandle> deps) {
+    if (jobCount == 0 || !fn) { return; }
+    if (batchSize == 0) { batchSize = 1; }
+    auto* taskPtr = new RangeTaskSet(jobCount, std::move(fn), deps.size());
+    taskPtr->m_MinRange = static_cast<uint32_t>(batchSize);
+    size_t i = 0;
+    for (auto* d : deps) {
+        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
+        ++i;
     }
-    group->tasks.clear();
+    new AutoDelete(taskPtr);
+    scheduler_.AddTaskSetToPipe(taskPtr);
+}
+
+void TaskSystem::Wait(TaskHandle handle) {
+    if (handle) {
+        scheduler_.WaitforTask(handle);
+        delete handle;
+    }
 }
 
 void TaskSystem::WaitForAll() {
