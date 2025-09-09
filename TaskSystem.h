@@ -19,18 +19,24 @@ public:
     void Stop();
 
     // manual handle-returning versions
-    TaskHandle Submit(Task t, const std::vector<TaskHandle>& deps = {});
+    TaskHandle Submit(Task t);
+    // staged creation to allow setting dependencies before firing
+    TaskHandle CreateTask(Task t, std::size_t depCount = 0);
+    TaskHandle CreateRangeTask(std::size_t jobCount,
+                               std::function<void(std::size_t)> fn,
+                               std::size_t batchSize = 1,
+                               std::size_t depCount = 0);
+    void SetDependencies(TaskHandle handle, const std::vector<TaskHandle>& deps);
+    void Submit(TaskHandle handle);
     TaskHandle Dispatch(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
-                        std::size_t batchSize = 1,
-                        const std::vector<TaskHandle>& deps = {});
+                        std::size_t batchSize = 1);
 
     // fire-and-forget versions (auto delete)
-    void SubmitDetach(Task t, const std::vector<TaskHandle>& deps = {});
+    void SubmitDetach(Task t);
     void DispatchDetach(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
-                        std::size_t batchSize = 1,
-                        const std::vector<TaskHandle>& deps = {});
+                        std::size_t batchSize = 1);
 
     void Wait(TaskHandle handle);
 
