@@ -30,7 +30,8 @@ void Profiler::EndFrame() {
     if (!GetEnabled()) { return; }
 
     // 0) ждём прошлую асинхронную сборку (минимум работы в главном потоке)
-    TaskSystem::Get().WaitGroup(&overlayGroup_);
+    TaskSystem::Get().Wait(overlayTask_);
+    overlayTask_ = nullptr;
 
     // 1) заберём сэмплы текущего кадра и закроем кадр (быстро)
     std::vector<ScopeSample> samples;
@@ -43,7 +44,7 @@ void Profiler::EndFrame() {
     }
 
     // 2) асинхронно свернём статистику и обновим дабл-буфер оверлея
-    TaskSystem::Get().Submit([this, samples = std::move(samples)]() mutable {
+    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples)]() mutable {
         const auto t0 = CoolClock::now();
 
         // A) свёртка сэмплов в stats_ (под мьютексом) + EMA/lastCount
@@ -150,7 +151,7 @@ void Profiler::EndFrame() {
 
         // F) флипним read-буфер
         overlayReadBuf_.store(writeIdx, std::memory_order_release);
-        }, &overlayGroup_);
+        });
 }
 
 void Profiler::PushSample(const char* name, uint64_t /*id*/, double ms) {

@@ -178,7 +178,7 @@ private:
     // Ширина оверлей-региона (фикс) — сглаженная оценка, чтобы не мерить строки
     double overlayWidthPx_ = 640.0;
 
-    TaskGroup overlayGroup_;
+    TaskSystem::TaskHandle overlayTask_ = nullptr;
 #endif
 };
 
