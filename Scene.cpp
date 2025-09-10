@@ -388,18 +388,20 @@ void Scene::RenderObjectBatch(Renderer* renderer,
             }
             else {
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-                GPU_SCOPE(t.cl, "RenderObjectBatch");
-                if (bindGbufOrScene)
                 {
-                    renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
-                }
-                else
-                {
-                    renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
-                }
-                
-                for (size_t i = begin; i < end; ++i) {
-                    if (auto* obj = objects[i]) obj->Render(renderer, t.cl, view, proj);
+                    GPU_SCOPE(t.cl, "RenderObjectBatch");
+                    if (bindGbufOrScene)
+                    {
+                        renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                    }
+                    else
+                    {
+                        renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                    }
+
+                    for (size_t i = begin; i < end; ++i) {
+                        if (auto* obj = objects[i]) obj->Render(renderer, t.cl, view, proj);
+                    }
                 }
                 renderer->EndThreadCommandList(t, batchIndex);
             }
@@ -431,19 +433,21 @@ void Scene::RenderShadowBatch(Renderer* renderer,
             const size_t end = std::min(begin + chunkSize, objects.size());
 
             // каждый чанк — отдельный direct CL
-            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-            t.cl->SetName(L"RenderShadowBatch");
-            GPU_SCOPE(t.cl, "RenderShadowBatch");
+              auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+              t.cl->SetName(L"RenderShadowBatch");
+              {
+                  GPU_SCOPE(t.cl, "RenderShadowBatch");
 
-            // важное: привязываем нужный тайл атласа каскада, без очистки
-            renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
+                  // важное: привязываем нужный тайл атласа каскада, без очистки
+                  renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
 
-            for (size_t i = begin; i < end; ++i) {
-                if (auto* obj = objects[i]) {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
-            }
-            renderer->EndThreadCommandList(t, batchIndex);
+                  for (size_t i = begin; i < end; ++i) {
+                      if (auto* obj = objects[i]) {
+                          obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                      }
+                  }
+              }
+              renderer->EndThreadCommandList(t, batchIndex);
         }, 1);
 }
 
@@ -451,8 +455,10 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 {
     auto t = r->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_PrologueClear");
-    r->RecordBindAndClear(t.cl);
+    {
+        GPU_SCOPE(t.cl, "Pass_PrologueClear");
+        r->RecordBindAndClear(t.cl);
+    }
     r->EndThreadCommandList(t, ctx.batchIndex);
 }
 
@@ -463,10 +469,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
-    GPU_SCOPE(d.cl, "Pass_CSM");
-    const auto& D = renderer->GetDeferredForFrame();
-    renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-    renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
+    {
+        GPU_SCOPE(d.cl, "Pass_CSM");
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
+    }
     renderer->EndThreadCommandList(d, ctx.batchIndex);
 
     const float shadowMaxDistance = 300.0f;
@@ -573,15 +581,17 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        GPU_SCOPE(driver.cl, "GBuffer.Driver");
+        {
+            GPU_SCOPE(driver.cl, "GBuffer.Driver");
 
-        const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(driver.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(driver.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(driver.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(driver.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-        renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
+            renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
+        }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
@@ -613,64 +623,65 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_Lighting");
-    const auto& D = renderer->GetDeferredForFrame();
-    renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color, false);
+    {
+        GPU_SCOPE(t.cl, "Pass_Lighting");
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color, false);
 
-    // аллоцируем динамический CB в аплоад-ринге текущего кадра
-    auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
+        // аллоцируем динамический CB в аплоад-ринге текущего кадра
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
-    matLighting_->UpdateCB0Field("sunDirWS", dirLight_.dir, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("ambientIntensity", dirLight_.ambient, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("lightRgb", dirLight_.color, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("exposure", dirLight_.exposure, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition(), (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("camDirWS", camDir, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("sunDirWS", dirLight_.dir, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("ambientIntensity", dirLight_.ambient, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("lightRgb", dirLight_.color, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("exposure", dirLight_.exposure, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition(), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("camDirWS", camDir, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
 
-    matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, /*arrayIndex*/0);
-    matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
-    matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
-    matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
+        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, /*arrayIndex*/0);
+        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
+        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
+        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
 
-    matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[0].x, cachedScale_[0].y, cachedBias_[0].x, cachedBias_[0].y), (uint8_t*)cb.cpu, 0);
-    matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[1].x, cachedScale_[1].y, cachedBias_[1].x, cachedBias_[1].y), (uint8_t*)cb.cpu, 1);
-    matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[2].x, cachedScale_[2].y, cachedBias_[2].x, cachedBias_[2].y), (uint8_t*)cb.cpu, 2);
-    matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
+        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[0].x, cachedScale_[0].y, cachedBias_[0].x, cachedBias_[0].y), (uint8_t*)cb.cpu, 0);
+        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[1].x, cachedScale_[1].y, cachedBias_[1].x, cachedBias_[1].y), (uint8_t*)cb.cpu, 1);
+        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[2].x, cachedScale_[2].y, cachedBias_[2].x, cachedBias_[2].y), (uint8_t*)cb.cpu, 2);
+        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
 
-    matLighting_->UpdateCB0Field("cascadeSplitsVS", float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("shadowAtlasSize", float2((float)renderer->GetDeferredForFrame().shadowRes, (float)renderer->GetDeferredForFrame().shadowRes), (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("shadowBiasNDC", float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
-    matLighting_->UpdateCB0Field("normalBiasWS", float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("cascadeSplitsVS", float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("shadowAtlasSize", float2((float)renderer->GetDeferredForFrame().shadowRes, (float)renderer->GetDeferredForFrame().shadowRes), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("shadowBiasNDC", float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCB0Field("normalBiasWS", float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
 
-    //matLighting_->UpdateCB0Field("shadowBias", 0.0015f, (uint8_t*)cb.cpu);
-    //matLighting_->UpdateCB0Field("pcfRadius", 1.0f, (uint8_t*)cb.cpu);
+        //matLighting_->UpdateCB0Field("shadowBias", 0.0015f, (uint8_t*)cb.cpu);
+        //matLighting_->UpdateCB0Field("pcfRadius", 1.0f, (uint8_t*)cb.cpu);
 
-    auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-    rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
-    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-    srvs.push_back(D.gbSRV[0]);
-    srvs.push_back(D.gbSRV[1]);
-    srvs.push_back(D.gbSRV[2]);
-    srvs.push_back(D.gbSRV[3]);
-    srvs.push_back(D.shadowSRV); // NEW
-    rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::PointClamp(), SamplerManager::ComparisonLinearClamp() });
+        rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+        srvs.push_back(D.gbSRV[0]);
+        srvs.push_back(D.gbSRV[1]);
+        srvs.push_back(D.gbSRV[2]);
+        srvs.push_back(D.gbSRV[3]);
+        srvs.push_back(D.shadowSRV); // NEW
+        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::PointClamp(), SamplerManager::ComparisonLinearClamp() });
 
-    matLighting_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
-
+        matLighting_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+    }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
@@ -682,31 +693,33 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_PointLights");
-
-    const auto& D = renderer->GetDeferredForFrame();
-
-    // Light RT и Depth (с подключённым DSV) — будем писать только стэнсил в Z-FAIL и аддитив в цвет в COLOR
-    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-    renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, /*withDepth*/true);
-
-    // Обнуляем только STENCIL перед каждым светом
-    for (auto& L : pointLights_)
     {
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        // clear stencil=0
-        t.cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+        GPU_SCOPE(t.cl, "Pass_PointLights");
 
-        // 1) Z-FAIL два прохода по объёму
-        L.RenderZFail(renderer, t.cl, view, proj);
+        const auto& D = renderer->GetDeferredForFrame();
 
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
-        // 2) Цвет: полноэкранный, stencil!=0, аддитив
-        L.RenderColor(renderer, t.cl, view, proj, invView, invProj, camera_.GetPosition());
+        // Light RT и Depth (с подключённым DSV) — будем писать только стэнсил в Z-FAIL и аддитив в цвет в COLOR
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+        renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, /*withDepth*/true);
+
+        // Обнуляем только STENCIL перед каждым светом
+        for (auto& L : pointLights_)
+        {
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            // clear stencil=0
+            t.cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+
+            // 1) Z-FAIL два прохода по объёму
+            L.RenderZFail(renderer, t.cl, view, proj);
+
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+            // 2) Цвет: полноэкранный, stencil!=0, аддитив
+            L.RenderColor(renderer, t.cl, view, proj, invView, invProj, camera_.GetPosition());
+        }
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -718,16 +731,18 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
     if (!skyBox_) { return; }
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_Skybox");
+    {
+        GPU_SCOPE(t.cl, "Pass_Skybox");
 
-    const auto& D = renderer->GetDeferredForFrame();
-    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
 
-    // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
-    renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
+        // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
+        renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
 
-    skyBox_->Render(renderer, t.cl, view, proj);
+        skyBox_->Render(renderer, t.cl, view, proj);
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -739,36 +754,38 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_SSR");
-    const auto& D = renderer->GetDeferredForFrame();
+    {
+        GPU_SCOPE(t.cl, "Pass_SSR");
+        const auto& D = renderer->GetDeferredForFrame();
 
-    renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    renderer->BindSSRTarget(t.cl, Renderer::ClearMode::Color);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::Color);
 
-    auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
-    matSSR_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
-    matSSR_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
+        matSSR_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
 
-    auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-    rc.cbv[0] = cb.gpu;
-    rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
 
-    matSSR_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
+        matSSR_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+    }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
@@ -776,49 +793,51 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_SSR.Blur");
-    const auto& D = renderer->GetDeferredForFrame();
-    // X Pass---
-    renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    {
+        GPU_SCOPE(t.cl, "Pass_SSR.Blur");
+        const auto& D = renderer->GetDeferredForFrame();
+        // X Pass---
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-    renderer->BindSSRBlurTarget(t.cl, Renderer::ClearMode::Color);
+        renderer->BindSSRBlurTarget(t.cl, Renderer::ClearMode::Color);
 
-    auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
-    float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
-    matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
-    matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
+        matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
 
-	auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-	rc.cbv[0] = cb.gpu;
-    rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
-    matBlur_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
-    // ---
-    // Y Pass---
-    renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        matBlur_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+        // ---
+        // Y Pass---
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-    renderer->BindSSRTarget(t.cl, Renderer::ClearMode::None); // RT=ssr
+        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::None); // RT=ssr
 
-    cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
-    dir = float2(0.0f, 1.0f / renderer->GetHeight());
-    matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
-    matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        dir = float2(0.0f, 1.0f / renderer->GetHeight());
+        matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
 
-    rc.cbv[0] = cb.gpu;
-    rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        rc.cbv[0] = cb.gpu;
+        rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
-    matBlur_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
-    //---
+        matBlur_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+        //---
+    }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
@@ -829,46 +848,48 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_Compose");
-    const auto& D = renderer->GetDeferredForFrame();
-    renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
+    {
+        GPU_SCOPE(t.cl, "Pass_Compose");
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
-    // === CB для compose_ps ===
+        // === CB для compose_ps ===
 
-    auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
-    matCompose_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-    matCompose_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
-    matCompose_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-    matCompose_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
-    matCompose_->UpdateCB0Field("skyboxIntensity", skyBox_->GetExposure(), (uint8_t*)cb.cpu);
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
+        matCompose_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCB0Field("skyboxIntensity", skyBox_->GetExposure(), (uint8_t*)cb.cpu);
 
-    // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
-    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-    srvs.push_back(D.lightSRV);   // t0
-    srvs.push_back(D.gbSRV[2]);   // t1 (GB2)
-    srvs.push_back(D.gbSRV[0]);   // t2 (GB0)
-    srvs.push_back(D.gbSRV[1]);   // t3 (GB1)
-    srvs.push_back(D.gbSRV[3]);   // t4 (Depth)
-    srvs.push_back(skyBox_->GetTex()->GetSRVCPU());
-    srvs.push_back(D.ssrSRV);
+        // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+        srvs.push_back(D.lightSRV);   // t0
+        srvs.push_back(D.gbSRV[2]);   // t1 (GB2)
+        srvs.push_back(D.gbSRV[0]);   // t2 (GB0)
+        srvs.push_back(D.gbSRV[1]);   // t3 (GB1)
+        srvs.push_back(D.gbSRV[3]);   // t4 (Depth)
+        srvs.push_back(skyBox_->GetTex()->GetSRVCPU());
+        srvs.push_back(D.ssrSRV);
 
-    auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-    rc.cbv[0] = cb.gpu; // b0
-    rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+        rc.cbv[0] = cb.gpu; // b0
+        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
 
-    matCompose_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
+        matCompose_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -882,11 +903,13 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
     rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        GPU_SCOPE(driver.cl, "Transparent.Driver");
-        const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
+        {
+            GPU_SCOPE(driver.cl, "Transparent.Driver");
+            const auto& D = renderer->GetDeferredForFrame();
+            renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
+        }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
@@ -913,20 +936,22 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_Tonemap");
-    const auto& D = renderer->GetDeferredForFrame();
-    renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    renderer->RecordBindDefaultsNoClear(t.cl);
+    {
+        GPU_SCOPE(t.cl, "Pass_Tonemap");
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->RecordBindDefaultsNoClear(t.cl);
 
-    auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-    rc.table[0] = renderer->StageTonemapSrvTable(); // t0
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        rc.table[0] = renderer->StageTonemapSrvTable(); // t0
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
-    matTonemap_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
+        matTonemap_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -940,18 +965,20 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
     const auto& D = renderer->GetDeferredForFrame();
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-    GPU_SCOPE(t.cl, "Pass_Debug");
-    renderer->RecordBindDefaultsNoClear(t.cl);
+    {
+        GPU_SCOPE(t.cl, "Pass_Debug");
+        renderer->RecordBindDefaultsNoClear(t.cl);
 
-    auto h = renderer->GetRenderContextPool()->Acquire();
-    auto& rc = h.ref();
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
 
-    rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
-    rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
 
-    matDebug_->Bind(t.cl, rc);
-    t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    t.cl->DrawInstanced(3, 1, 0, 0);
+        matDebug_->Bind(t.cl, rc);
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->DrawInstanced(3, 1, 0, 0);
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -961,14 +988,16 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
     if (auto* tm = renderer->GetTextManager()) {
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
-        GPU_SCOPE(t.cl, "Pass_Overlay");
-        renderer->RecordBindDefaultsNoClear(t.cl);
-        if (showProfiler_)
         {
-            Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/20);
+            GPU_SCOPE(t.cl, "Pass_Overlay");
+            renderer->RecordBindDefaultsNoClear(t.cl);
+            if (showProfiler_)
+            {
+                Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/20);
+            }
+            tm->Build(renderer, t.cl);
+            tm->Draw(renderer, t.cl);
         }
-        tm->Build(renderer, t.cl);
-        tm->Draw(renderer, t.cl);
         renderer->EndThreadCommandList(t, ctx.batchIndex);
     }
 }
