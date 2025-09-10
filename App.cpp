@@ -48,14 +48,18 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
 
     RegisterClassEx(&wc);
 
-    const LONG defWidth = 1600;
-	const LONG defHeight = 900;
+    RECT screenRect;
+    SystemParametersInfo(SPI_GETWORKAREA, 0, &screenRect, 0);
+
+    float scale = 1.0f, aspect = 9.0f/16.0f;
+    LONG defWidth = (LONG)(1600 * scale);
+	LONG defHeight = (LONG)(900 * scale);
+
+    defWidth = std::min(defWidth, (screenRect.right - screenRect.left) - 8);
+    defHeight = LONG(defWidth * aspect);
 
     RECT rect = { 0, 0, defWidth, defHeight };
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-
-    RECT screenRect;
-    SystemParametersInfo(SPI_GETWORKAREA, 0, &screenRect, 0);
 
     int windowWidth = rect.right - rect.left;
     int windowHeight = rect.bottom - rect.top;
