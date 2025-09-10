@@ -255,7 +255,6 @@ void Scene::Render(Renderer* renderer) {
     int y = 8;
     tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, L"FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
 
-    renderer->BeginFrame();
     renderer->BeginSubmitTimeline();
 
     // матрицы кадра и параметры камеры/света (как у тебя)
@@ -389,6 +388,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
             }
             else {
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+                GPU_SCOPE(t.cl, "RenderObjectBatch");
                 if (bindGbufOrScene)
                 {
                     renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
@@ -433,6 +433,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
             // каждый чанк — отдельный direct CL
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             t.cl->SetName(L"RenderShadowBatch");
+            GPU_SCOPE(t.cl, "RenderShadowBatch");
 
             // важное: привязываем нужный тайл атласа каскада, без очистки
             renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
@@ -450,6 +451,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 {
     auto t = r->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_PrologueClear");
     r->RecordBindAndClear(t.cl);
     r->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -461,6 +463,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
+    GPU_SCOPE(d.cl, "Pass_CSM");
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
     renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
@@ -570,6 +573,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        GPU_SCOPE(driver.cl, "GBuffer.Driver");
 
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(driver.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -609,6 +613,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_Lighting");
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -677,6 +682,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_PointLights");
 
     const auto& D = renderer->GetDeferredForFrame();
 
@@ -712,6 +718,7 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
     if (!skyBox_) { return; }
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_Skybox");
 
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -732,6 +739,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_SSR");
     const auto& D = renderer->GetDeferredForFrame();
 
     renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -768,6 +776,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_SSR.Blur");
     const auto& D = renderer->GetDeferredForFrame();
     // X Pass---
     renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -820,6 +829,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_Compose");
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -872,6 +882,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
     rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        GPU_SCOPE(driver.cl, "Transparent.Driver");
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -902,6 +913,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_Tonemap");
     const auto& D = renderer->GetDeferredForFrame();
     renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     renderer->RecordBindDefaultsNoClear(t.cl);
@@ -928,6 +940,7 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
     const auto& D = renderer->GetDeferredForFrame();
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    GPU_SCOPE(t.cl, "Pass_Debug");
     renderer->RecordBindDefaultsNoClear(t.cl);
 
     auto h = renderer->GetRenderContextPool()->Acquire();
@@ -948,6 +961,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
     if (auto* tm = renderer->GetTextManager()) {
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        GPU_SCOPE(t.cl, "Pass_Overlay");
         renderer->RecordBindDefaultsNoClear(t.cl);
         if (showProfiler_)
         {

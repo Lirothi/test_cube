@@ -16,6 +16,15 @@
 #define PROF_ENABLED 1
 #endif
 
+#ifndef PROF_GPU_ENABLED
+#define PROF_GPU_ENABLED 0
+#endif
+
+#if PROF_GPU_ENABLED
+#include <d3d12.h>
+#include <wrl/client.h>
+#endif
+
 class TextManager; // forward
 
 // Профайлер CPU: скоупы, EMA-среднее, кулдаун сброса максимумов,
@@ -61,6 +70,12 @@ public:
     void BeginFrame(uint64_t frameNo);
     void EndFrame();
 
+#if PROF_GPU_ENABLED
+    // Инициализация и сбор результатов GPU
+    void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries = 1024);
+    void CollectGpuResults();
+#endif
+
     // Скоповая отметка (CPU)
     class ScopedCpu {
     public:
@@ -91,6 +106,35 @@ public:
 #else
 #define CPU_SCOPE(nameLiteral)       do { } while (0)
 #define CPU_SCOPE_N(nameLiteral, id) do { } while (0)
+#endif
+
+#if PROF_GPU_ENABLED
+    // Скоповая отметка (GPU)
+    class ScopedGpu {
+    public:
+        ScopedGpu(ID3D12GraphicsCommandList* cl, const char* name, uint64_t nameId = 0);
+        ~ScopedGpu();
+    private:
+#if PROF_ENABLED
+        ID3D12GraphicsCommandList* cl_ = nullptr;
+        size_t idx_ = SIZE_MAX;
+#endif
+    };
+
+#if PROF_ENABLED
+#define GPU_SCOPE(cmdList, nameLiteral)       Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, nameLiteral, 0)
+#define GPU_SCOPE_N(cmdList, nameLiteral, id) Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, nameLiteral, (id))
+#else
+#define GPU_SCOPE(cmdList, nameLiteral)       do { } while (0)
+#define GPU_SCOPE_N(cmdList, nameLiteral, id) do { } while (0)
+#endif
+#else
+    class ScopedGpu {
+    public:
+        ScopedGpu(... ) {}
+    };
+#define GPU_SCOPE(cmdList, nameLiteral)       do { } while (0)
+#define GPU_SCOPE_N(cmdList, nameLiteral, id) do { } while (0)
 #endif
 
     // Оверлей с табличкой (читает дабл-буфер без локов)
@@ -128,6 +172,11 @@ public:
 private:
     Profiler() = default;
     void PushSample(const char* name, uint64_t id, double ms);
+#if PROF_GPU_ENABLED
+    void PushGpuSample(const char* name, uint64_t id, double ms);
+    size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id);
+    void EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx);
+#endif
 
 #if PROF_ENABLED
     void ResetMax_Unsafe(); // вызывать под mtx_
@@ -147,9 +196,15 @@ private:
     // сбор статистики
     std::mutex mtx_;
     robin_hood::unordered_map<std::string, ScopeStats> stats_;
+#if PROF_GPU_ENABLED
+    robin_hood::unordered_map<std::string, ScopeStats> gpuStats_;
+#endif
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
 
     std::vector<ScopeSample> frameSamples_;
+#if PROF_GPU_ENABLED
+    std::vector<ScopeSample> gpuFrameSamples_;
+#endif
     uint64_t  frameNo_ = 0;
     bool      frameOpen_ = false;
 
@@ -170,6 +225,10 @@ private:
     // Оверлей: дабл-буфер строк (EndFrame пишет, EmitOverlay читает)
     std::vector<OverlayRow> overlayRows_[2];
     std::atomic<int>        overlayReadBuf_{ 0 }; // 0 или 1
+#if PROF_GPU_ENABLED
+    std::vector<OverlayRow> gpuOverlayRows_[2];
+    std::atomic<int>        gpuOverlayReadBuf_{ 0 };
+#endif
 
     // Переcортировка по avgMs раз в N сек
     CoolClock::time_point lastOverlaySort_{};
@@ -177,8 +236,26 @@ private:
 
     // Ширина оверлей-региона (фикс) — сглаженная оценка, чтобы не мерить строки
     double overlayWidthPx_ = 640.0;
+#if PROF_GPU_ENABLED
+    double gpuOverlayWidthPx_ = 640.0;
+#endif
 
     TaskSystem::TaskHandle overlayTask_ = nullptr;
+
+#if PROF_GPU_ENABLED
+    // GPU timestamp queries
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_;
+    ID3D12CommandQueue* gpuQueue_ = nullptr;
+    UINT64 gpuFreq_ = 0;
+    UINT maxGpuQueries_ = 0;
+    UINT nextGpuQuery_ = 0;
+    UINT lastGpuQueryCount_ = 0;
+    struct GpuSampleRange { const char* name; UINT start; UINT end; };
+    std::vector<GpuSampleRange> gpuPending_;
+    std::vector<GpuSampleRange> gpuResolved_;
+    bool gpuInitialized_ = false;
+#endif
 #endif
 };
 

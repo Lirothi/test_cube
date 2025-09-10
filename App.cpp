@@ -81,6 +81,9 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     ShowWindow(hWnd, nCmdShow);
     renderer_.InitD3D12(hWnd);
     input_.Initialize(hWnd);
+#if PROF_GPU_ENABLED
+    Profiler::Get().InitGpu(renderer_.GetDevice(), renderer_.GetCommandQueue());
+#endif
 }
 
 void App::InitScene()
@@ -123,8 +126,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     MSG msg = {};
     double lastTime = GetTimeSeconds();
     while (isRunning_) {
-        Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber() + 1); //will be increased in Renderer::BeginFrame
-        
+        Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
+        renderer_.BeginFrame();
+#if PROF_GPU_ENABLED
+        Profiler::Get().CollectGpuResults();
+#endif
+
         {
             CPU_SCOPE("Whole Cycle");
             input_.NewFrame();
