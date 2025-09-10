@@ -333,6 +333,7 @@ void Renderer::SignalFrame(UINT frameIndex) {
 }
 
 void Renderer::BeginFrame() {
+	CPU_SCOPE("Renderer::BeginFrame");
     // Ждём GPU по своему backbuffer'у
     WaitForFrame(currentFrameIndex_);
 
@@ -409,10 +410,19 @@ void Renderer::Tick(float dt)
 
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
 {
-    CPU_SCOPE("Renderer::BeginThreadCommandList");
-    auto& fr = frameResources_[currentFrameIndex_];
-    ID3D12CommandAllocator* alloc = fr->AcquireCommandAllocator(device_.Get(), type);
-    ID3D12GraphicsCommandList* cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
+    ID3D12GraphicsCommandList* cl = 0;
+    ID3D12CommandAllocator* alloc = 0;
+    {
+        auto& fr = frameResources_[currentFrameIndex_];
+        {
+            CPU_SCOPE("Renderer::BeginThreadCommandList.1");
+            alloc = fr->AcquireCommandAllocator(device_.Get(), type);
+        }
+        {
+            CPU_SCOPE("Renderer::BeginThreadCommandList.2");
+            cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
+        }
+    }
 
     ID3D12DescriptorHeap* heaps[] = {
         frameResources_[currentFrameIndex_]->GetDescAlloc().GetShaderVisibleHeap(),

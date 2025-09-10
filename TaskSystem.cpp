@@ -103,7 +103,7 @@ void TaskSystem::SetDependencies(TaskHandle handle, const std::vector<TaskHandle
 }
 
 void TaskSystem::Submit(TaskHandle handle) {
-    if (handle) {
+    if (handle && handle->GetIsComplete()) {
         scheduler_.AddTaskSetToPipe(static_cast<enki::ITaskSet*>(handle));
     }
 }

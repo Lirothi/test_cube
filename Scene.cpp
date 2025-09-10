@@ -477,7 +477,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[3] = 100.0f;
     cachedSplitsVS_[4] = zFarShadow;
 
-    TaskSystem::Get().DispatchDetach(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+    auto cascades = TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
         CPU_SCOPE("CSM.PerCascade");
         const auto& D = renderer->GetDeferredForFrame();
@@ -560,6 +560,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
     }, 1);
+    TaskSystem::Get().Wait(cascades);
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
