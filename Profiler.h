@@ -17,7 +17,7 @@
 #endif
 
 #ifndef PROF_GPU_ENABLED
-#define PROF_GPU_ENABLED 0
+#define PROF_GPU_ENABLED 1
 #endif
 
 #if PROF_GPU_ENABLED
@@ -209,7 +209,7 @@ private:
     bool      frameOpen_ = false;
 
     // EMA для avgMs
-    double emaAlpha_ = 0.99;
+    double emaAlpha_ = 0.995;
 
     std::atomic<bool> enabled_{ true };
 
@@ -232,7 +232,7 @@ private:
 
     // Переcортировка по avgMs раз в N сек
     CoolClock::time_point lastOverlaySort_{};
-    double overlayResortIntervalSec_ = 1.0; // по умолчанию раз в секунду
+    double overlayResortIntervalSec_ = 2.0; // по умолчанию раз в секунду
 
     // Ширина оверлей-региона (фикс) — сглаженная оценка, чтобы не мерить строки
     double overlayWidthPx_ = 640.0;
