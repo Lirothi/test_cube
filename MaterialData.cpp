@@ -68,9 +68,15 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
     else {
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
         srvs.reserve(3);
-        if (hasAlbedo) srvs.push_back(albedo.GetSRVCPU());
-        if (hasMR)     srvs.push_back(mr.GetSRVCPU());
-        if (hasNormal) srvs.push_back(normal.GetSRVCPU());
+        if (hasAlbedo) {
+            srvs.push_back(albedo.GetSRVCPU());
+        }
+        if (hasMR) {
+            srvs.push_back(mr.GetSRVCPU());
+        }
+        if (hasNormal) {
+            srvs.push_back(normal.GetSRVCPU());
+        }
         if (!srvs.empty()) {
             auto tbl = r->StageSrvUavTable(srvs);
             ctx.table[srvTableRegister] = tbl.gpu;

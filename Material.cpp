@@ -129,7 +129,11 @@ struct IncludeCaptureDXC : public IDxcIncludeHandler
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refcnt; }
     ULONG STDMETHODCALLTYPE Release() override {
-        ULONG v = --refcnt; if (v == 0) delete this; return v;
+        ULONG v = --refcnt;
+        if (v == 0) {
+            delete this;
+        }
+        return v;
     }
 
     // IDxcIncludeHandler
@@ -213,9 +217,12 @@ static HRESULT CompileDXC(const std::wstring& file,
     }
 
     // Собираем массив LPCWSTR
-    std::vector<LPCWSTR> args; args.reserve(owned.size());
+    std::vector<LPCWSTR> args;
+    args.reserve(owned.size());
     {
-        for (auto& s : owned) args.push_back(s.c_str());
+        for (auto& s : owned) {
+            args.push_back(s.c_str());
+        }
     }
 
     // Компиляция
@@ -242,7 +249,9 @@ static HRESULT CompileDXC(const std::wstring& file,
     ComPtr<IDxcBlob> dxil;
     ComPtr<IDxcBlobUtf16> dummyNameObj;
     result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&dxil), dummyNameObj.ReleaseAndGetAddressOf());
-    if (!dxil) return E_FAIL;
+    if (!dxil) {
+        return E_FAIL;
+    }
 
     // Приводим к ID3DBlob через копию (чтобы остальной код не менять)
     ComPtr<ID3DBlob> blob;
@@ -997,7 +1006,9 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
 void Material::ReflectShaderBlob(ID3DBlob* blob,
     robin_hood::unordered_map<UINT, CBufferInfo>& io)
 {
-    if (!blob) return;
+    if (!blob) {
+        return;
+    }
 
     // Сначала попробуем DXIL (DXC)
     {

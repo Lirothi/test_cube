@@ -151,7 +151,10 @@ inline void CreateCheckerTex(std::vector<uint32_t>& outRGBA)
     outRGBA.clear();
     outRGBA.resize(256 * 256);
 
-    for (int y = 0; y < 256; ++y) for (int x = 0; x < 256; ++x) {
-        bool c = ((x >> 5) ^ (y >> 5)) & 1; outRGBA[y * 256 + x] = c ? 0xFFFFFFFF : 0xFF000000;
+    for (int y = 0; y < 256; ++y) {
+        for (int x = 0; x < 256; ++x) {
+            bool c = ((x >> 5) ^ (y >> 5)) & 1;
+            outRGBA[y * 256 + x] = c ? 0xFFFFFFFF : 0xFF000000;
+        }
     }
 }

@@ -272,9 +272,13 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
 
     if (hasDX10) {
         // DX10 header path (modern formats)
-        if (size < 4 + sizeof(DDS_HEADER) + sizeof(DDS_HEADER_DXT10)) return false;
+        if (size < 4 + sizeof(DDS_HEADER) + sizeof(DDS_HEADER_DXT10)) {
+            return false;
+        }
         const auto* hx = reinterpret_cast<const DDS_HEADER_DXT10*>(bytes + 4 + sizeof(DDS_HEADER));
-        if (hx->resourceDimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) return false;
+        if (hx->resourceDimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) {
+            return false;
+        }
 
         outIsCube = (hx->miscFlag & 0x4) != 0; // D3D11_RESOURCE_MISC_TEXTURECUBE
         outW = hdr->width;

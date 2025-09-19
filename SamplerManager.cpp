@@ -69,7 +69,9 @@ D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::Get(Renderer* renderer, const D3D12_
 
 D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::GetTableImpl(Renderer* renderer, const D3D12_SAMPLER_DESC* descs, size_t count) {
     D3D12_GPU_DESCRIPTOR_HANDLE null{}; null.ptr = 0;
-    if (count == 0) return null;
+    if (count == 0) {
+        return null;
+    }
 
     auto& sa = renderer->GetSamplerAlloc();
     GpuDescHandle block = sa.Alloc(static_cast<UINT>(count));
