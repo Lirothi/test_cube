@@ -545,7 +545,19 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
     std::vector<ID3D12CommandList*> fixedLists;
-    fixedLists.reserve(lists.size() * 2);
+    fixedLists.reserve(lists.size() * 2 + 3);
+#if PROF_GPU_ENABLED
+    {
+        auto& fr = frameResources_[currentFrameIndex_];
+        ID3D12CommandAllocator* alloc =
+            fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+        ID3D12GraphicsCommandList* cl =
+            fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+        Profiler::Get().BeginGpuFrame(cl);
+        ThrowIfFailed(cl->Close());
+        fixedLists.push_back(cl);
+    }
+#endif
 
     {
         // локальная копия глобальных стейтов на момент сабмита
@@ -629,6 +641,9 @@ void Renderer::ExecuteTimelineAndPresent() {
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         cl->ResourceBarrier(1, &b);
+#if PROF_GPU_ENABLED
+        Profiler::Get().EndGpuFrame(cl);
+#endif
         ThrowIfFailed(cl->Close());
         epilogueCL = cl;
     }
