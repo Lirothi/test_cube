@@ -429,8 +429,12 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     overlayWidthPx_ = overlayWidthPx_ * 0.9 + needW * 0.1;
     const double boxW = std::max(overlayWidthPx_, 480.0);
 #if PROF_GPU_ENABLED
-    gpuOverlayWidthPx_ = gpuOverlayWidthPx_ * 0.9 + needW * 0.1;
-    const double gpuBoxW = std::max(gpuOverlayWidthPx_, 480.0);
+    const bool hasGpuRows = !gpuRows.empty();
+    double gpuBoxW = 0.0;
+    if (hasGpuRows) {
+        gpuOverlayWidthPx_ = gpuOverlayWidthPx_ * 0.9 + needW * 0.1;
+        gpuBoxW = std::max(gpuOverlayWidthPx_, 480.0);
+    }
 #endif
 
     // CPU region
@@ -457,24 +461,26 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     }
 
 #if PROF_GPU_ENABLED
-    // GPU region to the right of CPU
-    const int gpuX = x + (int)boxW + 16;
-    auto regGpu = tm->CreateRegion(gpuX, y, TextManager::Align::Left);
-    tm->RegionSetPadding(regGpu, 8, 6);
-    tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.55f));
-    tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
-    tm->RegionSetAutoMeasure(regGpu, false);
+    if (hasGpuRows) {
+        // GPU region to the right of CPU
+        const int gpuX = x + (int)boxW + 16;
+        auto regGpu = tm->CreateRegion(gpuX, y, TextManager::Align::Left);
+        tm->RegionSetPadding(regGpu, 8, 6);
+        tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.55f));
+        tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
+        tm->RegionSetAutoMeasure(regGpu, false);
 
-    tm->AddTextf(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f),
-        L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
-        (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-    tm->AddText(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
+        tm->AddTextf(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f),
+            L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
+            (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
+        tm->AddText(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
 
-    int gshown = 0;
-    for (const auto& r : gpuRows) {
-        if (gshown >= maxLines) { break; }
-        tm->AddText(regGpu, 16.0f, (gshown & 1) ? colOdd : colEven, r.formatted);
-        gshown++;
+        int gshown = 0;
+        for (const auto& r : gpuRows) {
+            if (gshown >= maxLines) { break; }
+            tm->AddText(regGpu, 16.0f, (gshown & 1) ? colOdd : colEven, r.formatted);
+            gshown++;
+        }
     }
 #endif
 }

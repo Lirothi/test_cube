@@ -60,11 +60,11 @@ private:
     };
 
     struct RegionLine {
-        std::wstring text;        // исходная широкая строка
-        float4       color;
-        float        px = 16.0f;
-        float        widthPx = 0; // ширина строки (для Center/Right)
-        GlyphRun     run;         // кэш глифов/офсетов
+        float4   color;
+        float    px = 16.0f;
+        float    widthPx = 0;   // ширина строки (для Center/Right)
+        GlyphRun run;           // кэш глифов/офсетов
+        uint32_t glyphCount = 0; // запас по глифам для резерва
     };
 
     struct Region {
@@ -80,6 +80,7 @@ private:
         float maxLineWidth = 0;
         int   totalLines = 0;
         int   lineStepPx = 18;
+        size_t glyphCount = 0;
     };
 
 private:
