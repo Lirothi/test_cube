@@ -1,5 +1,4 @@
 #pragma once
-#include "third_party/robin_hood.h"
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -32,6 +31,13 @@ public:
 private:
     Texture2D tex_;
     int pxSize_=0, spread_=0, atlasW_=0, atlasH_=0, ascent_=0, descent_=0, lineAdvance_=0;
-    robin_hood::unordered_flat_map<uint32_t, FontGlyph> map_;
-    robin_hood::unordered_flat_map<uint64_t, int> kern_;
+    std::vector<FontGlyph> glyphs_;
+    std::vector<uint32_t> glyphRemap_;
+    uint32_t glyphRemapBase_ = 0;
+
+    struct KerningPair {
+        uint64_t key = 0;
+        int value = 0;
+    };
+    std::vector<KerningPair> kerning_;
 };

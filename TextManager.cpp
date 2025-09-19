@@ -358,38 +358,71 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
 
     if (font_ == nullptr || text.empty()) { return; }
 
+    const FontAtlas* font = font_;
+    const float scale = outRun.scale;
+
     outRun.glyphs.reserve(text.size());
     outRun.xOffsets.reserve(text.size());
+
+    const FontGlyph* glyphSpace = font->Find((uint32_t)L' ');
+    const FontGlyph* glyphTab   = font->Find((uint32_t)L'\t');
+    const FontGlyph* glyphN     = font->Find((uint32_t)'n');
+    const float emAdvance       = (glyphN ? float(glyphN->xadv) : float(font->PxSize()));
+    const float spaceAdvance    = (glyphSpace ? float(glyphSpace->xadv) : emAdvance * 0.5f) * scale;
+    const float tabAdvance      = (glyphTab ? float(glyphTab->xadv) : emAdvance * 2.0f) * scale;
 
     float penX = 0.0f;
     uint32_t prev = 0;
 
-    for (wchar_t wc : text) {
+    std::array<const FontGlyph*, 128> asciiGlyphs{};
+    std::array<uint8_t, 128> asciiGlyphReady{};
+    asciiGlyphReady.fill(0);
+
+    const wchar_t* cur = text.data();
+    const wchar_t* const end = cur + text.size();
+    for (; cur != end; ++cur) {
+        const wchar_t wc = *cur;
         if (wc == L'\n') { break; }
-        if (wc == L' ' || wc == L'\t') {
-            const FontGlyph* gsp = font_->Find((uint32_t)wc);
-            float adv = 0.0f;
-            if (gsp) { adv = float(gsp->xadv) * outRun.scale; }
-            else {
-                const FontGlyph* gn = font_->Find((uint32_t)'n');
-                const float em = (gn ? float(gn->xadv) : float(font_->PxSize()));
-                adv = (wc == L'\t' ? em * 2.0f : em * 0.5f) * outRun.scale;
-            }
-            penX += adv; prev = 0; continue;
+        if (wc == L' ') {
+            penX += spaceAdvance;
+            prev = 0;
+            continue;
+        }
+        if (wc == L'\t') {
+            penX += tabAdvance;
+            prev = 0;
+            continue;
         }
 
         const uint32_t cp = (uint32_t)wc;
-        const FontGlyph* gph = font_->Find(cp);
-        if (!gph) { prev = 0; continue; }
+        const FontGlyph* gph = nullptr;
+        if (cp < asciiGlyphs.size()) {
+            uint8_t& state = asciiGlyphReady[cp];
+            if (!state) {
+                asciiGlyphs[cp] = font->Find(cp);
+                state = 1;
+            }
+            gph = asciiGlyphs[cp];
+        }
+        else {
+            gph = font->Find(cp);
+        }
+        if (!gph) {
+            prev = 0;
+            continue;
+        }
 
         if (prev) {
-            penX += float(font_->Kerning(prev, cp)) * outRun.scale;
+            const int kern = font->Kerning(prev, cp);
+            if (kern) {
+                penX += float(kern) * scale;
+            }
         }
 
         outRun.xOffsets.push_back(penX);
         outRun.glyphs.push_back(gph);
 
-        penX += float(gph->xadv) * outRun.scale;
+        penX += float(gph->xadv) * scale;
         prev = cp;
     }
 

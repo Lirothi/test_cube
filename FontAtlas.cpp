@@ -2,6 +2,12 @@
 #include <fstream>
 #include <sstream>
 #include <cwchar>
+#include <algorithm>
+#include <limits>
+
+namespace {
+constexpr uint32_t kInvalidGlyphIndex = std::numeric_limits<uint32_t>::max();
+}
 
 // VERY small TGA reader (8-bit)
 static bool LoadTGA8(const std::wstring& path, int& w, int& h, std::vector<uint8_t>& out) {
@@ -46,20 +52,22 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     lineAdvance_= findNum("lineAdvance");
 
     // glyphs
-    map_.clear();
+    glyphs_.clear();
+    glyphRemap_.clear();
+    glyphRemapBase_ = 0;
     {
         size_t p = j.find("\"glyphs\":[");
         if (p != std::string::npos) {
             p = j.find('[', p);
             size_t e = j.find(']', p);
-            std::string arr = j.substr(p+1, e-p-1);
+            std::string arr = j.substr(p + 1, e - p - 1);
             size_t i = 0;
             while (i < arr.size()) {
                 size_t b = arr.find('{', i);
                 if (b == std::string::npos) { break; }
                 size_t c = arr.find('}', b);
-                std::string obj = arr.substr(b+1, c-b-1);
-                auto get = [&](const char* k)->int {
+                std::string obj = arr.substr(b + 1, c - b - 1);
+                auto get = [&](const char* k) -> int {
                     std::string kk = std::string("\"") + k + "\":";
                     size_t pp = obj.find(kk);
                     if (pp == std::string::npos) { return 0; }
@@ -67,11 +75,14 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
                     return std::atoi(obj.c_str() + pp);
                 };
                 FontGlyph g{};
-                g.cp    = (uint32_t)get("cp");
-                g.x     = get("x"); g.y = get("y");
-                g.w     = get("w"); g.h = get("h");
-                g.xoff  = get("xoff"); g.yoff = get("yoff");
-                g.xadv  = get("xadv");
+                g.cp = (uint32_t)get("cp");
+                g.x = get("x");
+                g.y = get("y");
+                g.w = get("w");
+                g.h = get("h");
+                g.xoff = get("xoff");
+                g.yoff = get("yoff");
+                g.xadv = get("xadv");
                 if (g.w > 0 && g.h > 0) {
                     const float invW = 1.0f / float(atlasW_);
                     const float invH = 1.0f / float(atlasH_);
@@ -86,27 +97,27 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
                 else {
                     g.u0 = g.v0 = g.u1 = g.v1 = 0.0f;
                 }
-                map_[g.cp] = g;
+                glyphs_.push_back(g);
                 i = c + 1;
             }
         }
     }
 
     // kern
-    kern_.clear();
+    kerning_.clear();
     {
         size_t p = j.find("\"kern\":[");
         if (p != std::string::npos) {
             p = j.find('[', p);
             size_t e = j.find(']', p);
-            std::string arr = j.substr(p+1, e-p-1);
+            std::string arr = j.substr(p + 1, e - p - 1);
             size_t i = 0;
             while (i < arr.size()) {
                 size_t b = arr.find('{', i);
                 if (b == std::string::npos) { break; }
                 size_t c = arr.find('}', b);
-                std::string obj = arr.substr(b+1, c-b-1);
-                auto get = [&](const char* k)->int {
+                std::string obj = arr.substr(b + 1, c - b - 1);
+                auto get = [&](const char* k) -> int {
                     std::string kk = std::string("\"") + k + "\":";
                     size_t pp = obj.find(kk);
                     if (pp == std::string::npos) { return 0; }
@@ -114,10 +125,12 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
                     return std::atoi(obj.c_str() + pp);
                 };
                 uint32_t a = (uint32_t)get("a");
-                uint32_t b2= (uint32_t)get("b");
+                uint32_t b2 = (uint32_t)get("b");
                 int k = get("k");
-                uint64_t key = ((uint64_t)a << 32) | (uint64_t)b2;
-                kern_[key] = k;
+                KerningPair pair{};
+                pair.key = ((uint64_t)a << 32) | (uint64_t)b2;
+                pair.value = k;
+                kerning_.push_back(pair);
                 i = c + 1;
             }
         }
@@ -138,34 +151,109 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     }
     tex_.CreateFromRGBA8(r, uploadCl, rgba.data(), (UINT)w, (UINT)h, uploadKeepAlive);
 
-    // если в JSON не было пробела — добавим синтетический с корректным advance
-    if (map_.find(32u) == map_.end()) {
+    // Отсортируем и дедуплицируем глифы (последнее в JSON имеет приоритет)
+    if (!glyphs_.empty()) {
+        std::stable_sort(glyphs_.begin(), glyphs_.end(), [](const FontGlyph& a, const FontGlyph& b) {
+            return a.cp < b.cp;
+        });
+        auto write = glyphs_.begin();
+        for (auto it = glyphs_.begin(); it != glyphs_.end();) {
+            uint32_t cp = it->cp;
+            auto last = it;
+            do {
+                last = it;
+                ++it;
+            } while (it != glyphs_.end() && it->cp == cp);
+            *write++ = *last;
+        }
+        glyphs_.erase(write, glyphs_.end());
+    }
+
+    // Если в JSON не было пробела — добавим синтетический с корректным advance
+    auto lowerBoundCp = [](const FontGlyph& glyph, uint32_t cp) {
+        return glyph.cp < cp;
+    };
+    auto itSpace = std::lower_bound(glyphs_.begin(), glyphs_.end(), uint32_t(32), lowerBoundCp);
+    if (itSpace == glyphs_.end() || itSpace->cp != 32u) {
         FontGlyph sp{};
         sp.cp = 32u;
-        sp.w = 0; sp.h = 0; sp.xoff = 0; sp.yoff = 0;
-        // пол-em: возьмём advance символа 'n', иначе pxSize/2
-        auto itN = map_.find((uint32_t)'n');
-        sp.xadv = (itN != map_.end() ? itN->second.xadv : (pxSize_ / 2));
+        sp.w = 0;
+        sp.h = 0;
+        sp.xoff = 0;
+        sp.yoff = 0;
         sp.u0 = sp.v0 = sp.u1 = sp.v1 = 0.0f;
-        map_[sp.cp] = sp;
+
+        auto itN = std::lower_bound(glyphs_.begin(), glyphs_.end(), static_cast<uint32_t>('n'), lowerBoundCp);
+        const bool hasN = (itN != glyphs_.end() && itN->cp == (uint32_t)'n');
+        sp.xadv = (hasN ? itN->xadv : (pxSize_ / 2));
+
+        itSpace = glyphs_.insert(itSpace, sp);
+    }
+
+    // Пересоберём remap (для компактных диапазонов используем прямой индекс)
+    glyphRemap_.clear();
+    glyphRemapBase_ = 0;
+    if (!glyphs_.empty()) {
+        glyphRemapBase_ = glyphs_.front().cp;
+        const uint32_t maxCp = glyphs_.back().cp;
+        const uint64_t span = uint64_t(maxCp) - uint64_t(glyphRemapBase_) + 1ull;
+        constexpr uint64_t kMaxDenseSpan = 65536ull;
+        if (span <= kMaxDenseSpan && span <= glyphs_.size() * 8ull + 64ull) {
+            glyphRemap_.assign(static_cast<size_t>(span), kInvalidGlyphIndex);
+            for (size_t i = 0; i < glyphs_.size(); ++i) {
+                glyphRemap_[glyphs_[i].cp - glyphRemapBase_] = static_cast<uint32_t>(i);
+            }
+        }
+    }
+
+    // Отсортируем и дедуплицируем кернинги
+    if (!kerning_.empty()) {
+        std::stable_sort(kerning_.begin(), kerning_.end(), [](const KerningPair& a, const KerningPair& b) {
+            return a.key < b.key;
+        });
+        auto write = kerning_.begin();
+        for (auto it = kerning_.begin(); it != kerning_.end();) {
+            uint64_t key = it->key;
+            auto last = it;
+            do {
+                last = it;
+                ++it;
+            } while (it != kerning_.end() && it->key == key);
+            *write++ = *last;
+        }
+        kerning_.erase(write, kerning_.end());
     }
 
     return true;
 }
 
 const FontGlyph* FontAtlas::Find(uint32_t cp) const {
-    auto it = map_.find(cp);
-    if (it == map_.end()) {
+    if (!glyphRemap_.empty()) {
+        if (cp < glyphRemapBase_) { return nullptr; }
+        const uint64_t offset = uint64_t(cp) - uint64_t(glyphRemapBase_);
+        if (offset >= glyphRemap_.size()) { return nullptr; }
+        const uint32_t glyphIndex = glyphRemap_[static_cast<size_t>(offset)];
+        if (glyphIndex == kInvalidGlyphIndex) { return nullptr; }
+        return &glyphs_[glyphIndex];
+    }
+
+    auto it = std::lower_bound(glyphs_.begin(), glyphs_.end(), cp, [](const FontGlyph& glyph, uint32_t value) {
+        return glyph.cp < value;
+    });
+    if (it == glyphs_.end() || it->cp != cp) {
         return nullptr;
     }
-    return &it->second;
+    return &(*it);
 }
 
 int FontAtlas::Kerning(uint32_t a, uint32_t b) const {
-    uint64_t k = ((uint64_t)a << 32) | (uint64_t)b;
-    auto it = kern_.find(k);
-    if (it == kern_.end()) {
+    if (kerning_.empty()) { return 0; }
+    const uint64_t key = ((uint64_t)a << 32) | (uint64_t)b;
+    auto it = std::lower_bound(kerning_.begin(), kerning_.end(), key, [](const KerningPair& pair, uint64_t value) {
+        return pair.key < value;
+    });
+    if (it == kerning_.end() || it->key != key) {
         return 0;
     }
-    return it->second;
+    return it->value;
 }
