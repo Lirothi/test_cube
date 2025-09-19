@@ -29,6 +29,7 @@ void Profiler::BeginFrame(uint64_t frameNo) {
     frameSamples_.clear();
 #if PROF_GPU_ENABLED
     gpuFrameSamples_.clear();
+    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
 #endif
     frameNo_ = frameNo;
     frameOpen_ = true;
@@ -333,6 +334,31 @@ void Profiler::CollectGpuResults() {
         }
         gpuReadback_->Unmap(0, nullptr);
     }
+#endif
+}
+
+void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList* cl) {
+#if PROF_ENABLED
+    if (!GetEnabled()) {
+        gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
+        return;
+    }
+    const size_t idx = BeginGpuSample(cl, "GPU.Frame", 0);
+    gpuFrameSampleIdx_.store(idx, std::memory_order_relaxed);
+#else
+    (void)cl;
+#endif
+}
+
+void Profiler::EndGpuFrame(ID3D12GraphicsCommandList* cl) {
+#if PROF_ENABLED
+    const size_t idx = gpuFrameSampleIdx_.load(std::memory_order_relaxed);
+    if (idx != SIZE_MAX) {
+        EndGpuSample(cl, idx);
+    }
+    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
+#else
+    (void)cl;
 #endif
 }
 

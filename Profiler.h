@@ -74,6 +74,8 @@ public:
     // Инициализация и сбор результатов GPU
     void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries = 1024);
     void CollectGpuResults();
+    void BeginGpuFrame(ID3D12GraphicsCommandList* cl);
+    void EndGpuFrame(ID3D12GraphicsCommandList* cl);
 #endif
 
     // Скоповая отметка (CPU)
@@ -256,6 +258,7 @@ private:
     std::vector<GpuSampleRange> gpuPending_;
     std::vector<GpuSampleRange> gpuResolved_;
     bool gpuInitialized_ = false;
+    std::atomic<size_t> gpuFrameSampleIdx_{ SIZE_MAX };
 #endif
 #endif
 };
@@ -268,4 +271,8 @@ inline void Profiler::EmitOverlay(TextManager*, int, int, int) {}
 inline void Profiler::SetMaxCooldownSeconds(double) {}
 inline double Profiler::GetMaxCooldownSeconds() const { return 0.0; }
 inline void Profiler::ResetMaxNow() {}
+#if PROF_GPU_ENABLED
+inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}
+inline void Profiler::EndGpuFrame(ID3D12GraphicsCommandList*) {}
+#endif
 #endif
