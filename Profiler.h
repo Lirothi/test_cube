@@ -244,6 +244,7 @@ private:
 
 #if PROF_GPU_ENABLED
     // GPU timestamp queries
+    std::mutex gpuMtx_;
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_;
     Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_;
     ID3D12CommandQueue* gpuQueue_ = nullptr;
