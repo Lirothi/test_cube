@@ -67,10 +67,13 @@ void Profiler::EndFrame() {
 
 #if PROF_GPU_ENABLED
     // 2) prepare gpu samples for next frame
-    gpuResolved_ = std::move(gpuPending_);
-    gpuPending_.clear();
-    lastGpuQueryCount_ = nextGpuQuery_;
-    nextGpuQuery_ = 0;
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        gpuResolved_ = std::move(gpuPending_);
+        gpuPending_.clear();
+        lastGpuQueryCount_ = nextGpuQuery_;
+        nextGpuQuery_ = 0;
+    }
 #endif
 
 #if PROF_GPU_ENABLED
@@ -305,12 +308,23 @@ void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT max
 
 void Profiler::CollectGpuResults() {
 #if PROF_ENABLED
-    if (!gpuInitialized_ || gpuResolved_.empty()) { return; }
+    if (!gpuInitialized_) { return; }
+
+    std::vector<GpuSampleRange> resolved;
+    UINT queryCount = 0;
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        if (gpuResolved_.empty()) { return; }
+        resolved = std::move(gpuResolved_);
+        gpuResolved_.clear();
+        queryCount = lastGpuQueryCount_;
+    }
+
     UINT64* data = nullptr;
-    D3D12_RANGE range{ 0, (SIZE_T)lastGpuQueryCount_ * sizeof(UINT64) };
+    D3D12_RANGE range{ 0, (SIZE_T)queryCount * sizeof(UINT64) };
     if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
-        for (const auto& s : gpuResolved_) {
-            if (s.end > s.start && s.end < lastGpuQueryCount_) {
+        for (const auto& s : resolved) {
+            if (s.end > s.start && s.end < queryCount) {
                 UINT64 a = data[s.start];
                 UINT64 b = data[s.end];
                 double ms = (double)(b - a) * 1000.0 / (double)gpuFreq_;
@@ -319,18 +333,23 @@ void Profiler::CollectGpuResults() {
         }
         gpuReadback_->Unmap(0, nullptr);
     }
-    gpuResolved_.clear();
 #endif
 }
 
 size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id) {
 #if PROF_ENABLED
     if (!gpuInitialized_ || !cl) { return SIZE_MAX; }
-    if (nextGpuQuery_ + 2 >= maxGpuQueries_) { return SIZE_MAX; }
-    UINT start = nextGpuQuery_++;
+    UINT start = 0;
+    size_t idx = SIZE_MAX;
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        if (nextGpuQuery_ + 2 >= maxGpuQueries_) { return SIZE_MAX; }
+        start = nextGpuQuery_++;
+        idx = gpuPending_.size();
+        gpuPending_.push_back({ name, start, UINT_MAX });
+    }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
-    gpuPending_.push_back({ name, start, UINT_MAX });
-    return gpuPending_.size() - 1;
+    return idx;
 #else
     (void)cl; (void)name; (void)id; return SIZE_MAX;
 #endif
@@ -339,12 +358,19 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name,
 void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
 #if PROF_ENABLED
     if (!gpuInitialized_ || !cl || idx == SIZE_MAX) { return; }
-    if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return; }
-    UINT end = nextGpuQuery_++;
+    UINT start = 0;
+    UINT end = 0;
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return; }
+        if (idx >= gpuPending_.size()) { return; }
+        start = gpuPending_[idx].start;
+        end = nextGpuQuery_++;
+        gpuPending_[idx].end = end;
+    }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
     cl->ResolveQueryData(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-        gpuPending_[idx].start, 2, gpuReadback_.Get(), gpuPending_[idx].start * sizeof(UINT64));
-    gpuPending_[idx].end = end;
+        start, 2, gpuReadback_.Get(), start * sizeof(UINT64));
 #else
     (void)cl; (void)idx;
 #endif
