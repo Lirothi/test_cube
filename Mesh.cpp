@@ -29,8 +29,12 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
 
     // IB (поддержка 16/32-битных индексов)
     UINT ibSize = 0;
-    if (indexFormat_ == DXGI_FORMAT_R16_UINT) ibSize = sizeof(uint16_t) * indexCount_;
-    else                                      ibSize = sizeof(uint32_t) * indexCount_;
+    if (indexFormat_ == DXGI_FORMAT_R16_UINT) {
+        ibSize = sizeof(uint16_t) * indexCount_;
+    }
+    else {
+        ibSize = sizeof(uint32_t) * indexCount_;
+    }
 
     indexBuffer_ = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
         D3D12_RESOURCE_STATE_INDEX_BUFFER);
@@ -77,7 +81,9 @@ static inline XMVECTOR SafeNormalize(XMVECTOR v) {
     const float eps = 1e-6f;
     XMFLOAT3 f; XMStoreFloat3(&f, v);
     float len2 = f.x * f.x + f.y * f.y + f.z * f.z;
-    if (len2 < eps) return XMVectorSet(0, 1, 0, 0);
+    if (len2 < eps) {
+        return XMVectorSet(0, 1, 0, 0);
+    }
     return XMVector3Normalize(v);
 }
 
@@ -114,7 +120,12 @@ void Mesh::GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
         float du2 = w2.x - w0.x;
         float dv2 = w2.y - w0.y;
         float r = (du1 * dv2 - du2 * dv1);
-        if (fabsf(r) < 1e-8f) r = 1.0f; else r = 1.0f / r;
+        if (fabsf(r) < 1e-8f) {
+            r = 1.0f;
+        }
+        else {
+            r = 1.0f / r;
+        }
 
         XMVECTOR T = XMVectorScale(XMVectorSubtract(XMVectorScale(e1, dv2), XMVectorScale(e2, dv1)), r);
         XMVECTOR B = XMVectorScale(XMVectorSubtract(XMVectorScale(e2, du1), XMVectorScale(e1, du2)), r);

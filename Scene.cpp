@@ -244,7 +244,9 @@ void Scene::Tick(float deltaTime) {
 }
 
 void Scene::Render(Renderer* renderer) {
-    if (!renderer) return;
+    if (!renderer) {
+        return;
+    }
     CPU_SCOPE("Scene::Render");
 
     if (actions_->WasActionPressed("Wireframe", *input_)) {
@@ -274,7 +276,9 @@ void Scene::Render(Renderer* renderer) {
         bucket.clear();
     }
     for (const auto& obj : objects_) {
-        if (!obj) continue;
+        if (!obj) {
+            continue;
+        }
         const bool tr = obj->IsTransparent();
         const bool simple = obj->IsSimpleRender();
         const ObjectRenderType key = tr
@@ -373,7 +377,9 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     bool useBundles,
     bool bindGbufOrScene)
 {
-    if (objects.empty()) return;
+    if (objects.empty()) {
+        return;
+    }
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
@@ -388,7 +394,9 @@ void Scene::RenderObjectBatch(Renderer* renderer,
             if (useBundles) {
                 auto b = renderer->BeginThreadCommandBundle(nullptr);
                 for (size_t i = begin; i < end; ++i) {
-                    if (auto* obj = objects[i]) obj->Render(renderer, b.cl, view, proj);
+                    if (auto* obj = objects[i]) {
+                        obj->Render(renderer, b.cl, view, proj);
+                    }
                 }
                 renderer->EndThreadCommandBundle(b, batchIndex);
             }
@@ -406,7 +414,9 @@ void Scene::RenderObjectBatch(Renderer* renderer,
                     }
 
                     for (size_t i = begin; i < end; ++i) {
-                        if (auto* obj = objects[i]) obj->Render(renderer, t.cl, view, proj);
+                        if (auto* obj = objects[i]) {
+                            obj->Render(renderer, t.cl, view, proj);
+                        }
                     }
                 }
                 renderer->EndThreadCommandList(t, batchIndex);

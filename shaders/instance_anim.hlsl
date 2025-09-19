@@ -23,12 +23,16 @@ void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint idx = DTid.x;
     if (idx >= instanceCount)
+    {
         return;
+    }
 
     // --- вращение вокруг Y (в радианах)
     gInstances[idx].rotationY += (angularSpeed + (idx % 7) * 0.1f) * deltaTime;
     if (gInstances[idx].rotationY > 6.283185f)
+    {
         gInstances[idx].rotationY -= 6.283185f;
+    }
     float a = gInstances[idx].rotationY + idx;
     //a = 0;
     // row-vector совместимая матрица R_y

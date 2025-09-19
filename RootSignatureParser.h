@@ -13,12 +13,24 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
     std::smatch m;
 
     auto ParseVisibility = [](const std::string& vis) {
-        if (vis == "all")     return D3D12_SHADER_VISIBILITY_ALL;
-        if (vis == "vertex")  return D3D12_SHADER_VISIBILITY_VERTEX;
-        if (vis == "pixel")   return D3D12_SHADER_VISIBILITY_PIXEL;
-        if (vis == "geometry")return D3D12_SHADER_VISIBILITY_GEOMETRY;
-        if (vis == "hull")    return D3D12_SHADER_VISIBILITY_HULL;
-        if (vis == "domain")  return D3D12_SHADER_VISIBILITY_DOMAIN;
+        if (vis == "all") {
+            return D3D12_SHADER_VISIBILITY_ALL;
+        }
+        if (vis == "vertex") {
+            return D3D12_SHADER_VISIBILITY_VERTEX;
+        }
+        if (vis == "pixel") {
+            return D3D12_SHADER_VISIBILITY_PIXEL;
+        }
+        if (vis == "geometry") {
+            return D3D12_SHADER_VISIBILITY_GEOMETRY;
+        }
+        if (vis == "hull") {
+            return D3D12_SHADER_VISIBILITY_HULL;
+        }
+        if (vis == "domain") {
+            return D3D12_SHADER_VISIBILITY_DOMAIN;
+        }
         return D3D12_SHADER_VISIBILITY_ALL;
         };
 

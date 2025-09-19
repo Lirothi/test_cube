@@ -76,12 +76,14 @@ float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
     float s = 0.0;
     [unroll]
     for (int y = -1; y <= 1; ++y)
-    [unroll]
+    {
+        [unroll]
         for (int x = -1; x <= 1; ++x)
         {
             float2 off = float2(x, y) * texel * radiusPx;
             s += ShadowAtlas.SampleCmp(gSmpLinear, uv + off, zRef).r;
         }
+    }
     return s / 9.0;
 }
 

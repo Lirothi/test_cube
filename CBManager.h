@@ -54,7 +54,9 @@ public:
         uint32_t offset = 0;
         for (const auto& f : fields) {
             uint32_t align = GetCBFieldTypeAlignment(f.second);
-            if (offset % align != 0) offset = ((offset / align) + 1) * align;
+            if (offset % align != 0) {
+                offset = ((offset / align) + 1) * align;
+            }
             fields_.push_back({ f.first, f.second, offset });
             nameToIndex_[f.first] = fields_.size() - 1;
             offset += GetCBFieldTypeSize(f.second);
@@ -67,8 +69,9 @@ public:
 
     const CBField* GetField(const std::string& name) const {
         auto it = nameToIndex_.find(name);
-        if (it != nameToIndex_.end())
+        if (it != nameToIndex_.end()) {
             return &fields_[it->second];
+        }
         return nullptr;
     }
 
@@ -78,7 +81,9 @@ public:
     template<typename T>
     bool SetField(const std::string& name, const T& value, uint8_t* data) const {
         const CBField* field = GetField(name);
-        if (!field) return false;
+        if (!field) {
+            return false;
+        }
         // sizeof(T) и GetCBFieldTypeSize могут не совпадать (например, XMMATRIX = 64, XMFLOAT4 = 16)
         static_assert(sizeof(T) <= 64, "T too big for CB"); // just sanity check
         memcpy(data + field->offset, &value, GetCBFieldTypeSize(field->type));
@@ -88,7 +93,9 @@ public:
     // Для сырых массивов/данных:
     bool SetFieldRaw(const std::string& name, const void* src, size_t size, uint8_t* data) const {
         const CBField* field = GetField(name);
-        if (!field) return false;
+        if (!field) {
+            return false;
+        }
         memcpy(data + field->offset, src, std::min(size, size_t(GetCBFieldTypeSize(field->type))));
         return true;
     }

@@ -1120,7 +1120,9 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
-        for (int i = 0; i < 3; ++i) cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
+        for (int i = 0; i < 3; ++i) {
+            cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
+        }
         if (mode == ClearMode::ColorDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);

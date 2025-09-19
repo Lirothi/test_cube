@@ -156,7 +156,9 @@ std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
     const std::wstring& suffix)
 {
     auto pos = file.find_last_of(L'.');
-    if (pos == std::wstring::npos) return file + suffix;
+    if (pos == std::wstring::npos) {
+        return file + suffix;
+    }
     return file.substr(0, pos) + suffix + file.substr(pos);
 }
 
