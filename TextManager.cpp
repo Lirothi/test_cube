@@ -3,8 +3,9 @@
 #include <cwchar>
 #include <optional>
 #include <algorithm>
-#include <cmath>
 #include <array>
+#include <cmath>
+#include <limits>
 #include <string_view>
 #include "TextManager.h"
 #include "UploadManager.h"
@@ -128,11 +129,13 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     Region& rg = regions_[id];
 
     RegionLine ln;
-    ln.text = std::wstring(text);
     ln.color = color;
     ln.px = px;
 
-    BuildGlyphRun(ln.text, ln.px, ln.run, ln.widthPx);
+    const size_t charCount = text.size();
+    BuildGlyphRun(text, ln.px, ln.run, ln.widthPx);
+    const size_t glyphReserve = (ln.run.ready ? ln.run.glyphs.size() : charCount);
+    ln.glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
 
     if (rg.autoMeasure || (rg.align != Align::Left)) {
         rg.maxLineWidth = std::max(rg.maxLineWidth, ln.widthPx);
@@ -141,6 +144,7 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
         // для Align::Left + fixedWidth измерение не обязательно (ширина уже в ln.widthPx)
     }
 
+    rg.glyphCount += glyphReserve;
     rg.lines.push_back(std::move(ln));
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
@@ -166,9 +170,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     size_t totalGlyphs = 0;
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
-        for (const RegionLine& ln : rg.lines) {
-            totalGlyphs += ln.run.ready ? ln.run.glyphs.size() : ln.text.size();
-        }
+        totalGlyphs += rg.glyphCount;
     }
     if (totalGlyphs) {
         verts_.reserve(verts_.size() + totalGlyphs * 4);
@@ -355,8 +357,26 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     const float penY = (float)y + float(font_->Ascent()) * scale;
 
     const size_t n = run.glyphs.size();
-    verts_.reserve(verts_.size() + n * 4);
-    idx_.reserve(idx_.size() + n * 6);
+    if (n == 0) { return; }
+
+    size_t drawable = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const FontGlyph* gph = run.glyphs[i];
+        if (gph && gph->w != 0 && gph->h != 0) { ++drawable; }
+    }
+    if (drawable == 0) { return; }
+
+    verts_.reserve(verts_.size() + drawable * 4);
+    idx_.reserve(idx_.size() + drawable * 6);
+
+    const size_t baseVert = verts_.size();
+    const size_t baseIdx = idx_.size();
+    verts_.resize(baseVert + drawable * 4);
+    idx_.resize(baseIdx + drawable * 6);
+
+    Vertex* vPtr = verts_.data() + baseVert;
+    uint32_t* iPtr = idx_.data() + baseIdx;
+    size_t emitted = 0;
 
     for (size_t i = 0; i < n; ++i) {
         const FontGlyph* gph = run.glyphs[i];
@@ -368,14 +388,18 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         const float gw = float(gph->w) * scale;
         const float gh = float(gph->h) * scale;
 
-        const uint32_t base = (uint32_t)verts_.size();
-        verts_.push_back({ {gx,      gy,      0}, color, {gph->u0, gph->v0} });
-        verts_.push_back({ {gx + gw, gy,      0}, color, {gph->u1, gph->v0} });
-        verts_.push_back({ {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} });
-        verts_.push_back({ {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} });
+        Vertex* curV = vPtr + emitted * 4;
+        curV[0] = { {gx,      gy,      0}, color, {gph->u0, gph->v0} };
+        curV[1] = { {gx + gw, gy,      0}, color, {gph->u1, gph->v0} };
+        curV[2] = { {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} };
+        curV[3] = { {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} };
 
-        idx_.push_back(base + 0u); idx_.push_back(base + 1u); idx_.push_back(base + 2u);
-        idx_.push_back(base + 0u); idx_.push_back(base + 2u); idx_.push_back(base + 3u);
+        const uint32_t base = (uint32_t)(baseVert + emitted * 4);
+        uint32_t* curI = iPtr + emitted * 6;
+        curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
+        curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
+
+        ++emitted;
     }
 }
 
