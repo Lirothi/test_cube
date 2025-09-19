@@ -252,7 +252,7 @@ private:
     UINT maxGpuQueries_ = 0;
     UINT nextGpuQuery_ = 0;
     UINT lastGpuQueryCount_ = 0;
-    struct GpuSampleRange { const char* name; UINT start; UINT end; };
+    struct GpuSampleRange { const char* name; UINT start; UINT end; bool completed; };
     std::vector<GpuSampleRange> gpuPending_;
     std::vector<GpuSampleRange> gpuResolved_;
     bool gpuInitialized_ = false;
