@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <algorithm>
+#include <array>
 
 #include "ActionMap.h"
 #include "Camera.h"
@@ -268,15 +269,20 @@ void Scene::Render(Renderer* renderer) {
     const mat4 invProj = mat4::Inverse(proj);
     const float3 camDir = invView.TransformDirection(float3(0, 0, 1)).Normalized();
 
-    // бакеты объектов (ровно как у тебя, просто в компактном виде)
-    robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>> buckets;
+    // bucketize renderables into the persistent scratch arrays to avoid per-frame allocations
+    for (auto& bucket : renderBuckets_) {
+        bucket.clear();
+    }
     for (const auto& obj : objects_) {
         if (!obj) continue;
-        bool tr = obj->IsTransparent();
-        bool simple = obj->IsSimpleRender();
-        auto key = tr ? (simple ? ObjectRenderType::TransparentSimple : ObjectRenderType::TransparentComplex) : (simple ? ObjectRenderType::OpaqueSimple : ObjectRenderType::OpaqueComplex);
-        buckets[key].push_back(obj.get());
+        const bool tr = obj->IsTransparent();
+        const bool simple = obj->IsSimpleRender();
+        const ObjectRenderType key = tr
+            ? (simple ? ObjectRenderType::TransparentSimple : ObjectRenderType::TransparentComplex)
+            : (simple ? ObjectRenderType::OpaqueSimple : ObjectRenderType::OpaqueComplex);
+        renderBuckets_[ToIndex(key)].push_back(obj.get());
     }
+    const auto& buckets = renderBuckets_;
 
     RenderGraph rg;
     auto pClear = rg.AddPass("PrologueClear", {},
@@ -465,7 +471,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
     float zNear, float zFar, const float3& camDir,
-    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const ObjectBuckets& buckets)
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
@@ -560,15 +566,15 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         cachedScale_[idx] = scale; cachedBias_[idx] = bias;
         cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
 
-        auto it = buckets.find(ObjectRenderType::OpaqueSimple);
-        if (it != buckets.end())
+        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+        if (!opaqueSimple.empty())
         {
-            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
-        it = buckets.find(ObjectRenderType::OpaqueComplex);
-        if (it != buckets.end())
+        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+        if (!opaqueComplex.empty())
         {
-            RenderShadowBatch(renderer, it->second, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
     }, 1);
     TaskSystem::Get().Wait(cascades);
@@ -576,7 +582,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const ObjectBuckets& buckets)
 {
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
@@ -597,19 +603,19 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
 
     // 1.2 Opaque simple → bundles
     rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
-        auto found = buckets.find(ObjectRenderType::OpaqueSimple);
-        if (found != buckets.end())
+        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+        if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, found->second, sub.batchIndex, view, proj, /*useBundles=*/true, true);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, view, proj, /*useBundles=*/true, true);
         }
         });
 
     // 1.3 Opaque complex → direct CL, без очисток
     rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
-        auto found = buckets.find(ObjectRenderType::OpaqueComplex);
-        if (found != buckets.end())
+        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+        if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, found->second, sub.batchIndex, view, proj, /*useBundles=*/false, true);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, view, proj, /*useBundles=*/false, true);
         }
         });
 
@@ -676,7 +682,8 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         srvs.push_back(D.gbSRV[3]);
         srvs.push_back(D.shadowSRV); // NEW
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::PointClamp(), SamplerManager::ComparisonLinearClamp() });
+        const auto samplerDescs = std::array{ SamplerManager::PointClamp(), SamplerManager::ComparisonLinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matLighting_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -780,7 +787,8 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+        const auto samplerDescs = std::array{ SamplerManager::LinearClamp(), SamplerManager::PointClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matSSR_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -812,7 +820,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        const auto samplerDescsX = std::array{ SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsX);
 
         matBlur_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -831,7 +840,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        const auto samplerDescsY = std::array{ SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsY);
 
         matBlur_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -884,7 +894,8 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
         rc.cbv[0] = cb.gpu; // b0
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp(), SamplerManager::PointClamp() });
+        const auto samplerDescs = std::array{ SamplerManager::LinearClamp(), SamplerManager::PointClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matCompose_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -896,7 +907,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets)
+    const ObjectBuckets& buckets)
 {
     RenderGraph rgTr(ctx.batchIndex);
 
@@ -914,18 +925,18 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     rgTr.AddPass("Transparent.Simple", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
-        auto found = buckets.find(ObjectRenderType::TransparentSimple);
-        if (found != buckets.end())
+        const auto& transparentSimple = buckets[ToIndex(ObjectRenderType::TransparentSimple)];
+        if (!transparentSimple.empty())
         {
-            RenderObjectBatch(renderer, found->second, sub.batchIndex, view, proj, /*useBundles=*/true, false);
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, view, proj, /*useBundles=*/true, false);
         }
         });
 
     rgTr.AddPass("Transparent.Complex", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
-        auto found = buckets.find(ObjectRenderType::TransparentComplex);
-        if (found != buckets.end())
+        const auto& transparentComplex = buckets[ToIndex(ObjectRenderType::TransparentComplex)];
+        if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, found->second, sub.batchIndex, view, proj, /*useBundles=*/false, false);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, view, proj, /*useBundles=*/false, false);
         }
         });
 
@@ -946,7 +957,8 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
         auto& rc = h.ref();
 
         rc.table[0] = renderer->StageTonemapSrvTable(); // t0
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        const auto tonemapSamplers = std::array{ SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
 
         matTonemap_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -973,7 +985,8 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
         auto& rc = h.ref();
 
         rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, { SamplerManager::LinearClamp() });
+        const auto debugSamplers = std::array{ SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 
         matDebug_->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1011,5 +1024,8 @@ void Scene::Clear()
     matSSR_.reset();
     matDebug_.reset();
     objects_.clear();
+    for (auto& bucket : renderBuckets_) {
+        bucket.clear();
+    }
     skyBox_.reset();
 }

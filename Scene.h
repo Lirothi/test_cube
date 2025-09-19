@@ -1,7 +1,9 @@
 #pragma once
 
-#include <memory>
+#include <array>
 #include <functional>
+#include <memory>
+#include <vector>
 
 #include "RenderableObject.h"
 #include "Camera.h"
@@ -27,6 +29,10 @@ public:
 
 private:
     enum class ObjectRenderType { OpaqueSimple, OpaqueComplex, TransparentSimple, TransparentComplex };
+    static constexpr size_t kRenderTypeCount = 4;
+    using ObjectBucket = std::vector<RenderableObjectBase*>;
+    using ObjectBuckets = std::array<ObjectBucket, kRenderTypeCount>;
+    static constexpr size_t ToIndex(ObjectRenderType type) { return static_cast<size_t>(type); }
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene);
@@ -39,10 +45,10 @@ private:
         const mat4& invView, const mat4& invProj,
         float zNear, float zFar,
         const float3& camDir,
-        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const ObjectBuckets& buckets);
     void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
-        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const ObjectBuckets& buckets);
     void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
         const mat4& invView, const mat4& invProj,
@@ -63,7 +69,7 @@ private:
         float zNear, float zFar);
     void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
-        const robin_hood::unordered_map<ObjectRenderType, std::vector<RenderableObjectBase*>>& buckets);
+        const ObjectBuckets& buckets);
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
@@ -87,6 +93,8 @@ private:
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     std::vector<PointLight> pointLights_;
+
+    ObjectBuckets renderBuckets_;
 
     InputManager* input_ = nullptr;
     ActionMap* actions_ = nullptr;

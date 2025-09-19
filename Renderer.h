@@ -222,6 +222,9 @@ private:
     };
     std::vector<PassBatch_> submitTimeline_;
     std::mutex submitMtx_;
+    std::vector<ID3D12CommandList*> submitListsScratch_;
+    std::vector<ID3D12CommandList*> fixedSubmitScratch_;
+    std::vector<D3D12_RESOURCE_BARRIER> barrierScratch_;
 
     // Heaps CPU для offscreen-ресурсов
     ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV: на все кадры
