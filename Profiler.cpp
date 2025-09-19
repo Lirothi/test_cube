@@ -324,7 +324,7 @@ void Profiler::CollectGpuResults() {
     D3D12_RANGE range{ 0, (SIZE_T)queryCount * sizeof(UINT64) };
     if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
         for (const auto& s : resolved) {
-            if (s.end > s.start && s.end < queryCount) {
+            if (s.completed && s.start < queryCount && s.end < queryCount) {
                 UINT64 a = data[s.start];
                 UINT64 b = data[s.end];
                 double ms = (double)(b - a) * 1000.0 / (double)gpuFreq_;
@@ -340,13 +340,16 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name,
 #if PROF_ENABLED
     if (!gpuInitialized_ || !cl) { return SIZE_MAX; }
     UINT start = 0;
+    UINT end = 0;
     size_t idx = SIZE_MAX;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (nextGpuQuery_ + 2 >= maxGpuQueries_) { return SIZE_MAX; }
-        start = nextGpuQuery_++;
+        if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return SIZE_MAX; }
+        start = nextGpuQuery_;
+        end = start + 1;
+        nextGpuQuery_ += 2;
         idx = gpuPending_.size();
-        gpuPending_.push_back({ name, start, UINT_MAX });
+        gpuPending_.push_back({ name, start, end, false });
     }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
     return idx;
@@ -362,11 +365,12 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
     UINT end = 0;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return; }
         if (idx >= gpuPending_.size()) { return; }
-        start = gpuPending_[idx].start;
-        end = nextGpuQuery_++;
-        gpuPending_[idx].end = end;
+        auto& range = gpuPending_[idx];
+        if (range.completed) { return; }
+        start = range.start;
+        end = range.end;
+        range.completed = true;
     }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
     cl->ResolveQueryData(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
