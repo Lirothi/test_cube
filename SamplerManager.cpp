@@ -67,26 +67,17 @@ D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::Get(Renderer* renderer, const D3D12_
     }
 }
 
-D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::GetTable(Renderer* renderer, std::initializer_list<D3D12_SAMPLER_DESC> descs) {
+D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::GetTableImpl(Renderer* renderer, const D3D12_SAMPLER_DESC* descs, size_t count) {
     D3D12_GPU_DESCRIPTOR_HANDLE null{}; null.ptr = 0;
-    if (descs.size() == 0) return null;
+    if (count == 0) return null;
 
-    // сначала гарантируем все CPU дескрипторы
-    std::vector<UINT> idx;
-    idx.reserve(descs.size());
-    for (const auto& d : descs) {
-        idx.push_back(ensureCpu_(d));
-    }
-
-    // выделяем подряд N слотов в shader-visible SAMPLER heap
     auto& sa = renderer->GetSamplerAlloc();
-    const UINT count = (UINT)descs.size();
-    GpuDescHandle block = sa.Alloc(count);
+    GpuDescHandle block = sa.Alloc(static_cast<UINT>(count));
 
-    // копируем CPU -> GPU «стенка-в-стенку»
     D3D12_CPU_DESCRIPTOR_HANDLE dst = block.cpu;
-    for (UINT i = 0; i < count; ++i) {
-        device_->CopyDescriptorsSimple(1, dst, cpuHandleAt_(idx[i]), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+    for (size_t i = 0; i < count; ++i) {
+        const UINT cpuIdx = ensureCpu_(descs[i]);
+        device_->CopyDescriptorsSimple(1, dst, cpuHandleAt_(cpuIdx), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
         dst.ptr += sa.GetIncr();
     }
 

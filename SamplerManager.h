@@ -2,8 +2,8 @@
 #include <wrl.h>
 #include <d3d12.h>
 #include "third_party/robin_hood.h"
-#include <vector>
-#include <initializer_list>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -42,7 +42,14 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE Get(Renderer* renderer, const D3D12_SAMPLER_DESC& desc);
 
     // Сформировать ТАБЛИЦУ из нескольких самплеров подряд и вернуть base GPU handle таблицы.
-    D3D12_GPU_DESCRIPTOR_HANDLE GetTable(Renderer* renderer, std::initializer_list<D3D12_SAMPLER_DESC> descs);
+    template <size_t N>
+    D3D12_GPU_DESCRIPTOR_HANDLE GetTable(Renderer* renderer, const std::array<D3D12_SAMPLER_DESC, N>& descs) {
+        return GetTableImpl(renderer, descs.data(), N);
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetTable(Renderer* renderer, const D3D12_SAMPLER_DESC& desc) {
+        return GetTable(renderer, std::array<D3D12_SAMPLER_DESC, 1>{ desc });
+    }
 
     void Clear();
 
@@ -75,4 +82,5 @@ private:
 
     UINT ensureCpu_(const D3D12_SAMPLER_DESC& desc);
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandleAt_(UINT idx) const;
+    D3D12_GPU_DESCRIPTOR_HANDLE GetTableImpl(Renderer* renderer, const D3D12_SAMPLER_DESC* descs, size_t count);
 };

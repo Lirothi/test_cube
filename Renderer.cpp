@@ -503,11 +503,19 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 void Renderer::ExecuteTimelineAndPresent() {
     CPU_SCOPE("Renderer::ExecuteTimelineAndPresent");
 
-    std::vector<ID3D12CommandList*> lists;
+    submitListsScratch_.clear();
 
     // собрать по порядку батчей
     {
         std::lock_guard<std::mutex> lk(submitMtx_);
+        size_t expectedListCount = 0;
+        for (const auto& pb : submitTimeline_) {
+            expectedListCount += pb.directs.size();
+            if (pb.driver != nullptr || !pb.bundles.empty()) {
+                ++expectedListCount;
+            }
+        }
+        submitListsScratch_.reserve(expectedListCount);
         for (auto& pb : submitTimeline_) {
             // Если есть driver (создан в пассе) — дописываем в него ExecuteBundle(...)
             if (pb.driver != nullptr) {
@@ -517,7 +525,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                     }
                 }
                 ThrowIfFailed(pb.driver->Close());
-                lists.push_back(pb.driver);
+                submitListsScratch_.push_back(pb.driver);
             }
             else if (!pb.bundles.empty()) {
                 // fallback: нет driver’а — создадим временный
@@ -533,19 +541,19 @@ void Renderer::ExecuteTimelineAndPresent() {
                     }
                 }
                 ThrowIfFailed(cl->Close());
-                lists.push_back(cl);
+                submitListsScratch_.push_back(cl);
             }
 
             // Также прикрепим любые готовые DIRECT-CL
             if (!pb.directs.empty()) {
-                lists.insert(lists.end(), pb.directs.begin(), pb.directs.end());
+                submitListsScratch_.insert(submitListsScratch_.end(), pb.directs.begin(), pb.directs.end());
             }
         }
         submitTimeline_.clear();
     }
 
-    std::vector<ID3D12CommandList*> fixedLists;
-    fixedLists.reserve(lists.size() * 2 + 3);
+    fixedSubmitScratch_.clear();
+    fixedSubmitScratch_.reserve(submitListsScratch_.size() * 2 + 3);
 #if PROF_GPU_ENABLED
     {
         auto& fr = frameResources_[currentFrameIndex_];
@@ -555,7 +563,7 @@ void Renderer::ExecuteTimelineAndPresent() {
             fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
         Profiler::Get().BeginGpuFrame(cl);
         ThrowIfFailed(cl->Close());
-        fixedLists.push_back(cl);
+        fixedSubmitScratch_.push_back(cl);
     }
 #endif
 
@@ -563,15 +571,15 @@ void Renderer::ExecuteTimelineAndPresent() {
         // локальная копия глобальных стейтов на момент сабмита
         auto global = knownStates_;
 
-        for (auto* cmd : lists) {
+        for (auto* cmd : submitListsScratch_) {
             const CLState* st = FindCLStateForCmd(cmd);
 
             // 3.1: если CL что-то «хочет» на первом использовании — вставим пролог с барьерами prev→firstUse
             if (st && !st->firstUse.empty()) {
 
                 // соберём набор барьеров
-                std::vector<D3D12_RESOURCE_BARRIER> barriers;
-                barriers.reserve(st->firstUse.size());
+                barrierScratch_.clear();
+                barrierScratch_.reserve(st->firstUse.size());
 
                 for (auto& kv : st->firstUse) {
                     ID3D12Resource* res = kv.first;
@@ -589,28 +597,28 @@ void Renderer::ExecuteTimelineAndPresent() {
                         b.Transition.StateBefore = before;
                         b.Transition.StateAfter = want;
                         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                        barriers.push_back(b);
+                        barrierScratch_.push_back(b);
 
                     }
                     global[res] = want;
                 }
 
                 // создадим пролог ТОЛЬКО если есть, что барьерить
-                if (!barriers.empty()) {
+                if (!barrierScratch_.empty()) {
                     auto& fr = frameResources_[currentFrameIndex_];
                     ID3D12CommandAllocator* alloc =
                         fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
                     ID3D12GraphicsCommandList* prologue =
                         fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
 
-                    prologue->ResourceBarrier(UINT(barriers.size()), barriers.data());
+                    prologue->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
                     ThrowIfFailed(prologue->Close());
-                    fixedLists.push_back(prologue);
+                    fixedSubmitScratch_.push_back(prologue);
                 }
             }
 
             // 3.2: сам CL
-            fixedLists.push_back(cmd);
+            fixedSubmitScratch_.push_back(cmd);
 
             // 3.3: после CL обновим «глобальный» финальный стейт его ресурсов
             if (st && !st->current.empty()) {
@@ -647,14 +655,14 @@ void Renderer::ExecuteTimelineAndPresent() {
         ThrowIfFailed(cl->Close());
         epilogueCL = cl;
     }
-    if (epilogueCL) 
+    if (epilogueCL)
     {
-        fixedLists.push_back(epilogueCL);
+        fixedSubmitScratch_.push_back(epilogueCL);
     }
 
     // Выполняем уже «починенный» список
-    if (!fixedLists.empty()) {
-        commandQueue_->ExecuteCommandLists((UINT)fixedLists.size(), fixedLists.data());
+    if (!fixedSubmitScratch_.empty()) {
+        commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
     }
 
     const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);

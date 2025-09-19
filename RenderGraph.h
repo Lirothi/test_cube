@@ -61,12 +61,12 @@ public:
     }
 
     // План без исполнения (для параллельного раннинга)
-    std::vector<FlatNode> BuildSchedule(Renderer* renderer)
+    const std::vector<FlatNode>& BuildSchedule(Renderer* renderer)
     {
-        std::vector<FlatNode> flat;
-        if (renderer == nullptr) { return flat; }
-        Unroll(renderer, /*executeInplace=*/false, &flat);
-        return flat;
+        scheduleScratch_.clear();
+        if (renderer == nullptr) { return scheduleScratch_; }
+        Unroll(renderer, /*executeInplace=*/false, &scheduleScratch_);
+        return scheduleScratch_;
     }
 
     // Параллель: создаём батчи в топологическом порядке, затем
@@ -74,12 +74,12 @@ public:
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
     {
         CPU_SCOPE("RenderGraph::ExecuteParallel");
-        auto flat = BuildSchedule(renderer);
+        const auto& flat = BuildSchedule(renderer);
         if (flat.empty()) { return; }
 
         const size_t N = passes_.size();
 
-        std::vector<TaskSystem::TaskHandle> passDone(N, nullptr);
+        passDoneScratch_.assign(N, nullptr);
 
         // create all tasks first
         for (const auto& n : flat) {
@@ -94,7 +94,7 @@ public:
                 passes_[passIdx].exec(ctx);
             }, passes_[passIdx].mtDeps.size());
 
-            passDone[passIdx] = handle;
+            passDoneScratch_[passIdx] = handle;
         }
 
         // set up dependencies between created tasks
@@ -102,25 +102,25 @@ public:
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
 
-            std::vector<TaskSystem::TaskHandle> deps;
+            dependencyScratch_.clear();
             for (size_t dep : passes_[passIdx].mtDeps) {
-                if (dep < passDone.size() && passDone[dep]) {
-                    deps.push_back(passDone[dep]);
+                if (dep < passDoneScratch_.size() && passDoneScratch_[dep]) {
+                    dependencyScratch_.push_back(passDoneScratch_[dep]);
                 }
             }
 
-            tasks.SetDependencies(passDone[passIdx], deps);
+            tasks.SetDependencies(passDoneScratch_[passIdx], dependencyScratch_);
         }
 
         // finally submit tasks for execution
         for (const auto& n : flat) {
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
-            tasks.Submit(passDone[passIdx]);
+            tasks.Submit(passDoneScratch_[passIdx]);
         }
 
         for (size_t i = 0; i < N; ++i) {
-            tasks.Wait(passDone[i]);
+            tasks.Wait(passDoneScratch_[i]);
         }
     }
 
@@ -189,6 +189,9 @@ private:
     }
 
 private:
-    std::vector<Pass> passes_;
-    size_t            submitBatchIndex_ = (size_t)-1;
+    std::vector<Pass>                  passes_;
+    size_t                             submitBatchIndex_ = (size_t)-1;
+    std::vector<FlatNode>              scheduleScratch_;
+    std::vector<TaskSystem::TaskHandle> passDoneScratch_;
+    std::vector<TaskSystem::TaskHandle> dependencyScratch_;
 };

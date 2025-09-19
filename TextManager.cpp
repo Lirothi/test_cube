@@ -282,7 +282,8 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         k[5] = f2u((float)font_->PxSize());
         rc.constants[1] = { k.begin(), k.end() };
 
-        rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, { SamplerManager::LinearClamp() });
+        const auto samplerDescs = std::array{ SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, samplerDescs);
 
         matText_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
