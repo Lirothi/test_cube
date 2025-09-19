@@ -98,6 +98,9 @@ private:
     // Рисунок прямоугольника (фон)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
+    RegionLine AcquireRegionLine(size_t glyphReserveHint);
+    void       RecycleRegionLines();
+
 private:
     FontAtlas* font_ = nullptr;
 
@@ -115,6 +118,7 @@ private:
     D3D12_INDEX_BUFFER_VIEW  rectIBV_{};
 
     std::vector<Region> regions_;
+    std::vector<RegionLine> regionLinePool_;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;

@@ -78,6 +78,7 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
 
     verts_.clear();   idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
+    RecycleRegionLines();
     regions_.clear();
 }
 
@@ -128,11 +129,10 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
-    RegionLine ln;
+    const size_t charCount = text.size();
+    RegionLine ln = AcquireRegionLine(charCount);
     ln.color = color;
     ln.px = px;
-
-    const size_t charCount = text.size();
     BuildGlyphRun(text, ln.px, ln.run, ln.widthPx);
     const size_t glyphReserve = (ln.run.ready ? ln.run.glyphs.size() : charCount);
     ln.glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
@@ -296,6 +296,54 @@ void TextManager::Clear() {
     matText_.reset(); matRect_.reset();
     verts_.clear(); idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
+    RecycleRegionLines();
+}
+
+TextManager::RegionLine TextManager::AcquireRegionLine(size_t glyphReserveHint) {
+    RegionLine ln;
+    if (!regionLinePool_.empty()) {
+        ln = std::move(regionLinePool_.back());
+        regionLinePool_.pop_back();
+    }
+
+    ln.color = {};
+    ln.px = 16.0f;
+    ln.widthPx = 0.0f;
+    ln.glyphCount = 0;
+
+    ln.run.glyphs.clear();
+    ln.run.xOffsets.clear();
+    ln.run.scale = 1.0f;
+    ln.run.ready = false;
+
+    if (glyphReserveHint > 0) {
+        if (ln.run.glyphs.capacity() < glyphReserveHint) {
+            ln.run.glyphs.reserve(glyphReserveHint);
+        }
+        if (ln.run.xOffsets.capacity() < glyphReserveHint) {
+            ln.run.xOffsets.reserve(glyphReserveHint);
+        }
+    }
+
+    return ln;
+}
+
+void TextManager::RecycleRegionLines() {
+    for (Region& rg : regions_) {
+        for (RegionLine& ln : rg.lines) {
+            ln.run.glyphs.clear();
+            ln.run.xOffsets.clear();
+            ln.run.ready = false;
+            ln.widthPx = 0.0f;
+            ln.glyphCount = 0;
+            regionLinePool_.push_back(std::move(ln));
+        }
+        rg.lines.clear();
+        rg.maxLineWidth = 0.0f;
+        rg.totalLines = 0;
+        rg.glyphCount = 0;
+        rg.lineStepPx = 18;
+    }
 }
 
 // ===== приватные =====
