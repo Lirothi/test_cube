@@ -31,10 +31,15 @@ class TextManager; // forward
 // подготовка оверлея в EndFrame (дабл-буфер), редкая сортировка по среднему.
 class Profiler {
 public:
+    using CpuClock = std::chrono::steady_clock;
+
     struct ScopeSample {
         const char* name = nullptr; // ожидается литерал/статическая строка
         uint64_t    nameId = 0;     // зарезервировано под быстрый id
         double      ms = 0.0;
+        uint64_t    startUs = 0;    // отметка начала (микросекунды)
+        uint64_t    durationUs = 0; // длительность (микросекунды)
+        uint32_t    threadIndex = 0;
     };
 
     struct ScopeStats {
@@ -89,13 +94,12 @@ public:
         ~ScopedCpu() {
 #if PROF_ENABLED
             const auto end = Clock::now();
-            const double ms = std::chrono::duration<double, std::milli>(end - start_).count();
-            Profiler::Get().PushSample(name_, id_, ms);
+            Profiler::Get().PushSample(name_, id_, start_, end);
 #endif
         }
     private:
 #if PROF_ENABLED
-        using Clock = std::chrono::high_resolution_clock;
+        using Clock = CpuClock;
         Clock::time_point start_{};
 #endif
         const char* name_;
@@ -146,6 +150,10 @@ public:
 #if PROF_ENABLED
     void SetEnabled(bool v) { enabled_.store(v, std::memory_order_relaxed); }
     bool GetEnabled() const { return enabled_.load(std::memory_order_relaxed); }
+    // Requests a trace capture for the given number of frames; calling again
+    // while a capture is pending or active will stop/cancel it.
+    void RequestTraceCapture(uint32_t frameCount);
+    void SetThreadName(const std::string& name);
 #endif
 
     // Кулдаун сброса максимумов
@@ -173,7 +181,7 @@ public:
 
 private:
     Profiler() = default;
-    void PushSample(const char* name, uint64_t id, double ms);
+    void PushSample(const char* name, uint64_t id, CpuClock::time_point start, CpuClock::time_point end);
 #if PROF_GPU_ENABLED
     void PushGpuSample(const char* name, uint64_t id, double ms);
     size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id);
@@ -182,6 +190,8 @@ private:
 
 #if PROF_ENABLED
     void ResetMax_Unsafe(); // вызывать под mtx_
+    uint32_t GetThreadIndex_Locked(std::thread::id id);
+    void WriteTraceJson(const std::vector<TraceEvent>& events, const std::vector<std::string>& threadNames);
 #endif
 
     // --- данные оверлея (снэпшот) ---
@@ -202,6 +212,8 @@ private:
     robin_hood::unordered_map<std::string, ScopeStats> gpuStats_;
 #endif
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
+    robin_hood::unordered_flat_map<std::thread::id, uint32_t> threadIndices_;
+    std::vector<std::string> threadIndexToName_;
 
     std::vector<ScopeSample> frameSamples_;
 #if PROF_GPU_ENABLED
@@ -209,6 +221,7 @@ private:
 #endif
     uint64_t  frameNo_ = 0;
     bool      frameOpen_ = false;
+    CpuClock::time_point frameCpuStart_{};
 
     // EMA для avgMs
     double emaAlpha_ = 0.995;
@@ -244,6 +257,23 @@ private:
 
     TaskSystem::TaskHandle overlayTask_ = nullptr;
 
+    struct TraceEvent {
+        std::string name;
+        uint64_t tsUs = 0;
+        uint64_t durUs = 0;
+        uint32_t threadIndex = 0;
+    };
+
+    bool traceCaptureRequested_ = false;
+    uint32_t traceRequestFrameCount_ = 0;
+    bool traceCapturing_ = false;
+    bool traceStopRequested_ = false;
+    uint32_t traceFramesRemaining_ = 0;
+    uint64_t traceStartUs_ = 0;
+    bool traceStartSet_ = false;
+    std::vector<TraceEvent> traceEvents_;
+    std::atomic<uint32_t> traceFileCounter_{ 0 };
+
 #if PROF_GPU_ENABLED
     // GPU timestamp queries
     std::mutex gpuMtx_;
@@ -271,6 +301,8 @@ inline void Profiler::EmitOverlay(TextManager*, int, int, int) {}
 inline void Profiler::SetMaxCooldownSeconds(double) {}
 inline double Profiler::GetMaxCooldownSeconds() const { return 0.0; }
 inline void Profiler::ResetMaxNow() {}
+inline void Profiler::RequestTraceCapture(uint32_t) {}
+inline void Profiler::SetThreadName(const std::string&) {}
 #if PROF_GPU_ENABLED
 inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}
 inline void Profiler::EndGpuFrame(ID3D12GraphicsCommandList*) {}

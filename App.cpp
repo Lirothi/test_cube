@@ -120,6 +120,7 @@ void App::InitScene()
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+    Profiler::Get().SetThreadName("MainThread");
 
     InitScene();
 
@@ -135,6 +136,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         {
             CPU_SCOPE("Whole Cycle");
             input_.NewFrame();
+
+            if (input_.WasKeyPressed(VK_F10)) {
+                constexpr uint32_t kTraceFrames = 120;
+                Profiler::Get().RequestTraceCapture(kTraceFrames);
+            }
 
             {
                 CPU_SCOPE("Win Messages");
