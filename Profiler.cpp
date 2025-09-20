@@ -1,7 +1,50 @@
 #include "Profiler.h"
 #include <cwchar>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <cstdio>
+#include <ctime>
 #include "third_party/robin_hood.h"
 #include "TextManager.h"
+
+namespace {
+
+uint64_t ToMicroseconds(Profiler::CpuClock::time_point tp) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(tp.time_since_epoch()).count());
+}
+
+std::string EscapeJson(const std::string& input) {
+    std::string out;
+    out.reserve(input.size() + 8);
+    for (char c : input) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '\"': out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                std::ostringstream oss;
+                oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)(unsigned char)c;
+                out += oss.str();
+            }
+            else {
+                out += c;
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+struct TraceDumpData {
+    std::vector<Profiler::TraceEvent> events;
+    std::vector<std::string> threadNames;
+};
+
+} // namespace
 
 
 #if PROF_ENABLED
@@ -33,6 +76,22 @@ void Profiler::BeginFrame(uint64_t frameNo) {
 #endif
     frameNo_ = frameNo;
     frameOpen_ = true;
+    frameCpuStart_ = CpuClock::now();
+
+    if (traceCaptureRequested_ && !traceCapturing_ && traceRequestFrameCount_ > 0) {
+        traceCaptureRequested_ = false;
+        traceCapturing_ = true;
+        traceFramesRemaining_ = traceRequestFrameCount_;
+        traceEvents_.clear();
+        traceStartUs_ = 0;
+        traceStartSet_ = false;
+        traceStopRequested_ = false;
+    }
+
+    if (traceCapturing_ && !traceStartSet_) {
+        traceStartUs_ = ToMicroseconds(frameCpuStart_);
+        traceStartSet_ = true;
+    }
 
     if (lastMaxReset_.time_since_epoch().count() == 0) {
         lastMaxReset_ = CoolClock::now();
@@ -54,6 +113,9 @@ void Profiler::EndFrame() {
 #if PROF_GPU_ENABLED
     std::vector<ScopeSample> gpuSamples;
 #endif
+    TraceDumpData traceDump;
+    bool haveTraceDump = false;
+    const auto frameEnd = CpuClock::now();
     {
         std::lock_guard<std::mutex> lk(mtx_);
         if (!frameOpen_) { return; }
@@ -63,6 +125,43 @@ void Profiler::EndFrame() {
         gpuSamples = std::move(gpuFrameSamples_);
         gpuFrameSamples_.clear();
 #endif
+        if (traceCapturing_) {
+            const uint64_t startUs = ToMicroseconds(frameCpuStart_);
+            const uint64_t endUs = ToMicroseconds(frameEnd);
+            const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
+            const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
+            TraceEvent fev;
+            fev.name = "Frame " + std::to_string(frameNo_);
+            fev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
+            fev.durUs = durUs;
+            fev.threadIndex = threadIdx;
+            traceEvents_.push_back(std::move(fev));
+
+            const bool stopNow = traceStopRequested_;
+            traceStopRequested_ = false;
+
+            bool finishTrace = false;
+            if (stopNow) {
+                traceFramesRemaining_ = 0;
+                finishTrace = true;
+            }
+            else if (traceFramesRemaining_ > 0) {
+                traceFramesRemaining_--;
+                if (traceFramesRemaining_ == 0) {
+                    finishTrace = true;
+                }
+            }
+
+            if (finishTrace) {
+                traceCapturing_ = false;
+                traceStartUs_ = 0;
+                traceStartSet_ = false;
+                traceDump.events = std::move(traceEvents_);
+                traceDump.threadNames = threadIndexToName_;
+                haveTraceDump = true;
+                traceRequestFrameCount_ = 0;
+            }
+        }
         frameOpen_ = false;
     }
 
@@ -78,9 +177,9 @@ void Profiler::EndFrame() {
 #endif
 
 #if PROF_GPU_ENABLED
-    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples), gpuSamples = std::move(gpuSamples)]() mutable {
+    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples), gpuSamples = std::move(gpuSamples), traceDump = std::move(traceDump), haveTraceDump]() mutable {
 #else
-    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples)]() mutable {
+    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples), traceDump = std::move(traceDump), haveTraceDump]() mutable {
 #endif
         const auto t0 = CoolClock::now();
 
@@ -257,14 +356,35 @@ void Profiler::EndFrame() {
 #else
         overlayReadBuf_.store(writeIdx, std::memory_order_release);
 #endif
+
+        if (haveTraceDump && !traceDump.events.empty()) {
+            WriteTraceJson(traceDump.events, traceDump.threadNames);
+        }
     });
 }
 
-void Profiler::PushSample(const char* name, uint64_t /*id*/, double ms) {
+void Profiler::PushSample(const char* name, uint64_t /*id*/, CpuClock::time_point start, CpuClock::time_point end) {
     if (!GetEnabled()) { return; }
     std::lock_guard<std::mutex> lk(mtx_);
     if (!frameOpen_) { return; }
-    frameSamples_.push_back({ name, 0u, ms });
+    const uint64_t startUs = ToMicroseconds(start);
+    const uint64_t endUs = ToMicroseconds(end);
+    const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
+    const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
+    const double ms = std::chrono::duration<double, std::milli>(end - start).count();
+    frameSamples_.push_back({ name, 0u, ms, startUs, durUs, threadIdx });
+    if (traceCapturing_) {
+        if (!traceStartSet_) {
+            traceStartUs_ = startUs;
+            traceStartSet_ = true;
+        }
+        TraceEvent ev;
+        ev.name = name ? name : "unknown";
+        ev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
+        ev.durUs = durUs;
+        ev.threadIndex = threadIdx;
+        traceEvents_.push_back(std::move(ev));
+    }
 }
 #if PROF_GPU_ENABLED
 void Profiler::PushGpuSample(const char* name, uint64_t /*id*/, double ms) {
@@ -419,6 +539,18 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const auto& gpuRows = gpuOverlayRows_[gpuReadIdx];
 #endif
 
+    bool captureActive = false;
+    bool capturePending = false;
+    uint32_t captureRemaining = 0;
+    uint32_t captureTotal = 0;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        captureActive = traceCapturing_;
+        capturePending = traceCaptureRequested_;
+        captureRemaining = traceFramesRemaining_;
+        captureTotal = traceRequestFrameCount_;
+    }
+
     // оценка ширины региона «в лоб», без измерения строк
     // Формат строки: "%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
     const int namePad = 40;
@@ -448,6 +580,21 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
         L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
+
+    if (captureActive || capturePending) {
+        if (captureActive) {
+            const uint32_t recorded = (captureTotal > captureRemaining) ? (captureTotal - captureRemaining) : 0u;
+            tm->AddTextf(reg, 16.0f, float4(1.0f, 0.85f, 0.25f, 0.95f),
+                L"[Trace capture active] recorded:%u remaining:%u  (press F10 to stop)",
+                recorded, captureRemaining);
+        }
+        else {
+            tm->AddTextf(reg, 16.0f, float4(0.7f, 0.85f, 1.0f, 0.95f),
+                L"[Trace capture pending] frames:%u  (press F10 again to cancel)",
+                captureTotal);
+        }
+    }
+
     tm->AddText(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
     // строки
@@ -510,6 +657,107 @@ void Profiler::ResetMax_Unsafe() {
         kv.second.maxMs = kv.second.avgMs;
     }
     #endif
+}
+
+void Profiler::RequestTraceCapture(uint32_t frameCount) {
+    if (frameCount == 0) { return; }
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (traceCapturing_) {
+        traceStopRequested_ = true;
+        std::printf("Profiler trace capture stop requested\n");
+        return;
+    }
+    if (traceCaptureRequested_) {
+        traceCaptureRequested_ = false;
+        traceRequestFrameCount_ = 0;
+        std::printf("Profiler trace capture canceled\n");
+        return;
+    }
+    traceCaptureRequested_ = true;
+    traceRequestFrameCount_ = frameCount;
+    traceStopRequested_ = false;
+    std::printf("Profiler trace capture requested: %u frames\n", frameCount);
+}
+
+void Profiler::SetThreadName(const std::string& name) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto id = std::this_thread::get_id();
+    threadNames_[id] = name;
+    auto it = threadIndices_.find(id);
+    if (it != threadIndices_.end()) {
+        const uint32_t idx = it->second;
+        if (threadIndexToName_.size() <= idx) { threadIndexToName_.resize(idx + 1); }
+        threadIndexToName_[idx] = name;
+    }
+}
+
+uint32_t Profiler::GetThreadIndex_Locked(std::thread::id id) {
+    auto it = threadIndices_.find(id);
+    if (it != threadIndices_.end()) {
+        return it->second;
+    }
+    const uint32_t idx = static_cast<uint32_t>(threadIndices_.size());
+    threadIndices_[id] = idx;
+    if (threadIndexToName_.size() <= idx) { threadIndexToName_.resize(idx + 1); }
+    auto nameIt = threadNames_.find(id);
+    if (nameIt == threadNames_.end()) {
+        std::string autoName = "Thread " + std::to_string(idx);
+        threadNames_[id] = autoName;
+        threadIndexToName_[idx] = std::move(autoName);
+    }
+    else {
+        threadIndexToName_[idx] = nameIt->second;
+    }
+    return idx;
+}
+
+void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events, const std::vector<std::string>& threadNames) {
+    if (events.empty()) { return; }
+    const uint32_t fileIdx = traceFileCounter_.fetch_add(1u, std::memory_order_relaxed);
+    auto now = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    std::ostringstream fname;
+    fname << "trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S")
+          << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
+    const std::string fileName = fname.str();
+    std::ofstream out(fileName, std::ios::binary);
+    if (!out) {
+        std::printf("Failed to write profiler trace to %s\n", fileName.c_str());
+        return;
+    }
+
+    out << "{\n\"traceEvents\":[\n";
+    bool first = true;
+    auto writeEntry = [&](const std::string& line) {
+        if (!first) { out << ",\n"; }
+        first = false;
+        out << line;
+    };
+
+    for (size_t tid = 0; tid < threadNames.size(); ++tid) {
+        if (threadNames[tid].empty()) { continue; }
+        std::ostringstream line;
+        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << tid
+             << ",\"args\":{\"name\":\"" << EscapeJson(threadNames[tid]) << "\"}}";
+        writeEntry(line.str());
+    }
+
+    for (const auto& ev : events) {
+        std::ostringstream line;
+        line << "  {\"name\":\"" << EscapeJson(ev.name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"
+             << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << ev.threadIndex << "}";
+        writeEntry(line.str());
+    }
+
+    out << "\n],\n\"displayTimeUnit\":\"us\"\n}\n";
+    out.close();
+    std::printf("Profiler trace saved to %s (%zu events)\n", fileName.c_str(), events.size());
 }
 
 #endif // PROF_ENABLED
