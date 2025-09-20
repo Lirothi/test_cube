@@ -316,6 +316,7 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
 }
 
 void Renderer::WaitForFrame(UINT frameIndex) {
+    CPU_SCOPE("Renderer::WaitForFrame");
     const UINT64 value = frameFenceValues_[frameIndex];
     if (value == 0) {
         return; // ещё не сигналили этот кадр — ждать нечего
@@ -410,12 +411,13 @@ void Renderer::Tick(float dt)
 
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
 {
+    CPU_SCOPE("Renderer::BeginThreadCommandList");
     ID3D12GraphicsCommandList* cl = 0;
     ID3D12CommandAllocator* alloc = 0;
     {
         auto& fr = frameResources_[currentFrameIndex_];
         {
-            CPU_SCOPE("Renderer::BeginThreadCommandList.1");
+            //CPU_SCOPE("Renderer::BeginThreadCommandList.1");
             alloc = fr->AcquireCommandAllocator(device_.Get(), type);
         }
         {

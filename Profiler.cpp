@@ -723,9 +723,10 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events, const std::
     localtime_r(&tt, &tm);
 #endif
     std::ostringstream fname;
-    fname << "trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S")
+    fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S")
           << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
     const std::string fileName = fname.str();
+    std::filesystem::create_directory("traces");
     std::ofstream out(fileName, std::ios::binary);
     if (!out) {
         std::printf("Failed to write profiler trace to %s\n", fileName.c_str());

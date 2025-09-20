@@ -137,11 +137,6 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             CPU_SCOPE("Whole Cycle");
             input_.NewFrame();
 
-            if (input_.WasKeyPressed(VK_F10)) {
-                constexpr uint32_t kTraceFrames = 120;
-                Profiler::Get().RequestTraceCapture(kTraceFrames);
-            }
-
             {
                 CPU_SCOPE("Win Messages");
                 while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -154,6 +149,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (msg.message == WM_QUIT) {
                     break;
                 }
+            }
+
+            if (input_.WasKeyPressed(VK_F11)) {
+                constexpr uint32_t kTraceFrames = 120;
+                Profiler::Get().RequestTraceCapture(kTraceFrames);
             }
 
             double now = GetTimeSeconds();

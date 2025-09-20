@@ -383,7 +383,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
-    const size_t chunkSize = 64;
+    const size_t chunkSize = 16;
 
     tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
@@ -445,6 +445,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
     tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
         [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
         {
+            CPU_SCOPE("RenderShadowBatch.Async");
             const size_t begin = jobIndex * chunkSize;
             const size_t end = std::min(begin + chunkSize, objects.size());
 
@@ -459,6 +460,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
 
                   for (size_t i = begin; i < end; ++i) {
                       if (auto* obj = objects[i]) {
+                          CPU_SCOPE("RenderShadowBatch.Async.For");
                           obj->RenderShadow(renderer, t.cl, lightView, lightProj);
                       }
                   }

@@ -17,7 +17,7 @@
 #endif
 
 #ifndef PROF_GPU_ENABLED
-#define PROF_GPU_ENABLED 1
+#define PROF_GPU_ENABLED 0
 #endif
 
 #if PROF_GPU_ENABLED
@@ -66,6 +66,13 @@ public:
             frameMsSum = 0.0;
             frameCount = 0;
         }
+    };
+
+    struct TraceEvent {
+        std::string name;
+        uint64_t tsUs = 0;
+        uint64_t durUs = 0;
+        uint32_t threadIndex = 0;
     };
 
 public:
@@ -152,9 +159,9 @@ public:
     bool GetEnabled() const { return enabled_.load(std::memory_order_relaxed); }
     // Requests a trace capture for the given number of frames; calling again
     // while a capture is pending or active will stop/cancel it.
+#endif
     void RequestTraceCapture(uint32_t frameCount);
     void SetThreadName(const std::string& name);
-#endif
 
     // Кулдаун сброса максимумов
     void   SetMaxCooldownSeconds(double sec);
@@ -256,13 +263,6 @@ private:
 #endif
 
     TaskSystem::TaskHandle overlayTask_ = nullptr;
-
-    struct TraceEvent {
-        std::string name;
-        uint64_t tsUs = 0;
-        uint64_t durUs = 0;
-        uint32_t threadIndex = 0;
-    };
 
     bool traceCaptureRequested_ = false;
     uint32_t traceRequestFrameCount_ = 0;
