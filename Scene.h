@@ -28,6 +28,8 @@ public:
     void Clear();
 
 private:
+    void RefreshCachedHandles(Renderer* renderer);
+
     enum class ObjectRenderType { OpaqueSimple, OpaqueComplex, TransparentSimple, TransparentComplex };
     static constexpr size_t kRenderTypeCount = 4;
     using ObjectBucket = std::vector<RenderableObjectBase*>;

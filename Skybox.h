@@ -32,6 +32,7 @@ protected:
     // пер-кадровые константы и дескрипторы
     void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override;
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void OnMaterialHotReload(Renderer* renderer) override;
 
     // рисуем обычным путём базового класса:
     // RecordGraphics/IssueDraw наследуем без изменений.

@@ -75,6 +75,46 @@ void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
 }
 
+void Scene::RefreshCachedHandles(Renderer* renderer)
+{
+    cbHandles_ = {};
+
+    if (matLighting_)
+    {
+        cbHandles_.lighting.Populate(matLighting_.get());
+    }
+    if (matCompose_)
+    {
+        cbHandles_.compose.Populate(matCompose_.get());
+    }
+    if (matSSR_)
+    {
+        cbHandles_.ssr.Populate(matSSR_.get());
+    }
+    if (matBlur_)
+    {
+        cbHandles_.blur.Populate(matBlur_.get());
+    }
+
+    for (auto& light : pointLights_)
+    {
+        light.OnMaterialHotReload();
+    }
+
+    for (auto& obj : objects_)
+    {
+        if (obj)
+        {
+            obj->OnMaterialHotReload(renderer);
+        }
+    }
+
+    if (skyBox_)
+    {
+        skyBox_->OnMaterialHotReload(renderer);
+    }
+}
+
 static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     float zNearVS, float zFarVS, std::array<float3, 8>& outCornersWS)
 {
@@ -147,7 +187,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matLighting_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
-    cbHandles_.lighting.Populate(matLighting_.get());
 
     if (!matCompose_) {
         Material::GraphicsDesc gd{};
@@ -159,7 +198,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matCompose_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
-    cbHandles_.compose.Populate(matCompose_.get());
 
     if (!matTonemap_) {
         Material::GraphicsDesc gd{};
@@ -180,7 +218,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
-    cbHandles_.ssr.Populate(matSSR_.get());
 
     if (!matBlur_) {
         Material::GraphicsDesc gd{};
@@ -190,7 +227,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
-    cbHandles_.blur.Populate(matBlur_.get());
 
     if (!matDebug_) {
         Material::GraphicsDesc gd{};
@@ -274,6 +310,8 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     {
         obj->Init(renderer, uploadCmdList, uploadKeepAlive);
     }
+
+    RefreshCachedHandles(renderer);
 }
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
@@ -316,6 +354,11 @@ void Scene::Render(Renderer* renderer) {
 
     if (actions_->WasActionPressed("Wireframe", *input_)) {
         renderer->SetWireframeMode(!renderer->GetWireframeMode());
+    }
+
+    if (renderer->ConsumeMaterialHotReloadFlag())
+    {
+        RefreshCachedHandles(renderer);
     }
 
     auto* tb = renderer->GetTextManager();

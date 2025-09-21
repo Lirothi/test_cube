@@ -877,17 +877,20 @@ bool MaterialManager::RequestFSProbeAsync()
     return true;
 }
 
-void MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)
+bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)
 {
+    bool anyReloaded = false;
     for (auto& kv : materials_) {
         auto& mat = kv.second;
         if (mat) {
             if (mat->HotReloadIfPending(r, frameNumber, keepAliveFrames)) {
+                anyReloaded = true;
                 // лог: пересобрали
             }
             mat->CollectRetired(frameNumber, keepAliveFrames);
         }
     }
+    return anyReloaded;
 }
 
 const Material::CBufferInfo* Material::GetCBInfo(UINT bRegister) const {

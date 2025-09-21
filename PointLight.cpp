@@ -184,3 +184,8 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->DrawInstanced(3, 1, 0, 0);
 }
+
+void PointLight::OnMaterialHotReload()
+{
+    RebuildHandleCache();
+}

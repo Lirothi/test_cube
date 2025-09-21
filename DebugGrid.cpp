@@ -84,6 +84,15 @@ public:
         UpdateGraphicsUniform(mvpHandle_, mvp, cbData);
     }
 
+    void OnMaterialHotReload(Renderer* renderer) override
+    {
+        RenderableObject::OnMaterialHotReload(renderer);
+        if (auto* material = GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+        }
+    }
+
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
     {
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
@@ -201,6 +210,16 @@ public:
         const UINT w = r->GetWidth();
         const UINT h = r->GetHeight();
         UpdateGraphicsUniform(viewportThicknessHandle_, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
+    }
+
+    void OnMaterialHotReload(Renderer* renderer) override
+    {
+        RenderableObject::OnMaterialHotReload(renderer);
+        if (auto* material = GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+            viewportThicknessHandle_ = material->ComputeCBFieldHandle(0, "viewportThickness");
+        }
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
