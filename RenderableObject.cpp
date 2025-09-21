@@ -10,16 +10,6 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
-namespace {
-    constexpr CBFieldID kBaseColorID = CB_FIELD_ID("baseColor");
-    constexpr CBFieldID kMetalRoughID = CB_FIELD_ID("metalRough");
-    constexpr CBFieldID kTexOffsScaleID = CB_FIELD_ID("texOffsScale");
-    constexpr CBFieldID kTexFlagsID = CB_FIELD_ID("texFlags");
-    constexpr CBFieldID kWorldID = CB_FIELD_ID("world");
-    constexpr CBFieldID kViewID = CB_FIELD_ID("view");
-    constexpr CBFieldID kProjID = CB_FIELD_ID("proj");
-}
-
 RenderableObject::RenderableObject(
     const std::string& matPreset,
     const std::string& inputLayout,
@@ -71,6 +61,8 @@ void RenderableObject::Init(Renderer* renderer,
 
         shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc_);
     }
+
+    RebuildHandleCaches();
 }
 
 void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
@@ -85,9 +77,9 @@ void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, cons
 {
     if (!cbData) { return; }
     //CPU_SCOPE(L"RenderableObject::UpdateUniforms");
-    UpdateUniform(kWorldID, GetModelMatrix(), cbData);
-    UpdateUniform(kViewID, view, cbData);
-    UpdateUniform(kProjID, proj, cbData);
+    UpdateGraphicsUniform("world", cb0Handles_.world, GetModelMatrix(), cbData);
+    UpdateGraphicsUniform("view", cb0Handles_.view, view, cbData);
+    UpdateGraphicsUniform("proj", cb0Handles_.proj, proj, cbData);
 
     ApplyMaterialParamsToCB(cbData);
 }
@@ -143,10 +135,10 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
-    UpdateUniform(kBaseColorID, p.baseColor, cbData);
-    UpdateUniform(kMetalRoughID, p.metalRough, cbData);
-    UpdateUniform(kTexOffsScaleID, p.texOffsScale, cbData);
-    UpdateUniform(kTexFlagsID, p.texFlags, cbData);
+    UpdateGraphicsUniform("baseColor", cb0Handles_.baseColor, p.baseColor, cbData);
+    UpdateGraphicsUniform("metalRough", cb0Handles_.metalRough, p.metalRough, cbData);
+    UpdateGraphicsUniform("texOffsScale", cb0Handles_.texOffsScale, p.texOffsScale, cbData);
+    UpdateGraphicsUniform("texFlags", cb0Handles_.texFlags, p.texFlags, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -168,13 +160,37 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     //TaskSystem::Get().Submit([this, &lightProj, &lightView, cbData]()
     {
         //CPU_SCOPE(L"RenderableObject::RecordShadow.Unis");
-        shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
-        shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
-        shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
+        UpdateShadowUniform(shadowHandles_.world, GetModelMatrix(), cbData);
+        UpdateShadowUniform(shadowHandles_.view, lightView, cbData);
+        UpdateShadowUniform(shadowHandles_.proj, lightProj, cbData);
     }
     //});
 
     shadowMaterial_->Bind(cl, ctx, false);
+}
+
+void RenderableObject::RebuildHandleCaches()
+{
+    cb0Handles_ = {};
+    shadowHandles_ = {};
+
+    if (graphicsMaterial_)
+    {
+        cb0Handles_.world = graphicsMaterial_->ComputeCBFieldHandle(0, "world");
+        cb0Handles_.view = graphicsMaterial_->ComputeCBFieldHandle(0, "view");
+        cb0Handles_.proj = graphicsMaterial_->ComputeCBFieldHandle(0, "proj");
+        cb0Handles_.baseColor = graphicsMaterial_->ComputeCBFieldHandle(0, "baseColor");
+        cb0Handles_.metalRough = graphicsMaterial_->ComputeCBFieldHandle(0, "metalRough");
+        cb0Handles_.texOffsScale = graphicsMaterial_->ComputeCBFieldHandle(0, "texOffsScale");
+        cb0Handles_.texFlags = graphicsMaterial_->ComputeCBFieldHandle(0, "texFlags");
+    }
+
+    if (shadowMaterial_)
+    {
+        shadowHandles_.world = shadowMaterial_->ComputeCBFieldHandle(0, "world");
+        shadowHandles_.view = shadowMaterial_->ComputeCBFieldHandle(0, "view");
+        shadowHandles_.proj = shadowMaterial_->ComputeCBFieldHandle(0, "proj");
+    }
 }
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,

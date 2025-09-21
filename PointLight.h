@@ -42,5 +42,33 @@ private:
     // цветовой (аддитивный) полноэкранный
     std::shared_ptr<Material> matColorFS_;
 
+    struct CBHandleCache {
+        struct ZFailHandles {
+            Material::CBFieldHandle world;
+            Material::CBFieldHandle view;
+            Material::CBFieldHandle proj;
+        } zFail;
+
+        struct ColorHandles {
+            struct PerFrame {
+                Material::CBFieldHandle view;
+                Material::CBFieldHandle proj;
+                Material::CBFieldHandle invView;
+                Material::CBFieldHandle invProj;
+                Material::CBFieldHandle camPos;
+                Material::CBFieldHandle screenSize;
+            } frame;
+
+            struct PerLight {
+                Material::CBFieldHandle position;
+                Material::CBFieldHandle radius;
+                Material::CBFieldHandle color;
+                Material::CBFieldHandle intensity;
+            } light;
+        } color;
+    } cbHandles_{};
+
+    void RebuildHandleCache();
+
     PointLightDesc desc_{};
 };

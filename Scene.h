@@ -73,7 +73,7 @@ private:
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
-    
+
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matCompose_;
     std::shared_ptr<Material> matTonemap_;
@@ -81,6 +81,55 @@ private:
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
     static constexpr int kCascades = 4;
+
+    struct CBHandleCache {
+        struct LightingHandles {
+            Material::CBFieldHandle sunDir;
+            Material::CBFieldHandle ambient;
+            Material::CBFieldHandle lightRgb;
+            Material::CBFieldHandle exposure;
+            Material::CBFieldHandle camPos;
+            Material::CBFieldHandle camDir;
+            Material::CBFieldHandle view;
+            Material::CBFieldHandle invView;
+            Material::CBFieldHandle invProj;
+            Material::CBFieldHandle lightViewProj;
+            Material::CBFieldHandle cascadeScaleBias;
+            Material::CBFieldHandle cascadeSplits;
+            Material::CBFieldHandle shadowAtlasSize;
+            Material::CBFieldHandle shadowBiasNDC;
+            Material::CBFieldHandle normalBiasWS;
+            void Populate(Material* material);
+        } lighting;
+
+        struct SsrHandles {
+            Material::CBFieldHandle view;
+            Material::CBFieldHandle proj;
+            Material::CBFieldHandle invView;
+            Material::CBFieldHandle invProj;
+            Material::CBFieldHandle depthA;
+            Material::CBFieldHandle depthB;
+            Material::CBFieldHandle zNear;
+            Material::CBFieldHandle zFar;
+            Material::CBFieldHandle screenSize;
+            void Populate(Material* material);
+        } ssr;
+
+        struct BlurHandles {
+            Material::CBFieldHandle dir;
+            Material::CBFieldHandle radius;
+            void Populate(Material* material);
+        } blur;
+
+        struct ComposeHandles {
+            Material::CBFieldHandle view;
+            Material::CBFieldHandle proj;
+            Material::CBFieldHandle invView;
+            Material::CBFieldHandle invProj;
+            Material::CBFieldHandle skyboxIntensity;
+            void Populate(Material* material);
+        } compose;
+    } cbHandles_{};
 
     // кэш для лайт-пасса
     mat4  cachedLightView_[kCascades];

@@ -54,6 +54,11 @@ public:
 
         RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
+        if (auto* material = GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+        }
+
         std::vector<LineVertex> verts;
         BuildGridCPU(verts);
 
@@ -76,8 +81,7 @@ public:
     void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        static constexpr CBFieldID mvpID = CB_FIELD_ID("modelViewProj");
-        UpdateUniform(mvpID, mvp, cbData);
+        UpdateGraphicsUniform("modelViewProj", mvpHandle_, mvp, cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
@@ -129,6 +133,7 @@ private:
     ComPtr<ID3D12Resource> vb_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     UINT vertexCount_ = 0;
+    Material::CBFieldHandle mvpHandle_{};
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -163,6 +168,12 @@ public:
 
         RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
+        if (auto* material = GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+            viewportThicknessHandle_ = material->ComputeCBFieldHandle(0, "viewportThickness");
+        }
+
         std::vector<AxisVertex> verts;
         BuildAxesCPU(verts);
 
@@ -185,13 +196,11 @@ public:
     void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        static constexpr CBFieldID mvpID = CB_FIELD_ID("modelViewProj");
-        static constexpr CBFieldID vpThickID = CB_FIELD_ID("viewportThickness");
-        UpdateUniform(mvpID, mvp, cbData);
+        UpdateGraphicsUniform("modelViewProj", mvpHandle_, mvp, cbData);
 
         const UINT w = r->GetWidth();
         const UINT h = r->GetHeight();
-        UpdateUniform(vpThickID, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
+        UpdateGraphicsUniform("viewportThickness", viewportThicknessHandle_, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
@@ -246,6 +255,8 @@ private:
     ComPtr<ID3D12Resource> vb_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     UINT vertexCount_ = 0;
+    Material::CBFieldHandle mvpHandle_{};
+    Material::CBFieldHandle viewportThicknessHandle_{};
 };
 
 // ──────────────────────────────────────────────────────────────

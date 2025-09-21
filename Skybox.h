@@ -45,4 +45,7 @@ private:
     TextureCube cube_;
     std::wstring path_;
     float exposure_ = 1.0f;
+    Material::CBFieldHandle viewHandle_{};
+    Material::CBFieldHandle projHandle_{};
+    Material::CBFieldHandle exposureHandle_{};
 };

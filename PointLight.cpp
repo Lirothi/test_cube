@@ -5,20 +5,6 @@
 
 using namespace Math;
 
-namespace {
-    constexpr CBFieldID ID_world        = CB_FIELD_ID("world");
-    constexpr CBFieldID ID_view         = CB_FIELD_ID("view");
-    constexpr CBFieldID ID_proj         = CB_FIELD_ID("proj");
-    constexpr CBFieldID ID_invView      = CB_FIELD_ID("invView");
-    constexpr CBFieldID ID_invProj      = CB_FIELD_ID("invProj");
-    constexpr CBFieldID ID_camPosWS     = CB_FIELD_ID("camPosWS");
-    constexpr CBFieldID ID_screenSize   = CB_FIELD_ID("screenSize");
-    constexpr CBFieldID ID_lightPosWS   = CB_FIELD_ID("lightPosWS");
-    constexpr CBFieldID ID_lightRadius  = CB_FIELD_ID("lightRadius");
-    constexpr CBFieldID ID_lightColor   = CB_FIELD_ID("lightColor");
-    constexpr CBFieldID ID_lightIntensity = CB_FIELD_ID("lightIntensity");
-}
-
 static D3D12_DEPTH_STENCIL_DESC MakeZFail_DS()
 {
     D3D12_DEPTH_STENCIL_DESC ds{};
@@ -106,6 +92,35 @@ void PointLight::Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
         rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         matColorFS_ = r->GetMaterialManager()->GetOrCreateGraphics(r, gd);
     }
+
+    RebuildHandleCache();
+}
+
+void PointLight::RebuildHandleCache()
+{
+    cbHandles_ = {};
+
+    if (matZFail_)
+    {
+        cbHandles_.zFail.world = matZFail_->ComputeCBFieldHandle(0, "world");
+        cbHandles_.zFail.view = matZFail_->ComputeCBFieldHandle(0, "view");
+        cbHandles_.zFail.proj = matZFail_->ComputeCBFieldHandle(0, "proj");
+    }
+
+    if (matColorFS_)
+    {
+        cbHandles_.color.frame.view = matColorFS_->ComputeCBFieldHandle(0, "view");
+        cbHandles_.color.frame.proj = matColorFS_->ComputeCBFieldHandle(0, "proj");
+        cbHandles_.color.frame.invView = matColorFS_->ComputeCBFieldHandle(0, "invView");
+        cbHandles_.color.frame.invProj = matColorFS_->ComputeCBFieldHandle(0, "invProj");
+        cbHandles_.color.frame.camPos = matColorFS_->ComputeCBFieldHandle(0, "camPosWS");
+        cbHandles_.color.frame.screenSize = matColorFS_->ComputeCBFieldHandle(0, "screenSize");
+
+        cbHandles_.color.light.position = matColorFS_->ComputeCBFieldHandle(1, "lightPosWS");
+        cbHandles_.color.light.radius = matColorFS_->ComputeCBFieldHandle(1, "lightRadius");
+        cbHandles_.color.light.color = matColorFS_->ComputeCBFieldHandle(1, "lightColor");
+        cbHandles_.color.light.intensity = matColorFS_->ComputeCBFieldHandle(1, "lightIntensity");
+    }
 }
 
 void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
@@ -115,9 +130,9 @@ void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
 
     // CB b0: world/view/proj
     auto cb = r->GetFrameResource()->AllocDynamic(matZFail_->GetCBSizeBytesAligned(0, 256), 256);
-    matZFail_->UpdateCBField(0, ID_world, BuildModel(), (uint8_t*)cb.cpu);
-    matZFail_->UpdateCBField(0, ID_view,  view,         (uint8_t*)cb.cpu);
-    matZFail_->UpdateCBField(0, ID_proj,  proj,         (uint8_t*)cb.cpu);
+    matZFail_->UpdateCBField(cbHandles_.zFail.world, BuildModel(), (uint8_t*)cb.cpu);
+    matZFail_->UpdateCBField(cbHandles_.zFail.view, view, (uint8_t*)cb.cpu);
+    matZFail_->UpdateCBField(cbHandles_.zFail.proj, proj, (uint8_t*)cb.cpu);
 
     // Сброс ref → 0 (мы будем тестировать !=0 в цвете)
     cl->OMSetStencilRef(0);
@@ -137,19 +152,19 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
 {
     // CB b0: per-frame
     auto cb0 = r->GetFrameResource()->AllocDynamic(matColorFS_->GetCBSizeBytesAligned(0, 256), 256);
-    matColorFS_->UpdateCBField(0, ID_view,     view,     (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(0, ID_proj,     proj,     (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(0, ID_invView,  invView,  (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(0, ID_invProj,  invProj,  (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(0, ID_camPosWS, camPos,   (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(0, ID_screenSize, float2((float)r->GetWidth(), (float)r->GetHeight()), (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.view, view, (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.proj, proj, (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.invView, invView, (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.invProj, invProj, (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.camPos, camPos, (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.screenSize, float2((float)r->GetWidth(), (float)r->GetHeight()), (uint8_t*)cb0.cpu);
 
     // CB b1: per-light
     auto cb1 = r->GetFrameResource()->AllocDynamic(matColorFS_->GetCBSizeBytesAligned(1, 256), 256);
-    matColorFS_->UpdateCBField(1, ID_lightPosWS,   desc_.position,  (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(1, ID_lightRadius,  desc_.radius,    (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(1, ID_lightColor,   desc_.color,     (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(1, ID_lightIntensity, desc_.intensity, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.position, desc_.position, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.radius, desc_.radius, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.intensity, desc_.intensity, (uint8_t*)cb1.cpu);
 
     // таблица GBuffer SRV: t0..t3 = GB0,GB1,GB2,Depth
     auto tbl = r->StageGBufferSrvTable();
