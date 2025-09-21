@@ -4,6 +4,8 @@
 #include <string_view>
 #include <cstdint>
 #include <optional>
+#include <memory>
+#include <algorithm>
 #include <wrl/client.h>
 #include "Material.h"
 #include "RenderContext.h"
@@ -84,6 +86,59 @@ private:
     };
 
 private:
+    template<typename T>
+    class GrowOnlyArray {
+    public:
+        void clear() noexcept { size_ = 0; }
+        [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+        [[nodiscard]] size_t size() const noexcept { return size_; }
+        [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
+        [[nodiscard]] T* data() noexcept { return storage_.get(); }
+        [[nodiscard]] const T* data() const noexcept { return storage_.get(); }
+
+        void ensureAdditional(size_t additional) {
+            if (additional == 0) { return; }
+            ensureCapacity(size_ + additional);
+        }
+
+        size_t appendUninitialized(size_t count) {
+            if (count == 0) { return size_; }
+            ensureCapacity(size_ + count);
+            const size_t base = size_;
+            size_ += count;
+            return base;
+        }
+
+    private:
+        void ensureCapacity(size_t required) {
+            if (required <= capacity_) { return; }
+
+            size_t newCapacity = (capacity_ != 0) ? capacity_ : kInitialCapacity;
+            if (newCapacity == 0) { newCapacity = 1; }
+            while (newCapacity < required) {
+                const size_t next = newCapacity * 2;
+                if (next <= newCapacity) { // overflow guard
+                    newCapacity = required;
+                    break;
+                }
+                newCapacity = next;
+            }
+
+            std::unique_ptr<T[]> newStorage = std::make_unique<T[]>(newCapacity);
+            if (storage_) {
+                std::copy_n(storage_.get(), size_, newStorage.get());
+            }
+            storage_.swap(newStorage);
+            capacity_ = newCapacity;
+        }
+
+        static constexpr size_t kInitialCapacity = 256;
+
+        std::unique_ptr<T[]> storage_;
+        size_t size_ = 0;
+        size_t capacity_ = 0;
+    };
+
     static std::wstring UTF8toW(std::string_view s);
 
     // === Общий хелпер построения глиф-рана и ширины ===
@@ -107,8 +162,8 @@ private:
     std::shared_ptr<Material> matText_;
     std::shared_ptr<Material> matRect_;
 
-    std::vector<Vertex>      verts_;
-    std::vector<uint32_t>    idx_;
+    GrowOnlyArray<Vertex>    verts_;
+    GrowOnlyArray<uint32_t>  idx_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     D3D12_INDEX_BUFFER_VIEW  ibv_{};
 
