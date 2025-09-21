@@ -741,6 +741,8 @@ void Renderer::OnResize(UINT width, UINT height) {
     CreateSwapChainAndRTVs(width_, height_);
     CreateDepthResources(width_, height_);
     CreateDeferredTargets(width_, height_);
+
+    RefreshCurrentFrameCaches();
 }
 
 void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
