@@ -104,11 +104,15 @@ private:
         std::vector<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>> pools[kQueueCount_];
         std::atomic<UINT> used[kQueueCount_] = { 0, 0, 0, 0 };
         std::mutex mtx[kQueueCount_];
+        std::atomic<uint32_t> epoch_{ 0 };
+
+        static constexpr UINT kChunkSize_ = 8u;
 
         void ResetUsage() {
             for (int qi = 0; qi < kQueueCount_; ++qi) {
                 used[qi].store(0u, std::memory_order_relaxed);
             }
+            epoch_.fetch_add(1u, std::memory_order_release);
         }
 
         ID3D12GraphicsCommandList* Acquire(ID3D12Device* dev,
@@ -116,7 +120,32 @@ private:
             ID3D12CommandAllocator* alloc,
             ID3D12PipelineState* initialPSO = nullptr) {
             const int qi = QueueIndex_(type);
-            const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
+
+            struct ThreadCache_ {
+                CommandListPools_* owner = nullptr;
+                uint32_t epoch = 0;
+                UINT next = 0;
+                UINT end = 0;
+            };
+
+            static thread_local ThreadCache_ cache[kQueueCount_];
+            ThreadCache_& entry = cache[qi];
+
+            const uint32_t epoch = epoch_.load(std::memory_order_acquire);
+            if (entry.owner != this || entry.epoch != epoch) {
+                entry.owner = this;
+                entry.epoch = epoch;
+                entry.next = 0;
+                entry.end = 0;
+            }
+
+            if (entry.next == entry.end) {
+                const UINT start = used[qi].fetch_add(kChunkSize_, std::memory_order_relaxed);
+                entry.next = start;
+                entry.end = start + kChunkSize_;
+            }
+
+            const UINT index = entry.next++;
             auto& vec = pools[qi];
 
             if (index >= vec.size()) {
@@ -125,7 +154,7 @@ private:
                     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cl;
                     if (FAILED(dev->CreateCommandList(0, type, alloc, initialPSO, IID_PPV_ARGS(&cl)))) {
                         throw std::runtime_error("CreateCommandList failed");
-					}
+                    }
                     // Закроем сразу — мы всё равно Reset'им при каждом Acquire
                     if (FAILED(cl->Close())) {
                         throw std::runtime_error("CreateCommandList Close failed");
@@ -137,7 +166,7 @@ private:
             ID3D12GraphicsCommandList* cl = vec[index].Get();
             if (FAILED(cl->Reset(alloc, initialPSO))) {
                 throw std::runtime_error("CommandList Reset failed");
-			}
+            }
             return cl;
         }
     };
