@@ -1,10 +1,14 @@
 #pragma once
 #include <vector>
+#include <list>
+#include <array>
+#include <cassert>
 #include <string>
 #include <string_view>
 #include <cstdint>
 #include <optional>
 #include <memory>
+#include <utility>
 #include <algorithm>
 #include <wrl/client.h>
 #include "Material.h"
@@ -55,10 +59,48 @@ private:
 
     // Предподсчитанный «глиф-ран» одной строки
     struct GlyphRun {
-        std::vector<const struct FontGlyph*> glyphs; // ptr на глифы в атласе
-        std::vector<float> xOffsets;                 // кумулятивные X до каждого глифа (с кернингом)
-        float scale = 1.0f;                          // px / fontPx
+        static constexpr size_t kDefaultCapacity = 256;
+
+        std::array<const struct FontGlyph*, kDefaultCapacity> glyphs{}; // ptr на глифы в атласе
+        std::array<float, kDefaultCapacity> xOffsets{};                  // кумулятивные X до каждого глифа (с кернингом)
+        size_t glyphCount = 0;
+        float scale = 1.0f;   // px / fontPx
         bool  ready = false;
+
+        void Reset() {
+            glyphCount = 0;
+            scale = 1.0f;
+            ready = false;
+        }
+
+        void Reserve(size_t desired) {
+            if (desired > kDefaultCapacity) {
+                assert(desired <= kDefaultCapacity);
+            }
+            (void)desired;
+        }
+
+        void Append(const struct FontGlyph* glyph, float xOffset) {
+            if (glyphCount >= kDefaultCapacity) {
+                assert(glyphCount < kDefaultCapacity);
+                return;
+            }
+            glyphs[glyphCount] = glyph;
+            xOffsets[glyphCount] = xOffset;
+            ++glyphCount;
+        }
+
+        [[nodiscard]] size_t size() const noexcept { return glyphCount; }
+        [[nodiscard]] bool empty() const noexcept { return glyphCount == 0; }
+        [[nodiscard]] size_t capacity() const noexcept { return kDefaultCapacity; }
+        [[nodiscard]] const struct FontGlyph* GlyphAt(size_t index) const noexcept {
+            assert(index < glyphCount);
+            return glyphs[index];
+        }
+        [[nodiscard]] float XOffsetAt(size_t index) const noexcept {
+            assert(index < glyphCount);
+            return xOffsets[index];
+        }
     };
 
     struct RegionLine {
@@ -67,6 +109,7 @@ private:
         float    widthPx = 0;   // ширина строки (для Center/Right)
         GlyphRun run;           // кэш глифов/офсетов
         uint32_t glyphCount = 0; // запас по глифам для резерва
+        bool     inUse = false;
     };
 
     struct Region {
@@ -78,7 +121,7 @@ private:
         std::optional<float> fixedWidthPx; // если есть — используем для фона/выравнивания
         bool  autoMeasure = true;          // если false и Align::Left — измерение строк не требуется
 
-        std::vector<RegionLine> lines;
+        std::vector<RegionLine*> lines;
         float maxLineWidth = 0;
         int   totalLines = 0;
         int   lineStepPx = 18;
@@ -153,7 +196,7 @@ private:
     // Рисунок прямоугольника (фон)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
-    RegionLine AcquireRegionLine(size_t glyphReserveHint);
+    RegionLine* AcquireRegionLine(size_t glyphReserveHint);
     void       RecycleRegionLines();
 
 private:
@@ -174,7 +217,7 @@ private:
 
     std::vector<Region> regions_;
     std::vector<Region> regionPool_;
-    std::vector<RegionLine> regionLinePool_;
+    std::list<RegionLine> regionLinePool_;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;

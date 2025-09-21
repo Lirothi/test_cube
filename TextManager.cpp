@@ -150,22 +150,26 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     Region& rg = regions_[id];
 
     const size_t charCount = text.size();
-    RegionLine ln = AcquireRegionLine(charCount);
-    ln.color = color;
-    ln.px = px;
-    BuildGlyphRun(text, ln.px, ln.run, ln.widthPx);
-    const size_t glyphReserve = (ln.run.ready ? ln.run.glyphs.size() : charCount);
-    ln.glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
+    RegionLine* ln = AcquireRegionLine(charCount);
+    if (!ln) {
+        return;
+    }
+
+    ln->color = color;
+    ln->px = px;
+    BuildGlyphRun(text, ln->px, ln->run, ln->widthPx);
+    const size_t glyphReserve = (ln->run.ready ? ln->run.size() : charCount);
+    ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
 
     if (rg.autoMeasure || (rg.align != Align::Left)) {
-        rg.maxLineWidth = std::max(rg.maxLineWidth, ln.widthPx);
+        rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
     }
     else {
         // для Align::Left + fixedWidth измерение не обязательно (ширина уже в ln.widthPx)
     }
 
     rg.glyphCount += glyphReserve;
-    rg.lines.push_back(std::move(ln));
+    rg.lines.push_back(ln);
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
 }
@@ -218,14 +222,15 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         // строки
         const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth);
         int y = rg.y;
-        for (const RegionLine& ln : rg.lines) {
+        for (const RegionLine* ln : rg.lines) {
+            if (!ln) { continue; }
             float xOff = 0.0f;
             switch (rg.align) {
             case Align::Left: { xOff = 0.0f; break; }
-            case Align::Center: { xOff = std::max(0.0f, 0.5f * (regionW - ln.widthPx)); break; }
-            case Align::Right: { xOff = std::max(0.0f, (regionW - ln.widthPx)); break; }
+            case Align::Center: { xOff = std::max(0.0f, 0.5f * (regionW - ln->widthPx)); break; }
+            case Align::Right: { xOff = std::max(0.0f, (regionW - ln->widthPx)); break; }
             }
-            EmitGlyphRun(rg.x, y, xOff, ln.color, ln.run);
+            EmitGlyphRun(rg.x, y, xOff, ln->color, ln->run);
             y += rg.lineStepPx;
         }
     }
@@ -325,44 +330,45 @@ void TextManager::Clear() {
     regionPool_.clear();
 }
 
-TextManager::RegionLine TextManager::AcquireRegionLine(size_t glyphReserveHint) {
-    RegionLine ln;
-    if (!regionLinePool_.empty()) {
-        ln = std::move(regionLinePool_.back());
-        regionLinePool_.pop_back();
-    }
-
-    ln.color = {};
-    ln.px = 16.0f;
-    ln.widthPx = 0.0f;
-    ln.glyphCount = 0;
-
-    ln.run.glyphs.clear();
-    ln.run.xOffsets.clear();
-    ln.run.scale = 1.0f;
-    ln.run.ready = false;
-
-    if (glyphReserveHint > 0) {
-        if (ln.run.glyphs.capacity() < glyphReserveHint) {
-            ln.run.glyphs.reserve(glyphReserveHint);
-        }
-        if (ln.run.xOffsets.capacity() < glyphReserveHint) {
-            ln.run.xOffsets.reserve(glyphReserveHint);
+TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint) {
+    RegionLine* ln = nullptr;
+    for (RegionLine& candidate : regionLinePool_) {
+        if (!candidate.inUse) {
+            ln = &candidate;
+            break;
         }
     }
+
+    if (!ln) {
+        regionLinePool_.emplace_back();
+        ln = &regionLinePool_.back();
+    }
+
+    if (!ln) {
+        return nullptr;
+    }
+
+    ln->inUse = true;
+    ln->color = {};
+    ln->px = 16.0f;
+    ln->widthPx = 0.0f;
+    ln->glyphCount = 0;
+    ln->run.Reset();
+
+    assert(glyphReserveHint <= GlyphRun::kDefaultCapacity);
+    (void)glyphReserveHint;
 
     return ln;
 }
 
 void TextManager::RecycleRegionLines() {
     for (Region& rg : regions_) {
-        for (RegionLine& ln : rg.lines) {
-            ln.run.glyphs.clear();
-            ln.run.xOffsets.clear();
-            ln.run.ready = false;
-            ln.widthPx = 0.0f;
-            ln.glyphCount = 0;
-            regionLinePool_.push_back(std::move(ln));
+        for (RegionLine* ln : rg.lines) {
+            if (!ln) { continue; }
+            ln->run.Reset();
+            ln->widthPx = 0.0f;
+            ln->glyphCount = 0;
+            ln->inUse = false;
         }
         rg.lines.clear();
         rg.maxLineWidth = 0.0f;
@@ -376,8 +382,7 @@ void TextManager::RecycleRegionLines() {
 
 // Общий хелпер построения глиф-рана + ширины (один проход)
 void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {
-    outRun.glyphs.clear();
-    outRun.xOffsets.clear();
+    outRun.Reset();
     outRun.scale = px / float(font_->PxSize());
     outRun.ready = false;
     outWidthPx = 0.0f;
@@ -387,8 +392,10 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
     const FontAtlas* font = font_;
     const float scale = outRun.scale;
 
-    outRun.glyphs.reserve(text.size());
-    outRun.xOffsets.reserve(text.size());
+    if (text.size() > GlyphRun::kDefaultCapacity) {
+        assert(text.size() <= GlyphRun::kDefaultCapacity);
+    }
+    outRun.Reserve(text.size());
 
     const FontGlyph* glyphSpace = font->Find((uint32_t)L' ');
     const FontGlyph* glyphTab   = font->Find((uint32_t)L'\t');
@@ -445,8 +452,12 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
             }
         }
 
-        outRun.xOffsets.push_back(penX);
-        outRun.glyphs.push_back(gph);
+        if (outRun.size() >= GlyphRun::kDefaultCapacity) {
+            assert(outRun.size() < GlyphRun::kDefaultCapacity);
+            break;
+        }
+
+        outRun.Append(gph, penX);
 
         penX += float(gph->xadv) * scale;
         prev = cp;
@@ -458,17 +469,17 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
 
 // Быстрый эмит с подготовленного глиф-рана
 void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run) {
-    if (!run.ready || run.glyphs.empty()) { return; }
+    if (!run.ready || run.empty()) { return; }
 
     const float scale = run.scale;
     const float penY = (float)y + float(font_->Ascent()) * scale;
 
-    const size_t n = run.glyphs.size();
+    const size_t n = run.size();
     if (n == 0) { return; }
 
     size_t drawable = 0;
     for (size_t i = 0; i < n; ++i) {
-        const FontGlyph* gph = run.glyphs[i];
+        const FontGlyph* gph = run.GlyphAt(i);
         if (gph && gph->w != 0 && gph->h != 0) { ++drawable; }
     }
     if (drawable == 0) { return; }
@@ -485,9 +496,9 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     size_t idxOffset = baseIdx;
 
     for (size_t i = 0; i < n; ++i) {
-        const FontGlyph* gph = run.glyphs[i];
+        const FontGlyph* gph = run.GlyphAt(i);
         if (!gph || gph->w == 0 || gph->h == 0) { continue; }
-        const float penX = (float)x + xOffset + run.xOffsets[i];
+        const float penX = (float)x + xOffset + run.XOffsetAt(i);
 
         const float gx = penX + float(gph->xoff) * scale;
         const float gy = penY + float(gph->yoff) * scale;
