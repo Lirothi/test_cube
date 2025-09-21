@@ -84,7 +84,7 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
 void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     if (!cbData) { return; }
-    CPU_SCOPE(L"RenderableObject::UpdateUniforms");
+    //CPU_SCOPE(L"RenderableObject::UpdateUniforms");
     UpdateUniform(kWorldID, GetModelMatrix(), cbData);
     UpdateUniform(kViewID, view, cbData);
     UpdateUniform(kProjID, proj, cbData);
@@ -112,7 +112,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
-    CPU_SCOPE(L"RenderableObject::Render");
+    //CPU_SCOPE(L"RenderableObject::Render");
 
     UINT cbSizeBytes = 0;
 

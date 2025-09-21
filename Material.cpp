@@ -977,7 +977,7 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
             if (FAILED(var->GetDesc(&vd))) { continue; }
 
             CBufferField f{};
-            f.name = vd.Name ? vd.Name : "";
+            std::string name = vd.Name ? vd.Name : "";
             f.offset = vd.StartOffset;
             f.size = vd.Size;
 
@@ -995,9 +995,9 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
             }
             f.elementCount = elements;
             f.elementStride = stride;
-            f.id = ComputeCBFieldID(f.name);
+            f.id = ComputeCBFieldID(name);
 
-            dst.fieldsByName[f.name] = f;
+            dst.fieldsByName[name] = f;
             dst.fieldsById[f.id] = f;
         }
     }

@@ -120,7 +120,6 @@ public:
     void CollectRetired(uint64_t frameIndex, uint64_t keepAliveFrames);
 
     struct CBufferField {
-        std::string name;
         UINT        offset = 0;         // байтовый сдвиг поля в cbuffer
         UINT        size = 0;           // общий размер поля (если массив — размер всего массива)
         UINT        elementStride = 0;  // шаг одного элемента массива в байтах (или size, если не массив)

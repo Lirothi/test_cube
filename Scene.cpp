@@ -388,6 +388,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
         {
+            CPU_SCOPE(L"RenderObjectBatch.Async");
             const size_t begin = jobIndex * chunkSize;
             const size_t end = std::min(begin + chunkSize, objects.size());
 
@@ -580,12 +581,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
         }
         const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
         }
     }, 1);
     TaskSystem::Get().Wait(cascades);
