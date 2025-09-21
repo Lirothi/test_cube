@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <cstring>
+#include <limits>
 
 #include "TaskSystem.h"
 
@@ -36,15 +37,11 @@ public:
     using CpuClock = std::chrono::steady_clock;
 
     struct ScopeNameKey {
-        const void* namePtr = nullptr;
-        uint64_t    nameId = 0;
-        bool        isWide = false;
+        const wchar_t* namePtr = nullptr;
+        uint64_t       nameId = 0;
 
-        static ScopeNameKey FromNarrow(const char* ptr, uint64_t id) {
-            return ScopeNameKey{ ptr, id, false };
-        }
         static ScopeNameKey FromWide(const wchar_t* ptr, uint64_t id) {
-            return ScopeNameKey{ ptr, id, true };
+            return ScopeNameKey{ ptr, id };
         }
     };
 
@@ -91,8 +88,7 @@ public:
             if (key.nameId != 0) {
                 return robin_hood::hash_bytes(&key.nameId, sizeof(key.nameId));
             }
-            const size_t ptrHash = robin_hood::hash_bytes(&key.namePtr, sizeof(key.namePtr));
-            return ptrHash ^ (key.isWide ? 0x9E3779B97F4A7C15ull : 0ull);
+            return robin_hood::hash_bytes(&key.namePtr, sizeof(key.namePtr));
         }
     };
 
@@ -101,17 +97,20 @@ public:
             if (a.nameId != 0 || b.nameId != 0) {
                 return a.nameId == b.nameId;
             }
-            return a.namePtr == b.namePtr && a.isWide == b.isWide;
+            return a.namePtr == b.namePtr;
         }
     };
 
     struct TraceEvent {
-        std::string  narrowName;
-        std::wstring wideName;
-        bool isWide = false;
-        uint64_t tsUs = 0;
-        uint64_t durUs = 0;
-        uint32_t threadIndex = 0;
+        uint32_t    nameIndex = std::numeric_limits<uint32_t>::max();
+        std::wstring inlineName;
+        uint64_t    tsUs = 0;
+        uint64_t    durUs = 0;
+        uint32_t    threadIndex = 0;
+    };
+
+    struct TraceNameEntry {
+        std::wstring displayName;
     };
 
     // --- данные оверлея (снэпшот) ---
@@ -142,12 +141,6 @@ public:
     // Скоповая отметка (CPU)
     class ScopedCpu {
     public:
-        ScopedCpu(const char* name, uint64_t nameId = 0) {
-#if PROF_ENABLED
-            key_ = ScopeNameKey::FromNarrow(name, nameId);
-            start_ = Clock::now();
-#endif
-        }
         ScopedCpu(const wchar_t* name, uint64_t nameId = 0) {
 #if PROF_ENABLED
             key_ = ScopeNameKey::FromWide(name, nameId);
@@ -180,7 +173,6 @@ public:
     // Скоповая отметка (GPU)
     class ScopedGpu {
     public:
-        ScopedGpu(ID3D12GraphicsCommandList* cl, const char* name, uint64_t nameId = 0);
         ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t nameId = 0);
         ~ScopedGpu();
     private:
@@ -254,7 +246,9 @@ private:
 #if PROF_ENABLED
     void ResetMax_Unsafe(); // вызывать под mtx_
     uint32_t GetThreadIndex_Locked(std::thread::id id);
-    void WriteTraceJson(const std::vector<TraceEvent>& events, const std::vector<std::string>& threadNames);
+    void WriteTraceJson(const std::vector<TraceEvent>& events,
+                        const std::vector<std::string>& threadNames,
+                        const std::vector<TraceNameEntry>& names);
 #endif
 
 private:
@@ -338,6 +332,8 @@ private:
     uint64_t traceStartUs_ = 0;
     bool traceStartSet_ = false;
     std::vector<TraceEvent> traceEvents_;
+    std::vector<TraceNameEntry> traceNames_;
+    robin_hood::unordered_flat_map<ScopeNameKey, uint32_t, ScopeNameKeyHash, ScopeNameKeyEqual> traceNameLookup_;
     std::atomic<uint32_t> traceFileCounter_{ 0 };
 
 #if PROF_GPU_ENABLED

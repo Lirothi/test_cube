@@ -164,7 +164,7 @@ void TextManager::AddTextf(RegionId id, float px, const float4& color, const wch
 // ======== СБОРКА / ОТРИСОВКА ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
-    CPU_SCOPE("TextManager::Build");
+    CPU_SCOPE(L"TextManager::Build");
 
     // 0) Предподсчёт глифов для единого reserve
     size_t totalGlyphs = 0;
@@ -247,7 +247,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 }
 
 void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
-    CPU_SCOPE("TextManager::Draw");
+    CPU_SCOPE(L"TextManager::Draw");
     // 1) фон
     if (!rectVerts_.empty() && !rectIdx_.empty() && matRect_) {
         auto h = r->GetRenderContextPool()->Acquire();
@@ -488,7 +488,7 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
 void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text) {
     if (font_ == nullptr) { return; }
-    CPU_SCOPE("TextManager::EmitTextImmediate");
+    CPU_SCOPE(L"TextManager::EmitTextImmediate");
     GlyphRun run;
     float width = 0.0f;
     BuildGlyphRun(text, px, run, width);

@@ -5,7 +5,6 @@
 #include <sstream>
 #include <cstdio>
 #include <ctime>
-#include <codecvt>
 #include <filesystem>
 #include "third_party/robin_hood.h"
 #include "TextManager.h"
@@ -44,29 +43,14 @@ std::string EscapeJson(const std::string& input) {
 struct TraceDumpData {
     std::vector<Profiler::TraceEvent> events;
     std::vector<std::string> threadNames;
+    std::vector<Profiler::TraceNameEntry> names;
 };
 
 std::wstring BuildWideName(const Profiler::ScopeNameKey& key) {
-    if (!key.namePtr) {
+    if (!key.namePtr || !*key.namePtr) {
         return L"unknown";
     }
-    if (key.isWide) {
-        const wchar_t* ws = static_cast<const wchar_t*>(key.namePtr);
-        return ws ? std::wstring(ws) : std::wstring(L"unknown");
-    }
-    const char* cs = static_cast<const char*>(key.namePtr);
-    if (!cs) {
-        return L"unknown";
-    }
-    std::wstring result;
-    while (*cs) {
-        result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*cs)));
-        ++cs;
-    }
-    if (result.empty()) {
-        result = L"unknown";
-    }
-    return result;
+    return std::wstring(key.namePtr);
 }
 
 std::string WideToUtf8(const std::wstring& input) {
@@ -111,12 +95,6 @@ Profiler& Profiler::Get() {
 }
 
 #if PROF_GPU_ENABLED
-Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id)
-    : cl_(cl)
-{
-    idx_ = Profiler::Get().BeginGpuSample(cl, ScopeNameKey::FromNarrow(name, id));
-}
-
 Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t id)
     : cl_(cl)
 {
@@ -145,6 +123,8 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceCapturing_ = true;
         traceFramesRemaining_ = traceRequestFrameCount_;
         traceEvents_.clear();
+        traceNames_.clear();
+        traceNameLookup_.clear();
         traceStartUs_ = 0;
         traceStartSet_ = false;
         traceStopRequested_ = false;
@@ -193,7 +173,8 @@ void Profiler::EndFrame() {
             const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
             const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
             TraceEvent fev;
-            fev.narrowName = "Frame " + std::to_string(frameNo_);
+            fev.inlineName = L"Frame ";
+            fev.inlineName += std::to_wstring(frameNo_);
             fev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
             fev.durUs = durUs;
             fev.threadIndex = threadIdx;
@@ -219,6 +200,8 @@ void Profiler::EndFrame() {
                 traceStartUs_ = 0;
                 traceStartSet_ = false;
                 traceDump.events = std::move(traceEvents_);
+                traceDump.names = std::move(traceNames_);
+                traceNameLookup_.clear();
                 traceDump.threadNames = threadIndexToName_;
                 haveTraceDump = true;
                 traceRequestFrameCount_ = 0;
@@ -458,41 +441,51 @@ void Profiler::EndFrame() {
 #endif
 
         if (haveTraceDump && !traceDump.events.empty()) {
-            WriteTraceJson(traceDump.events, traceDump.threadNames);
+            WriteTraceJson(traceDump.events, traceDump.threadNames, traceDump.names);
         }
     });
 }
 
 void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end) {
     if (!GetEnabled()) { return; }
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!frameOpen_) { return; }
     const uint64_t startUs = ToMicroseconds(start);
     const uint64_t endUs = ToMicroseconds(end);
     const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
-    const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
     const double ms = std::chrono::duration<double, std::milli>(end - start).count();
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (!frameOpen_) { return; }
     frameSamples_.push_back({ key, ms });
     if (traceCapturing_) {
         if (!traceStartSet_) {
             traceStartUs_ = startUs;
             traceStartSet_ = true;
         }
-        TraceEvent ev;
-        ev.isWide = key.isWide;
-        if (key.isWide) {
-            const wchar_t* ws = static_cast<const wchar_t*>(key.namePtr);
-            if (ws) {
-                ev.wideName.assign(ws);
-            }
-            else {
-                ev.wideName = L"unknown";
-            }
-            //ev.narrowName = WideToUtf8(ev.wideName);
+        const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
+        uint32_t nameIndex = std::numeric_limits<uint32_t>::max();
+        bool haveNameIndex = false;
+        std::wstring displayName;
+        auto nameIt = traceNameLookup_.find(key);
+        if (nameIt != traceNameLookup_.end()) {
+            nameIndex = nameIt->second;
+            haveNameIndex = true;
         }
         else {
-            const char* cs = static_cast<const char*>(key.namePtr);
-            ev.narrowName = cs ? std::string(cs) : std::string("unknown");
+            displayName = BuildWideName(key);
+            if (traceNames_.size() < static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                TraceNameEntry entry{};
+                entry.displayName = std::move(displayName);
+                nameIndex = static_cast<uint32_t>(traceNames_.size());
+                traceNames_.push_back(std::move(entry));
+                traceNameLookup_.emplace(key, nameIndex);
+                haveNameIndex = true;
+            }
+        }
+        TraceEvent ev;
+        if (haveNameIndex) {
+            ev.nameIndex = nameIndex;
+        }
+        else {
+            ev.inlineName = std::move(displayName);
         }
         ev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
         ev.durUs = durUs;
@@ -577,7 +570,7 @@ void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList* cl) {
         gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
         return;
     }
-    const size_t idx = BeginGpuSample(cl, ScopeNameKey::FromNarrow("GPU.Frame", 0));
+    const size_t idx = BeginGpuSample(cl, ScopeNameKey::FromWide(L"GPU.Frame", 0));
     gpuFrameSampleIdx_.store(idx, std::memory_order_relaxed);
 #else
     (void)cl;
@@ -643,7 +636,7 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
 
 void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     if (!tm || !GetEnabled()) { return; }
-    CPU_SCOPE("Profiler::EmitOverlay");
+    CPU_SCOPE(L"Profiler::EmitOverlay");
 
     // читаем актуальные read-буферы БЕЗ локов
     const int readIdx = overlayReadBuf_.load(std::memory_order_acquire);
@@ -825,7 +818,9 @@ uint32_t Profiler::GetThreadIndex_Locked(std::thread::id id) {
     return idx;
 }
 
-void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events, const std::vector<std::string>& threadNames) {
+void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events,
+                              const std::vector<std::string>& threadNames,
+                              const std::vector<TraceNameEntry>& names) {
     if (events.empty()) { return; }
     const uint32_t fileIdx = traceFileCounter_.fetch_add(1u, std::memory_order_relaxed);
     auto now = std::chrono::system_clock::now();
@@ -864,10 +859,12 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events, const std::
     }
 
     for (const auto& ev : events) {
-        std::string name = ev.narrowName;
-        if (name.empty() && !ev.wideName.empty()) {
-            name = WideToUtf8(ev.wideName);
+        std::wstring nameWide = ev.inlineName;
+        if (nameWide.empty() && ev.nameIndex < names.size()) {
+            nameWide = names[ev.nameIndex].displayName;
         }
+        if (nameWide.empty()) { nameWide = L"unknown"; }
+        std::string name = WideToUtf8(nameWide);
         if (name.empty()) { name = "unknown"; }
         std::ostringstream line;
         line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"

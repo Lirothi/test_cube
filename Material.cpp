@@ -368,7 +368,7 @@ void Material::RefreshWatchTimes_()
 
 bool Material::FSProbeAndFlagPending()
 {
-    CPU_SCOPE("Material::FSProbeAndFlagPending");
+    CPU_SCOPE(L"Material::FSProbeAndFlagPending");
     std::lock_guard<std::mutex> lk(watchMtx_);
     if (watchedFiles_.empty()) { return false; }
 

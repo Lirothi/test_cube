@@ -134,11 +134,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #endif
 
         {
-            CPU_SCOPE("Whole Cycle");
+            CPU_SCOPE(L"Whole Cycle");
             input_.NewFrame();
 
             {
-                CPU_SCOPE("Win Messages");
+                CPU_SCOPE(L"Win Messages");
                 while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                     TranslateMessage(&msg);
                     DispatchMessage(&msg);
