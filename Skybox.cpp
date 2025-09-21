@@ -39,6 +39,17 @@ void Skybox::Init(Renderer* renderer,
     }
 }
 
+void Skybox::OnMaterialHotReload(Renderer* renderer)
+{
+    RenderableObject::OnMaterialHotReload(renderer);
+    if (auto* material = GetGraphicsMaterial())
+    {
+        viewHandle_ = material->ComputeCBFieldHandle(0, "view");
+        projHandle_ = material->ComputeCBFieldHandle(0, "proj");
+        exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
+    }
+}
+
 void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     // CB0: ожидаем идентификаторы "view" и "proj" в cbuffer'е (см. skybox.hlsl)

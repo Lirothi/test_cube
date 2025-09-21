@@ -17,4 +17,5 @@ public:
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;
     virtual bool CastsShadow() const = 0;
+    virtual void OnMaterialHotReload(Renderer* renderer) {}
 };

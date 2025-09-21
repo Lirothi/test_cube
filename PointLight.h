@@ -31,6 +31,8 @@ public:
                      const Math::mat4& invView, const Math::mat4& invProj,
                      const Math::float3& camPos);
 
+    void OnMaterialHotReload();
+
 private:
     Math::mat4 BuildModel() const;
 

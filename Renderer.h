@@ -65,6 +65,7 @@ public:
     void EndFrame();                   // барьер RT->Present, Execute, Present, сигнал фэнса
 
     void Tick(float dt);
+    bool ConsumeMaterialHotReloadFlag();
 
     void CreateDeferredTargets(UINT width, UINT height);
     void DestroyDeferredTargets();
@@ -249,6 +250,7 @@ private:
     bool     shaderHotReloadEnabled_ = true;
     float    shaderWatchIntervalSec_ = 1.0f; // раз в секунду
     float    shaderWatchAccumSec_ = 0.0f;
+    bool     materialsHotReloaded_ = false;
 
     // D3D12 core
     ComPtr<ID3D12Device>              device_;

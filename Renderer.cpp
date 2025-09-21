@@ -432,8 +432,17 @@ void Renderer::Tick(float dt)
         }
 
         // 2) применим pending-пересборки (если скан что-то нашёл и флаг выставлен)
-        materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/kFrameCount + 1);
+        if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/kFrameCount + 1)) {
+            materialsHotReloaded_ = true;
+        }
     }
+}
+
+bool Renderer::ConsumeMaterialHotReloadFlag()
+{
+    bool wasReloaded = materialsHotReloaded_;
+    materialsHotReloaded_ = false;
+    return wasReloaded;
 }
 
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)

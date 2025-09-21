@@ -29,6 +29,7 @@ public:
     // Базовый отрисовщик: Compute -> Graphics (Bind/IssueDraw)
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
+    virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Трансформ
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }

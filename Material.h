@@ -245,7 +245,7 @@ public:
     }
 
     bool RequestFSProbeAsync();
-    void ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
+    bool ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
     bool IsProbeInFlight() const { return fsProbeInFlight_.load(std::memory_order_acquire); }
 
     void Clear() { materials_.clear(); }

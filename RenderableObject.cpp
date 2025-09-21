@@ -161,6 +161,11 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     shadowMaterial_->Bind(cl, ctx, false);
 }
 
+void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
+{
+    RebuildHandleCaches();
+}
+
 void RenderableObject::RebuildHandleCaches()
 {
     cb0Handles_ = {};
