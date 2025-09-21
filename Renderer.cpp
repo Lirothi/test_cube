@@ -186,6 +186,8 @@ void Renderer::InitD3D12(HWND window) {
         frameResources_[i]->InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
     }
 
+    RefreshCurrentFrameCaches();
+
     samplerManager_.Init(device_.Get(), 512);
 
     InitFence();
@@ -333,22 +335,47 @@ void Renderer::SignalFrame(UINT frameIndex) {
     frameFenceValues_[frameIndex] = v;
 }
 
+void Renderer::RefreshCurrentFrameCaches() {
+    currentFrameResource_ = nullptr;
+    currentFrameDescriptorHeapCount_ = 0;
+    currentFrameDescriptorHeaps_.fill(nullptr);
+
+    if (currentFrameIndex_ >= kFrameCount) {
+        return;
+    }
+
+    FrameResource* fr = frameResources_[currentFrameIndex_].get();
+    currentFrameResource_ = fr;
+    if (!fr) {
+        return;
+    }
+
+    if (auto* heap = fr->GetDescAlloc().GetShaderVisibleHeap()) {
+        currentFrameDescriptorHeaps_[currentFrameDescriptorHeapCount_++] = heap;
+    }
+    if (auto* heap = fr->GetSamplerAlloc().GetShaderVisibleHeap()) {
+        currentFrameDescriptorHeaps_[currentFrameDescriptorHeapCount_++] = heap;
+    }
+}
+
 void Renderer::BeginFrame() {
-	CPU_SCOPE("Renderer::BeginFrame");
+    CPU_SCOPE("Renderer::BeginFrame");
     // Ждём GPU по своему backbuffer'у
     WaitForFrame(currentFrameIndex_);
+
+    RefreshCurrentFrameCaches();
+    FrameResource* fr = currentFrameResource_;
 
     ++totalFrameNumber_;
 
     // Сброс кадровых пулов
-    auto& fr = frameResources_[currentFrameIndex_];
-    fr->ResetCommandAllocators(device_.Get());
-    fr->ResetCommandListsUsage();
-
-    frameResources_[currentFrameIndex_]->GetDescAlloc().ResetPerFrame();
-    frameResources_[currentFrameIndex_]->GetSamplerAlloc().ResetPerFrame();
-    frameResources_[currentFrameIndex_]->ResetCommandListsUsage();
-    frameResources_[currentFrameIndex_]->ResetUpload();
+    if (fr) {
+        fr->ResetCommandAllocators(device_.Get());
+        fr->ResetCommandListsUsage();
+        fr->GetDescAlloc().ResetPerFrame();
+        fr->GetSamplerAlloc().ResetPerFrame();
+        fr->ResetUpload();
+    }
 
     ctxPool_.ResetForFrame();
 }
@@ -414,32 +441,31 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     CPU_SCOPE("Renderer::BeginThreadCommandList");
     ID3D12GraphicsCommandList* cl = 0;
     ID3D12CommandAllocator* alloc = 0;
-    {
-        auto& fr = frameResources_[currentFrameIndex_];
-        {
-            //CPU_SCOPE("Renderer::BeginThreadCommandList.1");
-            alloc = fr->AcquireCommandAllocator(device_.Get(), type);
-        }
-        {
-            CPU_SCOPE("Renderer::BeginThreadCommandList.2");
-            cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
-        }
+    FrameResource* fr = currentFrameResource_;
+    if (!fr) {
+        fr = frameResources_[currentFrameIndex_].get();
+    }
+    if (!fr) {
+        return {};
     }
 
-    ID3D12DescriptorHeap* heaps[] = {
-        frameResources_[currentFrameIndex_]->GetDescAlloc().GetShaderVisibleHeap(),
-        frameResources_[currentFrameIndex_]->GetSamplerAlloc().GetShaderVisibleHeap()
-    };
-    cl->SetDescriptorHeaps(_countof(heaps), heaps);
+    //CPU_SCOPE("Renderer::BeginThreadCommandList.1");
+    alloc = fr->AcquireCommandAllocator(device_.Get(), type);
+    {
+        CPU_SCOPE("Renderer::BeginThreadCommandList.2");
+        cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
+    }
+
+    if ((type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE) &&
+        currentFrameDescriptorHeapCount_ > 0)
+    {
+        cl->SetDescriptorHeaps(currentFrameDescriptorHeapCount_, currentFrameDescriptorHeaps_.data());
+    }
 
     // регистрируем CL в lock-free трекере состояний
     //RegisterCurrentThreadCL(cl);
 
-    ThreadCL t{};
-    t.alloc = alloc;
-    t.cl = cl;
-    t.type = type;
-    return t;
+    return ThreadCL{ alloc, cl, type };
 }
 
 Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initialPSO)
@@ -677,6 +703,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     //ThrowIfFailed(swapChain_->Present(1, 0));
     SignalFrame(currentFrameIndex_);
     currentFrameIndex_ = swapChain_->GetCurrentBackBufferIndex();
+    RefreshCurrentFrameCaches();
 }
 
 void Renderer::WaitForPreviousFrame() {
