@@ -25,6 +25,7 @@ public:
     int LineAdvance() const { return lineAdvance_; }
     int PxSize() const { return pxSize_; }
     int Spread() const { return spread_; }
+    bool HasKerning() const { return kerning_.size() > 0; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return tex_.GetSRVCPU(); }
 

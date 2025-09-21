@@ -405,6 +405,7 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
 
     float penX = 0.0f;
     uint32_t prev = 0;
+    bool hasKerning = font->HasKerning();
 
     std::array<const FontGlyph*, 128> asciiGlyphs{};
     std::array<uint8_t, 128> asciiGlyphReady{};
@@ -444,7 +445,7 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
             continue;
         }
 
-        if (prev) {
+        if (hasKerning && prev) {
             const int kern = font->Kerning(prev, cp);
             if (kern) {
                 penX += float(kern) * scale;
