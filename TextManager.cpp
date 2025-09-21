@@ -193,8 +193,8 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         totalGlyphs += rg.glyphCount;
     }
     if (totalGlyphs) {
-        verts_.reserve(verts_.size() + totalGlyphs * 4);
-        idx_.reserve(idx_.size() + totalGlyphs * 6);
+        verts_.ensureAdditional(totalGlyphs * 4);
+        idx_.ensureAdditional(totalGlyphs * 6);
     }
 
     // 1) Резерв под потенциальные фоновые прямоугольники
@@ -473,17 +473,16 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     }
     if (drawable == 0) { return; }
 
-    verts_.reserve(verts_.size() + drawable * 4);
-    idx_.reserve(idx_.size() + drawable * 6);
+    const size_t vertsToAppend = drawable * 4;
+    const size_t idxToAppend = drawable * 6;
 
-    const size_t baseVert = verts_.size();
-    const size_t baseIdx = idx_.size();
-    verts_.resize(baseVert + drawable * 4);
-    idx_.resize(baseIdx + drawable * 6);
+    const size_t baseVert = verts_.appendUninitialized(vertsToAppend);
+    const size_t baseIdx = idx_.appendUninitialized(idxToAppend);
 
-    Vertex* vPtr = verts_.data() + baseVert;
-    uint32_t* iPtr = idx_.data() + baseIdx;
-    size_t emitted = 0;
+    Vertex* const vData = verts_.data();
+    uint32_t* const iData = idx_.data();
+    size_t vertOffset = baseVert;
+    size_t idxOffset = baseIdx;
 
     for (size_t i = 0; i < n; ++i) {
         const FontGlyph* gph = run.glyphs[i];
@@ -495,18 +494,19 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         const float gw = float(gph->w) * scale;
         const float gh = float(gph->h) * scale;
 
-        Vertex* curV = vPtr + emitted * 4;
+        const size_t glyphVertBase = vertOffset;
+        Vertex* curV = vData + glyphVertBase;
         curV[0] = { {gx,      gy,      0}, color, {gph->u0, gph->v0} };
         curV[1] = { {gx + gw, gy,      0}, color, {gph->u1, gph->v0} };
         curV[2] = { {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} };
         curV[3] = { {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} };
+        vertOffset += 4;
 
-        const uint32_t base = (uint32_t)(baseVert + emitted * 4);
-        uint32_t* curI = iPtr + emitted * 6;
+        const uint32_t base = static_cast<uint32_t>(glyphVertBase);
+        uint32_t* curI = iData + idxOffset;
         curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
         curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
-
-        ++emitted;
+        idxOffset += 6;
     }
 }
 
