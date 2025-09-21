@@ -79,6 +79,9 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
     verts_.clear();   idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     RecycleRegionLines();
+    for (Region& rg : regions_) {
+        regionPool_.push_back(std::move(rg));
+    }
     regions_.clear();
 }
 
@@ -100,7 +103,24 @@ void TextManager::AddTextf(int x, int y, const float4& color, float px, const wc
 
 // регионы
 TextManager::RegionId TextManager::CreateRegion(int x, int y, Align align) {
-    Region r; r.x = x; r.y = y; r.align = align;
+    Region r;
+    if (!regionPool_.empty()) {
+        r = std::move(regionPool_.back());
+        regionPool_.pop_back();
+    }
+    r.x = x;
+    r.y = y;
+    r.align = align;
+    r.padX = 8;
+    r.padY = 6;
+    r.bg.reset();
+    r.fixedWidthPx.reset();
+    r.autoMeasure = true;
+    r.lines.clear();
+    r.maxLineWidth = 0.0f;
+    r.totalLines = 0;
+    r.lineStepPx = 18;
+    r.glyphCount = 0;
     regions_.push_back(std::move(r));
     return (RegionId)(regions_.size() - 1);
 }
@@ -298,6 +318,11 @@ void TextManager::Clear() {
     verts_.clear(); idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     RecycleRegionLines();
+    for (Region& rg : regions_) {
+        regionPool_.push_back(std::move(rg));
+    }
+    regions_.clear();
+    regionPool_.clear();
 }
 
 TextManager::RegionLine TextManager::AcquireRegionLine(size_t glyphReserveHint) {
