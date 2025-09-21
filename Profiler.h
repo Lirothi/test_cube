@@ -19,7 +19,7 @@
 #endif
 
 #ifndef PROF_GPU_ENABLED
-#define PROF_GPU_ENABLED 0
+#define PROF_GPU_ENABLED 1
 #endif
 
 #if PROF_GPU_ENABLED
@@ -112,6 +112,16 @@ public:
         uint64_t tsUs = 0;
         uint64_t durUs = 0;
         uint32_t threadIndex = 0;
+    };
+
+    // --- данные оверлея (снэпшот) ---
+    struct OverlayRow {
+        uint32_t entryId = 0;
+        double   avgMs = 0.0;
+        double   maxMs = 0.0;
+        uint32_t usages = 0;
+        const std::wstring* namePtr = nullptr;
+        std::wstring formatted; // заранее отформатированная строка
     };
 
 public:
@@ -246,16 +256,6 @@ private:
     uint32_t GetThreadIndex_Locked(std::thread::id id);
     void WriteTraceJson(const std::vector<TraceEvent>& events, const std::vector<std::string>& threadNames);
 #endif
-
-    // --- данные оверлея (снэпшот) ---
-    struct OverlayRow {
-        uint32_t entryId = 0;
-        double   avgMs = 0.0;
-        double   maxMs = 0.0;
-        uint32_t usages = 0;
-        const std::wstring* namePtr = nullptr;
-        std::wstring formatted; // заранее отформатированная строка
-    };
 
 private:
 #if PROF_ENABLED

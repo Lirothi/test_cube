@@ -71,8 +71,16 @@ std::wstring BuildWideName(const Profiler::ScopeNameKey& key) {
 
 std::string WideToUtf8(const std::wstring& input) {
     if (input.empty()) { return std::string(); }
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-    return conv.to_bytes(input);
+    int bytes = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.c_str(), static_cast<int>(input.size()), nullptr, 0, nullptr, nullptr );
+    if (bytes <= 0) {
+        return std::string();
+    }
+    std::string out(static_cast<size_t>(bytes), '\0');
+    int written = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.c_str(), static_cast<int>(input.size()), out.data(), bytes, nullptr, nullptr);
+    if (written != bytes) {
+        return std::string();
+    }
+    return out;
 }
 
 void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
@@ -185,7 +193,7 @@ void Profiler::EndFrame() {
             const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
             const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
             TraceEvent fev;
-            fev.name = "Frame " + std::to_string(frameNo_);
+            fev.narrowName = "Frame " + std::to_string(frameNo_);
             fev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
             fev.durUs = durUs;
             fev.threadIndex = threadIdx;
@@ -480,7 +488,7 @@ void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, C
             else {
                 ev.wideName = L"unknown";
             }
-            ev.narrowName = WideToUtf8(ev.wideName);
+            //ev.narrowName = WideToUtf8(ev.wideName);
         }
         else {
             const char* cs = static_cast<const char*>(key.namePtr);

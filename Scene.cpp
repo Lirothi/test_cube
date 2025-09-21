@@ -460,7 +460,6 @@ void Scene::RenderShadowBatch(Renderer* renderer,
 
                   for (size_t i = begin; i < end; ++i) {
                       if (auto* obj = objects[i]) {
-                          CPU_SCOPE("RenderShadowBatch.Async.For");
                           obj->RenderShadow(renderer, t.cl, lightView, lightProj);
                       }
                   }

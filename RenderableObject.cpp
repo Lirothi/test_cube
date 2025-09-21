@@ -183,7 +183,7 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj)
 {
-    CPU_SCOPE("RenderableObject::RenderShadow");
+    //CPU_SCOPE("RenderableObject::RenderShadow");
     if (!CastsShadow())
     {
         return;
