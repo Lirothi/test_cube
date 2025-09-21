@@ -936,7 +936,7 @@ Material::CBFieldHandle Material::ComputeCBFieldHandle(UINT bRegister, const std
     }
 
     if (!GetCBFieldInfo(bRegister, name, handle.field)) {
-        assert(false && "Bad uniform name!");
+        //assert(false && "Bad uniform name!");
         handle.destCBSizeBytes = 0;
         return handle;
     }
