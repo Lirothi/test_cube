@@ -158,7 +158,7 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     ln->color = color;
     ln->px = px;
     BuildGlyphRun(text, ln->px, ln->run, ln->widthPx);
-    const size_t glyphReserve = (ln->run.ready ? ln->run.size() : charCount);
+    const size_t glyphReserve = (ln->run.ready ? ln->run.glyphCount : charCount);
     ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
 
     if (rg.autoMeasure || (rg.align != Align::Left)) {
@@ -395,7 +395,6 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
     if (text.size() > GlyphRun::kDefaultCapacity) {
         assert(text.size() <= GlyphRun::kDefaultCapacity);
     }
-    outRun.Reserve(text.size());
 
     const FontGlyph* glyphSpace = font->Find((uint32_t)L' ');
     const FontGlyph* glyphTab   = font->Find((uint32_t)L'\t');
@@ -452,8 +451,8 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
             }
         }
 
-        if (outRun.size() >= GlyphRun::kDefaultCapacity) {
-            assert(outRun.size() < GlyphRun::kDefaultCapacity);
+        if (outRun.glyphCount >= GlyphRun::kDefaultCapacity) {
+            assert(outRun.glyphCount < GlyphRun::kDefaultCapacity);
             break;
         }
 
@@ -469,12 +468,12 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
 
 // Быстрый эмит с подготовленного глиф-рана
 void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run) {
-    if (!run.ready || run.empty()) { return; }
+    if (!run.ready || run.glyphCount == 0) { return; }
 
     const float scale = run.scale;
     const float penY = (float)y + float(font_->Ascent()) * scale;
 
-    const size_t n = run.size();
+    const size_t n = run.glyphCount;
     if (n == 0) { return; }
 
     size_t drawable = 0;

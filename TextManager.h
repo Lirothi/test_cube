@@ -73,13 +73,6 @@ private:
             ready = false;
         }
 
-        void Reserve(size_t desired) {
-            if (desired > kDefaultCapacity) {
-                assert(desired <= kDefaultCapacity);
-            }
-            (void)desired;
-        }
-
         void Append(const struct FontGlyph* glyph, float xOffset) {
             if (glyphCount >= kDefaultCapacity) {
                 assert(glyphCount < kDefaultCapacity);
@@ -90,14 +83,11 @@ private:
             ++glyphCount;
         }
 
-        [[nodiscard]] size_t size() const noexcept { return glyphCount; }
-        [[nodiscard]] bool empty() const noexcept { return glyphCount == 0; }
-        [[nodiscard]] size_t capacity() const noexcept { return kDefaultCapacity; }
-        [[nodiscard]] const struct FontGlyph* GlyphAt(size_t index) const noexcept {
+        const struct FontGlyph* GlyphAt(size_t index) const noexcept {
             assert(index < glyphCount);
             return glyphs[index];
         }
-        [[nodiscard]] float XOffsetAt(size_t index) const noexcept {
+        float XOffsetAt(size_t index) const noexcept {
             assert(index < glyphCount);
             return xOffsets[index];
         }
