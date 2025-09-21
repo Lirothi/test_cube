@@ -318,7 +318,7 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
 }
 
 void Renderer::WaitForFrame(UINT frameIndex) {
-    CPU_SCOPE("Renderer::WaitForFrame");
+    CPU_SCOPE(L"Renderer::WaitForFrame");
     const UINT64 value = frameFenceValues_[frameIndex];
     if (value == 0) {
         return; // ещё не сигналили этот кадр — ждать нечего
@@ -359,7 +359,7 @@ void Renderer::RefreshCurrentFrameCaches() {
 }
 
 void Renderer::BeginFrame() {
-    CPU_SCOPE("Renderer::BeginFrame");
+    CPU_SCOPE(L"Renderer::BeginFrame");
     // Ждём GPU по своему backbuffer'у
     WaitForFrame(currentFrameIndex_);
 
@@ -438,7 +438,7 @@ void Renderer::Tick(float dt)
 
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
 {
-    CPU_SCOPE("Renderer::BeginThreadCommandList");
+    CPU_SCOPE(L"Renderer::BeginThreadCommandList");
     ID3D12GraphicsCommandList* cl = 0;
     ID3D12CommandAllocator* alloc = 0;
     FrameResource* fr = currentFrameResource_;
@@ -449,7 +449,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
         return {};
     }
 
-    //CPU_SCOPE("Renderer::BeginThreadCommandList.1");
+    //CPU_SCOPE(L"Renderer::BeginThreadCommandList.1");
     alloc = fr->AcquireCommandAllocator(device_.Get(), type);
     cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
 
@@ -471,7 +471,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
 }
 
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
-    CPU_SCOPE("Renderer::EndThreadCommandList");
+    CPU_SCOPE(L"Renderer::EndThreadCommandList");
     if (!t.cl) { return; }
     ThrowIfFailed(t.cl->Close());
 
@@ -513,7 +513,7 @@ void Renderer::RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchInd
 
 void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 {
-    CPU_SCOPE("Renderer::EndThreadCommandBundle");
+    CPU_SCOPE(L"Renderer::EndThreadCommandBundle");
     if (b.cl != nullptr) {
         ThrowIfFailed(b.cl->Close());
         std::lock_guard<std::mutex> lk(submitMtx_);
@@ -526,7 +526,7 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 }
 
 void Renderer::ExecuteTimelineAndPresent() {
-    CPU_SCOPE("Renderer::ExecuteTimelineAndPresent");
+    CPU_SCOPE(L"Renderer::ExecuteTimelineAndPresent");
 
     submitListsScratch_.clear();
 
@@ -762,7 +762,7 @@ D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
     if (!cl || !res) { return; }
-    CPU_SCOPE("Renderer::Transition");
+    CPU_SCOPE(L"Renderer::Transition");
     ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
 
     // быстрый путь — активный CL лежит в TLS

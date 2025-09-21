@@ -84,7 +84,7 @@ void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* 
 void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     if (!cbData) { return; }
-    CPU_SCOPE("RenderableObject::UpdateUniforms");
+    CPU_SCOPE(L"RenderableObject::UpdateUniforms");
     UpdateUniform(kWorldID, GetModelMatrix(), cbData);
     UpdateUniform(kViewID, view, cbData);
     UpdateUniform(kProjID, proj, cbData);
@@ -112,7 +112,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
-    CPU_SCOPE("RenderableObject::Render");
+    CPU_SCOPE(L"RenderableObject::Render");
 
     UINT cbSizeBytes = 0;
 
@@ -163,11 +163,11 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData)
 {
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
-    //CPU_SCOPE("RenderableObject::RecordShadow");
+    //CPU_SCOPE(L"RenderableObject::RecordShadow");
 
     //TaskSystem::Get().Submit([this, &lightProj, &lightView, cbData]()
     {
-        //CPU_SCOPE("RenderableObject::RecordShadow.Unis");
+        //CPU_SCOPE(L"RenderableObject::RecordShadow.Unis");
         shadowMaterial_->UpdateCB0Field(kWorldID, GetModelMatrix(), cbData);
         shadowMaterial_->UpdateCB0Field(kViewID, lightView, cbData);
         shadowMaterial_->UpdateCB0Field(kProjID, lightProj, cbData);
@@ -180,7 +180,7 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj)
 {
-    //CPU_SCOPE("RenderableObject::RenderShadow");
+    //CPU_SCOPE(L"RenderableObject::RenderShadow");
     if (!CastsShadow())
     {
         return;
