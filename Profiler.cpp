@@ -5,6 +5,8 @@
 #include <sstream>
 #include <cstdio>
 #include <ctime>
+#include <codecvt>
+#include <filesystem>
 #include "third_party/robin_hood.h"
 #include "TextManager.h"
 
@@ -44,6 +46,52 @@ struct TraceDumpData {
     std::vector<std::string> threadNames;
 };
 
+std::wstring BuildWideName(const Profiler::ScopeNameKey& key) {
+    if (!key.namePtr) {
+        return L"unknown";
+    }
+    if (key.isWide) {
+        const wchar_t* ws = static_cast<const wchar_t*>(key.namePtr);
+        return ws ? std::wstring(ws) : std::wstring(L"unknown");
+    }
+    const char* cs = static_cast<const char*>(key.namePtr);
+    if (!cs) {
+        return L"unknown";
+    }
+    std::wstring result;
+    while (*cs) {
+        result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*cs)));
+        ++cs;
+    }
+    if (result.empty()) {
+        result = L"unknown";
+    }
+    return result;
+}
+
+std::string WideToUtf8(const std::wstring& input) {
+    if (input.empty()) { return std::string(); }
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
+    return conv.to_bytes(input);
+}
+
+void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
+    if (!name) {
+        static const std::wstring kUnknown = L"unknown";
+        row.namePtr = &kUnknown;
+    }
+    else {
+        row.namePtr = name;
+    }
+    const std::wstring& n = *row.namePtr;
+    const double perUse = (row.usages ? (row.avgMs / static_cast<double>(row.usages)) : 0.0);
+    wchar_t buf[192];
+    std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
+        L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
+        n.c_str(), row.avgMs, row.maxMs, perUse, row.usages);
+    row.formatted.assign(buf);
+}
+
 } // namespace
 
 
@@ -58,7 +106,13 @@ Profiler& Profiler::Get() {
 Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id)
     : cl_(cl)
 {
-    idx_ = Profiler::Get().BeginGpuSample(cl, name, id);
+    idx_ = Profiler::Get().BeginGpuSample(cl, ScopeNameKey::FromNarrow(name, id));
+}
+
+Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t id)
+    : cl_(cl)
+{
+    idx_ = Profiler::Get().BeginGpuSample(cl, ScopeNameKey::FromWide(name, id));
 }
 
 Profiler::ScopedGpu::~ScopedGpu() {
@@ -183,61 +237,84 @@ void Profiler::EndFrame() {
 #endif
         const auto t0 = CoolClock::now();
 
-        // A) свёртка сэмплов в stats_ (под мьютексом) + EMA/lastCount
-        for (const auto& s : samples) {
-            auto& st = stats_[s.name ? s.name : "unknown"];
-            st.Accumulate(s.ms);
-        }
-        for (auto& kv : stats_) {
-            kv.second.CommitFrame(emaAlpha_);
-        }
+        // A) свёртка сэмплов в stats_ (без локов) + EMA/lastCount
+        auto accumulateSamples = [&](const std::vector<ScopeSample>& src,
+                                     auto& statsMap,
+                                     uint32_t& nextOverlayId) {
+            for (const auto& s : src) {
+                auto [it, inserted] = statsMap.try_emplace(s.key);
+                auto& entry = it->second;
+                if (inserted) {
+                    entry.wideName = BuildWideName(it->first);
+                    entry.overlayId = nextOverlayId++;
+                    if (entry.overlayId == 0) { entry.overlayId = nextOverlayId++; }
+                }
+                entry.stats.Accumulate(s.ms);
+            }
+            for (auto& kv : statsMap) {
+                kv.second.stats.CommitFrame(emaAlpha_);
+            }
+        };
+
+        accumulateSamples(samples, stats_, nextOverlayId_);
         samples.clear();
 
 #if PROF_GPU_ENABLED
-        for (const auto& s : gpuSamples) {
-            auto& st = gpuStats_[s.name ? s.name : "unknown"];
-            st.Accumulate(s.ms);
-        }
-        for (auto& kv : gpuStats_) {
-            kv.second.CommitFrame(emaAlpha_);
-        }
+        accumulateSamples(gpuSamples, gpuStats_, nextGpuOverlayId_);
         gpuSamples.clear();
 #endif
-        // B) формируем текущий набор строк (без лока)
-        robin_hood::unordered_flat_map<std::wstring, OverlayRow> current;
-        current.reserve(stats_.size() * 2u);
-        for (const auto& kv : stats_) {
-            OverlayRow row;
-            row.name.assign(kv.first.begin(), kv.first.end());
-            row.avgMs = kv.second.avgMs;
-            row.maxMs = kv.second.maxMs;
-            row.usages = kv.second.lastCount;
-            const double perUse = (row.usages ? (row.avgMs / (double)row.usages) : 0.0);
-            wchar_t buf[128];
-            std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
-                row.name.c_str(), row.avgMs, row.maxMs, perUse, row.usages);
-            row.formatted = buf;
-            current.emplace(row.name, std::move(row));
-        }
 
+        // B) формируем текущий набор строк, переиспользуя выделенные буферы
+        auto buildOverlayScratch = [&](auto& statsMap,
+                                       std::vector<OverlayRow>& scratchRows,
+                                       robin_hood::unordered_flat_map<uint32_t, size_t>& lookup,
+                                       std::vector<uint8_t>& usedFlags,
+                                       std::vector<const StatsEntry*>& entryPtrs,
+                                       std::vector<size_t>& orderBuffer) {
+            entryPtrs.clear();
+            entryPtrs.reserve(statsMap.size());
+            for (auto& kv : statsMap) {
+                if (kv.second.overlayId == 0) { continue; }
+                entryPtrs.push_back(&kv.second);
+            }
+            const size_t count = entryPtrs.size();
+            scratchRows.resize(count);
+            lookup.clear();
+            lookup.reserve(count);
+            usedFlags.assign(count, 0u);
+            orderBuffer.resize(count);
+            if (count == 0) {
+                return;
+            }
+            auto fillRow = [&](size_t idx) {
+                const StatsEntry* entry = entryPtrs[idx];
+                OverlayRow row;
+                row.entryId = entry->overlayId;
+                row.avgMs = entry->stats.avgMs;
+                row.maxMs = entry->stats.maxMs;
+                row.usages = entry->stats.lastCount;
+                FormatOverlayRow(row, &entry->wideName);
+                scratchRows[idx] = std::move(row);
+            };
+            constexpr size_t kParallelThreshold = 512;
+            const size_t jobCount = count;
+            if (jobCount >= kParallelThreshold) {
+                TaskSystem::ParallelFor(jobCount, [&](size_t idx) { fillRow(idx); }, 64);
+            }
+            else {
+                for (size_t idx = 0; idx < jobCount; ++idx) {
+                    fillRow(idx);
+                }
+            }
+            for (size_t idx = 0; idx < jobCount; ++idx) {
+                lookup.emplace(scratchRows[idx].entryId, idx);
+                orderBuffer[idx] = idx;
+            }
+        };
+
+        buildOverlayScratch(stats_, overlayScratchRows_, overlayScratchLookup_, overlayScratchUsed_, overlayEntryPtrs_, overlayScratchOrder_);
 #if PROF_GPU_ENABLED
-        robin_hood::unordered_flat_map<std::wstring, OverlayRow> gpuCurrent;
-        gpuCurrent.reserve(gpuStats_.size());
-        for (const auto& kv : gpuStats_) {
-            OverlayRow row;
-            row.name.assign(kv.first.begin(), kv.first.end());
-            row.avgMs = kv.second.avgMs;
-            row.maxMs = kv.second.maxMs;
-            row.usages = kv.second.lastCount;
-            const double perUse = (row.usages ? (row.avgMs / (double)row.usages) : 0.0);
-            wchar_t buf[128];
-            std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
-                row.name.c_str(), row.avgMs, row.maxMs, perUse, row.usages);
-            row.formatted = buf;
-            gpuCurrent.emplace(row.name, std::move(row));
-        }
+        buildOverlayScratch(gpuStats_, gpuOverlayScratchRows_, gpuOverlayScratchLookup_, gpuOverlayScratchUsed_, gpuOverlayEntryPtrs_, gpuOverlayScratchOrder_);
 #endif
 
         // C) редкая сортировка или стабильное обновление порядка
@@ -250,7 +327,7 @@ void Profiler::EndFrame() {
         auto& readRows = overlayRows_[readIdx];
         auto& writeRows = overlayRows_[writeIdx];
         writeRows.clear();
-        writeRows.reserve(current.size() + 1u); // +1 под строку EndFrame.Async
+        writeRows.reserve(overlayScratchRows_.size() + 1u);
 
 #if PROF_GPU_ENABLED
         const int gpuReadIdx = gpuOverlayReadBuf_.load(std::memory_order_acquire);
@@ -258,60 +335,78 @@ void Profiler::EndFrame() {
         auto& gpuReadRows = gpuOverlayRows_[gpuReadIdx];
         auto& gpuWriteRows = gpuOverlayRows_[gpuWriteIdx];
         gpuWriteRows.clear();
-        gpuWriteRows.reserve(gpuCurrent.size());
+        gpuWriteRows.reserve(gpuOverlayScratchRows_.size());
 #endif
 
         if (needResort) {
-            std::vector<OverlayRow> tmp; tmp.reserve(current.size());
-            for (auto& kv : current) {
-                tmp.push_back(std::move(kv.second));
+            auto& order = overlayScratchOrder_;
+            auto cmpIdx = [&](size_t a, size_t b) {
+                const auto& ra = overlayScratchRows_[a];
+                const auto& rb = overlayScratchRows_[b];
+                if (ra.avgMs == rb.avgMs) {
+                    const std::wstring& na = *ra.namePtr;
+                    const std::wstring& nb = *rb.namePtr;
+                    if (na == nb) { return ra.entryId < rb.entryId; }
+                    return na < nb;
+                }
+                return ra.avgMs > rb.avgMs;
+            };
+            std::sort(order.begin(), order.end(), cmpIdx);
+            for (size_t idx : order) {
+                writeRows.push_back(std::move(overlayScratchRows_[idx]));
             }
-            std::sort(tmp.begin(), tmp.end(), [](const OverlayRow& a, const OverlayRow& b) {
-                if (a.avgMs == b.avgMs) { return a.name < b.name; }
-                return a.avgMs > b.avgMs;
-            });
-            writeRows = std::move(tmp);
 
 #if PROF_GPU_ENABLED
-            std::vector<OverlayRow> gtmp; gtmp.reserve(gpuCurrent.size());
-            for (auto& kv : gpuCurrent) { gtmp.push_back(std::move(kv.second)); }
-            std::sort(gtmp.begin(), gtmp.end(), [](const OverlayRow& a, const OverlayRow& b) {
-                if (a.avgMs == b.avgMs) { return a.name < b.name; }
-                return a.avgMs > b.avgMs;
-            });
-            gpuWriteRows = std::move(gtmp);
+            auto& gorder = gpuOverlayScratchOrder_;
+            auto gcmpIdx = [&](size_t a, size_t b) {
+                const auto& ra = gpuOverlayScratchRows_[a];
+                const auto& rb = gpuOverlayScratchRows_[b];
+                if (ra.avgMs == rb.avgMs) {
+                    const std::wstring& na = *ra.namePtr;
+                    const std::wstring& nb = *rb.namePtr;
+                    if (na == nb) { return ra.entryId < rb.entryId; }
+                    return na < nb;
+                }
+                return ra.avgMs > rb.avgMs;
+            };
+            std::sort(gorder.begin(), gorder.end(), gcmpIdx);
+            for (size_t idx : gorder) {
+                gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
+            }
 #endif
             lastOverlaySort_ = now;
         }
         else {
-            robin_hood::unordered_flat_set<std::wstring> used; used.reserve(current.size());
             for (const OverlayRow& prev : readRows) {
-                const std::wstring& key = prev.name;
-                auto it = current.find(key);
-                if (it != current.end()) {
-                    writeRows.push_back(std::move(it->second));
-                    used.insert(key);
+                const uint32_t key = prev.entryId;
+                if (key == 0) { continue; }
+                auto it = overlayScratchLookup_.find(key);
+                if (it != overlayScratchLookup_.end()) {
+                    const size_t idx = it->second;
+                    writeRows.push_back(std::move(overlayScratchRows_[idx]));
+                    overlayScratchUsed_[idx] = 1;
                 }
             }
-            for (auto& kv : current) {
-                if (used.find(kv.first) == used.end()) {
-                    writeRows.push_back(std::move(kv.second));
+            for (size_t idx = 0; idx < overlayScratchRows_.size(); ++idx) {
+                if (!overlayScratchUsed_[idx]) {
+                    writeRows.push_back(std::move(overlayScratchRows_[idx]));
                 }
             }
 
 #if PROF_GPU_ENABLED
-            robin_hood::unordered_flat_set<std::wstring> gused; gused.reserve(gpuCurrent.size());
             for (const OverlayRow& prev : gpuReadRows) {
-                const std::wstring& key = prev.name;
-                auto it = gpuCurrent.find(key);
-                if (it != gpuCurrent.end()) {
-                    gpuWriteRows.push_back(std::move(it->second));
-                    gused.insert(key);
+                const uint32_t key = prev.entryId;
+                if (key == 0) { continue; }
+                auto it = gpuOverlayScratchLookup_.find(key);
+                if (it != gpuOverlayScratchLookup_.end()) {
+                    const size_t idx = it->second;
+                    gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
+                    gpuOverlayScratchUsed_[idx] = 1;
                 }
             }
-            for (auto& kv : gpuCurrent) {
-                if (gused.find(kv.first) == gused.end()) {
-                    gpuWriteRows.push_back(std::move(kv.second));
+            for (size_t idx = 0; idx < gpuOverlayScratchRows_.size(); ++idx) {
+                if (!gpuOverlayScratchUsed_[idx]) {
+                    gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
                 }
             }
 #endif
@@ -336,16 +431,13 @@ void Profiler::EndFrame() {
             else { endFrameAsyncAvgMs_ = endFrameAsyncAvgMs_ * emaAlpha_ + dtMs * (1.0 - emaAlpha_); }
             if (dtMs > endFrameAsyncMaxMs_) { endFrameAsyncMaxMs_ = dtMs; }
 
+            static const std::wstring kAsyncName = L"Profiler::EndFrame.Async";
             OverlayRow self;
-            self.name = L"Profiler::EndFrame.Async";
+            self.entryId = 0;
             self.avgMs = endFrameAsyncAvgMs_;
             self.maxMs = endFrameAsyncMaxMs_;
             self.usages = 1u;
-            wchar_t buf[128];
-            std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-                L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u",
-                self.name.c_str(), self.avgMs, self.maxMs, self.avgMs, self.usages);
-            self.formatted = buf;
+            FormatOverlayRow(self, &kAsyncName);
             writeRows.insert(writeRows.begin(), std::move(self));
         }
 
@@ -363,7 +455,7 @@ void Profiler::EndFrame() {
     });
 }
 
-void Profiler::PushSample(const char* name, uint64_t /*id*/, CpuClock::time_point start, CpuClock::time_point end) {
+void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end) {
     if (!GetEnabled()) { return; }
     std::lock_guard<std::mutex> lk(mtx_);
     if (!frameOpen_) { return; }
@@ -372,14 +464,28 @@ void Profiler::PushSample(const char* name, uint64_t /*id*/, CpuClock::time_poin
     const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
     const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
     const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-    frameSamples_.push_back({ name, 0u, ms, startUs, durUs, threadIdx });
+    frameSamples_.push_back({ key, ms });
     if (traceCapturing_) {
         if (!traceStartSet_) {
             traceStartUs_ = startUs;
             traceStartSet_ = true;
         }
         TraceEvent ev;
-        ev.name = name ? name : "unknown";
+        ev.isWide = key.isWide;
+        if (key.isWide) {
+            const wchar_t* ws = static_cast<const wchar_t*>(key.namePtr);
+            if (ws) {
+                ev.wideName.assign(ws);
+            }
+            else {
+                ev.wideName = L"unknown";
+            }
+            ev.narrowName = WideToUtf8(ev.wideName);
+        }
+        else {
+            const char* cs = static_cast<const char*>(key.namePtr);
+            ev.narrowName = cs ? std::string(cs) : std::string("unknown");
+        }
         ev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
         ev.durUs = durUs;
         ev.threadIndex = threadIdx;
@@ -387,11 +493,11 @@ void Profiler::PushSample(const char* name, uint64_t /*id*/, CpuClock::time_poin
     }
 }
 #if PROF_GPU_ENABLED
-void Profiler::PushGpuSample(const char* name, uint64_t /*id*/, double ms) {
+void Profiler::PushGpuSample(const ScopeNameKey& key, double ms) {
     if (!GetEnabled()) { return; }
     std::lock_guard<std::mutex> lk(mtx_);
     if (!frameOpen_) { return; }
-    gpuFrameSamples_.push_back({ name, 0u, ms });
+    gpuFrameSamples_.push_back({ key, ms });
 }
 
 void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries) {
@@ -449,7 +555,7 @@ void Profiler::CollectGpuResults() {
                 UINT64 a = data[s.start];
                 UINT64 b = data[s.end];
                 double ms = (double)(b - a) * 1000.0 / (double)gpuFreq_;
-                PushGpuSample(s.name, 0, ms);
+                PushGpuSample(s.key, ms);
             }
         }
         gpuReadback_->Unmap(0, nullptr);
@@ -463,7 +569,7 @@ void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList* cl) {
         gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
         return;
     }
-    const size_t idx = BeginGpuSample(cl, "GPU.Frame", 0);
+    const size_t idx = BeginGpuSample(cl, ScopeNameKey::FromNarrow("GPU.Frame", 0));
     gpuFrameSampleIdx_.store(idx, std::memory_order_relaxed);
 #else
     (void)cl;
@@ -482,7 +588,7 @@ void Profiler::EndGpuFrame(ID3D12GraphicsCommandList* cl) {
 #endif
 }
 
-size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id) {
+size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key) {
 #if PROF_ENABLED
     if (!gpuInitialized_ || !cl) { return SIZE_MAX; }
     UINT start = 0;
@@ -495,12 +601,12 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name,
         end = start + 1;
         nextGpuQuery_ += 2;
         idx = gpuPending_.size();
-        gpuPending_.push_back({ name, start, end, false });
+        gpuPending_.push_back({ key, start, end, false });
     }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
     return idx;
 #else
-    (void)cl; (void)name; (void)id; return SIZE_MAX;
+    (void)cl; (void)key; return SIZE_MAX;
 #endif
 }
 
@@ -650,11 +756,11 @@ void Profiler::ResetMaxNow() {
 
 void Profiler::ResetMax_Unsafe() {
     for (auto& kv : stats_) {
-        kv.second.maxMs = kv.second.avgMs;
+        kv.second.stats.maxMs = kv.second.stats.avgMs;
     }
     #if PROF_GPU_ENABLED
     for (auto& kv : gpuStats_) {
-        kv.second.maxMs = kv.second.avgMs;
+        kv.second.stats.maxMs = kv.second.stats.avgMs;
     }
     #endif
 }
@@ -750,8 +856,13 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events, const std::
     }
 
     for (const auto& ev : events) {
+        std::string name = ev.narrowName;
+        if (name.empty() && !ev.wideName.empty()) {
+            name = WideToUtf8(ev.wideName);
+        }
+        if (name.empty()) { name = "unknown"; }
         std::ostringstream line;
-        line << "  {\"name\":\"" << EscapeJson(ev.name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"
+        line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"
              << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << ev.threadIndex << "}";
         writeEntry(line.str());
     }
