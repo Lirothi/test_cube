@@ -8,7 +8,6 @@
 #include "FrameResource.h"
 #include "third_party/robin_hood.h"
 #include "Samplermanager.h"
-#include "CBManager.h"
 #include "Material.h"
 #include "InputLayoutManager.h"
 #include "MeshManager.h"
@@ -123,10 +122,9 @@ public:
     void InitTextSystem(ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, const std::wstring& folder);
 
     SamplerManager* GetSamplerManager() { return &samplerManager_; }
-	ConstantBufferLayoutManager* GetCBManager() { return &cbManager_; }
-	MaterialManager* GetMaterialManager() { return &materialManager_; }
-	InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
-	MeshManager* GetMeshManager() { return &meshManager_; }
+        MaterialManager* GetMaterialManager() { return &materialManager_; }
+        InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
+        MeshManager* GetMeshManager() { return &meshManager_; }
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
@@ -311,7 +309,6 @@ private:
     const CLState* FindCLStateForCmd(ID3D12CommandList* cmd) const;
 
     SamplerManager samplerManager_;
-    ConstantBufferLayoutManager cbManager_;
     MaterialManager materialManager_;
     InputLayoutManager inputLayoutManager_;
 	MeshManager meshManager_;

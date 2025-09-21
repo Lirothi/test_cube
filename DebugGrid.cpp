@@ -81,7 +81,7 @@ public:
     void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateGraphicsUniform("modelViewProj", mvpHandle_, mvp, cbData);
+        UpdateGraphicsUniform(mvpHandle_, mvp, cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
@@ -196,11 +196,11 @@ public:
     void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateGraphicsUniform("modelViewProj", mvpHandle_, mvp, cbData);
+        UpdateGraphicsUniform(mvpHandle_, mvp, cbData);
 
         const UINT w = r->GetWidth();
         const UINT h = r->GetHeight();
-        UpdateGraphicsUniform("viewportThickness", viewportThicknessHandle_, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
+        UpdateGraphicsUniform(viewportThicknessHandle_, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override

@@ -42,9 +42,9 @@ void Skybox::Init(Renderer* renderer,
 void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     // CB0: ожидаем идентификаторы "view" и "proj" в cbuffer'е (см. skybox.hlsl)
-    UpdateGraphicsUniform("view", viewHandle_, view, cbData);
-    UpdateGraphicsUniform("proj", projHandle_, proj, cbData);
-    UpdateGraphicsUniform("exposure", exposureHandle_, exposure_, cbData);
+    UpdateGraphicsUniform(viewHandle_, view, cbData);
+    UpdateGraphicsUniform(projHandle_, proj, cbData);
+    UpdateGraphicsUniform(exposureHandle_, exposure_, cbData);
 }
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
