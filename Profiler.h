@@ -9,6 +9,8 @@
 #include <atomic>
 #include <algorithm>
 #include <optional>
+#include <string_view>
+#include <cstring>
 
 #include "TaskSystem.h"
 
@@ -33,17 +35,26 @@ class Profiler {
 public:
     using CpuClock = std::chrono::steady_clock;
 
+    struct ScopeNameKey {
+        const void* namePtr = nullptr;
+        uint64_t    nameId = 0;
+        bool        isWide = false;
+
+        static ScopeNameKey FromNarrow(const char* ptr, uint64_t id) {
+            return ScopeNameKey{ ptr, id, false };
+        }
+        static ScopeNameKey FromWide(const wchar_t* ptr, uint64_t id) {
+            return ScopeNameKey{ ptr, id, true };
+        }
+    };
+
     struct ScopeSample {
-        const char* name = nullptr; // ожидается литерал/статическая строка
-        uint64_t    nameId = 0;     // зарезервировано под быстрый id
-        double      ms = 0.0;
-        uint64_t    startUs = 0;    // отметка начала (микросекунды)
-        uint64_t    durationUs = 0; // длительность (микросекунды)
-        uint32_t    threadIndex = 0;
+        ScopeNameKey key{};
+        double       ms = 0.0;
     };
 
     struct ScopeStats {
-        // Инклюзивные накопители за кадр
+        // Инклюзивные накопители за кадр (складывают ms всех обращений скоупа в текущем кадре)
         double   frameMsSum = 0.0;
         uint32_t frameCount = 0;
 
@@ -68,8 +79,36 @@ public:
         }
     };
 
+    struct StatsEntry {
+        ScopeStats   stats;
+        std::wstring wideName;
+        uint32_t     overlayId = 0;
+    };
+
+    struct ScopeNameKeyHash {
+        using is_avalanching = void;
+        size_t operator()(const ScopeNameKey& key) const noexcept {
+            if (key.nameId != 0) {
+                return robin_hood::hash_bytes(&key.nameId, sizeof(key.nameId));
+            }
+            const size_t ptrHash = robin_hood::hash_bytes(&key.namePtr, sizeof(key.namePtr));
+            return ptrHash ^ (key.isWide ? 0x9E3779B97F4A7C15ull : 0ull);
+        }
+    };
+
+    struct ScopeNameKeyEqual {
+        bool operator()(const ScopeNameKey& a, const ScopeNameKey& b) const noexcept {
+            if (a.nameId != 0 || b.nameId != 0) {
+                return a.nameId == b.nameId;
+            }
+            return a.namePtr == b.namePtr && a.isWide == b.isWide;
+        }
+    };
+
     struct TraceEvent {
-        std::string name;
+        std::string  narrowName;
+        std::wstring wideName;
+        bool isWide = false;
         uint64_t tsUs = 0;
         uint64_t durUs = 0;
         uint32_t threadIndex = 0;
@@ -93,15 +132,22 @@ public:
     // Скоповая отметка (CPU)
     class ScopedCpu {
     public:
-        ScopedCpu(const char* name, uint64_t nameId = 0) : name_(name), id_(nameId) {
+        ScopedCpu(const char* name, uint64_t nameId = 0) {
 #if PROF_ENABLED
+            key_ = ScopeNameKey::FromNarrow(name, nameId);
+            start_ = Clock::now();
+#endif
+        }
+        ScopedCpu(const wchar_t* name, uint64_t nameId = 0) {
+#if PROF_ENABLED
+            key_ = ScopeNameKey::FromWide(name, nameId);
             start_ = Clock::now();
 #endif
         }
         ~ScopedCpu() {
 #if PROF_ENABLED
             const auto end = Clock::now();
-            Profiler::Get().PushSample(name_, id_, start_, end);
+            Profiler::Get().PushSample(key_, start_, end);
 #endif
         }
     private:
@@ -109,8 +155,7 @@ public:
         using Clock = CpuClock;
         Clock::time_point start_{};
 #endif
-        const char* name_;
-        uint64_t    id_;
+        ScopeNameKey key_{};
     };
 
 #if PROF_ENABLED
@@ -126,6 +171,7 @@ public:
     class ScopedGpu {
     public:
         ScopedGpu(ID3D12GraphicsCommandList* cl, const char* name, uint64_t nameId = 0);
+        ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t nameId = 0);
         ~ScopedGpu();
     private:
 #if PROF_ENABLED
@@ -188,10 +234,10 @@ public:
 
 private:
     Profiler() = default;
-    void PushSample(const char* name, uint64_t id, CpuClock::time_point start, CpuClock::time_point end);
+    void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end);
 #if PROF_GPU_ENABLED
-    void PushGpuSample(const char* name, uint64_t id, double ms);
-    size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const char* name, uint64_t id);
+    void PushGpuSample(const ScopeNameKey& key, double ms);
+    size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key);
     void EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx);
 #endif
 
@@ -203,10 +249,11 @@ private:
 
     // --- данные оверлея (снэпшот) ---
     struct OverlayRow {
-        std::wstring name; // уже wide, чтобы не конвертировать при отрисовке
+        uint32_t entryId = 0;
         double   avgMs = 0.0;
         double   maxMs = 0.0;
         uint32_t usages = 0;
+        const std::wstring* namePtr = nullptr;
         std::wstring formatted; // заранее отформатированная строка
     };
 
@@ -214,9 +261,9 @@ private:
 #if PROF_ENABLED
     // сбор статистики
     std::mutex mtx_;
-    robin_hood::unordered_map<std::string, ScopeStats> stats_;
+    robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> stats_;
 #if PROF_GPU_ENABLED
-    robin_hood::unordered_map<std::string, ScopeStats> gpuStats_;
+    robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> gpuStats_;
 #endif
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
     robin_hood::unordered_flat_map<std::thread::id, uint32_t> threadIndices_;
@@ -252,6 +299,20 @@ private:
     std::atomic<int>        gpuOverlayReadBuf_{ 0 };
 #endif
 
+    // scratch буферы для построения оверлея (перевыделяются редко, переиспользуются между кадрами)
+    std::vector<OverlayRow> overlayScratchRows_;
+    robin_hood::unordered_flat_map<uint32_t, size_t> overlayScratchLookup_;
+    std::vector<uint8_t> overlayScratchUsed_;
+    std::vector<const StatsEntry*> overlayEntryPtrs_;
+    std::vector<size_t> overlayScratchOrder_;
+#if PROF_GPU_ENABLED
+    std::vector<OverlayRow> gpuOverlayScratchRows_;
+    robin_hood::unordered_flat_map<uint32_t, size_t> gpuOverlayScratchLookup_;
+    std::vector<uint8_t> gpuOverlayScratchUsed_;
+    std::vector<const StatsEntry*> gpuOverlayEntryPtrs_;
+    std::vector<size_t> gpuOverlayScratchOrder_;
+#endif
+
     // Переcортировка по avgMs раз в N сек
     CoolClock::time_point lastOverlaySort_{};
     double overlayResortIntervalSec_ = 2.0; // по умолчанию раз в секунду
@@ -260,6 +321,11 @@ private:
     double overlayWidthPx_ = 640.0;
 #if PROF_GPU_ENABLED
     double gpuOverlayWidthPx_ = 640.0;
+#endif
+
+    uint32_t nextOverlayId_ = 1;
+#if PROF_GPU_ENABLED
+    uint32_t nextGpuOverlayId_ = 1;
 #endif
 
     TaskSystem::TaskHandle overlayTask_ = nullptr;
@@ -284,7 +350,7 @@ private:
     UINT maxGpuQueries_ = 0;
     UINT nextGpuQuery_ = 0;
     UINT lastGpuQueryCount_ = 0;
-    struct GpuSampleRange { const char* name; UINT start; UINT end; bool completed; };
+    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; };
     std::vector<GpuSampleRange> gpuPending_;
     std::vector<GpuSampleRange> gpuResolved_;
     bool gpuInitialized_ = false;
