@@ -28,15 +28,12 @@ public:
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
 
-protected:
-    // пер-кадровые константы и дескрипторы
-    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override;
-    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
     void OnMaterialHotReload(Renderer* renderer) override;
 
-    // рисуем обычным путём базового класса:
-    // RecordGraphics/IssueDraw наследуем без изменений.
-
+protected:
+    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override;
+    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    
 private:
     void BuildCubeMesh_(Renderer* r,
         ID3D12GraphicsCommandList* uploadCmdList,
