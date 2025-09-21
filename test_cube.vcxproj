@@ -178,7 +178,6 @@
   <ItemGroup>
     <ClInclude Include="App.h" />
     <ClInclude Include="Camera.h" />
-    <ClInclude Include="CBManager.h" />
     <ClInclude Include="DebugGrid.h" />
     <ClInclude Include="DescriptorAllocator.h" />
     <ClInclude Include="DescriptorHeapGPU.h" />

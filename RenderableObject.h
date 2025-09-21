@@ -3,10 +3,8 @@
 #include <wrl/client.h>
 #include <DirectXMath.h>
 #include <string>
-#include <string_view>
 #include <memory>
 
-#include "CBManager.h"
 #include "Material.h"
 #include "MaterialData.h"
 #include "Mesh.h"
@@ -51,11 +49,9 @@ public:
     Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
     void SetGraphicsDesc(const Material::GraphicsDesc& gd) { graphicsDesc_ = gd; }
 
-    const ConstantBufferLayout* GetCBLayout() const { return cbLayout_; }
-
     virtual bool IsTransparent() const {
         return graphicsDesc_.blend.RenderTarget[0].BlendEnable;
-	}
+    }
 
     virtual bool CastsShadow() const { return true; }
 
@@ -67,16 +63,13 @@ protected:
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);
 
-    // Утилита записи в CB по имени из layout (b0)
+    // Утилита записи в CB (b0)
     template<typename T>
-    bool UpdateGraphicsUniform(std::string_view name, const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
+    bool UpdateGraphicsUniform(const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
     {
         if (!cbData) { return false; }
         if (handle.isValid && graphicsMaterial_) {
             return UpdateUniform(handle, graphicsMaterial_.get(), value, cbData);
-        }
-        if (cbLayout_) {
-            return cbLayout_->SetField<T>(std::string(name), value, cbData);
         }
         return false;
     }
@@ -103,8 +96,6 @@ protected:
     Math::mat4 modelMatrix_;
 
     // CB (upload, пер-объектный)
-    const ConstantBufferLayout* cbLayout_ = nullptr;
-
     bool allowWireframe_ = true;
 
 private:

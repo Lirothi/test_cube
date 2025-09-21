@@ -77,9 +77,9 @@ void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, cons
 {
     if (!cbData) { return; }
     //CPU_SCOPE(L"RenderableObject::UpdateUniforms");
-    UpdateGraphicsUniform("world", cb0Handles_.world, GetModelMatrix(), cbData);
-    UpdateGraphicsUniform("view", cb0Handles_.view, view, cbData);
-    UpdateGraphicsUniform("proj", cb0Handles_.proj, proj, cbData);
+    UpdateGraphicsUniform(cb0Handles_.world, GetModelMatrix(), cbData);
+    UpdateGraphicsUniform(cb0Handles_.view, view, cbData);
+    UpdateGraphicsUniform(cb0Handles_.proj, proj, cbData);
 
     ApplyMaterialParamsToCB(cbData);
 }
@@ -106,16 +106,8 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     if (cl == nullptr) { return; }
     //CPU_SCOPE(L"RenderableObject::Render");
 
-    UINT cbSizeBytes = 0;
-
-	if (cbLayout_) {
-        cbSizeBytes = cbLayout_->GetSize();
-    }
-
     constexpr UINT kAlign = 256;
-    if (cbSizeBytes == 0) {
-        cbSizeBytes = graphicsMaterial_->GetCBSizeBytesAligned(0, kAlign);
-    }
+    const UINT cbSizeBytes = graphicsMaterial_->GetCBSizeBytesAligned(0, kAlign);
     
     // 2) выделить слайс в ринг-буфере кадра и прописать CBV
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign); // <- как просили
@@ -135,10 +127,10 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
-    UpdateGraphicsUniform("baseColor", cb0Handles_.baseColor, p.baseColor, cbData);
-    UpdateGraphicsUniform("metalRough", cb0Handles_.metalRough, p.metalRough, cbData);
-    UpdateGraphicsUniform("texOffsScale", cb0Handles_.texOffsScale, p.texOffsScale, cbData);
-    UpdateGraphicsUniform("texFlags", cb0Handles_.texFlags, p.texFlags, cbData);
+    UpdateGraphicsUniform(cb0Handles_.baseColor, p.baseColor, cbData);
+    UpdateGraphicsUniform(cb0Handles_.metalRough, p.metalRough, cbData);
+    UpdateGraphicsUniform(cb0Handles_.texOffsScale, p.texOffsScale, cbData);
+    UpdateGraphicsUniform(cb0Handles_.texFlags, p.texFlags, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
