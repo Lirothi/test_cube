@@ -133,10 +133,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ctx.cbv[0] = alloc.gpu;
 
     RecordCompute(renderer, cl);
-    {
-        //CPU_SCOPE("RenderableObject::Render.UpdateUniforms");
-        UpdateUniforms(renderer, view, proj, cbData);
-    }
+    UpdateUniforms(renderer, view, proj, cbData);
     PopulateContext(renderer, cl, ctx);
     RecordGraphics(renderer, cl, ctx);
     

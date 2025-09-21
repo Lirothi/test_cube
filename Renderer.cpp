@@ -451,12 +451,9 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
 
     //CPU_SCOPE("Renderer::BeginThreadCommandList.1");
     alloc = fr->AcquireCommandAllocator(device_.Get(), type);
-    {
-        CPU_SCOPE("Renderer::BeginThreadCommandList.2");
-        cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
-    }
+    cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
 
-    if ((type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE) &&
+    if ((type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE || type == D3D12_COMMAND_LIST_TYPE_BUNDLE) &&
         currentFrameDescriptorHeapCount_ > 0)
     {
         cl->SetDescriptorHeaps(currentFrameDescriptorHeapCount_, currentFrameDescriptorHeaps_.data());
