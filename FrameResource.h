@@ -71,13 +71,13 @@ private:
                         a->Reset();
                     }
                 }
-                used[qi] = 0;
+                used[qi].store(0u, std::memory_order_relaxed);
             }
         }
 
         ID3D12CommandAllocator* Acquire(ID3D12Device* dev, D3D12_COMMAND_LIST_TYPE type) {
             const int qi = QueueIndex_(type);
-            const UINT index = used[qi].fetch_add(1, std::memory_order_acq_rel);
+            const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
             auto& queuePool = pools[qi];
 
             // Быстрый путь: уже есть аллокатор с таким индексом.
@@ -107,7 +107,7 @@ private:
 
         void ResetUsage() {
             for (int qi = 0; qi < kQueueCount_; ++qi) {
-                used[qi].store(0u, std::memory_order_release);
+                used[qi].store(0u, std::memory_order_relaxed);
             }
         }
 
@@ -116,7 +116,7 @@ private:
             ID3D12CommandAllocator* alloc,
             ID3D12PipelineState* initialPSO = nullptr) {
             const int qi = QueueIndex_(type);
-            const UINT index = used[qi].fetch_add(1u, std::memory_order_acq_rel);
+            const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
             auto& vec = pools[qi];
 
             if (index >= vec.size()) {

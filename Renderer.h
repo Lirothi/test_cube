@@ -2,6 +2,7 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <array>
 
 #include "DescriptorAllocator.h"
 #include "FrameResource.h"
@@ -190,6 +191,7 @@ private:
     void CreateDepthResources(UINT width, UINT height);
     void WaitForFrame(UINT frameIndex);   // ожидание конкретного кадра (по fence value кадра)
     void SignalFrame(UINT frameIndex);    // сигнал на фэнсе для кадра
+    void RefreshCurrentFrameCaches();
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
@@ -271,8 +273,12 @@ private:
     UINT64                            frameFenceValues_[kFrameCount] = {};  // последний сигнал для каждого кадра
 
     // Кадровые ресурсы (аллокатор + upload и т.п.)
-	std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
+        std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
+    FrameResource*                    currentFrameResource_ = nullptr;
+    static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
+    std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
+    UINT                              currentFrameDescriptorHeapCount_ = 0;
 
     std::mutex knownStatesMtx_;
     robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
