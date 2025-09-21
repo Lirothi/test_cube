@@ -3,11 +3,11 @@
 #include <wrl/client.h>
 #include <DirectXMath.h>
 #include <string>
+#include <string_view>
 #include <memory>
 
 #include "CBManager.h"
 #include "Material.h"
-#include "CBFieldID.h"
 #include "MaterialData.h"
 #include "Mesh.h"
 #include "RenderContext.h"
@@ -41,7 +41,7 @@ public:
     const Mesh* GetMesh() const { return mesh_.get(); }
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
-    void SetGraphicsMaterial(Material* m) { graphicsMaterial_.reset(m); } // если хочешь вручную
+    void SetGraphicsMaterial(Material* m) { graphicsMaterial_.reset(m); RebuildHandleCaches(); } // если хочешь вручную
 
     // пер-объектные параметры (b0)
     MaterialParams& MaterialParamsRef() { return matParams_; }
@@ -68,21 +68,23 @@ protected:
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);
 
     // Утилита записи в CB по имени из layout (b0)
-    template<typename T> bool UpdateUniform(const std::string& name, const T& value, uint8_t* cbData) {
+    template<typename T>
+    bool UpdateGraphicsUniform(std::string_view name, const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
+    {
         if (!cbData) { return false; }
-        if (cbLayout_) {
-            return cbLayout_->SetField<T>(name, value, cbData);
+        if (handle.isValid && graphicsMaterial_) {
+            return UpdateUniform(handle, graphicsMaterial_.get(), value, cbData);
         }
-        return graphicsMaterial_->UpdateCB0Field(name, value, cbData);
+        if (cbLayout_) {
+            return cbLayout_->SetField<T>(std::string(name), value, cbData);
+        }
+        return false;
     }
 
-    // Обновление поля по хешированному идентификатору
-    template<typename T> bool UpdateUniform(CBFieldID id, const T& value, uint8_t* cbData) {
-        if (!cbData) { return false; }
-        if (cbLayout_) {
-            return false;
-        }
-        return graphicsMaterial_->UpdateCB0Field(id, value, cbData);
+    template<typename T>
+    bool UpdateShadowUniform(const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
+    {
+        return UpdateUniform(handle, shadowMaterial_.get(), value, cbData);
     }
 
     void ApplyMaterialParamsToCB(uint8_t* cbData);
@@ -107,6 +109,35 @@ protected:
 
 private:
     static std::wstring AppendSuffixBeforeExt(const std::wstring& file, const std::wstring& suffix);
+
+    void RebuildHandleCaches();
+
+    struct CBHandles
+    {
+        Material::CBFieldHandle world;
+        Material::CBFieldHandle view;
+        Material::CBFieldHandle proj;
+        Material::CBFieldHandle baseColor;
+        Material::CBFieldHandle metalRough;
+        Material::CBFieldHandle texOffsScale;
+        Material::CBFieldHandle texFlags;
+    } cb0Handles_{};
+
+    struct ShadowCBHandles
+    {
+        Material::CBFieldHandle world;
+        Material::CBFieldHandle view;
+        Material::CBFieldHandle proj;
+    } shadowHandles_{};
+
+    template<typename T>
+    bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)
+    {
+        if (!cbData) { return false; }
+        if (!material) { return false; }
+        if (!handle.isValid) { return false; }
+        return material->UpdateCBField(handle, value, cbData);
+    }
 
     RenderableObject(const RenderableObject&) = delete;
     RenderableObject& operator=(const RenderableObject&) = delete;

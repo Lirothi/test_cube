@@ -16,6 +16,65 @@
 #include "TextManager.h"
 #include "Profiler.h"
 
+void Scene::CBHandleCache::LightingHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    sunDir = material->ComputeCB0FieldHandle("sunDirWS");
+    ambient = material->ComputeCB0FieldHandle("ambientIntensity");
+    lightRgb = material->ComputeCB0FieldHandle("lightRgb");
+    exposure = material->ComputeCB0FieldHandle("exposure");
+    camPos = material->ComputeCB0FieldHandle("camPosWS");
+    camDir = material->ComputeCB0FieldHandle("camDirWS");
+    view = material->ComputeCB0FieldHandle("view");
+    invView = material->ComputeCB0FieldHandle("invView");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    lightViewProj = material->ComputeCB0FieldHandle("lightViewProj");
+    cascadeScaleBias = material->ComputeCB0FieldHandle("cascadeScaleBias");
+    cascadeSplits = material->ComputeCB0FieldHandle("cascadeSplitsVS");
+    shadowAtlasSize = material->ComputeCB0FieldHandle("shadowAtlasSize");
+    shadowBiasNDC = material->ComputeCB0FieldHandle("shadowBiasNDC");
+    normalBiasWS = material->ComputeCB0FieldHandle("normalBiasWS");
+}
+
+void Scene::CBHandleCache::SsrHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    view = material->ComputeCB0FieldHandle("view");
+    proj = material->ComputeCB0FieldHandle("proj");
+    invView = material->ComputeCB0FieldHandle("invView");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    depthA = material->ComputeCB0FieldHandle("depthA");
+    depthB = material->ComputeCB0FieldHandle("depthB");
+    zNear = material->ComputeCB0FieldHandle("zNear");
+    zFar = material->ComputeCB0FieldHandle("zFar");
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+}
+
+void Scene::CBHandleCache::BlurHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    dir = material->ComputeCB0FieldHandle("dir");
+    radius = material->ComputeCB0FieldHandle("radius");
+}
+
+void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    view = material->ComputeCB0FieldHandle("view");
+    proj = material->ComputeCB0FieldHandle("proj");
+    invView = material->ComputeCB0FieldHandle("invView");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
+}
+
 static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     float zNearVS, float zFarVS, std::array<float3, 8>& outCornersWS)
 {
@@ -76,6 +135,8 @@ private:
 
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
+    cbHandles_ = {};
+
     if (!matLighting_) {
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/lighting_ps.hlsl";
@@ -86,6 +147,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matLighting_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+    cbHandles_.lighting.Populate(matLighting_.get());
 
     if (!matCompose_) {
         Material::GraphicsDesc gd{};
@@ -97,6 +159,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matCompose_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+    cbHandles_.compose.Populate(matCompose_.get());
 
     if (!matTonemap_) {
         Material::GraphicsDesc gd{};
@@ -117,6 +180,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+    cbHandles_.ssr.Populate(matSSR_.get());
 
     if (!matBlur_) {
         Material::GraphicsDesc gd{};
@@ -126,6 +190,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         gd.depth.DepthEnable = FALSE;
         matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
+    cbHandles_.blur.Populate(matBlur_.get());
 
     if (!matDebug_) {
         Material::GraphicsDesc gd{};
@@ -655,33 +720,37 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         // аллоцируем динамический CB в аплоад-ринге текущего кадра
         auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
-        matLighting_->UpdateCB0Field("sunDirWS", dirLight_.dir, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("ambientIntensity", dirLight_.ambient, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("lightRgb", dirLight_.color, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("exposure", dirLight_.exposure, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("camPosWS", camera_.GetPosition(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("camDirWS", camDir, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
+        const auto& handles = cbHandles_.lighting;
 
-        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, /*arrayIndex*/0);
-        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
-        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
-        matLighting_->UpdateCB0Field("lightViewProj", (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
+        matLighting_->UpdateCBField(handles.sunDir, dirLight_.dir, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.ambient, dirLight_.ambient, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.lightRgb, dirLight_.color, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.exposure, dirLight_.exposure, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.camDir, camDir, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.view, view, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
 
-        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[0].x, cachedScale_[0].y, cachedBias_[0].x, cachedBias_[0].y), (uint8_t*)cb.cpu, 0);
-        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[1].x, cachedScale_[1].y, cachedBias_[1].x, cachedBias_[1].y), (uint8_t*)cb.cpu, 1);
-        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[2].x, cachedScale_[2].y, cachedBias_[2].x, cachedBias_[2].y), (uint8_t*)cb.cpu, 2);
-        matLighting_->UpdateCB0Field("cascadeScaleBias", float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
+        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, /*arrayIndex*/0);
+        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
+        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
+        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
 
-        matLighting_->UpdateCB0Field("cascadeSplitsVS", float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("shadowAtlasSize", float2((float)renderer->GetDeferredForFrame().shadowRes, (float)renderer->GetDeferredForFrame().shadowRes), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("shadowBiasNDC", float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCB0Field("normalBiasWS", float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[0].x, cachedScale_[0].y, cachedBias_[0].x, cachedBias_[0].y), (uint8_t*)cb.cpu, 0);
+        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[1].x, cachedScale_[1].y, cachedBias_[1].x, cachedBias_[1].y), (uint8_t*)cb.cpu, 1);
+        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[2].x, cachedScale_[2].y, cachedBias_[2].x, cachedBias_[2].y), (uint8_t*)cb.cpu, 2);
+        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
 
-        //matLighting_->UpdateCB0Field("shadowBias", 0.0015f, (uint8_t*)cb.cpu);
-        //matLighting_->UpdateCB0Field("pcfRadius", 1.0f, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.cascadeSplits, float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.shadowAtlasSize, float2((float)renderer->GetDeferredForFrame().shadowRes, (float)renderer->GetDeferredForFrame().shadowRes), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.shadowBiasNDC, float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.normalBiasWS, float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
+
+        //const auto shadowBiasExtraHandle = matLighting_->ComputeCB0FieldHandle("shadowBias");
+        //matLighting_->UpdateCBField(shadowBiasExtraHandle, 0.0015f, (uint8_t*)cb.cpu);
+        //const auto pcfRadiusHandle = matLighting_->ComputeCB0FieldHandle("pcfRadius");
+        //matLighting_->UpdateCBField(pcfRadiusHandle, 1.0f, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -784,15 +853,16 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->BindSSRTarget(t.cl, Renderer::ClearMode::Color);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
-        matSSR_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("depthA", zFar / (zFar - zNear), (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("depthB", (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("zNear", zNear, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("zFar", zFar, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCB0Field("screenSize", float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
+        const auto& handlesSSR = cbHandles_.ssr;
+        matSSR_->UpdateCBField(handlesSSR.view, view, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.proj, proj, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.invView, invView, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.invProj, invProj, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.depthA, zFar / (zFar - zNear), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.depthB, (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.zNear, zNear, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.zFar, zFar, (uint8_t*)cb.cpu);
+        matSSR_->UpdateCBField(handlesSSR.screenSize, float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -824,8 +894,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
         float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
-        matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -847,8 +917,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
         dir = float2(0.0f, 1.0f / renderer->GetHeight());
-        matBlur_->UpdateCB0Field("dir", dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCB0Field("radius", 1.0f, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
@@ -885,11 +955,12 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         // === CB для compose_ps ===
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
-        matCompose_->UpdateCB0Field("view", view, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCB0Field("proj", proj, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCB0Field("invView", invView, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCB0Field("invProj", invProj, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCB0Field("skyboxIntensity", skyBox_->GetExposure(), (uint8_t*)cb.cpu);
+        const auto& composeHandles = cbHandles_.compose;
+        matCompose_->UpdateCBField(composeHandles.view, view, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCBField(composeHandles.proj, proj, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCBField(composeHandles.invView, invView, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCBField(composeHandles.invProj, invProj, (uint8_t*)cb.cpu);
+        matCompose_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
 
         // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
@@ -1035,6 +1106,7 @@ void Scene::Clear()
     matBlur_.reset();
     matSSR_.reset();
     matDebug_.reset();
+    cbHandles_ = {};
     objects_.clear();
     for (auto& bucket : renderBuckets_) {
         bucket.clear();

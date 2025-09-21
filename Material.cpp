@@ -5,6 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <cassert>
 
 #include <d3d12shader.h>    // ID3D12ShaderReflection
 #include <d3dcompiler.h>    // D3DReflect (DXBC)
@@ -909,20 +910,6 @@ bool Material::GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferFi
     return true;
 }
 
-bool Material::GetCBFieldInfo(UINT bRegister, CBFieldID id, CBufferField& out) const
-{
-    const CBufferInfo* cb = GetCBInfo(bRegister);
-    if (!cb) { return false; }
-    auto it = cb->fieldsById.find(id);
-    if (it == cb->fieldsById.end()) { return false; }
-    out = it->second;
-    if (out.elementStride == 0) {
-        out.elementStride = (out.size > 0 ? out.size : 16);
-        out.elementCount = 1;
-    }
-    return true;
-}
-
 bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const {
     auto* cb = GetCBInfo(bRegister);
     if (!cb)
@@ -937,6 +924,25 @@ bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& o
     outOffset = it->second.offset;
     outSize = it->second.size;
     return true;
+}
+
+Material::CBFieldHandle Material::ComputeCBFieldHandle(UINT bRegister, const std::string& name) const
+{
+    CBFieldHandle handle{};
+    handle.destCBSizeBytes = GetCBSizeBytes(bRegister);
+    if (handle.destCBSizeBytes == 0) {
+        assert(false && "Bad constant buffer register!");
+        return handle;
+    }
+
+    if (!GetCBFieldInfo(bRegister, name, handle.field)) {
+        assert(false && "Bad uniform name!");
+        handle.destCBSizeBytes = 0;
+        return handle;
+    }
+
+    handle.isValid = true;
+    return handle;
 }
 
 void Material::ProcessReflection(ID3D12ShaderReflection* refl,
@@ -995,10 +1001,8 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
             }
             f.elementCount = elements;
             f.elementStride = stride;
-            f.id = ComputeCBFieldID(name);
 
             dst.fieldsByName[name] = f;
-            dst.fieldsById[f.id] = f;
         }
     }
 }

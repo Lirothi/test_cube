@@ -8,13 +8,13 @@
 #include <filesystem>
 #include <mutex>
 #include <atomic>
+#include <optional>
 #include <d3d12shader.h>
 #include "Profiler.h"
 #include "RenderContext.h"
 #include "robin_hood.h"
 #include <cassert>
 #include <algorithm>
-#include "CBFieldID.h"
 
 using namespace Microsoft::WRL;
 
@@ -124,23 +124,29 @@ public:
         UINT        size = 0;           // общий размер поля (если массив — размер всего массива)
         UINT        elementStride = 0;  // шаг одного элемента массива в байтах (или size, если не массив)
         UINT        elementCount = 1;   // ёмкость массива (1 — если не массив)
-        CBFieldID   id = 0;             // хеш-идентификатор имени
     };
     struct CBufferInfo {
         UINT bindRegister = 0;    // bN
         UINT sizeBytes = 0;
         robin_hood::unordered_flat_map<std::string, CBufferField> fieldsByName; // name -> {offset,size}
-        robin_hood::unordered_flat_map<CBFieldID, CBufferField>   fieldsById;   // id -> {offset,size}
+    };
+
+    struct CBFieldHandle {
+        CBufferField field{};
+        UINT destCBSizeBytes = 0;
+        bool isValid = false;
     };
 
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
     bool GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferField& out) const;
-    bool GetCBFieldInfo(UINT bRegister, CBFieldID id, CBufferField& out) const;
     bool GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& outOffset, UINT& outSize) const;
     UINT GetCBSizeBytes(UINT bRegister) const {const CBufferInfo* cb = GetCBInfo(bRegister); return cb ? cb->sizeBytes : 0u; }
     UINT GetCBSizeBytesAligned(UINT bRegister, UINT alignment) const {
         return (GetCBSizeBytes(bRegister) + (alignment - 1)) & ~(alignment - 1);
     }
+
+    CBFieldHandle ComputeCBFieldHandle(UINT bRegister, const std::string& name) const;
+    CBFieldHandle ComputeCB0FieldHandle(const std::string& name) const { return ComputeCBFieldHandle(0, name); }
 
     template<typename T>
     bool CopyData(const CBufferField& info, const T& value, uint8_t* destCB, UINT destCBSizeBytes, UINT idx)
@@ -161,60 +167,14 @@ public:
     }
 
     template<typename T>
-    bool UpdateCBField(UINT bRegister, const std::string& name,
+    bool UpdateCBField(const CBFieldHandle& handle,
         const T& value, uint8_t* destCB,
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
-        UINT destCBSizeBytes = 0;
-        CBufferField info{};
-        {
-            destCBSizeBytes = GetCBSizeBytes(bRegister);
-            if (!destCB || destCBSizeBytes == 0) { return false; }
+        if (!destCB) { return false; }
+        if (!handle.isValid) { return false; }
 
-            
-            if (!GetCBFieldInfo(bRegister, name, info)) {
-                assert(false && "Bad uniform name!");
-                return false;
-            }
-        }
-
-        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
-    }
-
-    template<typename T>
-    bool UpdateCBField(UINT bRegister, CBFieldID id,
-        const T& value, uint8_t* destCB,
-        std::optional<UINT> arrayIdxParam = std::nullopt)
-    {
-        UINT destCBSizeBytes = 0;
-        CBufferField info{};
-        {
-            destCBSizeBytes = GetCBSizeBytes(bRegister);
-            if (!destCB || destCBSizeBytes == 0) { return false; }
-
-            if (!GetCBFieldInfo(bRegister, id, info)) {
-                assert(false && "Bad uniform id!");
-                return false;
-            }
-        }
-
-        return CopyData(info, value, destCB, destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
-    }
-
-    template<typename T>
-    bool UpdateCB0Field(const std::string& name,
-        const T& value, uint8_t* destCB,
-        std::optional<UINT> arrayIdxParam = std::nullopt)
-    {
-        return UpdateCBField(0, name, value, destCB, arrayIdxParam);
-    }
-
-    template<typename T>
-    bool UpdateCB0Field(CBFieldID id,
-        const T& value, uint8_t* destCB,
-        std::optional<UINT> arrayIdxParam = std::nullopt)
-    {
-        return UpdateCBField(0, id, value, destCB, arrayIdxParam);
+        return CopyData(handle.field, value, destCB, handle.destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
     }
 
 private:
