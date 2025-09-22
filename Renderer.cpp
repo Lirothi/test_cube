@@ -16,13 +16,10 @@ Renderer::Renderer()
 }
 
 Renderer::~Renderer() {
-    // 1) Полный аккуратный teardown
-    Shutdown();
-
-    // 2) Теперь отчёт — уже после того, как мы всё обнулили
+    // Отчёт — уже после того, как мы всё обнулили
     ReportLiveObjects(); // если у тебя есть эта функция в сборке дебага
 
-    // 3) Закрываем событие в самом конце
+    // Закрываем событие в самом конце
     if (fenceEvent_ != nullptr) {
         CloseHandle(fenceEvent_);
         fenceEvent_ = nullptr;

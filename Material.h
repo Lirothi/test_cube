@@ -248,7 +248,7 @@ public:
     bool ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
     bool IsProbeInFlight() const { return fsProbeInFlight_.load(std::memory_order_acquire); }
 
-    void Clear() { materials_.clear(); }
+    void Clear();
 
 private:
     // key → material

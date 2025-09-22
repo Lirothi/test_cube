@@ -123,6 +123,21 @@ TaskSystem::TaskHandle TaskSystem::Dispatch(std::size_t jobCount,
     return handle;
 }
 
+void TaskSystem::DispatchTrack(std::size_t jobCount,
+                         std::function<void(std::size_t)> fn,
+                         std::size_t batchSize) {
+    TaskHandle handle = Dispatch(jobCount, std::move(fn), batchSize);
+    TrackFrameTask(handle);
+}
+
+void TaskSystem::DispatchWait(std::size_t jobCount,
+                        std::function<void(std::size_t)> fn,
+                        std::size_t batchSize) {
+    TaskHandle handle = Dispatch(jobCount, std::move(fn), batchSize);
+    Wait(handle);
+    Release(handle);
+}
+
 void TaskSystem::DispatchDetach(std::size_t jobCount,
                           std::function<void(std::size_t)> fn,
                           std::size_t batchSize) {
@@ -135,7 +150,37 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
 void TaskSystem::Wait(TaskHandle handle) {
     if (handle) {
         scheduler_.WaitforTask(handle);
+    }
+}
+
+void TaskSystem::Release(TaskHandle& handle) {
+    if (handle) {
         delete handle;
+        handle = nullptr;
+    }
+}
+
+void TaskSystem::TrackFrameTask(TaskHandle handle) {
+    if (!handle) { return; }
+    std::lock_guard<std::mutex> lk(trackedFrameMutex_);
+    trackedFrameTasks_.push_back(handle);
+}
+
+void TaskSystem::WaitForTrackedAsyncTasks() {
+    std::vector<TaskHandle> handles;
+    {
+        std::lock_guard<std::mutex> lk(trackedFrameMutex_);
+        if (trackedFrameTasks_.empty()) {
+            return;
+        }
+        handles.swap(trackedFrameTasks_);
+    }
+
+    for (auto& h : handles) {
+        Wait(h);
+    }
+    for (auto& h : handles) {
+        Release(h);
     }
 }
 
