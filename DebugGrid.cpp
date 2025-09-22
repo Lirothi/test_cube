@@ -41,7 +41,7 @@ private:
 class AxesUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
-    explicit AxesUniformBinder(DebugGrid::AxesRO& owner) : owner_(owner) {}
+    explicit AxesUniformBinder(const float* thicknessPx) : thicknessPx_(thicknessPx) {}
 
     void RebuildHandles(RenderableObject& owner) override
     {
@@ -67,11 +67,12 @@ public:
 
         const UINT w = renderer->GetWidth();
         const UINT h = renderer->GetHeight();
-        UpdateUniform(owner, viewportThicknessHandle_, material, float4(float(w), float(h), owner_.GetThicknessPx(), 0.0f), cbData);
+        const float thicknessPx = thicknessPx_ ? *thicknessPx_ : 0.0f;
+        UpdateUniform(owner, viewportThicknessHandle_, material, float4(float(w), float(h), thicknessPx, 0.0f), cbData);
     }
 
 private:
-    DebugGrid::AxesRO& owner_;
+    const float* thicknessPx_ = nullptr;
     Material::CBFieldHandle mvpHandle_{};
     Material::CBFieldHandle viewportThicknessHandle_{};
 };
@@ -230,7 +231,7 @@ public:
 
         if (!GetUniformBinder())
         {
-            SetUniformBinder(std::make_unique<AxesUniformBinder>(*this));
+            SetUniformBinder(std::make_unique<AxesUniformBinder>(&thicknessPx_));
         }
 
         RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
