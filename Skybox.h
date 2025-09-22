@@ -8,7 +8,7 @@
 
 class Skybox : public RenderableObject {
 public:
-    Skybox(const std::wstring& filePath): RenderableObject(/*matPreset*/"", /*inputLayout*/"PosOnly", /*graphicsShader*/L"shaders/skybox.hlsl"),
+    Skybox(const std::wstring& filePath): RenderableObject(/*inputLayout*/"PosOnly", /*graphicsShader*/L"shaders/skybox.hlsl"),
         path_(filePath)
     {
         allowWireframe_ = false;
@@ -28,10 +28,7 @@ public:
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
 
-    void OnMaterialHotReload(Renderer* renderer) override;
-
 protected:
-    void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override;
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
     
 private:
@@ -43,7 +40,4 @@ private:
     TextureCube cube_;
     std::wstring path_;
     float exposure_ = 1.0f;
-    Material::CBFieldHandle viewHandle_{};
-    Material::CBFieldHandle projHandle_{};
-    Material::CBFieldHandle exposureHandle_{};
 };

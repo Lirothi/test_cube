@@ -84,6 +84,9 @@
     <ClCompile Include="FrameResource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="GBufferRenderable.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="FontManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -156,6 +159,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="FrameResource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="GBufferRenderable.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DescriptorAllocator.h">

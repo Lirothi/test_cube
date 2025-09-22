@@ -8,6 +8,75 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
+namespace
+{
+class GridMVPBinder final : public RenderableObject::UniformBinder
+{
+public:
+    void RebuildHandles(RenderableObject& owner) override
+    {
+        if (Material* material = owner.GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+        }
+        else
+        {
+            mvpHandle_ = {};
+        }
+    }
+
+    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    {
+        Material* material = owner.GetGraphicsMaterial();
+        if (!material) { return; }
+
+        mat4 mvp = owner.GetModelMatrix() * view * proj;
+        UpdateUniform(owner, mvpHandle_, material, mvp, cbData);
+    }
+
+private:
+    Material::CBFieldHandle mvpHandle_{};
+};
+
+class AxesUniformBinder final : public RenderableObject::UniformBinder
+{
+public:
+    explicit AxesUniformBinder(DebugGrid::AxesRO& owner) : owner_(owner) {}
+
+    void RebuildHandles(RenderableObject& owner) override
+    {
+        if (Material* material = owner.GetGraphicsMaterial())
+        {
+            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+            viewportThicknessHandle_ = material->ComputeCBFieldHandle(0, "viewportThickness");
+        }
+        else
+        {
+            mvpHandle_ = {};
+            viewportThicknessHandle_ = {};
+        }
+    }
+
+    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    {
+        Material* material = owner.GetGraphicsMaterial();
+        if (!material || !renderer) { return; }
+
+        mat4 mvp = owner.GetModelMatrix() * view * proj;
+        UpdateUniform(owner, mvpHandle_, material, mvp, cbData);
+
+        const UINT w = renderer->GetWidth();
+        const UINT h = renderer->GetHeight();
+        UpdateUniform(owner, viewportThicknessHandle_, material, float4(float(w), float(h), owner_.GetThicknessPx(), 0.0f), cbData);
+    }
+
+private:
+    DebugGrid::AxesRO& owner_;
+    Material::CBFieldHandle mvpHandle_{};
+    Material::CBFieldHandle viewportThicknessHandle_{};
+};
+} // namespace
+
 // ──────────────────────────────────────────────────────────────
 // ВЕРШИННЫЕ ТИПЫ (локально, чтобы не плодить инклуды)
 // ──────────────────────────────────────────────────────────────
@@ -29,7 +98,7 @@ struct AxisVertex {
 class DebugGrid::GridRO final : public RenderableObject {
 public:
     GridRO(float halfSize, float step, float yPlane, float alpha)
-        : RenderableObject(/*matPreset*/"", /*inputLayout*/"PosColor", /*shader*/L"shaders/lines.hlsl")
+        : RenderableObject(/*inputLayout*/"PosColor", /*shader*/L"shaders/lines.hlsl")
         , halfSize_(halfSize), step_(step), yPlane_(yPlane), alpha_(alpha)
     {
     }
@@ -52,12 +121,12 @@ public:
         gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
         gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 
-        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
-
-        if (auto* material = GetGraphicsMaterial())
+        if (!GetUniformBinder())
         {
-            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
+            SetUniformBinder(std::make_unique<GridMVPBinder>());
         }
+
+        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
         std::vector<LineVertex> verts;
         BuildGridCPU(verts);
@@ -76,21 +145,6 @@ public:
         vertexCount_ = static_cast<UINT>(verts.size());
 
         um.StealKeepAlive(uploadKeepAlive);
-    }
-
-    void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
-    {
-        mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateUniform(mvpHandle_, graphicsMaterial_.get(), mvp, cbData);
-    }
-
-    void OnMaterialHotReload(Renderer* renderer) override
-    {
-        RenderableObject::OnMaterialHotReload(renderer);
-        if (auto* material = GetGraphicsMaterial())
-        {
-            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
-        }
     }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
@@ -142,7 +196,6 @@ private:
     ComPtr<ID3D12Resource> vb_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     UINT vertexCount_ = 0;
-    Material::CBFieldHandle mvpHandle_{};
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -151,7 +204,7 @@ private:
 class DebugGrid::AxesRO final : public RenderableObject {
 public:
     AxesRO(float axisLen, float yPlane, float alpha, float thicknessPx)
-        : RenderableObject(/*matPreset*/"", /*inputLayout*/"AxisLine", /*shader*/L"shaders/axes.hlsl")
+        : RenderableObject(/*inputLayout*/"AxisLine", /*shader*/L"shaders/axes.hlsl")
         , axisLen_(axisLen), yPlane_(yPlane), alpha_(alpha), thicknessPx_(thicknessPx)
     {
     }
@@ -175,13 +228,12 @@ public:
         gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
         gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 
-        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
-
-        if (auto* material = GetGraphicsMaterial())
+        if (!GetUniformBinder())
         {
-            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
-            viewportThicknessHandle_ = material->ComputeCBFieldHandle(0, "viewportThickness");
+            SetUniformBinder(std::make_unique<AxesUniformBinder>(*this));
         }
+
+        RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
         std::vector<AxisVertex> verts;
         BuildAxesCPU(verts);
@@ -202,25 +254,7 @@ public:
         um.StealKeepAlive(uploadKeepAlive);
     }
 
-    void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj, uint8_t* cbData) override
-    {
-        mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateUniform(mvpHandle_, graphicsMaterial_.get(), mvp, cbData);
-
-        const UINT w = r->GetWidth();
-        const UINT h = r->GetHeight();
-        UpdateUniform(viewportThicknessHandle_, graphicsMaterial_.get(), float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
-    }
-
-    void OnMaterialHotReload(Renderer* renderer) override
-    {
-        RenderableObject::OnMaterialHotReload(renderer);
-        if (auto* material = GetGraphicsMaterial())
-        {
-            mvpHandle_ = material->ComputeCBFieldHandle(0, "modelViewProj");
-            viewportThicknessHandle_ = material->ComputeCBFieldHandle(0, "viewportThickness");
-        }
-    }
+    float GetThicknessPx() const { return thicknessPx_; }
 
     void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
     {
@@ -274,8 +308,6 @@ private:
     ComPtr<ID3D12Resource> vb_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     UINT vertexCount_ = 0;
-    Material::CBFieldHandle mvpHandle_{};
-    Material::CBFieldHandle viewportThicknessHandle_{};
 };
 
 // ──────────────────────────────────────────────────────────────

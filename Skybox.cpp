@@ -3,7 +3,48 @@
 #include "UploadManager.h"
 #include "FrameResource.h"
 
+#include <memory>
+
 using Microsoft::WRL::ComPtr;
+
+namespace
+{
+class SkyboxUniformBinder final : public RenderableObject::UniformBinder
+{
+public:
+    explicit SkyboxUniformBinder(Skybox& owner) : owner_(owner) {}
+
+    void RebuildHandles(RenderableObject& owner) override
+    {
+        viewHandle_ = {};
+        projHandle_ = {};
+        exposureHandle_ = {};
+
+        if (Material* material = owner.GetGraphicsMaterial())
+        {
+            viewHandle_ = material->ComputeCBFieldHandle(0, "view");
+            projHandle_ = material->ComputeCBFieldHandle(0, "proj");
+            exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
+        }
+    }
+
+    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    {
+        Material* material = owner.GetGraphicsMaterial();
+        if (!material) { return; }
+
+        UpdateUniform(owner, viewHandle_, material, view, cbData);
+        UpdateUniform(owner, projHandle_, material, proj, cbData);
+        UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
+    }
+
+private:
+    Skybox& owner_;
+    Material::CBFieldHandle viewHandle_{};
+    Material::CBFieldHandle projHandle_{};
+    Material::CBFieldHandle exposureHandle_{};
+};
+} // namespace
 
 void Skybox::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
@@ -29,33 +70,12 @@ void Skybox::Init(Renderer* renderer,
     // Сборка геометрии (куб)
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
 
+    if (!GetUniformBinder())
+    {
+        SetUniformBinder(std::make_unique<SkyboxUniformBinder>(*this));
+    }
+
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
-
-    if (auto* material = GetGraphicsMaterial())
-    {
-        viewHandle_ = material->ComputeCBFieldHandle(0, "view");
-        projHandle_ = material->ComputeCBFieldHandle(0, "proj");
-        exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
-    }
-}
-
-void Skybox::OnMaterialHotReload(Renderer* renderer)
-{
-    RenderableObject::OnMaterialHotReload(renderer);
-    if (auto* material = GetGraphicsMaterial())
-    {
-        viewHandle_ = material->ComputeCBFieldHandle(0, "view");
-        projHandle_ = material->ComputeCBFieldHandle(0, "proj");
-        exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
-    }
-}
-
-void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
-{
-    // CB0: ожидаем идентификаторы "view" и "proj" в cbuffer'е (см. skybox.hlsl)
-    UpdateUniform(viewHandle_, graphicsMaterial_.get(), view, cbData);
-    UpdateUniform(projHandle_, graphicsMaterial_.get(), proj, cbData);
-    UpdateUniform(exposureHandle_, graphicsMaterial_.get(), exposure_, cbData);
 }
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)

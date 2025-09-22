@@ -6,7 +6,7 @@ StaticMesh::StaticMesh(const std::string& modelName,
     const std::string& matPreset,
     const std::string& inputLayout,
     const std::wstring& graphicsShader)
-    : RenderableObject(matPreset, inputLayout, graphicsShader),
+    : GBufferRenderable(matPreset, inputLayout, graphicsShader),
     modelName_(modelName)
 {
     pos_ = float3(0.0f, 0.0f, 0.0f);
@@ -17,7 +17,7 @@ StaticMesh::StaticMesh(const std::string& modelName,
 
 void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+    GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);
     if (!modelName_.empty())
     {
         mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
