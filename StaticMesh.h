@@ -1,8 +1,8 @@
 #pragma once
-#include "RenderableObject.h"
+#include "GBufferRenderable.h"
 #include "Math.h"
 
-class StaticMesh : public RenderableObject
+class StaticMesh : public GBufferRenderable
 {
 public:
     StaticMesh(const std::string& modelName,

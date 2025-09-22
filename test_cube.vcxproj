@@ -149,6 +149,7 @@
     <ClCompile Include="FontAtlas.cpp" />
     <ClCompile Include="FontManager.cpp" />
     <ClCompile Include="FrameResource.cpp" />
+    <ClCompile Include="GBufferRenderable.cpp" />
     <ClCompile Include="GpuInstancedModels.cpp" />
     <ClCompile Include="InputLayoutManager.cpp" />
     <ClCompile Include="InputManager.cpp" />
@@ -184,6 +185,7 @@
     <ClInclude Include="FontAtlas.h" />
     <ClInclude Include="FontManager.h" />
     <ClInclude Include="FrameResource.h" />
+    <ClInclude Include="GBufferRenderable.h" />
     <ClInclude Include="GpuInstancedModels.h" />
     <ClInclude Include="Helpers.h" />
     <ClInclude Include="InputLayoutManager.h" />

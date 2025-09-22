@@ -6,7 +6,6 @@
 #include <memory>
 
 #include "Material.h"
-#include "MaterialData.h"
 #include "Mesh.h"
 #include "RenderContext.h"
 #include "Math.h"
@@ -16,8 +15,24 @@ class Renderer;
 
 class RenderableObject: public RenderableObjectBase {
 public:
+    class UniformBinder
+    {
+    public:
+        virtual ~UniformBinder() = default;
+
+        virtual void RebuildHandles(RenderableObject& /*owner*/) {}
+        virtual void UpdateMainCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*view*/, const mat4& /*proj*/, uint8_t* /*cbData*/) {}
+        virtual void UpdateShadowCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* /*cbData*/) {}
+
+    protected:
+        template<typename T>
+        bool UpdateUniform(RenderableObject& owner, const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData) const
+        {
+            return owner.UpdateUniform(handle, material, value, cbData);
+        }
+    };
+
     RenderableObject(
-        const std::string& matPreset,
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
@@ -40,11 +55,8 @@ public:
     const Mesh* GetMesh() const { return mesh_.get(); }
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
-    void SetGraphicsMaterial(Material* m) { graphicsMaterial_.reset(m); RebuildHandleCaches(); } // если хочешь вручную
-
-    // пер-объектные параметры (b0)
-    MaterialParams& MaterialParamsRef() { return matParams_; }
-    const MaterialParams& MaterialParamsRef() const { return matParams_; }
+    void SetGraphicsMaterial(Material* m);
+    Material* GetShadowMaterial() const { return shadowMaterial_.get(); }
 
     // GraphicsDesc — правим пайплайн (топология/блендинг/растр/DS)
     Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
@@ -58,13 +70,10 @@ public:
 
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
-    virtual void UpdateUniforms(Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData);
     virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
-    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);
-
-    void ApplyMaterialParamsToCB(uint8_t* cbData);
+    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
 
     template<typename T>
     bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)
@@ -76,12 +85,8 @@ protected:
     }
 
 protected:
-    // Данные рендера
-    std::shared_ptr<MaterialData> matData_;          // ассет: текстуры+фичи (shared)
-    MaterialParams                matParams_;        // пер-объект в b0
     std::shared_ptr<Material>     graphicsMaterial_; // вариант шейдера (PSO/RS)
     Material::GraphicsDesc        graphicsDesc_;
-    std::string                   matPreset_;
     std::shared_ptr<Material>     shadowMaterial_;
     Material::GraphicsDesc        shadowDesc_;
 
@@ -91,29 +96,16 @@ protected:
     // CB (upload, пер-объектный)
     bool allowWireframe_ = true;
 
+    void SetUniformBinder(std::unique_ptr<UniformBinder> binder);
+    UniformBinder* GetUniformBinder() const { return uniformBinder_.get(); }
+
 private:
     static std::wstring AppendSuffixBeforeExt(const std::wstring& file, const std::wstring& suffix);
 
-    void RebuildHandleCaches();
-
-    struct CBHandles
-    {
-        Material::CBFieldHandle world;
-        Material::CBFieldHandle view;
-        Material::CBFieldHandle proj;
-        Material::CBFieldHandle baseColor;
-        Material::CBFieldHandle metalRough;
-        Material::CBFieldHandle texOffsScale;
-        Material::CBFieldHandle texFlags;
-    } cb0Handles_{};
-
-    struct ShadowCBHandles
-    {
-        Material::CBFieldHandle world;
-        Material::CBFieldHandle view;
-        Material::CBFieldHandle proj;
-    } shadowHandles_{};
-
     RenderableObject(const RenderableObject&) = delete;
     RenderableObject& operator=(const RenderableObject&) = delete;
+
+    friend class UniformBinder;
+
+    std::unique_ptr<UniformBinder> uniformBinder_;
 };
