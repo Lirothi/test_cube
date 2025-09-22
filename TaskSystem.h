@@ -68,6 +68,12 @@ public:
     std::size_t ThreadIndex() const;
 
 private:
+    struct TaskWithDeps;
+    struct LambdaTaskSet;
+    struct RangeTaskSet;
+    struct AutoDelete;
+    friend struct AutoDelete;
+
     TaskSystem() = default;
     ~TaskSystem();
 
@@ -75,8 +81,25 @@ private:
     TaskSystem& operator=(const TaskSystem&) = delete;
 
 private:
+    LambdaTaskSet* AcquireLambdaTask(Task&& f, std::size_t depCount);
+    RangeTaskSet* AcquireRangeTask(std::size_t jobCount,
+                                   std::function<void(std::size_t)> fn,
+                                   std::size_t batchSize,
+                                   std::size_t depCount);
+    void RecycleLambdaTask(LambdaTaskSet* task);
+    void RecycleRangeTask(RangeTaskSet* task);
+    AutoDelete* AcquireAutoDelete(enki::ITaskSet* task, AutoDelete::Kind kind);
+    void RecycleAutoDelete(AutoDelete* autoDelete);
+    void ClearPools();
+
     enki::TaskScheduler scheduler_;
     std::vector<TaskHandle> trackedFrameTasks_;
     std::mutex trackedFrameMutex_;
+    std::vector<LambdaTaskSet*> lambdaTaskPool_;
+    std::vector<RangeTaskSet*> rangeTaskPool_;
+    std::mutex lambdaPoolMutex_;
+    std::mutex rangePoolMutex_;
+    std::vector<AutoDelete*> autoDeletePool_;
+    std::mutex autoDeletePoolMutex_;
 };
 
