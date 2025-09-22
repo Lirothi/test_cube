@@ -1145,8 +1145,6 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
 
 void Scene::Clear()
 {
-    TaskSystem::Get().WaitForTrackedAsyncTasks();
-
     matLighting_.reset();
     matCompose_.reset();
     matTonemap_.reset();
