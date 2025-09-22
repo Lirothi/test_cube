@@ -368,6 +368,8 @@ void Scene::Render(Renderer* renderer) {
 
     renderer->BeginSubmitTimeline();
 
+    TaskSystem::Get().WaitForTrackedAsyncTasks();
+
     // матрицы кадра и параметры камеры/света (как у тебя)
     const float aspect = float(renderer->GetWidth()) / float(renderer->GetHeight());
     const mat4 view = camera_.GetViewMatrix();
@@ -460,10 +462,10 @@ void Scene::Render(Renderer* renderer) {
 
     rg.ExecuteParallel(renderer, TaskSystem::Get());
     //rg.Execute(renderer);
-    
+
     {
-        CPU_SCOPE(L"Main Wait");
-        TaskSystem::Get().WaitForAll();
+        CPU_SCOPE(L"Frame Async Wait");
+        TaskSystem::Get().WaitForTrackedAsyncTasks();
     }
 
     RenderGraph epilogueRG;
@@ -472,8 +474,8 @@ void Scene::Render(Renderer* renderer) {
     epilogueRG.Execute(renderer);
     
     {
-        CPU_SCOPE(L"Last Wait");
-        TaskSystem::Get().WaitForAll();
+        CPU_SCOPE(L"Overlay Async Wait");
+        TaskSystem::Get().WaitForTrackedAsyncTasks();
     }
     renderer->EndFrame();
 }
@@ -493,7 +495,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     const size_t N = objects.size();
     const size_t chunkSize = 16;
 
-    tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
+    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize,
         [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
         {
             CPU_SCOPE(L"RenderObjectBatch.Async");
@@ -551,7 +553,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
         chunkSize = 32;
     }
 
-    tasks.DispatchDetach((N + chunkSize - 1) / chunkSize,
+    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize,
         [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
         {
             CPU_SCOPE(L"RenderShadowBatch.Async");
@@ -559,21 +561,21 @@ void Scene::RenderShadowBatch(Renderer* renderer,
             const size_t end = std::min(begin + chunkSize, objects.size());
 
             // каждый чанк — отдельный direct CL
-              auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-              t.cl->SetName(L"RenderShadowBatch");
-              {
-                  GPU_SCOPE(t.cl, L"RenderShadowBatch");
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            t.cl->SetName(L"RenderShadowBatch");
+            {
+                GPU_SCOPE(t.cl, L"RenderShadowBatch");
 
-                  // важное: привязываем нужный тайл атласа каскада, без очистки
-                  renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
+                // важное: привязываем нужный тайл атласа каскада, без очистки
+                renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
 
-                  for (size_t i = begin; i < end; ++i) {
-                      if (auto* obj = objects[i]) {
-                          obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                      }
-                  }
-              }
-              renderer->EndThreadCommandList(t, batchIndex);
+                for (size_t i = begin; i < end; ++i) {
+                    if (auto* obj = objects[i]) {
+                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                    }
+                }
+            }
+            renderer->EndThreadCommandList(t, batchIndex);
         }, 1);
 }
 
@@ -614,7 +616,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[3] = 100.0f;
     cachedSplitsVS_[4] = zFarShadow;
 
-    auto cascades = TaskSystem::Get().Dispatch(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+    TaskSystem& tasks = TaskSystem::Get();
+    tasks.DispatchWait(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
         CPU_SCOPE(L"CSM.PerCascade");
         const auto& D = renderer->GetDeferredForFrame();
@@ -697,7 +700,6 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
             RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
         }
     }, 1);
-    TaskSystem::Get().Wait(cascades);
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
@@ -1143,6 +1145,8 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
 
 void Scene::Clear()
 {
+    TaskSystem::Get().WaitForTrackedAsyncTasks();
+
     matLighting_.reset();
     matCompose_.reset();
     matTonemap_.reset();

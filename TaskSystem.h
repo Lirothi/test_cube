@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <memory>
 #include <initializer_list>
+#include <mutex>
 
 #include "third_party/enkiTS/src/TaskScheduler.h"
 
@@ -31,6 +32,12 @@ public:
     TaskHandle Dispatch(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
                         std::size_t batchSize = 1);
+    void DispatchTrack(std::size_t jobCount,
+                       std::function<void(std::size_t)> fn,
+                       std::size_t batchSize = 1);
+    void DispatchWait(std::size_t jobCount,
+                      std::function<void(std::size_t)> fn,
+                      std::size_t batchSize = 1);
 
     // fire-and-forget versions (auto delete)
     void SubmitDetach(Task t);
@@ -39,19 +46,21 @@ public:
                         std::size_t batchSize = 1);
 
     void Wait(TaskHandle handle);
+    void Release(TaskHandle& handle);
+
+    void TrackFrameTask(TaskHandle handle);
+    void WaitForTrackedAsyncTasks();
 
     template<class F>
     static void ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
-        auto h = Get().Dispatch(jobCount, std::forward<F>(fn), batchSize);
-        Get().Wait(h);
+        Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
     }
 
     template<class F>
     static void ParallelForNoHelp(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
-        auto h = Get().Dispatch(jobCount, std::forward<F>(fn), batchSize);
-        Get().Wait(h);
+        Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
     }
 
     void WaitForAll();
@@ -67,5 +76,7 @@ private:
 
 private:
     enki::TaskScheduler scheduler_;
+    std::vector<TaskHandle> trackedFrameTasks_;
+    std::mutex trackedFrameMutex_;
 };
 

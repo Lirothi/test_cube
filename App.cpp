@@ -170,7 +170,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         Profiler::Get().EndFrame();
     }
 
-    scene_.Clear();
-
     TaskSystem::Get().Stop();
+
+    scene_.Clear();
+    renderer_.Shutdown();
 }

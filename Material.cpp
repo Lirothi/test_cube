@@ -872,9 +872,14 @@ bool MaterialManager::RequestFSProbeAsync()
             }
         }
         fsProbeInFlight_.store(false, std::memory_order_release);
-        });
+    });
 
     return true;
+}
+
+void MaterialManager::Clear()
+{
+    materials_.clear();
 }
 
 bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)

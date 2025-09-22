@@ -147,8 +147,9 @@ void Profiler::EndFrame() {
     if (!GetEnabled()) { return; }
 
     // 0) ждём прошлую асинхронную сборку (минимум работы в главном потоке)
-    TaskSystem::Get().Wait(overlayTask_);
-    overlayTask_ = nullptr;
+    TaskSystem& tasks = TaskSystem::Get();
+    tasks.Wait(overlayTask_);
+    tasks.Release(overlayTask_);
 
     // 1) заберём сэмплы текущего кадра и закроем кадр (быстро)
     std::vector<ScopeSample> samples;

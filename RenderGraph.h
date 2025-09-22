@@ -120,7 +120,12 @@ public:
         }
 
         for (size_t i = 0; i < N; ++i) {
-            tasks.Wait(passDoneScratch_[i]);
+            if (passDoneScratch_[i]) {
+                tasks.Wait(passDoneScratch_[i]);
+            }
+        }
+        for (size_t i = N; i-- > 0;) {
+            tasks.Release(passDoneScratch_[i]);
         }
     }
 
