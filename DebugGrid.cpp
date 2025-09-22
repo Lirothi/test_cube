@@ -81,7 +81,7 @@ public:
     void UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateGraphicsUniform(mvpHandle_, mvp, cbData);
+        UpdateUniform(mvpHandle_, graphicsMaterial_.get(), mvp, cbData);
     }
 
     void OnMaterialHotReload(Renderer* renderer) override
@@ -205,11 +205,11 @@ public:
     void UpdateUniforms(Renderer* r, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         mat4 mvp = (GetModelMatrix() * view * proj);
-        UpdateGraphicsUniform(mvpHandle_, mvp, cbData);
+        UpdateUniform(mvpHandle_, graphicsMaterial_.get(), mvp, cbData);
 
         const UINT w = r->GetWidth();
         const UINT h = r->GetHeight();
-        UpdateGraphicsUniform(viewportThicknessHandle_, float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
+        UpdateUniform(viewportThicknessHandle_, graphicsMaterial_.get(), float4(float(w), float(h), thicknessPx_, 0.0f), cbData);
     }
 
     void OnMaterialHotReload(Renderer* renderer) override

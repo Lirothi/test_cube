@@ -64,24 +64,16 @@ protected:
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData);
 
-    // Утилита записи в CB (b0)
+    void ApplyMaterialParamsToCB(uint8_t* cbData);
+
     template<typename T>
-    bool UpdateGraphicsUniform(const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
+    bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)
     {
         if (!cbData) { return false; }
-        if (handle.isValid && graphicsMaterial_) {
-            return UpdateUniform(handle, graphicsMaterial_.get(), value, cbData);
-        }
-        return false;
+        if (!material) { return false; }
+        if (!handle.isValid) { return false; }
+        return material->UpdateCBField(handle, value, cbData);
     }
-
-    template<typename T>
-    bool UpdateShadowUniform(const Material::CBFieldHandle& handle, const T& value, uint8_t* cbData)
-    {
-        return UpdateUniform(handle, shadowMaterial_.get(), value, cbData);
-    }
-
-    void ApplyMaterialParamsToCB(uint8_t* cbData);
 
 protected:
     // Данные рендера
@@ -121,15 +113,6 @@ private:
         Material::CBFieldHandle view;
         Material::CBFieldHandle proj;
     } shadowHandles_{};
-
-    template<typename T>
-    bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)
-    {
-        if (!cbData) { return false; }
-        if (!material) { return false; }
-        if (!handle.isValid) { return false; }
-        return material->UpdateCBField(handle, value, cbData);
-    }
 
     RenderableObject(const RenderableObject&) = delete;
     RenderableObject& operator=(const RenderableObject&) = delete;

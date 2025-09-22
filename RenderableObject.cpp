@@ -77,9 +77,9 @@ void RenderableObject::UpdateUniforms(Renderer* renderer, const mat4& view, cons
 {
     if (!cbData) { return; }
     //CPU_SCOPE(L"RenderableObject::UpdateUniforms");
-    UpdateGraphicsUniform(cb0Handles_.world, GetModelMatrix(), cbData);
-    UpdateGraphicsUniform(cb0Handles_.view, view, cbData);
-    UpdateGraphicsUniform(cb0Handles_.proj, proj, cbData);
+    UpdateUniform(cb0Handles_.world, graphicsMaterial_.get(), GetModelMatrix(), cbData);
+    UpdateUniform(cb0Handles_.view, graphicsMaterial_.get(), view, cbData);
+    UpdateUniform(cb0Handles_.proj, graphicsMaterial_.get(), proj, cbData);
 
     ApplyMaterialParamsToCB(cbData);
 }
@@ -127,10 +127,10 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 void RenderableObject::ApplyMaterialParamsToCB(uint8_t* cbData)
 {
     const auto& p = matParams_;
-    UpdateGraphicsUniform(cb0Handles_.baseColor, p.baseColor, cbData);
-    UpdateGraphicsUniform(cb0Handles_.metalRough, p.metalRough, cbData);
-    UpdateGraphicsUniform(cb0Handles_.texOffsScale, p.texOffsScale, cbData);
-    UpdateGraphicsUniform(cb0Handles_.texFlags, p.texFlags, cbData);
+    UpdateUniform(cb0Handles_.baseColor, graphicsMaterial_.get(), p.baseColor, cbData);
+    UpdateUniform(cb0Handles_.metalRough, graphicsMaterial_.get(), p.metalRough, cbData);
+    UpdateUniform(cb0Handles_.texOffsScale, graphicsMaterial_.get(), p.texOffsScale, cbData);
+    UpdateUniform(cb0Handles_.texFlags, graphicsMaterial_.get(), p.texFlags, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -147,16 +147,9 @@ void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     const mat4& lightView, const mat4& lightProj, RenderContext& ctx, uint8_t* cbData)
 {
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
-    //CPU_SCOPE(L"RenderableObject::RecordShadow");
-
-    //TaskSystem::Get().Submit([this, &lightProj, &lightView, cbData]()
-    {
-        //CPU_SCOPE(L"RenderableObject::RecordShadow.Unis");
-        UpdateShadowUniform(shadowHandles_.world, GetModelMatrix(), cbData);
-        UpdateShadowUniform(shadowHandles_.view, lightView, cbData);
-        UpdateShadowUniform(shadowHandles_.proj, lightProj, cbData);
-    }
-    //});
+    UpdateUniform(shadowHandles_.world, shadowMaterial_.get(), GetModelMatrix(), cbData);
+    UpdateUniform(shadowHandles_.view, shadowMaterial_.get(), lightView, cbData);
+    UpdateUniform(shadowHandles_.proj, shadowMaterial_.get(), lightProj, cbData);
 
     shadowMaterial_->Bind(cl, ctx, false);
 }

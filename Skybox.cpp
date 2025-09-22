@@ -53,9 +53,9 @@ void Skybox::OnMaterialHotReload(Renderer* renderer)
 void Skybox::UpdateUniforms(Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData)
 {
     // CB0: ожидаем идентификаторы "view" и "proj" в cbuffer'е (см. skybox.hlsl)
-    UpdateGraphicsUniform(viewHandle_, view, cbData);
-    UpdateGraphicsUniform(projHandle_, proj, cbData);
-    UpdateGraphicsUniform(exposureHandle_, exposure_, cbData);
+    UpdateUniform(viewHandle_, graphicsMaterial_.get(), view, cbData);
+    UpdateUniform(projHandle_, graphicsMaterial_.get(), proj, cbData);
+    UpdateUniform(exposureHandle_, graphicsMaterial_.get(), exposure_, cbData);
 }
 
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
