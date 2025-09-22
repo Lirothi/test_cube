@@ -115,7 +115,8 @@ public:
         // finally submit tasks for execution
         for (const auto& n : flat) {
             const size_t passIdx = n.pass;
-            if (!passes_[passIdx].exec) { continue; }
+            auto& pass = passes_[passIdx];
+            if (!pass.exec || pass.mtDeps.size() > 0) { continue; }
             tasks.Submit(passDoneScratch_[passIdx]);
         }
 
