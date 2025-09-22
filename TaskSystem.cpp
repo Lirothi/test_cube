@@ -54,14 +54,12 @@ struct TaskSystem::RangeTaskSet : TaskWithDeps {
 };
 
 struct TaskSystem::AutoDelete : enki::ICompletable {
-    enum class Kind { Lambda, Range };
-
     TaskSystem& owner;
     enki::ITaskSet* task;
-    Kind kind;
+    AutoDeleteKind kind;
     enki::Dependency dep;
 
-    AutoDelete(TaskSystem& sys, enki::ITaskSet* t, Kind k)
+    AutoDelete(TaskSystem& sys, enki::ITaskSet* t, AutoDeleteKind k)
         : owner(sys), task(t), kind(k) {
         SetDependency(dep, task);
     }
@@ -69,10 +67,10 @@ struct TaskSystem::AutoDelete : enki::ICompletable {
     void OnDependenciesComplete(enki::TaskScheduler* pTS, uint32_t thread) override {
         ICompletable::OnDependenciesComplete(pTS, thread);
         switch (kind) {
-        case Kind::Lambda:
+        case AutoDeleteKind::Lambda:
             owner.RecycleLambdaTask(static_cast<LambdaTaskSet*>(task));
             break;
-        case Kind::Range:
+        case AutoDeleteKind::Range:
             owner.RecycleRangeTask(static_cast<RangeTaskSet*>(task));
             break;
         }
@@ -124,7 +122,7 @@ void TaskSystem::Submit(TaskHandle handle) {
 void TaskSystem::SubmitDetach(Task t) {
     if (!t) { return; }
     auto* taskPtr = AcquireLambdaTask(std::move(t), 0);
-    AcquireAutoDelete(taskPtr, AutoDelete::Kind::Lambda);
+    AcquireAutoDelete(taskPtr, AutoDeleteKind::Lambda);
     scheduler_.AddTaskSetToPipe(taskPtr);
 }
 
@@ -157,7 +155,7 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
     TaskHandle taskHandle = CreateRangeTask(jobCount, std::move(fn), batchSize);
     auto* taskPtr = static_cast<RangeTaskSet*>(taskHandle);
     if (!taskPtr) { return; }
-    AcquireAutoDelete(taskPtr, AutoDelete::Kind::Range);
+    AcquireAutoDelete(taskPtr, AutoDeleteKind::Range);
     scheduler_.AddTaskSetToPipe(taskPtr);
 }
 
@@ -273,7 +271,7 @@ void TaskSystem::RecycleRangeTask(RangeTaskSet* task) {
     rangeTaskPool_.push_back(task);
 }
 
-TaskSystem::AutoDelete* TaskSystem::AcquireAutoDelete(enki::ITaskSet* task, AutoDelete::Kind kind) {
+TaskSystem::AutoDelete* TaskSystem::AcquireAutoDelete(enki::ITaskSet* task, AutoDeleteKind kind) {
     AutoDelete* autoDelete = nullptr;
     {
         std::lock_guard<std::mutex> lock(autoDeletePoolMutex_);

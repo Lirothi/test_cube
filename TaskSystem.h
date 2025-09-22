@@ -72,7 +72,7 @@ private:
     struct LambdaTaskSet;
     struct RangeTaskSet;
     struct AutoDelete;
-    friend struct AutoDelete;
+    struct AutoDelete;
 
     TaskSystem() = default;
     ~TaskSystem();
@@ -81,6 +81,8 @@ private:
     TaskSystem& operator=(const TaskSystem&) = delete;
 
 private:
+    enum class AutoDeleteKind { Lambda, Range };
+
     LambdaTaskSet* AcquireLambdaTask(Task&& f, std::size_t depCount);
     RangeTaskSet* AcquireRangeTask(std::size_t jobCount,
                                    std::function<void(std::size_t)> fn,
@@ -88,7 +90,7 @@ private:
                                    std::size_t depCount);
     void RecycleLambdaTask(LambdaTaskSet* task);
     void RecycleRangeTask(RangeTaskSet* task);
-    AutoDelete* AcquireAutoDelete(enki::ITaskSet* task, AutoDelete::Kind kind);
+    AutoDelete* AcquireAutoDelete(enki::ITaskSet* task, AutoDeleteKind kind);
     void RecycleAutoDelete(AutoDelete* autoDelete);
     void ClearPools();
 
