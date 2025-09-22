@@ -323,6 +323,8 @@ void TextManager::Clear() {
     verts_.clear(); idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     RecycleRegionLines();
+    nextUnusedRegionLine_ = 0;
+    freeRegionLines_.clear();
     for (Region& rg : regions_) {
         regionPool_.push_back(std::move(rg));
     }
@@ -332,19 +334,23 @@ void TextManager::Clear() {
 
 TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint) {
     RegionLine* ln = nullptr;
-    for (RegionLine& candidate : regionLinePool_) {
-        if (!candidate.inUse) {
-            ln = &candidate;
-            break;
-        }
+
+    if (!freeRegionLines_.empty()) {
+        ln = freeRegionLines_.back();
+        freeRegionLines_.pop_back();
+        assert(ln != nullptr);
+        const RegionLine* poolBegin = regionLinePool_.data();
+        const RegionLine* poolEnd = poolBegin + regionLinePool_.size();
+        assert(ln >= poolBegin && ln < poolEnd);
+        assert(!ln->inUse);
+    } else if (nextUnusedRegionLine_ < regionLinePool_.size()) {
+        ln = &regionLinePool_[nextUnusedRegionLine_++];
+        assert(ln != nullptr);
+        assert(!ln->inUse);
     }
 
     if (!ln) {
-        regionLinePool_.emplace_back();
-        ln = &regionLinePool_.back();
-    }
-
-    if (!ln) {
+        assert(false && "RegionLine pool overflow");
         return nullptr;
     }
 
@@ -362,13 +368,18 @@ TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint)
 }
 
 void TextManager::RecycleRegionLines() {
+    const RegionLine* poolBegin = regionLinePool_.data();
+    const RegionLine* poolEnd = poolBegin + regionLinePool_.size();
     for (Region& rg : regions_) {
         for (RegionLine* ln : rg.lines) {
             if (!ln) { continue; }
+            assert(ln >= poolBegin && ln < poolEnd);
             ln->run.Reset();
             ln->widthPx = 0.0f;
             ln->glyphCount = 0;
             ln->inUse = false;
+            freeRegionLines_.push_back(ln);
+            assert(freeRegionLines_.size() <= regionLinePool_.size());
         }
         rg.lines.clear();
         rg.maxLineWidth = 0.0f;

@@ -1,6 +1,5 @@
 #pragma once
 #include <vector>
-#include <list>
 #include <array>
 #include <cassert>
 #include <string>
@@ -119,6 +118,8 @@ private:
     };
 
 private:
+    static constexpr size_t kRegionLinePoolCapacity = 128;
+
     template<typename T>
     class GrowOnlyArray {
     public:
@@ -207,7 +208,9 @@ private:
 
     std::vector<Region> regions_;
     std::vector<Region> regionPool_;
-    std::list<RegionLine> regionLinePool_;
+    std::array<RegionLine, kRegionLinePoolCapacity> regionLinePool_{};
+    size_t nextUnusedRegionLine_ = 0;
+    std::vector<RegionLine*> freeRegionLines_;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;
