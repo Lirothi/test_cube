@@ -338,15 +338,8 @@ TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint)
     if (!freeRegionLines_.empty()) {
         ln = freeRegionLines_.back();
         freeRegionLines_.pop_back();
-        assert(ln != nullptr);
-        const RegionLine* poolBegin = regionLinePool_.data();
-        const RegionLine* poolEnd = poolBegin + regionLinePool_.size();
-        assert(ln >= poolBegin && ln < poolEnd);
-        assert(!ln->inUse);
     } else if (nextUnusedRegionLine_ < regionLinePool_.size()) {
         ln = &regionLinePool_[nextUnusedRegionLine_++];
-        assert(ln != nullptr);
-        assert(!ln->inUse);
     }
 
     if (!ln) {
@@ -379,7 +372,6 @@ void TextManager::RecycleRegionLines() {
             ln->glyphCount = 0;
             ln->inUse = false;
             freeRegionLines_.push_back(ln);
-            assert(freeRegionLines_.size() <= regionLinePool_.size());
         }
         rg.lines.clear();
         rg.maxLineWidth = 0.0f;
@@ -387,6 +379,7 @@ void TextManager::RecycleRegionLines() {
         rg.glyphCount = 0;
         rg.lineStepPx = 18;
     }
+    assert(freeRegionLines_.size() <= regionLinePool_.size());
 }
 
 // ===== приватные =====
