@@ -1,4 +1,4 @@
-#include "TaskSystemTBB.h"
+#include "TaskSystem.h"
 
 #ifdef TASKSYSTEM_USE_TBB
 
@@ -203,10 +203,16 @@ void TaskSystem::SetDependencies(TaskHandle handle, const std::vector<TaskHandle
 {
     if (!handle) { return; }
 
+    bool registeredDependency = false;
     for (auto* dep : deps) {
         if (!dep) { continue; }
         handle->IncrementDependency();
         dep->AddDependent(handle);
+        registeredDependency = true;
+    }
+
+    if (registeredDependency && !handle->submitted_.load(std::memory_order_acquire)) {
+        Submit(handle);
     }
 }
 

@@ -502,6 +502,8 @@ void Scene::RenderObjectBatch(Renderer* renderer,
         return;
     }
 
+    //chunkSize = 16;
+
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
@@ -567,9 +569,9 @@ void Scene::RenderShadowBatch(Renderer* renderer,
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
-    if (chunkSize == 0) 
+    if (chunkSize == 0)
     {
-        chunkSize = 32;
+        chunkSize = 16;
     }
 
     auto shadowJob = [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)

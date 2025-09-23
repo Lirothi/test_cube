@@ -76,7 +76,6 @@ private:
     struct LambdaTaskSet;
     struct RangeTaskSet;
     struct AutoDelete;
-    struct AutoDelete;
 
     TaskSystem() = default;
     ~TaskSystem();

@@ -16,7 +16,6 @@
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
-#include <tbb/this_task_arena.h>
 
 #ifndef TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
 #define TASKSYSTEM_ENABLE_PARALLEL_EXECUTION 1
@@ -24,15 +23,37 @@
 
 class TaskSystem {
 public:
+    struct TaskWithDeps;
+    using TaskHandle = TaskWithDeps*;
+
+    struct TaskWithDeps {
+        TaskWithDeps(TaskSystem& owner, std::size_t depCapacity);
+        virtual ~TaskWithDeps() = default;
+
+        void AddDependent(TaskHandle dependent);
+        void IncrementDependency();
+        void DependencySatisfied();
+        void NotifyDependents();
+
+        virtual void Execute() = 0;
+
+        TaskSystem& owner_;
+        std::atomic<std::size_t> pendingDeps_{ 0 };
+        std::vector<TaskHandle> dependents_;
+        std::mutex dependentsMutex_;
+        std::promise<void> completionPromise_;
+        std::shared_future<void> completionFuture_;
+        std::atomic<bool> submitted_{ false };
+        std::atomic<bool> scheduled_{ false };
+        std::atomic<int> refCount_{ 1 };
+    };
+
     using Task = std::function<void()>;
 
     static TaskSystem& Get();
 
     void Start(unsigned threadCount = 0);
     void Stop();
-
-    struct TaskWithDeps;
-    using TaskHandle = TaskWithDeps*;
 
     TaskHandle Submit(Task t);
     TaskHandle CreateTask(Task t, std::size_t depCount = 0);
@@ -80,28 +101,6 @@ public:
     std::size_t ThreadIndex() const;
 
 private:
-    struct TaskWithDeps {
-        TaskWithDeps(TaskSystem& owner, std::size_t depCapacity);
-        virtual ~TaskWithDeps() = default;
-
-        void AddDependent(TaskHandle dependent);
-        void IncrementDependency();
-        void DependencySatisfied();
-        void NotifyDependents();
-
-        virtual void Execute() = 0;
-
-        TaskSystem& owner_;
-        std::atomic<std::size_t> pendingDeps_{0};
-        std::vector<TaskHandle> dependents_;
-        std::mutex dependentsMutex_;
-        std::promise<void> completionPromise_;
-        std::shared_future<void> completionFuture_;
-        std::atomic<bool> submitted_{false};
-        std::atomic<bool> scheduled_{false};
-        std::atomic<int> refCount_{1};
-    };
-
     struct LambdaTaskSet : TaskWithDeps {
         LambdaTaskSet(TaskSystem& owner, Task&& fn, std::size_t depCapacity);
         void Execute() override;

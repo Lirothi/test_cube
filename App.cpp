@@ -120,6 +120,7 @@ void App::InitScene()
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
     InitWindow(hInstance, nCmdShow);
     TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+    //TaskSystem::Get().Start(8);
     Profiler::Get().SetThreadName("MainThread");
 
     InitScene();
