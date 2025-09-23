@@ -9,6 +9,10 @@
 
 #include "third_party/enkiTS/src/TaskScheduler.h"
 
+#ifndef TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+#define TASKSYSTEM_ENABLE_PARALLEL_EXECUTION 1
+#endif
+
 class TaskSystem {
 public:
     using Task = std::function<void()>;

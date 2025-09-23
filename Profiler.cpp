@@ -222,11 +222,13 @@ void Profiler::EndFrame() {
     }
 #endif
 
+    auto overlayJob =
 #if PROF_GPU_ENABLED
-    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples), gpuSamples = std::move(gpuSamples), traceDump = std::move(traceDump), haveTraceDump]() mutable {
+        [this, samples = std::move(samples), gpuSamples = std::move(gpuSamples), traceDump = std::move(traceDump), haveTraceDump]() mutable
 #else
-    overlayTask_ = TaskSystem::Get().Submit([this, samples = std::move(samples), traceDump = std::move(traceDump), haveTraceDump]() mutable {
+        [this, samples = std::move(samples), traceDump = std::move(traceDump), haveTraceDump]() mutable
 #endif
+    {
         const auto t0 = CoolClock::now();
 
         // A) свёртка сэмплов в stats_ (без локов) + EMA/lastCount
@@ -444,7 +446,14 @@ void Profiler::EndFrame() {
         if (haveTraceDump && !traceDump.events.empty()) {
             WriteTraceJson(traceDump.events, traceDump.threadNames, traceDump.names);
         }
-    });
+    };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    overlayTask_ = TaskSystem::Get().Submit(std::move(overlayJob));
+#else
+    overlayTask_ = nullptr;
+    overlayJob();
+#endif
 }
 
 void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end) {
