@@ -23,10 +23,8 @@ public:
     void Run(HINSTANCE hInstance, int nCmdShow);
 
 private:
-    Renderer renderer_;
-    ActionMap actions_;
-    Scene scene_;
-    InputManager input_;
+    struct Systems;
+    std::unique_ptr<Systems> systems_;
     bool isRunning_ = true;
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -35,6 +33,6 @@ private:
 
     void SetRunnig(bool running)
     {
-		isRunning_ = running;
+        isRunning_ = running;
     }
 };

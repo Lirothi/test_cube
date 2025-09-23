@@ -1,6 +1,15 @@
 #include "App.h"
 #include "Profiler.h"
 
+#include <cassert>
+
+struct App::Systems {
+    Renderer renderer;
+    ActionMap actions;
+    Scene scene;
+    InputManager input;
+};
+
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
@@ -11,8 +20,8 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
 
-    if (app) {
-        app->input_.OnWndProc(hWnd, message, wParam, lParam);
+    if (app && app->systems_) {
+        app->systems_->input.OnWndProc(hWnd, message, wParam, lParam);
     }
 
     switch (message) {
@@ -20,8 +29,8 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
     {
         UINT width = LOWORD(lParam);
         UINT height = HIWORD(lParam);
-        if (app && app->renderer_.GetDevice() && wParam != SIZE_MINIMIZED) {
-            app->renderer_.OnResize(width, height);
+        if (app && app->systems_ && app->systems_->renderer.GetDevice() && wParam != SIZE_MINIMIZED) {
+            app->systems_->renderer.OnResize(width, height);
         }
         break;
     }
@@ -38,6 +47,8 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
+    assert(systems_);
+
     WNDCLASSEX wc = {};
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -79,100 +90,120 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
     ShowWindow(hWnd, nCmdShow);
-    renderer_.InitD3D12(hWnd);
-    input_.Initialize(hWnd);
+
+    auto& renderer = systems_->renderer;
+    auto& input = systems_->input;
+    renderer.InitD3D12(hWnd);
+    input.Initialize(hWnd);
 #if PROF_GPU_ENABLED
-    Profiler::Get().InitGpu(renderer_.GetDevice(), renderer_.GetCommandQueue());
+    Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue());
 #endif
 }
 
 void App::InitScene()
 {
+    assert(systems_);
+
+    auto& renderer = systems_->renderer;
+    auto& actions = systems_->actions;
+    auto& scene = systems_->scene;
+    auto& input = systems_->input;
+
     std::vector<ComPtr<ID3D12Resource>> pendingUploads;
-    scene_.SetInput(&input_);
-	scene_.SetActions(&actions_);
-    if (!actions_.LoadFromJsonFile(L"bindings.json"))
+    scene.SetInput(&input);
+    scene.SetActions(&actions);
+    if (!actions.LoadFromJsonFile(L"bindings.json"))
     {
         assert(false && "No bindings.json found!");
     }
 
-    renderer_.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal.dds",  /*RG*/false, /*TBN*/true });
-    renderer_.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal.dds", /*RG*/false, /*TBN*/true });
-    renderer_.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
-    renderer_.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
+    renderer.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal.dds",  /*RG*/false, /*TBN*/true });
+    renderer.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal.dds", /*RG*/false, /*TBN*/true });
+    renderer.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
+    renderer.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
 
     // Заранее создаем upload command list
     ComPtr<ID3D12CommandAllocator> uploadAlloc;
     ComPtr<ID3D12GraphicsCommandList> uploadCmdList;
-    renderer_.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&uploadAlloc));
-    renderer_.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAlloc.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList));
+    renderer.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&uploadAlloc));
+    renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAlloc.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList));
 
-    renderer_.InitTextSystem(uploadCmdList.Get(), &pendingUploads, L"fonts");
-    scene_.InitAll(&renderer_, uploadCmdList.Get(), &pendingUploads);
+    renderer.InitTextSystem(uploadCmdList.Get(), &pendingUploads, L"fonts");
+    scene.InitAll(&renderer, uploadCmdList.Get(), &pendingUploads);
 
     uploadCmdList->Close();
     ID3D12CommandList* cmdLists[] = { uploadCmdList.Get() };
-    renderer_.GetCommandQueue()->ExecuteCommandLists(1, cmdLists);
+    renderer.GetCommandQueue()->ExecuteCommandLists(1, cmdLists);
     // Ждем, пока upload завершится (фенс ивент)
-    renderer_.WaitForPreviousFrame();
+    renderer.WaitForPreviousFrame();
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
-    InitWindow(hInstance, nCmdShow);
-    TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
-    //TaskSystem::Get().Start(8);
-    Profiler::Get().SetThreadName("MainThread");
+    systems_ = std::make_unique<Systems>();
 
-    InitScene();
+    {
+        auto& renderer = systems_->renderer;
+        auto& scene = systems_->scene;
+        auto& input = systems_->input;
 
-    MSG msg = {};
-    double lastTime = GetTimeSeconds();
-    while (isRunning_) {
-        Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
-        renderer_.BeginFrame();
+        InitWindow(hInstance, nCmdShow);
+        TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+        //TaskSystem::Get().Start(8);
+        Profiler::Get().SetThreadName("MainThread");
+
+        InitScene();
+
+        MSG msg = {};
+        double lastTime = GetTimeSeconds();
+        while (isRunning_) {
+            Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
+            renderer.BeginFrame();
 #if PROF_GPU_ENABLED
-        Profiler::Get().CollectGpuResults();
+            Profiler::Get().CollectGpuResults();
 #endif
 
-        {
-            CPU_SCOPE(L"Whole Cycle");
-            input_.NewFrame();
-
             {
-                CPU_SCOPE(L"Win Messages");
-                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                    if (msg.message == WM_QUIT) {
-                        break; // Прерываем цикл, не рендерим больше!
+                CPU_SCOPE(L"Whole Cycle");
+                input.NewFrame();
+
+                {
+                    CPU_SCOPE(L"Win Messages");
+                    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&msg);
+                        DispatchMessage(&msg);
+                        if (msg.message == WM_QUIT) {
+                            break; // Прерываем цикл, не рендерим больше!
+                        }
+                    }
+                    if (msg.message == WM_QUИТ) {
+                        break;
                     }
                 }
-                if (msg.message == WM_QUIT) {
-                    break;
+
+                if (input.WasKeyPressed(VK_F11)) {
+                    constexpr uint32_t kTraceFrames = 120;
+                    Profiler::Get().RequestTraceCapture(kTraceFrames);
                 }
+
+                double now = GetTimeSeconds();
+                float deltaTime = static_cast<float>(now - lastTime);
+                lastTime = now;
+
+                deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
+
+                renderer.Tick(deltaTime);
+                scene.Tick(deltaTime);
+                scene.Render(&renderer);
             }
 
-            if (input_.WasKeyPressed(VK_F11)) {
-                constexpr uint32_t kTraceFrames = 120;
-                Profiler::Get().RequestTraceCapture(kTraceFrames);
-            }
-
-            double now = GetTimeSeconds();
-            float deltaTime = static_cast<float>(now - lastTime);
-            lastTime = now;
-
-            deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
-
-            renderer_.Tick(deltaTime);
-            scene_.Tick(deltaTime);
-            scene_.Render(&renderer_);
+            Profiler::Get().EndFrame();
         }
 
-        Profiler::Get().EndFrame();
+        TaskSystem::Get().Stop();
+
+        scene.Clear();
+        renderer.Shutdown();
     }
 
-    TaskSystem::Get().Stop();
-
-    scene_.Clear();
-    renderer_.Shutdown();
+    systems_.reset();
 }
