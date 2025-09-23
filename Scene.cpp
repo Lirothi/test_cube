@@ -495,7 +495,8 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     size_t batchIndex,
     const mat4& view, const mat4& proj,
     bool useBundles,
-    bool bindGbufOrScene)
+    bool bindGbufOrScene,
+    size_t chunkSize)
 {
     if (objects.empty()) {
         return;
@@ -503,9 +504,8 @@ void Scene::RenderObjectBatch(Renderer* renderer,
 
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
-    const size_t chunkSize = 16;
 
-    auto renderJob = [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
+    auto renderJob = [renderer, &view, &proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
     {
         CPU_SCOPE(L"RenderObjectBatch.Async");
         const size_t begin = jobIndex * chunkSize;
@@ -720,12 +720,12 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
+            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
         const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
+            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
         }
     };
 
@@ -761,20 +761,20 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
+    rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
         const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, view, proj, /*useBundles=*/true, true);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, view, proj, /*useBundles=*/true, true, 32);
         }
         });
 
     // 1.3 Opaque complex → direct CL, без очисток
-    rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
+    rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
         const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, view, proj, /*useBundles=*/false, true);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, view, proj, /*useBundles=*/false, true, 32);
         }
         });
 
@@ -1089,19 +1089,19 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass("Transparent.Simple", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
+    rgTr.AddPass("Transparent.Simple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
         const auto& transparentSimple = buckets[ToIndex(ObjectRenderType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
-            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, view, proj, /*useBundles=*/true, false);
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, view, proj, /*useBundles=*/true, false, 32);
         }
         });
 
-    rgTr.AddPass("Transparent.Complex", {}, [this, renderer, view, proj, &buckets](RenderGraph::PassContext sub) {
+    rgTr.AddPass("Transparent.Complex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
         const auto& transparentComplex = buckets[ToIndex(ObjectRenderType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, view, proj, /*useBundles=*/false, false);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, view, proj, /*useBundles=*/false, false, 32);
         }
         });
 

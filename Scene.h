@@ -37,9 +37,9 @@ private:
     static constexpr size_t ToIndex(ObjectRenderType type) { return static_cast<size_t>(type); }
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene);
+        const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
     void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize = 32);
+        const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
     void Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_CSM(Renderer* r, RenderGraph::PassContext ctx,
