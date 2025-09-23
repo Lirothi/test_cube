@@ -336,7 +336,8 @@ void Scene::Tick(float deltaTime) {
     }
     auto& tasks = TaskSystem::Get();
 
-    size_t batchSize = 16;
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    size_t batchSize = 32;
     TaskSystem::ParallelFor(objects_.size(),
         [this, deltaTime](size_t index) {
             if (index >= objects_.size()) {
@@ -344,6 +345,12 @@ void Scene::Tick(float deltaTime) {
 			}
             objects_[index]->Tick(deltaTime);
 		}, batchSize);
+#else
+    for (auto& obj : objects_)
+    {
+        obj->Tick(deltaTime);
+    }
+#endif
 }
 
 void Scene::Render(Renderer* renderer) {
