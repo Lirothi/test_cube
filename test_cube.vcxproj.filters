@@ -60,6 +60,9 @@
     <ClCompile Include="TaskSystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="TaskSystemTBB.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -189,6 +192,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TaskSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TaskSystemEnki.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TaskSystemTBB.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
