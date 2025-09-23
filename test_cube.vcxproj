@@ -171,6 +171,7 @@
     <ClCompile Include="Skybox.cpp" />
     <ClCompile Include="StaticMesh.cpp" />
     <ClCompile Include="TaskSystem.cpp" />
+    <ClCompile Include="TaskSystemTBB.cpp" />
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp" />
     <ClCompile Include="TextManager.cpp" />
     <ClCompile Include="Texture2D.cpp" />
@@ -212,6 +213,8 @@
     <ClInclude Include="Skybox.h" />
     <ClInclude Include="StaticMesh.h" />
     <ClInclude Include="TaskSystem.h" />
+    <ClInclude Include="TaskSystemEnki.h" />
+    <ClInclude Include="TaskSystemTBB.h" />
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h" />
     <ClInclude Include="TextManager.h" />
     <ClInclude Include="Texture2D.h" />

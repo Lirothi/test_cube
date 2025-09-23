@@ -1,5 +1,7 @@
 #include "TaskSystem.h"
 
+#ifndef TASKSYSTEM_USE_TBB
+
 #include <new>
 #include <utility>
 
@@ -321,4 +323,6 @@ void TaskSystem::ClearPools() {
         autoDeletePool_.clear();
     }
 }
+
+#endif // !TASKSYSTEM_USE_TBB
 
