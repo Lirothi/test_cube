@@ -74,6 +74,11 @@ public:
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
     {
         CPU_SCOPE(L"RenderGraph::ExecuteParallel");
+#if !TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+        (void)tasks;
+        Execute(renderer);
+        return;
+#endif
         const auto& flat = BuildSchedule(renderer);
         if (flat.empty()) { return; }
 

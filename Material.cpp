@@ -864,7 +864,7 @@ bool MaterialManager::RequestFSProbeAsync()
         return false;
     }
 
-    TaskSystem::Get().SubmitDetach([this]() {
+    auto requestJob = [this]() {
         for (auto& kv : materials_) {
             auto& mat = kv.second;
             if (mat) {
@@ -872,7 +872,13 @@ bool MaterialManager::RequestFSProbeAsync()
             }
         }
         fsProbeInFlight_.store(false, std::memory_order_release);
-    });
+    };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    TaskSystem::Get().SubmitDetach(std::move(requestJob));
+#else
+    requestJob();
+#endif
 
     return true;
 }

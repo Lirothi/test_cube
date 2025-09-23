@@ -460,8 +460,11 @@ void Scene::Render(Renderer* renderer) {
     rg.AddPass("Debug", { pTone },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(L"Pass_Debug"); Pass_Debug(renderer, ctx); });
 
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     rg.ExecuteParallel(renderer, TaskSystem::Get());
-    //rg.Execute(renderer);
+#else
+    rg.Execute(renderer);
+#endif
 
     {
         CPU_SCOPE(L"Frame Async Wait");
@@ -495,44 +498,53 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     const size_t N = objects.size();
     const size_t chunkSize = 16;
 
-    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize,
-        [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
-        {
-            CPU_SCOPE(L"RenderObjectBatch.Async");
-            const size_t begin = jobIndex * chunkSize;
-            const size_t end = std::min(begin + chunkSize, objects.size());
+    auto renderJob = [renderer, view, proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
+    {
+        CPU_SCOPE(L"RenderObjectBatch.Async");
+        const size_t begin = jobIndex * chunkSize;
+        const size_t end = std::min(begin + chunkSize, objects.size());
 
-            if (useBundles) {
-                auto b = renderer->BeginThreadCommandBundle(nullptr);
+        if (useBundles) {
+            auto b = renderer->BeginThreadCommandBundle(nullptr);
+            for (size_t i = begin; i < end; ++i) {
+                if (auto* obj = objects[i]) {
+                    obj->Render(renderer, b.cl, view, proj);
+                }
+            }
+            renderer->EndThreadCommandBundle(b, batchIndex);
+        }
+        else {
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            {
+                GPU_SCOPE(t.cl, L"RenderObjectBatch");
+                if (bindGbufOrScene)
+                {
+                    renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                }
+                else
+                {
+                    renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                }
+
                 for (size_t i = begin; i < end; ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->Render(renderer, b.cl, view, proj);
+                        obj->Render(renderer, t.cl, view, proj);
                     }
                 }
-                renderer->EndThreadCommandBundle(b, batchIndex);
             }
-            else {
-                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-                {
-                    GPU_SCOPE(t.cl, L"RenderObjectBatch");
-                    if (bindGbufOrScene)
-                    {
-                        renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
-                    }
-                    else
-                    {
-                        renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
-                    }
+            renderer->EndThreadCommandList(t, batchIndex);
+        }
+    };
 
-                    for (size_t i = begin; i < end; ++i) {
-                        if (auto* obj = objects[i]) {
-                            obj->Render(renderer, t.cl, view, proj);
-                        }
-                    }
-                }
-                renderer->EndThreadCommandList(t, batchIndex);
-            }
-        }, 1);
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize, renderJob, 1);
+#else
+    (void)tasks;
+    const size_t jobCount = (N + chunkSize - 1) / chunkSize;
+    for (size_t jobIndex = 0; jobIndex < jobCount; ++jobIndex) {
+        renderJob(jobIndex);
+    }
+#endif
 }
 
 void Scene::RenderShadowBatch(Renderer* renderer,
@@ -553,30 +565,39 @@ void Scene::RenderShadowBatch(Renderer* renderer,
         chunkSize = 32;
     }
 
-    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize,
-        [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
+    auto shadowJob = [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
+    {
+        CPU_SCOPE(L"RenderShadowBatch.Async");
+        const size_t begin = jobIndex * chunkSize;
+        const size_t end = std::min(begin + chunkSize, objects.size());
+
+        // каждый чанк — отдельный direct CL
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        t.cl->SetName(L"RenderShadowBatch");
         {
-            CPU_SCOPE(L"RenderShadowBatch.Async");
-            const size_t begin = jobIndex * chunkSize;
-            const size_t end = std::min(begin + chunkSize, objects.size());
+            GPU_SCOPE(t.cl, L"RenderShadowBatch");
 
-            // каждый чанк — отдельный direct CL
-            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-            t.cl->SetName(L"RenderShadowBatch");
-            {
-                GPU_SCOPE(t.cl, L"RenderShadowBatch");
+            // важное: привязываем нужный тайл атласа каскада, без очистки
+            renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
 
-                // важное: привязываем нужный тайл атласа каскада, без очистки
-                renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
-
-                for (size_t i = begin; i < end; ++i) {
-                    if (auto* obj = objects[i]) {
-                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                    }
+            for (size_t i = begin; i < end; ++i) {
+                if (auto* obj = objects[i]) {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
                 }
             }
-            renderer->EndThreadCommandList(t, batchIndex);
-        }, 1);
+        }
+        renderer->EndThreadCommandList(t, batchIndex);
+    };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize, shadowJob, 1);
+#else
+    (void)tasks;
+    const size_t jobCount = (N + chunkSize - 1) / chunkSize;
+    for (size_t jobIndex = 0; jobIndex < jobCount; ++jobIndex) {
+        shadowJob(jobIndex);
+    }
+#endif
 }
 
 void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
@@ -617,7 +638,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     cachedSplitsVS_[4] = zFarShadow;
 
     TaskSystem& tasks = TaskSystem::Get();
-    tasks.DispatchWait(kCascades, [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+    auto csmJob = [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
     {
         CPU_SCOPE(L"CSM.PerCascade");
         const auto& D = renderer->GetDeferredForFrame();
@@ -699,7 +720,16 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         {
             RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/32);
         }
-    }, 1);
+    };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    tasks.DispatchWait(kCascades, csmJob, 1);
+#else
+    (void)tasks;
+    for (size_t idx = 0; idx < kCascades; ++idx) {
+        csmJob(idx);
+    }
+#endif
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
