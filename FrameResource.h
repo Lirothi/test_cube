@@ -121,6 +121,7 @@ private:
             ID3D12PipelineState* initialPSO = nullptr) {
             const int qi = QueueIndex_(type);
 
+#if USE_CL_THREAD_CACHE
             struct ThreadCache_ {
                 CommandListPools_* owner = nullptr;
                 uint32_t epoch = 0;
@@ -144,8 +145,10 @@ private:
                 entry.next = start;
                 entry.end = start + kChunkSize_;
             }
-
             const UINT index = entry.next++;
+#else
+            const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
+#endif
             auto& vec = pools[qi];
 
             if (index >= vec.size()) {
