@@ -3,13 +3,6 @@
 
 #include <cassert>
 
-struct App::Systems {
-    Renderer renderer;
-    ActionMap actions;
-    Scene scene;
-    InputManager input;
-};
-
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
@@ -175,7 +168,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                             break; // Прерываем цикл, не рендерим больше!
                         }
                     }
-                    if (msg.message == WM_QUИТ) {
+                    if (msg.message == WM_QUIT) {
                         break;
                     }
                 }

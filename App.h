@@ -20,10 +20,16 @@
 
 class App {
 public:
+    struct Systems {
+        Renderer renderer;
+        ActionMap actions;
+        Scene scene;
+        InputManager input;
+    };
+
     void Run(HINSTANCE hInstance, int nCmdShow);
 
 private:
-    struct Systems;
     std::unique_ptr<Systems> systems_;
     bool isRunning_ = true;
 
