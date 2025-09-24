@@ -211,7 +211,6 @@ void Profiler::DrainTraceSampleNodes(std::vector<TraceSample>& out) {
         ReleaseTraceSampleNode(head);
         head = next;
     }
-    std::reverse(out.begin() + prevSize, out.end());
 }
 
 bool Profiler::PushSampleNode(SampleNode* node) {
