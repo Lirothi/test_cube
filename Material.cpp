@@ -18,6 +18,8 @@
 #include "RootSignatureLayout.h"
 #include "RootSignatureParser.h"
 #include "TaskSystem.h"
+#include "Profiler.h"
+#include "ProfilerScopes.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -369,7 +371,7 @@ void Material::RefreshWatchTimes_()
 
 bool Material::FSProbeAndFlagPending()
 {
-    CPU_SCOPE(L"Material::FSProbeAndFlagPending");
+    CPU_SCOPE(ProfilerScopes::kMaterialFSProbe);
     std::lock_guard<std::mutex> lk(watchMtx_);
     if (watchedFiles_.empty()) { return false; }
 

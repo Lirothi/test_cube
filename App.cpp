@@ -1,6 +1,6 @@
 #include "App.h"
 #include "Profiler.h"
-
+#include "ProfilerScopes.h"
 #include <cassert>
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -156,11 +156,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #endif
 
             {
-                CPU_SCOPE(L"Whole Cycle");
+                CPU_SCOPE(ProfilerScopes::kWholeCycle);
                 input.NewFrame();
 
                 {
-                    CPU_SCOPE(L"Win Messages");
+                    CPU_SCOPE(ProfilerScopes::kWinMessages);
                     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
                         TranslateMessage(&msg);
                         DispatchMessage(&msg);

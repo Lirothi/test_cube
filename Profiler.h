@@ -11,7 +11,6 @@
 #include <optional>
 #include <string_view>
 #include <cstring>
-#include <limits>
 
 #include "TaskSystem.h"
 
@@ -37,11 +36,10 @@ public:
     using CpuClock = std::chrono::steady_clock;
 
     struct ScopeNameKey {
-        const wchar_t* namePtr = nullptr;
-        uint64_t       nameId = 0;
+        const std::wstring* name = nullptr;
 
-        static ScopeNameKey FromWide(const wchar_t* ptr, uint64_t id) {
-            return ScopeNameKey{ ptr, id };
+        const wchar_t* c_str() const noexcept {
+            return name ? name->c_str() : nullptr;
         }
     };
 
@@ -85,39 +83,34 @@ public:
     struct ScopeNameKeyHash {
         using is_avalanching = void;
         size_t operator()(const ScopeNameKey& key) const noexcept {
-            if (key.nameId != 0) {
-                return robin_hood::hash_bytes(&key.nameId, sizeof(key.nameId));
-            }
-            return robin_hood::hash_bytes(&key.namePtr, sizeof(key.namePtr));
+            return robin_hood::hash_bytes(&key.name, sizeof(key.name));
         }
     };
 
     struct ScopeNameKeyEqual {
         bool operator()(const ScopeNameKey& a, const ScopeNameKey& b) const noexcept {
-            if (a.nameId != 0 || b.nameId != 0) {
-                return a.nameId == b.nameId;
-            }
-            return a.namePtr == b.namePtr;
+            return a.name == b.name;
         }
     };
 
     struct TraceEvent {
-        uint32_t    nameIndex = std::numeric_limits<uint32_t>::max();
-        std::wstring inlineName;
-        uint64_t    tsUs = 0;
-        uint64_t    durUs = 0;
-        uint32_t    threadIndex = 0;
+        ScopeNameKey key{};
+        uint64_t     tsUs = 0;
+        uint64_t     durUs = 0;
+        uint32_t     threadIndex = 0;
     };
 
     struct TraceNameEntry {
         std::wstring displayName;
+        ScopeNameKey key{};
+        bool         isDynamic = false;
+        bool         dynamicInUse = false;
     };
 
-    struct TraceSample {
-        ScopeNameKey key{};
-        uint64_t     startUsAbs = 0;
-        uint64_t     durUs = 0;
-        uint32_t     threadIndex = 0;
+    struct TraceDumpData {
+        std::vector<TraceEvent> events;
+        std::vector<std::string> threadNames;
+        std::vector<ScopeNameKey> dynamicKeys;
     };
 
     // --- данные оверлея (снэпшот) ---
@@ -132,6 +125,9 @@ public:
 
 public:
     static Profiler& Get();
+
+    static ScopeNameKey RegisterTraceLiteral(const wchar_t* name);
+    static ScopeNameKey RegisterTraceDynamic(std::wstring name, uint32_t* outIndex = nullptr);
 
     // Границы кадра
     void BeginFrame(uint64_t frameNo);
@@ -148,9 +144,9 @@ public:
     // Скоповая отметка (CPU)
     class ScopedCpu {
     public:
-        ScopedCpu(const wchar_t* name, uint64_t nameId = 0) {
+        ScopedCpu(ScopeNameKey key) {
 #if PROF_ENABLED
-            key_ = ScopeNameKey::FromWide(name, nameId);
+            key_ = key;
             start_ = Clock::now();
 #endif
         }
@@ -169,18 +165,18 @@ public:
     };
 
 #if PROF_ENABLED
-#define CPU_SCOPE(nameLiteral)       Profiler::ScopedCpu _prof_scope_##__LINE__(nameLiteral, 0)
-#define CPU_SCOPE_N(nameLiteral, id) Profiler::ScopedCpu _prof_scope_##__LINE__(nameLiteral, (id))
+#define CPU_SCOPE(keyExpr)       Profiler::ScopedCpu _prof_scope_##__LINE__(keyExpr)
+#define CPU_SCOPE_N(keyExpr, id) Profiler::ScopedCpu _prof_scope_##__LINE__(keyExpr)
 #else
-#define CPU_SCOPE(nameLiteral)       do { } while (0)
-#define CPU_SCOPE_N(nameLiteral, id) do { } while (0)
+#define CPU_SCOPE(keyExpr)       do { } while (0)
+#define CPU_SCOPE_N(keyExpr, id) do { } while (0)
 #endif
 
 #if PROF_GPU_ENABLED
     // Скоповая отметка (GPU)
     class ScopedGpu {
     public:
-        ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t nameId = 0);
+        ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key);
         ~ScopedGpu();
     private:
 #if PROF_ENABLED
@@ -190,19 +186,19 @@ public:
     };
 
 #if PROF_ENABLED
-#define GPU_SCOPE(cmdList, nameLiteral)       Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, nameLiteral, 0)
-#define GPU_SCOPE_N(cmdList, nameLiteral, id) Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, nameLiteral, (id))
+#define GPU_SCOPE(cmdList, keyExpr)       Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, keyExpr)
+#define GPU_SCOPE_N(cmdList, keyExpr, id) Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, keyExpr)
 #else
-#define GPU_SCOPE(cmdList, nameLiteral)       do { } while (0)
-#define GPU_SCOPE_N(cmdList, nameLiteral, id) do { } while (0)
+#define GPU_SCOPE(cmdList, keyExpr)       do { } while (0)
+#define GPU_SCOPE_N(cmdList, keyExpr, id) do { } while (0)
 #endif
 #else
     class ScopedGpu {
     public:
         ScopedGpu(... ) {}
     };
-#define GPU_SCOPE(cmdList, nameLiteral)       do { } while (0)
-#define GPU_SCOPE_N(cmdList, nameLiteral, id) do { } while (0)
+#define GPU_SCOPE(cmdList, keyExpr)       do { } while (0)
+#define GPU_SCOPE_N(cmdList, keyExpr, id) do { } while (0)
 #endif
 
     // Оверлей с табличкой (читает дабл-буфер без локов)
@@ -255,8 +251,8 @@ private:
     void ResetMax_Unsafe(); // вызывать под mtx_
     uint32_t GetThreadIndex_Locked(std::thread::id id);
     void WriteTraceJson(const std::vector<TraceEvent>& events,
-                        const std::vector<std::string>& threadNames,
-                        const std::vector<TraceNameEntry>& names);
+                        const std::vector<std::string>& threadNames);
+    void ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys);
 #endif
 
 private:
@@ -287,7 +283,7 @@ private:
     uint32_t    GetThreadIndexForCurrentThread();
 
     struct TraceSampleNode {
-        TraceSample sample;
+        TraceEvent sample;
         TraceSampleNode* next = nullptr;
     };
 
@@ -297,7 +293,7 @@ private:
     void             ReleaseTraceSampleNode(TraceSampleNode* node);
     void             ReleaseTraceSampleList(TraceSampleNode* head);
     bool             PushTraceSampleNode(TraceSampleNode* node);
-    void             DrainTraceSampleNodes(std::vector<TraceSample>& out);
+    void             DrainTraceSampleNodes(uint64_t traceStartUs);
 
     std::atomic<SampleNode*> frameSampleHead_{ nullptr };
     std::atomic<SampleNode*> sampleNodePool_{ nullptr };
@@ -376,10 +372,12 @@ private:
     uint64_t traceStartUs_ = 0;
     bool traceStartSet_ = false;
     std::vector<TraceEvent> traceEvents_;
-    std::vector<TraceNameEntry> traceNames_;
-    robin_hood::unordered_flat_map<ScopeNameKey, uint32_t, ScopeNameKeyHash, ScopeNameKeyEqual> traceNameLookup_;
     std::atomic<uint32_t> traceFileCounter_{ 0 };
-    std::vector<TraceSample> traceSampleScratch_;
+    std::vector<ScopeSample> asyncCpuSamples_;
+#if PROF_GPU_ENABLED
+    std::vector<ScopeSample> asyncGpuSamples_;
+#endif
+    TraceDumpData traceDumpData_;
 
 #if PROF_GPU_ENABLED
     // GPU timestamp queries
