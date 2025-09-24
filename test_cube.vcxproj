@@ -170,6 +170,7 @@
     <ClCompile Include="MeshManager.cpp" />
     <ClCompile Include="PointLight.cpp" />
     <ClCompile Include="Profiler.cpp" />
+    <ClCompile Include="ProfilerScopes.cpp" />
     <ClCompile Include="RenderContextPool.cpp" />
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="SamplerManager.cpp" />
@@ -208,6 +209,7 @@
     <ClInclude Include="MeshManager.h" />
     <ClInclude Include="PointLight.h" />
     <ClInclude Include="Profiler.h" />
+    <ClInclude Include="ProfilerScopes.h" />
     <ClInclude Include="RenderContext.h" />
     <ClInclude Include="RenderContextPool.h" />
     <ClInclude Include="Renderer.h" />

@@ -6,6 +6,10 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <string_view>
+#include <algorithm>
+#include <memory>
+#include <limits>
 #include "third_party/robin_hood.h"
 #include "TextManager.h"
 
@@ -40,17 +44,161 @@ std::string EscapeJson(const std::string& input) {
     return out;
 }
 
-struct TraceDumpData {
-    std::vector<Profiler::TraceEvent> events;
-    std::vector<std::string> threadNames;
-    std::vector<Profiler::TraceNameEntry> names;
-};
+const Profiler::ScopeNameKey kTraceHandlingKey = Profiler::RegisterTraceLiteral(L"TraceHandling");
+const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLiteral(L"Profiler::EmitOverlay");
+const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
 
 std::wstring BuildWideName(const Profiler::ScopeNameKey& key) {
-    if (!key.namePtr || !*key.namePtr) {
+    if (!key.name || key.name->empty()) {
         return L"unknown";
     }
-    return std::wstring(key.namePtr);
+    return *key.name;
+}
+
+class TraceStringTable {
+public:
+    Profiler::ScopeNameKey RegisterLiteral(const wchar_t* name) {
+#if PROF_ENABLED
+        std::lock_guard<std::mutex> lock(mtx_);
+
+        std::wstring literal = (name && *name) ? std::wstring(name) : std::wstring();
+        if (literal.empty()) {
+            literal = L"unknown";
+        }
+
+        auto valueIt = valueLookup_.find(literal);
+        if (valueIt != valueLookup_.end()) {
+            uint32_t idx = valueIt->second;
+            if (idx < entries_.size() && entries_[idx]) {
+                return entries_[idx]->key;
+            }
+        }
+
+        const uint32_t index = static_cast<uint32_t>(entries_.size());
+        auto entry = std::make_unique<Profiler::TraceNameEntry>();
+        entry->displayName = std::move(literal);
+        entry->key.name = &entry->displayName;
+        entry->isDynamic = false;
+        entry->dynamicInUse = false;
+        auto* stored = entry.get();
+        entries_.push_back(std::move(entry));
+        valueLookup_.emplace(stored->displayName, index);
+        keyLookup_.emplace(stored->key.name, index);
+        return stored->key;
+#else
+        (void)name;
+        return {};
+#endif
+    }
+
+    Profiler::ScopeNameKey RegisterDynamic(std::wstring name, uint32_t* outIndex) {
+#if PROF_ENABLED
+        std::lock_guard<std::mutex> lock(mtx_);
+
+        std::wstring display = std::move(name);
+        if (display.empty()) {
+            display = L"unknown";
+        }
+
+        uint32_t index = std::numeric_limits<uint32_t>::max();
+        Profiler::TraceNameEntry* entry = nullptr;
+
+        if (!dynamicFree_.empty()) {
+            index = dynamicFree_.back();
+            dynamicFree_.pop_back();
+            if (index >= entries_.size()) {
+                entries_.resize(index + 1);
+            }
+            if (!entries_[index]) {
+                entries_[index] = std::make_unique<Profiler::TraceNameEntry>();
+            }
+            entry = entries_[index].get();
+            entry->displayName = std::move(display);
+            entry->isDynamic = true;
+            entry->dynamicInUse = true;
+            if (!entry->key.name) {
+                entry->key.name = &entry->displayName;
+            }
+        }
+        else {
+            index = static_cast<uint32_t>(entries_.size());
+            auto newEntry = std::make_unique<Profiler::TraceNameEntry>();
+            newEntry->displayName = std::move(display);
+            newEntry->key.name = &newEntry->displayName;
+            newEntry->isDynamic = true;
+            newEntry->dynamicInUse = true;
+            entry = newEntry.get();
+            entries_.push_back(std::move(newEntry));
+        }
+
+        keyLookup_[entry->key.name] = index;
+
+        if (outIndex) {
+            *outIndex = index;
+        }
+        captureDynamicKeys_.push_back(entry->key);
+        return entry->key;
+#else
+        (void)name; (void)outIndex;
+        return {};
+#endif
+    }
+
+    void ReleaseDynamicKeys(const std::vector<Profiler::ScopeNameKey>& keys) {
+#if PROF_ENABLED
+        if (keys.empty()) { return; }
+        std::lock_guard<std::mutex> lock(mtx_);
+        for (const Profiler::ScopeNameKey& key : keys) {
+            if (!key.name) { continue; }
+            auto it = keyLookup_.find(key.name);
+            if (it == keyLookup_.end()) { continue; }
+            const uint32_t idx = it->second;
+            if (idx >= entries_.size()) { continue; }
+            auto* entry = entries_[idx].get();
+            if (!entry || !entry->isDynamic || !entry->dynamicInUse) { continue; }
+            entry->dynamicInUse = false;
+            dynamicFree_.push_back(idx);
+        }
+#else
+        (void)keys;
+#endif
+    }
+
+    std::vector<Profiler::ScopeNameKey> TakeCaptureKeys() {
+#if PROF_ENABLED
+        std::lock_guard<std::mutex> lock(mtx_);
+        std::vector<Profiler::ScopeNameKey> out;
+        out.swap(captureDynamicKeys_);
+        return out;
+#else
+        return {};
+#endif
+    }
+
+private:
+    std::mutex mtx_;
+    robin_hood::unordered_flat_map<const std::wstring*, uint32_t> keyLookup_;
+    robin_hood::unordered_flat_map<std::wstring, uint32_t> valueLookup_;
+    std::vector<std::unique_ptr<Profiler::TraceNameEntry>> entries_;
+    std::vector<uint32_t> dynamicFree_;
+    std::vector<Profiler::ScopeNameKey> captureDynamicKeys_;
+};
+
+TraceStringTable& GetTraceStringTable() {
+    static TraceStringTable table;
+    return table;
+}
+
+Profiler::ScopeNameKey Profiler::RegisterTraceLiteral(const wchar_t* name) {
+    return GetTraceStringTable().RegisterLiteral(name);
+}
+
+Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring name, uint32_t* outIndex) {
+    return GetTraceStringTable().RegisterDynamic(std::move(name), outIndex);
+}
+
+void Profiler::ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys) {
+    GetTraceStringTable().ReleaseDynamicKeys(keys);
 }
 
 std::string WideToUtf8(const std::wstring& input) {
@@ -201,13 +349,19 @@ bool Profiler::PushTraceSampleNode(TraceSampleNode* node) {
     return false;
 }
 
-void Profiler::DrainTraceSampleNodes(std::vector<TraceSample>& out) {
-    const size_t prevSize = out.size();
+void Profiler::DrainTraceSampleNodes(uint64_t traceStartUs) {
     TraceSampleNode* head = traceSampleHead_.exchange(kTraceListClosed, std::memory_order_acq_rel);
     if (head == kTraceListClosed) { return; }
     while (head) {
-        out.push_back(head->sample);
         TraceSampleNode* next = head->next;
+        TraceEvent ev = head->sample;
+        if (ev.tsUs >= traceStartUs) {
+            ev.tsUs -= traceStartUs;
+        }
+        else {
+            ev.tsUs = 0;
+        }
+        traceEvents_.push_back(std::move(ev));
         ReleaseTraceSampleNode(head);
         head = next;
     }
@@ -254,10 +408,10 @@ Profiler& Profiler::Get() {
 }
 
 #if PROF_GPU_ENABLED
-Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, const wchar_t* name, uint64_t id)
+Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key)
     : cl_(cl)
 {
-    idx_ = Profiler::Get().BeginGpuSample(cl, ScopeNameKey::FromWide(name, id));
+    idx_ = Profiler::Get().BeginGpuSample(cl, key);
 }
 
 Profiler::ScopedGpu::~ScopedGpu() {
@@ -294,11 +448,13 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceCapturing_ = true;
         traceFramesRemaining_ = traceRequestFrameCount_;
         traceEvents_.clear();
-        traceNames_.clear();
-        traceNameLookup_.clear();
         traceStartUs_ = 0;
         traceStartSet_ = false;
         traceStopRequested_ = false;
+        auto leftoverKeys = GetTraceStringTable().TakeCaptureKeys();
+        if (!leftoverKeys.empty()) {
+            GetTraceStringTable().ReleaseDynamicKeys(leftoverKeys);
+        }
     }
 
     if (traceCapturing_ && !traceStartSet_) {
@@ -327,11 +483,16 @@ void Profiler::EndFrame() {
     tasks.Release(overlayTask_);
 
     // 1) заберём сэмплы текущего кадра и закроем кадр (быстро)
-    std::vector<ScopeSample> samples;
+    auto& samples = asyncCpuSamples_;
+    samples.clear();
 #if PROF_GPU_ENABLED
-    std::vector<ScopeSample> gpuSamples;
+    auto& gpuSamples = asyncGpuSamples_;
+    gpuSamples.clear();
 #endif
-    TraceDumpData traceDump;
+    auto& traceDump = traceDumpData_;
+    traceDump.events.clear();
+    traceDump.threadNames.clear();
+    traceDump.dynamicKeys.clear();
     bool haveTraceDump = false;
     const auto frameEnd = CpuClock::now();
     frameSamples_.clear();
@@ -340,64 +501,33 @@ void Profiler::EndFrame() {
     samples.swap(frameSamples_);
     {
         std::lock_guard<std::mutex> lk(mtx_);
-        if (!frameOpen_) { return; }
+        if (!frameOpen_) {
+            frameSamples_.swap(samples);
+            return;
+        }
 #if PROF_GPU_ENABLED
-        gpuSamples = std::move(gpuFrameSamples_);
-        gpuFrameSamples_.clear();
+        gpuSamples.swap(gpuFrameSamples_);
 #endif
         if (traceCapturing_) {
             std::lock_guard<std::mutex> traceLock(traceMtx_);
-            traceSampleScratch_.clear();
-            DrainTraceSampleNodes(traceSampleScratch_);
             const uint64_t startUs = ToMicroseconds(frameCpuStart_);
             const uint64_t endUs = ToMicroseconds(frameEnd);
             const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
             const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
             TraceEvent fev;
-            fev.inlineName = L"Frame ";
-            fev.inlineName += std::to_wstring(frameNo_);
+            std::wstring frameLabel = L"Frame ";
+            frameLabel += std::to_wstring(frameNo_);
+            Profiler::ScopeNameKey frameKey = RegisterTraceDynamic(std::move(frameLabel));
+            fev.key = frameKey;
             fev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
             fev.durUs = durUs;
             fev.threadIndex = threadIdx;
             traceEvents_.push_back(std::move(fev));
 
-            for (const TraceSample& sample : traceSampleScratch_) {
-                uint32_t nameIndex = std::numeric_limits<uint32_t>::max();
-                bool haveNameIndex = false;
-                std::wstring displayName;
-                auto nameIt = traceNameLookup_.find(sample.key);
-                if (nameIt != traceNameLookup_.end()) {
-                    nameIndex = nameIt->second;
-                    haveNameIndex = true;
-                }
-                else {
-                    displayName = BuildWideName(sample.key);
-                    if (traceNames_.size() < static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-                        TraceNameEntry entry{};
-                        entry.displayName = std::move(displayName);
-                        nameIndex = static_cast<uint32_t>(traceNames_.size());
-                        traceNames_.push_back(std::move(entry));
-                        traceNameLookup_.emplace(sample.key, nameIndex);
-                        haveNameIndex = true;
-                    }
-                }
-
-                TraceEvent ev;
-                if (haveNameIndex) {
-                    ev.nameIndex = nameIndex;
-                }
-                else {
-                    ev.inlineName = std::move(displayName);
-                }
-                ev.tsUs = (sample.startUsAbs >= traceStartUs_) ? (sample.startUsAbs - traceStartUs_) : 0;
-                ev.durUs = sample.durUs;
-                ev.threadIndex = sample.threadIndex;
-                traceEvents_.push_back(std::move(ev));
-            }
-            traceSampleScratch_.clear();
+            DrainTraceSampleNodes(traceStartUs_);
 
             TraceEvent hev;
-            hev.inlineName = L"TraceHandling";
+            hev.key = kTraceHandlingKey;
             hev.tsUs = endUs - traceStartUs_;
             hev.durUs = ToMicroseconds(CoolClock::now()) - endUs;
             hev.threadIndex = threadIdx;
@@ -423,9 +553,8 @@ void Profiler::EndFrame() {
                 traceStartUs_ = 0;
                 traceStartSet_ = false;
                 traceDump.events = std::move(traceEvents_);
-                traceDump.names = std::move(traceNames_);
-                traceNameLookup_.clear();
                 traceDump.threadNames = threadIndexToName_;
+                traceDump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
                 haveTraceDump = true;
                 traceRequestFrameCount_ = 0;
             }
@@ -445,13 +574,7 @@ void Profiler::EndFrame() {
     }
 #endif
 
-    auto overlayJob =
-#if PROF_GPU_ENABLED
-        [this, samples = std::move(samples), gpuSamples = std::move(gpuSamples), traceDump = std::move(traceDump), haveTraceDump]() mutable
-#else
-        [this, samples = std::move(samples), traceDump = std::move(traceDump), haveTraceDump]() mutable
-#endif
-    {
+    auto overlayJob = [this, haveTraceDump]() mutable {
         const auto t0 = CoolClock::now();
 
         // A) свёртка сэмплов в stats_ (без локов) + EMA/lastCount
@@ -473,12 +596,12 @@ void Profiler::EndFrame() {
             }
         };
 
-        accumulateSamples(samples, stats_, nextOverlayId_);
-        samples.clear();
+        accumulateSamples(asyncCpuSamples_, stats_, nextOverlayId_);
+        asyncCpuSamples_.clear();
 
 #if PROF_GPU_ENABLED
-        accumulateSamples(gpuSamples, gpuStats_, nextGpuOverlayId_);
-        gpuSamples.clear();
+        accumulateSamples(asyncGpuSamples_, gpuStats_, nextGpuOverlayId_);
+        asyncGpuSamples_.clear();
 #endif
 
         // B) формируем текущий набор строк, переиспользуя выделенные буферы
@@ -666,8 +789,15 @@ void Profiler::EndFrame() {
         overlayReadBuf_.store(writeIdx, std::memory_order_release);
 #endif
 
-        if (haveTraceDump && !traceDump.events.empty()) {
-            WriteTraceJson(traceDump.events, traceDump.threadNames, traceDump.names);
+        if (haveTraceDump) {
+            auto& traceDump = traceDumpData_;
+            if (!traceDump.events.empty()) {
+                WriteTraceJson(traceDump.events, traceDump.threadNames);
+            }
+            ReleaseTraceNameKeys(traceDump.dynamicKeys);
+            traceDump.events.clear();
+            traceDump.threadNames.clear();
+            traceDump.dynamicKeys.clear();
         }
     };
 
@@ -701,7 +831,7 @@ void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, C
     const uint32_t threadIdx = GetThreadIndexForCurrentThread();
     TraceSampleNode* traceNode = AcquireTraceSampleNode();
     traceNode->sample.key = key;
-    traceNode->sample.startUsAbs = startUs;
+    traceNode->sample.tsUs = startUs;
     traceNode->sample.durUs = durUs;
     traceNode->sample.threadIndex = threadIdx;
     if (!PushTraceSampleNode(traceNode)) {
@@ -785,7 +915,7 @@ void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList* cl) {
         gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
         return;
     }
-    const size_t idx = BeginGpuSample(cl, ScopeNameKey::FromWide(L"GPU.Frame", 0));
+    const size_t idx = BeginGpuSample(cl, kGpuFrameKey);
     gpuFrameSampleIdx_.store(idx, std::memory_order_relaxed);
 #else
     (void)cl;
@@ -851,7 +981,7 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
 
 void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     if (!tm || !GetEnabled()) { return; }
-    CPU_SCOPE(L"Profiler::EmitOverlay");
+    CPU_SCOPE(kProfilerEmitOverlayKey);
 
     // читаем актуальные read-буферы БЕЗ локов
     const int readIdx = overlayReadBuf_.load(std::memory_order_acquire);
@@ -1034,8 +1164,7 @@ uint32_t Profiler::GetThreadIndex_Locked(std::thread::id id) {
 }
 
 void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events,
-                              const std::vector<std::string>& threadNames,
-                              const std::vector<TraceNameEntry>& names) {
+                              const std::vector<std::string>& threadNames) {
     if (events.empty()) { return; }
     const uint32_t fileIdx = traceFileCounter_.fetch_add(1u, std::memory_order_relaxed);
     auto now = std::chrono::system_clock::now();
@@ -1065,6 +1194,11 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events,
         out << line;
     };
 
+    static const std::wstring kUnknownWide = L"unknown";
+    static const std::string  kUnknownNarrow = "unknown";
+    robin_hood::unordered_flat_map<const std::wstring*, std::string> nameLookup;
+    nameLookup.reserve(events.size());
+
     for (size_t tid = 0; tid < threadNames.size(); ++tid) {
         if (threadNames[tid].empty()) { continue; }
         std::ostringstream line;
@@ -1074,13 +1208,19 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events,
     }
 
     for (const auto& ev : events) {
-        std::wstring nameWide = ev.inlineName;
-        if (nameWide.empty() && ev.nameIndex < names.size()) {
-            nameWide = names[ev.nameIndex].displayName;
+        const std::wstring* nameWidePtr = ev.key.name;
+        if (!nameWidePtr || nameWidePtr->empty()) {
+            nameWidePtr = &kUnknownWide;
         }
-        if (nameWide.empty()) { nameWide = L"unknown"; }
-        std::string name = WideToUtf8(nameWide);
-        if (name.empty()) { name = "unknown"; }
+        auto lookupIt = nameLookup.find(nameWidePtr);
+        if (lookupIt == nameLookup.end()) {
+            std::string narrow = WideToUtf8(*nameWidePtr);
+            if (narrow.empty()) {
+                narrow = kUnknownNarrow;
+            }
+            lookupIt = nameLookup.emplace(nameWidePtr, std::move(narrow)).first;
+        }
+        const std::string& name = lookupIt->second;
         std::ostringstream line;
         line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"
              << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << ev.threadIndex << "}";

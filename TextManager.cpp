@@ -14,6 +14,7 @@
 #include "Renderer.h"
 #include "FontAtlas.h"
 #include "Profiler.h"
+#include "ProfilerScopes.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -188,7 +189,7 @@ void TextManager::AddTextf(RegionId id, float px, const float4& color, const wch
 // ======== СБОРКА / ОТРИСОВКА ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
-    CPU_SCOPE(L"TextManager::Build");
+    CPU_SCOPE(ProfilerScopes::kTextManagerBuild);
 
     // 0) Предподсчёт глифов для единого reserve
     size_t totalGlyphs = 0;
@@ -272,7 +273,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 }
 
 void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
-    CPU_SCOPE(L"TextManager::Draw");
+    CPU_SCOPE(ProfilerScopes::kTextManagerDraw);
     // 1) фон
     if (!rectVerts_.empty() && !rectIdx_.empty() && matRect_) {
         auto h = r->GetRenderContextPool()->Acquire();
@@ -528,7 +529,7 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
 void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text) {
     if (font_ == nullptr) { return; }
-    CPU_SCOPE(L"TextManager::EmitTextImmediate");
+    CPU_SCOPE(ProfilerScopes::kTextManagerEmitImmediate);
     GlyphRun run;
     float width = 0.0f;
     BuildGlyphRun(text, px, run, width);

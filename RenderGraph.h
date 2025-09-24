@@ -7,6 +7,7 @@
 #include "Renderer.h"
 #include "TaskSystem.h"
 #include "Profiler.h"
+#include "ProfilerScopes.h"
 
 class RenderGraph {
 public:
@@ -55,7 +56,7 @@ public:
     // Старое: последовательное исполнение (на место)
     void Execute(Renderer* renderer)
     {
-        CPU_SCOPE(L"RenderGraph::Execute");
+        CPU_SCOPE(ProfilerScopes::kRenderGraphExecute);
         if (renderer == nullptr) { return; }
         Unroll(renderer, /*executeInplace=*/true, nullptr);
     }
@@ -73,7 +74,7 @@ public:
     // сабмитим РЕАЛЬНЫЕ таски пассов с ожиданием их mt-deps.
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
     {
-        CPU_SCOPE(L"RenderGraph::ExecuteParallel");
+        CPU_SCOPE(ProfilerScopes::kRenderGraphExecuteParallel);
 #if !TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
         (void)tasks;
         Execute(renderer);
