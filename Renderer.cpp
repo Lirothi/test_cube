@@ -539,6 +539,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     // собрать по порядку батчей
     {
+        CPU_SCOPE(ProfilerScopes::kService1);
         std::lock_guard<std::mutex> lk(submitMtx_);
         size_t expectedListCount = 0;
         for (const auto& pb : submitTimeline_) {
@@ -600,8 +601,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 #endif
 
     {
-        // локальная копия глобальных стейтов на момент сабмита
-        auto global = knownStates_;
+        CPU_SCOPE(ProfilerScopes::kService2);
 
         for (auto* cmd : submitListsScratch_) {
             const CLState* st = FindCLStateForCmd(cmd);
@@ -618,7 +618,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                     const D3D12_RESOURCE_STATES want = kv.second;
 
                     D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
-                    if (auto ig = global.find(res); ig != global.end()) {
+                    if (auto ig = knownStates_.find(res); ig != knownStates_.end()) {
                         before = ig->second;
                     }
 
@@ -632,7 +632,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                         barrierScratch_.push_back(b);
 
                     }
-                    global[res] = want;
+                    knownStates_[res] = want;
                 }
 
                 // создадим пролог ТОЛЬКО если есть, что барьерить
@@ -655,13 +655,10 @@ void Renderer::ExecuteTimelineAndPresent() {
             // 3.3: после CL обновим «глобальный» финальный стейт его ресурсов
             if (st && !st->current.empty()) {
                 for (auto& kv : st->current) {
-                    global[kv.first] = kv.second;
+                    knownStates_[kv.first] = kv.second;
                 }
             }
         }
-
-        // обновим knownStates_ итогами сабмита
-        knownStates_ = std::move(global);
     }
 
     // Эпилог: RT→Present
@@ -692,10 +689,12 @@ void Renderer::ExecuteTimelineAndPresent() {
         fixedSubmitScratch_.push_back(epilogueCL);
     }
 
-    // Выполняем уже «починенный» список
-    if (!fixedSubmitScratch_.empty()) {
-        commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
-    }
+	{
+        CPU_SCOPE(ProfilerScopes::kService3);
+		if (!fixedSubmitScratch_.empty()) {
+			commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
+		}
+	}
 
     const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
     for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
@@ -703,7 +702,10 @@ void Renderer::ExecuteTimelineAndPresent() {
         clLanes_[i].epoch++;
     }
 
-    ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+    {
+        CPU_SCOPE(ProfilerScopes::kService4);
+        ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+    }
     //ThrowIfFailed(swapChain_->Present(1, 0));
     SignalFrame(currentFrameIndex_);
     currentFrameIndex_ = swapChain_->GetCurrentBackBufferIndex();

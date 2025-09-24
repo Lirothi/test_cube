@@ -47,5 +47,10 @@ const Profiler::ScopeNameKey kTextManagerEmitImmediate = Profiler::RegisterTrace
 const Profiler::ScopeNameKey kRenderGraphExecute = Profiler::RegisterTraceLiteral(L"RenderGraph::Execute");
 const Profiler::ScopeNameKey kRenderGraphExecuteParallel = Profiler::RegisterTraceLiteral(L"RenderGraph::ExecuteParallel");
 
+const Profiler::ScopeNameKey kService1 = Profiler::RegisterTraceLiteral(L"Service1");
+const Profiler::ScopeNameKey kService2 = Profiler::RegisterTraceLiteral(L"Service2");
+const Profiler::ScopeNameKey kService3 = Profiler::RegisterTraceLiteral(L"Service3");
+const Profiler::ScopeNameKey kService4 = Profiler::RegisterTraceLiteral(L"Service4");
+
 } // namespace ProfilerScopes
 

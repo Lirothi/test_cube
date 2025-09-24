@@ -55,5 +55,11 @@ extern const Profiler::ScopeNameKey kTextManagerEmitImmediate;
 extern const Profiler::ScopeNameKey kRenderGraphExecute;
 extern const Profiler::ScopeNameKey kRenderGraphExecuteParallel;
 
+//Service
+extern const Profiler::ScopeNameKey kService1;
+extern const Profiler::ScopeNameKey kService2;
+extern const Profiler::ScopeNameKey kService3;
+extern const Profiler::ScopeNameKey kService4;
+
 } // namespace ProfilerScopes
 
