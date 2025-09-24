@@ -109,7 +109,6 @@ public:
 
     struct TraceDumpData {
         std::vector<TraceEvent> events;
-        std::vector<std::string> threadNames;
         std::vector<ScopeNameKey> dynamicKeys;
     };
 
@@ -119,7 +118,6 @@ public:
         double   avgMs = 0.0;
         double   maxMs = 0.0;
         uint32_t usages = 0;
-        const std::wstring* namePtr = nullptr;
         std::wstring formatted; // заранее отформатированная строка
     };
 
@@ -250,8 +248,7 @@ private:
 #if PROF_ENABLED
     void ResetMax_Unsafe(); // вызывать под mtx_
     uint32_t GetThreadIndex_Locked(std::thread::id id);
-    void WriteTraceJson(const std::vector<TraceEvent>& events,
-                        const std::vector<std::string>& threadNames);
+    void WriteTraceJson(const std::vector<TraceEvent>& events);
     void ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys);
 #endif
 

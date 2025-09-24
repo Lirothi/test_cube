@@ -769,7 +769,7 @@ D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
     if (!cl || !res) { return; }
-    CPU_SCOPE(ProfilerScopes::kRendererTransition);
+    //CPU_SCOPE(ProfilerScopes::kRendererTransition);
     ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
 
     // быстрый путь — активный CL лежит в TLS
