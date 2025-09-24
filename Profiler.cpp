@@ -89,6 +89,166 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
 
 #if PROF_ENABLED
 
+Profiler::SampleNode* const Profiler::kSampleListClosed = reinterpret_cast<Profiler::SampleNode*>(1);
+Profiler::TraceSampleNode* const Profiler::kTraceListClosed = reinterpret_cast<Profiler::TraceSampleNode*>(1);
+
+Profiler::Profiler() {
+    frameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
+    traceSampleHead_.store(kTraceListClosed, std::memory_order_relaxed);
+}
+
+Profiler::~Profiler() {
+    auto destroyList = [](SampleNode* head) {
+        while (head) {
+            SampleNode* next = head->next;
+            delete head;
+            head = next;
+        }
+    };
+
+    SampleNode* head = frameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (head == kSampleListClosed) { head = nullptr; }
+    destroyList(head);
+
+    SampleNode* pool = sampleNodePool_.exchange(nullptr, std::memory_order_acq_rel);
+    destroyList(pool);
+
+    auto destroyTraceList = [](TraceSampleNode* head) {
+        while (head) {
+            TraceSampleNode* next = head->next;
+            delete head;
+            head = next;
+        }
+    };
+
+    TraceSampleNode* traceHead = traceSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (traceHead == kTraceListClosed) { traceHead = nullptr; }
+    destroyTraceList(traceHead);
+
+    TraceSampleNode* tracePool = traceSamplePool_.exchange(nullptr, std::memory_order_acq_rel);
+    destroyTraceList(tracePool);
+}
+
+Profiler::SampleNode* Profiler::AcquireSampleNode() {
+    SampleNode* node = sampleNodePool_.load(std::memory_order_acquire);
+    while (node && !sampleNodePool_.compare_exchange_weak(node, node->next,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
+    if (!node) {
+        node = new SampleNode();
+    }
+    node->next = nullptr;
+    return node;
+}
+
+void Profiler::ReleaseSampleNode(SampleNode* node) {
+    if (!node) { return; }
+    SampleNode* head = sampleNodePool_.load(std::memory_order_relaxed);
+    do {
+        node->next = head;
+    } while (!sampleNodePool_.compare_exchange_weak(head, node,
+                std::memory_order_release, std::memory_order_relaxed));
+}
+
+void Profiler::ReleaseSampleList(SampleNode* head) {
+    if (!head || head == kSampleListClosed) { return; }
+    while (head) {
+        SampleNode* next = head->next;
+        ReleaseSampleNode(head);
+        head = next;
+    }
+}
+
+Profiler::TraceSampleNode* Profiler::AcquireTraceSampleNode() {
+    TraceSampleNode* node = traceSamplePool_.load(std::memory_order_acquire);
+    while (node && !traceSamplePool_.compare_exchange_weak(node, node->next,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
+    if (!node) {
+        node = new TraceSampleNode();
+    }
+    node->next = nullptr;
+    return node;
+}
+
+void Profiler::ReleaseTraceSampleNode(TraceSampleNode* node) {
+    if (!node) { return; }
+    TraceSampleNode* head = traceSamplePool_.load(std::memory_order_relaxed);
+    do {
+        node->next = head;
+    } while (!traceSamplePool_.compare_exchange_weak(head, node,
+                std::memory_order_release, std::memory_order_relaxed));
+}
+
+void Profiler::ReleaseTraceSampleList(TraceSampleNode* head) {
+    if (!head || head == kTraceListClosed) { return; }
+    while (head) {
+        TraceSampleNode* next = head->next;
+        ReleaseTraceSampleNode(head);
+        head = next;
+    }
+}
+
+bool Profiler::PushTraceSampleNode(TraceSampleNode* node) {
+    TraceSampleNode* head = traceSampleHead_.load(std::memory_order_acquire);
+    while (head != kTraceListClosed) {
+        node->next = head;
+        if (traceSampleHead_.compare_exchange_weak(head, node,
+                std::memory_order_release, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Profiler::DrainTraceSampleNodes(std::vector<TraceSample>& out) {
+    const size_t prevSize = out.size();
+    TraceSampleNode* head = traceSampleHead_.exchange(kTraceListClosed, std::memory_order_acq_rel);
+    if (head == kTraceListClosed) { return; }
+    while (head) {
+        out.push_back(head->sample);
+        TraceSampleNode* next = head->next;
+        ReleaseTraceSampleNode(head);
+        head = next;
+    }
+    std::reverse(out.begin() + prevSize, out.end());
+}
+
+bool Profiler::PushSampleNode(SampleNode* node) {
+    SampleNode* head = frameSampleHead_.load(std::memory_order_acquire);
+    while (head != kSampleListClosed) {
+        node->next = head;
+        if (frameSampleHead_.compare_exchange_weak(head, node,
+                std::memory_order_release, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Profiler::DrainSampleNodes(std::vector<ScopeSample>& out) {
+    SampleNode* head = frameSampleHead_.exchange(kSampleListClosed, std::memory_order_acq_rel);
+    if (head == kSampleListClosed) { return; }
+    while (head) {
+        out.push_back(head->sample);
+        SampleNode* next = head->next;
+        ReleaseSampleNode(head);
+        head = next;
+    }
+}
+
+uint32_t Profiler::GetThreadIndexForCurrentThread() {
+    static thread_local uint32_t cached = std::numeric_limits<uint32_t>::max();
+    uint32_t idx = cached;
+    if (idx != std::numeric_limits<uint32_t>::max()) {
+        return idx;
+    }
+    std::lock_guard<std::mutex> lk(mtx_);
+    idx = GetThreadIndex_Locked(std::this_thread::get_id());
+    cached = idx;
+    return idx;
+}
+
 Profiler& Profiler::Get() {
     static Profiler g;
     return g;
@@ -110,15 +270,27 @@ void Profiler::BeginFrame(uint64_t frameNo) {
     if (!GetEnabled()) { return; }
     std::lock_guard<std::mutex> lk(mtx_);
     frameSamples_.clear();
+    SampleNode* stale = frameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (stale && stale != kSampleListClosed) {
+        ReleaseSampleList(stale);
+    }
+    TraceSampleNode* traceStale = traceSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (traceStale && traceStale != kTraceListClosed) {
+        ReleaseTraceSampleList(traceStale);
+    }
 #if PROF_GPU_ENABLED
     gpuFrameSamples_.clear();
     gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
 #endif
     frameNo_ = frameNo;
     frameOpen_ = true;
+    frameSampleHead_.store(nullptr, std::memory_order_release);
+    traceSampleHead_.store(nullptr, std::memory_order_release);
+    frameOpenFlag_.store(true, std::memory_order_release);
     frameCpuStart_ = CpuClock::now();
 
     if (traceCaptureRequested_ && !traceCapturing_ && traceRequestFrameCount_ > 0) {
+        std::lock_guard<std::mutex> traceLock(traceMtx_);
         traceCaptureRequested_ = false;
         traceCapturing_ = true;
         traceFramesRemaining_ = traceRequestFrameCount_;
@@ -131,9 +303,13 @@ void Profiler::BeginFrame(uint64_t frameNo) {
     }
 
     if (traceCapturing_ && !traceStartSet_) {
-        traceStartUs_ = ToMicroseconds(frameCpuStart_);
-        traceStartSet_ = true;
+        std::lock_guard<std::mutex> traceLock(traceMtx_);
+        if (!traceStartSet_) {
+            traceStartUs_ = ToMicroseconds(frameCpuStart_);
+            traceStartSet_ = true;
+        }
     }
+    traceCapturingAtomic_.store(traceCapturing_, std::memory_order_release);
 
     if (lastMaxReset_.time_since_epoch().count() == 0) {
         lastMaxReset_ = CoolClock::now();
@@ -159,16 +335,21 @@ void Profiler::EndFrame() {
     TraceDumpData traceDump;
     bool haveTraceDump = false;
     const auto frameEnd = CpuClock::now();
+    frameSamples_.clear();
+    frameOpenFlag_.store(false, std::memory_order_release);
+    DrainSampleNodes(frameSamples_);
+    samples.swap(frameSamples_);
     {
         std::lock_guard<std::mutex> lk(mtx_);
         if (!frameOpen_) { return; }
-        samples = std::move(frameSamples_);
-        frameSamples_.clear();
 #if PROF_GPU_ENABLED
         gpuSamples = std::move(gpuFrameSamples_);
         gpuFrameSamples_.clear();
 #endif
         if (traceCapturing_) {
+            std::lock_guard<std::mutex> traceLock(traceMtx_);
+            traceSampleScratch_.clear();
+            DrainTraceSampleNodes(traceSampleScratch_);
             const uint64_t startUs = ToMicroseconds(frameCpuStart_);
             const uint64_t endUs = ToMicroseconds(frameEnd);
             const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
@@ -180,6 +361,41 @@ void Profiler::EndFrame() {
             fev.durUs = durUs;
             fev.threadIndex = threadIdx;
             traceEvents_.push_back(std::move(fev));
+
+            for (const TraceSample& sample : traceSampleScratch_) {
+                uint32_t nameIndex = std::numeric_limits<uint32_t>::max();
+                bool haveNameIndex = false;
+                std::wstring displayName;
+                auto nameIt = traceNameLookup_.find(sample.key);
+                if (nameIt != traceNameLookup_.end()) {
+                    nameIndex = nameIt->second;
+                    haveNameIndex = true;
+                }
+                else {
+                    displayName = BuildWideName(sample.key);
+                    if (traceNames_.size() < static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                        TraceNameEntry entry{};
+                        entry.displayName = std::move(displayName);
+                        nameIndex = static_cast<uint32_t>(traceNames_.size());
+                        traceNames_.push_back(std::move(entry));
+                        traceNameLookup_.emplace(sample.key, nameIndex);
+                        haveNameIndex = true;
+                    }
+                }
+
+                TraceEvent ev;
+                if (haveNameIndex) {
+                    ev.nameIndex = nameIndex;
+                }
+                else {
+                    ev.inlineName = std::move(displayName);
+                }
+                ev.tsUs = (sample.startUsAbs >= traceStartUs_) ? (sample.startUsAbs - traceStartUs_) : 0;
+                ev.durUs = sample.durUs;
+                ev.threadIndex = sample.threadIndex;
+                traceEvents_.push_back(std::move(ev));
+            }
+            traceSampleScratch_.clear();
 
             const bool stopNow = traceStopRequested_;
             traceStopRequested_ = false;
@@ -210,6 +426,7 @@ void Profiler::EndFrame() {
         }
         frameOpen_ = false;
     }
+    traceCapturingAtomic_.store(traceCapturing_, std::memory_order_release);
 
 #if PROF_GPU_ENABLED
     // 2) prepare gpu samples for next frame
@@ -458,49 +675,31 @@ void Profiler::EndFrame() {
 
 void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end) {
     if (!GetEnabled()) { return; }
+    if (!frameOpenFlag_.load(std::memory_order_acquire)) { return; }
+    const double ms = std::chrono::duration<double, std::milli>(end - start).count();
+    SampleNode* node = AcquireSampleNode();
+    node->sample.key = key;
+    node->sample.ms = ms;
+    if (!PushSampleNode(node)) {
+        ReleaseSampleNode(node);
+        return;
+    }
+
+    if (!traceCapturingAtomic_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     const uint64_t startUs = ToMicroseconds(start);
     const uint64_t endUs = ToMicroseconds(end);
     const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
-    const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!frameOpen_) { return; }
-    frameSamples_.push_back({ key, ms });
-    if (traceCapturing_) {
-        if (!traceStartSet_) {
-            traceStartUs_ = startUs;
-            traceStartSet_ = true;
-        }
-        const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
-        uint32_t nameIndex = std::numeric_limits<uint32_t>::max();
-        bool haveNameIndex = false;
-        std::wstring displayName;
-        auto nameIt = traceNameLookup_.find(key);
-        if (nameIt != traceNameLookup_.end()) {
-            nameIndex = nameIt->second;
-            haveNameIndex = true;
-        }
-        else {
-            displayName = BuildWideName(key);
-            if (traceNames_.size() < static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-                TraceNameEntry entry{};
-                entry.displayName = std::move(displayName);
-                nameIndex = static_cast<uint32_t>(traceNames_.size());
-                traceNames_.push_back(std::move(entry));
-                traceNameLookup_.emplace(key, nameIndex);
-                haveNameIndex = true;
-            }
-        }
-        TraceEvent ev;
-        if (haveNameIndex) {
-            ev.nameIndex = nameIndex;
-        }
-        else {
-            ev.inlineName = std::move(displayName);
-        }
-        ev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
-        ev.durUs = durUs;
-        ev.threadIndex = threadIdx;
-        traceEvents_.push_back(std::move(ev));
+    const uint32_t threadIdx = GetThreadIndexForCurrentThread();
+    TraceSampleNode* traceNode = AcquireTraceSampleNode();
+    traceNode->sample.key = key;
+    traceNode->sample.startUsAbs = startUs;
+    traceNode->sample.durUs = durUs;
+    traceNode->sample.threadIndex = threadIdx;
+    if (!PushTraceSampleNode(traceNode)) {
+        ReleaseTraceSampleNode(traceNode);
     }
 }
 #if PROF_GPU_ENABLED
