@@ -113,6 +113,13 @@ public:
         std::wstring displayName;
     };
 
+    struct TraceSample {
+        ScopeNameKey key{};
+        uint64_t     startUsAbs = 0;
+        uint64_t     durUs = 0;
+        uint32_t     threadIndex = 0;
+    };
+
     // --- данные оверлея (снэпшот) ---
     struct OverlayRow {
         uint32_t entryId = 0;
@@ -235,7 +242,8 @@ public:
     }
 
 private:
-    Profiler() = default;
+    Profiler();
+    ~Profiler();
     void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end);
 #if PROF_GPU_ENABLED
     void PushGpuSample(const ScopeNameKey& key, double ms);
@@ -255,6 +263,7 @@ private:
 #if PROF_ENABLED
     // сбор статистики
     std::mutex mtx_;
+    std::mutex traceMtx_;
     robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> stats_;
 #if PROF_GPU_ENABLED
     robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> gpuStats_;
@@ -262,6 +271,40 @@ private:
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
     robin_hood::unordered_flat_map<std::thread::id, uint32_t> threadIndices_;
     std::vector<std::string> threadIndexToName_;
+
+    struct SampleNode {
+        ScopeSample sample;
+        SampleNode* next = nullptr;
+    };
+
+    static SampleNode* const kSampleListClosed;
+
+    SampleNode* AcquireSampleNode();
+    void        ReleaseSampleNode(SampleNode* node);
+    void        ReleaseSampleList(SampleNode* head);
+    bool        PushSampleNode(SampleNode* node);
+    void        DrainSampleNodes(std::vector<ScopeSample>& out);
+    uint32_t    GetThreadIndexForCurrentThread();
+
+    struct TraceSampleNode {
+        TraceSample sample;
+        TraceSampleNode* next = nullptr;
+    };
+
+    static TraceSampleNode* const kTraceListClosed;
+
+    TraceSampleNode* AcquireTraceSampleNode();
+    void             ReleaseTraceSampleNode(TraceSampleNode* node);
+    void             ReleaseTraceSampleList(TraceSampleNode* head);
+    bool             PushTraceSampleNode(TraceSampleNode* node);
+    void             DrainTraceSampleNodes(std::vector<TraceSample>& out);
+
+    std::atomic<SampleNode*> frameSampleHead_{ nullptr };
+    std::atomic<SampleNode*> sampleNodePool_{ nullptr };
+    std::atomic<bool>        frameOpenFlag_{ false };
+
+    std::atomic<TraceSampleNode*> traceSampleHead_{ nullptr };
+    std::atomic<TraceSampleNode*> traceSamplePool_{ nullptr };
 
     std::vector<ScopeSample> frameSamples_;
 #if PROF_GPU_ENABLED
@@ -327,6 +370,7 @@ private:
     bool traceCaptureRequested_ = false;
     uint32_t traceRequestFrameCount_ = 0;
     bool traceCapturing_ = false;
+    std::atomic<bool> traceCapturingAtomic_{ false };
     bool traceStopRequested_ = false;
     uint32_t traceFramesRemaining_ = 0;
     uint64_t traceStartUs_ = 0;
@@ -335,6 +379,7 @@ private:
     std::vector<TraceNameEntry> traceNames_;
     robin_hood::unordered_flat_map<ScopeNameKey, uint32_t, ScopeNameKeyHash, ScopeNameKeyEqual> traceNameLookup_;
     std::atomic<uint32_t> traceFileCounter_{ 0 };
+    std::vector<TraceSample> traceSampleScratch_;
 
 #if PROF_GPU_ENABLED
     // GPU timestamp queries
