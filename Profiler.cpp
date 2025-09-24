@@ -397,6 +397,13 @@ void Profiler::EndFrame() {
             }
             traceSampleScratch_.clear();
 
+            TraceEvent hev;
+            hev.inlineName = L"TraceHandling";
+            hev.tsUs = endUs - traceStartUs_;
+            hev.durUs = ToMicroseconds(CoolClock::now()) - endUs;
+            hev.threadIndex = threadIdx;
+            traceEvents_.push_back(std::move(hev));
+
             const bool stopNow = traceStopRequested_;
             traceStopRequested_ = false;
 
