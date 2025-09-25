@@ -35,6 +35,7 @@ struct VSOutput
 static const float3 kDeepColor = float3(0.01f, 0.09f, 0.18f);
 static const float3 kShallowColor = float3(0.06f, 0.25f, 0.35f);
 static const float3 kLightDir = normalize(float3(0.4f, 1.0f, 0.2f));
+static const float kLodThreshold = 0.05f;
 
 float ModifiedManhattanDistance(float3 a, float3 b)
 {
@@ -48,12 +49,11 @@ float EaseInOutClamped(float x)
     return 3.0f * x * x - 2.0f * x * x * x;
 }
 
-float4 LodWeights(float viewDist, float lodFadeDistance)
+float4 LodWeights(float viewDist, float lodScale)
 {
-    float4 scaledLength = max(cascadeLengthScales, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
-    float4 fadeWidth = max(float4(lodFadeDistance, lodFadeDistance, lodFadeDistance, lodFadeDistance),
-        float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
-    float4 x = (viewDist - scaledLength) / fadeWidth;
+    float4 length = max(cascadeLengthScales, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
+    float4 fade = max(length * lodScale, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
+    float4 x = (viewDist - fade) / fade;
     return float4(1.0f, 1.0f, 1.0f, 1.0f) - float4(
         EaseInOutClamped(x.x),
         EaseInOutClamped(x.y),
@@ -85,23 +85,23 @@ float3 ClipMapVertex(float3 positionOS, float2 uv)
     return worldPos;
 }
 
-float3 SampleDisplacementCascade(float2 worldXZ, uint cascade, float amplitude)
+float3 SampleDisplacementCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f);
     float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    return sample.xyz * amplitude;
+    return sample.xyz;
 }
 
-float4 SampleDerivativesCascade(float2 worldXZ, uint cascade, float amplitude)
+float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
     float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    return sample * amplitude;
+    return sample;
 }
 
-float3 SampleDisplacement(float2 worldXZ, float4 weights, uint clipCount, float amplitude)
+float3 SampleDisplacement(float2 worldXZ, float4 weights, uint clipCount)
 {
     float3 displacement = float3(0.0f, 0.0f, 0.0f);
     [unroll]
@@ -112,15 +112,15 @@ float3 SampleDisplacement(float2 worldXZ, float4 weights, uint clipCount, float 
             break;
         }
         float w = weights[cascade];
-        if (w > 1e-4f)
+        if (cascade == 0 || w > kLodThreshold)
         {
-            displacement += w * SampleDisplacementCascade(worldXZ, cascade, amplitude);
+            displacement += w * SampleDisplacementCascade(worldXZ, cascade);
         }
     }
     return displacement;
 }
 
-float4 SampleDerivatives(float2 worldXZ, float4 weights, uint clipCount, float amplitude)
+float4 SampleDerivatives(float2 worldXZ, float4 weights, uint clipCount)
 {
     float4 derivatives = float4(0.0f, 0.0f, 0.0f, 0.0f);
     [unroll]
@@ -131,9 +131,9 @@ float4 SampleDerivatives(float2 worldXZ, float4 weights, uint clipCount, float a
             break;
         }
         float w = weights[cascade];
-        if (w > 1e-4f)
+        if (cascade == 0 || w > kLodThreshold)
         {
-            derivatives += w * SampleDerivativesCascade(worldXZ, cascade, amplitude);
+            derivatives += w * SampleDerivativesCascade(worldXZ, cascade);
         }
     }
     return derivatives;
@@ -149,11 +149,10 @@ VSOutput VSMain(VSInput input)
     float3 viewVector = baseWorld - clipMapViewer.xyz;
     float viewDist = length(viewVector);
 
-    float amplitude = viewerParams.z;
-    float4 weights = saturate(LodWeights(viewDist, clipMapParams.w));
+    float4 weights = LodWeights(viewDist, clipMapParams.w);
 
-    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount, amplitude);
-    float4 deriv = SampleDerivatives(baseWorld.xz, weights, clipCount, amplitude);
+    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount);
+    float4 deriv = SampleDerivatives(baseWorld.xz, weights, clipCount);
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
     output.worldPos = world;
