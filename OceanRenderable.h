@@ -33,6 +33,8 @@ public:
 
     void OnMaterialHotReload(Renderer* renderer) override;
 
+    void SetGridVertexDensity(uint32_t density);
+
 private:
     struct ClipLevel
     {
@@ -53,6 +55,8 @@ private:
     Math::float4 GetViewerParams() const;
     Math::float4 GetCascadeLengthScales() const;
     Math::float4 GetCascadeInvLengthScales() const;
+    Math::float4 GetClipMapParams() const;
+    Math::float4 GetClipMapViewer() const;
 
 private:
     Camera* camera_ = nullptr;
@@ -60,9 +64,16 @@ private:
 
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
+    float viewerHeight_ = 0.0f;
     std::array<ClipLevel, OceanSimulation::kClipLevels> clipLevels_{};
     uint32_t activeClipLevels_ = OceanSimulation::kClipLevels;
     Math::float4 lengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
     Math::float4 invLengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    uint32_t meshVertexDensity_ = 25u;
+    float clipMapScale_ = 1.0f;
+    float clipMapLevelHalfSize_ = 0.0f;
+    Math::float3 clipMapViewer_ = Math::float3(0.0f, 0.0f, 0.0f);
+    float cascadesFadeDistance_ = 200.0f;
 };
 
