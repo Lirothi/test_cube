@@ -20,8 +20,7 @@ cbuffer FFTParams : register(b0)
     uint Flags;
 };
 
-groupshared float4 BufferA[FFT_SIZE];
-groupshared float4 BufferB[FFT_SIZE];
+groupshared float4 FftBuffer[2][FFT_SIZE];
 
 float2 ComplexMult(float2 a, float2 b)
 {
@@ -44,36 +43,32 @@ void ButterflyValues(uint step, uint index, out uint2 indices, out float2 twiddl
 
 float4 DoFft(uint threadIndex, float4 input)
 {
-    BufferA[threadIndex] = input;
-    GroupMemoryBarrierWithGroupSync();
+	FftBuffer[0][threadIndex] = input;
+	GroupMemoryBarrierWithGroupSync();
 
-    bool flag = true;
+	uint ping = 0;
 
-    [unroll(FFT_LOG_SIZE)]
-    for (uint step = 0; step < FFT_LOG_SIZE; ++step)
-    {
-        uint2 inputsIndices;
-        float2 twiddle;
-        ButterflyValues(step, threadIndex, inputsIndices, twiddle);
+	[unroll(FFT_LOG_SIZE)]
+	for (uint step = 0; step < FFT_LOG_SIZE; ++step)
+	{
+		uint2 inputsIndices;
+		float2 twiddle;
+		ButterflyValues(step, threadIndex, inputsIndices, twiddle);
 
-        float4 v = flag ? BufferA[inputsIndices.y] : BufferB[inputsIndices.y];
-        float4 lhs = flag ? BufferA[inputsIndices.x] : BufferB[inputsIndices.x];
-        float4 res = lhs + float4(ComplexMult(twiddle, v.xy), ComplexMult(twiddle, v.zw));
+		const uint readIndex = ping;
+		const uint writeIndex = 1 - ping;
 
-        if (flag)
-        {
-            BufferB[threadIndex] = res;
-        }
-        else
-        {
-            BufferA[threadIndex] = res;
-        }
+		float4 lhs = FftBuffer[readIndex][inputsIndices.x];
+		float4 v = FftBuffer[readIndex][inputsIndices.y];
+		float4 res = lhs + float4(ComplexMult(twiddle, v.xy), ComplexMult(twiddle, v.zw));
 
-        flag = !flag;
-        GroupMemoryBarrierWithGroupSync();
-    }
+		FftBuffer[writeIndex][threadIndex] = res;
 
-    return flag ? BufferA[threadIndex] : BufferB[threadIndex];
+		ping = writeIndex;
+		GroupMemoryBarrierWithGroupSync();
+	}
+
+	return FftBuffer[ping][threadIndex];
 }
 
 [numthreads(FFT_SIZE, 1, 1)]
