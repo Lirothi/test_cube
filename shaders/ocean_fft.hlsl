@@ -47,7 +47,7 @@ float4 DoFft(uint threadIndex, float4 input)
     BufferA[threadIndex] = input;
     GroupMemoryBarrierWithGroupSync();
 
-    bool flag = false;
+    bool flag = true;
 
     [unroll(FFT_LOG_SIZE)]
     for (uint step = 0; step < FFT_LOG_SIZE; ++step)
@@ -73,7 +73,7 @@ float4 DoFft(uint threadIndex, float4 input)
         GroupMemoryBarrierWithGroupSync();
     }
 
-    return flag ? BufferB[threadIndex] : BufferA[threadIndex];
+    return flag ? BufferA[threadIndex] : BufferB[threadIndex];
 }
 
 [numthreads(FFT_SIZE, 1, 1)]
