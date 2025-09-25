@@ -48,10 +48,12 @@ float EaseInOutClamped(float x)
     return 3.0f * x * x - 2.0f * x * x * x;
 }
 
-float4 LodWeights(float viewDist, float lodScale)
+float4 LodWeights(float viewDist, float lodFadeDistance)
 {
     float4 scaledLength = max(cascadeLengthScales, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
-    float4 x = (viewDist - scaledLength * lodScale) / (scaledLength * lodScale);
+    float4 fadeWidth = max(float4(lodFadeDistance, lodFadeDistance, lodFadeDistance, lodFadeDistance),
+        float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
+    float4 x = (viewDist - scaledLength) / fadeWidth;
     return float4(1.0f, 1.0f, 1.0f, 1.0f) - float4(
         EaseInOutClamped(x.x),
         EaseInOutClamped(x.y),
