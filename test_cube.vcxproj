@@ -168,6 +168,8 @@
     <ClCompile Include="MaterialDataManager.cpp" />
     <ClCompile Include="Mesh.cpp" />
     <ClCompile Include="MeshManager.cpp" />
+    <ClCompile Include="OceanRenderable.cpp" />
+    <ClCompile Include="OceanSimulation.cpp" />
     <ClCompile Include="PointLight.cpp" />
     <ClCompile Include="Profiler.cpp" />
     <ClCompile Include="ProfilerScopes.cpp" />
@@ -207,6 +209,8 @@
     <ClInclude Include="Math.h" />
     <ClInclude Include="Mesh.h" />
     <ClInclude Include="MeshManager.h" />
+    <ClInclude Include="OceanRenderable.h" />
+    <ClInclude Include="OceanSimulation.h" />
     <ClInclude Include="PointLight.h" />
     <ClInclude Include="Profiler.h" />
     <ClInclude Include="ProfilerScopes.h" />
@@ -257,6 +261,18 @@
       <FileType>Document</FileType>
     </Text>
     <Text Include="shaders\lines.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\ocean_fft.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\ocean_generate_mips.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\ocean_time_spectrum.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\ocean_surface.hlsl">
       <FileType>Document</FileType>
     </Text>
     <Text Include="shaders\shader.hlsl">

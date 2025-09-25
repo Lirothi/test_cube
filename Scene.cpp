@@ -11,6 +11,7 @@
 #include "Helpers.h"
 #include "Renderer.h"
 #include "RenderGraph.h"
+#include "OceanRenderable.h"
 #include "StaticMesh.h"
 #include "TaskSystem.h"
 #include "TextManager.h"
@@ -297,6 +298,8 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     }
 
     AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
+
+    AddObject(std::make_unique<OceanRenderable>(&camera_));
 
     AddObject(std::make_unique<DebugGrid>(100.0f));
 

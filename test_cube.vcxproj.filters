@@ -102,6 +102,12 @@
     <ClCompile Include="RenderableObjectBase.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OceanSimulation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OceanRenderable.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="RenderContextPool.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -186,6 +192,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MeshManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OceanSimulation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OceanRenderable.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DebugGrid.h">
@@ -281,6 +293,18 @@
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\lines.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ocean_fft.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ocean_generate_mips.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ocean_time_spectrum.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\ocean_surface.hlsl">
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\shader.hlsl">
