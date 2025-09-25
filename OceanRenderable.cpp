@@ -1,5 +1,6 @@
 #include "OceanRenderable.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,207 @@ namespace
         float u;
         float v;
     };
+
+    struct MeshData
+    {
+        std::vector<OceanVertex> vertices;
+        std::vector<uint32_t> indices;
+    };
+
+    constexpr int kOverlap = 2;
+
+    int ClipLevelHalfSize(uint32_t vertexDensity)
+    {
+        return static_cast<int>((vertexDensity + 1u) * 4u - 1u);
+    }
+
+    void AppendMesh(MeshData& dst, const MeshData& src,
+        const Math::float3& translation, const Math::float3& scale)
+    {
+        const uint32_t baseVertex = static_cast<uint32_t>(dst.vertices.size());
+        dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+        dst.indices.reserve(dst.indices.size() + src.indices.size());
+
+        for (const auto& v : src.vertices)
+        {
+            OceanVertex out = v;
+            out.px = v.px * scale.x + translation.x;
+            out.py = v.py * scale.y + translation.y;
+            out.pz = v.pz * scale.z + translation.z;
+            dst.vertices.push_back(out);
+        }
+
+        for (uint32_t idx : src.indices)
+        {
+            dst.indices.push_back(baseVertex + idx);
+        }
+    }
+
+    MeshData BuildPlane(int width, int height, const Math::float3& pivot,
+        bool geomorphOffsetInUv, bool morphShiftX = false, bool morphShiftZ = false,
+        int trianglesShift = 0)
+    {
+        MeshData mesh;
+        const int vertCount = (width + 1) * (height + 1);
+        mesh.vertices.resize(static_cast<size_t>(vertCount));
+        mesh.indices.resize(static_cast<size_t>(width * height * 6));
+
+        for (int i = 0; i <= height; ++i)
+        {
+            for (int j = 0; j <= width; ++j)
+            {
+                const int index = j + i * (width + 1);
+                int x = j;
+                int z = i;
+
+                const Math::float3 normalPos(static_cast<float>(x), 1.0f, static_cast<float>(z));
+
+                if ((x & 1) != 0)
+                {
+                    const bool cond = morphShiftX ^ ((x & 3) == 3);
+                    x += cond ? 1 : -1;
+                }
+                if ((z & 1) != 0)
+                {
+                    const bool cond = morphShiftZ ^ ((z & 3) == 3);
+                    z += cond ? 1 : -1;
+                }
+
+                OceanVertex v{};
+                v.px = normalPos.x - pivot.x;
+                v.py = normalPos.y - pivot.y;
+                v.pz = normalPos.z - pivot.z;
+                if (geomorphOffsetInUv)
+                {
+                    v.u = static_cast<float>(x) - normalPos.x;
+                    v.v = static_cast<float>(z) - normalPos.z;
+                }
+                else
+                {
+                    v.u = 0.0f;
+                    v.v = 0.0f;
+                }
+                mesh.vertices[static_cast<size_t>(index)] = v;
+            }
+        }
+
+        size_t tri = 0;
+        for (int i = 0; i < height; ++i)
+        {
+            for (int j = 0; j < width; ++j)
+            {
+                const int k = j + i * (width + 1);
+                if (((i + j + trianglesShift) & 1) == 0)
+                {
+                    mesh.indices[tri++] = static_cast<uint32_t>(k);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 1);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 2);
+
+                    mesh.indices[tri++] = static_cast<uint32_t>(k);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 2);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + 1);
+                }
+                else
+                {
+                    mesh.indices[tri++] = static_cast<uint32_t>(k);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 1);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + 1);
+
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + 1);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 1);
+                    mesh.indices[tri++] = static_cast<uint32_t>(k + width + 2);
+                }
+            }
+        }
+
+        return mesh;
+    }
+
+    MeshData BuildRing(int clipLevelHalfSize)
+    {
+        MeshData ring;
+        const int k = clipLevelHalfSize;
+        const int shortSide = (k + 1) / 2 + kOverlap;
+        const int longSide = k - 1;
+        const int sum = longSide + shortSide;
+        const bool shortMorphShift = ((shortSide / 2) % 2) == 1;
+
+        const Math::float3 pivot = (Math::float3(1.0f, 0.0f, 0.0f) + Math::float3(0.0f, 0.0f, 1.0f)) * static_cast<float>(k + 1);
+
+        const MeshData bottomLeft = BuildPlane(shortSide, shortSide, pivot, true, false, false);
+        AppendMesh(ring, bottomLeft, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData middleLeft = BuildPlane(shortSide, longSide, pivot, true, false, shortMorphShift);
+        AppendMesh(ring, middleLeft, Math::float3(0.0f, 0.0f, static_cast<float>(shortSide)), Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData topLeft = BuildPlane(shortSide, shortSide, pivot, true, false, !shortMorphShift);
+        AppendMesh(ring, topLeft, Math::float3(0.0f, 0.0f, static_cast<float>(sum)), Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData topMiddle = BuildPlane(longSide, shortSide, pivot, true, shortMorphShift, !shortMorphShift);
+        AppendMesh(ring, topMiddle,
+            Math::float3(static_cast<float>(shortSide), 0.0f, static_cast<float>(sum)),
+            Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData topRight = BuildPlane(shortSide, shortSide, pivot, true, !shortMorphShift, !shortMorphShift);
+        AppendMesh(ring, topRight,
+            Math::float3(static_cast<float>(sum), 0.0f, static_cast<float>(sum)),
+            Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData middleRight = BuildPlane(shortSide, longSide, pivot, true, !shortMorphShift, shortMorphShift);
+        AppendMesh(ring, middleRight,
+            Math::float3(static_cast<float>(sum), 0.0f, static_cast<float>(shortSide)),
+            Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData bottomRight = BuildPlane(shortSide, shortSide, pivot, true, !shortMorphShift, false);
+        AppendMesh(ring, bottomRight,
+            Math::float3(static_cast<float>(sum), 0.0f, 0.0f),
+            Math::float3(1.0f, 1.0f, 1.0f));
+
+        const MeshData bottomMiddle = BuildPlane(longSide, shortSide, pivot, true, shortMorphShift, false);
+        AppendMesh(ring, bottomMiddle,
+            Math::float3(static_cast<float>(shortSide), 0.0f, 0.0f),
+            Math::float3(1.0f, 1.0f, 1.0f));
+
+        return ring;
+    }
+
+    MeshData BuildSkirt(int clipLevelHalfSize, float outerBorderScale)
+    {
+        MeshData skirt;
+        const int borderVertCount = clipLevelHalfSize + kOverlap;
+        const int scale = 2;
+
+        Math::float3 pivot = Math::float3(-1.0f, 0.0f, -1.0f)
+            * static_cast<float>(borderVertCount) * (1.0f + 2.0f * outerBorderScale)
+            + Math::float3(1.0f, 0.0f, 1.0f);
+
+        const MeshData quad = BuildPlane(1, 1, Math::float3(0.0f, 0.0f, 0.0f), false);
+        const MeshData hStrip = BuildPlane(borderVertCount, 1, Math::float3(0.0f, 0.0f, 0.0f), false);
+        const MeshData vStrip = BuildPlane(1, borderVertCount, Math::float3(0.0f, 0.0f, 0.0f), false);
+
+        outerBorderScale *= static_cast<float>(borderVertCount * scale);
+        const Math::float3 cornerQuadScale(outerBorderScale, 1.0f, outerBorderScale);
+        const Math::float3 stripScaleVert(static_cast<float>(scale), 1.0f, outerBorderScale);
+        const Math::float3 stripScaleHor(outerBorderScale, 1.0f, static_cast<float>(scale));
+
+        AppendMesh(skirt, quad, pivot + Math::float3(0.0f, 0.0f, 0.0f), cornerQuadScale);
+        AppendMesh(skirt, hStrip, pivot + Math::float3(outerBorderScale, 0.0f, 0.0f), stripScaleVert);
+        AppendMesh(skirt, quad,
+            pivot + Math::float3(outerBorderScale + borderVertCount * scale, 0.0f, 0.0f), cornerQuadScale);
+        AppendMesh(skirt, vStrip,
+            pivot + Math::float3(0.0f, 0.0f, outerBorderScale), stripScaleHor);
+        AppendMesh(skirt, vStrip,
+            pivot + Math::float3(outerBorderScale + borderVertCount * scale, 0.0f, outerBorderScale), stripScaleHor);
+        AppendMesh(skirt, quad,
+            pivot + Math::float3(0.0f, 0.0f, outerBorderScale + borderVertCount * scale), cornerQuadScale);
+        AppendMesh(skirt, hStrip,
+            pivot + Math::float3(outerBorderScale, 0.0f, outerBorderScale + borderVertCount * scale), stripScaleVert);
+        AppendMesh(skirt, quad,
+            pivot + Math::float3(outerBorderScale + borderVertCount * scale, 0.0f,
+                outerBorderScale + borderVertCount * scale), cornerQuadScale);
+
+        return skirt;
+    }
 }
 
 class OceanRenderable::OceanUniformBinder final : public RenderableObject::UniformBinder
@@ -40,6 +242,8 @@ public:
             viewerParamsHandle_ = material->ComputeCBFieldHandle(0, "viewerParams");
             cascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "cascadeLengthScales");
             inverseCascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "inverseCascadeLengthScales");
+            clipMapParamsHandle_ = material->ComputeCBFieldHandle(0, "clipMapParams");
+            clipMapViewerHandle_ = material->ComputeCBFieldHandle(0, "clipMapViewer");
         }
         else
         {
@@ -51,6 +255,8 @@ public:
             viewerParamsHandle_ = {};
             cascadeLengthScalesHandle_ = {};
             inverseCascadeLengthScalesHandle_ = {};
+            clipMapParamsHandle_ = {};
+            clipMapViewerHandle_ = {};
         }
     }
 
@@ -76,6 +282,8 @@ public:
         UpdateUniform(owner, viewerParamsHandle_, material, owner_.GetViewerParams(), cbData);
         UpdateUniform(owner, cascadeLengthScalesHandle_, material, owner_.GetCascadeLengthScales(), cbData);
         UpdateUniform(owner, inverseCascadeLengthScalesHandle_, material, owner_.GetCascadeInvLengthScales(), cbData);
+        UpdateUniform(owner, clipMapParamsHandle_, material, owner_.GetClipMapParams(), cbData);
+        UpdateUniform(owner, clipMapViewerHandle_, material, owner_.GetClipMapViewer(), cbData);
     }
 
 private:
@@ -88,6 +296,8 @@ private:
     Material::CBFieldHandle viewerParamsHandle_{};
     Material::CBFieldHandle cascadeLengthScalesHandle_{};
     Material::CBFieldHandle inverseCascadeLengthScalesHandle_{};
+    Material::CBFieldHandle clipMapParamsHandle_{};
+    Material::CBFieldHandle clipMapViewerHandle_{};
 };
 
 OceanRenderable::OceanRenderable(Camera* camera)
@@ -120,6 +330,7 @@ void OceanRenderable::Init(Renderer* renderer,
     simulation_->Initialize(renderer, uploadCmdList, uploadKeepAlive);
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
+    UpdateClipLevels();
 }
 
 void OceanRenderable::Tick(float deltaTime)
@@ -129,6 +340,7 @@ void OceanRenderable::Tick(float deltaTime)
     {
         const auto pos = camera_->GetPosition();
         viewerXZ_ = Math::float2(pos.x, pos.z);
+        viewerHeight_ = pos.y;
     }
     UpdateClipLevels();
 }
@@ -192,59 +404,41 @@ void OceanRenderable::BuildMesh(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    const uint32_t resolution = OceanSimulation::kResolution;
     const uint32_t levels = OceanSimulation::kClipLevels;
-    const uint32_t vertsPerLevel = (resolution + 1u) * (resolution + 1u);
+    const int clipHalfSize = ClipLevelHalfSize(meshVertexDensity_);
 
-    std::vector<OceanVertex> vertices;
-    vertices.reserve(size_t(vertsPerLevel) * size_t(levels));
+    MeshData combined;
+    combined.vertices.reserve(1024);
+    combined.indices.reserve(1024);
 
-    std::vector<uint32_t> indices;
-    indices.reserve(size_t(levels) * size_t(resolution) * size_t(resolution) * 6u);
+    const MeshData center = BuildPlane(2 * clipHalfSize + kOverlap, 2 * clipHalfSize + kOverlap,
+        Math::float3(static_cast<float>(clipHalfSize + 1), 0.0f, static_cast<float>(clipHalfSize + 1)), true);
+    AppendMesh(combined, center, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(1.0f, 1.0f, 1.0f));
 
-    for (uint32_t level = 0; level < levels; ++level)
+    const MeshData ring = BuildRing(clipHalfSize);
+    for (uint32_t level = 1; level <= levels; ++level)
     {
-        for (uint32_t y = 0; y <= resolution; ++y)
-        {
-            const float fy = static_cast<float>(y) / static_cast<float>(resolution);
-            const float ly = fy * 2.0f - 1.0f;
-            for (uint32_t x = 0; x <= resolution; ++x)
-            {
-                const float fx = static_cast<float>(x) / static_cast<float>(resolution);
-                const float lx = fx * 2.0f - 1.0f;
-                vertices.push_back({ lx, ly, static_cast<float>(level), fx, fy });
-            }
-        }
-
-        const uint32_t baseVertex = level * vertsPerLevel;
-        for (uint32_t y = 0; y < resolution; ++y)
-        {
-            for (uint32_t x = 0; x < resolution; ++x)
-            {
-                const uint32_t i0 = baseVertex + y * (resolution + 1u) + x;
-                const uint32_t i1 = i0 + 1u;
-                const uint32_t i2 = i0 + (resolution + 1u);
-                const uint32_t i3 = i2 + 1u;
-
-                indices.push_back(i0);
-                indices.push_back(i2);
-                indices.push_back(i1);
-
-                indices.push_back(i1);
-                indices.push_back(i2);
-                indices.push_back(i3);
-            }
-        }
+        const float scale = std::pow(2.0f, static_cast<float>(level));
+        AppendMesh(combined, ring, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(scale, scale, scale));
     }
 
+    const MeshData skirt = BuildSkirt(clipHalfSize, 10.0f);
+    const float skirtScale = std::pow(2.0f, static_cast<float>(levels));
+    AppendMesh(combined, skirt, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(skirtScale, skirtScale, skirtScale));
+
     mesh_->CreateGPUFlexible(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        vertices.data(), static_cast<UINT>(vertices.size()), sizeof(OceanVertex),
-        indices.data(), static_cast<UINT>(indices.size()), DXGI_FORMAT_R32_UINT);
+        combined.vertices.data(), static_cast<UINT>(combined.vertices.size()), sizeof(OceanVertex),
+        combined.indices.data(), static_cast<UINT>(combined.indices.size()), DXGI_FORMAT_R32_UINT);
 }
 
 void OceanRenderable::UpdateClipLevels()
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
+
+    clipMapLevelHalfSize_ = static_cast<float>(ClipLevelHalfSize(meshVertexDensity_));
+    clipMapScale_ = patchLength / std::max(1.0f, 2.0f * (clipMapLevelHalfSize_ + 1.0f));
+    clipMapViewer_ = Math::float3(viewerXZ_.x, viewerHeight_, viewerXZ_.y);
+    cascadesFadeDistance_ = patchLength;
 
     for (uint32_t level = 0; level < clipLevels_.size(); ++level)
     {
@@ -283,7 +477,7 @@ Math::float4 OceanRenderable::GetSimulationParams() const
 Math::float4 OceanRenderable::GetViewerParams() const
 {
     const float amplitude = simulation_ ? simulation_->GetDisplacementAmplitude() : 1.0f;
-    return Math::float4(viewerXZ_.x, viewerXZ_.y, amplitude, 0.0f);
+    return Math::float4(viewerXZ_.x, viewerXZ_.y, amplitude, cascadesFadeDistance_);
 }
 
 Math::float4 OceanRenderable::GetCascadeLengthScales() const
@@ -294,5 +488,26 @@ Math::float4 OceanRenderable::GetCascadeLengthScales() const
 Math::float4 OceanRenderable::GetCascadeInvLengthScales() const
 {
     return invLengthScales_;
+}
+
+Math::float4 OceanRenderable::GetClipMapParams() const
+{
+    return Math::float4(clipMapScale_, clipMapLevelHalfSize_, static_cast<float>(meshVertexDensity_), cascadesFadeDistance_);
+}
+
+Math::float4 OceanRenderable::GetClipMapViewer() const
+{
+    return Math::float4(clipMapViewer_.x, clipMapViewer_.y, clipMapViewer_.z, 0.0f);
+}
+
+void OceanRenderable::SetGridVertexDensity(uint32_t density)
+{
+    const uint32_t clamped = std::max<uint32_t>(1u, density);
+    if (meshVertexDensity_ == clamped)
+    {
+        return;
+    }
+    meshVertexDensity_ = clamped;
+    UpdateClipLevels();
 }
 
