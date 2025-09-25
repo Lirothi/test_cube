@@ -104,7 +104,7 @@ void OceanRenderable::Init(Renderer* renderer,
     auto& gd = GetGraphicsDesc();
     gd.numRT = 1;
     gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-    gd.dsvFormat = DXGI_FORMAT_D32_FLOAT;
+    gd.dsvFormat = renderer->GetDsvFormat();
     gd.depth.DepthEnable = TRUE;
     gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     gd.raster.CullMode = D3D12_CULL_MODE_NONE;
@@ -135,6 +135,7 @@ void OceanRenderable::Tick(float deltaTime)
 
 void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
+    CPU_SCOPE(ProfilerScopes::kOceanRender);
     if (!renderer || !cl)
     {
         return;

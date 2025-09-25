@@ -45,6 +45,7 @@ extern const Profiler::ScopeNameKey kRenderObjectBatchGpu;
 extern const Profiler::ScopeNameKey kRenderShadowBatchGpu;
 extern const Profiler::ScopeNameKey kGBufferDriver;
 extern const Profiler::ScopeNameKey kTransparentDriver;
+extern const Profiler::ScopeNameKey kOceanRender;
 
 // TextManager
 extern const Profiler::ScopeNameKey kTextManagerBuild;

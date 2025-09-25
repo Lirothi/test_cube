@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0,t1)) TABLE(UAV(u0))
+// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0) SRV(t1)) TABLE(UAV(u0))
 
 cbuffer SpectrumParams : register(b0)
 {

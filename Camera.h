@@ -40,7 +40,7 @@ public:
     }
 
     // Для передачи в CB/шедер
-    float3 GetPosition() const { return position_; }
+    const float3& GetPosition() const { return position_; }
 
     // Управление мышью (ScreenSpace -> DeltaYaw/Pitch)
     void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {

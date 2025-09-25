@@ -86,6 +86,7 @@ public:
     DXGI_FORMAT GetLightTargetFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
     DXGI_FORMAT GetSceneColorFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
     DXGI_FORMAT GetBackbufferFormat() const { return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; }
+    DXGI_FORMAT GetDsvFormat() const { return DXGI_FORMAT_D32_FLOAT_S8X24_UINT; }
 
     const DeferredTargets& GetDeferredForFrame() const { return deferred_[currentFrameIndex_]; }
 
