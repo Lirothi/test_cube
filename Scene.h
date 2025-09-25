@@ -12,6 +12,7 @@
 #include "PointLight.h"
 
 class Renderer;
+class OceanFFTSystem;
 
 class Scene {
 public:
@@ -164,5 +165,7 @@ private:
     DirectionalLight dirLight_;
 
     std::unique_ptr<Skybox> skyBox_;
+
+    std::unique_ptr<OceanFFTSystem> oceanSystem_;
 
 };

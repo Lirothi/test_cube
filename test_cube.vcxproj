@@ -173,6 +173,8 @@
     <ClCompile Include="ProfilerScopes.cpp" />
     <ClCompile Include="RenderContextPool.cpp" />
     <ClCompile Include="Renderer.cpp" />
+    <ClCompile Include="GpuTexture2D.cpp" />
+    <ClCompile Include="OceanFFT.cpp" />
     <ClCompile Include="SamplerManager.cpp" />
     <ClCompile Include="Scene.cpp" />
     <ClCompile Include="RenderableObject.cpp" />
@@ -213,6 +215,8 @@
     <ClInclude Include="RenderContext.h" />
     <ClInclude Include="RenderContextPool.h" />
     <ClInclude Include="Renderer.h" />
+    <ClInclude Include="GpuTexture2D.h" />
+    <ClInclude Include="OceanFFT.h" />
     <ClInclude Include="RenderGraph.h" />
     <ClInclude Include="RootSignatureLayout.h" />
     <ClInclude Include="RootSignatureParser.h" />

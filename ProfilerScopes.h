@@ -24,6 +24,7 @@ extern const Profiler::ScopeNameKey kRendererTransition;
 extern const Profiler::ScopeNameKey kSceneTick;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kPassPrologueClear;
+extern const Profiler::ScopeNameKey kPassOceanFFT;
 extern const Profiler::ScopeNameKey kPassCSM;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassLighting;

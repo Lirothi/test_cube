@@ -9,6 +9,7 @@
 #include "DebugGrid.h"
 #include "GpuInstancedModels.h"
 #include "Helpers.h"
+#include "OceanFFT.h"
 #include "Renderer.h"
 #include "RenderGraph.h"
 #include "StaticMesh.h"
@@ -244,6 +245,12 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
     skyBox_->SetExposure(0.2f);
 
+    oceanSystem_ = std::make_unique<OceanFFTSystem>();
+    if (!oceanSystem_->Initialize(renderer, uploadCmdList, uploadKeepAlive))
+    {
+        oceanSystem_.reset();
+    }
+
     pointLights_.emplace_back(); pointLights_.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
     pointLights_.emplace_back(); pointLights_.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
 
@@ -335,6 +342,10 @@ void Scene::Tick(float deltaTime) {
             showProfiler_ = !showProfiler_;
         }
     }
+    if (oceanSystem_)
+    {
+        oceanSystem_->Tick(deltaTime);
+    }
     auto& tasks = TaskSystem::Get();
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
@@ -378,6 +389,21 @@ void Scene::Render(Renderer* renderer) {
 
     TaskSystem::Get().WaitForTrackedAsyncTasks();
 
+    RenderGraph rg;
+    auto pOcean = rg.AddPass("OceanFFT", {}, [this, renderer](RenderGraph::PassContext ctx) {
+        if (!oceanSystem_)
+        {
+            return;
+        }
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        t.cl->SetName(L"OceanFFT");
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassOceanFFT);
+            oceanSystem_->Dispatch(renderer, t.cl);
+        }
+        renderer->EndThreadCommandList(t, ctx.batchIndex);
+    });
+
     // матрицы кадра и параметры камеры/света (как у тебя)
     const float aspect = float(renderer->GetWidth()) / float(renderer->GetHeight());
     const mat4 view = camera_.GetViewMatrix();
@@ -406,8 +432,7 @@ void Scene::Render(Renderer* renderer) {
     }
     const auto& buckets = renderBuckets_;
 
-    RenderGraph rg;
-    auto pClear = rg.AddPass("PrologueClear", {},
+    auto pClear = rg.AddPass("PrologueClear", { pOcean },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
 
     auto pShadow = rg.AddPass("CSM", { pClear },
@@ -1197,4 +1222,5 @@ void Scene::Clear()
         bucket.clear();
     }
     skyBox_.reset();
+    oceanSystem_.reset();
 }
