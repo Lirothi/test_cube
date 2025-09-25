@@ -78,6 +78,12 @@ void InputLayoutManager::InitBuiltins() {
         .AddInstanceMatrix4x4("TEXCOORD", 4, 1) // per-instance
         .Build(*this, "PosColor_InstMat4x4");
 
+    // pos.xy (-1..1 quads), pos.z = clip level index, uv
+    Builder()
+        .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0)
+        .Build(*this, "PosLevelUV");
+
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Add("POSITION", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0)

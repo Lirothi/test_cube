@@ -1,0 +1,68 @@
+#pragma once
+
+#include <array>
+#include <memory>
+#include <vector>
+
+#include "Math.h"
+#include "RenderableObject.h"
+#include "OceanSimulation.h"
+
+class Camera;
+class SamplerManager;
+
+class OceanRenderable : public RenderableObject
+{
+public:
+    explicit OceanRenderable(Camera* camera);
+    ~OceanRenderable() override = default;
+
+    void Init(Renderer* renderer,
+        ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
+
+    void Tick(float deltaTime) override;
+
+    void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
+    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+
+    bool IsTransparent() const override { return true; }
+    bool IsSimpleRender() const override { return false; }
+    bool CastsShadow() const override { return false; }
+
+    void OnMaterialHotReload(Renderer* renderer) override;
+
+private:
+    struct ClipLevel
+    {
+        float halfExtent = 1.0f;
+        Math::float2 offset = Math::float2(0.0f, 0.0f);
+        float step = 1.0f;
+    };
+
+    class OceanUniformBinder;
+
+    void BuildMesh(Renderer* renderer,
+        ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    void UpdateClipLevels();
+
+    Math::float4 GetClipData(uint32_t index) const;
+    Math::float4 GetSimulationParams() const;
+    Math::float4 GetViewerParams() const;
+    Math::float4 GetCascadeLengthScales() const;
+    Math::float4 GetCascadeInvLengthScales() const;
+
+private:
+    Camera* camera_ = nullptr;
+    std::unique_ptr<OceanSimulation> simulation_;
+
+    float elapsedTime_ = 0.0f;
+    Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
+    std::array<ClipLevel, OceanSimulation::kClipLevels> clipLevels_{};
+    uint32_t activeClipLevels_ = OceanSimulation::kClipLevels;
+    Math::float4 lengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    Math::float4 invLengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+};
+
