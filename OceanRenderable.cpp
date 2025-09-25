@@ -436,10 +436,22 @@ void OceanRenderable::UpdateClipLevels()
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
 
     clipMapLevelHalfSize_ = static_cast<float>(ClipLevelHalfSize(meshVertexDensity_));
-    clipMapScale_ = patchLength / std::max(1.0f, 2.0f * (clipMapLevelHalfSize_ + 1.0f));
     clipMapViewer_ = Math::float3(viewerXZ_.x, viewerHeight_, viewerXZ_.y);
-    cascadesFadeDistance_ = patchLength;
+    const float absHeight = std::abs(clipMapViewer_.y);
+    int meshExponent = 0;
+    if (absHeight > Math::EPS)
+    {
+        const float denom = std::max(2.0f * minMeshScale_, Math::EPS);
+        const float ratio = absHeight / denom;
+        if (ratio > Math::EPS)
+        {
+            meshExponent = static_cast<int>(std::floor(std::max(0.0f, std::log2(ratio) + 1.0f)));
+        }
+    }
 
+    const float halfSize = std::max(1.0f, clipMapLevelHalfSize_);
+    clipMapScale_ = (minMeshScale_ / halfSize) * std::pow(2.0f, static_cast<float>(meshExponent));
+    clipMapScale_ = std::max(clipMapScale_, 1.0e-3f);
     for (uint32_t level = 0; level < clipLevels_.size(); ++level)
     {
         const float scale = patchLength * std::pow(2.0f, static_cast<float>(level));
@@ -477,7 +489,7 @@ Math::float4 OceanRenderable::GetSimulationParams() const
 Math::float4 OceanRenderable::GetViewerParams() const
 {
     const float amplitude = simulation_ ? simulation_->GetDisplacementAmplitude() : 1.0f;
-    return Math::float4(viewerXZ_.x, viewerXZ_.y, amplitude, cascadesFadeDistance_);
+    return Math::float4(viewerXZ_.x, viewerXZ_.y, amplitude, cascadesFadeScale_);
 }
 
 Math::float4 OceanRenderable::GetCascadeLengthScales() const
@@ -492,7 +504,7 @@ Math::float4 OceanRenderable::GetCascadeInvLengthScales() const
 
 Math::float4 OceanRenderable::GetClipMapParams() const
 {
-    return Math::float4(clipMapScale_, clipMapLevelHalfSize_, static_cast<float>(meshVertexDensity_), cascadesFadeDistance_);
+    return Math::float4(clipMapScale_, clipMapLevelHalfSize_, static_cast<float>(meshVertexDensity_), cascadesFadeScale_);
 }
 
 Math::float4 OceanRenderable::GetClipMapViewer() const

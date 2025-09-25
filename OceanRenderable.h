@@ -74,6 +74,7 @@ private:
     float clipMapScale_ = 1.0f;
     float clipMapLevelHalfSize_ = 0.0f;
     Math::float3 clipMapViewer_ = Math::float3(0.0f, 0.0f, 0.0f);
-    float cascadesFadeDistance_ = 200.0f;
+    float cascadesFadeScale_ = 20.0f;
+    float minMeshScale_ = 15.0f;
 };
 
