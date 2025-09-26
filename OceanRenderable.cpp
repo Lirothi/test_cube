@@ -237,7 +237,6 @@ public:
             modelHandle_ = material->ComputeCBFieldHandle(0, "model");
             viewHandle_ = material->ComputeCBFieldHandle(0, "view");
             projHandle_ = material->ComputeCBFieldHandle(0, "proj");
-            clipHandle_ = material->ComputeCBFieldHandle(0, "clipData");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
             viewerParamsHandle_ = material->ComputeCBFieldHandle(0, "viewerParams");
             cascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "cascadeLengthScales");
@@ -250,7 +249,6 @@ public:
             modelHandle_ = {};
             viewHandle_ = {};
             projHandle_ = {};
-            clipHandle_ = {};
             simulationParamsHandle_ = {};
             viewerParamsHandle_ = {};
             cascadeLengthScalesHandle_ = {};
@@ -272,12 +270,6 @@ public:
         UpdateUniform(owner, viewHandle_, material, view, cbData);
         UpdateUniform(owner, projHandle_, material, proj, cbData);
 
-        for (uint32_t i = 0; i < OceanSimulation::kClipLevels; ++i)
-        {
-            const Math::float4 clip = owner_.GetClipData(i);
-            material->UpdateCBField(clipHandle_, clip, cbData, i);
-        }
-
         UpdateUniform(owner, simulationParamsHandle_, material, owner_.GetSimulationParams(), cbData);
         UpdateUniform(owner, viewerParamsHandle_, material, owner_.GetViewerParams(), cbData);
         UpdateUniform(owner, cascadeLengthScalesHandle_, material, owner_.GetCascadeLengthScales(), cbData);
@@ -291,7 +283,6 @@ private:
     Material::CBFieldHandle modelHandle_{};
     Material::CBFieldHandle viewHandle_{};
     Material::CBFieldHandle projHandle_{};
-    Material::CBFieldHandle clipHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};
     Material::CBFieldHandle viewerParamsHandle_{};
     Material::CBFieldHandle cascadeLengthScalesHandle_{};

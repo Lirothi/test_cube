@@ -6,7 +6,6 @@ cbuffer OceanCB : register(b0)
     float4x4 model;
     float4x4 view;
     float4x4 proj;
-    float4 clipData[4]; // xy: offset, z: half extent, w: step
     float4 simulationParams;           // x: patch length, y: inv patch length, z: time, w: clip level count
     float4 viewerParams;               // x: viewer x, y: viewer z, z: amplitude, w: fade distance
     float4 cascadeLengthScales;        // length scales per cascade
