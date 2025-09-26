@@ -191,8 +191,7 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     RefreshDerivedSettings();
 
     initialized_ = false;
-    h0Data_.clear();
-    waveData_.clear();
+    ReleaseCpuData();
 
     h0Buffer_.Reset();
     waveDataBuffer_.Reset();
@@ -321,8 +320,7 @@ void OceanSimulation::Initialize(Renderer* renderer,
     CreateDescriptors(renderer->GetDevice());
     CreateMaterials(renderer);
 
-    h0Data_.resize(0);
-    waveData_.resize(0);
+    ReleaseCpuData();
 
     initialized_ = true;
 }
@@ -526,8 +524,7 @@ void OceanSimulation::BuildSpectrum()
 
     if (resolution_ == 0 || cascadeCount_ == 0)
     {
-        h0Data_.clear();
-        waveData_.clear();
+        ReleaseCpuData();
         return;
     }
 
@@ -651,6 +648,12 @@ void OceanSimulation::BuildSpectrum()
             }
         }
     }
+}
+
+void OceanSimulation::ReleaseCpuData()
+{
+    std::vector<Math::float4>().swap(h0Data_);
+    std::vector<Math::float4>().swap(waveData_);
 }
 
 void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds)
