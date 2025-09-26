@@ -170,6 +170,9 @@
     <ClCompile Include="MeshManager.cpp" />
     <ClCompile Include="OceanRenderable.cpp" />
     <ClCompile Include="OceanSimulation.cpp" />
+    <ClCompile Include="OceanSimulationInputs.cpp" />
+    <ClCompile Include="OceanSpectrum.cpp" />
+    <ClCompile Include="OceanSimulationSettings.cpp" />
     <ClCompile Include="PointLight.cpp" />
     <ClCompile Include="Profiler.cpp" />
     <ClCompile Include="ProfilerScopes.cpp" />
@@ -211,6 +214,9 @@
     <ClInclude Include="MeshManager.h" />
     <ClInclude Include="OceanRenderable.h" />
     <ClInclude Include="OceanSimulation.h" />
+    <ClInclude Include="OceanSimulationInputs.h" />
+    <ClInclude Include="OceanSpectrum.h" />
+    <ClInclude Include="OceanSimulationSettings.h" />
     <ClInclude Include="PointLight.h" />
     <ClInclude Include="Profiler.h" />
     <ClInclude Include="ProfilerScopes.h" />

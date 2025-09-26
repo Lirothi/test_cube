@@ -9,6 +9,8 @@
 #include <wrl/client.h>
 
 #include "Math.h"
+#include "OceanSimulationInputs.h"
+#include "OceanSimulationSettings.h"
 
 class Renderer;
 class Material;
@@ -16,10 +18,7 @@ class Material;
 class OceanSimulation
 {
 public:
-    static constexpr UINT kResolution = 256;
-    static constexpr UINT kCascadeCount = 4;
-    static constexpr UINT kClipLevels = kCascadeCount;
-    static constexpr UINT kArraySlices = kCascadeCount * 2;
+    static constexpr UINT kClipLevels = 4;
 
     OceanSimulation();
     ~OceanSimulation() = default;
@@ -30,6 +29,17 @@ public:
 
     void Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds);
     void OnHotReload(Renderer* renderer);
+
+    void SetSettings(const OceanSimulationSettings& settings);
+    void SetInputsProvider(const OceanSimulationInputsProvider& provider);
+    OceanSimulationInputsProvider& GetInputsProvider() { return inputsProvider_; }
+    const OceanSimulationInputsProvider& GetInputsProvider() const { return inputsProvider_; }
+
+    void SetSceneVariables(float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01);
+    const OceanSimulationSettings& GetSettings() const { return settings_; }
+
+    UINT GetResolution() const { return resolution_; }
+    UINT GetCascadeCount() const { return cascadeCount_; }
 
     float GetPatchLength() const { return basePatchLength_; }
     const Math::float4& GetLengthScales() const { return lengthScales_; }
@@ -50,21 +60,42 @@ private:
     void DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void DispatchFFTPost(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    void RefreshDerivedSettings();
+    float ComputeCascadeContribution(float kLength, UINT cascade) const;
+    void InitializeDefaultAssets();
 
     static uint32_t FloatToBits(float value);
 
 private:
     bool initialized_ = false;
 
-    float basePatchLength_ = 200.0f;
-    float windSpeed_ = 12.0f;
-    Math::float2 windDir_ = Math::float2(1.0f, 0.0f);
-    float spectrumScale_ = 3.0e-3f;
+    OceanSimulationSettings defaultSettings_;
+    OceanSimulationSettings settings_;
+    float basePatchLength_ = 0.0f;
     float displacementAmplitude_ = 1.5f;
     float timeScale_ = 1.0f;
+    float localWindDirection_ = 0.0f;
+    float swellDirection_ = 0.0f;
+    float windForce01_ = 0.0f;
+    float waterDepth_ = 1000.0f;
+    float chopValue_ = 1.0f;
+
+    std::shared_ptr<EqualizerPreset> defaultEqualizerPreset_;
+    std::shared_ptr<SwellPreset> defaultSwellPreset_;
+    std::shared_ptr<LocalWavesPreset> defaultLocalPreset_;
+    std::vector<std::shared_ptr<LocalWavesPreset>> defaultLocalPresets_;
+
+    OceanSimulationInputsProvider inputsProvider_;
+    OceanSimulationInputs inputs_;
 
     Math::float4 lengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
     Math::float4 invLengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    Math::float4 cutoffsLow_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    Math::float4 cutoffsHigh_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    UINT resolution_ = 0;
+    UINT cascadeCount_ = 0;
+    UINT arraySliceCount_ = 0;
 
     std::vector<Math::float4> h0Data_;
     std::vector<Math::float4> waveData_;

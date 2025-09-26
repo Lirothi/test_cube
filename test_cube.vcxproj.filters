@@ -105,6 +105,15 @@
     <ClCompile Include="OceanSimulation.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OceanSimulationInputs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OceanSpectrum.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OceanSimulationSettings.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="OceanRenderable.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -158,6 +167,9 @@
     <ClInclude Include="GpuInstancedModels.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="OceanSimulationSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="RootSignatureParser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -195,6 +207,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="OceanSimulation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OceanSimulationInputs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OceanSpectrum.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="OceanRenderable.h">
