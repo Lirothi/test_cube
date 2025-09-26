@@ -17,6 +17,7 @@ using Microsoft::WRL::ComPtr;
 namespace
 {
     constexpr UINT kThreadGroupSize = 8;
+    constexpr UINT kFftFlagPermute = 1u << 1;
 }
 
 OceanSimulation::OceanSimulation()
@@ -768,7 +769,7 @@ void OceanSimulation::DispatchFFTPost(Renderer* renderer, ID3D12GraphicsCommandL
         arraySliceCount_,
         1u,
         1u,
-        0u,
+        kFftFlagPermute,
     };
     ctx.table[1] = uavTable.gpu;
 
