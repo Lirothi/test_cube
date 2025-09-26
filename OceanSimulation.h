@@ -63,6 +63,7 @@ private:
     void RefreshDerivedSettings();
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeDefaultAssets();
+    void ReleaseCpuData();
 
     static uint32_t FloatToBits(float value);
 
