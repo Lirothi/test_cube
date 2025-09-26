@@ -36,7 +36,7 @@ void OceanSimulation::InitializeDefaultAssets()
     defaultSettings_.SetReadbackMode(OceanSimulationSettings::ReadbackCascadesMode::None);
     defaultSettings_.SetSamplingIterations(3u);
     defaultSettings_.SetDomainsMode(OceanSimulationSettings::CascadeDomainsMode::Auto);
-    defaultSettings_.SetSimulationScale(400.0f);
+    defaultSettings_.SetSimulationScale(600.0f);
     defaultSettings_.SetAllowOverlap(true);
     defaultSettings_.SetMinWavesInCascade(6.0f);
     defaultSettings_.SetManualLengthScales(Math::float4(65.72f, 12.0f, 12.84f, 5.62f));
@@ -57,12 +57,12 @@ void OceanSimulation::InitializeDefaultAssets()
     swellSpectrum.windSpeed = 6.3f;
     swellSpectrum.fetch = 100.0f;
     swellSpectrum.peaking = 3.0f;
-    swellSpectrum.scale = 1.0f;
+    swellSpectrum.scale = 0.2f;
     swellSpectrum.cutoffWavelength = 0.01f;
     swellSpectrum.alignment = 0.8f;
     swellSpectrum.extraAlignment = 0.5f;
     defaultSwellPreset_->SetSpectrum(swellSpectrum);
-    defaultSwellPreset_->SetReferenceWaveHeight(2.0f);
+    defaultSwellPreset_->SetReferenceWaveHeight(0.0f);
 
     defaultLocalPresets_.clear();
     defaultLocalPresets_.reserve(6);
@@ -133,7 +133,7 @@ void OceanSimulation::InitializeDefaultAssets()
     calmFoam.cascadesWeights = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     defaultLocalPreset_ = addLocalPreset(0.0f,
-        makeSpectrum(2.0f, 100.0f, 3.0f, 10.0f, 0.01f, 0.5f, 0.0f),
+        makeSpectrum(4.0f, 100.0f, 3.0f, 1.0f, 0.01f, 1.0f, 0.0f),
         1.0f,
         1.0f,
         calmFoam);
@@ -600,19 +600,10 @@ void OceanSimulation::BuildSpectrum()
                     spectrum += swellValue;
                 }
 
-                if (spectrum <= 0.0f)
-                {
-                    waveData_[idx] = Math::float4(kVec.x, 0.0f, kVec.y, 0.0f);
-                    continue;
-                }
+                spectrum = std::max(spectrum, 0.0f);
 
                 const float dOmegadk = OceanSpectrum::FrequencyDerivative(kLen, waterDepth_);
                 const float spectralFactor = std::max(0.0f, 2.0f * spectrum * std::abs(dOmegadk) / kLen);
-                if (spectralFactor <= Math::EPS)
-                {
-                    waveData_[idx] = Math::float4(kVec.x, 0.0f, kVec.y, 0.0f);
-                    continue;
-                }
 
                 const float logTerm = std::log10(Math::TWO_PI / kLen);
                 float rampU = (logTerm - EqualizerPreset::kXMin) / equalizerRange;
@@ -625,14 +616,15 @@ void OceanSimulation::BuildSpectrum()
                 const float lambda = chopValue_ * eqSample.y;
 
                 const float amplitude = contribution * scaleRamp * std::sqrt(spectralFactor) * deltaK;
+                waveData_[idx] = Math::float4(kVec.x, lambda, kVec.y, omega);
+
                 if (amplitude <= Math::EPS)
                 {
-                    waveData_[idx] = Math::float4(kVec.x, 0.0f, kVec.y, omega);
+                    h0Seed[idx] = Math::float2(0.0f, 0.0f);
                     continue;
                 }
 
                 h0Seed[idx] = Math::float2(gauss(rng) * amplitude, gauss(rng) * amplitude);
-                waveData_[idx] = Math::float4(kVec.x, lambda, kVec.y, omega);
             }
         }
     }
