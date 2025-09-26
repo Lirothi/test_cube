@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(UAV(u1))
+// RootSignature: CONSTANTS(b0,count=4) TABLE(UAV(u0))
 
 #ifndef FFT_SIZE
 #define FFT_SIZE 256
@@ -10,7 +10,7 @@
 
 static const uint Size = FFT_SIZE;
 
-RWTexture2DArray<float4> Target : register(u1);
+RWTexture2DArray<float4> Target : register(u0);
 
 cbuffer FFTParams : register(b0)
 {

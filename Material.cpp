@@ -16,6 +16,7 @@
 
 #include "Helpers.h"
 #include "RootSignatureLayout.h"
+#include "RenderContext.h"
 #include "RootSignatureParser.h"
 #include "TaskSystem.h"
 #include "Profiler.h"
@@ -57,22 +58,27 @@ static void BuildRootFromLayout(
             info.type = Material::RootParameterInfo::Constants;
             info.constantsCount = p.num32BitValues;
             info.bindingRegister = p.shaderRegister; // bN
+            info.bindingSpace = p.registerSpace;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_CBV:
             info.type = Material::RootParameterInfo::CBV;
             info.bindingRegister = p.shaderRegister; // bN
+            info.bindingSpace = p.registerSpace;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_SRV:
             info.type = Material::RootParameterInfo::SRV;
             info.bindingRegister = p.shaderRegister; // tN
+            info.bindingSpace = p.registerSpace;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
             info.type = Material::RootParameterInfo::UAV;
             info.bindingRegister = p.shaderRegister; // uN
+            info.bindingSpace = p.registerSpace;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
             info.type = p.hasSamplerRanges ? Material::RootParameterInfo::TableSampler : Material::RootParameterInfo::Table;
-            info.bindingRegister = p.ranges.empty() ? 0u : p.ranges.front().BaseShaderRegister;
+            info.bindingRegister = p.shaderRegister;
+            info.bindingSpace = p.registerSpace;
             break;
         }
         outParams.push_back(info);

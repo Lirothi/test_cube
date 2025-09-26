@@ -70,6 +70,15 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
         }
         };
 
+    UINT tableRegister = 0;
+    auto AssignTableRegister = [&layout, &tableRegister]() {
+        if (!layout.params.empty() && layout.params.back().type == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+        {
+            auto& tbl = layout.params.back();
+            tbl.shaderRegister = tableRegister++;
+        }
+    };
+
     while (std::getline(ss, line)) {
         if (std::regex_search(line, m, re)) {
             std::string spec = m[1].str();
@@ -95,6 +104,7 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
                         std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
                         ParseTableRanges(inside, ranges);     // теперь тянет и SAMPLER
                         layout.AddTable(ranges);              // видимость — по умолчанию ALL
+                        AssignTableRegister();
                         pos = i + 1;
                         continue;
                     }
@@ -135,7 +145,7 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
                     if (type == "CBV" || type == "cbv") { layout.AddCBV(regNum, regSpace, vis); }
                     else if (type == "SRV" || type == "srv") { layout.AddSRV(regNum, regSpace, vis); }
                     else if (type == "UAV" || type == "uav") { layout.AddUAV(regNum, regSpace, vis); }
-                    else if (type == "SAMPLER" || type == "sampler") { layout.AddSampler(regNum, regSpace, vis); }
+                    else if (type == "SAMPLER" || type == "sampler") { layout.AddSampler(regNum, regSpace, vis); AssignTableRegister(); }
 
                     pos += mm.length(0);
                     continue;

@@ -92,6 +92,7 @@ public:
         enum Type { Constants, CBV, SRV, UAV, Table, TableSampler } type;
         UINT rootIndex = 0;       // индекс root-параметра
         UINT bindingRegister = 0; // номер регистра b0/t0/u0 для поиска в RenderContext
+        UINT bindingSpace = 0;    // space для дополнительных смещений
         UINT constantsCount = 0;  // только для constants
     };
 
