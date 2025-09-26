@@ -71,11 +71,12 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
         };
 
     UINT tableRegister = 0;
-    auto AssignTableRegister = [&layout, &tableRegister]() {
+    UINT samplerTableRegister = 0;
+    auto AssignTableRegister = [&layout, &tableRegister, &samplerTableRegister]() {
         if (!layout.params.empty() && layout.params.back().type == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
         {
             auto& tbl = layout.params.back();
-            tbl.shaderRegister = tableRegister++;
+            tbl.shaderRegister = tbl.hasSamplerRanges ? samplerTableRegister++ : tableRegister++;
         }
     };
 
