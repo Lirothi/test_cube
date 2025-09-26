@@ -111,6 +111,7 @@ struct RootSignatureLayout {
         p.visibility = vis;
         p.ranges = ranges;
         p.shaderRegister = ranges.empty() ? 0u : ranges.front().BaseShaderRegister;
+        p.registerSpace = ranges.empty() ? 0u : ranges.front().RegisterSpace;
 
         p.hasSamplerRanges = false;
         for (const auto& r : ranges) {
@@ -130,6 +131,7 @@ struct RootSignatureLayout {
         p.visibility = vis;
         p.ranges.push_back(range);
         p.shaderRegister = range.BaseShaderRegister;
+        p.registerSpace = range.RegisterSpace;
         p.hasSamplerRanges = (range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER);
         params.push_back(p);
     }
