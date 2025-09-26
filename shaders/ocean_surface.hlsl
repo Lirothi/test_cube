@@ -163,6 +163,8 @@ VSOutput VSMain(VSInput input)
     return output;
 }
 
+static const float normalScale = 4.0f;
+
 float4 PSMain(VSOutput input) : SV_TARGET
 {
     uint clipCount = max((uint)simulationParams.w, 1u);
@@ -176,7 +178,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
     float denomX = max(1e-3f, 1.0f + deriv.z);
     float denomZ = max(1e-3f, 1.0f + deriv.w);
-    float2 slope = float2(deriv.x / denomX, deriv.y / denomZ);
+    float2 slope = float2(deriv.x / denomX, deriv.y / denomZ) * normalScale;
     float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
 
     float heightFactor = 0.2f;//saturate(input.worldPos.y * 0.5f + 0.5f);
