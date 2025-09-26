@@ -4,9 +4,8 @@
 #include <string>
 #include <vector>
 
-// CBV, SRV, UAV по ключу (например, "viewProj", "instanceBuffer" и т.д.)
 struct RenderContext {
-    static constexpr size_t kMaxBindings = 16;
+    static constexpr size_t kMaxBindings = 8;
 
     std::array<D3D12_GPU_VIRTUAL_ADDRESS, kMaxBindings> cbv{};
     std::array<std::vector<uint32_t>, kMaxBindings> constants{};
