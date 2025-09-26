@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=8) TABLE(SRV(t0)) TABLE(UAV(u0))
+// RootSignature: CONSTANTS(b0,count=8) TABLE(SRV(t0)) TABLE(UAV(u1))
 
 cbuffer MipParams : register(b0)
 {
@@ -13,7 +13,7 @@ cbuffer MipParams : register(b0)
 };
 
 Texture2DArray<float4> Source : register(t0);
-RWTexture2DArray<float4> Dest : register(u0);
+RWTexture2DArray<float4> Dest : register(u1);
 
 [numthreads(8, 8, 1)]
 void GenerateMip(uint3 dispatchThreadId : SV_DispatchThreadID)

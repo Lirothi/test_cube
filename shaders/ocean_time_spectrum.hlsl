@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0) SRV(t1)) TABLE(UAV(u0))
+// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0) SRV(t1)) TABLE(UAV(u1))
 
 cbuffer SpectrumParams : register(b0)
 {
@@ -10,7 +10,7 @@ cbuffer SpectrumParams : register(b0)
 
 StructuredBuffer<float4> H0 : register(t0);
 StructuredBuffer<float4> Waves : register(t1);
-RWTexture2DArray<float4> Spectrum : register(u0);
+RWTexture2DArray<float4> Spectrum : register(u1);
 
 float2 ComplexMul(float2 a, float2 b)
 {

@@ -406,7 +406,7 @@ void OceanSimulation::DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList*
             1u,
             0u,
         };
-        ctx.table[0] = uavTable.gpu;
+        ctx.table[1] = uavTable.gpu;
         fftMaterial_->Bind(cl, ctx);
         cl->Dispatch(1, kResolution, 1);
     }
@@ -422,7 +422,7 @@ void OceanSimulation::DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList*
             1u,
             0u,
         };
-        ctx.table[0] = uavTable.gpu;
+        ctx.table[1] = uavTable.gpu;
         fftMaterial_->Bind(cl, ctx);
         cl->Dispatch(1, kResolution, 1);
     }
@@ -449,7 +449,7 @@ void OceanSimulation::DispatchFFTPost(Renderer* renderer, ID3D12GraphicsCommandL
         1u,
         0u,
     };
-    ctx.table[0] = uavTable.gpu;
+    ctx.table[1] = uavTable.gpu;
 
     fftPostMaterial_->Bind(cl, ctx);
 
