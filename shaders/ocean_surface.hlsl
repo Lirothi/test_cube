@@ -28,8 +28,7 @@ struct VSOutput
 {
     float4 position : SV_POSITION;
     float3 worldPos : TEXCOORD0;
-    float3 normalWS : TEXCOORD1;
-    float3 displacementUVW : TEXCOORD2;
+    float2 baseXZ : TEXCOORD1;
 };
 
 static const float3 kDeepColor = float3(0.01f, 0.09f, 0.18f);
@@ -151,18 +150,12 @@ VSOutput VSMain(VSInput input)
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
 
-    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount) * 50000.0f;
-    float4 deriv = SampleDerivatives(baseWorld.xz, weights, clipCount);
+    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount);
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
     output.worldPos = world;
 
-    float denomX = max(1e-3f, 1.0f + deriv.z);
-    float denomZ = max(1e-3f, 1.0f + deriv.w);
-    float2 slope = float2(deriv.x / denomX, deriv.y / denomZ);
-    float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
-    output.normalWS = normal;
-    output.displacementUVW = float3(baseWorld.xz, viewDist);
+    output.baseXZ = baseWorld.xz;
 
     float4 local = float4(world, 1.0f);
     float4 worldH = mul(local, model);
@@ -173,9 +166,22 @@ VSOutput VSMain(VSInput input)
 
 float4 PSMain(VSOutput input) : SV_TARGET
 {
+    uint clipCount = max((uint)simulationParams.w, 1u);
+
+    float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);
+    float3 viewVector = baseWorld - clipMapViewer.xyz;
+    float viewDist = length(viewVector);
+
+    float4 weights = LodWeights(viewDist, clipMapParams.w);
+    float4 deriv = SampleDerivatives(input.baseXZ, weights, clipCount);
+
+    float denomX = max(1e-3f, 1.0f + deriv.z);
+    float denomZ = max(1e-3f, 1.0f + deriv.w);
+    float2 slope = float2(deriv.x / denomX, deriv.y / denomZ);
+    float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
+
     float heightFactor = saturate(input.worldPos.y * 0.5f + 0.5f);
     float3 baseColor = lerp(kDeepColor, kShallowColor, heightFactor);
-    float3 normal = normalize(input.normalWS);
     float lighting = saturate(dot(normal, kLightDir)) * 0.7f + 0.3f;
     float3 color = baseColor * lighting;
     return float4(color, 1.0f);

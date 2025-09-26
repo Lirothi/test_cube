@@ -20,6 +20,9 @@ cbuffer FFTParams : register(b0)
     uint Flags;
 };
 
+static const uint FFT_FLAG_SCALE = 1u << 0;
+static const uint FFT_FLAG_PERMUTE = 1u << 1;
+
 groupshared float4 FftBuffer[2][FFT_SIZE];
 
 float2 ComplexMult(float2 a, float2 b)
@@ -85,11 +88,11 @@ void Fft(uint3 id : SV_DispatchThreadID)
 
 float4 DoPostProcess(float4 input, uint2 coord)
 {
-    if (Direction != 0)
+    if ((Flags & FFT_FLAG_SCALE) != 0)
     {
         input /= (Size * Size);
     }
-    if (Inverse != 0)
+    if ((Flags & FFT_FLAG_PERMUTE) != 0)
     {
         input *= 1.0f - 2.0f * ((coord.x + coord.y) & 1);
     }
