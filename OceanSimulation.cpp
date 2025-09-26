@@ -173,7 +173,7 @@ void OceanSimulation::InitializeDefaultAssets()
             Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
 
     inputsProvider_ = OceanSimulationInputsProvider();
-    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Fixed);
+    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Scale);
     inputsProvider_.SetTimeScale(1.0f);
     inputsProvider_.SetDepth(1000.0f);
     inputsProvider_.SetSwellPreset(defaultSwellPreset_);

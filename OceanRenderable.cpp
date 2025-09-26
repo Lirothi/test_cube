@@ -522,4 +522,3 @@ void OceanRenderable::SetGridVertexDensity(uint32_t density)
     meshVertexDensity_ = clamped;
     UpdateClipLevels();
 }
-

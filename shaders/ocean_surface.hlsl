@@ -180,7 +180,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float2 slope = float2(deriv.x / denomX, deriv.y / denomZ);
     float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
 
-    float heightFactor = saturate(input.worldPos.y * 0.5f + 0.5f);
+    float heightFactor = 0.2f;//saturate(input.worldPos.y * 0.5f + 0.5f);
     float3 baseColor = lerp(kDeepColor, kShallowColor, heightFactor);
     float lighting = saturate(dot(normal, kLightDir)) * 0.7f + 0.3f;
     float3 color = baseColor * lighting;
