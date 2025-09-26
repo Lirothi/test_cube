@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include "Helpers.h"
 #include <cassert>
+#include <vector>
 #include <dxgidebug.h>
 #pragma comment(lib, "dxguid.lib")
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
@@ -226,6 +227,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
 
     // Уничтожим старый свап и RTV при переинициализации (если было)
     for (UINT i = 0; i < kFrameCount; ++i) {
+        ClearResourceState(renderTargets_[i].Get());
         renderTargets_[i].Reset();
     }
     rtvHeap_.Reset();
@@ -735,8 +737,10 @@ void Renderer::OnResize(UINT width, UINT height) {
 
     // Освобождаем старые RTV/DSV
     for (UINT i = 0; i < kFrameCount; ++i) {
+        ClearResourceState(renderTargets_[i].Get());
         renderTargets_[i].Reset();
     }
+    ClearResourceState(depthBuffer_.Get());
     depthBuffer_.Reset();
     dsvHeap_.Reset();
     rtvHeap_.Reset();
@@ -767,6 +771,14 @@ D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
     std::lock_guard<std::mutex> lk(knownStatesMtx_);
     auto it = knownStates_.find(res);
     return (it == knownStates_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second;
+}
+
+void Renderer::ClearResourceState(ID3D12Resource* res) {
+    if (res == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(knownStatesMtx_);
+    knownStates_.erase(res);
 }
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
@@ -1127,22 +1139,34 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
 void Renderer::DestroyDeferredTargets() {
     deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
+    std::vector<ID3D12Resource*> released;
+    released.reserve(kFrameCount * 9);
+
+    auto collect = [&released](ComPtr<ID3D12Resource>& res) {
+        if (ID3D12Resource* ptr = res.Get()) {
+            released.push_back(ptr);
+            res.Reset();
+        }
+    };
+
     for (UINT f = 0; f < kFrameCount; ++f) {
         auto& D = deferred_[f];
-        D.gb0.Reset();
-        D.gb1.Reset();
-        D.gb2.Reset();
-        D.depth.Reset();
-        D.light.Reset();
-        D.scene.Reset();
-        D.ssr.Reset();
-        D.ssrBlur.Reset();
-        D.shadow.Reset();
+        collect(D.gb0);
+        collect(D.gb1);
+        collect(D.gb2);
+        collect(D.depth);
+        collect(D.light);
+        collect(D.scene);
+        collect(D.ssr);
+        collect(D.ssrBlur);
+        collect(D.shadow);
     }
 
-    {
+    if (!released.empty()) {
         std::lock_guard<std::mutex> lk(knownStatesMtx_);
-        knownStates_.clear();
+        for (auto* res : released) {
+            knownStates_.erase(res);
+        }
     }
 }
 
