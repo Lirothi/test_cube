@@ -137,6 +137,7 @@ public:
     bool GetWireframeMode() const { return wireframeMode_; }
 
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
+    void ClearResourceState(ID3D12Resource* res);
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
