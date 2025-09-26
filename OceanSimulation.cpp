@@ -321,6 +321,9 @@ void OceanSimulation::Initialize(Renderer* renderer,
     CreateDescriptors(renderer->GetDevice());
     CreateMaterials(renderer);
 
+    h0Data_.resize(0);
+    waveData_.resize(0);
+
     initialized_ = true;
 }
 
