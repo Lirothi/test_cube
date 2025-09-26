@@ -151,7 +151,7 @@ VSOutput VSMain(VSInput input)
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
 
-    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount);
+    float3 displacement = SampleDisplacement(baseWorld.xz, weights, clipCount) * 50000.0f;
     float4 deriv = SampleDerivatives(baseWorld.xz, weights, clipCount);
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);

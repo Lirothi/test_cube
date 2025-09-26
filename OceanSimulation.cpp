@@ -177,10 +177,10 @@ void OceanSimulation::InitializeDefaultAssets()
     inputsProvider_.SetDepth(1000.0f);
     inputsProvider_.SetSwellPreset(defaultSwellPreset_);
     inputsProvider_.SetLocalWavesPreset(defaultLocalPreset_);
-    //inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
+    inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
     inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
 
-    windForce01_ = 0.029f;
+    windForce01_ = 0.8f;
     inputsProvider_.SetDisplayWindForce(windForce01_);
 }
 
