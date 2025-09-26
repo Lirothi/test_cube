@@ -32,14 +32,14 @@ void OceanSimulation::InitializeDefaultAssets()
     defaultSettings_.SetCascadeCount(OceanSimulationSettings::CascadesNumberValue::Four);
     defaultSettings_.SetAnisotropyLevel(6u);
     defaultSettings_.SetSimulateFoam(false);
-    defaultSettings_.SetUpdateSpectrum(true);
+    defaultSettings_.SetUpdateSpectrum(false);
     defaultSettings_.SetReadbackMode(OceanSimulationSettings::ReadbackCascadesMode::None);
     defaultSettings_.SetSamplingIterations(3u);
     defaultSettings_.SetDomainsMode(OceanSimulationSettings::CascadeDomainsMode::Auto);
-    defaultSettings_.SetSimulationScale(665.91f);
+    defaultSettings_.SetSimulationScale(400.0f);
     defaultSettings_.SetAllowOverlap(true);
     defaultSettings_.SetMinWavesInCascade(6.0f);
-    defaultSettings_.SetManualLengthScales(Math::float4(858.72f, 167.0f, 30.84f, 5.62f));
+    defaultSettings_.SetManualLengthScales(Math::float4(65.72f, 12.0f, 12.84f, 5.62f));
 
     settings_ = defaultSettings_;
 
@@ -55,14 +55,14 @@ void OceanSimulation::InitializeDefaultAssets()
     SpectrumParams swellSpectrum = defaultSwellPreset_->GetSpectrum();
     swellSpectrum.energySpectrum = SpectrumParams::EnergySpectrumModel::PM;
     swellSpectrum.windSpeed = 6.3f;
-    swellSpectrum.fetch = 0.0f;
-    swellSpectrum.peaking = 0.0f;
-    swellSpectrum.scale = 0.016f;
-    swellSpectrum.cutoffWavelength = 1.67f;
-    swellSpectrum.alignment = 1.0f;
-    swellSpectrum.extraAlignment = 1.0f;
+    swellSpectrum.fetch = 100.0f;
+    swellSpectrum.peaking = 3.0f;
+    swellSpectrum.scale = 1.0f;
+    swellSpectrum.cutoffWavelength = 0.01f;
+    swellSpectrum.alignment = 0.8f;
+    swellSpectrum.extraAlignment = 0.5f;
     defaultSwellPreset_->SetSpectrum(swellSpectrum);
-    defaultSwellPreset_->SetReferenceWaveHeight(0.0f);
+    defaultSwellPreset_->SetReferenceWaveHeight(2.0f);
 
     defaultLocalPresets_.clear();
     defaultLocalPresets_.reserve(6);
@@ -133,8 +133,8 @@ void OceanSimulation::InitializeDefaultAssets()
     calmFoam.cascadesWeights = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     defaultLocalPreset_ = addLocalPreset(0.0f,
-        makeSpectrum(1.5f, 100.0f, 3.3f, 0.011f, 0.01f, 0.794f, 0.0f),
-        0.0f,
+        makeSpectrum(2.0f, 100.0f, 3.0f, 10.0f, 0.01f, 0.5f, 0.0f),
+        1.0f,
         1.0f,
         calmFoam);
 
@@ -172,12 +172,12 @@ void OceanSimulation::InitializeDefaultAssets()
             Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
 
     inputsProvider_ = OceanSimulationInputsProvider();
-    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Scale);
+    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Fixed);
     inputsProvider_.SetTimeScale(1.0f);
     inputsProvider_.SetDepth(1000.0f);
     inputsProvider_.SetSwellPreset(defaultSwellPreset_);
     inputsProvider_.SetLocalWavesPreset(defaultLocalPreset_);
-    inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
+    //inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
     inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
 
     windForce01_ = 0.029f;

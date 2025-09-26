@@ -456,7 +456,7 @@ void OceanRenderable::UpdateClipLevels()
     {
         const float scale = patchLength * std::pow(2.0f, static_cast<float>(level));
         const float half = scale * 0.5f;
-        const float step = scale / static_cast<float>(OceanSimulation::kResolution);
+        const float step = scale / static_cast<float>(simulation_->GetResolution());
 
         const float snappedX = std::floor(viewerXZ_.x / step) * step;
         const float snappedZ = std::floor(viewerXZ_.y / step) * step;
