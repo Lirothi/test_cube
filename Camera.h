@@ -52,6 +52,9 @@ private:
     float3 position_;
     float pitch_; // вверх/вниз, ограничить [-pi/2+eps, pi/2-eps]
     float yaw_;   // влево/вправо, можно не ограничивать
+    float moveSpeed_ = 3.0f;
+    float sprintMultiplier_ = 2.5f;
+    float moveSpeedMultiplier_ = 1.0f;
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

@@ -68,16 +68,6 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
 
     actions_.clear();
 
-    if (j.contains("speed")) {
-        auto sp = j["speed"];
-        if (sp.contains("move") && sp["move"].is_number()) {
-            moveSpeed_ = sp["move"].get<float>();
-        }
-        if (sp.contains("sprintMultiplier") && sp["sprintMultiplier"].is_number()) {
-            sprintMultiplier_ = sp["sprintMultiplier"].get<float>();
-        }
-    }
-
     if (j.contains("actions") && j["actions"].is_array()) {
         for (auto& a : j["actions"]) {
             if (!a.contains("name") || !a["name"].is_string()) {
