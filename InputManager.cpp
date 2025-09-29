@@ -18,6 +18,7 @@ void InputManager::NewFrame() {
     for (auto& v : keyReleased_) { v = 0; }
     mouseDX_ = 0;
     mouseDY_ = 0;
+    mouseWheelDelta_ = 0;
 }
 
 void InputManager::SetMouseCapture(bool capture) {
@@ -101,6 +102,10 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_MBUTTONUP: { mButtonDown_ = false; break; }
         case WM_RBUTTONDOWN: { rButtonDown_ = true; break; }
         case WM_RBUTTONUP: { rButtonDown_ = false; break; }
+        case WM_MOUSEWHEEL: {
+            mouseWheelDelta_ += GET_WHEEL_DELTA_WPARAM(wParam);
+            break;
+        }
         case WM_ACTIVATE: {
             if (LOWORD(wParam) == WA_INACTIVE) {
                 SetMouseCapture(false);

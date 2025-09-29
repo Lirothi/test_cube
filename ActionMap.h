@@ -17,10 +17,6 @@ public:
     bool  WasActionReleased(const std::string& name, const InputManager& input) const;
     float GetAxis(const std::string& name, const InputManager& input) const;
 
-    // Параметры скорости/сенс
-    float MoveSpeed() const { return moveSpeed_; }
-    float SprintMultiplier() const { return sprintMultiplier_; }
-
 private:
     struct Digital {
         // любой из keys или mouseButtons активен -> true
@@ -50,6 +46,4 @@ private:
 
 private:
     robin_hood::unordered_map<std::string, Action> actions_;
-    float moveSpeed_ = 3.0f;
-    float sprintMultiplier_ = 2.5f;
 };

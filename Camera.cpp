@@ -22,10 +22,21 @@ void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float 
         }
     }
 
+    // корректировка скорости перемещения колесом мыши
+    const int wheel = input.MouseWheelDelta();
+    if (wheel != 0) {
+        constexpr float kWheelStep = 0.2f;
+        constexpr float kMinMultiplier = 0.2f;
+        constexpr float kMaxMultiplier = 5.0f;
+        const float ticks = static_cast<float>(wheel) / 120.0f;
+        moveSpeedMultiplier_ += ticks * kWheelStep;
+        moveSpeedMultiplier_ = Clamp(moveSpeedMultiplier_, kMinMultiplier, kMaxMultiplier);
+    }
+
     // ходьба
-    float speed = map.MoveSpeed();
+    float speed = moveSpeed_ * moveSpeedMultiplier_;
     if (map.IsActionDown("Sprint", input)) {
-        speed *= map.SprintMultiplier();
+        speed *= sprintMultiplier_;
     }
     const float mx = map.GetAxis("MoveX", input);
     const float my = map.GetAxis("MoveY", input);

@@ -26,6 +26,7 @@ public:
     // Мышь
     int  MouseDeltaX() const { return mouseDX_; }
     int  MouseDeltaY() const { return mouseDY_; }
+    int  MouseWheelDelta() const { return mouseWheelDelta_; }
     bool IsRButtonDown() const { return rButtonDown_; }
     bool IsLButtonDown() const { return lButtonDown_; }
     bool IsMButtonDown() const { return mButtonDown_; }
@@ -50,5 +51,6 @@ private:
 
     int mouseDX_ = 0;
     int mouseDY_ = 0;
+    int mouseWheelDelta_ = 0;
     bool mouseCaptured_ = false;
 };
