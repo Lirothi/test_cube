@@ -27,6 +27,14 @@ std::wstring TextManager::UTF8toW(std::string_view s) {
     return w;
 }
 
+void TextManager::SetShadow(const ShadowDesc& desc) {
+    shadow_ = desc;
+}
+
+void TextManager::DisableShadow() {
+    shadow_.reset();
+}
+
 void TextManager::Init(Renderer* r) {
     auto createTextMaterial = [&](const wchar_t* shaderPath) -> std::shared_ptr<Material> {
         Material::GraphicsDesc gd;
@@ -199,9 +207,10 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         if (rg.totalLines <= 0) { continue; }
         totalGlyphs += rg.glyphCount;
     }
+    const size_t glyphMultiplier = shadow_.has_value() ? 2u : 1u;
     if (totalGlyphs) {
-        verts_.ensureAdditional(totalGlyphs * 4);
-        idx_.ensureAdditional(totalGlyphs * 6);
+        verts_.ensureAdditional(totalGlyphs * glyphMultiplier * 4);
+        idx_.ensureAdditional(totalGlyphs * glyphMultiplier * 6);
     }
 
     // 1) Резерв под потенциальные фоновые прямоугольники
@@ -499,41 +508,64 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     }
     if (drawable == 0) { return; }
 
-    const size_t vertsToAppend = drawable * 4;
-    const size_t idxToAppend = drawable * 6;
+    auto emitGlyphs = [&](const float4& drawColor, float offsetXExtra, float offsetYExtra) {
+        if (drawColor.w <= 0.0f) {
+            return;
+        }
 
-    const size_t baseVert = verts_.appendUninitialized(vertsToAppend);
-    const size_t baseIdx = idx_.appendUninitialized(idxToAppend);
+        const size_t baseVert = verts_.appendUninitialized(drawable * 4);
+        const size_t baseIdx = idx_.appendUninitialized(drawable * 6);
+        Vertex* const vData = verts_.data() + baseVert;
+        uint32_t* const iData = idx_.data() + baseIdx;
 
-    Vertex* const vData = verts_.data();
-    uint32_t* const iData = idx_.data();
-    size_t vertOffset = baseVert;
-    size_t idxOffset = baseIdx;
+        size_t glyphCounter = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const FontGlyph* gph = run.GlyphAt(i);
+            if (!gph || gph->w == 0 || gph->h == 0) { continue; }
+            const float penX = (float)x + xOffset + run.XOffsetAt(i);
 
-    for (size_t i = 0; i < n; ++i) {
-        const FontGlyph* gph = run.GlyphAt(i);
-        if (!gph || gph->w == 0 || gph->h == 0) { continue; }
-        const float penX = (float)x + xOffset + run.XOffsetAt(i);
+            const float gx = penX + float(gph->xoff) * scale + offsetXExtra;
+            const float gy = penY + float(gph->yoff) * scale + offsetYExtra;
+            const float gw = float(gph->w) * scale;
+            const float gh = float(gph->h) * scale;
 
-        const float gx = penX + float(gph->xoff) * scale;
-        const float gy = penY + float(gph->yoff) * scale;
-        const float gw = float(gph->w) * scale;
-        const float gh = float(gph->h) * scale;
+            Vertex* curV = vData + glyphCounter * 4;
+            curV[0] = { {gx,      gy,      0.0f}, drawColor, {gph->u0, gph->v0} };
+            curV[1] = { {gx + gw, gy,      0.0f}, drawColor, {gph->u1, gph->v0} };
+            curV[2] = { {gx + gw, gy + gh, 0.0f}, drawColor, {gph->u1, gph->v1} };
+            curV[3] = { {gx,      gy + gh, 0.0f}, drawColor, {gph->u0, gph->v1} };
 
-        const size_t glyphVertBase = vertOffset;
-        Vertex* curV = vData + glyphVertBase;
-        curV[0] = { {gx,      gy,      0}, color, {gph->u0, gph->v0} };
-        curV[1] = { {gx + gw, gy,      0}, color, {gph->u1, gph->v0} };
-        curV[2] = { {gx + gw, gy + gh, 0}, color, {gph->u1, gph->v1} };
-        curV[3] = { {gx,      gy + gh, 0}, color, {gph->u0, gph->v1} };
-        vertOffset += 4;
+            uint32_t* curI = iData + glyphCounter * 6;
+            const uint32_t base = static_cast<uint32_t>(baseVert + glyphCounter * 4);
+            curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
+            curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
+            ++glyphCounter;
+        }
+    };
 
-        const uint32_t base = static_cast<uint32_t>(glyphVertBase);
-        uint32_t* curI = iData + idxOffset;
-        curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
-        curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
-        idxOffset += 6;
+    if (shadow_.has_value()) {
+        const ShadowDesc& desc = *shadow_;
+        float4 shadowColor = desc.color;
+        if (desc.multiplyByTextAlpha) {
+            shadowColor.w *= color.w;
+        }
+        shadowColor.w *= desc.alphaMultiplier;
+        if (shadowColor.w > 0.0f) {
+            float offsetXExtra = desc.offsetX;
+            float offsetYExtra = desc.offsetY;
+            if (desc.scaleWithTextSize) {
+                offsetXExtra *= scale;
+                offsetYExtra *= scale;
+            }
+            if (desc.scaleWithDpi) {
+                offsetXExtra *= dpi_;
+                offsetYExtra *= dpi_;
+            }
+            emitGlyphs(shadowColor, offsetXExtra, offsetYExtra);
+        }
     }
+
+    emitGlyphs(color, 0.0f, 0.0f);
 }
 
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun

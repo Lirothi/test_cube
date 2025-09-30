@@ -22,8 +22,21 @@ public:
     enum class Align : uint8_t { Left = 0, Center = 1, Right = 2 };
     using RegionId = uint32_t;
 
+    struct ShadowDesc {
+        float offsetX = 1.0f;
+        float offsetY = 1.0f;
+        float4 color = float4(0.0f, 0.0f, 0.0f, 0.65f);
+        float alphaMultiplier = 1.0f;
+        bool  multiplyByTextAlpha = true;
+        bool  scaleWithDpi = true;
+        bool  scaleWithTextSize = false;
+    };
+
     void Init(Renderer* r);
     void Begin(UINT vpW, UINT vpH, float dpiScale = 1.0f);
+
+    void SetShadow(const ShadowDesc& desc);
+    void DisableShadow();
 
     // Позиционные API
     void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
@@ -215,4 +228,5 @@ private:
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;
+    std::optional<ShadowDesc> shadow_;
 };
