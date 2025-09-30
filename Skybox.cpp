@@ -81,7 +81,7 @@ void Skybox::Init(Renderer* renderer,
 void Skybox::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
     ctx.table[0] = cube_.GetSRVForFrame(renderer);
-    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, SamplerManager::LinearClamp());
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 }
 
 void Skybox::BuildCubeMesh_(Renderer* r,

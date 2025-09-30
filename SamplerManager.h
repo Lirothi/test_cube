@@ -54,12 +54,12 @@ public:
     void Clear();
 
     // Быстрые пресеты
-    static D3D12_SAMPLER_DESC LinearWrap();
-    static D3D12_SAMPLER_DESC LinearClamp();
-    static D3D12_SAMPLER_DESC PointClamp();
-    static D3D12_SAMPLER_DESC FontMinPointMagLinearClamp();
-    static D3D12_SAMPLER_DESC AnisoWrap(UINT aniso = 8);
-    static D3D12_SAMPLER_DESC ComparisonLinearClamp();
+    static const D3D12_SAMPLER_DESC* LinearWrap();
+    static const D3D12_SAMPLER_DESC* LinearClamp();
+    static const D3D12_SAMPLER_DESC* PointClamp();
+    static const D3D12_SAMPLER_DESC* FontMinPointMagLinearClamp();
+    static const D3D12_SAMPLER_DESC* AnisoWrap(UINT aniso = 8);
+    static const D3D12_SAMPLER_DESC* ComparisonLinearClamp();
 
 private:
     struct Entry {

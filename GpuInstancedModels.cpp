@@ -91,8 +91,8 @@ void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsComma
     auto tbl = renderer->StageSrvUavTable(srvs);
     ctx.table[0] = tbl.gpu;
 
-    auto aniso = SamplerManager::AnisoWrap(16);
-    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
+    const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *aniso);
 }
 
 void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)

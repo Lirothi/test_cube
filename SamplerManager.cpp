@@ -2,6 +2,8 @@
 #include "Renderer.h"
 #include "DescriptorAllocator.h" // для DescriptorAllocatorSampler
 
+#include <array>
+
 using Microsoft::WRL::ComPtr;
 
 void SamplerManager::Init(ID3D12Device* device, UINT capacity) {
@@ -92,65 +94,140 @@ void SamplerManager::Clear()
     cpuHeap_.Reset();
 }
 
+namespace {
+
+enum class SamplerPresetIndex : size_t {
+    LinearWrap = 0,
+    LinearClamp,
+    PointClamp,
+    FontMinPointMagLinearClamp,
+    ComparisonLinearClamp,
+    AnisoWrap4,
+    AnisoWrap8,
+    AnisoWrap16,
+    Count
+};
+
+struct PrebakedSamplers {
+    std::array<D3D12_SAMPLER_DESC,
+               static_cast<size_t>(SamplerPresetIndex::Count)> descs{};
+
+    PrebakedSamplers() {
+        auto makeLinear = [](D3D12_TEXTURE_ADDRESS_MODE mode) {
+            D3D12_SAMPLER_DESC s{};
+            s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            s.AddressU = s.AddressV = s.AddressW = mode;
+            s.MinLOD = 0.0f;
+            s.MaxLOD = D3D12_FLOAT32_MAX;
+            s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            s.MaxAnisotropy = 1;
+            return s;
+        };
+
+        auto makePointClamp = []() {
+            D3D12_SAMPLER_DESC s{};
+            s.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+            s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            s.MinLOD = 0.0f;
+            s.MaxLOD = D3D12_FLOAT32_MAX;
+            s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            s.MaxAnisotropy = 1;
+            return s;
+        };
+
+        auto makeFont = []() {
+            D3D12_SAMPLER_DESC d{};
+            d.Filter = D3D12_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT;
+            d.AddressU = d.AddressV = d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            d.MipLODBias = 0.0f;
+            d.MaxAnisotropy = 1;
+            d.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            d.MinLOD = 0.0f;
+            d.MaxLOD = D3D12_FLOAT32_MAX;
+            return d;
+        };
+
+        auto makeComparisonLinearClamp = []() {
+            D3D12_SAMPLER_DESC d{};
+            d.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+            d.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            d.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            d.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+            d.MipLODBias = 0.0f;
+            d.MaxAnisotropy = 1;
+            d.MinLOD = 0.0f;
+            d.MaxLOD = 0.0f;
+            d.BorderColor[0] = d.BorderColor[1] = d.BorderColor[2] = d.BorderColor[3] = 1.0f;
+            return d;
+        };
+
+        auto makeAnisoWrap = [](UINT aniso) {
+            D3D12_SAMPLER_DESC s{};
+            s.Filter = D3D12_FILTER_ANISOTROPIC;
+            s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            s.MinLOD = 0.0f;
+            s.MaxLOD = D3D12_FLOAT32_MAX;
+            s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            s.MaxAnisotropy = aniso;
+            return s;
+        };
+
+        descs[static_cast<size_t>(SamplerPresetIndex::LinearWrap)] =
+            makeLinear(D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+        descs[static_cast<size_t>(SamplerPresetIndex::LinearClamp)] =
+            makeLinear(D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+        descs[static_cast<size_t>(SamplerPresetIndex::PointClamp)] = makePointClamp();
+        descs[static_cast<size_t>(SamplerPresetIndex::FontMinPointMagLinearClamp)] = makeFont();
+        descs[static_cast<size_t>(SamplerPresetIndex::ComparisonLinearClamp)] =
+            makeComparisonLinearClamp();
+
+        descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap4)] = makeAnisoWrap(4);
+        descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap8)] = makeAnisoWrap(8);
+        descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap16)] = makeAnisoWrap(16);
+    }
+};
+
+const PrebakedSamplers& GetPrebakedSamplers() {
+    static const PrebakedSamplers samplers;
+    return samplers;
+}
+
+const D3D12_SAMPLER_DESC* ResolveSampler(SamplerPresetIndex preset) {
+    const auto& samplers = GetPrebakedSamplers().descs;
+    return &samplers[static_cast<size_t>(preset)];
+}
+
+} // namespace
+
 // Presets
-D3D12_SAMPLER_DESC SamplerManager::LinearWrap() {
-    D3D12_SAMPLER_DESC s{};
-    s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    s.MaxAnisotropy = 1;
-    return s;
+const D3D12_SAMPLER_DESC* SamplerManager::LinearWrap() {
+    return ResolveSampler(SamplerPresetIndex::LinearWrap);
 }
-D3D12_SAMPLER_DESC SamplerManager::LinearClamp() {
-    D3D12_SAMPLER_DESC s{};
-    s.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    s.MaxAnisotropy = 1;
-    return s;
+
+const D3D12_SAMPLER_DESC* SamplerManager::LinearClamp() {
+    return ResolveSampler(SamplerPresetIndex::LinearClamp);
 }
-D3D12_SAMPLER_DESC SamplerManager::PointClamp() {
-    D3D12_SAMPLER_DESC s{};
-    s.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-    s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    s.MaxAnisotropy = 1;
-    return s;
+
+const D3D12_SAMPLER_DESC* SamplerManager::PointClamp() {
+    return ResolveSampler(SamplerPresetIndex::PointClamp);
 }
-D3D12_SAMPLER_DESC SamplerManager::AnisoWrap(UINT aniso) {
-    D3D12_SAMPLER_DESC s{};
-    s.Filter = D3D12_FILTER_ANISOTROPIC;
-    s.AddressU = s.AddressV = s.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    s.MinLOD = 0.0f; s.MaxLOD = D3D12_FLOAT32_MAX;
-    s.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    s.MaxAnisotropy = aniso ? aniso : 8;
-    return s;
+
+const D3D12_SAMPLER_DESC* SamplerManager::AnisoWrap(UINT aniso) {
+    const UINT requested = aniso == 0 ? 8u : aniso;
+    if (requested <= 4) {
+        return ResolveSampler(SamplerPresetIndex::AnisoWrap4);
+    }
+    if (requested <= 8) {
+        return ResolveSampler(SamplerPresetIndex::AnisoWrap8);
+    }
+    return ResolveSampler(SamplerPresetIndex::AnisoWrap16);
 }
-D3D12_SAMPLER_DESC SamplerManager::FontMinPointMagLinearClamp() {
-    D3D12_SAMPLER_DESC d = {};
-    d.Filter = D3D12_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT;
-    d.AddressU = d.AddressV = d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    d.MipLODBias = 0.0f;
-    d.MaxAnisotropy = 1;
-    d.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-    d.MinLOD = 0.0f;
-    d.MaxLOD = D3D12_FLOAT32_MAX;
-    return d;
+
+const D3D12_SAMPLER_DESC* SamplerManager::FontMinPointMagLinearClamp() {
+    return ResolveSampler(SamplerPresetIndex::FontMinPointMagLinearClamp);
 }
-D3D12_SAMPLER_DESC SamplerManager::ComparisonLinearClamp() {
-    D3D12_SAMPLER_DESC d{};
-    d.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT; // или POINT
-    d.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    d.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    d.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    d.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    d.MipLODBias = 0.0f;
-    d.MaxAnisotropy = 1;
-    d.MinLOD = 0.0f;
-    d.MaxLOD = 0.0f;   // будем звать SampleCmpLevelZero
-    d.BorderColor[0] = d.BorderColor[1] = d.BorderColor[2] = d.BorderColor[3] = 1.0f;
-    return d;
+
+const D3D12_SAMPLER_DESC* SamplerManager::ComparisonLinearClamp() {
+    return ResolveSampler(SamplerPresetIndex::ComparisonLinearClamp);
 }

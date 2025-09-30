@@ -853,7 +853,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         srvs.push_back(D.gbSRV[3]);
         srvs.push_back(D.shadowSRV); // NEW
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        const auto samplerDescs = std::array{ SamplerManager::PointClamp(), SamplerManager::ComparisonLinearClamp() };
+        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matLighting_->Bind(t.cl, rc);
@@ -959,7 +959,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
-        const auto samplerDescs = std::array{ SamplerManager::LinearClamp(), SamplerManager::PointClamp() };
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matSSR_->Bind(t.cl, rc);
@@ -992,7 +992,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
-        const auto samplerDescsX = std::array{ SamplerManager::LinearClamp() };
+        const auto samplerDescsX = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsX);
 
         matBlur_->Bind(t.cl, rc);
@@ -1012,7 +1012,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
-        const auto samplerDescsY = std::array{ SamplerManager::LinearClamp() };
+        const auto samplerDescsY = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsY);
 
         matBlur_->Bind(t.cl, rc);
@@ -1067,7 +1067,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
         rc.cbv[0] = cb.gpu; // b0
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        const auto samplerDescs = std::array{ SamplerManager::LinearClamp(), SamplerManager::PointClamp() };
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matCompose_->Bind(t.cl, rc);
@@ -1130,7 +1130,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
         auto& rc = h.ref();
 
         rc.table[0] = renderer->StageTonemapSrvTable(); // t0
-        const auto tonemapSamplers = std::array{ SamplerManager::LinearClamp() };
+        const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
 
         matTonemap_->Bind(t.cl, rc);
@@ -1158,7 +1158,7 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
         auto& rc = h.ref();
 
         rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
-        const auto debugSamplers = std::array{ SamplerManager::LinearClamp() };
+        const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 
         matDebug_->Bind(t.cl, rc);

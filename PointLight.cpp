@@ -174,7 +174,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     rc.cbv[0] = cb0.gpu;
     rc.cbv[1] = cb1.gpu;
     rc.table[0] = tbl;
-    const auto samplerDescs = std::array{ SamplerManager::LinearClamp(), SamplerManager::PointClamp() };
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
     rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, samplerDescs);
 
     cl->OMSetStencilRef(0);

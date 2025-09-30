@@ -133,9 +133,8 @@ public:
     };
 
     struct CBFieldHandle {
-        CBufferField field{};
+        const CBufferField* field = nullptr;
         UINT destCBSizeBytes = 0;
-        bool isValid = false;
     };
 
     const CBufferInfo* GetCBInfo(UINT bRegister) const;
@@ -173,9 +172,9 @@ public:
         std::optional<UINT> arrayIdxParam = std::nullopt)
     {
         if (!destCB) { return false; }
-        if (!handle.isValid) { return false; }
+        if (!handle.field) { return false; }
 
-        return CopyData(handle.field, value, destCB, handle.destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
+        return CopyData(*handle.field, value, destCB, handle.destCBSizeBytes, arrayIdxParam ? *arrayIdxParam : 0);
     }
 
 private:

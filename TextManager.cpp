@@ -355,7 +355,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         rc.constants[1] = { k.begin(), k.end() };
 
         const bool useCoverage = font_->IsCoverage();
-        const D3D12_SAMPLER_DESC samplerDesc = useCoverage ? SamplerManager::PointClamp() : SamplerManager::LinearClamp();
+        const D3D12_SAMPLER_DESC samplerDesc = useCoverage ? *SamplerManager::PointClamp() : *SamplerManager::LinearClamp();
         rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, samplerDesc);
 
         const std::shared_ptr<Material>& mat = useCoverage ? matTextCoverage_ : matTextSdf_;
