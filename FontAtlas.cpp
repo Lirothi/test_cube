@@ -73,9 +73,6 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
 
     pxSize_      = getInt(parsed, "pxSize");
     spread_      = getInt(parsed, "spread");
-    if (type_ == Type::Coverage) {
-        spread_ = 0;
-    }
     atlasW_      = getInt(parsed, "atlasW");
     atlasH_      = getInt(parsed, "atlasH");
     ascent_      = getInt(parsed, "ascent");
