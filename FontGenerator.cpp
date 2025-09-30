@@ -6,9 +6,6 @@
 #include <cstddef>
 #include <fstream>
 #include <filesystem>
-#include <limits>
-#include <numeric>
-#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
@@ -40,11 +37,16 @@ struct GlyphBitmap {
     uint32_t codepoint = 0;
     int glyphIndex = 0;
     int advance = 0;
-    int bearingX = 0;
-    int bearingY = 0;
     int boxW = 0;
     int boxH = 0;
+    int bitmapX0 = 0;
+    int bitmapY0 = 0;
+    int sdfW = 0;
+    int sdfH = 0;
+    int sdfXOffset = 0;
+    int sdfYOffset = 0;
     std::vector<uint8_t> coverage;
+    std::vector<uint8_t> sdf;
 };
 
 struct PackedGlyph {
@@ -54,97 +56,6 @@ struct PackedGlyph {
     int width = 0;
     int height = 0;
 };
-
-constexpr float kInf = 1e12f;
-
-void EDT1D(const float* f, int n, float* d) {
-    std::vector<int> v(n);
-    std::vector<float> z(n + 1);
-    int k = 0;
-    v[0] = 0;
-    z[0] = -std::numeric_limits<float>::infinity();
-    z[1] = std::numeric_limits<float>::infinity();
-    for (int q = 1; q < n; ++q) {
-        float s = 0.0f;
-        while (true) {
-            const int vk = v[k];
-            const float num = (f[q] + float(q * q)) - (f[vk] + float(vk * vk));
-            const float den = 2.0f * float(q - vk);
-            s = (den != 0.0f) ? (num / den) : std::numeric_limits<float>::infinity();
-            if (s <= z[k]) {
-                if (k == 0) {
-                    break;
-                }
-                --k;
-            } else {
-                break;
-            }
-        }
-        ++k;
-        v[k] = q;
-        z[k] = s;
-        z[k + 1] = std::numeric_limits<float>::infinity();
-    }
-    k = 0;
-    for (int q = 0; q < n; ++q) {
-        while (z[k + 1] < q) {
-            ++k;
-        }
-        const int vk = v[k];
-        const float diff = float(q - vk);
-        d[q] = diff * diff + f[vk];
-    }
-}
-
-void EDT2D(const std::vector<float>& f, int w, int h, std::vector<float>& d) {
-    std::vector<float> tmp((size_t)w * (size_t)h);
-    std::vector<float> column(h);
-    std::vector<float> columnOut(h);
-
-    for (int y = 0; y < h; ++y) {
-        EDT1D(f.data() + (size_t)y * (size_t)w, w, tmp.data() + (size_t)y * (size_t)w);
-    }
-    for (int x = 0; x < w; ++x) {
-        for (int y = 0; y < h; ++y) {
-            column[y] = tmp[(size_t)y * (size_t)w + (size_t)x];
-        }
-        EDT1D(column.data(), h, columnOut.data());
-        for (int y = 0; y < h; ++y) {
-            d[(size_t)y * (size_t)w + (size_t)x] = columnOut[y];
-        }
-    }
-}
-
-void ComputeSDF(const std::vector<uint8_t>& coverage, int w, int h, float spread, std::vector<uint8_t>& out) {
-    const size_t pixelCount = (size_t)w * (size_t)h;
-    std::vector<float> inside(pixelCount, kInf);
-    std::vector<float> outside(pixelCount, kInf);
-
-    for (size_t i = 0; i < pixelCount; ++i) {
-        const float alpha = float(coverage[i]) / 255.0f;
-        if (alpha >= 0.5f) {
-            inside[i] = 0.0f;
-        } else {
-            outside[i] = 0.0f;
-        }
-    }
-
-    std::vector<float> distInside(pixelCount, kInf);
-    std::vector<float> distOutside(pixelCount, kInf);
-    EDT2D(inside, w, h, distInside);
-    EDT2D(outside, w, h, distOutside);
-
-    out.resize(pixelCount);
-    const float spreadF = std::max(1.0f, spread);
-    for (size_t i = 0; i < pixelCount; ++i) {
-        const float di = std::sqrt(distInside[i]);
-        const float do_ = std::sqrt(distOutside[i]);
-        const float signedDist = do_ - di;
-        float value = 0.5f + signedDist / (2.0f * spreadF);
-        value = std::clamp(value, 0.0f, 1.0f);
-        out[i] = static_cast<uint8_t>(std::round(value * 255.0f));
-    }
-}
 
 bool WriteTGA8(const std::wstring& path, int w, int h, const std::vector<uint8_t>& data) {
     if ((int)data.size() != w * h) {
@@ -208,6 +119,9 @@ bool FontGenerator::Generate(const Params& params) {
     namespace fs = std::filesystem;
 
     const bool isSdf = (params.type == OutputType::Sdf);
+    const float spreadValue = isSdf ? std::max(0.0f, params.spread) : 0.0f;
+    const int spreadPixels = isSdf ? std::max(0, static_cast<int>(std::ceil(spreadValue))) : 0;
+    const float sdfPixelDistScale = (spreadValue > 0.0f) ? (127.0f / spreadValue) : 0.0f;
 
     const fs::path fontPath(params.fontFile);
     const fs::path fileStem = fontPath.stem();
@@ -273,14 +187,40 @@ bool FontGenerator::Generate(const Params& params) {
         bmp.codepoint = cp;
         bmp.glyphIndex = static_cast<int>(glyphIdx);
         bmp.advance = static_cast<int>(std::round(scale * static_cast<float>(advanceWidth)));
-        bmp.bearingX = static_cast<int>(std::round(scale * static_cast<float>(leftSideBearing)));
-        bmp.bearingY = static_cast<int>(std::round(-static_cast<float>(y0)));
         bmp.boxW = x1 - x0;
         bmp.boxH = y1 - y0;
+        bmp.bitmapX0 = x0;
+        bmp.bitmapY0 = y0;
 
         if (bmp.boxW > 0 && bmp.boxH > 0) {
             bmp.coverage.assign((size_t)bmp.boxW * (size_t)bmp.boxH, 0);
             stbtt_MakeGlyphBitmap(&fontInfo, bmp.coverage.data(), bmp.boxW, bmp.boxH, bmp.boxW, scale, scale, glyphIdx);
+            if (isSdf) {
+                int sdfW = 0;
+                int sdfH = 0;
+                int sdfXOff = 0;
+                int sdfYOff = 0;
+                unsigned char* sdf = stbtt_GetGlyphSDF(&fontInfo,
+                                                       scale,
+                                                       glyphIdx,
+                                                       spreadPixels,
+                                                       128,
+                                                       sdfPixelDistScale,
+                                                       &sdfW,
+                                                       &sdfH,
+                                                       &sdfXOff,
+                                                       &sdfYOff);
+                if (sdf != nullptr && sdfW > 0 && sdfH > 0) {
+                    bmp.sdf.assign(sdf, sdf + (size_t)sdfW * (size_t)sdfH);
+                    bmp.sdfW = sdfW;
+                    bmp.sdfH = sdfH;
+                    bmp.sdfXOffset = sdfXOff;
+                    bmp.sdfYOffset = sdfYOff;
+                    STBTT_free(sdf, fontInfo.userdata);
+                } else if (sdf != nullptr) {
+                    STBTT_free(sdf, fontInfo.userdata);
+                }
+            }
         }
 
         codepointToGlyph.emplace(cp, glyphIdx);
@@ -295,20 +235,17 @@ bool FontGenerator::Generate(const Params& params) {
         return a.boxH > b.boxH;
     });
 
-    const bool isSdfOutput = (params.type == OutputType::Sdf);
-    const float sdfSpread = isSdfOutput ? std::max(1.0f, params.spread) : 0.0f;
-    const int padding = isSdfOutput
-        ? static_cast<int>(std::ceil(std::max(1.0f, sdfSpread * 0.5f))) + 1
-        : 1;
-
     std::vector<PackedGlyph> packed;
     packed.reserve(glyphs.size());
     for (const GlyphBitmap& g : glyphs) {
         PackedGlyph pg;
         pg.glyph = g;
-        if (g.boxW > 0 && g.boxH > 0) {
-            pg.width = g.boxW + padding * 2;
-            pg.height = g.boxH + padding * 2;
+        if (isSdf && g.sdfW > 0 && g.sdfH > 0) {
+            pg.width = g.sdfW;
+            pg.height = g.sdfH;
+        } else if (!isSdf && g.boxW > 0 && g.boxH > 0) {
+            pg.width = g.boxW;
+            pg.height = g.boxH;
         } else {
             pg.width = 0;
             pg.height = 0;
@@ -316,7 +253,7 @@ bool FontGenerator::Generate(const Params& params) {
         packed.push_back(std::move(pg));
     }
 
-    const int borderSize = (params.type == OutputType::Sdf) ? padding : std::max(1, padding);
+    const int borderSize = spreadPixels;
 
     auto tryPack = [&](int atlasW, int atlasH) -> bool {
         if (atlasW <= borderSize * 2 || atlasH <= borderSize * 2) {
@@ -420,28 +357,37 @@ bool FontGenerator::Generate(const Params& params) {
         entry.cp = pg.glyph.codepoint;
         entry.xadv = pg.glyph.advance;
         if (pg.width > 0 && pg.height > 0 && pg.atlasX >= 0 && pg.atlasY >= 0) {
-            std::vector<uint8_t> padded(static_cast<size_t>(pg.width) * static_cast<size_t>(pg.height), 0);
-            for (int y = 0; y < pg.glyph.boxH; ++y) {
-                uint8_t* dst = padded.data() + (static_cast<size_t>(y + padding) * static_cast<size_t>(pg.width) + padding);
-                const uint8_t* src = pg.glyph.coverage.data() + static_cast<size_t>(y) * static_cast<size_t>(pg.glyph.boxW);
-                std::copy(src, src + pg.glyph.boxW, dst);
+            const size_t expectedSize = static_cast<size_t>(pg.width) * static_cast<size_t>(pg.height);
+            const uint8_t* srcData = nullptr;
+            if (isSdf) {
+                if (pg.glyph.sdf.size() == expectedSize) {
+                    srcData = pg.glyph.sdf.data();
+                }
+            } else {
+                if (pg.glyph.coverage.size() == expectedSize) {
+                    srcData = pg.glyph.coverage.data();
+                }
             }
-            if (isSdfOutput) {
-                std::vector<uint8_t> sdf;
-                ComputeSDF(padded, pg.width, pg.height, sdfSpread, sdf);
-                padded.swap(sdf);
+
+            if (srcData != nullptr) {
+                for (int y = 0; y < pg.height; ++y) {
+                    uint8_t* dst = atlas.data() + (static_cast<size_t>(pg.atlasY + y) * static_cast<size_t>(atlasW) + static_cast<size_t>(pg.atlasX));
+                    const uint8_t* src = srcData + static_cast<size_t>(y) * static_cast<size_t>(pg.width);
+                    std::copy(src, src + pg.width, dst);
+                }
             }
-            for (int y = 0; y < pg.height; ++y) {
-                uint8_t* dst = atlas.data() + (static_cast<size_t>(pg.atlasY + y) * static_cast<size_t>(atlasW) + static_cast<size_t>(pg.atlasX));
-                const uint8_t* src = padded.data() + static_cast<size_t>(y) * static_cast<size_t>(pg.width);
-                std::copy(src, src + pg.width, dst);
-            }
+
             entry.x = pg.atlasX;
             entry.y = pg.atlasY;
             entry.w = pg.width;
             entry.h = pg.height;
-            entry.xoff = pg.glyph.bearingX - padding;
-            entry.yoff = -pg.glyph.bearingY - padding;
+            if (isSdf) {
+                entry.xoff = pg.glyph.sdfXOffset;
+                entry.yoff = pg.glyph.sdfYOffset;
+            } else {
+                entry.xoff = pg.glyph.bitmapX0;
+                entry.yoff = pg.glyph.bitmapY0;
+            }
         }
         glyphEntries.push_back(entry);
     }
@@ -482,7 +428,7 @@ bool FontGenerator::Generate(const Params& params) {
     json root;
     root["type"] = isSdf ? "sdf" : "coverage";
     root["pxSize"] = params.pixelHeight;
-    root["spread"] = isSdf ? static_cast<int>(std::round(sdfSpread)) : 0;
+    root["spread"] = isSdf ? static_cast<int>(std::round(spreadValue)) : 0;
     root["atlasW"] = atlasW;
     root["atlasH"] = atlasH;
     root["ascent"] = ascentPx;
