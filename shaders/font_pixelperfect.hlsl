@@ -25,6 +25,6 @@ SamplerState samp0 : register(s0);
 
 float4 PSMain(VSOut i) : SV_Target {
     float coverage = tex0.Sample(samp0, i.uv).r;
-    float alpha = coverage >= 0.5 ? 1.0 : 0.0;
+    float alpha = coverage;// >= 0.5 ? 1.0 : 0.0;
     return float4(i.col.rgb, i.col.a * alpha);
 }

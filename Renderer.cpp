@@ -220,10 +220,10 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
         textManager_.SetFont(def);
     }
     auto shadowDesc = TextManager::ShadowDesc();
-    shadowDesc.offsetX = 3.0f;
-    shadowDesc.offsetY = 3.0f;
+    shadowDesc.offsetX = 2.0f;
+    shadowDesc.offsetY = 2.0f;
     shadowDesc.color.w = 0.9f;
-    shadowDesc.scaleWithTextSize = true;
+    shadowDesc.scaleWithTextSize = false;
     textManager_.SetShadow(shadowDesc);
 }
 

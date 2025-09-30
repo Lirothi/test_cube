@@ -965,13 +965,13 @@ Material::CBFieldHandle Material::ComputeCBFieldHandle(UINT bRegister, const std
         return handle;
     }
 
-    CBufferField& field = it->second;
-    if (field.elementStride == 0) {
-        field.elementStride = (field.size > 0 ? field.size : 16);
-        field.elementCount = 1;
+    CBufferField* field = const_cast<CBufferField*>(&it->second);
+    if (field->elementStride == 0) {
+        field->elementStride = (field->size > 0 ? field->size : 16);
+        field->elementCount = 1;
     }
 
-    handle.field = &field;
+    handle.field = field;
     return handle;
 }
 
