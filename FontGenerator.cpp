@@ -122,6 +122,7 @@ bool FontGenerator::Generate(const Params& params) {
     const float spreadValue = isSdf ? std::max(0.0f, params.spread) : 0.0f;
     const int spreadPixels = isSdf ? std::max(0, static_cast<int>(std::ceil(spreadValue))) : 0;
     const float sdfPixelDistScale = (spreadValue > 0.0f) ? (127.0f / spreadValue) : 0.0f;
+    //const float sdfPixelDistScale = 4.0f;
 
     const fs::path fontPath(params.fontFile);
     const fs::path fileStem = fontPath.stem();
@@ -253,7 +254,7 @@ bool FontGenerator::Generate(const Params& params) {
         packed.push_back(std::move(pg));
     }
 
-    const int borderSize = spreadPixels;
+    const int borderSize = 2;
 
     auto tryPack = [&](int atlasW, int atlasH) -> bool {
         if (atlasW <= borderSize * 2 || atlasH <= borderSize * 2) {

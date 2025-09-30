@@ -192,9 +192,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     params.fontsFolder = L"fonts";
                     if (generateSdf) {
                         const int baseSpread = std::max(8, params.pixelHeight / 2 + 2);
-                        params.spread = static_cast<float>(baseSpread) * 1.5f;
+                        params.spread = static_cast<float>(baseSpread);
                     } else {
-                        params.spread = 0.0f;
+                        params.spread = 2.0f;
                     }
 
                     if (!generator.Generate(params)) {

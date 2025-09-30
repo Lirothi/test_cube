@@ -214,7 +214,8 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
 
     textManager_.Init(this);
     //if (auto* def = fontManager_.Get(L"Consolas_32"))
-    if (auto* def = fontManager_.Get(L"cons_32"))
+    if (auto* def = fontManager_.Get(L"Consolas_32_coverage"))
+    //if (auto* def = fontManager_.Get(L"cons_32"))
     {
         textManager_.SetFont(def);
     }
