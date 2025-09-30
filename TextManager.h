@@ -193,7 +193,8 @@ private:
 private:
     FontAtlas* font_ = nullptr;
 
-    std::shared_ptr<Material> matText_;
+    std::shared_ptr<Material> matTextSdf_;
+    std::shared_ptr<Material> matTextCoverage_;
     std::shared_ptr<Material> matRect_;
 
     GrowOnlyArray<Vertex>    verts_;

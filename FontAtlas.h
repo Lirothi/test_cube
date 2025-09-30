@@ -15,6 +15,8 @@ struct FontGlyph {
 
 class FontAtlas {
 public:
+    enum class Type : uint8_t { SDF, Coverage };
+
     bool Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
               const std::wstring& jsonPath, const std::wstring& tgaPath);
 
@@ -26,12 +28,15 @@ public:
     int PxSize() const { return pxSize_; }
     int Spread() const { return spread_; }
     bool HasKerning() const { return kerning_.size() > 0; }
+    Type GetType() const { return type_; }
+    bool IsCoverage() const { return type_ == Type::Coverage; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return tex_.GetSRVCPU(); }
 
 private:
     Texture2D tex_;
     int pxSize_=0, spread_=0, atlasW_=0, atlasH_=0, ascent_=0, descent_=0, lineAdvance_=0;
+    Type type_ = Type::SDF;
     std::vector<FontGlyph> glyphs_;
     std::vector<uint32_t> glyphRemap_;
     uint32_t glyphRemapBase_ = 0;

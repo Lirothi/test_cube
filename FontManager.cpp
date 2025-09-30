@@ -57,9 +57,15 @@ void FontManager::LoadFromFolder(Renderer* r,
 
         auto atlas = std::make_unique<FontAtlas>();
         if (atlas->Load(r, uploadCl, uploadKeepAlive, json, tga)) {
+            const FontAtlas::Type atlasType = atlas->GetType();
             fonts_[base] = std::move(atlas);
             if (defaultName_.empty()) {
                 defaultName_ = base;
+            } else if (atlasType == FontAtlas::Type::SDF) {
+                auto itDefault = fonts_.find(defaultName_);
+                if (itDefault == fonts_.end() || itDefault->second->GetType() != FontAtlas::Type::SDF) {
+                    defaultName_ = base;
+                }
             }
         }
     } while (FindNextFileW(h, &fd));

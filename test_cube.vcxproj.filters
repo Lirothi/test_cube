@@ -84,6 +84,9 @@
     <ClCompile Include="FontAtlas.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="FontGenerator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="FrameResource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -248,6 +251,9 @@
     <ClInclude Include="FontAtlas.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FontGenerator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="FontManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -293,6 +299,9 @@
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\font_sdf.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+    <Text Include="shaders\font_pixelperfect.hlsl">
       <Filter>Shaders</Filter>
     </Text>
     <Text Include="shaders\gbuffer.hlsl">
