@@ -127,7 +127,7 @@ void ComputeSDF(const std::vector<uint8_t>& coverage, int w, int h, int spread, 
     EDT2D(outside, w, h, distOutside);
 
     out.resize(pixelCount);
-    const float spreadF = std::max(1, spread);
+    const float spreadF = (float)std::max(1, spread);
     for (size_t i = 0; i < pixelCount; ++i) {
         const float di = std::sqrt(distInside[i]);
         const float do_ = std::sqrt(distOutside[i]);
@@ -198,7 +198,7 @@ bool FontGenerator::Generate(const Params& params) {
     }
 
     const bool isSdf = (params.type == OutputType::Sdf);
-    const std::wstring baseName = L"cons_" + std::to_wstring(params.pixelHeight);
+    const std::wstring baseName = params.fontFamily + L"_" + std::to_wstring(params.pixelHeight);
     const std::wstring jsonPath = JoinPath(params.fontsFolder, isSdf ? baseName + L".json" : baseName + L"_coverage.json");
     const std::wstring texturePath = JoinPath(params.fontsFolder, isSdf ? baseName + L".tga" : baseName + L"_coverage.tga");
 
@@ -281,19 +281,20 @@ bool FontGenerator::Generate(const Params& params) {
         bmp.boxW = gm.gmBlackBoxX;
         bmp.boxH = gm.gmBlackBoxY;
 
-        if (bufferSize > 0 && gm.gmBlackBoxX > 0 && gm.gmBlackBoxY > 0) {
-            std::vector<uint8_t> raw(bufferSize);
-            if (GetGlyphOutlineW(hdc, glyphIdx, GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX,
-                                 &gm, bufferSize, raw.data(), &mat2) == GDI_ERROR) {
-                continue;
-            }
-            const size_t stride = ((size_t)gm.gmBlackBoxX + 3u) & ~3u;
-            bmp.coverage.resize((size_t)gm.gmBlackBoxX * (size_t)gm.gmBlackBoxY);
-            for (int y = 0; y < gm.gmBlackBoxY; ++y) {
-                for (int x = 0; x < gm.gmBlackBoxX; ++x) {
-                    const uint8_t v = raw[(size_t)y * stride + (size_t)x];
-                    const int scaled = (int(v) * 255 + 32) / 64;
-                    bmp.coverage[(size_t)y * (size_t)gm.gmBlackBoxX + (size_t)x] = static_cast<uint8_t>(std::clamp(scaled, 0, 255));
+        if (gm.gmBlackBoxX > 0 && gm.gmBlackBoxY > 0) {
+            bmp.coverage.assign((size_t)gm.gmBlackBoxX * (size_t)gm.gmBlackBoxY, 0);
+            if (bufferSize > 0) {
+                std::vector<uint8_t> raw(bufferSize);
+                if (GetGlyphOutlineW(hdc, glyphIdx, GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX,
+                    &gm, bufferSize, raw.data(), &mat2) != GDI_ERROR) {
+                    const size_t stride = ((size_t)gm.gmBlackBoxX + 3u) & ~3u;
+                    for (UINT y = 0; y < gm.gmBlackBoxY; ++y) {
+                        for (UINT x = 0; x < gm.gmBlackBoxX; ++x) {
+                            const uint8_t v = raw[(size_t)y * stride + (size_t)x];
+                            const int scaled = (int(v) * 255 + 32) / 64;
+                            bmp.coverage[(size_t)y * (size_t)gm.gmBlackBoxX + (size_t)x] = static_cast<uint8_t>(std::clamp(scaled, 0, 255));
+                        }
+                    }
                 }
             }
         }
@@ -341,10 +342,16 @@ bool FontGenerator::Generate(const Params& params) {
                 pg.atlasY = 0;
                 continue;
             }
+            if (pg.width > atlasW || pg.height > atlasH) {
+                return false;
+            }
             if (penX + pg.width > atlasW) {
                 penX = padding;
                 penY += rowH + padding;
                 rowH = 0;
+                if (penX + pg.width > atlasW) {
+                    return false;
+                }
             }
             if (penY + pg.height > atlasH) {
                 return false;
@@ -477,7 +484,7 @@ bool FontGenerator::Generate(const Params& params) {
     root["lineAdvance"] = tm.tmHeight + tm.tmExternalLeading;
 
     json glyphArray = json::array();
-    glyphArray.reserve(glyphEntries.size());
+    //glyphArray.reserve(glyphEntries.size());
     for (const auto& ge : glyphEntries) {
         json jg;
         jg["cp"] = static_cast<int>(ge.cp);

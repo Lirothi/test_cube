@@ -213,9 +213,8 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
     fontManager_.LoadFromFolder(this, uploadCl, uploadKeepAlive, folder);
 
     textManager_.Init(this);
-    //if (auto* def = fontManager_.Get(L"courierb_32"))
+    //if (auto* def = fontManager_.Get(L"Consolas_32"))
     if (auto* def = fontManager_.Get(L"cons_32"))
-    //if (auto* def = fontManager_.Get(L"consolas_32"))
     {
         textManager_.SetFont(def);
     }

@@ -103,8 +103,8 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
             if (g.w > 0 && g.h > 0 && atlasW_ > 0 && atlasH_ > 0) {
                 const float invW = 1.0f / float(atlasW_);
                 const float invH = 1.0f / float(atlasH_);
-                const float padU = 0.5f;
-                const float padV = 0.5f;
+                const float padU = 0.0f;// 0.5f;
+                const float padV = 0.0f;// 0.5f;
 
                 g.u0 = (g.x + padU) * invW;
                 g.v0 = (g.y + padV) * invH;
