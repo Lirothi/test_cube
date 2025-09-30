@@ -218,6 +218,12 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
     {
         textManager_.SetFont(def);
     }
+    auto shadowDesc = TextManager::ShadowDesc();
+    shadowDesc.offsetX = 3.0f;
+    shadowDesc.offsetY = 3.0f;
+    shadowDesc.color.w = 0.9f;
+    shadowDesc.scaleWithTextSize = true;
+    textManager_.SetShadow(shadowDesc);
 }
 
 void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {

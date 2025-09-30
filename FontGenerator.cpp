@@ -49,7 +49,7 @@ struct PackedGlyph {
 };
 
 constexpr float kInf = 1e12f;
-constexpr float kSdfHaloScale = 1.25f;
+constexpr float kSdfHaloScale = 1.5f;
 
 void EDT1D(const float* f, int n, float* d) {
     std::vector<int> v(n);
@@ -322,7 +322,7 @@ bool FontGenerator::Generate(const Params& params) {
         sdfSpread = float(baseSpread) * kSdfHaloScale;
     }
     const int spread = (params.type == OutputType::Sdf) ? static_cast<int>(std::round(std::max(1.0f, sdfSpread))) : 0;
-    const int padding = (params.type == OutputType::Sdf) ? static_cast<int>(std::ceil(std::max(1.0f, sdfSpread))) + 1 : 1;
+    const int padding = (params.type == OutputType::Sdf) ? static_cast<int>(std::ceil(std::max(1.0f, sdfSpread * 0.5f))) + 1 : 1;
 
     std::vector<PackedGlyph> packed;
     packed.reserve(glyphs.size());

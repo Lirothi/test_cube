@@ -375,7 +375,7 @@ void Scene::Render(Renderer* renderer) {
     auto* tb = renderer->GetTextManager();
     tb->Begin(renderer->GetWidth(), renderer->GetHeight(), 1.0f);
     int y = 8;
-    tb->AddTextf(8, 8, float4(1, 1, 1, 0.5f), 32.0f, L"FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
+    tb->AddTextf(8, 8, float4(1, 1, 1, 0.6f), 32.0f, L"FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
     tb->AddText(8, 8 + 32, float4(1, 1, 1, 0.9f), 16.0f, L"The quick brown fox jumps over the lazy dog 0123456789");
     
 
