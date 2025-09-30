@@ -98,10 +98,16 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
 
 // позиционные (не кэшируем — как было)
 void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text) {
-    EmitTextImmediate(x, y, color, px, text);
+    AddText(x, y, color, px, text, shadow_.has_value());
 }
 void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8) {
-    AddText(x, y, color, px, UTF8toW(utf8));
+    AddText(x, y, color, px, utf8, shadow_.has_value());
+}
+void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow) {
+    EmitTextImmediate(x, y, color, px, text, enableShadow);
+}
+void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8, bool enableShadow) {
+    AddText(x, y, color, px, UTF8toW(utf8), enableShadow);
 }
 void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
@@ -110,6 +116,14 @@ void TextManager::AddTextf(int x, int y, const float4& color, float px, const wc
     int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
     if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
+}
+void TextManager::AddTextfShadow(int x, int y, const float4& color, float px, bool enableShadow, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    wchar_t buf[256];
+    va_list args; va_start(args, fmt);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+    va_end(args);
+    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
 // регионы
@@ -157,6 +171,12 @@ void TextManager::RegionSetAutoMeasure(RegionId id, bool enabled) {
 }
 
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text) {
+    AddText(id, px, color, text, shadow_.has_value());
+}
+void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
+    AddText(id, px, color, UTF8toW(utf8), shadow_.has_value());
+}
+void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
@@ -168,6 +188,7 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
 
     ln->color = color;
     ln->px = px;
+    ln->shadowEnabled = enableShadow;
     BuildGlyphRun(text, ln->px, ln->run, ln->widthPx);
     const size_t glyphReserve = (ln->run.ready ? ln->run.glyphCount : charCount);
     ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
@@ -184,9 +205,6 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
 }
-void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
-    AddText(id, px, color, UTF8toW(utf8));
-}
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     wchar_t buf[256];
@@ -194,6 +212,14 @@ void TextManager::AddTextf(RegionId id, float px, const float4& color, const wch
     int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
     if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len)); }
+}
+void TextManager::AddTextfShadow(RegionId id, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...) {
+    if (fmt == nullptr) { return; }
+    wchar_t buf[256];
+    va_list args; va_start(args, fmt);
+    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+    va_end(args);
+    if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
 // ======== СБОРКА / ОТРИСОВКА ========
@@ -203,14 +229,23 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 
     // 0) Предподсчёт глифов для единого reserve
     size_t totalGlyphs = 0;
+    size_t totalShadowGlyphs = 0;
+    const bool hasShadowDesc = shadow_.has_value();
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
         totalGlyphs += rg.glyphCount;
+        if (hasShadowDesc) {
+            for (const RegionLine* ln : rg.lines) {
+                if (ln && ln->shadowEnabled) {
+                    totalShadowGlyphs += ln->glyphCount;
+                }
+            }
+        }
     }
-    const size_t glyphMultiplier = shadow_.has_value() ? 2u : 1u;
-    if (totalGlyphs) {
-        verts_.ensureAdditional(totalGlyphs * glyphMultiplier * 4);
-        idx_.ensureAdditional(totalGlyphs * glyphMultiplier * 6);
+    const size_t totalForReserve = totalGlyphs + totalShadowGlyphs;
+    if (totalForReserve) {
+        verts_.ensureAdditional(totalForReserve * 4);
+        idx_.ensureAdditional(totalForReserve * 6);
     }
 
     // 1) Резерв под потенциальные фоновые прямоугольники
@@ -242,7 +277,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
             case Align::Center: { xOff = std::max(0.0f, 0.5f * (regionW - ln->widthPx)); break; }
             case Align::Right: { xOff = std::max(0.0f, (regionW - ln->widthPx)); break; }
             }
-            EmitGlyphRun(rg.x, y, xOff, ln->color, ln->run);
+            EmitGlyphRun(rg.x, y, xOff, ln->color, ln->run, ln->shadowEnabled);
             y += rg.lineStepPx;
         }
     }
@@ -373,6 +408,7 @@ TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint)
     ln->widthPx = 0.0f;
     ln->glyphCount = 0;
     ln->run.Reset();
+    ln->shadowEnabled = false;
 
     assert(glyphReserveHint <= GlyphRun::kDefaultCapacity);
     (void)glyphReserveHint;
@@ -391,6 +427,7 @@ void TextManager::RecycleRegionLines() {
             ln->widthPx = 0.0f;
             ln->glyphCount = 0;
             ln->inUse = false;
+            ln->shadowEnabled = false;
             freeRegionLines_.push_back(ln);
         }
         rg.lines.clear();
@@ -492,7 +529,7 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
 }
 
 // Быстрый эмит с подготовленного глиф-рана
-void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run) {
+void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow) {
     if (!run.ready || run.glyphCount == 0) { return; }
 
     const float scale = run.scale;
@@ -543,8 +580,10 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         }
     };
 
-    if (shadow_.has_value()) {
-        const ShadowDesc& desc = *shadow_;
+    const ShadowDesc* shadowDesc = (enableShadow && shadow_.has_value()) ? &(*shadow_) : nullptr;
+
+    if (shadowDesc) {
+        const ShadowDesc& desc = *shadowDesc;
         float4 shadowColor = desc.color;
         if (desc.multiplyByTextAlpha) {
             shadowColor.w *= color.w;
@@ -569,13 +608,13 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 }
 
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
-void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text) {
+void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerEmitImmediate);
     GlyphRun run;
     float width = 0.0f;
     BuildGlyphRun(text, px, run, width);
-    EmitGlyphRun(x, y, 0.0f, color, run);
+    EmitGlyphRun(x, y, 0.0f, color, run, enableShadow);
 }
 
 void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) {

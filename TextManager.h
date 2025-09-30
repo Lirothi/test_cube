@@ -41,7 +41,10 @@ public:
     // Позиционные API
     void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
     void AddText(int x, int y, const float4& color, float px, std::string_view utf8);
+    void AddText(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow);
+    void AddText(int x, int y, const float4& color, float px, std::string_view utf8, bool enableShadow);
     void AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...);
+    void AddTextfShadow(int x, int y, const float4& color, float px, bool enableShadow, const wchar_t* fmt, ...);
 
     // -------------------- Регионы --------------------
     RegionId CreateRegion(int x, int y, Align align = Align::Left);
@@ -58,7 +61,10 @@ public:
 
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
+    void AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow);
+    void AddText(RegionId id, float px, const float4& color, std::string_view utf8, bool enableShadow);
     void AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...);
+    void AddTextfShadow(RegionId id, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...);
 
     void Build(Renderer* r, ID3D12GraphicsCommandList* cl);
     void Draw(Renderer* r, ID3D12GraphicsCommandList* cl);
@@ -112,6 +118,7 @@ private:
         GlyphRun run;           // кэш глифов/офсетов
         uint32_t glyphCount = 0; // запас по глифам для резерва
         bool     inUse = false;
+        bool     shadowEnabled = false;
     };
 
     struct Region {
@@ -192,10 +199,10 @@ private:
     void  BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const;
 
     // Быстрый вывод подготовленного глиф-рана
-    void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run);
+    void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
 
     // Старая «неподготовленная» отрисовка (позиционная) — теперь через BuildGlyphRun
-    void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text);
+    void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow);
 
     // Рисунок прямоугольника (фон)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
