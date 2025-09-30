@@ -2,6 +2,7 @@
 #include "Profiler.h"
 #include "ProfilerScopes.h"
 #include "FontGenerator.h"
+#include <algorithm>
 #include <cassert>
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -185,10 +186,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
                     FontGenerator generator;
                     FontGenerator::Params params;
-                    params.fontFamily = L"Consolas";
+                    params.fontFile = L"fonts/Consolas.ttf";
                     params.pixelHeight = 32;
                     params.type = type;
                     params.fontsFolder = L"fonts";
+                    if (generateSdf) {
+                        const int baseSpread = std::max(8, params.pixelHeight / 2 + 2);
+                        params.spread = static_cast<float>(baseSpread) * 1.5f;
+                    } else {
+                        params.spread = 0.0f;
+                    }
 
                     if (!generator.Generate(params)) {
                         OutputDebugStringA("Font generation failed\n");
