@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <fstream>
 #include <limits>
 #include <numeric>
@@ -48,6 +49,7 @@ struct PackedGlyph {
 };
 
 constexpr float kInf = 1e12f;
+constexpr float kSdfHaloScale = 1.25f;
 
 void EDT1D(const float* f, int n, float* d) {
     std::vector<int> v(n);
@@ -107,7 +109,7 @@ void EDT2D(const std::vector<float>& f, int w, int h, std::vector<float>& d) {
     }
 }
 
-void ComputeSDF(const std::vector<uint8_t>& coverage, int w, int h, int spread, std::vector<uint8_t>& out) {
+void ComputeSDF(const std::vector<uint8_t>& coverage, int w, int h, float spread, std::vector<uint8_t>& out) {
     const size_t pixelCount = (size_t)w * (size_t)h;
     std::vector<float> inside(pixelCount, kInf);
     std::vector<float> outside(pixelCount, kInf);
@@ -127,7 +129,7 @@ void ComputeSDF(const std::vector<uint8_t>& coverage, int w, int h, int spread, 
     EDT2D(outside, w, h, distOutside);
 
     out.resize(pixelCount);
-    const float spreadF = (float)std::max(1, spread);
+    const float spreadF = std::max(1.0f, spread);
     for (size_t i = 0; i < pixelCount; ++i) {
         const float di = std::sqrt(distInside[i]);
         const float do_ = std::sqrt(distOutside[i]);
@@ -314,8 +316,13 @@ bool FontGenerator::Generate(const Params& params) {
         return a.boxH > b.boxH;
     });
 
-    const int spread = (params.type == OutputType::Sdf) ? std::max(8, params.pixelHeight / 2 + 2) : 0;
-    const int padding = (params.type == OutputType::Sdf) ? spread + 2 : 1;
+    float sdfSpread = 0.0f;
+    if (params.type == OutputType::Sdf) {
+        const int baseSpread = std::max(8, params.pixelHeight / 2 + 2);
+        sdfSpread = float(baseSpread) * kSdfHaloScale;
+    }
+    const int spread = (params.type == OutputType::Sdf) ? static_cast<int>(std::round(std::max(1.0f, sdfSpread))) : 0;
+    const int padding = (params.type == OutputType::Sdf) ? static_cast<int>(std::ceil(std::max(1.0f, sdfSpread))) + 1 : 1;
 
     std::vector<PackedGlyph> packed;
     packed.reserve(glyphs.size());
@@ -332,42 +339,162 @@ bool FontGenerator::Generate(const Params& params) {
         packed.push_back(std::move(pg));
     }
 
+    const int borderSize = (params.type == OutputType::Sdf) ? padding : std::max(1, padding);
+
     auto tryPack = [&](int atlasW, int atlasH) -> bool {
-        int penX = padding;
-        int penY = padding;
-        int rowH = 0;
+        if (atlasW <= 0 || atlasH <= 0) {
+            return false;
+        }
+
+        struct Rect { int x = 0, y = 0, w = 0, h = 0; };
+
+        Rect initial{ borderSize, borderSize, atlasW - borderSize * 2, atlasH - borderSize * 2 };
+        if (initial.w <= 0 || initial.h <= 0) {
+            return false;
+        }
+
+        auto intersects = [](const Rect& a, const Rect& b) -> bool {
+            return !(b.x >= a.x + a.w || b.x + b.w <= a.x || b.y >= a.y + a.h || b.y + b.h <= a.y);
+        };
+
+        auto isContained = [](const Rect& a, const Rect& b) -> bool {
+            return a.x >= b.x && a.y >= b.y && (a.x + a.w) <= (b.x + b.w) && (a.y + a.h) <= (b.y + b.h);
+        };
+
+        std::vector<Rect> freeRects;
+        freeRects.reserve(packed.size() * 2 + 1);
+        freeRects.push_back(initial);
+
         for (auto& pg : packed) {
-            if (pg.width == 0 || pg.height == 0) {
+            if (pg.width > 0 && pg.height > 0) {
+                pg.atlasX = -1;
+                pg.atlasY = -1;
+            } else {
                 pg.atlasX = 0;
                 pg.atlasY = 0;
+            }
+        }
+
+        for (auto& pg : packed) {
+            if (pg.width == 0 || pg.height == 0) {
                 continue;
             }
-            if (pg.width > atlasW || pg.height > atlasH) {
-                return false;
-            }
-            if (penX + pg.width > atlasW) {
-                penX = padding;
-                penY += rowH + padding;
-                rowH = 0;
-                if (penX + pg.width > atlasW) {
-                    return false;
+
+            int bestIndex = -1;
+            Rect bestPlacement{};
+            int bestScoreY = std::numeric_limits<int>::max();
+            int bestScoreX = std::numeric_limits<int>::max();
+
+            for (int i = 0; i < (int)freeRects.size(); ++i) {
+                const Rect& fr = freeRects[i];
+                if (pg.width > fr.w || pg.height > fr.h) {
+                    continue;
+                }
+                const int scoreY = fr.y;
+                const int scoreX = fr.x;
+                if (scoreY < bestScoreY || (scoreY == bestScoreY && scoreX < bestScoreX)) {
+                    bestIndex = i;
+                    bestPlacement = { fr.x, fr.y, pg.width, pg.height };
+                    bestScoreY = scoreY;
+                    bestScoreX = scoreX;
                 }
             }
-            if (penY + pg.height > atlasH) {
+
+            if (bestIndex < 0) {
                 return false;
             }
-            pg.atlasX = penX;
-            pg.atlasY = penY;
-            penX += pg.width + padding;
-            rowH = std::max(rowH, pg.height);
+
+            pg.atlasX = bestPlacement.x;
+            pg.atlasY = bestPlacement.y;
+
+            std::vector<Rect> newFreeRects;
+            newFreeRects.reserve(freeRects.size() + 4);
+
+            for (const Rect& fr : freeRects) {
+                if (!intersects(fr, bestPlacement)) {
+                    newFreeRects.push_back(fr);
+                    continue;
+                }
+
+                // split above
+                if (bestPlacement.y > fr.y) {
+                    Rect top = fr;
+                    top.h = bestPlacement.y - fr.y;
+                    if (top.w > 0 && top.h > 0) {
+                        newFreeRects.push_back(top);
+                    }
+                }
+                // split below
+                if (bestPlacement.y + bestPlacement.h < fr.y + fr.h) {
+                    Rect bottom = fr;
+                    bottom.y = bestPlacement.y + bestPlacement.h;
+                    bottom.h = fr.y + fr.h - bottom.y;
+                    if (bottom.w > 0 && bottom.h > 0) {
+                        newFreeRects.push_back(bottom);
+                    }
+                }
+                // split left
+                if (bestPlacement.x > fr.x) {
+                    Rect left = fr;
+                    left.w = bestPlacement.x - fr.x;
+                    if (left.w > 0 && left.h > 0) {
+                        newFreeRects.push_back(left);
+                    }
+                }
+                // split right
+                if (bestPlacement.x + bestPlacement.w < fr.x + fr.w) {
+                    Rect right = fr;
+                    right.x = bestPlacement.x + bestPlacement.w;
+                    right.w = fr.x + fr.w - right.x;
+                    if (right.w > 0 && right.h > 0) {
+                        newFreeRects.push_back(right);
+                    }
+                }
+            }
+
+            // prune rectangles contained inside others
+            for (size_t i = 0; i < newFreeRects.size(); ++i) {
+                for (size_t j = i + 1; j < newFreeRects.size(); ) {
+                    if (isContained(newFreeRects[i], newFreeRects[j])) {
+                        newFreeRects.erase(newFreeRects.begin() + (std::ptrdiff_t)i);
+                        --i;
+                        break;
+                    }
+                    if (isContained(newFreeRects[j], newFreeRects[i])) {
+                        newFreeRects.erase(newFreeRects.begin() + (std::ptrdiff_t)j);
+                    } else {
+                        ++j;
+                    }
+                }
+            }
+
+            freeRects.swap(newFreeRects);
+            if (freeRects.empty()) {
+                return std::all_of(packed.begin(), packed.end(), [](const PackedGlyph& g) {
+                    return g.width == 0 || g.atlasX >= 0;
+                });
+            }
         }
+
         return true;
     };
 
-    int atlasW = 256;
-    int atlasH = 256;
+    int maxDim = 0;
+    for (const auto& pg : packed) {
+        maxDim = std::max(maxDim, std::max(pg.width, pg.height));
+    }
+
+    int startSize = 64;
+    const int target = std::max(borderSize * 2 + 1, maxDim + borderSize * 2);
+    while (startSize < target) {
+        startSize *= 2;
+    }
+    startSize = std::min(startSize, 4096);
+
+    int atlasW = startSize;
+    int atlasH = startSize;
     bool packedOk = false;
-    for (int size = 256; size <= 2048; size *= 2) {
+    for (int size = startSize; size <= 4096; size *= 2) {
         atlasW = size;
         atlasH = size;
         if (tryPack(atlasW, atlasH)) {
@@ -406,7 +533,7 @@ bool FontGenerator::Generate(const Params& params) {
             }
             if (params.type == OutputType::Sdf) {
                 std::vector<uint8_t> sdf;
-                ComputeSDF(padded, pg.width, pg.height, spread, sdf);
+                ComputeSDF(padded, pg.width, pg.height, sdfSpread, sdf);
                 padded.swap(sdf);
             }
             for (int y = 0; y < pg.height; ++y) {
