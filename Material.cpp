@@ -951,19 +951,27 @@ bool Material::GetCBFieldOffset(UINT bRegister, const std::string& name, UINT& o
 Material::CBFieldHandle Material::ComputeCBFieldHandle(UINT bRegister, const std::string& name) const
 {
     CBFieldHandle handle{};
-    handle.destCBSizeBytes = GetCBSizeBytes(bRegister);
-    if (handle.destCBSizeBytes == 0) {
+    const CBufferInfo* cbInfo = GetCBInfo(bRegister);
+    if (!cbInfo) {
+        handle.destCBSizeBytes = 0;
         assert(false && "Bad constant buffer register!");
         return handle;
     }
 
-    if (!GetCBFieldInfo(bRegister, name, handle.field)) {
-        //assert(false && "Bad uniform name!");
+    handle.destCBSizeBytes = cbInfo->sizeBytes;
+    auto it = cbInfo->fieldsByName.find(name);
+    if (it == cbInfo->fieldsByName.end()) {
         handle.destCBSizeBytes = 0;
         return handle;
     }
 
-    handle.isValid = true;
+    CBufferField& field = it->second;
+    if (field.elementStride == 0) {
+        field.elementStride = (field.size > 0 ? field.size : 16);
+        field.elementCount = 1;
+    }
+
+    handle.field = &field;
     return handle;
 }
 

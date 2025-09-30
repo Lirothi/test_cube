@@ -80,7 +80,7 @@ protected:
     {
         if (!cbData) { return false; }
         if (!material) { return false; }
-        if (!handle.isValid) { return false; }
+        if (!handle.field) { return false; }
         return material->UpdateCBField(handle, value, cbData);
     }
 

@@ -362,7 +362,7 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
     auto tbl = renderer->StageSrvUavTable({ simulation_->GetDisplacementSRV() });
     ctx.table[0] = tbl.gpu;
 
-    const auto samplers = std::array{ SamplerManager::LinearWrap() };
+    const auto samplers = std::array{ *SamplerManager::LinearWrap() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 }
 

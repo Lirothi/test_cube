@@ -84,6 +84,6 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
             gbufferSrvCache_.gpu = tbl.gpu;
         }
     }
-    auto aniso = SamplerManager::AnisoWrap(16);
-    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, aniso);
+    const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
+    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, *aniso);
 }
