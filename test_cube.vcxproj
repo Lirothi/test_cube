@@ -89,6 +89,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -103,6 +104,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -120,7 +122,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>mimalloc.lib;tbb12_debug.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>mimalloc.lib;tbb12_debug.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
@@ -146,7 +148,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>mimalloc.lib;tbb12.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -155,6 +157,7 @@
     <ClCompile Include="Camera.cpp" />
     <ClCompile Include="DebugGrid.cpp" />
     <ClCompile Include="FontAtlas.cpp" />
+    <ClCompile Include="FontGenerator.cpp" />
     <ClCompile Include="FontManager.cpp" />
     <ClCompile Include="FrameResource.cpp" />
     <ClCompile Include="GBufferRenderable.cpp" />
@@ -198,6 +201,7 @@
     <ClInclude Include="DescriptorAllocator.h" />
     <ClInclude Include="DescriptorHeapGPU.h" />
     <ClInclude Include="FontAtlas.h" />
+    <ClInclude Include="FontGenerator.h" />
     <ClInclude Include="FontManager.h" />
     <ClInclude Include="FrameResource.h" />
     <ClInclude Include="GBufferRenderable.h" />
@@ -249,6 +253,9 @@
       <FileType>Document</FileType>
     </Text>
     <Text Include="shaders\font_sdf.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\font_pixelperfect.hlsl">
       <FileType>Document</FileType>
     </Text>
     <Text Include="shaders\gbuffer.hlsl">

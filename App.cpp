@@ -1,6 +1,7 @@
 #include "App.h"
 #include "Profiler.h"
 #include "ProfilerScopes.h"
+#include "FontGenerator.h"
 #include <cassert>
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -176,6 +177,22 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (input.WasKeyPressed(VK_F11)) {
                     constexpr uint32_t kTraceFrames = 120;
                     Profiler::Get().RequestTraceCapture(kTraceFrames);
+                }
+
+                if (input.WasKeyPressed(VK_F8)) {
+                    const bool generateSdf = input.IsKeyDown(VK_SHIFT);
+                    const FontGenerator::OutputType type = generateSdf ? FontGenerator::OutputType::Sdf : FontGenerator::OutputType::Coverage;
+
+                    FontGenerator generator;
+                    FontGenerator::Params params;
+                    params.fontFamily = L"Consolas";
+                    params.pixelHeight = 32;
+                    params.type = type;
+                    params.fontsFolder = L"fonts";
+
+                    if (!generator.Generate(params)) {
+                        OutputDebugStringA("Font generation failed\n");
+                    }
                 }
 
                 double now = GetTimeSeconds();

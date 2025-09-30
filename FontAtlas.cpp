@@ -4,6 +4,13 @@
 #include <cwchar>
 #include <algorithm>
 #include <limits>
+#include <cctype>
+
+#pragma warning(push)
+#pragma warning(disable: 26819)
+#include "third_party/json/json.hpp"
+#pragma warning(pop)
+using nlohmann::json;
 
 namespace {
 constexpr uint32_t kInvalidGlyphIndex = std::numeric_limits<uint32_t>::max();
@@ -34,105 +41,96 @@ static std::string ReadAllUtf8(const std::wstring& path) {
 
 bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                      const std::wstring& jsonPath, const std::wstring& tgaPath) {
-    // JSON (без сторонних либ — парсим по-минимуму под нашу схему)
+    // JSON metadata
     std::string j = ReadAllUtf8(jsonPath);
-    auto findNum = [&](const char* key)->int {
-        std::string k = std::string("\"") + key + "\":";
-        size_t p = j.find(k);
-        if (p == std::string::npos) { return 0; }
-        p += k.size();
-        return std::atoi(j.c_str() + p);
+    json parsed = json::parse(j, nullptr, false);
+    if (parsed.is_discarded()) {
+        return false;
+    }
+
+    auto getInt = [](const json& node, const char* key) -> int {
+        auto it = node.find(key);
+        if (it == node.end()) { return 0; }
+        if (it->is_number_integer()) { return it->get<int>(); }
+        if (it->is_number_unsigned()) { return static_cast<int>(it->get<uint32_t>()); }
+        if (it->is_number_float()) { return static_cast<int>(it->get<float>()); }
+        return 0;
     };
-    pxSize_     = findNum("pxSize");
-    spread_     = findNum("spread");
-    atlasW_     = findNum("atlasW");
-    atlasH_     = findNum("atlasH");
-    ascent_     = findNum("ascent");
-    descent_    = findNum("descent");
-    lineAdvance_= findNum("lineAdvance");
+
+    type_ = Type::SDF;
+    auto typeIt = parsed.find("type");
+    if (typeIt != parsed.end() && typeIt->is_string()) {
+        std::string typeStr = typeIt->get<std::string>();
+        std::string lowered;
+        lowered.reserve(typeStr.size());
+        for (unsigned char c : typeStr) {
+            lowered.push_back(static_cast<char>(std::tolower(static_cast<int>(c))));
+        }
+        if (lowered == "coverage") {
+            type_ = Type::Coverage;
+        }
+    }
+
+    pxSize_      = getInt(parsed, "pxSize");
+    spread_      = getInt(parsed, "spread");
+    if (type_ == Type::Coverage) {
+        spread_ = 0;
+    }
+    atlasW_      = getInt(parsed, "atlasW");
+    atlasH_      = getInt(parsed, "atlasH");
+    ascent_      = getInt(parsed, "ascent");
+    descent_     = getInt(parsed, "descent");
+    lineAdvance_ = getInt(parsed, "lineAdvance");
 
     // glyphs
     glyphs_.clear();
     glyphRemap_.clear();
     glyphRemapBase_ = 0;
-    {
-        size_t p = j.find("\"glyphs\":[");
-        if (p != std::string::npos) {
-            p = j.find('[', p);
-            size_t e = j.find(']', p);
-            std::string arr = j.substr(p + 1, e - p - 1);
-            size_t i = 0;
-            while (i < arr.size()) {
-                size_t b = arr.find('{', i);
-                if (b == std::string::npos) { break; }
-                size_t c = arr.find('}', b);
-                std::string obj = arr.substr(b + 1, c - b - 1);
-                auto get = [&](const char* k) -> int {
-                    std::string kk = std::string("\"") + k + "\":";
-                    size_t pp = obj.find(kk);
-                    if (pp == std::string::npos) { return 0; }
-                    pp += kk.size();
-                    return std::atoi(obj.c_str() + pp);
-                };
-                FontGlyph g{};
-                g.cp = (uint32_t)get("cp");
-                g.x = get("x");
-                g.y = get("y");
-                g.w = get("w");
-                g.h = get("h");
-                g.xoff = get("xoff");
-                g.yoff = get("yoff");
-                g.xadv = get("xadv");
-                if (g.w > 0 && g.h > 0) {
-                    const float invW = 1.0f / float(atlasW_);
-                    const float invH = 1.0f / float(atlasH_);
-                    const float padU = 0.5f;
-                    const float padV = 0.5f;
+    if (parsed.contains("glyphs") && parsed["glyphs"].is_array()) {
+        for (const auto& entry : parsed["glyphs"]) {
+            if (!entry.is_object()) { continue; }
+            FontGlyph g{};
+            const int cp = getInt(entry, "cp");
+            if (cp < 0) { continue; }
+            g.cp = static_cast<uint32_t>(cp);
+            g.x = getInt(entry, "x");
+            g.y = getInt(entry, "y");
+            g.w = getInt(entry, "w");
+            g.h = getInt(entry, "h");
+            g.xoff = getInt(entry, "xoff");
+            g.yoff = getInt(entry, "yoff");
+            g.xadv = getInt(entry, "xadv");
+            if (g.w > 0 && g.h > 0 && atlasW_ > 0 && atlasH_ > 0) {
+                const float invW = 1.0f / float(atlasW_);
+                const float invH = 1.0f / float(atlasH_);
+                const float padU = 0.5f;
+                const float padV = 0.5f;
 
-                    g.u0 = (g.x + padU) * invW;
-                    g.v0 = (g.y + padV) * invH;
-                    g.u1 = (g.x + g.w - padU) * invW;
-                    g.v1 = (g.y + g.h - padV) * invH;
-                }
-                else {
-                    g.u0 = g.v0 = g.u1 = g.v1 = 0.0f;
-                }
-                glyphs_.push_back(g);
-                i = c + 1;
+                g.u0 = (g.x + padU) * invW;
+                g.v0 = (g.y + padV) * invH;
+                g.u1 = (g.x + g.w - padU) * invW;
+                g.v1 = (g.y + g.h - padV) * invH;
             }
+            else {
+                g.u0 = g.v0 = g.u1 = g.v1 = 0.0f;
+            }
+            glyphs_.push_back(g);
         }
     }
 
     // kern
     kerning_.clear();
-    {
-        size_t p = j.find("\"kern\":[");
-        if (p != std::string::npos) {
-            p = j.find('[', p);
-            size_t e = j.find(']', p);
-            std::string arr = j.substr(p + 1, e - p - 1);
-            size_t i = 0;
-            while (i < arr.size()) {
-                size_t b = arr.find('{', i);
-                if (b == std::string::npos) { break; }
-                size_t c = arr.find('}', b);
-                std::string obj = arr.substr(b + 1, c - b - 1);
-                auto get = [&](const char* k) -> int {
-                    std::string kk = std::string("\"") + k + "\":";
-                    size_t pp = obj.find(kk);
-                    if (pp == std::string::npos) { return 0; }
-                    pp += kk.size();
-                    return std::atoi(obj.c_str() + pp);
-                };
-                uint32_t a = (uint32_t)get("a");
-                uint32_t b2 = (uint32_t)get("b");
-                int k = get("k");
-                KerningPair pair{};
-                pair.key = ((uint64_t)a << 32) | (uint64_t)b2;
-                pair.value = k;
-                kerning_.push_back(pair);
-                i = c + 1;
-            }
+    if (parsed.contains("kern") && parsed["kern"].is_array()) {
+        for (const auto& entry : parsed["kern"]) {
+            if (!entry.is_object()) { continue; }
+            const int a = getInt(entry, "a");
+            const int b = getInt(entry, "b");
+            KerningPair pair{};
+            if (a < 0 || b < 0) { continue; }
+            pair.key = (static_cast<uint64_t>(static_cast<uint32_t>(a)) << 32) |
+                       static_cast<uint64_t>(static_cast<uint32_t>(b));
+            pair.value = getInt(entry, "k");
+            kerning_.push_back(pair);
         }
     }
 

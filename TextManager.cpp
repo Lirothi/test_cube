@@ -28,10 +28,9 @@ std::wstring TextManager::UTF8toW(std::string_view s) {
 }
 
 void TextManager::Init(Renderer* r) {
-    // текст (SDF)
-    {
+    auto createTextMaterial = [&](const wchar_t* shaderPath) -> std::shared_ptr<Material> {
         Material::GraphicsDesc gd;
-        gd.shaderFile = L"shaders/font_sdf.hlsl";
+        gd.shaderFile = shaderPath;
         gd.inputLayoutKey = "PosColorUV";
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         gd.depth.DepthEnable = FALSE;
@@ -46,8 +45,11 @@ void TextManager::Init(Renderer* r) {
         b.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
         b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         b.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        matText_ = r->GetMaterialManager()->GetOrCreateGraphics(r, gd);
-    }
+        return r->GetMaterialManager()->GetOrCreateGraphics(r, gd);
+    };
+
+    matTextSdf_ = createTextMaterial(L"shaders/font_sdf.hlsl");
+    matTextCoverage_ = createTextMaterial(L"shaders/font_pixelperfect.hlsl");
     // прямоугольник (фон)
     {
         Material::GraphicsDesc gd;
@@ -293,7 +295,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     }
 
     // 2) текст
-    if (!verts_.empty() && !idx_.empty() && matText_) {
+    if (!verts_.empty() && !idx_.empty() && font_) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
@@ -308,10 +310,16 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         k[5] = f2u((float)font_->PxSize());
         rc.constants[1] = { k.begin(), k.end() };
 
-        const auto samplerDescs = std::array{ SamplerManager::LinearClamp() };
-        rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, samplerDescs);
+        const bool useCoverage = font_->IsCoverage();
+        const D3D12_SAMPLER_DESC samplerDesc = useCoverage ? SamplerManager::PointClamp() : SamplerManager::LinearClamp();
+        rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, samplerDesc);
 
-        matText_->Bind(cl, rc);
+        const std::shared_ptr<Material>& mat = useCoverage ? matTextCoverage_ : matTextSdf_;
+        if (!mat) {
+            return;
+        }
+
+        mat->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         cl->IASetVertexBuffers(0, 1, &vbv_);
         cl->IASetIndexBuffer(&ibv_);
@@ -320,7 +328,9 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
 }
 
 void TextManager::Clear() {
-    matText_.reset(); matRect_.reset();
+    matTextSdf_.reset();
+    matTextCoverage_.reset();
+    matRect_.reset();
     verts_.clear(); idx_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     RecycleRegionLines();
