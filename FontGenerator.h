@@ -11,7 +11,7 @@ public:
         int pixelHeight = 32;
         OutputType type = OutputType::Coverage;
         std::wstring fontsFolder;
-        float spread = 0.0f;
+        int spread = 0;
     };
 
     bool Generate(const Params& params);

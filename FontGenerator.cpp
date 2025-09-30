@@ -119,9 +119,8 @@ bool FontGenerator::Generate(const Params& params) {
     namespace fs = std::filesystem;
 
     const bool isSdf = (params.type == OutputType::Sdf);
-    const float spreadValue = isSdf ? std::max(0.0f, params.spread) : 0.0f;
-    const int spreadPixels = isSdf ? std::max(0, static_cast<int>(std::ceil(spreadValue))) : 0;
-    const float sdfPixelDistScale = (spreadValue > 0.0f) ? (127.0f / spreadValue) : 0.0f;
+    const int spreadPixels = std::max(0, params.spread);
+    const float sdfPixelDistScale = (isSdf && spreadPixels > 0) ? (127.0f / static_cast<float>(spreadPixels)) : 0.0f;
     //const float sdfPixelDistScale = 4.0f;
 
     const fs::path fontPath(params.fontFile);
@@ -245,8 +244,8 @@ bool FontGenerator::Generate(const Params& params) {
             pg.width = g.sdfW;
             pg.height = g.sdfH;
         } else if (!isSdf && g.boxW > 0 && g.boxH > 0) {
-            pg.width = g.boxW;
-            pg.height = g.boxH;
+            pg.width = g.boxW + spreadPixels * 2;
+            pg.height = g.boxH + spreadPixels * 2;
         } else {
             pg.width = 0;
             pg.height = 0;
@@ -358,23 +357,33 @@ bool FontGenerator::Generate(const Params& params) {
         entry.cp = pg.glyph.codepoint;
         entry.xadv = pg.glyph.advance;
         if (pg.width > 0 && pg.height > 0 && pg.atlasX >= 0 && pg.atlasY >= 0) {
-            const size_t expectedSize = static_cast<size_t>(pg.width) * static_cast<size_t>(pg.height);
+            size_t expectedSize = 0;
             const uint8_t* srcData = nullptr;
             if (isSdf) {
+                expectedSize = static_cast<size_t>(pg.width) * static_cast<size_t>(pg.height);
                 if (pg.glyph.sdf.size() == expectedSize) {
                     srcData = pg.glyph.sdf.data();
                 }
             } else {
+                expectedSize = static_cast<size_t>(pg.glyph.boxW) * static_cast<size_t>(pg.glyph.boxH);
                 if (pg.glyph.coverage.size() == expectedSize) {
                     srcData = pg.glyph.coverage.data();
                 }
             }
 
             if (srcData != nullptr) {
-                for (int y = 0; y < pg.height; ++y) {
-                    uint8_t* dst = atlas.data() + (static_cast<size_t>(pg.atlasY + y) * static_cast<size_t>(atlasW) + static_cast<size_t>(pg.atlasX));
-                    const uint8_t* src = srcData + static_cast<size_t>(y) * static_cast<size_t>(pg.width);
-                    std::copy(src, src + pg.width, dst);
+                if (isSdf) {
+                    for (int y = 0; y < pg.height; ++y) {
+                        uint8_t* dst = atlas.data() + (static_cast<size_t>(pg.atlasY + y) * static_cast<size_t>(atlasW) + static_cast<size_t>(pg.atlasX));
+                        const uint8_t* src = srcData + static_cast<size_t>(y) * static_cast<size_t>(pg.width);
+                        std::copy(src, src + pg.width, dst);
+                    }
+                } else {
+                    for (int y = 0; y < pg.glyph.boxH; ++y) {
+                        uint8_t* dst = atlas.data() + (static_cast<size_t>(pg.atlasY + spreadPixels + y) * static_cast<size_t>(atlasW) + static_cast<size_t>(pg.atlasX + spreadPixels));
+                        const uint8_t* src = srcData + static_cast<size_t>(y) * static_cast<size_t>(pg.glyph.boxW);
+                        std::copy(src, src + pg.glyph.boxW, dst);
+                    }
                 }
             }
 
@@ -385,6 +394,9 @@ bool FontGenerator::Generate(const Params& params) {
             if (isSdf) {
                 entry.xoff = pg.glyph.sdfXOffset;
                 entry.yoff = pg.glyph.sdfYOffset;
+            } else if (pg.glyph.boxW > 0 && pg.glyph.boxH > 0) {
+                entry.xoff = pg.glyph.bitmapX0 - spreadPixels;
+                entry.yoff = pg.glyph.bitmapY0 - spreadPixels;
             } else {
                 entry.xoff = pg.glyph.bitmapX0;
                 entry.yoff = pg.glyph.bitmapY0;
@@ -429,7 +441,7 @@ bool FontGenerator::Generate(const Params& params) {
     json root;
     root["type"] = isSdf ? "sdf" : "coverage";
     root["pxSize"] = params.pixelHeight;
-    root["spread"] = isSdf ? static_cast<int>(std::round(spreadValue)) : 0;
+    root["spread"] = spreadPixels;
     root["atlasW"] = atlasW;
     root["atlasH"] = atlasH;
     root["ascent"] = ascentPx;
