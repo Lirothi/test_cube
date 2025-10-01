@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b1,count=8) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+// RootSignature: CONSTANTS(b1,count=4) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
 
 struct VSIn {
     float3 pos : POSITION;
@@ -19,9 +19,6 @@ cbuffer TextParams : register(b1)
 {
     float2 viewport;
     float2 atlasTexelSize;
-    float spread;
-    float pxSize;
-    float2 _pad0;
 };
 
 VSOut VSMain(VSIn i) {

@@ -315,10 +315,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        std::array<uint32_t, 8> k{};
-        k[0] = static_cast<uint32_t>(vpW_);
-        k[1] = static_cast<uint32_t>(vpH_);
-        rc.constants[1] = { k.begin(), k.end() };
+        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_) };
 
         matRect_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -348,16 +345,9 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         cl->IASetVertexBuffers(0, 1, &vbv_);
         cl->IASetIndexBuffer(&ibv_);
 
-        std::array<uint32_t, 8> k{};
-        k[0] = static_cast<uint32_t>(vpW_);
-        k[1] = static_cast<uint32_t>(vpH_);
         const float invAtlasW = (font_->AtlasWidth() > 0) ? (1.0f / float(font_->AtlasWidth())) : 0.0f;
         const float invAtlasH = (font_->AtlasHeight() > 0) ? (1.0f / float(font_->AtlasHeight())) : 0.0f;
-        k[2] = Math::FloatToUint32(invAtlasW);
-        k[3] = Math::FloatToUint32(invAtlasH);
-        k[4] = static_cast<uint32_t>(font_->Spread());
-        k[5] = static_cast<uint32_t>(font_->PxSize());
-        rc.constants[1] = { k.begin(), k.end() };
+        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_), FloatToUint32(invAtlasW), FloatToUint32(invAtlasH) };
 
         mat->Bind(cl, rc);
 

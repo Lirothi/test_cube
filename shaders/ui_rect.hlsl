@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b1,count=8)
+// RootSignature: CONSTANTS(b1,count=4)
 struct VSIn
 {
     float3 pos : POSITION;
@@ -18,9 +18,6 @@ cbuffer UIConsts : register(b1)
 {
     float2 uViewport;
     float2 uAtlasTexelSize;
-    float uSpread;
-    float uPxSize;
-    float2 _pad0;
 };
 
 static float2 PixelToNDC(float2 p, float2 vp)
