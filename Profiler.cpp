@@ -990,6 +990,30 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
     (void)cl; (void)idx;
 #endif
 }
+
+void Profiler::ShutdownGpu() {
+#if PROF_ENABLED
+    if (!gpuInitialized_) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        gpuPending_.clear();
+        gpuResolved_.clear();
+    }
+
+    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
+    gpuQueryHeap_.Reset();
+    gpuReadback_.Reset();
+    gpuQueue_ = nullptr;
+    gpuFreq_ = 0;
+    maxGpuQueries_ = 0;
+    nextGpuQuery_ = 0;
+    lastGpuQueryCount_ = 0;
+    gpuInitialized_ = false;
+#endif
+}
 #endif // PROF_GPU_ENABLED
 
 void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {

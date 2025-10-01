@@ -49,6 +49,10 @@ void Renderer::Shutdown()
         WaitForPreviousFrame(); // твой метод полной синхронизации :contentReference[oaicite:2]{index=2}
     }
 
+#if PROF_GPU_ENABLED
+    Profiler::Get().ShutdownGpu();
+#endif
+
     materialManager_.Clear();
     materialDataManager_.ClearAll();
     meshManager_.Clear();
