@@ -222,6 +222,9 @@ Profiler::TraceSampleNode* const Profiler::kTraceListClosed = reinterpret_cast<P
 
 Profiler::Profiler() {
     frameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
+#if PROF_GPU_ENABLED
+    gpuFrameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
+#endif
     traceSampleHead_.store(kTraceListClosed, std::memory_order_relaxed);
 }
 
@@ -237,6 +240,11 @@ Profiler::~Profiler() {
     SampleNode* head = frameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
     if (head == kSampleListClosed) { head = nullptr; }
     destroyList(head);
+#if PROF_GPU_ENABLED
+    SampleNode* gpuHead = gpuFrameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (gpuHead == kSampleListClosed) { gpuHead = nullptr; }
+    destroyList(gpuHead);
+#endif
 
     SampleNode* pool = sampleNodePool_.exchange(nullptr, std::memory_order_acq_rel);
     destroyList(pool);
@@ -359,11 +367,11 @@ void Profiler::DrainTraceSampleNodes(uint64_t traceStartUs) {
     }
 }
 
-bool Profiler::PushSampleNode(SampleNode* node) {
-    SampleNode* head = frameSampleHead_.load(std::memory_order_acquire);
+bool Profiler::PushSampleNode(std::atomic<SampleNode*>& headAtomic, SampleNode* node) {
+    SampleNode* head = headAtomic.load(std::memory_order_acquire);
     while (head != kSampleListClosed) {
         node->next = head;
-        if (frameSampleHead_.compare_exchange_weak(head, node,
+        if (headAtomic.compare_exchange_weak(head, node,
                 std::memory_order_release, std::memory_order_acquire)) {
             return true;
         }
@@ -371,8 +379,8 @@ bool Profiler::PushSampleNode(SampleNode* node) {
     return false;
 }
 
-void Profiler::DrainSampleNodes(std::vector<ScopeSample>& out) {
-    SampleNode* head = frameSampleHead_.exchange(kSampleListClosed, std::memory_order_acq_rel);
+void Profiler::DrainSampleNodes(std::atomic<SampleNode*>& headAtomic, std::vector<ScopeSample>& out) {
+    SampleNode* head = headAtomic.exchange(kSampleListClosed, std::memory_order_acq_rel);
     if (head == kSampleListClosed) { return; }
     while (head) {
         out.push_back(head->sample);
@@ -419,6 +427,12 @@ void Profiler::BeginFrame(uint64_t frameNo) {
     if (stale && stale != kSampleListClosed) {
         ReleaseSampleList(stale);
     }
+#if PROF_GPU_ENABLED
+    SampleNode* gpuStale = gpuFrameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
+    if (gpuStale && gpuStale != kSampleListClosed) {
+        ReleaseSampleList(gpuStale);
+    }
+#endif
     TraceSampleNode* traceStale = traceSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
     if (traceStale && traceStale != kTraceListClosed) {
         ReleaseTraceSampleList(traceStale);
@@ -430,6 +444,9 @@ void Profiler::BeginFrame(uint64_t frameNo) {
     frameNo_ = frameNo;
     frameOpen_ = true;
     frameSampleHead_.store(nullptr, std::memory_order_release);
+#if PROF_GPU_ENABLED
+    gpuFrameSampleHead_.store(nullptr, std::memory_order_release);
+#endif
     traceSampleHead_.store(nullptr, std::memory_order_release);
     frameOpenFlag_.store(true, std::memory_order_release);
     frameCpuStart_ = CpuClock::now();
@@ -487,18 +504,27 @@ void Profiler::EndFrame() {
     bool haveTraceDump = false;
     const auto frameEnd = CpuClock::now();
     frameSamples_.clear();
+#if PROF_GPU_ENABLED
+    gpuFrameSamples_.clear();
+#endif
     frameOpenFlag_.store(false, std::memory_order_release);
-    DrainSampleNodes(frameSamples_);
+    DrainSampleNodes(frameSampleHead_, frameSamples_);
+#if PROF_GPU_ENABLED
+    DrainSampleNodes(gpuFrameSampleHead_, gpuFrameSamples_);
+#endif
     samples.swap(frameSamples_);
+#if PROF_GPU_ENABLED
+    gpuSamples.swap(gpuFrameSamples_);
+#endif
     {
         std::lock_guard<std::mutex> lk(mtx_);
         if (!frameOpen_) {
             frameSamples_.swap(samples);
+#if PROF_GPU_ENABLED
+            gpuFrameSamples_.swap(gpuSamples);
+#endif
             return;
         }
-#if PROF_GPU_ENABLED
-        gpuSamples.swap(gpuFrameSamples_);
-#endif
         if (traceCapturing_) {
             std::lock_guard<std::mutex> traceLock(traceMtx_);
             const uint64_t startUs = ToMicroseconds(frameCpuStart_);
@@ -799,7 +825,7 @@ void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, C
     SampleNode* node = AcquireSampleNode();
     node->sample.key = key;
     node->sample.ms = ms;
-    if (!PushSampleNode(node)) {
+    if (!PushSampleNode(frameSampleHead_, node)) {
         ReleaseSampleNode(node);
         return;
     }
@@ -824,9 +850,13 @@ void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, C
 #if PROF_GPU_ENABLED
 void Profiler::PushGpuSample(const ScopeNameKey& key, double ms) {
     if (!GetEnabled()) { return; }
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!frameOpen_) { return; }
-    gpuFrameSamples_.push_back({ key, ms });
+    if (!frameOpenFlag_.load(std::memory_order_acquire)) { return; }
+    SampleNode* node = AcquireSampleNode();
+    node->sample.key = key;
+    node->sample.ms = ms;
+    if (!PushSampleNode(gpuFrameSampleHead_, node)) {
+        ReleaseSampleNode(node);
+    }
 }
 
 void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries) {

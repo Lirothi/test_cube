@@ -275,8 +275,8 @@ private:
     SampleNode* AcquireSampleNode();
     void        ReleaseSampleNode(SampleNode* node);
     void        ReleaseSampleList(SampleNode* head);
-    bool        PushSampleNode(SampleNode* node);
-    void        DrainSampleNodes(std::vector<ScopeSample>& out);
+    bool        PushSampleNode(std::atomic<SampleNode*>& head, SampleNode* node);
+    void        DrainSampleNodes(std::atomic<SampleNode*>& head, std::vector<ScopeSample>& out);
     uint32_t    GetThreadIndexForCurrentThread();
 
     struct TraceSampleNode {
@@ -293,6 +293,9 @@ private:
     void             DrainTraceSampleNodes(uint64_t traceStartUs);
 
     std::atomic<SampleNode*> frameSampleHead_{ nullptr };
+#if PROF_GPU_ENABLED
+    std::atomic<SampleNode*> gpuFrameSampleHead_{ nullptr };
+#endif
     std::atomic<SampleNode*> sampleNodePool_{ nullptr };
     std::atomic<bool>        frameOpenFlag_{ false };
 
