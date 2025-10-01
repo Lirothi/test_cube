@@ -4,6 +4,8 @@ struct VSIn
     float3 pos : POSITION;
     float4 col : COLOR0;
     float2 uv : TEXCOORD0;
+    float2 shadowOffset : TEXCOORD1;
+    float4 shadowColor : COLOR1;
 };
 struct VSOut
 {
@@ -15,9 +17,10 @@ struct VSOut
 cbuffer UIConsts : register(b1)
 {
     float2 uViewport;
+    float2 uAtlasTexelSize;
+    float uSpread;
+    float uPxSize;
     float2 _pad0;
-    float2 _pad1;
-    float2 _pad2;
 };
 
 static float2 PixelToNDC(float2 p, float2 vp)

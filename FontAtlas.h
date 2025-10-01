@@ -27,6 +27,8 @@ public:
     int LineAdvance() const { return lineAdvance_; }
     int PxSize() const { return pxSize_; }
     int Spread() const { return spread_; }
+    int AtlasWidth() const { return atlasW_; }
+    int AtlasHeight() const { return atlasH_; }
     bool HasKerning() const { return kerning_.size() > 0; }
     Type GetType() const { return type_; }
     bool IsCoverage() const { return type_ == Type::Coverage; }
