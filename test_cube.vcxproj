@@ -85,6 +85,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)sources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -100,6 +101,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)sources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -116,7 +118,7 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>26495;28182;6011;26454;26819;6387;6385;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -141,7 +143,7 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party\tbb\include;$(ProjectDir)third_party;$(ProjectDir)third_party\mimalloc\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)sources;$(ProjectDir)third_party\tbb\include;$(ProjectDir)third_party;$(ProjectDir)third_party\mimalloc\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -152,98 +154,99 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ActionMap.cpp" />
-    <ClCompile Include="App.cpp" />
-    <ClCompile Include="Camera.cpp" />
-    <ClCompile Include="DebugGrid.cpp" />
-    <ClCompile Include="FontAtlas.cpp" />
-    <ClCompile Include="FontGenerator.cpp" />
-    <ClCompile Include="FontManager.cpp" />
-    <ClCompile Include="FrameResource.cpp" />
-    <ClCompile Include="GBufferRenderable.cpp" />
-    <ClCompile Include="GpuInstancedModels.cpp" />
-    <ClCompile Include="InputLayoutManager.cpp" />
-    <ClCompile Include="InputManager.cpp" />
-    <ClCompile Include="InstanceBuffer.cpp" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="Material.cpp" />
-    <ClCompile Include="MaterialData.cpp" />
-    <ClCompile Include="MaterialDataManager.cpp" />
-    <ClCompile Include="Mesh.cpp" />
-    <ClCompile Include="MeshManager.cpp" />
-    <ClCompile Include="OceanRenderable.cpp" />
-    <ClCompile Include="OceanSimulation.cpp" />
-    <ClCompile Include="OceanSimulationInputs.cpp" />
-    <ClCompile Include="OceanSpectrum.cpp" />
-    <ClCompile Include="OceanSimulationSettings.cpp" />
-    <ClCompile Include="PointLight.cpp" />
-    <ClCompile Include="Profiler.cpp" />
-    <ClCompile Include="ProfilerScopes.cpp" />
-    <ClCompile Include="RenderContextPool.cpp" />
-    <ClCompile Include="Renderer.cpp" />
-    <ClCompile Include="SamplerManager.cpp" />
-    <ClCompile Include="Scene.cpp" />
-    <ClCompile Include="RenderableObject.cpp" />
-    <ClCompile Include="RenderableObjectBase.cpp" />
-    <ClCompile Include="Skybox.cpp" />
-    <ClCompile Include="StaticMesh.cpp" />
-    <ClCompile Include="TaskSystem.cpp" />
-    <ClCompile Include="TaskSystemTBB.cpp" />
+    <ClCompile Include="sources/input/ActionMap.cpp" />
+    <ClCompile Include="sources/app/App.cpp" />
+    <ClCompile Include="sources/app/Camera.cpp" />
+    <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
+    <ClCompile Include="sources/text/FontAtlas.cpp" />
+    <ClCompile Include="sources/text/FontGenerator.cpp" />
+    <ClCompile Include="sources/text/FontManager.cpp" />
+    <ClCompile Include="sources/rendering/core/FrameResource.cpp" />
+    <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp" />
+    <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
+    <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp" />
+    <ClCompile Include="sources/input/InputManager.cpp" />
+    <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
+    <ClCompile Include="sources/app/main.cpp" />
+    <ClCompile Include="sources/materials/Material.cpp" />
+    <ClCompile Include="sources/materials/MaterialData.cpp" />
+    <ClCompile Include="sources/materials/MaterialDataManager.cpp" />
+    <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
+    <ClCompile Include="sources/rendering/meshes/MeshManager.cpp" />
+    <ClCompile Include="sources/ocean/OceanRenderable.cpp" />
+    <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
+    <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
+    <ClCompile Include="sources/ocean/OceanSpectrum.cpp" />
+    <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp" />
+    <ClCompile Include="sources/rendering/lighting/PointLight.cpp" />
+    <ClCompile Include="sources/core/profiling/Profiler.cpp" />
+    <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
+    <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
+    <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp" />
+    <ClCompile Include="sources/app/Scene.cpp" />
+    <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
+    <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp" />
+    <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
+    <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp" />
+    <ClCompile Include="sources/core/task/TaskSystem.cpp" />
+    <ClCompile Include="sources/core/task/TaskSystemTBB.cpp" />
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp" />
-    <ClCompile Include="TextManager.cpp" />
-    <ClCompile Include="Texture2D.cpp" />
-    <ClCompile Include="TextureCube.cpp" />
+    <ClCompile Include="sources/text/TextManager.cpp" />
+    <ClCompile Include="sources/materials/Texture2D.cpp" />
+    <ClCompile Include="sources/materials/TextureCube.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="App.h" />
-    <ClInclude Include="Camera.h" />
-    <ClInclude Include="DebugGrid.h" />
-    <ClInclude Include="DescriptorAllocator.h" />
-    <ClInclude Include="DescriptorHeapGPU.h" />
-    <ClInclude Include="FontAtlas.h" />
-    <ClInclude Include="FontGenerator.h" />
-    <ClInclude Include="FontManager.h" />
-    <ClInclude Include="FrameResource.h" />
-    <ClInclude Include="GBufferRenderable.h" />
-    <ClInclude Include="GpuInstancedModels.h" />
-    <ClInclude Include="Helpers.h" />
-    <ClInclude Include="InputLayoutManager.h" />
-    <ClInclude Include="InputManager.h" />
-    <ClInclude Include="InstanceBuffer.h" />
-    <ClInclude Include="Material.h" />
-    <ClInclude Include="MaterialData.h" />
-    <ClInclude Include="MaterialDataManager.h" />
-    <ClInclude Include="Math.h" />
-    <ClInclude Include="Mesh.h" />
-    <ClInclude Include="MeshManager.h" />
-    <ClInclude Include="OceanRenderable.h" />
-    <ClInclude Include="OceanSimulation.h" />
-    <ClInclude Include="OceanSimulationInputs.h" />
-    <ClInclude Include="OceanSpectrum.h" />
-    <ClInclude Include="OceanSimulationSettings.h" />
-    <ClInclude Include="PointLight.h" />
-    <ClInclude Include="Profiler.h" />
-    <ClInclude Include="ProfilerScopes.h" />
-    <ClInclude Include="RenderContext.h" />
-    <ClInclude Include="RenderContextPool.h" />
-    <ClInclude Include="Renderer.h" />
-    <ClInclude Include="RenderGraph.h" />
-    <ClInclude Include="RootSignatureLayout.h" />
-    <ClInclude Include="RootSignatureParser.h" />
-    <ClInclude Include="SamplerManager.h" />
-    <ClInclude Include="Scene.h" />
-    <ClInclude Include="RenderableObject.h" />
-    <ClInclude Include="RenderableObjectBase.h" />
-    <ClInclude Include="Skybox.h" />
-    <ClInclude Include="StaticMesh.h" />
-    <ClInclude Include="TaskSystem.h" />
-    <ClInclude Include="TaskSystemEnki.h" />
-    <ClInclude Include="TaskSystemTBB.h" />
+    <ClInclude Include="sources/app/App.h" />
+    <ClInclude Include="sources/app/Camera.h" />
+    <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
+    <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h" />
+    <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h" />
+    <ClInclude Include="sources/text/FontAtlas.h" />
+    <ClInclude Include="sources/text/FontGenerator.h" />
+    <ClInclude Include="sources/text/FontManager.h" />
+    <ClInclude Include="sources/rendering/core/FrameResource.h" />
+    <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h" />
+    <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
+    <ClInclude Include="sources/core/Helpers.h" />
+    <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h" />
+    <ClInclude Include="sources/input/ActionMap.h" />
+    <ClInclude Include="sources/input/InputManager.h" />
+    <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
+    <ClInclude Include="sources/materials/Material.h" />
+    <ClInclude Include="sources/materials/MaterialData.h" />
+    <ClInclude Include="sources/materials/MaterialDataManager.h" />
+    <ClInclude Include="sources/core/Math.h" />
+    <ClInclude Include="sources/rendering/meshes/Mesh.h" />
+    <ClInclude Include="sources/rendering/meshes/MeshManager.h" />
+    <ClInclude Include="sources/ocean/OceanRenderable.h" />
+    <ClInclude Include="sources/ocean/OceanSimulation.h" />
+    <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
+    <ClInclude Include="sources/ocean/OceanSpectrum.h" />
+    <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/PointLight.h" />
+    <ClInclude Include="sources/core/profiling/Profiler.h" />
+    <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
+    <ClInclude Include="sources/rendering/core/RenderContext.h" />
+    <ClInclude Include="sources/rendering/core/RenderContextPool.h" />
+    <ClInclude Include="sources/rendering/core/Renderer.h" />
+    <ClInclude Include="sources/rendering/core/RenderGraph.h" />
+    <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h" />
+    <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h" />
+    <ClInclude Include="sources/rendering/descriptors/SamplerManager.h" />
+    <ClInclude Include="sources/app/Scene.h" />
+    <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
+    <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
+    <ClInclude Include="sources/rendering/lighting/Skybox.h" />
+    <ClInclude Include="sources/rendering/meshes/StaticMesh.h" />
+    <ClInclude Include="sources/core/task/TaskSystem.h" />
+    <ClInclude Include="sources/core/task/TaskSystemEnki.h" />
+    <ClInclude Include="sources/core/task/TaskSystemTBB.h" />
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h" />
-    <ClInclude Include="TextManager.h" />
-    <ClInclude Include="Texture2D.h" />
-    <ClInclude Include="TextureCube.h" />
-    <ClInclude Include="UploadManager.h" />
+    <ClInclude Include="sources/text/TextManager.h" />
+    <ClInclude Include="sources/materials/Texture2D.h" />
+    <ClInclude Include="sources/materials/TextureCube.h" />
+    <ClInclude Include="sources/materials/UploadManager.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="shaders\axes.hlsl">
