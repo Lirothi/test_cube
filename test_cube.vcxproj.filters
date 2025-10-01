@@ -1,481 +1,441 @@
-<?xml version='1.0' encoding='utf-8'?>
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source Files">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    <Filter Include="sources">
+      <UniqueIdentifier>{2f945f3e-b723-4214-859a-7577c42810bf}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="sources\app">
+      <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="sources\core">
+      <UniqueIdentifier>{e4ee6e35-a54a-4795-9849-d685ff1589ed}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Shaders">
-      <UniqueIdentifier>{dfef4da2-2035-4d80-9c22-3eb47ff613ca}</UniqueIdentifier>
+    <Filter Include="sources\core\profiling">
+      <UniqueIdentifier>{b159312f-ce29-4185-896e-c90bf9c9e7a1}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\App">
-      <UniqueIdentifier>{7a082dea-ba52-4fd0-9318-a95721e4c50a}</UniqueIdentifier>
+    <Filter Include="sources\core\task">
+      <UniqueIdentifier>{614b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Core">
-      <UniqueIdentifier>{4f2dbfae-1bf2-4f8b-81e0-65fa4b6e953d}</UniqueIdentifier>
+    <Filter Include="sources\input">
+      <UniqueIdentifier>{849f6304-d894-4dd4-9d93-005e85a0b4e2}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Core\Profiling">
-      <UniqueIdentifier>{a820c08d-2934-4256-93f8-f1a9f0d62bfb}</UniqueIdentifier>
+    <Filter Include="sources\materials">
+      <UniqueIdentifier>{80f11b03-6857-4909-a56b-811acbb13623}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Core\Task">
-      <UniqueIdentifier>{1823ced3-31a8-443b-8a2e-7ce44cbaf197}</UniqueIdentifier>
+    <Filter Include="sources\ocean">
+      <UniqueIdentifier>{36d7f479-eefd-466d-9a40-266581ee6b89}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Input">
-      <UniqueIdentifier>{14738bd7-4082-4167-9741-83e4cfaacf69}</UniqueIdentifier>
+    <Filter Include="sources\rendering">
+      <UniqueIdentifier>{d7a549b3-2575-456d-869c-0c11ead713a3}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Materials">
-      <UniqueIdentifier>{4673bb58-e043-433d-b252-92af0e046eb8}</UniqueIdentifier>
+    <Filter Include="sources\rendering\core">
+      <UniqueIdentifier>{dc6790ce-276e-4f46-8000-f893062b29a2}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Ocean">
-      <UniqueIdentifier>{6d068f76-a9de-451e-a9c5-7e334eb566de}</UniqueIdentifier>
+    <Filter Include="sources\rendering\debug">
+      <UniqueIdentifier>{5b663f47-cdab-4683-891d-f6186e6cdece}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Core">
-      <UniqueIdentifier>{196a0c0f-7e07-4397-9ca3-f3102b4b4c96}</UniqueIdentifier>
+    <Filter Include="sources\rendering\descriptors">
+      <UniqueIdentifier>{5012d3ff-a759-4130-a653-2bedd00122c0}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Debug">
-      <UniqueIdentifier>{e2345d2b-5f4c-4ac0-aebb-08de9f05d92a}</UniqueIdentifier>
+    <Filter Include="sources\rendering\lighting">
+      <UniqueIdentifier>{2188c317-84c1-4124-bafc-cf5f7b610fd0}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Descriptors">
-      <UniqueIdentifier>{85069024-38d2-404f-be28-9f707f089bb1}</UniqueIdentifier>
+    <Filter Include="sources\rendering\meshes">
+      <UniqueIdentifier>{8c3dc93e-5b8a-4317-b18f-f33f90b9f5d6}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Lighting">
-      <UniqueIdentifier>{bfac4243-54ee-43e6-a307-e56b0380b9b5}</UniqueIdentifier>
+    <Filter Include="sources\rendering\renderables">
+      <UniqueIdentifier>{99f7c016-b0a5-4396-a20a-8823cda192d5}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Meshes">
-      <UniqueIdentifier>{75645aeb-0ca0-427e-96a7-f59ec967823d}</UniqueIdentifier>
+    <Filter Include="sources\text">
+      <UniqueIdentifier>{4426bb63-b333-4e9f-b709-016e83f65a2e}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Rendering\Renderables">
-      <UniqueIdentifier>{6b5052c7-3cd5-4c7f-908b-56a6ef91a7b8}</UniqueIdentifier>
+    <Filter Include="third_party">
+      <UniqueIdentifier>{7a300746-b1e1-41ad-bbd4-6f265c38c41a}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Text">
-      <UniqueIdentifier>{9067f479-4cd1-45a6-89a8-00e3818f42dc}</UniqueIdentifier>
+    <Filter Include="third_party\enkiTS">
+      <UniqueIdentifier>{4f1b643a-7bfe-4677-bb0a-effcb5754eef}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\Third Party">
-      <UniqueIdentifier>{8f3a9a78-6e59-4abf-9b96-6683f3f3d324}</UniqueIdentifier>
+    <Filter Include="third_party\enkiTS\src">
+      <UniqueIdentifier>{2123397a-80ef-4fc1-af02-75b8aed52681}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\App">
-      <UniqueIdentifier>{d5431069-d1b2-4012-ac7c-79306547a28b}</UniqueIdentifier>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{43276b08-25ea-44fe-9e3e-68d490073ae0}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\Core\Profiling">
-      <UniqueIdentifier>{18e9bfd2-61be-43fe-8d75-0a05cc60f4a6}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Core\Task">
-      <UniqueIdentifier>{51841cb8-cb85-4610-9de6-12430176481b}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Input">
-      <UniqueIdentifier>{c1808bf1-c311-4cc9-95f7-feec5d5a4eb4}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Materials">
-      <UniqueIdentifier>{b02e101f-e5f0-479c-943a-7605e60e1fb0}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Ocean">
-      <UniqueIdentifier>{d9e41f4c-aa3f-4640-80c9-4634f04bdf40}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Core">
-      <UniqueIdentifier>{1cc29327-a0e6-4c0c-b6d0-14d1bf81372b}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Debug">
-      <UniqueIdentifier>{624e84db-62b1-4395-8695-6cb8153fcee2}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Descriptors">
-      <UniqueIdentifier>{f64ab94e-5c56-4708-95a5-2603e4c99ab4}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Lighting">
-      <UniqueIdentifier>{1bb43f18-4eb3-4147-bb02-3857b1976c84}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Meshes">
-      <UniqueIdentifier>{81fa875f-7901-4c34-ba90-163bff2c74f8}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Rendering\Renderables">
-      <UniqueIdentifier>{3d10e225-90ff-4922-9514-1edc7796358e}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Text">
-      <UniqueIdentifier>{35ae981a-ad80-4b64-b353-d93a8897ae45}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source Files\Third Party">
-      <UniqueIdentifier>{b4e7a283-0599-4a9c-911b-16e0036b64a5}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Input">
-      <UniqueIdentifier>{f697a87f-ef2e-4be5-9979-bfb4d69f795a}</UniqueIdentifier>
+    <Filter Include="input">
+      <UniqueIdentifier>{09b469f3-2854-440a-8b45-695e11cfe0e6}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="sources/app/main.cpp">
-      <Filter>Source Files\App</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/core/Renderer.cpp">
-      <Filter>Source Files\Rendering\Core</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/materials/Material.cpp">
-      <Filter>Source Files\Materials</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/meshes/Mesh.cpp">
-      <Filter>Source Files\Rendering\Meshes</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/app/Scene.cpp">
-      <Filter>Source Files\App</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
-      <Filter>Source Files\Rendering\Renderables</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp">
-      <Filter>Source Files\Rendering\Meshes</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp">
-      <Filter>Source Files\Rendering\Meshes</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/materials/Texture2D.cpp">
-      <Filter>Source Files\Materials</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp">
-      <Filter>Source Files\Rendering\Descriptors</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
-      <Filter>Source Files\Rendering\Descriptors</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/meshes/MeshManager.cpp">
-      <Filter>Source Files\Rendering\Meshes</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
-      <Filter>Source Files\Rendering\Debug</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/core/task/TaskSystem.cpp">
-      <Filter>Source Files\Core\Task</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/core/task/TaskSystemTBB.cpp">
-      <Filter>Source Files\Core\Task</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
-      <Filter>Source Files\Third Party</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/input/InputManager.cpp">
-      <Filter>Source Files\Input</Filter>
-    </ClCompile>
     <ClCompile Include="sources/app/App.cpp">
-      <Filter>Source Files\App</Filter>
+      <Filter>sources\app</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/Camera.cpp">
-      <Filter>Source Files\App</Filter>
+      <Filter>sources\app</Filter>
     </ClCompile>
-    <ClCompile Include="sources/input/ActionMap.cpp">
-      <Filter>Source Files\Input</Filter>
+    <ClCompile Include="sources/app/Scene.cpp">
+      <Filter>sources\app</Filter>
     </ClCompile>
-    <ClCompile Include="sources/text/TextManager.cpp">
-      <Filter>Source Files\Text</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/text/FontAtlas.cpp">
-      <Filter>Source Files\Text</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/text/FontGenerator.cpp">
-      <Filter>Source Files\Text</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/core/FrameResource.cpp">
-      <Filter>Source Files\Rendering\Core</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp">
-      <Filter>Source Files\Rendering\Renderables</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/text/FontManager.cpp">
-      <Filter>Source Files\Text</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/materials/MaterialDataManager.cpp">
-      <Filter>Source Files\Materials</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/materials/MaterialData.cpp">
-      <Filter>Source Files\Materials</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp">
-      <Filter>Source Files\Rendering\Renderables</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/ocean/OceanSimulation.cpp">
-      <Filter>Source Files\Ocean</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp">
-      <Filter>Source Files\Ocean</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/ocean/OceanSpectrum.cpp">
-      <Filter>Source Files\Ocean</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp">
-      <Filter>Source Files\Ocean</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/ocean/OceanRenderable.cpp">
-      <Filter>Source Files\Ocean</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/core/RenderContextPool.cpp">
-      <Filter>Source Files\Rendering\Core</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
-      <Filter>Source Files\Rendering\Lighting</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/materials/TextureCube.cpp">
-      <Filter>Source Files\Materials</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/lighting/PointLight.cpp">
-      <Filter>Source Files\Rendering\Lighting</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp">
-      <Filter>Source Files\Rendering\Meshes</Filter>
+    <ClCompile Include="sources/app/main.cpp">
+      <Filter>sources\app</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/profiling/Profiler.cpp">
-      <Filter>Source Files\Core\Profiling</Filter>
+      <Filter>sources\core\profiling</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp">
-      <Filter>Source Files\Core\Profiling</Filter>
+      <Filter>sources\core\profiling</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/task/TaskSystem.cpp">
+      <Filter>sources\core\task</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/task/TaskSystemTBB.cpp">
+      <Filter>sources\core\task</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/input/ActionMap.cpp">
+      <Filter>sources\input</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/input/InputManager.cpp">
+      <Filter>sources\input</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/Material.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/MaterialData.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/MaterialDataManager.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/Texture2D.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/TextureCube.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanRenderable.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanSimulation.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanSpectrum.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/FrameResource.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/RenderContextPool.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/Renderer.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
+      <Filter>sources\rendering\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/PointLight.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/Mesh.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/MeshManager.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/text/FontAtlas.cpp">
+      <Filter>sources\text</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/text/FontGenerator.cpp">
+      <Filter>sources\text</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/text/FontManager.cpp">
+      <Filter>sources\text</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/text/TextManager.cpp">
+      <Filter>sources\text</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
+      <Filter>third_party\enkiTS\src</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sources/app/App.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/Camera.h">
-      <Filter>Header Files\App</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/Renderer.h">
-      <Filter>Header Files\Rendering\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/core/Helpers.h">
-      <Filter>Header Files\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/Material.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/Mesh.h">
-      <Filter>Header Files\Rendering\Meshes</Filter>
+      <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/Scene.h">
-      <Filter>Header Files\App</Filter>
+      <Filter>sources\app</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/RenderableObject.h">
-      <Filter>Header Files\Rendering\Renderables</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h">
-      <Filter>Header Files\Rendering\Meshes</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h">
-      <Filter>Header Files\Rendering\Meshes</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/ocean/OceanSimulationSettings.h">
-      <Filter>Header Files\Ocean</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/RenderContext.h">
-      <Filter>Header Files\Rendering\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/UploadManager.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/FrameResource.h">
-      <Filter>Header Files\Rendering\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h">
-      <Filter>Header Files\Rendering\Renderables</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/Texture2D.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/SamplerManager.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h">
-      <Filter>Header Files\Rendering\Descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/input/ActionMap.h">
-      <Filter>Header Files\Input</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/MeshManager.h">
-      <Filter>Header Files\Rendering\Meshes</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/ocean/OceanSimulation.h">
-      <Filter>Header Files\Ocean</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/ocean/OceanSimulationInputs.h">
-      <Filter>Header Files\Ocean</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/ocean/OceanSpectrum.h">
-      <Filter>Header Files\Ocean</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/ocean/OceanRenderable.h">
-      <Filter>Header Files\Ocean</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/debug/DebugGrid.h">
-      <Filter>Header Files\Rendering\Debug</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/RenderGraph.h">
-      <Filter>Header Files\Rendering\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/core/task/TaskSystem.h">
-      <Filter>Header Files\Core\Task</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/core/task/TaskSystemEnki.h">
-      <Filter>Header Files\Core\Task</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/core/task/TaskSystemTBB.h">
-      <Filter>Header Files\Core\Task</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
-      <Filter>Header Files\Third Party</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/input/InputManager.h">
-      <Filter>Header Files\Input</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/app/App.h">
-      <Filter>Header Files\App</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/text/TextManager.h">
-      <Filter>Header Files\Text</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/text/FontAtlas.h">
-      <Filter>Header Files\Text</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/text/FontGenerator.h">
-      <Filter>Header Files\Text</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/text/FontManager.h">
-      <Filter>Header Files\Text</Filter>
+    <ClInclude Include="sources/core/Helpers.h">
+      <Filter>sources\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/Math.h">
-      <Filter>Header Files\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/MaterialDataManager.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/MaterialData.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h">
-      <Filter>Header Files\Rendering\Renderables</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/RenderContextPool.h">
-      <Filter>Header Files\Rendering\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/lighting/Skybox.h">
-      <Filter>Header Files\Rendering\Lighting</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/materials/TextureCube.h">
-      <Filter>Header Files\Materials</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/lighting/PointLight.h">
-      <Filter>Header Files\Rendering\Lighting</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/StaticMesh.h">
-      <Filter>Header Files\Rendering\Meshes</Filter>
+      <Filter>sources\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/profiling/Profiler.h">
-      <Filter>Header Files\Core\Profiling</Filter>
+      <Filter>sources\core\profiling</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h">
-      <Filter>Header Files\Core\Profiling</Filter>
+      <Filter>sources\core\profiling</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/task/TaskSystem.h">
+      <Filter>sources\core\task</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/task/TaskSystemEnki.h">
+      <Filter>sources\core\task</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/task/TaskSystemTBB.h">
+      <Filter>sources\core\task</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/input/ActionMap.h">
+      <Filter>sources\input</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/input/InputManager.h">
+      <Filter>sources\input</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/Material.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/MaterialData.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/MaterialDataManager.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/Texture2D.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/TextureCube.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/UploadManager.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanRenderable.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanSimulation.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanSimulationInputs.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanSimulationSettings.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanSpectrum.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/FrameResource.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderContext.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderContextPool.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderGraph.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/Renderer.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/debug/DebugGrid.h">
+      <Filter>sources\rendering\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/SamplerManager.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/PointLight.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/Skybox.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/Mesh.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/MeshManager.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/StaticMesh.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/RenderableObject.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/text/FontAtlas.h">
+      <Filter>sources\text</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/text/FontGenerator.h">
+      <Filter>sources\text</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/text/FontManager.h">
+      <Filter>sources\text</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/text/TextManager.h">
+      <Filter>sources\text</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
+      <Filter>third_party\enkiTS\src</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="shaders\axes.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\axes.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\compose_ps.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\compose_ps.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\font_sdf.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\font_pixelperfect.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\font_pixelperfect.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\font_sdf.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\gbuffer.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\gbuffer.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\gbuffer_common.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\gbuffer_common.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\gbuffer_inst.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\gbuffer_csm.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\instance_anim.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\gbuffer_inst.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\lighting_ps.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\gbuffer_inst_csm.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\lines.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\instance_anim.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ocean_fft.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\lighting_ps.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ocean_generate_mips.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\lines.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ocean_time_spectrum.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ocean_fft.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ocean_surface.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ocean_generate_mips.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\shader.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ocean_surface.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\shader_comp.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ocean_time_spectrum.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\shader_PNTUV.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\pointlight_color_fs.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\tonemap_ps.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\pointlight_zfail.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\utils.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\shader.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\blur_ps.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\shader_PNTUV.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\debug_texture.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\shader_comp.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\gbuffer_csm.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\skybox.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\gbuffer_inst_csm.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ssr_ps.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\skybox.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\tonemap_ps.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ssr_ps.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\ui_rect.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\pointlight_color_fs.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\utils.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\pointlight_zfail.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\blur_ps.hlsl">
+      <Filter>shaders</Filter>
     </Text>
-    <Text Include="shaders\ui_rect.hlsl">
-      <Filter>Shaders</Filter>
+    <Text Include="shaders\\debug_texture.hlsl">
+      <Filter>shaders</Filter>
     </Text>
   </ItemGroup>
   <ItemGroup>
-    <None Include="input\bindings.json">
-      <Filter>Input</Filter>
+    <None Include="input\\bindings.json">
+      <Filter>input</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
-    <Natvis Include="third_party\robin_hood.natvis" />
+    <Natvis Include="third_party\\robin_hood.natvis">
+      <Filter>third_party</Filter>
+    </Natvis>
   </ItemGroup>
 </Project>
