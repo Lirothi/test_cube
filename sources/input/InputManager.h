@@ -7,12 +7,12 @@
 class InputManager {
 public:
     void Initialize(HWND hwnd);
-    void NewFrame(); // сброс delta/pressed/released на начало кадра
+    void NewFrame(); // Reset delta/pressed/released at the start of the frame
 
-    // WndProc прокидываем сюда из App::WndProc
+    // Forward WndProc messages from App::WndProc
     void OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-    // Клавиатура
+    // Keyboard
     bool IsKeyDown(int vk) const {
         return keyDown_[vk] != 0;
     }
@@ -23,7 +23,7 @@ public:
         return keyReleased_[vk] != 0;
     }
 
-    // Мышь
+    // Mouse
     int  MouseDeltaX() const { return mouseDX_; }
     int  MouseDeltaY() const { return mouseDY_; }
     int  MouseWheelDelta() const { return mouseWheelDelta_; }
@@ -31,7 +31,7 @@ public:
     bool IsLButtonDown() const { return lButtonDown_; }
     bool IsMButtonDown() const { return mButtonDown_; }
 
-    // Захват мыши (конфин + курсор)
+    // Mouse capture (confine + cursor)
     void SetMouseCapture(bool capture);
     bool IsMouseCaptured() const { return mouseCaptured_; }
 
@@ -41,9 +41,9 @@ private:
 private:
     HWND hwnd_ = nullptr;
 
-    std::array<uint8_t, 256> keyDown_{};     // текущее состояние
-    std::array<uint8_t, 256> keyPressed_{};  // сработало в этом кадре
-    std::array<uint8_t, 256> keyReleased_{}; // отпустили в этом кадре
+    std::array<uint8_t, 256> keyDown_{};     // Current state
+    std::array<uint8_t, 256> keyPressed_{};  // Triggered during this frame
+    std::array<uint8_t, 256> keyReleased_{}; // Released during this frame
 
     bool lButtonDown_ = false;
     bool mButtonDown_ = false;

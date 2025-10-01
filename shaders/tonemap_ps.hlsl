@@ -15,7 +15,7 @@ VSOut VSMain(uint vid : SV_VertexID)
 
 // ---- named constants ----
 static const float kGammaOut = 2.2;
-static const float kDitherAmplitude = 1.0 / 255.0; // достаточно, чтобы сломать бэндинг
+static const float kDitherAmplitude = 1.0 / 255.0; // enough to break banding
 static const float kEps = 1e-6;
 
 // ACES fitted (K. Narkowicz)
@@ -25,7 +25,7 @@ float3 TonemapACES(float3 x)
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
-// стабильный cheap hash от координаты пикселя
+// Stable, cheap hash based on the pixel coordinate
 float Dither(uint2 p)
 {
     // [0,1)
@@ -40,7 +40,7 @@ float4 PSMain(VSOut i) : SV_Target
     float3 mapped = TonemapACES(hdr);
     float3 ldr = mapped;//pow(max(mapped, 0.0.xxx), 1.0 / max(kEps, kGammaOut));
 
-    // добавим одинаковый шум на каналы — достаточно, чтобы сломать полосы
+    // Add identical noise to every channel — sufficient to break banding
     //uint2 pix = (uint2) i.H.xy;
     //float d = Dither(pix) * kDitherAmplitude;
     //ldr += d;

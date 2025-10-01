@@ -1,8 +1,8 @@
 #pragma once
 #include "rendering/descriptors/DescriptorHeapGPU.h"
 
-// Простой фасад: один глобальный shader-visible heap для CBV/SRV/UAV.
-// Транзиентная схема: Reset() раз в кадр.
+// Simple facade: a single global shader-visible heap for CBV/SRV/UAV.
+// Transient usage: call Reset() once per frame.
 class DescriptorAllocator {
 public:
     void Init(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE HeapType, uint32_t capacity = 4096) {

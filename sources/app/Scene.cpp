@@ -124,16 +124,16 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     int idx = 0;
     for (int i = 0; i < 4; ++i)
     {
-        // Берём луч из камеры в направлении угла фрустума (на z=1 во view)
+        // Take the ray from the camera toward the frustum corner (at z=1 in view space)
         float4 farVS = invProj.Transform(float4(ndc[i].x, ndc[i].y, 1.0f, 1.0f));
-        float3 dirVS = farVS.xyz() / farVS.w; // направление в плоскости far
+        float3 dirVS = farVS.xyz() / farVS.w; // direction on the far plane
 
-        // Точка на заданной глубине z: масштабируем луч так, чтобы его z совпал с нужной глубиной
+        // Point at the desired depth z: scale the ray so its z matches the required depth
         float nz = std::max(1e-6f, dirVS.z);
         float3 nearVS = dirVS * (zNearVS / nz);
         float3 farV = dirVS * (zFarVS / nz);
 
-        // Во world-space
+        // Transform into world space
         float3 nearWS = (invView * float4(nearVS, 1)).xyz();
         float3 farWS = (invView * float4(farV, 1)).xyz();
 
@@ -385,7 +385,7 @@ void Scene::Render(Renderer* renderer) {
 
     TaskSystem::Get().WaitForTrackedAsyncTasks();
 
-    // матрицы кадра и параметры камеры/света (как у тебя)
+    // Frame matrices and camera/light parameters (mirrors your setup)
     const float aspect = float(renderer->GetWidth()) / float(renderer->GetHeight());
     const mat4 view = camera_.GetViewMatrix();
     constexpr float HFOV = XMConvertToRadians(90.f);
@@ -536,7 +536,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
                 GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
                 if (bindGbufOrScene)
                 {
-                    renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // без очистки!
+                    renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // no clear!
                 }
                 else
                 {
@@ -588,13 +588,13 @@ void Scene::RenderShadowBatch(Renderer* renderer,
         const size_t begin = jobIndex * chunkSize;
         const size_t end = std::min(begin + chunkSize, objects.size());
 
-        // каждый чанк — отдельный direct CL
+        // Each chunk uses its own DIRECT command list
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         t.cl->SetName(L"RenderShadowBatch");
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kRenderShadowBatchGpu);
 
-            // важное: привязываем нужный тайл атласа каскада, без очистки
+            // Important: bind the correct atlas tile for the cascade without clearing
             renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
 
             for (size_t i = begin; i < end; ++i) {
@@ -647,7 +647,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const float zFarShadow = std::min(zFar, shadowMaxDistance);
     size_t batchIndex = ctx.batchIndex;
 
-    // твои сплиты (жёстко прописанные)
+    // Split distances (hard-coded to match your setup)
     cachedSplitsVS_[0] = zNear;
     cachedSplitsVS_[1] = 10.0f;
     cachedSplitsVS_[2] = 30.0f;
@@ -663,7 +663,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
         const UINT  tileRes = D.shadowRes / 2;
 
-        // 8 углов фрустума (твоя функция)
+        // Eight frustum corners (using your helper)
         std::array<float3, 8> cornersWS;
         BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
 
@@ -689,11 +689,11 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         float spatialStep = radius * 0.1f;
         center = Floor(center / spatialStep) * spatialStep;
 
-        // view света
+        // Light view matrix
         const float3 up(0, 1, 0);
         mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
 
-        // AABB по Z + стабилизация XY
+        // AABB along Z + stabilize XY
         float2 centerLS = (lightView * float4(center, 1)).xy();
         float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
         for (int k = 0; k < 8; ++k) {
@@ -779,7 +779,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
         }
         });
 
-    // 1.3 Opaque complex → direct CL, без очисток
+    // 1.3 Opaque complex → direct command list, no clears
     rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
         const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
         if (!opaqueComplex.empty())
@@ -809,7 +809,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color, false);
 
-        // аллоцируем динамический CB в аплоад-ринге текущего кадра
+        // Allocate a dynamic constant buffer in the current frame's upload ring
         auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
 
         const auto& handles = cbHandles_.lighting;
@@ -847,7 +847,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.cbv[0] = cb.gpu; // b0 — наш PerFrame
+        rc.cbv[0] = cb.gpu; // b0 — our PerFrame buffer
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
         srvs.push_back(D.gbSRV[0]);
         srvs.push_back(D.gbSRV[1]);
@@ -878,7 +878,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         const auto& D = renderer->GetDeferredForFrame();
 
-        // Light RT и Depth (с подключённым DSV) — будем писать только стэнсил в Z-FAIL и аддитив в цвет в COLOR
+        // Light RT and depth (with the DSV bound) — write only stencil during Z-FAIL and additive color in COLOR
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -886,18 +886,18 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, /*withDepth*/true);
 
-        // Обнуляем только STENCIL перед каждым светом
+        // Clear only the STENCIL before each light
         for (auto& L : pointLights_)
         {
             renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             // clear stencil=0
             t.cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
-            // 1) Z-FAIL два прохода по объёму
+            // 1) Z-FAIL performs two passes over the volume
             L.RenderZFail(renderer, t.cl, view, proj);
 
             renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
-            // 2) Цвет: полноэкранный, stencil!=0, аддитив
+            // 2) Color: fullscreen, stencil!=0, additive
             L.RenderColor(renderer, t.cl, view, proj, invView, invProj, camera_.GetPosition());
         }
     }
@@ -918,7 +918,7 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
 
-        // RTV = SceneColor, DSV = GBuffer Depth (read-only), без очисток
+        // RTV = SceneColor, DSV = GBuffer Depth (read-only), no clears
         renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
 
         skyBox_->Render(renderer, t.cl, view, proj);
@@ -1044,7 +1044,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
-        // === CB для compose_ps ===
+        // === Constant buffer for compose_ps ===
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
         const auto& composeHandles = cbHandles_.compose;
@@ -1054,7 +1054,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         matCompose_->UpdateCBField(composeHandles.invProj, invProj, (uint8_t*)cb.cpu);
         matCompose_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
 
-        // === Собираем SRV-таблицу под root TABLE(SRV...) из compose_ps.hlsl
+        // === Build the SRV table for the root TABLE(SRV...) from compose_ps.hlsl ===
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
         srvs.push_back(D.lightSRV);   // t0
         srvs.push_back(D.gbSRV[2]);   // t1 (GB2)
@@ -1086,7 +1086,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
 {
     RenderGraph rgTr(ctx.batchIndex);
 
-    // Driver: RTV=SceneColor, DSV=GBuffer. Без очистки. НЕ закрываем.
+    // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
     rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {

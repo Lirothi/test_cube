@@ -486,12 +486,12 @@ void Profiler::BeginFrame(uint64_t frameNo) {
 void Profiler::EndFrame() {
     if (!GetEnabled()) { return; }
 
-    // 0) ждём прошлую асинхронную сборку (минимум работы в главном потоке)
+    // 0) Wait for the previous async build (minimal work on the main thread)
     TaskSystem& tasks = TaskSystem::Get();
     tasks.Wait(overlayTask_);
     tasks.Release(overlayTask_);
 
-    // 1) заберём сэмплы текущего кадра и закроем кадр (быстро)
+    // 1) Pull samples from the current frame and close it out quickly
     auto& samples = asyncCpuSamples_;
     samples.clear();
 #if PROF_GPU_ENABLED
@@ -593,7 +593,7 @@ void Profiler::EndFrame() {
     auto overlayJob = [this, haveTraceDump]() mutable {
         const auto t0 = CoolClock::now();
 
-        // A) свёртка сэмплов в stats_ (без локов) + EMA/lastCount
+        // A) Reduce samples into stats_ (lock-free) + EMA/lastCount
         auto accumulateSamples = [&](const std::vector<ScopeSample>& src,
                                      auto& statsMap,
                                      uint32_t& nextOverlayId) {
@@ -620,7 +620,7 @@ void Profiler::EndFrame() {
         asyncGpuSamples_.clear();
 #endif
 
-        // B) формируем текущий набор строк, переиспользуя выделенные буферы
+        // B) Build the current set of rows, reusing allocated buffers
         auto buildOverlayScratch = [&](auto& statsMap,
                                        std::vector<OverlayRow>& scratchRows,
                                        robin_hood::unordered_flat_map<uint32_t, size_t>& lookup,
@@ -673,7 +673,7 @@ void Profiler::EndFrame() {
         buildOverlayScratch(gpuStats_, gpuOverlayScratchRows_, gpuOverlayScratchLookup_, gpuOverlayScratchUsed_, gpuOverlayEntryPtrs_, gpuOverlayScratchOrder_);
 #endif
 
-        // C) редкая сортировка или стабильное обновление порядка
+        // C) Rare sort or stable order update
         const auto now = CoolClock::now();
         const double secSinceSort = std::chrono::duration<double>(now - lastOverlaySort_).count();
         const bool needResort = (secSinceSort >= overlayResortIntervalSec_);
@@ -762,7 +762,7 @@ void Profiler::EndFrame() {
 #endif
         }
 
-        // D) кулдаун сброса максимумов (под локаом для stats_)
+        // D) Cooldown for resetting maxima (under the stats_ lock)
         {
             const double secSinceMax = std::chrono::duration<double>(now - lastMaxReset_).count();
             if (secSinceMax >= maxResetIntervalSec_) {
@@ -773,7 +773,7 @@ void Profiler::EndFrame() {
             }
         }
 
-        // E) измерим саму асинхронную фазу и вставим первым пунктом
+        // E) Measure the async phase itself and insert it as the first entry
         {
             const double dtMs = std::chrono::duration<double, std::milli>(CoolClock::now() - t0).count();
             endFrameAsyncLastMs_ = dtMs;
@@ -792,7 +792,7 @@ void Profiler::EndFrame() {
         }
 
 #if PROF_GPU_ENABLED
-        // F) флипним read-буферы
+        // F) Flip the read buffers
         overlayReadBuf_.store(writeIdx, std::memory_order_release);
         gpuOverlayReadBuf_.store(gpuWriteIdx, std::memory_order_release);
 #else
@@ -1020,7 +1020,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     if (!tm || !GetEnabled()) { return; }
     CPU_SCOPE(kProfilerEmitOverlayKey);
 
-    // читаем актуальные read-буферы БЕЗ локов
+    // Read the active read buffers WITHOUT locks
     const int readIdx = overlayReadBuf_.load(std::memory_order_acquire);
     const auto& rows = overlayRows_[readIdx];
 #if PROF_GPU_ENABLED
@@ -1040,8 +1040,8 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         captureTotal = traceRequestFrameCount_;
     }
 
-    // оценка ширины региона «в лоб», без измерения строк
-    // Формат строки: "%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
+    // Estimate the region width directly, without measuring individual lines
+    // Row format: "%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
     const int namePad = 40;
     const int otherCols = 1 + 28;
     const int lineCols = namePad + otherCols + 16;
@@ -1065,7 +1065,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->RegionSetFixedWidth(reg, (float)boxW);
     tm->RegionSetAutoMeasure(reg, false);
 
-    // заголовок
+    // Header
     tm->AddTextfShadow(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), true,
         L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
@@ -1086,7 +1086,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 
     tm->AddText(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
-    // строки
+    // Rows
     int shown = 0;
     const float4 colOdd = { 1, 1, 1,   0.92f };
     const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };

@@ -3,7 +3,7 @@
 // t1: GB2 (Emissive)
 // t2: GB0 (Albedo+Metal encoded in A)
 // t3: GB1 (Normal01 + Rough encoded in A)
-// t4: Depth (R32F SRV из DSV)
+// t4: Depth (R32F SRV created from the DSV)
 // t5: Skybox cubemap
 // t6: SSR blurred (premultiplied)
 
@@ -11,7 +11,7 @@
 
 #include "utils.hlsl"
 
-// === Ресурсы ===
+// === Resources ===
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
 Texture2D GB0 : register(t2);
@@ -20,10 +20,10 @@ Texture2D DepthT : register(t4);
 TextureCube SkyboxTex : register(t5);
 Texture2D SSRBlur : register(t6);
 
-SamplerState gSmp : register(s0); // LinearClamp (цвет)
-SamplerState gSmpPoint : register(s1); // PointClamp  (глубина)
+SamplerState gSmp : register(s0); // LinearClamp (color)
+SamplerState gSmpPoint : register(s1); // PointClamp (depth)
 
-// === Параметры SSR ===
+// === SSR parameters ===
 cbuffer PerFrame : register(b0)
 {
     float4x4 view; // world -> view
@@ -66,7 +66,7 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
 
 inline float ReadDepth(float2 uv)
 {
-    return DepthT.SampleLevel(gSmpPoint, uv, 0).r; // всегда LOD0, без билинеара
+    return DepthT.SampleLevel(gSmpPoint, uv, 0).r; // Always sample LOD0, no bilinear
 }
 
 
@@ -102,7 +102,7 @@ float4 PSMain(VSOut i) : SV_Target
 
         float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
 
-		// skybox как фоллбек: (ssrColor*α + sky*(1-α))
+            // Skybox as fallback: (ssrColor*α + sky*(1-α))
         float3 refl = ssrRGB + skyCol * (1.0 - ssrA);
 
         float cosT = saturate(dot(Nv, Vv));

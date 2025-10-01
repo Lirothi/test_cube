@@ -2,14 +2,14 @@
 thread_local RenderContextPool::TLS RenderContextPool::tls_{};
 
 RenderContextPool::Handle RenderContextPool::Acquire() {
-    // 1) попытка из thread_local стэша
+    // 1) Try the thread-local stash first
     if (!tls_.stash.empty()) {
         RenderContext* c = tls_.stash.back();
         tls_.stash.pop_back();
         c->ClearFast();
         return Handle(this, c);
     }
-    // 2) глобальный пул
+    // 2) Global pool
     {
         std::lock_guard<std::mutex> _l(mtx_);
         if (!free_.empty()) {
@@ -19,7 +19,7 @@ RenderContextPool::Handle RenderContextPool::Acquire() {
             return Handle(this, c);
         }
     }
-    // 3) создаём новый
+    // 3) Create a new context
     auto up = std::make_unique<RenderContext>();
     RenderContext* c = up.get();
     {
@@ -31,12 +31,12 @@ RenderContextPool::Handle RenderContextPool::Acquire() {
 }
 
 void RenderContextPool::ResetForFrame() {
-    // ничего не делаем специально: контексты очищаются при Acquire().
-    // При желании можно «подрезать» TLS-кеш:
+    // Nothing specific to do: contexts are cleared during Acquire().
+    // Optionally trim the TLS cache:
     // TrimTLS(8);
 }
 
-// можно периодически триммить TLS-кеш (например, раз в N кадров)
+// TLS cache can be trimmed periodically (e.g., once every N frames)
 void RenderContextPool::TrimTLS(size_t keepPerThread) {
     if (tls_.stash.size() > keepPerThread) {
         std::lock_guard<std::mutex> _l(mtx_);
@@ -49,7 +49,7 @@ void RenderContextPool::TrimTLS(size_t keepPerThread) {
 
 void RenderContextPool::Release(RenderContext* c) {
     if (!c) { return; }
-    // небольшой per-thread кеш, чтобы не бегать за мьютексом
+    // Small per-thread cache to avoid locking
     if (tls_.stash.size() < kTLSCap) {
         tls_.stash.push_back(c);
         return;

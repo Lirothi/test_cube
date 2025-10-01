@@ -5,7 +5,7 @@ Texture2D SSRIn : register(t0);
 SamplerState gSmp : register(s0);
 
 cbuffer BlurCB : register(b0){
-    float2 dir;         // (1/width,0) для X, (0,1/height) для Y
+    float2 dir;         // (1/width,0) for X, (0,1/height) for Y
     float radius;     // 1..3
     float _pad;
 }
@@ -18,7 +18,7 @@ VSOut VSMain(uint vid:SV_VertexID){
 
 float4 PSMain(VSOut i):SV_Target
 {
-    // 9-tap Гаусс; премультиплайнем — значит просто усредняем rgba
+    // 9-tap Gaussian; premultiplied input so we simply average RGBA
     const float w[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
     float2 stepv = dir * radius;
 
@@ -29,5 +29,5 @@ float4 PSMain(VSOut i):SV_Target
         c += SSRIn.SampleLevel(gSmp, i.UV + off, 0) * w[k];
         c += SSRIn.SampleLevel(gSmp, i.UV - off, 0) * w[k];
     }
-    return c; // rgb & a размыты одинаково (OK для premultiplied)
+    return c; // rgb & a blurred identically (OK for premultiplied data)
 }

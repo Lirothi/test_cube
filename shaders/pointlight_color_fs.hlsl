@@ -6,8 +6,8 @@ static const float PI = 3.14159265359;
 
 Texture2D GB0    : register(t0); // Albedo.rgb + Metal (a)
 Texture2D GB1    : register(t1); // NormalOct.xy (0..1), Roughness (a)
-Texture2D GB2    : register(t2); // Emissive (не обязателен здесь)
-Texture2D DepthT : register(t3); // линейная глубина [0..1]
+Texture2D GB2    : register(t2); // Emissive (optional here)
+Texture2D DepthT : register(t3); // Linear depth [0..1]
 
 SamplerState SampLin : register(s0);
 SamplerState SampPt  : register(s1);
@@ -73,7 +73,7 @@ float4 PSMain(VSOut i) : SV_Target
     }
     float3 L = Lvec / max(kEpsilon, dist);
 
-    // плавное затухание по радиусу
+    // Smooth attenuation by radius
     float x = saturate(1.0 - dist / lightRadius);
     float atten = x * x;
 

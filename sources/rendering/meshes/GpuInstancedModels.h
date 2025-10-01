@@ -34,16 +34,16 @@ protected:
     void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx) override;
 
 private:
-    // данные инстансинга
+    // Instancing data
     InstanceBuffer instanceBuffer_;
     UINT instanceCount_ = 0;
     float deltaTime_ = 0.0f;
     float angularSpeed_ = DirectX::XM_PIDIV2;
 
-    // compute
+    // Compute pipeline
     std::shared_ptr<Material> computeMaterial_;
     std::wstring computeShader_;
 
-    // модель/текстура
+    // Model / texture
     std::string modelName_;
 };

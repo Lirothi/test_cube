@@ -10,7 +10,7 @@
 class Renderer;
 struct ID3D12GraphicsCommandList;
 
-// Конфигурация пресета (пути к текстурам + фичи)
+// Preset configuration (texture paths + feature flags)
 struct MaterialPreset {
     std::wstring albedoPath;
     std::wstring mrPath;
@@ -19,28 +19,28 @@ struct MaterialPreset {
     bool useTBN     = true;
 };
 
-// Менеджер пресетов и кэша загруженных MaterialData
+// Manages presets and the cache of loaded MaterialData
 class MaterialDataManager {
 public:
-    // Зарегистрировать или заменить пресет
+    // Register or replace a preset
     void RegisterPreset(const std::string& name, const MaterialPreset& preset);
 
-    // Есть такой пресет?
+    // Does the preset exist?
     bool HasPreset(const std::string& name) const;
 
-    // Получить/создать MaterialData по имени пресета (ленивая загрузка текстур)
+    // Get or create MaterialData by preset name (lazy texture loading)
     std::shared_ptr<MaterialData> GetOrCreate(Renderer* renderer,
                                               ID3D12GraphicsCommandList* uploadCmdList,
                                               std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                               const std::string& name);
 
-    // Прямой доступ к уже загруженному (или nullptr)
+    // Direct access to an already loaded instance (or nullptr)
     std::shared_ptr<MaterialData> FindLoaded(const std::string& name) const;
 
-    // Очистить только кэш (оставив пресеты)
+    // Clear only the cache (keep the presets)
     void ClearCache();
 
-    // Полная очистка (пресеты + кэш)
+    // Full reset (presets + cache)
     void ClearAll();
 
 private:

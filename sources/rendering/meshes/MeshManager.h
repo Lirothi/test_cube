@@ -9,21 +9,21 @@
 class Renderer;
 
 struct MeshLoadOptions {
-    bool generateTangentSpace = true; // если в файле нет нормалей/тангентов — досчитаем
-    bool wantCW = true;               // приводить трианги к CW (под D3D12 FrontCounterClockwise = FALSE)
-    int  iBase  = 0;                  // базис индексов в "i a b c"
+    bool generateTangentSpace = true; // Compute normals/tangents if the file does not provide them
+    bool wantCW = true;               // Convert triangles to CW (for D3D12 FrontCounterClockwise = FALSE)
+    int  iBase  = 0;                  // Index base used in "i a b c"
 };
 
 class MeshManager {
 public:
-    // Авто по расширению (.obj | .mesh.txt | .txt)
+    // Auto-detect by extension (.obj | .mesh.txt | .txt)
     std::shared_ptr<Mesh> Load(const std::string& path,
                                Renderer* renderer,
                                ID3D12GraphicsCommandList* uploadCmdList,
                                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                const MeshLoadOptions& opt = {});
 
-    // Явные варианты
+    // Explicit options
     std::shared_ptr<Mesh> LoadText(const std::string& path,
                                    Renderer* renderer,
                                    ID3D12GraphicsCommandList* uploadCmdList,
@@ -36,7 +36,7 @@ public:
                                   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                   const MeshLoadOptions& opt = {});
 
-    // Из памяти (если уже есть verts/indices)
+    // From memory (when verts/indices are already available)
     std::shared_ptr<Mesh> CreateFromMemory(const std::string& key,
                                            Renderer* renderer,
                                            const std::vector<VertexPNTUV>& verts,
@@ -49,7 +49,7 @@ public:
     void Clear();
 
 private:
-    // внутренние парсеры
+    // Internal parsers
     bool ParseTextFile(const std::string& path,
                        std::vector<VertexPNTUV>& outVerts,
                        std::vector<uint32_t>& outIndices,

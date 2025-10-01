@@ -22,24 +22,24 @@ class Renderer;
 
 class Material {
 public:
-    // -------- Общая часть: список дефайнов (пермутации) --------
+    // -------- Common section: list of defines (permutations) --------
     using DefineList = std::vector<std::pair<std::string, std::string>>; // NAME=VALUE
 
     // -------- Graphics --------
     struct GraphicsDesc {
         GraphicsDesc() { FillDefaultsTriangle(); }
 
-        // что компилим
+        // What to compile
         std::wstring shaderFile;
         const char* vsEntry = "VSMain";
         const char* psEntry = "PSMain";
-        DefineList   defines;              // << новые: Shader Defines
+        DefineList   defines;              // << new: Shader Defines
 
         // IA
         std::string  inputLayoutKey = "PosColor";
         D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
-        // стейты
+        // States
         D3D12_RASTERIZER_DESC    raster{};
         D3D12_BLEND_DESC         blend{};
         D3D12_DEPTH_STENCIL_DESC depth{};
@@ -53,7 +53,7 @@ public:
         DXGI_FORMAT dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
         UINT        sampleCount = 1;
 
-        // RS-флаги
+        // RS flags
         D3D12_ROOT_SIGNATURE_FLAGS rsFlags =
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
             D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
@@ -84,16 +84,16 @@ public:
     struct ComputeDesc {
         std::wstring shaderFile;
         const char* csEntry = "main";
-        DefineList   defines;                  // << новые: Shader Defines
+        DefineList   defines;                  // << new: Shader Defines
         D3D12_ROOT_SIGNATURE_FLAGS rsFlags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
     };
 
     struct RootParameterInfo {
         enum Type { Constants, CBV, SRV, UAV, Table, TableSampler } type;
-        UINT rootIndex = 0;       // индекс root-параметра
-        UINT bindingRegister = 0; // номер регистра b0/t0/u0 для поиска в RenderContext
-        UINT bindingSpace = 0;    // space для дополнительных смещений
-        UINT constantsCount = 0;  // только для constants
+        UINT rootIndex = 0;       // Root parameter index
+        UINT bindingRegister = 0; // Register number b0/t0/u0 used for lookup in RenderContext
+        UINT bindingSpace = 0;    // Register space for additional offsets
+        UINT constantsCount = 0;  // Only for constants
     };
 
     Material() = default;
@@ -101,7 +101,7 @@ public:
     void CreateGraphics(Renderer* renderer, const GraphicsDesc& gd);
     void CreateCompute(Renderer* renderer, const ComputeDesc& cd);
 
-    // Старая совместимая обёртка (оставил, чтобы не ломать старый код)
+    // Legacy-compatible wrapper (kept to avoid breaking old code)
     void CreateCompute(Renderer* renderer, const std::wstring& shaderFile) {
         ComputeDesc cd{};
         cd.shaderFile = shaderFile;
@@ -115,16 +115,16 @@ public:
 
     void Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe = false) const;
 
-    // Хот-релоад
+    // Hot reload
     bool FSProbeAndFlagPending();
     bool HotReloadIfPending(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
     void CollectRetired(uint64_t frameIndex, uint64_t keepAliveFrames);
 
     struct CBufferField {
-        UINT        offset = 0;         // байтовый сдвиг поля в cbuffer
-        UINT        size = 0;           // общий размер поля (если массив — размер всего массива)
-        UINT        elementStride = 0;  // шаг одного элемента массива в байтах (или size, если не массив)
-        UINT        elementCount = 1;   // ёмкость массива (1 — если не массив)
+        UINT        offset = 0;         // Byte offset of the field inside the cbuffer
+        UINT        size = 0;           // Total field size (entire array size if it is an array)
+        UINT        elementStride = 0;  // Byte stride of one array element (or size if not an array)
+        UINT        elementCount = 1;   // Array capacity (1 if not an array)
     };
     struct CBufferInfo {
         UINT bindRegister = 0;    // bN
@@ -184,11 +184,11 @@ private:
     bool isCompute_ = false;
     std::vector<RootParameterInfo> rootParams_;
 
-    // кэш для пересборки
+    // Cache for rebuilding
     GraphicsDesc cachedGfxDesc_{};
     ComputeDesc  cachedCmpDesc_{};
 
-    // watch-лист
+    // Watch list
     std::vector<std::wstring>                     watchedFiles_;
     std::vector<std::filesystem::file_time_type>  watchedTimes_;
     mutable std::mutex                            watchMtx_;
@@ -208,7 +208,7 @@ private:
     static void ProcessReflection(ID3D12ShaderReflection* refl,
         robin_hood::unordered_map<UINT, CBufferInfo>& io);
 
-    // общие билдеры
+    // Shared builders
     bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         ComPtr<ID3D12RootSignature>& outRS,
         ComPtr<ID3D12PipelineState>& outPSO,
@@ -222,7 +222,7 @@ private:
         std::vector<RootParameterInfo>& outParams,
         std::vector<std::wstring>& outIncludes);
 
-    // компиляция с includes и defines
+    // Compilation with includes and defines
     static HRESULT CompileWithIncludes(const std::wstring& file,
         const char* entry, const char* target, UINT flags,
         const DefineList& defines,
@@ -238,7 +238,7 @@ public:
     std::shared_ptr<Material> GetOrCreateGraphics(Renderer* r, const Material::GraphicsDesc& gd);
     std::shared_ptr<Material> GetOrCreateCompute(Renderer* r, const Material::ComputeDesc& cd);
 
-    // Старая совместимая обёртка
+    // Legacy-compatible wrapper
     std::shared_ptr<Material> GetOrCreateCompute(Renderer* r, const std::wstring& shaderFile) {
         Material::ComputeDesc cd{}; cd.shaderFile = shaderFile;
         return GetOrCreateCompute(r, cd);

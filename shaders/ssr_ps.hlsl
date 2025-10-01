@@ -1,11 +1,11 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0) SAMPLER(s1))
 // t0: LightTarget            (HDR color)
 // t1: GB1 (normal.xy in 0..1, rough in A)
-// t2: Depth (R32F SRV из DSV)
+// t2: Depth (R32F SRV created from the DSV)
 // s0: LinearClamp, s1: PointClamp
 
 #pragma pack_matrix(row_major)
-#include "utils.hlsl" // UnpackRM если надо
+#include "utils.hlsl" // UnpackRM if needed
 
 Texture2D   LightTarget : register(t0);
 Texture2D   GB1         : register(t1);
@@ -21,13 +21,13 @@ cbuffer PerFrame : register(b0)
 }
 
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
-static const float ssrResolution = 0.9f; // 0..1 (шаг coarse-pass по экрану)
-static const int ssrRefineSteps = 12; // steps (итерации refinement)
+static const float ssrResolution = 0.9f; // 0..1 (coarse-pass step size in screen space)
+static const int ssrRefineSteps = 12; // number of refinement iterations
 static const float ssrThicknessVS = 0.15f; // thickness (view units)
-static const float ssrEdgeFadePx = 32.0f; // ширина плавного затухания у границы экрана, в пикселях (16–48)
-static const float ssrJitterStrength = 0.5f; // 0..1 — сколько пикселей сдвигаем старт
-static const float ssrGrazingMinZ = 0.01f; // при Rv.z ниже этого — начинаем гасить отражение
-static const float ssrGrazingMaxZ = 0.05f; // к этому значению — полностью включаем
+static const float ssrEdgeFadePx = 32.0f; // Smooth fade width near the screen border in pixels (16–48)
+static const float ssrJitterStrength = 0.5f; // 0..1 — pixel offset applied to the start
+static const float ssrGrazingMinZ = 0.01f; // Start fading reflections when Rv.z falls below this
+static const float ssrGrazingMaxZ = 0.05f; // Fully enable reflections by this value
 static const float kEps = 1e-6f;
 
 struct VSOut { float4 H:SV_POSITION; float2 UV:TEXCOORD0; };
@@ -62,7 +62,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     outv.visibility = 0.0f;
     outv.hit = 0;
 
-    // Пивот = отражённое направление (как в статье: reflect(unitPositionFrom, normal))
+    // Pivot is the reflected direction (see article: reflect(unitPositionFrom, normal))
     float3 unitPositionFrom = normalize(Pv);
     float3 pivot = normalize(reflect(unitPositionFrom, Nv));
 
@@ -79,11 +79,11 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     bias = bias * 0.5f;
     float thickness = ssrThicknessVS + bias;
 
-    // Старт/финиш луча в view
+    // Start/end of the ray in view space
     float3 startView = Pv + pivot * 0.0f;
     float3 endView = Pv + pivot * ssrMaxDistanceVS;
 
-    // В экранные фрейм-координаты (пиксели)
+    // Convert to screen-space frame coordinates (pixels)
     float4 sClip = mul(float4(startView, 1), proj);
     float4 eClip = mul(float4(endView, 1), proj);
     sClip.xyz /= max(kEps, sClip.w);
@@ -93,7 +93,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     float2 eFrag = float2((eClip.x * 0.5f + 0.5f) * screenSize.x,
                        (-eClip.y * 0.5f + 0.5f) * screenSize.y);
 
-    // coarse march по экранной линии
+    // Coarse march along the screen-space line
     float deltaX = eFrag.x - sFrag.x;
     float deltaY = eFrag.y - sFrag.y;
     float useX = (abs(deltaX) >= abs(deltaY)) ? 1.0f : 0.0f;
@@ -106,14 +106,14 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     int hit0 = 0;
     int hit1 = 0;
 
-    float viewDistance = startView.z; // у нас вью-дистанция = z (LH: +Z вперёд)
+    float viewDistance = startView.z; // In our setup view distance equals z (LH: +Z forward)
     float depthDiff = thickness;
 
-    float2 frag = sFrag; // текущая экранная точка (в пикселях)
+    float2 frag = sFrag; // Current screen-space point (pixels)
 
-    float2 uv; // текущие uv (0..1)
+    float2 uv; // Current UV (0..1)
 
-    // Первый проход: быстрый — шагами по экрану
+    // First pass: coarse march in screen space
     int coarseCount = (int) delta;
     for (int i = 0; i < coarseCount; ++i)
     {
@@ -125,18 +125,18 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
             break;
         }
 
-    // 1) доля пройденного вдоль экранной линии
+    // 1) Fraction traveled along the screen-space line
         search1 = lerp((frag.y - sFrag.y) / deltaY, (frag.x - sFrag.x) / deltaX, useX);
         search1 = saturate(search1);
 
-    // 2) позиция сцены и глубина в этой точке
+    // 2) Scene position and depth at this sample
         float d = ReadDepth(uv);
         float dLin = DepthToViewZ_Fast(d);
 
-    // 3) перспективно-корректная «длина» луча до текущего шага (по Lettier)
+    // 3) Perspective-correct ray length up to the current step (per Lettier)
         viewDistance = (startView.z * endView.z) / lerp(endView.z, startView.z, search1);
 
-    // 4) сравнение в view-z (толщина — в тех же единицах)
+    // 4) View-z comparison (thickness is in the same units)
         depthDiff = viewDistance - dLin;
 
         if (depthDiff > 0.0f && depthDiff < thickness)
@@ -152,7 +152,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 
     search1 = search0 + ((search1 - search0) / 2.0f);
 
-    // Второй проход: уточнение (бинарный поиск)
+    // Second pass: refinement (binary search)
     int refineSteps = hit0 * ssrRefineSteps;
     for (int i = 0; i < refineSteps; ++i)
     {
@@ -183,25 +183,25 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         }
     }
 
-    // Видимость (фейды), финальные uv отражения
+    // Visibility (fades) and final reflection UVs
     float visibility = (float) hit1;
     if (visibility > 0.0f)
     {
         float3 positionTo = ReconstructPosVS(uv, ReadDepth(uv));
 
-        // 1 - facing to camera (как в статье: dot(-unitPos, pivot))
+        // 1 - facing the camera (as in the article: dot(-unitPos, pivot))
         {
             visibility *= (1.0f - max(dot(-unitPositionFrom, pivot), 0.0f));
         }
-        // близость к найденному «хиту»
+        // Proximity to the found hit
         {
             visibility *= (1.0f - clamp(depthDiff / thickness, 0.0f, 1.0f));
         }
-        // дистанционный фейд
+        // Distance-based fade
         {
             visibility *= (1.0f - clamp(length(positionTo - Pv) / ssrMaxDistanceVS, 0.0f, 1.0f));
         }
-        // выход за экран
+        // Outside of the screen
         {
             visibility *= ((uv.x < 0.0f || uv.x > 1.0f) ? 0.0f : 1.0f) * ((uv.y < 0.0f || uv.y > 1.0f) ? 0.0f : 1.0f);
         }
@@ -225,20 +225,20 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    // не пишем ничего для небесного фона
+    // Do not output anything for sky background
     float d = ReadDepth(i.UV);
     if (d >= 1.0f - 1e-6f) { return float4(0,0,0,0); }
 
-    // входные векторы
+    // Input vectors
     float3 N_ws = normalize(GB1.SampleLevel(gSmp, i.UV, 0).rgb * 2 - 1);
     float3 Pv   = ReconstructPosVS(i.UV, d);
     float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 
-    // трассируем
+    // Trace the ray
     SSRHit ssr = TraceSSR_Lettier(Pv, Nv);
     if (ssr.hit == 0) { return float4(0,0,0,0); }
 
-    // цвет из LightTarget ровно по пикселю хита (premultiplied alpha)
+    // Fetch color from LightTarget exactly at the hit pixel (premultiplied alpha)
     int2 ip = int2(ssr.uv * screenSize + 0.5);
     ip = clamp(ip, int2(0,0), int2(screenSize)-int2(1,1));
     float3 c = LightTarget.Load(int3(ip,0)).rgb;

@@ -8,10 +8,10 @@ class InputManager;
 
 class ActionMap {
 public:
-    // Загрузка JSON схемы. Вернёт false, если не удалось прочитать/распарсить.
+    // Load a JSON schema. Returns false if reading/parsing failed.
     bool LoadFromJsonFile(const std::wstring& path);
 
-    // Запросы (передаём InputManager каждый кадр)
+    // Queries (provide the InputManager each frame)
     bool  IsActionDown(const std::string& name, const InputManager& input) const;
     bool  WasActionPressed(const std::string& name, const InputManager& input) const;
     bool  WasActionReleased(const std::string& name, const InputManager& input) const;
@@ -19,13 +19,13 @@ public:
 
 private:
     struct Digital {
-        // любой из keys или mouseButtons активен -> true
+        // Returns true when any key or mouse button is active
         std::vector<int> keys;           // VK_*
         std::vector<int> mouseButtons;   // 0=Left,1=Right,2=Middle
-        // (опционально) модификаторы в будущем
+        // Optional: modifiers in the future
     };
     struct Axis {
-        // либо пара клавиш, либо мышиная ось
+        // Either a key pair or a mouse axis
         std::vector<int> positiveKeys;
         std::vector<int> negativeKeys;
         // mouseAxis: 0=none, 1=X, 2=Y

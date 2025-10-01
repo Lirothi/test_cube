@@ -27,7 +27,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         return;
     }
 
-    // --- вращение вокруг Y (в радианах)
+    // --- Rotation around Y (radians)
     gInstances[idx].rotationY += (angularSpeed + (idx % 7) * 0.1f) * deltaTime;
     if (gInstances[idx].rotationY > 6.283185f)
     {
@@ -35,7 +35,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     }
     float a = gInstances[idx].rotationY + idx;
     //a = 0;
-    // row-vector совместимая матрица R_y
+    // Row-vector compatible R_y matrix
     float4x4 R =
     {
         cos(a), 0, sin(a), 0,
@@ -44,9 +44,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
         0, 0, 0, 1
     };
 
-    // — масштаб —
-    // можно задать глобально через globalScale,
-    // а при желании ещё домножить на пер-экземпляр (если scale в буфере = 0, считаем 1)
+    // --- Scale ---
+    // Apply a global scale via globalScale,
+    // and optionally multiply by per-instance data (treat scale=0 as 1)
     //float3 s = gInstances[idx].scale;
     //s = (s.x == 0 && s.y == 0 && s.z == 0) ? float3(1, 1, 1) : s;
     //s *= globalScale;
@@ -60,7 +60,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         0, 0, 0, 1
     };
 
-    // — размещение в сетке —
+    // --- Grid placement ---
     const float spacing = 1.3f;
     const uint gridSize = 10;
     uint x = idx % gridSize;

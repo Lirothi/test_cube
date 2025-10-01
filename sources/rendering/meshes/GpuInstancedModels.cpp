@@ -30,15 +30,15 @@ void GpuInstancedModels::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    // Инициализация RenderableObject (создаёт GraphicsMaterial, ставит b0)
+    // Initialize RenderableObject (creates GraphicsMaterial and sets b0)
     GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);
 
-    // Compute-материал
+    // Compute material
     computeMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, computeShader_);
 
-    // Модель
+    // Model
     mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
-    {   // ресурсные состояния VB/IB
+    {   // Resource states for VB/IB
         if (ID3D12Resource* vb = mesh_->GetVertexBufferResource()) {
             renderer->SetResourceState(vb, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         }
@@ -47,10 +47,10 @@ void GpuInstancedModels::Init(Renderer* renderer,
         }
     }
 
-    // Instance-buffer (DEFAULT, UAV)
+    // Instance buffer (DEFAULT, UAV)
     instanceBuffer_.Create(renderer->GetDevice(), instanceCount_, uploadCmdList, uploadKeepAlive);
 
-    // Регистрируем текущее состояние (после Create — UAV)
+    // Register the current state (after Create — UAV)
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     modelMatrix_ = mat4::RotationY(45.0f * DEG2RAD) * mat4::Translation({0.0f, 6.0f, 10.0f});
@@ -58,21 +58,21 @@ void GpuInstancedModels::Init(Renderer* renderer,
 
 void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
-    // Переход в UAV (если нужно)
+    // Transition to UAV if required
     renderer->Transition(cl, instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     auto h = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = h.ref();
 
-    // constants(b0) для CS
+    // constants(b0) for the compute shader
     const uint32_t dtBits = Math::FloatToUint32(deltaTime_);
     const uint32_t angBits = Math::FloatToUint32(angularSpeed_);
     ctx.constants[0] = { dtBits, angBits, instanceCount_ };
 
-    // таблица UAV/SRV для CS: u0 = instanceBuffer UAV
+    // UAV/SRV table for the compute shader: u0 = instanceBuffer UAV
     auto uavTbl = renderer->StageSrvUavTable({ instanceBuffer_.GetUAVCPU() });
     ctx.table[0] = uavTbl.gpu;
 
-    // Запуск CS
+    // Dispatch the compute shader
     computeMaterial_->Bind(cl, ctx);
     constexpr UINT THREADS_PER_GROUP = 64;
     const UINT groups = (instanceCount_ + THREADS_PER_GROUP - 1u) / THREADS_PER_GROUP;
@@ -85,7 +85,7 @@ void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsComma
 {
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
     srvs.reserve(4);
-    srvs.push_back(instanceBuffer_.GetSRVCPU()); // t0: инстансы
+    srvs.push_back(instanceBuffer_.GetSRVCPU()); // t0: instances
     if (auto* data = GetMaterialData()) { data->AppendGBufferSRVs(srvs); } // t1..t3: albedo/mr/normal
 
     auto tbl = renderer->StageSrvUavTable(srvs);

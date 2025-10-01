@@ -9,8 +9,8 @@ cbuffer MVP_Axis : register(b0)
 
 struct VSIn
 {
-    float3 a : POSITION; // начало
-    float3 b : POSITION1; // конец
+    float3 a : POSITION; // start
+    float3 b : POSITION1; // end
     float3 corner : TEXCOORD0; // xy = (-1|+1, -1|+1), z = edgeBiasPx
     float4 color : COLOR;
 };
@@ -20,18 +20,18 @@ struct VSOut
     float4 color : COLOR;
 };
 
-// Клип к near-плоскости z=0 в clip-space, линейной интерполяцией между P и Q.
-// Если оба конца за near, вернёмся в минимум — треугольник задеградирует и ничего не нарисуется.
+// Clip against the near plane z=0 in clip space via linear interpolation between P and Q.
+// If both endpoints are behind near, return the minimum — the triangle degenerates and nothing is drawn.
 static void ClipEndToNear(inout float4 P, float4 Q)
 {
-    // если P за near (z<0), подвинем его к пересечению с плоскостью z=0
+    // If P is behind near (z < 0), move it to the intersection with z=0
     if (P.z < 0.0f)
     {
         float denom = (Q.z - P.z);
-        // если отрезок почти параллелен/дегенеративен — дальше всё равно задеградирует
+        // If the segment is nearly parallel/degenerate, it will collapse later anyway
         if (abs(denom) > 1e-8f)
         {
-            float t = (-P.z) / denom; // t in [0..1] обычно
+            float t = (-P.z) / denom; // t typically in [0..1]
             t = clamp(t, 0.0f, 1.0f);
             P = lerp(P, Q, t);
         }
@@ -42,7 +42,7 @@ VSOut VSMain(VSIn i)
 {
     VSOut o;
 
-    // clip-концы
+    // Clip-space endpoints
     float4 A = mul(float4(i.a, 1.0f), modelViewProj);
     float4 B = mul(float4(i.b, 1.0f), modelViewProj);
 
@@ -56,7 +56,7 @@ VSOut VSMain(VSIn i)
     float2 Andc = A.xy / wA;
     float2 Bndc = B.xy / wB;
 
-    // экранная толщина
+    // Screen-space thickness
     float2 viewport = max(viewportThickness.xy, float2(1.0f, 1.0f));
     float thickPx = max(viewportThickness.z, 0.5f);
     float2 px2ndc = 2.0 / viewport;
@@ -68,16 +68,16 @@ VSOut VSMain(VSIn i)
     float2 n_px = float2(-t_px.y, t_px.x);
     float2 off_ndc = n_px * (0.5f * thickPx) * px2ndc;
 
-    // продольная координата вдоль оси: 0 на A-краю, 1 на B-краю
+    // Longitudinal coordinate along the axis: 0 at the A edge, 1 at the B edge
     float v = (i.corner.y < 0.0f) ? 0.0f : 1.0f;
 
-    // базовая точка по продольной координате (в NDC)
+    // Base point along the axis in NDC
     float2 base = lerp(Andc, Bndc, v);
 
-    // боковой сдвиг
+    // Lateral offset
     float2 ndc = base + off_ndc * i.corner.x;
 
-    // ВНИМАНИЕ: z и w — линейная интерполяция между A и B по той же v!
+    // NOTE: z and w are linearly interpolated between A and B using the same v!
     float w = max(lerp(wA, wB, v), 1e-6f);
     float z = lerp(A.z, B.z, v);
 

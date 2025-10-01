@@ -18,10 +18,10 @@ Renderer::Renderer()
 }
 
 Renderer::~Renderer() {
-    // Отчёт — уже после того, как мы всё обнулили
-    ReportLiveObjects(); // если у тебя есть эта функция в сборке дебага
+    // Report after everything has been reset
+    ReportLiveObjects(); // when the debug build includes this helper
 
-    // Закрываем событие в самом конце
+    // Close the event at the very end
     if (fenceEvent_ != nullptr) {
         CloseHandle(fenceEvent_);
         fenceEvent_ = nullptr;
@@ -32,21 +32,21 @@ static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 
 void Renderer::Shutdown()
 {
-    // Защита от повторных вызовов
+    // Guard against repeated calls
     static bool inShutdown = false;
     if (inShutdown) {
         return;
     }
     inShutdown = true;
 
-    // Если девайса нет — делать нечего
+    // Nothing to do if the device is missing
     const bool hasDevice = (device_ != nullptr);
     const bool hasQueue = (commandQueue_ != nullptr);
     const bool hasFence = (fence_ != nullptr);
 
-    // 0) Полностью дождаться GPU (и закрыть все незавершённые CL)
+    // 0) Fully wait for the GPU (and close all outstanding command lists)
     if (hasDevice && hasQueue && hasFence) {
-        WaitForPreviousFrame(); // твой метод полной синхронизации :contentReference[oaicite:2]{index=2}
+        WaitForPreviousFrame(); // your full-synchronization helper :contentReference[oaicite:2]{index=2}
     }
 
 #if PROF_GPU_ENABLED
@@ -60,16 +60,16 @@ void Renderer::Shutdown()
     fontManager_.Clear();
     samplerManager_.Clear();
 
-    // 1) Остановить «таймлайн» команд: никому ничего больше не сабмитим
+    // 1) Stop the command “timeline”: prevent further submissions
     {
         std::lock_guard<std::mutex> lk(submitMtx_);
-        submitTimeline_.clear(); // PassBatch_ ссылается только на CL из кадровых пулов :contentReference[oaicite:3]{index=3}
+        submitTimeline_.clear(); // PassBatch_ refers only to command lists from the frame pools :contentReference[oaicite:3]{index=3}
     }
 
-    // 2) Offscreen (G-Buffer/Light/Scene/Depth) — уничтожаем первыми
-    DestroyDeferredTargets(); // корректно резетит ресурсы и их heap’ы + чистит knownStates_ :contentReference[oaicite:4]{index=4}
+    // 2) Offscreen targets (G-Buffer/Light/Scene/Depth) — destroy these first
+    DestroyDeferredTargets(); // properly resets resources and heaps, and clears knownStates_ :contentReference[oaicite:4]{index=4}
 
-    // 3) Backbuffer’ы и RTV/DSV heap’ы
+    // 3) Back buffers and RTV/DSV heaps
     for (UINT i = 0; i < kFrameCount; ++i) {
         renderTargets_[i].Reset();
     }
@@ -79,13 +79,13 @@ void Renderer::Shutdown()
     rtvDescriptorSize_ = 0;
     dsvDescriptorSize_ = 0;
 
-    // 4) Перестраховка: очистить трекинг состояний ресурсов
+    // 4) Safety measure: clear resource state tracking
     {
         std::lock_guard<std::mutex> lk(knownStatesMtx_);
         knownStates_.clear();
     }
 
-    // 5) SwapChain — выводим из fullscreen (если вдруг) и освобождаем
+    // 5) SwapChain — exit fullscreen (if needed) and release it
     if (swapChain_) {
         BOOL fs = FALSE;
         Microsoft::WRL::ComPtr<IDXGIOutput> out;
@@ -95,12 +95,12 @@ void Renderer::Shutdown()
         swapChain_.Reset();
     }
 
-    // 6) Кадровые ресурсы: сбросить использование пулов, обнулить аплоад-ринг
-    // (их реальные ComPtr освободятся при разрушении Renderer, но это снимет связности)
+    // 6) Frame resources: reset pool usage and clear the upload ring
+    // (the actual ComPtrs release when Renderer is destroyed, but this removes dependencies)
     for (UINT i = 0; i < kFrameCount; ++i) {
         frameResources_[i]->ResetCommandAllocators(device_.Get());
         frameResources_[i]->ResetCommandListsUsage();
-        frameResources_[i]->ResetUpload(); // очищает фолбэк-чанки и сбрасывает указатели внутри кадра :contentReference[oaicite:5]{index=5}
+        frameResources_[i]->ResetUpload(); // clears fallback chunks and resets per-frame pointers :contentReference[oaicite:5]{index=5}
         frameResources_[i].reset();
         frameFenceValues_[i] = 0;
     }
@@ -114,7 +114,7 @@ void Renderer::Shutdown()
         commandQueue_.Reset();
     }
 
-    // 8) Девайс — последним
+    // 8) Release the device last
     if (device_) {
         device_.Reset();
     }
@@ -149,7 +149,7 @@ void Renderer::InitD3D12(HWND window) {
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
-            // при желании можно добавить фильтры на шумные сообщения
+            // Add filters for noisy messages if desired
         }
     }
 #endif
@@ -197,7 +197,7 @@ void Renderer::InitD3D12(HWND window) {
 }
 
 void Renderer::InitFence() {
-    // для совместимости с твоим main.cpp — безопасный no-op если уже инициализировано
+    // Compatibility with your main.cpp — safe no-op if initialization already happened
     if (!fence_) {
         ThrowIfFailed(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_)));
     }
@@ -235,7 +235,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     ComPtr<IDXGIFactory4> factory;
     ThrowIfFailed(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)));
 
-    // Уничтожим старый свап и RTV при переинициализации (если было)
+    // Destroy the old swap chain and RTVs when reinitializing (if any)
     for (UINT i = 0; i < kFrameCount; ++i) {
         ClearResourceState(renderTargets_[i].Get());
         renderTargets_[i].Reset();
@@ -243,7 +243,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     rtvHeap_.Reset();
     swapChain_.Reset();
 
-    // Создаём swap chain (kFrameCount)
+    // Create the swap chain (kFrameCount)
     DXGI_SWAP_CHAIN_DESC1 scd{};
     scd.BufferCount = kFrameCount;
     scd.Width = width;
@@ -275,7 +275,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
         ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
 
         D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
-        rtvFmt.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;        // <- ключ
+        rtvFmt.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;        // <- key
         rtvFmt.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         rtvFmt.Texture2D.MipSlice   = 0;
         rtvFmt.Texture2D.PlaneSlice = 0;
@@ -331,7 +331,7 @@ void Renderer::WaitForFrame(UINT frameIndex) {
     CPU_SCOPE(ProfilerScopes::kRendererWaitForFrame);
     const UINT64 value = frameFenceValues_[frameIndex];
     if (value == 0) {
-        return; // ещё не сигналили этот кадр — ждать нечего
+        return; // frame has not been signaled yet — nothing to wait for
     }
     if (fence_->GetCompletedValue() < value) {
         ThrowIfFailed(fence_->SetEventOnCompletion(value, fenceEvent_));
@@ -370,7 +370,7 @@ void Renderer::RefreshCurrentFrameCaches() {
 
 void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
-    // Ждём GPU по своему backbuffer'у
+    // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
 
     RefreshCurrentFrameCaches();
@@ -378,7 +378,7 @@ void Renderer::BeginFrame() {
 
     ++totalFrameNumber_;
 
-    // Сброс кадровых пулов
+    // Reset per-frame pools
     if (fr) {
         fr->ResetCommandAllocators(device_.Get());
         fr->ResetCommandListsUsage();
@@ -397,14 +397,14 @@ void Renderer::EndFrame() {
 void Renderer::ReportLiveObjects()
 {
 #if defined(_DEBUG)
-    // 1) Детальный отчёт от устройства
+    // 1) Detailed report from the device
     if (device_) {
         Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev;
         if (SUCCEEDED(device_.As(&ddev))) {
             ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL);
         }
     }
-    // 2) DXGI-отчёт (дополнительно)
+    // 2) DXGI report (optional)
     {
         Microsoft::WRL::ComPtr<IDXGIDebug1> dxgiDbg;
         if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDbg)))) {
@@ -426,22 +426,22 @@ void Renderer::Tick(float dt)
         fps_ = fps_ * fpsAlpha_ + (1.0f - fpsAlpha_) / dt;
     }
 
-    // хот-релод: накопим время
+    // Hot reload: accumulate elapsed time
     if (shaderHotReloadEnabled_) {
         shaderWatchAccumSec_ += dt;
 
-        // 1) раз в N секунд — запустим одноразовую фоновую задачу сканирования ФС
+        // 1) Every N seconds — launch a one-off background task to scan the filesystem
         if (shaderWatchAccumSec_ >= shaderWatchIntervalSec_) {
-            // не допускаем наложения сканов
+            // Prevent overlapping scans
             if (!materialManager_.IsProbeInFlight()) {
                 (void)materialManager_.RequestFSProbeAsync();
             }
-            // сохраняем остаток, чтоб не терять дробь
+            // Keep the fractional remainder so we do not lose time
             shaderWatchAccumSec_ -= shaderWatchIntervalSec_;
             shaderWatchAccumSec_ = std::max(0.0f, shaderWatchAccumSec_);
         }
 
-        // 2) применим pending-пересборки (если скан что-то нашёл и флаг выставлен)
+        // 2) Apply pending rebuilds (if the scan found changes and set the flag)
         if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/kFrameCount + 1)) {
             materialsHotReloaded_ = true;
         }
@@ -478,7 +478,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
         cl->SetDescriptorHeaps(currentFrameDescriptorHeapCount_, currentFrameDescriptorHeaps_.data());
     }
 
-    // регистрируем CL в lock-free трекере состояний
+    // Register the command list in the lock-free state tracker
     //RegisterCurrentThreadCL(cl);
 
     return ThreadCL{ alloc, cl, type };
@@ -502,7 +502,7 @@ void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
         }
     }
 
-    // снимаем TLS-привязку к этому CL
+    // Clear the TLS binding for this command list
     //UnregisterCurrentThreadCL();
 
     t.cl = nullptr;
@@ -549,7 +549,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     submitListsScratch_.clear();
 
-    // собрать по порядку батчей
+    // Gather batches in order
     {
         CPU_SCOPE(ProfilerScopes::kService1);
         std::lock_guard<std::mutex> lk(submitMtx_);
@@ -562,7 +562,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         }
         submitListsScratch_.reserve(expectedListCount);
         for (auto& pb : submitTimeline_) {
-            // Если есть driver (создан в пассе) — дописываем в него ExecuteBundle(...)
+            // If the driver exists (created in the pass) — append ExecuteBundle(...)
             if (pb.driver != nullptr) {
                 for (auto* b : pb.bundles) {
                     if (b != nullptr) {
@@ -573,7 +573,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                 submitListsScratch_.push_back(pb.driver);
             }
             else if (!pb.bundles.empty()) {
-                // fallback: нет driver’а — создадим временный
+                // Fallback: no driver available — create a temporary one
                 auto& fr = frameResources_[currentFrameIndex_];
                 ID3D12CommandAllocator* alloc =
                     fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -589,7 +589,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                 submitListsScratch_.push_back(cl);
             }
 
-            // Также прикрепим любые готовые DIRECT-CL
+            // Also attach any prepared DIRECT command lists
             if (!pb.directs.empty()) {
                 submitListsScratch_.insert(submitListsScratch_.end(), pb.directs.begin(), pb.directs.end());
             }
@@ -618,10 +618,10 @@ void Renderer::ExecuteTimelineAndPresent() {
         for (auto* cmd : submitListsScratch_) {
             const CLState* st = FindCLStateForCmd(cmd);
 
-            // 3.1: если CL что-то «хочет» на первом использовании — вставим пролог с барьерами prev→firstUse
+            // 3.1: if a command list needs transitions on first use — insert a prologue with prev→firstUse barriers
             if (st && !st->firstUse.empty()) {
 
-                // соберём набор барьеров
+                // Gather the barrier list
                 barrierScratch_.clear();
                 barrierScratch_.reserve(st->firstUse.size());
 
@@ -647,7 +647,7 @@ void Renderer::ExecuteTimelineAndPresent() {
                     knownStates_[res] = want;
                 }
 
-                // создадим пролог ТОЛЬКО если есть, что барьерить
+                // Create the prologue ONLY when there is something to transition
                 if (!barrierScratch_.empty()) {
                     auto& fr = frameResources_[currentFrameIndex_];
                     ID3D12CommandAllocator* alloc =
@@ -661,10 +661,10 @@ void Renderer::ExecuteTimelineAndPresent() {
                 }
             }
 
-            // 3.2: сам CL
+            // 3.2: the command list itself
             fixedSubmitScratch_.push_back(cmd);
 
-            // 3.3: после CL обновим «глобальный» финальный стейт его ресурсов
+            // 3.3: after executing, update the global final state of its resources
             if (st && !st->current.empty()) {
                 for (auto& kv : st->current) {
                     knownStates_[kv.first] = kv.second;
@@ -673,7 +673,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         }
     }
 
-    // Эпилог: RT→Present
+    // Epilogue: transition RT → Present
     ID3D12GraphicsCommandList* epilogueCL = nullptr;
     {
         auto& fr = frameResources_[currentFrameIndex_];
@@ -725,8 +725,8 @@ void Renderer::ExecuteTimelineAndPresent() {
 }
 
 void Renderer::WaitForPreviousFrame() {
-    // Полностью дождаться GPU (для ресайза/деструктора)
-    // Сигналим и ждём, пока фэнс не догонит значение
+    // Fully wait for the GPU (for resize/destructor)
+    // Signal and wait until the fence reaches the target value
     const UINT64 v = nextFenceValue_++;
     ThrowIfFailed(commandQueue_->Signal(fence_.Get(), v));
     if (fence_->GetCompletedValue() < v) {
@@ -742,10 +742,10 @@ void Renderer::OnResize(UINT width, UINT height) {
     width_ = width;
     height_ = height;
 
-    // Важно: полностью дождаться GPU перед заменой ресурсов
+    // Important: wait for the GPU before replacing resources
     WaitForPreviousFrame();
 
-    // Освобождаем старые RTV/DSV
+    // Release the old RTV/DSV objects
     for (UINT i = 0; i < kFrameCount; ++i) {
         ClearResourceState(renderTargets_[i].Get());
         renderTargets_[i].Reset();
@@ -760,7 +760,7 @@ void Renderer::OnResize(UINT width, UINT height) {
     ThrowIfFailed(swapChain_->GetDesc(&desc));
     ThrowIfFailed(swapChain_->ResizeBuffers(kFrameCount, width_, height_, desc.BufferDesc.Format, desc.Flags));
 
-    // Пересоздать RTV и DSV
+    // Recreate RTV and DSV
     CreateSwapChainAndRTVs(width_, height_);
     CreateDepthResources(width_, height_);
     CreateDeferredTargets(width_, height_);
@@ -796,7 +796,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
     //CPU_SCOPE(ProfilerScopes::kRendererTransition);
     ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
 
-    // быстрый путь — активный CL лежит в TLS
+    // Fast path — the active command list is stored in TLS
     CLStateEntry* entry = tlCurrentEntry_;
     const uint32_t lane = tlLaneIndex_;
     if (entry == nullptr || lane == UINT32_MAX ||
@@ -813,7 +813,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
                 entry = tlCurrentEntry_;
             }
         } else {
-            // CL ещё не зарегистрирован в этом потоке — регистрируем на лету
+            // Command list not yet registered on this thread — register it on the fly
             RegisterCurrentThreadCL(cl);
             entry = tlCurrentEntry_;
         }
@@ -826,7 +826,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
 
     auto itCur = st.current.find(res);
     if (itCur == st.current.end()) {
-        // первое упоминание в этом CL — барьер внутри CL не нужен
+        // First use in this command list — no intra-CL barrier required
         st.firstUse.emplace(res, after);
         st.current.emplace(res, after);
         return;
@@ -857,7 +857,7 @@ void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
 }
 
 void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
-    // Barrier: Present -> RenderTarget (для текущего backbuffer)
+    // Barrier: Present -> RenderTarget (for the current back buffer)
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
@@ -890,7 +890,7 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
 }
 
 void Renderer::RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl) {
-    // Только bind RTV/DSV + viewport/scissor (без барьера и клира)
+    // Only bind RTV/DSV + viewport/scissor (no barrier or clear)
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += SIZE_T(currentFrameIndex_) * rtvDescriptorSize_;
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
@@ -934,18 +934,18 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvCPU(UINT frame, DeferredDsvSlot
 
 void Renderer::CreateDeferredTargets(UINT width, UINT height)
 {
-    // На всякий случай: убираем старые ресурсы/кучи
+    // Just in case: release old resources/heaps
     DestroyDeferredTargets();
 
     ID3D12Device* dev = device_.Get();
     if (!dev) { return; }
 
-    // --- инкременты дескрипторов ---
+    // --- Descriptor increments ---
     deferredRtvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     deferredDsvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     deferredSrvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // --- CPU-only дескрипторные кучи под offscreen (RTV/DSV/SRV) ---
+    // --- CPU-only descriptor heaps for offscreen targets (RTV/DSV/SRV) ---
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -966,7 +966,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
 
-    // --- общие параметры размещения (Default heap) ---
+    // --- Common placement parameters (Default heap) ---
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
     heapProps.CreationNodeMask = 1;
@@ -986,7 +986,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         return rd;
         };
 
-    // ---- универсальные фабрики ----
+    // ---- Shared factories ----
     auto CreateRT = [&](DXGI_FORMAT fmt,
         DeferredRtvSlot rtvSlot,
         DeferredSrvSlot srvSlot,
@@ -1005,7 +1005,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
                 D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&outRes)));
 
-            // RTV/SRV — ТОЛЬКО для кадра f
+            // RTV/SRV — ONLY for frame f
             outRTV = DeferredRtvCPU(f, rtvSlot);
             dev->CreateRenderTargetView(outRes.Get(), nullptr, outRTV);
 
@@ -1018,7 +1018,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             outSRV = DeferredSrvCPU(f, srvSlot);
             dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
 
-            // сохранить хэндлы в deferred_[f]
+            // Store the handles in deferred_[f]
             auto& D = deferred_[f];
             switch (rtvSlot) {
             case DeferredRtvSlot::GB0:   D.gbRTV[0] = outRTV; break;
@@ -1068,7 +1068,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             dev->CreateDepthStencilView(outRes.Get(), &dv, outDSV);
             D.dsv = outDSV;
 
-            // SRV к depth как R32_FLOAT
+            // Create an SRV for depth as R32_FLOAT
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -1087,7 +1087,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
         UINT resolution)
         {
-            // Тень создаём типлесс, с DSV=D32F и SRV=R32F
+            // Shadows use a typeless texture with DSV=D32F and SRV=R32F
             D3D12_RESOURCE_DESC rd{};
             rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
             rd.Width = resolution;
@@ -1108,14 +1108,14 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
 
-            // DSV — В СВОЙ SHADOW-СЛОТ
+            // DSV — goes into its dedicated shadow slot
             outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
             D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
             dsv.Format = DXGI_FORMAT_D16_UNORM;
             dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
             dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV);
 
-            // SRV — тоже в свой shadow-слот
+            // SRV — also stored in the shadow slot
             outSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = DXGI_FORMAT_R16_UNORM;
@@ -1137,7 +1137,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateDepth(DXGI_FORMAT_D32_FLOAT_S8X24_UINT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
 
-        D.shadowRes = 4096; // или конфиг/параметр
+        D.shadowRes = 4096; // could be driven by config/parameter
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
         CreateRT(DXGI_FORMAT_R16G16B16A16_FLOAT, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
@@ -1252,13 +1252,13 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 {
     auto& D = deferred_[currentFrameIndex_];
 
-    // один DSV на весь атлас
+    // Single DSV for the entire atlas
     cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);
 
     if (!clearDepth)
     {
 	    const float tile = float(D.shadowRes) * 0.5f; // 2048
-    	// раскладка: 0:(0,0)  1:(2048,0)  2:(0,2048)
+           // Layout: 0:(0,0)  1:(2048,0)  2:(0,2048)
     	float topLeftX = 0.0f;
     	float topLeftY = 0.0f;
     	if (cascadeIndex == 1) { topLeftX = tile; topLeftY = 0.0f; }
@@ -1279,7 +1279,7 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageGBufferSrvTable() {
     auto& D = deferred_[currentFrameIndex_];
     auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3] });
-    return tbl.gpu; // ключ t0 в шейдере
+    return tbl.gpu; // shader key t0
 }
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageComposeSrvTable() {
     auto& D = deferred_[currentFrameIndex_];

@@ -10,20 +10,20 @@ class TextureCube {
 public:
     TextureCube() = default;
 
-    // Загрузка готовой DDS-кубкарты (или cube array) с диска.
-    // Требуется DDS с DXT10-хедером (DXGI_FORMAT = float/HDR/BC6H и т.п.). Мипы поддерживаются.
+    // Load a ready-made DDS cubemap (or cube array) from disk.
+    // Requires a DDS with a DXT10 header (DXGI_FORMAT = float/HDR/BC6H, etc.). Mipmaps are supported.
     bool CreateFromDDS(Renderer* renderer,
                        ID3D12GraphicsCommandList* uploadCmd,
                        const std::wstring& path,
                        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
-    // Получить SRV для текущего кадра (скопирует CPU SRV в shader-visible heap кадра).
+    // Retrieve the SRV for the current frame (copies the CPU SRV into the frame's shader-visible heap).
     D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* r);
 
-    // При необходимости — CPU SRV (постоянный).
+    // Provide the CPU SRV (persistent) if needed.
     D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return srvCPU_; }
 
-    // Метаданные / ресурс
+    // Metadata / resource
     ID3D12Resource* GetResource() const { return tex_.Get(); }
     UINT            GetWidth()   const { return width_; }
     UINT            GetHeight()  const { return height_; }
@@ -42,15 +42,15 @@ private:
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource> tex_;
 
-    // CPU-only heap на 1 дескриптор (SRV)
+    // CPU-only heap with one descriptor (SRV)
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeapCPU_;
     D3D12_CPU_DESCRIPTOR_HANDLE srvCPU_{};
 
-    // Кэш «состейдженного» GPU handle на кадр (как в Texture2D)
+    // Cache of the staged GPU handle per frame (same as Texture2D)
     UINT stagedFrame_ = UINT(-1);
     D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
 
-    // Метаданные
+    // Metadata
     UINT       width_ = 0, height_ = 0;
     UINT       mipLevels_ = 1;
     UINT       arraySize_ = 6;

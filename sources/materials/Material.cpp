@@ -25,7 +25,7 @@
 using Microsoft::WRL::ComPtr;
 
 // ----------------------------------------
-// Утилиты
+// Utilities
 // ----------------------------------------
 static std::string ReadFileToString(const std::wstring& path) {
     std::ifstream file(path);
@@ -95,19 +95,19 @@ static D3D_SHADER_MODEL QueryMaxShaderModel(ID3D12Device* dev)
     D3D12_FEATURE_DATA_SHADER_MODEL data = { D3D_SHADER_MODEL_6_7 };
     if (SUCCEEDED(dev->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &data, sizeof(data))))
     {
-        // data.HighestShaderModel может быть 0x60..0x67 даже если в SDK нет enum-имен
+        // data.HighestShaderModel may be 0x60..0x67 even when the SDK lacks enum names
         return data.HighestShaderModel;
     }
-    return D3D_SHADER_MODEL_6_0; // самый безопасный fallback
+    return D3D_SHADER_MODEL_6_0; // safest fallback
 }
 
 static std::wstring BuildProfile(const char* stage4cc, D3D_SHADER_MODEL sm)
 {
-    // В D3D12 SM кодируют как 0xMN (6_0=0x60, 6_7=0x67)
+    // In D3D12 the shader model is encoded as 0xMN (6_0=0x60, 6_7=0x67)
     unsigned v = static_cast<unsigned>(sm);
     unsigned major = (v >> 4) & 0xF;   // 6
     unsigned minor = v & 0xF;          // 0..7
-    // на всякий случай кламп
+    // Clamp defensively
     if (major < 6) { major = 6; minor = 0; }
     if (minor > 9) { minor = 9; }
 
@@ -116,7 +116,7 @@ static std::wstring BuildProfile(const char* stage4cc, D3D_SHADER_MODEL sm)
     return std::wstring(buf);
 }
 
-// Include handler для DXC с захватом списка файлов
+// Include handler for DXC that captures the list of files
 struct IncludeCaptureDXC : public IDxcIncludeHandler
 {
     std::atomic<ULONG> refcnt{ 1 };
@@ -180,24 +180,24 @@ static HRESULT CompileDXC(const std::wstring& file,
     hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hr)) return hr;
 
-    // Загружаем исходник
+    // Load the source file
     std::filesystem::path path = std::filesystem::path(file).lexically_normal();
     ComPtr<IDxcBlobEncoding> src;
     hr = utils->LoadFile(path.c_str(), nullptr, &src);
     if (FAILED(hr)) return hr;
 
-    // Include handler с захватом
+    // Include handler that tracks loaded files
     IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(), outIncludes);
 
-    // Target: max supported SM
+    // Target: highest supported shader model
     const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
     const std::wstring target = BuildProfile(stage4cc, sm);
 
-    // Строим устойчиво: все wchar-строки живут до конца функции
+    // Build the argument list safely: keep wchar strings alive until the end of the function
     std::wstring wEntry(entry, entry + std::strlen(entry));
     std::vector<std::wstring> owned; owned.reserve(16 + defines.size());
 
-    // Базовые аргументы
+    // Base arguments
     owned.push_back(L"-E");           // 0
     owned.push_back(wEntry);          // 1
     owned.push_back(L"-T");           // 2
@@ -215,7 +215,7 @@ static HRESULT CompileDXC(const std::wstring& file,
     //owned.push_back(L"-Qstrip_reflect");
 #endif
 
-    // Дефайны
+    // Defines
     for (auto& kv : defines) {
         std::wstring w = L"-D";
         w += std::wstring(kv.first.begin(), kv.first.end());
@@ -225,7 +225,7 @@ static HRESULT CompileDXC(const std::wstring& file,
         owned.push_back(std::move(w));
     }
 
-    // Собираем массив LPCWSTR
+    // Assemble the LPCWSTR array
     std::vector<LPCWSTR> args;
     args.reserve(owned.size());
     {
@@ -234,7 +234,7 @@ static HRESULT CompileDXC(const std::wstring& file,
         }
     }
 
-    // Компиляция
+    // Compilation
     DxcBuffer buf{}; buf.Ptr = src->GetBufferPointer(); buf.Size = src->GetBufferSize(); buf.Encoding = 0;
     ComPtr<IDxcResult> result;
     hr = compiler->Compile(&buf, args.data(), (UINT)args.size(), inc, IID_PPV_ARGS(&result));
@@ -262,7 +262,7 @@ static HRESULT CompileDXC(const std::wstring& file,
         return E_FAIL;
     }
 
-    // Приводим к ID3DBlob через копию (чтобы остальной код не менять)
+    // Convert to ID3DBlob via copy (so the rest of the code stays unchanged)
     ComPtr<ID3DBlob> blob;
     ThrowIfFailed(D3DCreateBlob(dxil->GetBufferSize(), &blob));
     std::memcpy(blob->GetBufferPointer(), dxil->GetBufferPointer(), dxil->GetBufferSize());
@@ -324,7 +324,7 @@ struct IncludeCapture : public ID3DInclude {
 // ---- macros → D3D_SHADER_MACRO ----
 static void BuildMacros(const Material::DefineList& defines,
     std::vector<D3D_SHADER_MACRO>& outMacros,
-    std::vector<std::string>& storage) // для владения char*
+    std::vector<std::string>& storage) // owns the char* buffers
 {
     outMacros.clear();
     storage.clear();
@@ -341,7 +341,7 @@ static void BuildMacros(const Material::DefineList& defines,
     outMacros.push_back({ nullptr, nullptr }); // terminator
 }
 
-// ===== компиляция =====
+// ===== Compilation =====
 HRESULT Material::CompileWithIncludes(const std::wstring& file,
     const char* entry, const char* target, UINT flags,
     const DefineList& defines,
@@ -364,7 +364,7 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
     return hr;
 }
 
-// ===== watch utils =====
+// ===== Watch utilities =====
 void Material::RefreshWatchTimes_()
 {
     std::lock_guard<std::mutex> lk(watchMtx_);
@@ -471,7 +471,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
     }
 
     if (!ok) {
-        return false; // оставим pending=true — попробуем на следующем тике
+        return false; // leave pending=true — try again on the next tick
     }
 
     retired_.push_back({ pipelineState_, rootSignature_, frameNumber });
@@ -573,7 +573,7 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     }
 }
 
-// ===== Общий билдер: Graphics =====
+// ===== Shared builder: Graphics =====
 bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
@@ -590,7 +590,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3DBlob> vs, ps;
     std::vector<std::wstring> incVS, incPS;
 
-    // SM6+ через DXC
+    // SM6+ via DXC
     if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
         OutputDebugStringA("[Material] DXC VS failed, fallback to D3DCompile SM5\n");
         UINT cf =
@@ -616,7 +616,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         }
     }
 
-    // рефлексия (работает для DXIL и DXBC)
+    // Reflection (works for DXIL and DXBC)
     cbInfos_.clear();
     ReflectShaderBlob(vs.Get(), cbInfos_);
     ReflectShaderBlob(ps.Get(), cbInfos_);
@@ -672,7 +672,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     return true;
 }
 
-// ===== Общий билдер: Compute =====
+// ===== Shared builder: Compute =====
 bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
@@ -759,15 +759,15 @@ static inline void HashStruct(uint64_t& h, const T& s) { HashMem(h, &s, sizeof(T
 
 std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
 {
-    // Стабильный ключ, зависящий от *всего* значимого состояния PSO.
+    // Stable key that depends on every meaningful part of the PSO state.
     uint64_t H = 1469598103934665603ull; // FNV-1a offset basis
 
-    // Файл и точки входа
+    // File and entry points
     HashStrW(H, gd.shaderFile);
     HashStrA(H, gd.vsEntry);
     HashStrA(H, gd.psEntry);
 
-    // Defines (отсортированы для детерминизма)
+    // Defines (sorted for determinism)
     auto defs = gd.defines;
     std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
         if (a.first == b.first) { return a.second < b.second; }
@@ -778,7 +778,7 @@ std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
         HashStrA(H, kv.second.c_str());
     }
 
-    // IA / топология / RS флаги
+    // IA / topology / RS flags
     HashStrA(H, gd.inputLayoutKey.c_str());
     HashU32(H, (uint32_t)gd.topologyType);
     HashU32(H, (uint32_t)gd.rsFlags);
@@ -789,17 +789,17 @@ std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
     HashU32(H, (uint32_t)gd.dsvFormat);
     HashU32(H, (uint32_t)gd.sampleCount);
 
-    // Полный Raster/Blend/DepthStencil — целиком как структуры
-    // (они ZeroMemory по умолчанию в FillDefaultsTriangle, так что паддинг детерминирован)
+    // Full Raster/Blend/DepthStencil — copy the structs as-is
+    // (ZeroMemory in FillDefaultsTriangle ensures deterministic padding)
     HashStruct(H, gd.raster);
     HashStruct(H, gd.blend);
     HashStruct(H, gd.depth);
 
-    // Сделаем читаемый wstring-ключ: префикс + hex-хеш
+    // Produce a readable wstring key: prefix + hex hash
     wchar_t hex[32] = {};
     swprintf_s(hex, L"%016llX", (unsigned long long)H);
 
-    // Немного человекочитаемости в начале — файл/входы.
+    // Add some human-readable context at the start — file and entry points.
     std::wstring key = L"GFX3|";
     key += gd.shaderFile;
     key += L"|";
@@ -904,7 +904,7 @@ bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, 
         if (mat) {
             if (mat->HotReloadIfPending(r, frameNumber, keepAliveFrames)) {
                 anyReloaded = true;
-                // лог: пересобрали
+                // Logging hook: material was rebuilt
             }
             mat->CollectRetired(frameNumber, keepAliveFrames);
         }
@@ -924,7 +924,7 @@ bool Material::GetCBFieldInfo(UINT bRegister, const std::string& name, CBufferFi
     auto it = cb->fieldsByName.find(name);
     if (it == cb->fieldsByName.end()) { return false; }
     out = it->second;
-    // safety: если stride не заполнен (старые шейдеры) — подстрахуемся
+    // Safety: backfill stride for old shaders if it was not provided
     if (out.elementStride == 0) {
         out.elementStride = (out.size > 0 ? out.size : 16);
         out.elementCount = 1;
@@ -1017,7 +1017,7 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
             f.offset = vd.StartOffset;
             f.size = vd.Size;
 
-            // === NEW: stride / length из типа ===
+            // === NEW: stride / length extracted from the type ===
             UINT elements = 1;
             UINT stride = vd.Size;
             if (ID3D12ShaderReflectionType* ty = var->GetType()) {
@@ -1025,7 +1025,7 @@ void Material::ProcessReflection(ID3D12ShaderReflection* refl,
                 if (SUCCEEDED(ty->GetDesc(&td))) {
                     elements = (td.Elements > 0 ? td.Elements : 1);
                     if (elements > 0) {
-                        stride = vd.Size / elements; // в HLSL Size уже кратен 16 и включает паддинг на элемент
+                        stride = vd.Size / elements; // In HLSL the size is already padded to 16 bytes per element
                     }
                 }
             }
@@ -1044,7 +1044,7 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
         return;
     }
 
-    // Сначала попробуем DXIL (DXC)
+    // First try DXIL (DXC)
     {
         Microsoft::WRL::ComPtr<IDxcUtils> utils;
         if (SUCCEEDED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))) {
@@ -1061,7 +1061,7 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
         }
     }
 
-    // Если это не DXIL, пробуем старый DXBC путь
+    // If it is not DXIL, fall back to the legacy DXBC path
     {
         Microsoft::WRL::ComPtr<ID3D12ShaderReflection> refl;
         if (SUCCEEDED(D3DReflect(blob->GetBufferPointer(),

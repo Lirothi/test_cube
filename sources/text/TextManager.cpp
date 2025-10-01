@@ -58,7 +58,7 @@ void TextManager::Init(Renderer* r) {
 
     matTextSdf_ = createTextMaterial(L"shaders/font_sdf.hlsl");
     matTextCoverage_ = createTextMaterial(L"shaders/font_pixelperfect.hlsl");
-    // прямоугольник (фон)
+    // Rectangle material (background)
     {
         Material::GraphicsDesc gd;
         gd.shaderFile = L"shaders/ui_rect.hlsl";
@@ -96,7 +96,7 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
     regions_.clear();
 }
 
-// позиционные (не кэшируем — как было)
+// Positional text (non-cached, legacy behavior)
 void TextManager::AddText(int x, int y, float px, const float4& color, std::wstring_view text) {
     AddText(x, y, px, color, text, false);
 }
@@ -126,7 +126,7 @@ void TextManager::AddTextfShadow(int x, int y, float px, const float4& color, bo
     if (len > 0) { AddText(x, y, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
-// регионы
+// Regions
 TextManager::RegionId TextManager::CreateRegion(int x, int y, Align align) {
     Region r;
     if (!regionPool_.empty()) {
@@ -197,7 +197,7 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
         rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
     }
     else {
-        // для Align::Left + fixedWidth измерение не обязательно (ширина уже в ln.widthPx)
+        // For Align::Left + fixedWidth the measurement is already stored in ln.widthPx
     }
 
     rg.glyphCount += glyphReserve;
@@ -222,12 +222,12 @@ void TextManager::AddTextfShadow(RegionId id, float px, const float4& color, boo
     if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
-// ======== СБОРКА / ОТРИСОВКА ========
+// ======== BUILD / RENDER ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerBuild);
 
-    // 0) Предподсчёт глифов для единого reserve
+    // 0) Precompute glyph count for a single reserve call
     size_t totalGlyphs = 0;
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
@@ -238,15 +238,15 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         idx_.ensureAdditional(totalGlyphs * 6);
     }
 
-    // 1) Резерв под потенциальные фоновые прямоугольники
+    // 1) Reserve space for potential background rectangles
     rectVerts_.reserve(rectVerts_.size() + regions_.size() * 4);
     rectIdx_.reserve(rectIdx_.size() + regions_.size() * 6);
 
-    // 2) Один проход по регионам: фоны и строки
+    // 2) Single pass over regions: backgrounds and lines
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
 
-        // фон
+        // Background
         if (rg.bg.has_value()) {
             const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth)
                 + float(rg.padX * 2);
@@ -256,7 +256,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
             EmitRect(bx, by, w, h, rg.bg.value());
         }
 
-        // строки
+        // Lines
         const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth);
         int y = rg.y;
         for (const RegionLine* ln : rg.lines) {
@@ -272,7 +272,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
         }
     }
 
-    // 3) Аплоад
+    // 3) Upload to GPU
     FrameResource* fr = r->GetFrameResource();
 
     // rects
@@ -310,7 +310,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 
 void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     CPU_SCOPE(ProfilerScopes::kTextManagerDraw);
-    // 1) фон
+    // 1) Background
     if (!rectVerts_.empty() && !rectIdx_.empty() && matRect_) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -324,7 +324,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         cl->DrawIndexedInstanced((UINT)rectIdx_.size(), 1, 0, 0, 0);
     }
 
-    // 2) текст
+    // 2) Text
     if (!verts_.empty() && !idx_.empty() && font_) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -423,9 +423,9 @@ void TextManager::RecycleRegionLines() {
     assert(freeRegionLines_.size() <= regionLinePool_.size());
 }
 
-// ===== приватные =====
+// ===== Private helpers =====
 
-// Общий хелпер построения глиф-рана + ширины (один проход)
+// Shared helper to build a glyph run and compute width in a single pass
 void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {
     outRun.Reset();
     outRun.scale = px / float(font_->PxSize());
@@ -512,7 +512,7 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
     outRun.ready = true;
 }
 
-// Быстрый эмит с подготовленного глиф-рана
+// Fast emission for a prepared glyph run
 void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow) {
     if (!run.ready || run.glyphCount == 0) { return; }
 
@@ -588,7 +588,7 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 
 }
 
-// Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
+// Positional drawing now also uses BuildGlyphRun + EmitGlyphRun
 void TextManager::EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerEmitImmediate);

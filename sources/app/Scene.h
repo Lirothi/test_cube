@@ -133,12 +133,12 @@ private:
         } compose;
     } cbHandles_{};
 
-    // кэш для лайт-пасса
+    // Cache for the lighting pass
     mat4  cachedLightView_[kCascades];
     mat4  cachedLightProj_[kCascades];
     float2 cachedScale_[kCascades];  // atlas scale
     float2 cachedBias_[kCascades];   // atlas bias
-    float  cachedSplitsVS_[kCascades + 1] = {}; // near..far в view-space
+    float  cachedSplitsVS_[kCascades + 1] = {}; // near..far in view space
     float  cachedNormalBiasWS_[kCascades] = {};
     float  cachedDepthBiasNDC_[kCascades] = {};
 
