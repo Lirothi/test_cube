@@ -25,12 +25,12 @@ public:
 
     struct Pass {
         std::string           name;
-        std::vector<size_t>   prereqs;     // порядок открытия батчей (DAG)
-        ExecFn                exec;        // тело пасса
-        std::vector<size_t>   mtDeps;      // РАНТАЙМ-зависимости (какие пассы должны завершиться)
+        std::vector<size_t>   prereqs;     // batch opening order (DAG)
+        ExecFn                exec;        // pass body
+        std::vector<size_t>   mtDeps;      // runtime dependencies (which passes must complete)
     };
 
-    // Удобный AddPass: все prereqs являются и mt-deps (флаг), либо явно mtDeps
+    // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
     size_t AddPass(const std::string& name,
         const std::vector<size_t>& prereqs,
         ExecFn fn)
@@ -40,7 +40,7 @@ public:
         return passes_.size() - 1;
     }
 
-    // Перегрузка с явными mt-deps (более точная)
+    // Overload with explicit mt-deps (more precise)
     size_t AddPassMT(const std::string& name,
         const std::vector<size_t>& prereqs,
         const std::vector<size_t>& mtDeps,
@@ -53,7 +53,7 @@ public:
 
     struct FlatNode { size_t pass; size_t batch; };
 
-    // Старое: последовательное исполнение (на место)
+    // Legacy path: sequential execution in place
     void Execute(Renderer* renderer)
     {
         CPU_SCOPE(ProfilerScopes::kRenderGraphExecute);
@@ -61,7 +61,7 @@ public:
         Unroll(renderer, /*executeInplace=*/true, nullptr);
     }
 
-    // План без исполнения (для параллельного раннинга)
+    // Build a plan without executing (for parallel scheduling)
     const std::vector<FlatNode>& BuildSchedule(Renderer* renderer)
     {
         scheduleScratch_.clear();
@@ -70,8 +70,8 @@ public:
         return scheduleScratch_;
     }
 
-    // Параллель: создаём батчи в топологическом порядке, затем
-    // сабмитим РЕАЛЬНЫЕ таски пассов с ожиданием их mt-deps.
+    // Parallel path: create batches in topological order, then
+    // submit actual pass tasks that wait on their mt-deps.
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
     {
         CPU_SCOPE(ProfilerScopes::kRenderGraphExecuteParallel);
@@ -139,7 +139,7 @@ public:
     void Clear() { passes_.clear(); }
 
 private:
-    // Общая раскрутка: строим топопорядок, создаём batch’и, либо исполняем inplace
+    // General unrolling: build the topological order, create batches, or execute inplace
     void Unroll(Renderer* renderer, bool executeInplace, std::vector<FlatNode>* outFlat)
     {
         const size_t N = passes_.size();

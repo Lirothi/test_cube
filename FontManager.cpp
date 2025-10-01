@@ -38,7 +38,7 @@ void FontManager::LoadFromFolder(Renderer* r,
         }
         json += fd.cFileName;
 
-        // basename без расширения
+        // basename without the extension
         std::wstring base = fd.cFileName;
         size_t dot = base.find_last_of(L'.');
         if (dot != std::wstring::npos) {
@@ -51,7 +51,7 @@ void FontManager::LoadFromFolder(Renderer* r,
         }
         tga += base + L".tga";
         if (!FileExistsW_(tga)) {
-            // нет соответствующего .tga — пропускаем
+            // no matching .tga file—skip it
             continue;
         }
 

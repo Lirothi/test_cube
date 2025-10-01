@@ -16,7 +16,7 @@ public:
 
     ~Skybox() override = default;
 
-    // Init: достраиваем PSO и геометрию (куб)
+    // Init: finalize the PSO and cube geometry
     void Init(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;

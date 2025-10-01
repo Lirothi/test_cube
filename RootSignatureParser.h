@@ -4,7 +4,7 @@
 #include <sstream>
 #include <cctype>
 
-// Главная функция-парсер
+// Main parser function
 inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSignatureLayout& layout)
 {
     std::istringstream ss(shaderSource);
@@ -35,13 +35,13 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
         };
 
     auto ParseTableRanges = [](const std::string& inside, std::vector<D3D12_DESCRIPTOR_RANGE>& out) {
-        // Добавили SAMPLER и регистр 's'
+        // Include SAMPLER and register 's'
         std::regex rangeRe(R"((CBV|SRV|UAV|SAMPLER)\((b|t|u|s)(\d+)(?:,space=(\d+))?\))", std::regex::icase);
         auto begin = std::sregex_iterator(inside.begin(), inside.end(), rangeRe);
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string type = (*it)[1].str();
-            // char regType = (*it)[2].str()[0]; // при желании можно использовать
+            // char regType = (*it)[2].str()[0]; // can be used if desired
             int regNum = std::stoi((*it)[3].str());
             int regSpace = (*it)[4].matched ? std::stoi((*it)[4].str()) : 0;
 
@@ -64,7 +64,7 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
             range.NumDescriptors = 1;
             range.BaseShaderRegister = regNum;
             range.RegisterSpace = regSpace;
-            // Важно: аппендим корректно, не "0"
+            // Important: append properly, not "0"
             range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
             out.push_back(range);
         }
@@ -86,7 +86,7 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
             size_t pos = 0;
 
             while (pos < spec.length()) {
-                // Пропуски
+                // Skip whitespace
                 while (pos < spec.length() && std::isspace((unsigned char)spec[pos])) { ++pos; }
                 if (pos >= spec.length()) { break; }
 
@@ -103,8 +103,8 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
                     if (depth == 0) {
                         std::string inside = spec.substr(start, i - start);
                         std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
-                        ParseTableRanges(inside, ranges);     // теперь тянет и SAMPLER
-                        layout.AddTable(ranges);              // видимость — по умолчанию ALL
+                        ParseTableRanges(inside, ranges);     // now also handles SAMPLER
+                        layout.AddTable(ranges);              // visibility defaults to ALL
                         AssignTableRegister();
                         pos = i + 1;
                         continue;
@@ -131,7 +131,7 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
                     }
                 }
 
-                // Одиночные: CBV/SRV/UAV/SAMPLER (поддержка visibility и space)
+                // Single descriptors: CBV/SRV/UAV/SAMPLER (support visibility and space)
                 std::regex resre(R"((CBV|SRV|UAV|SAMPLER)\((b|t|u|s)(\d+)(?:,space=(\d+))?(?:,visibility=([a-z]+))?\))",
                     std::regex::icase);
                 std::string tail = spec.substr(pos);
@@ -152,10 +152,10 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
                     continue;
                 }
 
-                // Не распознали — двигаемся дальше
+                // Not recognized—move on
                 ++pos;
             }
-            break; // парсим только первую найденную строку с RootSignature:
+            break; // parse only the first line containing RootSignature:
         }
     }
 }

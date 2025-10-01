@@ -8,7 +8,7 @@
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
-    // Если окно только создается — app еще нет, но нам это не страшно
+    // When the window is first created the app pointer is not set yet, but that's fine
     if (message == WM_NCCREATE) {
         CREATESTRUCT* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
         SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
@@ -117,7 +117,7 @@ void App::InitScene()
     renderer.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
     renderer.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
 
-    // Заранее создаем upload command list
+    // Create the upload command list ahead of time
     ComPtr<ID3D12CommandAllocator> uploadAlloc;
     ComPtr<ID3D12GraphicsCommandList> uploadCmdList;
     renderer.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&uploadAlloc));
@@ -129,7 +129,7 @@ void App::InitScene()
     uploadCmdList->Close();
     ID3D12CommandList* cmdLists[] = { uploadCmdList.Get() };
     renderer.GetCommandQueue()->ExecuteCommandLists(1, cmdLists);
-    // Ждем, пока upload завершится (фенс ивент)
+    // Wait for the upload to finish (fence event)
     renderer.WaitForPreviousFrame();
 }
 
@@ -167,7 +167,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         TranslateMessage(&msg);
                         DispatchMessage(&msg);
                         if (msg.message == WM_QUIT) {
-                            break; // Прерываем цикл, не рендерим больше!
+                            break; // Break out of the loop and stop rendering
                         }
                     }
                     if (msg.message == WM_QUIT) {

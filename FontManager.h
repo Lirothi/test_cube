@@ -14,19 +14,19 @@ public:
         renderer_ = r;
     }
 
-    // Сканирует папку: берёт все *.json и ищет соседний *.tga с тем же именем
+    // Scan a folder: grab every *.json and look for a sibling *.tga with the same name
     void LoadFromFolder(Renderer* r,
                         ID3D12GraphicsCommandList* uploadCl,
                         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                         const std::wstring& folder);
 
-    // Отдаёт шрифт по имени (basename файла, без расширения). nullptr если нет.
+    // Return a font by name (file basename without extension). nullptr if absent.
     FontAtlas* Get(const std::wstring& name);
 
-    // Возвращает дефолтный (первый успешно загруженный)
+    // Return the default font (the first one loaded successfully)
     FontAtlas* GetDefault();
 
-    // Для UI/отладки — список загруженных имён
+    // For UI/debug purposes—list all loaded names
     std::vector<std::wstring> List() const;
 
     void Clear();

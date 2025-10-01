@@ -33,7 +33,7 @@ public:
         desc.Flags = flags;
 
         ComPtr<ID3D12Resource> defaultBuf;
-        // ВАЖНО: для буферов InitialState = COMMON
+        // IMPORTANT: buffers must use InitialState = COMMON
         ThrowIfFailed(device_->CreateCommittedResource(
             &heapDefault, D3D12_HEAP_FLAG_NONE, &desc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
@@ -70,10 +70,10 @@ public:
             cmdList_->ResourceBarrier(1, &b);
         }
 
-        // Копирование буфера (предпочтительно CopyBufferRegion)
+        // Copy the buffer (prefer CopyBufferRegion)
         cmdList_->CopyBufferRegion(defaultBuf.Get(), 0, uploadBuf.Get(), 0, byteSize);
 
-        // Barriers: COPY_DEST -> afterCopy (если нужно)
+        // Barriers: COPY_DEST -> afterCopy (if needed)
         if (afterCopy != D3D12_RESOURCE_STATE_COPY_DEST) {
             D3D12_RESOURCE_BARRIER b{};
             b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;

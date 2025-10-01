@@ -48,7 +48,7 @@ public:
                 h.gpu.ptr = startGPU_.ptr ? (startGPU_.ptr + UINT64(old) * incr_) : 0;
                 return h;
             }
-            // old обновится значением cursor_, цикл повторится
+            // 'old' is updated with cursor_'s value and the loop repeats
         }
     }
 

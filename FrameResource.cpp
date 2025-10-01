@@ -3,7 +3,7 @@
 
 void FrameResource::InitUpload(ID3D12Device* dev, UINT bytes) {
     if (bytes == 0u) {
-        bytes = 1u << 20; // 1 MB по умолчанию
+        bytes = 1u << 20; // 1 MB by default
     }
 
     D3D12_HEAP_PROPERTIES hp{};
@@ -37,13 +37,13 @@ void FrameResource::InitUpload(ID3D12Device* dev, UINT bytes) {
     ThrowIfFailed(upload_->Map(0, &rge, &p));
     uploadCPU_ = p;
 
-    // почистим фолбэки
+    // Clear fallback chunks
     extraUploads_.clear();
 }
 
 void FrameResource::ResetUpload() {
     uploadOffset_.store(0u, std::memory_order_release);
-    // освободим фолбэк-чанки предыдущего кадра
+    // Release fallback chunks from the previous frame
     extraUploads_.clear();
 }
 
@@ -61,7 +61,7 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
         return (v + m) & ~m;
         };
 
-    // Попытка из основного буфера
+    // Try the main buffer first
     for (;;) {
         UINT old = uploadOffset_.load(std::memory_order_relaxed);
         UINT aligned = AlignUp_(old, align);
@@ -81,11 +81,11 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
         break;
     }
 
-    // Переполнение — берём/создаём фолбэк-чанк и аллоцируем из него.
+    // Overflow: take or create a fallback chunk and allocate from it.
     {
         std::lock_guard<std::mutex> lk(uploadGrowMtx_);
 
-        // попробуем существующие чанки
+        // Try existing chunks
         for (auto& ch : extraUploads_) {
             for (;;) {
                 UINT old = ch.offset.load(std::memory_order_relaxed);
@@ -107,13 +107,13 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
             }
         }
 
-        // создаём новый чанк (увеличиваем кратно)
+        // Create a new chunk (grow multiplicatively)
         UploadChunk_ ch{};
-        ch.size = std::max<UINT>(AlignUp_(size, 65536u), uploadSize_); // не меньше базового
+        ch.size = std::max<UINT>(AlignUp_(size, 65536u), uploadSize_); // no smaller than the base buffer
 
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_UPLOAD;
-        // (для single-GPU можно явно указать)
+        // For single-GPU we can specify the node mask explicitly
         hp.CreationNodeMask = 1;
         hp.VisibleNodeMask = 1;
 
@@ -128,7 +128,7 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         rd.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-        // получаем девайс из уже созданного upload_ (это тот же ID3D12Device)
+        // Obtain the device from the existing upload_ resource (it is the same ID3D12Device)
         Microsoft::WRL::ComPtr<ID3D12Device> dev;
         ThrowIfFailed(upload_->GetDevice(IID_PPV_ARGS(dev.GetAddressOf())));
 
@@ -145,7 +145,7 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
         ch.gpu = ch.res->GetGPUVirtualAddress();
         ch.offset.store(0u, std::memory_order_release);
 
-        // сразу выделим из него
+        // Immediately carve out space from it
         const UINT aligned = AlignUp_(0u, align);
         ch.offset.store(aligned + size, std::memory_order_release);
 

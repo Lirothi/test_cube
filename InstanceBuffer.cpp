@@ -11,7 +11,7 @@ void InstanceBuffer::Create(ID3D12Device* device, UINT numInstances,
     instanceCount_ = numInstances;
     const size_t byteSize = sizeof(InstanceData) * size_t(instanceCount_);
 
-    // Подготовим стартовые данные под заливку (identity + нули)
+    // Prepare initial data for upload (identity + zeros)
     std::vector<InstanceData> init(instanceCount_);
     for (UINT i = 0; i < instanceCount_; ++i) {
         DirectX::XMStoreFloat4x4(&init[i].world, DirectX::XMMatrixIdentity());
@@ -19,17 +19,17 @@ void InstanceBuffer::Create(ID3D12Device* device, UINT numInstances,
         init[i]._pad[0] = init[i]._pad[1] = init[i]._pad[2] = 0.0f;
     }
 
-    // Через UploadManager создаём Default-буфер с флагом UAV и сразу переводим в UAV-состояние
+    // Use UploadManager to create the Default buffer with a UAV flag and transition it to UAV state immediately
     UploadManager up(device, uploadCmdList);
     buffer_ = up.CreateBufferWithData(
         init.data(), byteSize,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    // Забираем upload-ресурсы, чтобы их не прибило до исполнения копии
+    // Take ownership of the upload resources so they survive until the copy executes
     up.StealKeepAlive(uploadKeepAlive);
 
-    // Создаём постоянные CPU-дескрипторы (SRV/UAV) — дальше в каждом кадре копируем их в shader-visible heap
+    // Create persistent CPU descriptors (SRV/UAV) and copy them into the shader-visible heap each frame
     CreateCpuDescriptors_(device);
 }
 
@@ -46,7 +46,7 @@ void InstanceBuffer::CreateCpuDescriptors_(ID3D12Device* device)
     srvCPU_ = cpuHeap_->GetCPUDescriptorHandleForHeapStart();
     uavCPU_ = srvCPU_; uavCPU_.ptr += inc;
 
-    // SRV (структурированный буфер)
+    // SRV (structured buffer)
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = DXGI_FORMAT_UNKNOWN;
     srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -57,7 +57,7 @@ void InstanceBuffer::CreateCpuDescriptors_(ID3D12Device* device)
     srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
     device->CreateShaderResourceView(buffer_.Get(), &srv, srvCPU_);
 
-    // UAV (структурированный буфер)
+    // UAV (structured buffer)
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
     uav.Format = DXGI_FORMAT_UNKNOWN;
     uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
@@ -70,7 +70,7 @@ void InstanceBuffer::CreateCpuDescriptors_(ID3D12Device* device)
 
 D3D12_GPU_DESCRIPTOR_HANDLE InstanceBuffer::GetSRVForFrame(Renderer* renderer)
 {
-    auto& da = renderer->GetDescAlloc();           // транзиентный shader-visible heap (ресетится в EndFrame)
+    auto& da = renderer->GetDescAlloc();           // transient shader-visible heap (reset in EndFrame)
     auto h = da.Alloc();
     renderer->GetDevice()->CopyDescriptorsSimple(
         1, h.cpu, srvCPU_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);

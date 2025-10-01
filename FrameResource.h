@@ -17,17 +17,17 @@ public:
         void* cpu = nullptr;
         D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
         UINT size = 0;
-        UINT offset = 0; // смещение внутри ресурса
+        UINT offset = 0; // offset within the resource
     };
 
-    // Инициализация/переинициализация upload-буфера кадра (персистентный MAP)
+    // Initialize or reinitialize the frame upload buffer (persistent MAP)
     void InitUpload(ID3D12Device* dev, UINT bytes);
 
-    // Сброс смещения в начале кадра (после ожидания fence)
+    // Reset the offset at the start of the frame (after waiting for the fence)
     void ResetUpload();
 
-    // Потокобезопасная линейная аллокация из upload-буфера кадра.
-// align должен быть степенью двойки (по умолчанию 16).
+    // Thread-safe linear allocation from the frame upload buffer.
+// align must be a power of two (defaults to 16).
     DynamicAlloc AllocDynamic(UINT size, UINT align = 16);
 
     void ResetCommandAllocators(ID3D12Device* dev) {
@@ -55,7 +55,7 @@ private:
         if (t == D3D12_COMMAND_LIST_TYPE_COMPUTE) { return 1; }
         if (t == D3D12_COMMAND_LIST_TYPE_COPY) { return 2; }
         if (t == D3D12_COMMAND_LIST_TYPE_BUNDLE) { return 3; }
-        return 0; // fallback на Direct
+        return 0; // fallback to Direct
     }
 
     struct CommandAllocPools_ {
@@ -80,14 +80,14 @@ private:
             const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
             auto& queuePool = pools[qi];
 
-            // Быстрый путь: уже есть аллокатор с таким индексом.
+            // Fast path: an allocator with this index already exists.
             if (index < queuePool.size()) {
                 return queuePool[index].Get();
             }
             else {
-                // Медленный путь: нужно дорастить вектор. Лочим только свою очередь.
+                // Slow path: grow the vector while holding only this queue's lock.
                 std::lock_guard<std::mutex> lk(mtx[qi]);
-                // Возможно, кто-то уже вырастил — проверим ещё раз.
+                // Another thread may have grown it already—check again.
                 while (index >= queuePool.size()) {
                     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> ca;
                     if (FAILED(dev->CreateCommandAllocator(type, IID_PPV_ARGS(&ca)))) {
@@ -158,7 +158,7 @@ private:
                     if (FAILED(dev->CreateCommandList(0, type, alloc, initialPSO, IID_PPV_ARGS(&cl)))) {
                         throw std::runtime_error("CreateCommandList failed");
                     }
-                    // Закроем сразу — мы всё равно Reset'им при каждом Acquire
+                    // Close immediately—we reset on every Acquire anyway
                     if (FAILED(cl->Close())) {
                         throw std::runtime_error("CreateCommandList Close failed");
                     }
@@ -187,7 +187,7 @@ private:
     UINT uploadSize_ = 0;
     std::atomic<UINT> uploadOffset_{ 0 };
 
-    // Фолбэк-чанки (если основной буфер переполнен). Живут до конца кадра.
+    // Fallback chunks (used when the main buffer overflows). They live until the end of the frame.
     struct UploadChunk_ {
         Microsoft::WRL::ComPtr<ID3D12Resource> res;
         void* cpu = nullptr;
@@ -197,11 +197,11 @@ private:
 
         UploadChunk_() = default;
 
-        // запрещаем копирование
+        // Disable copying
         UploadChunk_(const UploadChunk_&) = delete;
         UploadChunk_& operator=(const UploadChunk_&) = delete;
 
-        // разрешаем перемещение
+        // Allow moves
         UploadChunk_(UploadChunk_&& o) noexcept
             : res(std::move(o.res)),
             cpu(o.cpu),

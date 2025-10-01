@@ -29,8 +29,8 @@
 
 class TextManager; // forward
 
-// Профайлер CPU: скоупы, EMA-среднее, кулдаун сброса максимумов,
-// подготовка оверлея в EndFrame (дабл-буфер), редкая сортировка по среднему.
+// CPU profiler: scopes, EMA averaging, cooldown for resetting maxima,
+// overlay preparation in EndFrame (double-buffered) and infrequent sorting by average.
 class Profiler {
 public:
     using CpuClock = std::chrono::steady_clock;
@@ -49,14 +49,14 @@ public:
     };
 
     struct ScopeStats {
-        // Инклюзивные накопители за кадр (складывают ms всех обращений скоупа в текущем кадре)
+        // Inclusive accumulators per frame (sum ms of every scope invocation this frame)
         double   frameMsSum = 0.0;
         uint32_t frameCount = 0;
 
-        // Показатели
+        // Metrics
         double   avgMs = 0.0;   // EMA
-        double   maxMs = 0.0;   // сбрасывается по кулдауну
-        uint32_t lastCount = 0; // сколько раз встретился скоуп в прошлом кадре
+        double   maxMs = 0.0;   // reset by cooldown
+        uint32_t lastCount = 0; // how many times the scope appeared last frame
 
         void Accumulate(double ms) {
             frameMsSum += ms;
@@ -112,13 +112,13 @@ public:
         std::vector<ScopeNameKey> dynamicKeys;
     };
 
-    // --- данные оверлея (снэпшот) ---
+    // --- overlay data (snapshot) ---
     struct OverlayRow {
         uint32_t entryId = 0;
         double   avgMs = 0.0;
         double   maxMs = 0.0;
         uint32_t usages = 0;
-        std::wstring formatted; // заранее отформатированная строка
+        std::wstring formatted; // preformatted string
     };
 
 public:
@@ -127,19 +127,19 @@ public:
     static ScopeNameKey RegisterTraceLiteral(const wchar_t* name);
     static ScopeNameKey RegisterTraceDynamic(std::wstring name, uint32_t* outIndex = nullptr);
 
-    // Границы кадра
+    // Frame boundaries
     void BeginFrame(uint64_t frameNo);
     void EndFrame();
 
 #if PROF_GPU_ENABLED
-    // Инициализация и сбор результатов GPU
+    // GPU initialization and result collection
     void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries = 1024);
     void CollectGpuResults();
     void BeginGpuFrame(ID3D12GraphicsCommandList* cl);
     void EndGpuFrame(ID3D12GraphicsCommandList* cl);
 #endif
 
-    // Скоповая отметка (CPU)
+    // Scoped marker (CPU)
     class ScopedCpu {
     public:
         ScopedCpu(ScopeNameKey key) {
@@ -171,7 +171,7 @@ public:
 #endif
 
 #if PROF_GPU_ENABLED
-    // Скоповая отметка (GPU)
+    // Scoped marker (GPU)
     class ScopedGpu {
     public:
         ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key);
@@ -199,10 +199,10 @@ public:
 #define GPU_SCOPE_N(cmdList, keyExpr, id) do { } while (0)
 #endif
 
-    // Оверлей с табличкой (читает дабл-буфер без локов)
+    // Overlay table (reads the double buffer without locks)
     void EmitOverlay(TextManager* tm, int x = 8, int y = 48, int maxLines = 16);
 
-    // Управление
+    // Controls
 #if PROF_ENABLED
     void SetEnabled(bool v) { enabled_.store(v, std::memory_order_relaxed); }
     bool GetEnabled() const { return enabled_.load(std::memory_order_relaxed); }
@@ -212,12 +212,12 @@ public:
     void RequestTraceCapture(uint32_t frameCount);
     void SetThreadName(const std::string& name);
 
-    // Кулдаун сброса максимумов
+    // Cooldown for resetting maxima
     void   SetMaxCooldownSeconds(double sec);
     double GetMaxCooldownSeconds() const;
     void   ResetMaxNow();
 
-    // Интервал пересортировки строк в оверлее (сек)
+    // Interval for resorting rows in the overlay (seconds)
     void   SetOverlayResortIntervalSeconds(double sec) {
 #if PROF_ENABLED
         if (sec < 0.05) { sec = 0.05; }
@@ -247,7 +247,7 @@ private:
 #endif
 
 #if PROF_ENABLED
-    void ResetMax_Unsafe(); // вызывать под mtx_
+    void ResetMax_Unsafe(); // call while holding mtx_
     uint32_t GetThreadIndex_Locked(std::thread::id id);
     void WriteTraceJson(const std::vector<TraceEvent>& events);
     void ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys);
@@ -255,7 +255,7 @@ private:
 
 private:
 #if PROF_ENABLED
-    // сбор статистики
+    // statistics collection
     std::mutex mtx_;
     std::mutex traceMtx_;
     robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> stats_;
@@ -311,12 +311,12 @@ private:
     bool      frameOpen_ = false;
     CpuClock::time_point frameCpuStart_{};
 
-    // EMA для avgMs
+    // EMA for avgMs
     double emaAlpha_ = 0.995;
 
     std::atomic<bool> enabled_{ true };
 
-    // Кулдаун сброса максимумов
+    // Cooldown for resetting maxima
     using CoolClock = std::chrono::steady_clock;
     CoolClock::time_point lastMaxReset_{};
     double maxResetIntervalSec_ = 3.0;
@@ -325,15 +325,15 @@ private:
     double endFrameAsyncAvgMs_ = 0.0;
     double endFrameAsyncMaxMs_ = 0.0;
 
-    // Оверлей: дабл-буфер строк (EndFrame пишет, EmitOverlay читает)
+    // Overlay: double-buffered strings (EndFrame writes, EmitOverlay reads)
     std::vector<OverlayRow> overlayRows_[2];
-    std::atomic<int>        overlayReadBuf_{ 0 }; // 0 или 1
+    std::atomic<int>        overlayReadBuf_{ 0 }; // 0 or 1
 #if PROF_GPU_ENABLED
     std::vector<OverlayRow> gpuOverlayRows_[2];
     std::atomic<int>        gpuOverlayReadBuf_{ 0 };
 #endif
 
-    // scratch буферы для построения оверлея (перевыделяются редко, переиспользуются между кадрами)
+    // Scratch buffers for building the overlay (reallocated rarely, reused between frames)
     std::vector<OverlayRow> overlayScratchRows_;
     robin_hood::unordered_flat_map<uint32_t, size_t> overlayScratchLookup_;
     std::vector<uint8_t> overlayScratchUsed_;
@@ -347,11 +347,11 @@ private:
     std::vector<size_t> gpuOverlayScratchOrder_;
 #endif
 
-    // Переcортировка по avgMs раз в N сек
+    // Resort by avgMs every N seconds
     CoolClock::time_point lastOverlaySort_{};
-    double overlayResortIntervalSec_ = 2.0; // по умолчанию раз в секунду
+    double overlayResortIntervalSec_ = 2.0; // defaults to once per second
 
-    // Ширина оверлей-региона (фикс) — сглаженная оценка, чтобы не мерить строки
+    // Overlay region width (fixed)—a smoothed estimate to avoid measuring strings
     double overlayWidthPx_ = 640.0;
 #if PROF_GPU_ENABLED
     double gpuOverlayWidthPx_ = 640.0;

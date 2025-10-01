@@ -1,6 +1,6 @@
 #include "SamplerManager.h"
 #include "Renderer.h"
-#include "DescriptorAllocator.h" // для DescriptorAllocatorSampler
+#include "DescriptorAllocator.h" // for DescriptorAllocatorSampler
 
 #include <array>
 
@@ -85,7 +85,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::GetTableImpl(Renderer* renderer, con
         dst.ptr += sa.GetIncr();
     }
 
-    return block.gpu; // base GPU handle таблицы
+    return block.gpu; // base GPU handle of the table
 }
 
 void SamplerManager::Clear()

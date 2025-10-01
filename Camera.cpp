@@ -3,7 +3,7 @@
 #include "ActionMap.h"
 
 void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float dt) {
-    // toggle «вращение камерой» по действию
+    // Toggle camera rotation via the action
     const bool lookHeld = map.IsActionDown("LookToggle", input) && !input.IsKeyDown(VK_MENU);
     if (lookHeld) {
         if (!input.IsMouseCaptured()) {
@@ -12,7 +12,7 @@ void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float 
         const float dx = map.GetAxis("LookX", input);
         const float dy = map.GetAxis("LookY", input);
         if (dx != 0.0f || dy != 0.0f) {
-            // шкала уже включает sensitivity/invert
+            // Scale already includes sensitivity/invert
             AddYaw(dx);
             AddPitch(dy);
         }
@@ -22,7 +22,7 @@ void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float 
         }
     }
 
-    // корректировка скорости перемещения колесом мыши
+    // Adjust movement speed with the mouse wheel
     const int wheel = input.MouseWheelDelta();
     if (wheel != 0) {
         constexpr float kWheelStep = 0.2f;
@@ -34,7 +34,7 @@ void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float 
         moveSpeedMultiplier_ = Clamp(moveSpeedMultiplier_, kMinMultiplier, kMaxMultiplier);
     }
 
-    // ходьба
+    // Movement
     float speed = moveSpeed_ * moveSpeedMultiplier_;
     if (map.IsActionDown("Sprint", input)) {
         speed *= sprintMultiplier_;

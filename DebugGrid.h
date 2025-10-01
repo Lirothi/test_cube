@@ -36,13 +36,13 @@ public:
     bool CastsShadow() const override { return false; }
 
 private:
-    // два внутренних рендерабла
+    // Two internal renderables
     class GridRO;
     class AxesRO;
     std::unique_ptr<GridRO> grid_;
     std::unique_ptr<AxesRO> axes_;
 
-    // параметры
+    // Parameters
     float halfSize_;
     float step_;
     float axisLen_;

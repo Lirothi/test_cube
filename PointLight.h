@@ -20,12 +20,12 @@ public:
     void SetDesc(const PointLightDesc& d) { desc_ = d; }
     const PointLightDesc& GetDesc() const { return desc_; }
 
-    // ДВА ОТДЕЛЬНЫЕ ФУНКЦИИ:
-    // 1) Z-FAIL стенсил-препасс (два прохода: back затем front)
+    // TWO SEPARATE FUNCTIONS:
+    // 1) Z-FAIL stencil pre-pass (two passes: back then front)
     void RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
                      const Math::mat4& view, const Math::mat4& proj);
 
-    // 2) Цветовой проход (аддитив в Light RT) с маской stencil!=0
+    // 2) Color pass (additive into the Light RT) with a stencil!=0 mask
     void RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
                      const Math::mat4& view, const Math::mat4& proj,
                      const Math::mat4& invView, const Math::mat4& invProj,
@@ -38,10 +38,10 @@ private:
 
     std::shared_ptr<Mesh> sphere_ = nullptr;
 
-    // два PSO для z-fail: отдельные на back/front
+    // two PSOs for z-fail: one for back faces and one for front faces
     std::shared_ptr<Material> matZFail_;
 
-    // цветовой (аддитивный) полноэкранный
+    // color (additive) fullscreen pass
     std::shared_ptr<Material> matColorFS_;
 
     struct CBHandleCache {

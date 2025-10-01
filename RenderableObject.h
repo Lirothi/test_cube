@@ -37,20 +37,20 @@ public:
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
 
-    // Жизненный цикл
+    // Lifecycle
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     virtual void Tick(float /*dt*/) {}
 
-    // Базовый отрисовщик: Compute -> Graphics (Bind/IssueDraw)
+    // Base renderer: Compute -> Graphics (Bind/IssueDraw)
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
     virtual void OnMaterialHotReload(Renderer* renderer);
 
-    // Трансформ
+    // Transform
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
     void SetModelMatrix(const Math::mat4& m) { modelMatrix_ = m; }
 
-    // Меш/материал
+    // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
     const Mesh* GetMesh() const { return mesh_.get(); }
 
@@ -58,7 +58,7 @@ public:
     void SetGraphicsMaterial(Material* m);
     Material* GetShadowMaterial() const { return shadowMaterial_.get(); }
 
-    // GraphicsDesc — правим пайплайн (топология/блендинг/растр/DS)
+    // GraphicsDesc—adjust the pipeline (topology/blending/raster/depth-stencil)
     Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
     void SetGraphicsDesc(const Material::GraphicsDesc& gd) { graphicsDesc_ = gd; }
 
@@ -85,7 +85,7 @@ protected:
     }
 
 protected:
-    std::shared_ptr<Material>     graphicsMaterial_; // вариант шейдера (PSO/RS)
+    std::shared_ptr<Material>     graphicsMaterial_; // shader variant (PSO/RS)
     Material::GraphicsDesc        graphicsDesc_;
     std::shared_ptr<Material>     shadowMaterial_;
     Material::GraphicsDesc        shadowDesc_;
@@ -93,7 +93,7 @@ protected:
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
 
-    // CB (upload, пер-объектный)
+    // CB (upload, per-object)
     bool allowWireframe_ = true;
 
     void SetUniformBinder(std::unique_ptr<UniformBinder> binder);

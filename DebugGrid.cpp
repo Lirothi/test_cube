@@ -79,7 +79,7 @@ private:
 } // namespace
 
 // ──────────────────────────────────────────────────────────────
-// ВЕРШИННЫЕ ТИПЫ (локально, чтобы не плодить инклуды)
+// VERTEX TYPES (local to avoid extra includes)
 // ──────────────────────────────────────────────────────────────
 struct LineVertex {
     float3 pos;
@@ -87,14 +87,14 @@ struct LineVertex {
 };
 
 struct AxisVertex {
-    float3 a;           // начало отрезка в мире
-    float3 b;           // конец   отрезка в мире
+    float3 a;           // segment start in world space
+    float3 b;           // segment end in world space
     float3 cornerBias;  // xy = (-1/+1), z = edgeBiasPx
-    float4 col;         // цвет линии
+    float4 col;         // line color
 };
 
 // ──────────────────────────────────────────────────────────────
-// GridRO — сетка (линии)
+// GridRO — grid (lines)
 // ──────────────────────────────────────────────────────────────
 class DebugGrid::GridRO final : public RenderableObject {
 public:
@@ -200,7 +200,7 @@ private:
 };
 
 // ──────────────────────────────────────────────────────────────
-// AxesRO — оси (толстые линии в экранных пикселях, треугольники)
+// AxesRO — axes (thick lines in screen pixels, triangles)
 // ──────────────────────────────────────────────────────────────
 class DebugGrid::AxesRO final : public RenderableObject {
 public:
@@ -281,7 +281,7 @@ private:
         const float eps = 2.25f;
 
         auto push = [&](float3 A, float3 B, const float4& C) {
-            // два треугольника (= шесть вершин) на «толстую» линию в экранных координатах
+            // Two triangles (= six vertices) per "thick" line in screen space
             {
                 out.push_back({ A, B, float3(-1,-1, +eps), C });
                 out.push_back({ A, B, float3(-1,+1, +eps), C });
@@ -294,7 +294,7 @@ private:
             }
             };
 
-        // X, Z в плоскости yPlane_, и Y вверх
+        // X and Z lie in the yPlane_, Y points upward
         push(float3(0.0f, yPlane_, 0.0f), float3(L, yPlane_, 0.0f), xC);
         push(float3(0.0f, yPlane_, 0.0f), float3(0.0f, yPlane_, L), zC);
         push(float3(0.0f, 0.0f, 0.0f), float3(0.0f, L, 0.0f), yC);
@@ -312,7 +312,7 @@ private:
 };
 
 // ──────────────────────────────────────────────────────────────
-// DebugGrid — контейнер из двух рендераблов
+// DebugGrid — container composed of two renderables
 // ──────────────────────────────────────────────────────────────
 DebugGrid::DebugGrid(float halfSize, float step, float axisLen, float yPlane,
     float gridAlpha, float axisAlpha, float axisThicknessPx)
@@ -344,7 +344,7 @@ void DebugGrid::Init(Renderer* renderer,
 
 void DebugGrid::Tick(float dt)
 {
-    (void)dt; // сейчас нечего анимировать, но оставим хук
+    (void)dt; // nothing to animate yet, but keep the hook
 }
 
 void DebugGrid::Render(Renderer* renderer,
