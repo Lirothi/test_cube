@@ -39,12 +39,12 @@ public:
     void DisableShadow();
 
     // Позиционные API
-    void AddText(int x, int y, const float4& color, float px, std::wstring_view text);
-    void AddText(int x, int y, const float4& color, float px, std::string_view utf8);
-    void AddText(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow);
-    void AddText(int x, int y, const float4& color, float px, std::string_view utf8, bool enableShadow);
-    void AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...);
-    void AddTextfShadow(int x, int y, const float4& color, float px, bool enableShadow, const wchar_t* fmt, ...);
+    void AddText(int x, int y, float px, const float4& color, std::wstring_view text);
+    void AddText(int x, int y, float px, const float4& color, std::string_view utf8);
+    void AddText(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow);
+    void AddText(int x, int y, float px, const float4& color, std::string_view utf8, bool enableShadow);
+    void AddTextf(int x, int y, float px, const float4& color, const wchar_t* fmt, ...);
+    void AddTextfShadow(int x, int y, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...);
 
     // -------------------- Регионы --------------------
     RegionId CreateRegion(int x, int y, Align align = Align::Left);
@@ -202,7 +202,7 @@ private:
     void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
 
     // Старая «неподготовленная» отрисовка (позиционная) — теперь через BuildGlyphRun
-    void  EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow);
+    void  EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow);
 
     // Рисунок прямоугольника (фон)
     void  EmitRect(int x, int y, float w, float h, const float4& color);

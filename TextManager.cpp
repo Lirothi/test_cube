@@ -97,33 +97,33 @@ void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
 }
 
 // позиционные (не кэшируем — как было)
-void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text) {
-    AddText(x, y, color, px, text, shadow_.has_value());
+void TextManager::AddText(int x, int y, float px, const float4& color, std::wstring_view text) {
+    AddText(x, y, px, color, text, false);
 }
-void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8) {
-    AddText(x, y, color, px, utf8, shadow_.has_value());
+void TextManager::AddText(int x, int y, float px, const float4& color, std::string_view utf8) {
+    AddText(x, y, px, color, utf8, false);
 }
-void TextManager::AddText(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow) {
-    EmitTextImmediate(x, y, color, px, text, enableShadow);
+void TextManager::AddText(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow) {
+    EmitTextImmediate(x, y, px, color, text, enableShadow);
 }
-void TextManager::AddText(int x, int y, const float4& color, float px, std::string_view utf8, bool enableShadow) {
-    AddText(x, y, color, px, UTF8toW(utf8), enableShadow);
+void TextManager::AddText(int x, int y, float px, const float4& color, std::string_view utf8, bool enableShadow) {
+    AddText(x, y, px, color, UTF8toW(utf8), enableShadow);
 }
-void TextManager::AddTextf(int x, int y, const float4& color, float px, const wchar_t* fmt, ...) {
+void TextManager::AddTextf(int x, int y, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     wchar_t buf[256];
     va_list args; va_start(args, fmt);
     int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
-    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len)); }
+    if (len > 0) { AddText(x, y, px, color, std::wstring_view(buf, (size_t)len)); }
 }
-void TextManager::AddTextfShadow(int x, int y, const float4& color, float px, bool enableShadow, const wchar_t* fmt, ...) {
+void TextManager::AddTextfShadow(int x, int y, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     wchar_t buf[256];
     va_list args; va_start(args, fmt);
     int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
     va_end(args);
-    if (len > 0) { AddText(x, y, color, px, std::wstring_view(buf, (size_t)len), enableShadow); }
+    if (len > 0) { AddText(x, y, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
 // регионы
@@ -171,10 +171,10 @@ void TextManager::RegionSetAutoMeasure(RegionId id, bool enabled) {
 }
 
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text) {
-    AddText(id, px, color, text, shadow_.has_value());
+    AddText(id, px, color, text, false);
 }
 void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
-    AddText(id, px, color, UTF8toW(utf8), shadow_.has_value());
+    AddText(id, px, color, UTF8toW(utf8), false);
 }
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
@@ -608,7 +608,7 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 }
 
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
-void TextManager::EmitTextImmediate(int x, int y, const float4& color, float px, std::wstring_view text, bool enableShadow) {
+void TextManager::EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerEmitImmediate);
     GlyphRun run;
