@@ -229,23 +229,13 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 
     // 0) Предподсчёт глифов для единого reserve
     size_t totalGlyphs = 0;
-    size_t totalShadowGlyphs = 0;
-    const bool hasShadowDesc = shadow_.has_value();
     for (const Region& rg : regions_) {
         if (rg.totalLines <= 0) { continue; }
         totalGlyphs += rg.glyphCount;
-        if (hasShadowDesc) {
-            for (const RegionLine* ln : rg.lines) {
-                if (ln && ln->shadowEnabled) {
-                    totalShadowGlyphs += ln->glyphCount;
-                }
-            }
-        }
     }
-    const size_t totalForReserve = totalGlyphs + totalShadowGlyphs;
-    if (totalForReserve) {
-        verts_.ensureAdditional(totalForReserve * 4);
-        idx_.ensureAdditional(totalForReserve * 6);
+    if (totalGlyphs) {
+        verts_.ensureAdditional(totalGlyphs * 4);
+        idx_.ensureAdditional(totalGlyphs * 6);
     }
 
     // 1) Резерв под потенциальные фоновые прямоугольники
@@ -346,14 +336,6 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto tbl = r->StageSrvUavTable({ font_->GetSRVCPU() });
         rc.table[0] = tbl.gpu;
 
-        std::array<uint32_t, 8> k{};
-        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
-        k[0] = f2u((float)vpW_);
-        k[1] = f2u((float)vpH_);
-        k[4] = f2u((float)font_->Spread());
-        k[5] = f2u((float)font_->PxSize());
-        rc.constants[1] = { k.begin(), k.end() };
-
         const bool useCoverage = font_->IsCoverage();
         //const D3D12_SAMPLER_DESC samplerDesc = useCoverage ? *SamplerManager::PointClamp() : *SamplerManager::LinearClamp();
         rc.samplerTable[0] = r->GetSamplerManager()->GetTable(r, *SamplerManager::LinearClamp());
@@ -363,10 +345,24 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
             return;
         }
 
-        mat->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         cl->IASetVertexBuffers(0, 1, &vbv_);
         cl->IASetIndexBuffer(&ibv_);
+
+        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
+        std::array<uint32_t, 8> k{};
+        k[0] = f2u((float)vpW_);
+        k[1] = f2u((float)vpH_);
+        const float invAtlasW = (font_->AtlasWidth() > 0) ? (1.0f / float(font_->AtlasWidth())) : 0.0f;
+        const float invAtlasH = (font_->AtlasHeight() > 0) ? (1.0f / float(font_->AtlasHeight())) : 0.0f;
+        k[2] = f2u(invAtlasW);
+        k[3] = f2u(invAtlasH);
+        k[4] = f2u((float)font_->Spread());
+        k[5] = f2u((float)font_->PxSize());
+        rc.constants[1] = { k.begin(), k.end() };
+
+        mat->Bind(cl, rc);
+
         cl->DrawIndexedInstanced((UINT)idx_.size(), 1, 0, 0, 0);
     }
 }
@@ -545,66 +541,67 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     }
     if (drawable == 0) { return; }
 
-    auto emitGlyphs = [&](const float4& drawColor, float offsetXExtra, float offsetYExtra) {
-        if (drawColor.w <= 0.0f) {
-            return;
+    const size_t baseVert = verts_.appendUninitialized(drawable * 4);
+    const size_t baseIdx = idx_.appendUninitialized(drawable * 6);
+    Vertex* const vData = verts_.data() + baseVert;
+    uint32_t* const iData = idx_.data() + baseIdx;
+
+    float2 shadowOffset = { 0.0f, 0.0f };
+    float4 shadowColor = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    if (enableShadow && shadow_.has_value()) {
+        const ShadowDesc& desc = shadow_.value();
+        float offsetX = desc.offsetX;
+        float offsetY = desc.offsetY;
+        if (desc.scaleWithTextSize) {
+            offsetX *= scale;
+            offsetY *= scale;
+        }
+        if (desc.scaleWithDpi) {
+            offsetX *= dpi_;
+            offsetY *= dpi_;
+        }
+        if (scale != 0.0f) {
+            offsetX /= scale;
+            offsetY /= scale;
+        }
+        else {
+            offsetX = 0.0f;
+            offsetY = 0.0f;
         }
 
-        const size_t baseVert = verts_.appendUninitialized(drawable * 4);
-        const size_t baseIdx = idx_.appendUninitialized(drawable * 6);
-        Vertex* const vData = verts_.data() + baseVert;
-        uint32_t* const iData = idx_.data() + baseIdx;
-
-        size_t glyphCounter = 0;
-        for (size_t i = 0; i < n; ++i) {
-            const FontGlyph* gph = run.GlyphAt(i);
-            if (!gph || gph->w == 0 || gph->h == 0) { continue; }
-            const float penX = (float)x + xOffset + run.XOffsetAt(i);
-
-            const float gx = penX + float(gph->xoff) * scale + offsetXExtra;
-            const float gy = penY + float(gph->yoff) * scale + offsetYExtra;
-            const float gw = float(gph->w) * scale;
-            const float gh = float(gph->h) * scale;
-
-            Vertex* curV = vData + glyphCounter * 4;
-            curV[0] = { {gx,      gy,      0.0f}, drawColor, {gph->u0, gph->v0} };
-            curV[1] = { {gx + gw, gy,      0.0f}, drawColor, {gph->u1, gph->v0} };
-            curV[2] = { {gx + gw, gy + gh, 0.0f}, drawColor, {gph->u1, gph->v1} };
-            curV[3] = { {gx,      gy + gh, 0.0f}, drawColor, {gph->u0, gph->v1} };
-
-            uint32_t* curI = iData + glyphCounter * 6;
-            const uint32_t base = static_cast<uint32_t>(baseVert + glyphCounter * 4);
-            curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
-            curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
-            ++glyphCounter;
-        }
-    };
-
-    const ShadowDesc* shadowDesc = (enableShadow && shadow_.has_value()) ? &(*shadow_) : nullptr;
-
-    if (shadowDesc) {
-        const ShadowDesc& desc = *shadowDesc;
-        float4 shadowColor = desc.color;
-        if (desc.multiplyByTextAlpha) {
-            shadowColor.w *= color.w;
-        }
-        shadowColor.w *= desc.alphaMultiplier;
-        if (shadowColor.w > 0.0f) {
-            float offsetXExtra = desc.offsetX;
-            float offsetYExtra = desc.offsetY;
-            if (desc.scaleWithTextSize) {
-                offsetXExtra *= scale;
-                offsetYExtra *= scale;
-            }
-            if (desc.scaleWithDpi) {
-                offsetXExtra *= dpi_;
-                offsetYExtra *= dpi_;
-            }
-            emitGlyphs(shadowColor, offsetXExtra, offsetYExtra);
+        const float baseAlpha = desc.color.w * desc.alphaMultiplier * color.w;
+        const float finalAlpha = std::clamp(baseAlpha, 0.0f, 1.0f);
+        if (finalAlpha > 0.0f) {
+            shadowOffset = { offsetX, offsetY };
+            shadowColor = { desc.color.x, desc.color.y, desc.color.z, finalAlpha };
         }
     }
 
-    emitGlyphs(color, 0.0f, 0.0f);
+    size_t glyphCounter = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const FontGlyph* gph = run.GlyphAt(i);
+        if (!gph || gph->w == 0 || gph->h == 0) { continue; }
+        const float penX = (float)x + xOffset + run.XOffsetAt(i);
+
+        const float gx = penX + float(gph->xoff) * scale;
+        const float gy = penY + float(gph->yoff) * scale;
+        const float gw = float(gph->w) * scale;
+        const float gh = float(gph->h) * scale;
+
+        Vertex* curV = vData + glyphCounter * 4;
+        curV[0] = { {gx,      gy,      0.0f}, color, {gph->u0, gph->v0}, shadowOffset, shadowColor };
+        curV[1] = { {gx + gw, gy,      0.0f}, color, {gph->u1, gph->v0}, shadowOffset, shadowColor };
+        curV[2] = { {gx + gw, gy + gh, 0.0f}, color, {gph->u1, gph->v1}, shadowOffset, shadowColor };
+        curV[3] = { {gx,      gy + gh, 0.0f}, color, {gph->u0, gph->v1}, shadowOffset, shadowColor };
+
+        uint32_t* curI = iData + glyphCounter * 6;
+        const uint32_t base = static_cast<uint32_t>(baseVert + glyphCounter * 4);
+        curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
+        curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
+        ++glyphCounter;
+    }
+
 }
 
 // Позиционная отрисовка теперь тоже через BuildGlyphRun + EmitGlyphRun
@@ -621,10 +618,12 @@ void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) 
     const float gx = (float)x, gy = (float)y;
     const float gw = w, gh = h;
     const uint32_t base = (uint32_t)rectVerts_.size();
-    rectVerts_.push_back({ {gx,      gy,      0}, color, {0,0} });
-    rectVerts_.push_back({ {gx + gw, gy,      0}, color, {0,0} });
-    rectVerts_.push_back({ {gx + gw, gy + gh, 0}, color, {0,0} });
-    rectVerts_.push_back({ {gx,      gy + gh, 0}, color, {0,0} });
+    const float2 zeroOffset{ 0.0f, 0.0f };
+    const float4 zeroShadow{ 0.0f, 0.0f, 0.0f, 0.0f };
+    rectVerts_.push_back({ {gx,      gy,      0}, color, {0,0}, zeroOffset, zeroShadow });
+    rectVerts_.push_back({ {gx + gw, gy,      0}, color, {0,0}, zeroOffset, zeroShadow });
+    rectVerts_.push_back({ {gx + gw, gy + gh, 0}, color, {0,0}, zeroOffset, zeroShadow });
+    rectVerts_.push_back({ {gx,      gy + gh, 0}, color, {0,0}, zeroOffset, zeroShadow });
     rectIdx_.push_back(base + 0u); rectIdx_.push_back(base + 1u); rectIdx_.push_back(base + 2u);
     rectIdx_.push_back(base + 0u); rectIdx_.push_back(base + 2u); rectIdx_.push_back(base + 3u);
 }

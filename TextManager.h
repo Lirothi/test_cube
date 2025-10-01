@@ -27,7 +27,6 @@ public:
         float offsetY = 1.0f;
         float4 color = float4(0.0f, 0.0f, 0.0f, 0.65f);
         float alphaMultiplier = 1.0f;
-        bool  multiplyByTextAlpha = true;
         bool  scaleWithDpi = true;
         bool  scaleWithTextSize = false;
     };
@@ -73,7 +72,13 @@ public:
     void Clear();
 
 private:
-    struct Vertex { float3 pos; float4 col; float2 uv; };
+    struct Vertex {
+        float3 pos;
+        float4 col;
+        float2 uv;
+        float2 shadowOffset;
+        float4 shadowColor;
+    };
 
     // Предподсчитанный «глиф-ран» одной строки
     struct GlyphRun {
