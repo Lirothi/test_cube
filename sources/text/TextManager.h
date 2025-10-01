@@ -37,7 +37,7 @@ public:
     void SetShadow(const ShadowDesc& desc);
     void DisableShadow();
 
-    // Позиционные API
+    // Positional text API
     void AddText(int x, int y, float px, const float4& color, std::wstring_view text);
     void AddText(int x, int y, float px, const float4& color, std::string_view utf8);
     void AddText(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow);
@@ -45,17 +45,17 @@ public:
     void AddTextf(int x, int y, float px, const float4& color, const wchar_t* fmt, ...);
     void AddTextfShadow(int x, int y, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...);
 
-    // -------------------- Регионы --------------------
+    // -------------------- Regions --------------------
     RegionId CreateRegion(int x, int y, Align align = Align::Left);
 
     void RegionSetBackground(RegionId id, std::optional<float4> color);
     void RegionSetPadding(RegionId id, int padX, int padY);
     void RegionSetAlign(RegionId id, Align a);
 
-    // фиксированная ширина региона (если задана — фон рисуем по ней)
+    // Fixed region width (if set, the background uses it)
     void RegionSetFixedWidth(RegionId id, float wPx);
 
-    // отключить измерение ширины строк внутри региона (ускорение для Align::Left)
+    // Disable per-line width measurement inside the region (faster for Align::Left)
     void RegionSetAutoMeasure(RegionId id, bool enabled);
 
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
@@ -80,12 +80,12 @@ private:
         float4 shadowColor;
     };
 
-    // Предподсчитанный «глиф-ран» одной строки
+    // Precomputed glyph run for a single line
     struct GlyphRun {
         static constexpr size_t kDefaultCapacity = 256;
 
-        std::array<const struct FontGlyph*, kDefaultCapacity> glyphs{}; // ptr на глифы в атласе
-        std::array<float, kDefaultCapacity> xOffsets{};                  // кумулятивные X до каждого глифа (с кернингом)
+        std::array<const struct FontGlyph*, kDefaultCapacity> glyphs{}; // pointers to glyphs in the atlas
+        std::array<float, kDefaultCapacity> xOffsets{};                  // cumulative X offset before each glyph (with kerning)
         size_t glyphCount = 0;
         float scale = 1.0f;   // px / fontPx
         bool  ready = false;
@@ -119,9 +119,9 @@ private:
     struct RegionLine {
         float4   color;
         float    px = 16.0f;
-        float    widthPx = 0;   // ширина строки (для Center/Right)
-        GlyphRun run;           // кэш глифов/офсетов
-        uint32_t glyphCount = 0; // запас по глифам для резерва
+        float    widthPx = 0;   // line width (used for Center/Right)
+        GlyphRun run;           // cached glyphs/offsets
+        uint32_t glyphCount = 0; // glyph reserve count
         bool     inUse = false;
         bool     shadowEnabled = false;
     };
@@ -132,8 +132,8 @@ private:
         int   padX = 8, padY = 6;
         std::optional<float4> bg;
 
-        std::optional<float> fixedWidthPx; // если есть — используем для фона/выравнивания
-        bool  autoMeasure = true;          // если false и Align::Left — измерение строк не требуется
+        std::optional<float> fixedWidthPx; // use for background/alignment when provided
+        bool  autoMeasure = true;          // when false and Align::Left — skip line width measurement
 
         std::vector<RegionLine*> lines;
         float maxLineWidth = 0;
@@ -200,16 +200,16 @@ private:
 
     static std::wstring UTF8toW(std::string_view s);
 
-    // === Общий хелпер построения глиф-рана и ширины ===
+    // === Shared helper to build a glyph run and compute width ===
     void  BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const;
 
-    // Быстрый вывод подготовленного глиф-рана
+    // Fast rendering of a prepared glyph run
     void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
 
-    // Старая «неподготовленная» отрисовка (позиционная) — теперь через BuildGlyphRun
+    // Legacy positional rendering now routed through BuildGlyphRun
     void  EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow);
 
-    // Рисунок прямоугольника (фон)
+    // Render a rectangle (background)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
 
     RegionLine* AcquireRegionLine(size_t glyphReserveHint);

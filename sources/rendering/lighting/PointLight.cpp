@@ -60,24 +60,24 @@ void PointLight::Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
         gd.shaderFile = L"shaders/pointlight_zfail.hlsl";
         gd.vsEntry = "VSMain";
         gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "PosNormTanUV";        // позиции сферы
+        gd.inputLayoutKey = "PosNormTanUV";        // sphere vertex positions
         gd.numRT = 1;
-        gd.rtvFormats[0] = r->GetLightTargetFormat(); // цвет не пишем (mask=0), но RTV можно привязать общий
+        gd.rtvFormats[0] = r->GetLightTargetFormat(); // color is not written (mask=0), but we can bind the shared RTV
         gd.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
         gd.depth = MakeZFail_DS();
         gd.raster.CullMode = D3D12_CULL_MODE_NONE;
-        // write mask = 0 (не пишем цвет)
+        // write mask = 0 (skip writing color)
         for (int i = 0; i < 8; ++i) { gd.blend.RenderTarget[i].RenderTargetWriteMask = 0; }
         matZFail_ = r->GetMaterialManager()->GetOrCreateGraphics(r, gd);
     }
 
-    // --- COLOR (fullscreen, аддитив, stencil!=0) ---
+    // --- COLOR (fullscreen, additive, stencil!=0) ---
     {
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/pointlight_color_fs.hlsl";
         gd.vsEntry = "VSMain";
         gd.psEntry = "PSMain";
-        gd.inputLayoutKey = ""; // fullscreen треугольник
+        gd.inputLayoutKey = ""; // fullscreen triangle
         gd.numRT = 1;
         gd.rtvFormats[0] = r->GetLightTargetFormat();
         gd.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
@@ -134,7 +134,7 @@ void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
     matZFail_->UpdateCBField(cbHandles_.zFail.view, view, (uint8_t*)cb.cpu);
     matZFail_->UpdateCBField(cbHandles_.zFail.proj, proj, (uint8_t*)cb.cpu);
 
-    // Сброс ref → 0 (мы будем тестировать !=0 в цвете)
+    // Reset the stencil ref to 0 (color pass tests for != 0)
     cl->OMSetStencilRef(0);
 
 	auto h = r->GetRenderContextPool()->Acquire();
@@ -166,7 +166,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.intensity, desc_.intensity, (uint8_t*)cb1.cpu);
 
-    // таблица GBuffer SRV: t0..t3 = GB0,GB1,GB2,Depth
+    // GBuffer SRV table: t0..t3 = GB0, GB1, GB2, Depth
     auto tbl = r->StageGBufferSrvTable();
 
     auto h = r->GetRenderContextPool()->Acquire();
@@ -180,7 +180,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     cl->OMSetStencilRef(0);
 
     matColorFS_->Bind(cl, rc);
-    // fullscreen треугольник
+    // Fullscreen triangle
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->DrawInstanced(3, 1, 0, 0);
 }

@@ -29,16 +29,16 @@ inline void BuildSpoonMeshCW(std::vector<VertexPNTUV>& outVerts,
 {
     struct Node { float y, r; };
     const Node profile[] = {
-        // чаша (вогнутая)
+        // Spoon bowl (concave)
         { -0.018f, 0.002f },
         { -0.016f, 0.008f },
         { -0.012f, 0.014f },
         { -0.006f, 0.018f },
-        {  0.000f, 0.018f }, // кромка
-        // переход к ручке
+        {  0.000f, 0.018f }, // lip
+        // Transition to the handle
         {  0.010f, 0.013f },
         {  0.050f, 0.009f },
-        // ручка
+        // Handle
         {  0.080f, 0.0085f },
         {  0.110f, 0.0080f },
         {  0.140f, 0.0078f },
@@ -47,7 +47,7 @@ inline void BuildSpoonMeshCW(std::vector<VertexPNTUV>& outVerts,
     outVerts.clear(); outIdx.clear();
     outVerts.reserve(size_t(rows) * size_t(radialSegments));
 
-    // вершины
+    // Vertices
     for (int j = 0; j < rows; ++j) {
         const float y = profile[j].y;
         const float r = profile[j].r;
@@ -59,14 +59,14 @@ inline void BuildSpoonMeshCW(std::vector<VertexPNTUV>& outVerts,
 
             VertexPNTUV vtx{};
             vtx.position = { r * ca, y, r * sa };
-            vtx.normal = { 0,0,0 };     // досчитаем в Mesh::CreateGPU_PNTUV(..., true)
+            vtx.normal = { 0,0,0 };     // computed later in Mesh::CreateGPU_PNTUV(..., true)
             vtx.tangent = { 0,0,0,0 };
             vtx.uv = { u, v };
             outVerts.push_back(vtx);
         }
     }
 
-    // индексы: следим за ориентацией
+    // Indices: maintain consistent winding
     const uint32_t ring = (uint32_t)radialSegments;
     auto emit = [&](uint32_t a, uint32_t b, uint32_t c) {
         if (frontCW) { outIdx.push_back(a); outIdx.push_back(c); outIdx.push_back(b); } // CW
@@ -85,7 +85,7 @@ inline void BuildSpoonMeshCW(std::vector<VertexPNTUV>& outVerts,
             const uint32_t c = row1 + i1;
             const uint32_t d = row1 + i0;
 
-            // два треугольника квада: a-b-c, a-c-d
+            // Two triangles per quad: a-b-c, a-c-d
             emit(a, b, c);
             emit(a, c, d);
         }

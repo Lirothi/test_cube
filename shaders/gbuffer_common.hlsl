@@ -68,7 +68,7 @@ inline VSOut BaseVS(float3 pos, float4x4 world, float4x4 view, float4x4 proj, fl
     return o;
 }
 
-// финальный вывод в MRT по готовым значениям
+// Final MRT output using prepared values
 inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
 {
     PSOut o;
@@ -94,13 +94,13 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
     mr = txMR.Sample(samp, tfUV(uv)).rg;
     
 #if NORMALMAP_IS_RG
-    // --- RG (BC5/R8G8_UNORM): n.xy в [-1..1], n.z восстанавливаем ---
+    // --- RG (BC5/R8G8_UNORM): n.xy in [-1..1], reconstruct n.z ---
     float2 nrg = txNorm.Sample(samp, tfUV(uv)).rg * 2.0 - 1.0;
     nrg *= texFlags.w;
     float  nz2 = saturate(1.0 - dot(nrg, nrg));
     float3 nTS = float3(nrg, sqrt(nz2));
 #else
-    // --- RGB(A): классика ---
+    // --- RGB(A): standard path ---
     float3 nTS = txNorm.Sample(samp, tfUV(uv)).xyz * 2.0 - 1.0;
     nTS.xy *= texFlags.w * 1;
 #endif

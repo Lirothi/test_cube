@@ -242,7 +242,7 @@ float ActionMap::GetAxis(const std::string& name, const InputManager& input) con
 
 static int VkFromNameLower_(const std::string& s)
 {
-    // 1) одиночный символ: буквы/цифры
+    // 1) Single character: letters/digits
     if (s.size() == 1) {
         const char c = s[0];
         if (c >= 'a' && c <= 'z') { return ('A' + (c - 'a')); } // 'A'..'Z'
@@ -271,7 +271,7 @@ static int VkFromNameLower_(const std::string& s)
         if (num >= 1 && num <= 24) { return VK_F1 + (num - 1); }
     }
 
-    // 3) модификаторы
+    // 3) Modifier keys
     if (s == "shift" || s == "lshift" || s == "rshift") { return VK_SHIFT; }
     if (s == "ctrl" || s == "control" || s == "lctrl" || s == "rctrl") { return VK_CONTROL; }
     if (s == "alt" || s == "lalt" || s == "ralt" || s == "menu" || s == "lmenu" || s == "rmenu") { return VK_MENU; }
@@ -279,7 +279,7 @@ static int VkFromNameLower_(const std::string& s)
     if (s == "rwin" || s == "rightwin") { return VK_RWIN; }
     if (s == "apps" || s == "menukey" || s == "app") { return VK_APPS; }
 
-    // 4) управление/сервис
+    // 4) Navigation/service keys
     if (s == "space" || s == "spacebar") { return VK_SPACE; }
     if (s == "enter" || s == "return") { return VK_RETURN; }
     if (s == "escape" || s == "esc") { return VK_ESCAPE; }
@@ -302,7 +302,7 @@ static int VkFromNameLower_(const std::string& s)
     if (s == "scrolllock" || s == "scroll") { return VK_SCROLL; }
     if (s == "pause" || s == "break") { return VK_PAUSE; }
 
-    // 5) OEM-пункты по названиям
+    // 5) OEM keys by name
     if (s == "minus" || s == "dash" || s == "hyphen") { return VK_OEM_MINUS; }    // -
     if (s == "equals" || s == "equal" || s == "plus") { return VK_OEM_PLUS; }     // =
     if (s == "comma") { return VK_OEM_COMMA; }                                        // ,
@@ -342,17 +342,17 @@ static int VkFromNameLower_(const std::string& s)
         return VK_DIVIDE;
     }
     if (s == "numpaddec" || s == "numpad." || s == "decimal") { return VK_DECIMAL; }
-    if (s == "numpadenter") { return VK_RETURN; } // у Win нет отдельного VK
+    if (s == "numpadenter") { return VK_RETURN; } // Windows lacks a dedicated VK code
 
-    // 7) буквы словами (на случай "key_w" и т.п.)
-    if (s.size() == 2 && s[0] == 'k' && s[1] == 'p') { return 0; } // KP* (если встретится — лучше писать "numpad*")
+    // 7) Letters spelled out (for cases like "key_w")
+    if (s.size() == 2 && s[0] == 'k' && s[1] == 'p') { return 0; } // KP* (prefer "numpad*")
     if (s.rfind("key_", 0) == 0 && s.size() == 5) {
         char c = s[4];
         if (c >= 'a' && c <= 'z') { return ('A' + (c - 'a')); }
         if (c >= '0' && c <= '9') { return c; }
     }
 
-    // 8) запасной путь: пусто
+    // 8) Fallback: return 0
     return 0;
 }
 

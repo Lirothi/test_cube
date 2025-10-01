@@ -13,7 +13,7 @@ struct VSOut
     float4 col : COLOR0;
 };
 
-// те же root-constants, что и для текста: нам нужны лишь первые два (viewport.xy)
+// Same root constants as for text rendering: we only need the first two (viewport.xy)
 cbuffer UIConsts : register(b1)
 {
     float2 uViewport;
@@ -22,7 +22,7 @@ cbuffer UIConsts : register(b1)
 
 static float2 PixelToNDC(float2 p, float2 vp)
 {
-    // пиксели (0..vp) → NDC (-1..1), top-left origin
+    // pixels (0..vp) → NDC (-1..1), top-left origin
     float x = (p.x / max(1.0, vp.x)) * 2.0 - 1.0;
     float y = 1.0 - (p.y / max(1.0, vp.y)) * 2.0;
     return float2(x, y);

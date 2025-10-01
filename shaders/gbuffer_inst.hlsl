@@ -2,7 +2,7 @@
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 
-// world на инстанс
+// Per-instance world matrix
 struct InstanceData
 {
     row_major float4x4 world;

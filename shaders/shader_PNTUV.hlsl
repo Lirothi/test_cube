@@ -43,6 +43,6 @@ PSInput VSMain(VSInput input)
 float4 PSMain(PSInput input) : SV_TARGET
 {
     float3 n = pow(input.nrm, 1.0f);
-    float3 c = 0.5 + 0.5 * normalize(input.nrm); // яркая раскраска по нормали для проверки
+    float3 c = 0.5 + 0.5 * normalize(input.nrm); // bright normal-based coloring for debugging
     return gTex.Sample(gSmp, input.uv) * float4(c, 1.0);
 }

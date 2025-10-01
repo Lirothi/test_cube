@@ -6,21 +6,21 @@
 // ---------- GBuffer inputs ----------
 Texture2D GB0 : register(t0); // Albedo.rgb + Metal (a)
 Texture2D GB1 : register(t1); // NormalOcta.rg + Rough (b)
-Texture2D GB2 : register(t2); // Emissive (в compose)
-Texture2D DepthT : register(t3); // R32F (SRV к D32)
+Texture2D GB2 : register(t2); // Emissive (used in compose)
+Texture2D DepthT : register(t3); // R32F (SRV for D32 depth)
 Texture2D ShadowAtlas : register(t4);
 
 SamplerState gSmpPoint : register(s0);
-SamplerComparisonState gSmpLinear : register(s1); // для PCF (shadow)
+SamplerComparisonState gSmpLinear : register(s1); // for PCF (shadow)
 
 // ---------- Per-frame camera/light ----------
 cbuffer PerFrame : register(b0)
 {
-    // Направление ЛУЧЕЙ солнца в мире (куда светит). В лобе нужен вектор к источнику => -sunDirWS
+    // Direction of the sun rays in world space (direction of light). For shading we need a vector to the light source => -sunDirWS
     float3 sunDirWS;
     float ambientIntensity; // 0..1
     float3 lightRgb;
-    float exposure; // обычно 1..2
+    float exposure; // usually 1..2
     float3 camPosWS;
     float3 camDirWS;
 
@@ -29,16 +29,16 @@ cbuffer PerFrame : register(b0)
     float4x4 invProj;
     
     // === CSM ===
-    float4x4 lightViewProj[4]; // мир -> клип света (на каждый каскад)
-    float4 cascadeScaleBias[4]; // (scale.xy, bias.xy) в атлас
-    float4 cascadeSplitsVS; // z_view границы: [near, split1, split2, far]
+    float4x4 lightViewProj[4]; // world -> light clip (per cascade)
+    float4 cascadeScaleBias[4]; // (scale.xy, bias.xy) in the atlas
+    float4 cascadeSplitsVS; // z_view boundaries: [near, split1, split2, far]
     float2 shadowAtlasSize; // (W,H) = (4096,4096)
-    float4 shadowBiasNDC; // xyz: depth bias (в НОРМАЛИЗОВАННЫХ координатах z) по каскадам 0..2
-    float4 normalBiasWS; // xyz: normal offset (в МИРОВЫХ юнитах) по каскадам 0..2
+    float4 shadowBiasNDC; // xyz: depth bias (in NORMALIZED z coordinates) for cascades 0..2
+    float4 normalBiasWS; // xyz: normal offset (in WORLD units) for cascades 0..2
 }
 
-static const float shadowBias = 0.0015f; // базовый bias в 0..1 depth
-static const float pcfRadius = 1.0f; // в пикселях тайла
+static const float shadowBias = 0.0015f; // base bias in the 0..1 depth range
+static const float pcfRadius = 1.0f; // in tile pixels
 
 // ---------- VS fullscreen ----------
 struct VSOut
@@ -66,11 +66,11 @@ int ChooseCascadeIndex(float3 Pws)
 
 float ShadowPCF(float2 uv, float zRef)
 {
-    // базовый «hardware PCF» = 2x2 с билинеарными весами
+    // basic "hardware PCF" = 2x2 with bilinear weights
     return ShadowAtlas.SampleCmp(gSmpLinear, uv, zRef).r;
 }
 
-// 3x3 поверх hardware PCF (рекомендую для ближнего каскада)
+// 3x3 on top of hardware PCF (recommended for the near cascade)
 float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
 {
     float s = 0.0;
@@ -97,7 +97,7 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
     float2 scale = sb.xy;
     float2 bias = sb.zw;
 
-    // --- NORMAL OFFSET: двигаем точку вдоль нормали, чтобы убрать “отставание”
+    // --- NORMAL OFFSET: move the point along the normal to remove the "dragging" effect
     float3 Poff = Pws + Nws * normalBiasWS[idx];
 
     float4 lc = mul(float4(Poff, 1), LVP);
@@ -114,9 +114,9 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 
     float2 texel = 1.0 / shadowAtlasSize;
 
-    // depth bias в NDC z (пер-каскадно) + немного slope-scaled по NdotL
+    // depth bias in NDC z (per cascade) plus a bit of slope scaling by NdotL
     float bBase = shadowBiasNDC[idx];
-    float b = bBase + (1.0 - saturate(NdotL)) * bBase; // мягкое усиление под острым углом
+    float b = bBase + (1.0 - saturate(NdotL)) * bBase; // soft boost at grazing angles
 
     if (idx < 3)
     {

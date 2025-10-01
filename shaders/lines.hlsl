@@ -26,5 +26,5 @@ VSOut VSMain(VSIn i)
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    return i.color; // альфа из вершины
+    return i.color; // alpha comes from the vertex
 }

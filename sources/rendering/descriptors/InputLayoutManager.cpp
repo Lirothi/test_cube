@@ -1,7 +1,7 @@
 #include "rendering/descriptors/InputLayoutManager.h"
 
 InputLayoutManager::InputLayoutManager() {
-    InitBuiltins(); // инициализируем стандартные лейауты
+    InitBuiltins(); // initialize built-in layouts
 }
 
 void InputLayoutManager::Register(const std::string& name,
@@ -11,10 +11,10 @@ void InputLayoutManager::Register(const std::string& name,
     s.descs.resize(elems.size());
 
     for (size_t i = 0; i < elems.size(); ++i) {
-        // Копируем строку семантики внутрь менеджера
+        // Copy the semantic string into the manager's storage
         s.names.emplace_back(elems[i].SemanticName ? elems[i].SemanticName : "");
         s.descs[i] = elems[i];
-        s.descs[i].SemanticName = s.names.back().c_str(); // стабильный указатель
+        s.descs[i].SemanticName = s.names.back().c_str(); // stable pointer
     }
     map_[name] = std::move(s);
 }
@@ -24,7 +24,7 @@ void InputLayoutManager::Builder::Build(InputLayoutManager& mgr, const std::stri
     v.reserve(items_.size());
     for (auto& it : items_) {
         D3D12_INPUT_ELEMENT_DESC d{};
-        d.SemanticName         = it.semantic.c_str(); // временно; менеджер перепривяжет
+        d.SemanticName         = it.semantic.c_str(); // temporary; the manager will rebind it
         d.SemanticIndex        = it.semanticIndex;
         d.Format               = it.format;
         d.InputSlot            = it.inputSlot;
@@ -73,7 +73,7 @@ void InputLayoutManager::InitBuiltins() {
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Build(*this, "PosOnly");
 
-    // pos+color (slot 0) + instance matrix 4x4 в slot 1 (TEXCOORD4..7)
+    // pos+color (slot 0) + instance matrix 4x4 in slot 1 (TEXCOORD4..7)
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,     0, 0)
         .Add("COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT,  0)

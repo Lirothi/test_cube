@@ -42,8 +42,8 @@ struct DDS_HEADER_DXT10 {
     DXGI_FORMAT               dxgiFormat;
     D3D12_RESOURCE_DIMENSION  resourceDimension;
     uint32_t                  miscFlag;    // D3D11_RESOURCE_MISC_TEXTURECUBE = 0x4
-    uint32_t                  arraySize;   // кратно 6 для cubemap arrays
-    uint32_t                  miscFlags2;  // alpha mode и пр.
+    uint32_t                  arraySize;   // multiple of 6 for cubemap arrays
+    uint32_t                  miscFlags2;  // alpha mode and similar flags
 };
 #pragma pack(pop)
 
@@ -78,14 +78,14 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         return false;
     }
 
-    // 1) читаем файл
+    // 1) Read the file
     std::vector<uint8_t> file;
     if (!LoadFileToMemory_(path, file)) {
         OutputDebugStringW((L"[TextureCube] failed to read: " + path + L"\n").c_str());
         return false;
     }
 
-    // 2) парсим DDS (требуем DX10 header для современных форматов)
+    // 2) Parse the DDS (requires a DX10 header for modern formats)
     UINT w=0, h=0, mips=1, arr=0;
     DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
     size_t dataOfs = 0;
@@ -102,7 +102,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     width_ = w; height_ = h; mipLevels_ = mips; arraySize_ = arr; format_ = fmt;
 
-    // 3) создаём GPU ресурс (Texture2D array, arraySize = 6*N)
+    // 3) Create the GPU resource (Texture2D array, arraySize = 6*N)
     D3D12_RESOURCE_DESC td{};
     td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     td.Width = w;
@@ -120,7 +120,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         &hp, D3D12_HEAP_FLAG_NONE, &td,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
 
-    // 4) подготавливаем upload и раскладку сабресурсов
+    // 4) Prepare the upload buffer and subresource layout
     const UINT subresources = mips * arr;
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(subresources);
@@ -148,7 +148,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         &hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
 
-    // 5) копируем линейные данные DDS в upload-буфер (с учётом Footprint.RowPitch)
+    // 5) Copy the linear DDS data into the upload buffer (respecting Footprint.RowPitch)
     uint8_t* mapped = nullptr;
     ThrowIfFailed(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped)));
 
@@ -168,7 +168,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
     }
     upload->Unmap(0, nullptr);
 
-    // 6) CopyTextureRegion всех сабресурсов
+    // 6) CopyTextureRegion for all subresources
     for (UINT s = 0; s < subresources; ++s) {
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource = tex_.Get();
@@ -183,7 +183,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         uploadCmd->CopyTextureRegion(&dst, 0,0,0, &srcLoc, nullptr);
     }
 
-    // 7) барьер COPY_DEST -> PS SRV
+    // 7) Barrier COPY_DEST -> PS SRV
     {
         D3D12_RESOURCE_BARRIER b{};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -200,10 +200,10 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // 8) создаём CPU SRV (TextureCube или TextureCubeArray, формат = как у ресурса)
+    // 8) Create the CPU SRV (TextureCube or TextureCubeArray, same format as the resource)
     CreateSrvCPU_(r, format_, mips, arr);
 
-    // сброс staged-кэша
+    // Reset the staged cache
     stagedFrame_ = UINT(-1);
     srvGPU_.ptr = 0;
 
@@ -286,7 +286,7 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
         outMips = std::max(1u, hdr->mipMapCount);
         outFmt = hx->dxgiFormat;
 
-        // некоторые тулзы пишут arraySize=1 для куба и надеются на legacy-флаги caps2
+        // Some tools write arraySize=1 for a cube and rely on legacy caps2 flags
         const uint32_t faceMask =
             0x00000400u | 0x00000800u | 0x00001000u | 0x00002000u | 0x00004000u | 0x00008000u; // +X -X +Y -Y +Z -Z
         const bool legacyCube = (hdr->caps2 & 0x00000200u) != 0 && ((hdr->caps2 & faceMask) == faceMask); // DDSCAPS2_CUBEMAP
@@ -294,11 +294,11 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
         outArray = std::max(1u, hx->arraySize);
         if (outIsCube) {
             if (outArray == 1 && legacyCube) {
-                // поблажка: сломанный DX10 заголовок, но legacy-флаги говорят "куб" → считаем 1 куб = 6 слоёв
+                // Leniency: the DX10 header is broken, but the legacy flags say "cube" → treat 1 cube as 6 layers
                 outArray = 6;
             }
             if ((outArray % 6) != 0) {
-                // всё ещё мусор — лучше отказать, чтобы не копировать данные мимо
+                // Still invalid — better to refuse so we don't copy data incorrectly
                 return false;
             }
         }
@@ -307,8 +307,8 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
         return true;
     }
 
-    // --- Legacy DDS path (без DX10). Делаем минимально полезную поддержку ---
-    // Определим, куб это или нет, и пытаемся сопоставить распространённые форматы.
+    // --- Legacy DDS path (without DX10). Provide the minimum useful support ---
+    // Determine whether it is a cube and try to match the common formats.
     const bool capsCube = (hdr->caps2 & DDSCAPS2_CUBEMAP) != 0;
     const uint32_t faceMask =
         DDSCAPS2_CUBEMAP_POSITIVEX | DDSCAPS2_CUBEMAP_NEGATIVEX |
@@ -318,8 +318,8 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
     outIsCube = capsCube && ((hdr->caps2 & faceMask) == faceMask);
     outArray = outIsCube ? 6u : 1u;
 
-    // Формат:
-    // a) Сжатые DXT — маппим на BC1/2/3 UNORM
+    // Format:
+    // a) Compressed DXT — map to BC1/2/3 UNORM
     if (hasFourCC) {
         switch (fourcc) {
         case MAKEFOURCC('D', 'X', 'T', '1'): outFmt = DXGI_FORMAT_BC1_UNORM; break;
@@ -328,7 +328,7 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
         default: outFmt = DXGI_FORMAT_UNKNOWN; break;
         }
     }
-    // b) Несжатые 32-битные
+    // b) Uncompressed 32-bit formats
     if (outFmt == DXGI_FORMAT_UNKNOWN && hdr->ddspf.RGBBitCount == 32) {
         const auto R = hdr->ddspf.RBitMask;
         const auto G = hdr->ddspf.GBitMask;
@@ -345,7 +345,7 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
     }
 
     if (outFmt == DXGI_FORMAT_UNKNOWN) {
-        // Не поддерживаем этот старый формат — лучше перегнать DDS в DX10/HDR/BC6H.
+        // Unsupported legacy format — better to convert the DDS to DX10/HDR/BC6H.
         return false;
     }
 
@@ -355,7 +355,7 @@ bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,
 
 void TextureCube::CreateSrvCPU_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels, UINT arraySize)
 {
-    // CPU-only heap на 1 SRV
+    // CPU-only heap with one SRV
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.NumDescriptors = 1;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;

@@ -116,7 +116,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
     }
 
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV может модифицировать
+    std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV may modify the data
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, indices.data(), (UINT)indices.size(), generateTangentSpace);
     cache_[key] = m;
@@ -324,7 +324,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
                 continue;
             }
 
-            // выдаёт ID для (v/vt/vn), создавая уникальную вершину
+            // Produce an ID for (v/vt/vn), creating a unique vertex when needed
             std::vector<uint32_t> id(face.size());
             for (size_t i = 0; i < face.size(); ++i) {
                 robin_hood::unordered_map<OBJKey, uint32_t, OBJKeyHash>::iterator it = vmap.find(face[i]);
@@ -354,7 +354,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
                 }
             }
 
-            // триангуляция фаном: (0,1,2), (0,2,3), ...
+            // Triangulate as a fan: (0,1,2), (0,2,3), ...
             for (size_t t = 1; t + 1 < id.size(); ++t) {
                 addTri(outIndices, id[0], id[t], id[t + 1], opt.wantCW);
             }

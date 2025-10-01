@@ -27,12 +27,12 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
                                                                std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                                                const std::string& name)
 {
-    // уже есть в кэше?
+    // Already cached?
     if (auto it = cache_.find(name); it != cache_.end()) {
         return it->second;
     }
 
-    // есть пресет?
+    // Does a preset exist?
     auto pit = presets_.find(name);
     if (pit == presets_.end()) {
         return {};

@@ -12,7 +12,7 @@ namespace Math
 {
     using namespace DirectX;
 
-    // --- Константы ---
+    // --- Constants ---
     constexpr float  PI        = 3.14159265358979323846f;
     constexpr float  TWO_PI    = 6.28318530717958647692f;
     constexpr float  HALF_PI   = 1.57079632679489661923f;
@@ -20,7 +20,7 @@ namespace Math
     constexpr float  RAD2DEG   = 180.0f / PI;
     constexpr float  EPS       = 1e-6f;
 
-    // --- Утилиты (скаляры) ---
+    // --- Utilities (scalars) ---
     template<typename T> inline T Clamp(T v, T lo, T hi) {
         if (v < lo) { return lo; }
         if (v > hi) { return hi; }
@@ -58,7 +58,7 @@ namespace Math
         return std::fabs(a - b) <= eps * std::max(1.0f, std::max(std::fabs(a), std::fabs(b)));
     }
 
-    // --- Вектора: лёгкие обёртки над XMFLOAT* + helpers ---
+    // --- Vectors: lightweight wrappers over XMFLOAT* + helpers ---
     struct float2 {
         float x, y;
         float2() : x(0), y(0) {}
@@ -137,7 +137,7 @@ namespace Math
         float4 operator/(float s) const { return { x / s, y / s, z / s, w / s }; }
     };
 
-    // --- Цвет (float и RGBA8) ---
+    // --- Color (float and RGBA8) ---
     inline uint32_t PackRGBA(float r, float g, float b, float a = 1.0f) {
         const uint32_t R = (uint32_t)(Saturate(r) * 255.0f + 0.5f);
         const uint32_t G = (uint32_t)(Saturate(g) * 255.0f + 0.5f);
@@ -153,7 +153,7 @@ namespace Math
         return float4(r,g,b,a);
     }
 
-    // --- Кватернион ---
+    // --- Quaternion ---
     struct quat {
         float x, y, z, w; // (x,y,z,w)
         quat() : x(0), y(0), z(0), w(1) {}
@@ -181,7 +181,7 @@ namespace Math
         }
     };
 
-    // --- Матрица 4x4 (row-major интерфейс, под DirectX LH) ---
+    // --- 4x4 matrix (row-major interface, DirectX LH) ---
     struct mat4 {
         XMFLOAT4X4 m;
         mat4() { XMStoreFloat4x4(&m, XMMatrixIdentity()); }
@@ -202,13 +202,13 @@ namespace Math
         static mat4 RotationX(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationX(r)); return o; }
         static mat4 RotationY(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationY(r)); return o; }
         static mat4 RotationZ(float r) { mat4 o; XMStoreFloat4x4(&o.m, XMMatrixRotationZ(r)); return o; }
-        // Вращение из Эйлеров (DX: Roll=X? Нет — см. порядок аргументов)
+        // Rotation from Euler angles (DX: Roll=X? No — see argument order)
         static mat4 RotationRollPitchYaw(float pitch, float yaw, float roll) {
             mat4 o;
             DirectX::XMStoreFloat4x4(&o.m, DirectX::XMMatrixRotationRollPitchYaw(pitch, yaw, roll));
             return o;
         }
-        // Те же варианты, но вход в градусах
+        // Same variants with degree input
         static mat4 RotationRollPitchYawDegrees(float pitchDeg, float yawDeg, float rollDeg) {
             return RotationRollPitchYaw(pitchDeg * Math::DEG2RAD, yawDeg * Math::DEG2RAD, rollDeg * Math::DEG2RAD);
         }
@@ -261,33 +261,33 @@ namespace Math
             mat4 r; XMVECTOR det; XMStoreFloat4x4(&r.m, XMMatrixInverse(&det, a.xm())); return r;
         }
 
-        // Точка (x,y,z,1): эквивалент XMVector3TransformCoord
+        // Point (x,y,z,1): equivalent to XMVector3TransformCoord
         float3 TransformPoint(const float3& p) const {
             using namespace DirectX;
             return float3::FromXM(XMVector3TransformCoord(p.xm(), this->xm()));
         }
 
-        // Направление (x,y,z,0): эквивалент XMVector3TransformNormal (без учёта переноса)
+        // Direction (x,y,z,0): equivalent to XMVector3TransformNormal (ignores translation)
         float3 TransformDirection(const float3& v) const {
             using namespace DirectX;
             return float3::FromXM(XMVector3TransformNormal(v.xm(), this->xm()));
         }
 
-        // Полный 4D-вектор: эквивалент XMVector4Transform
+        // Full 4D vector: equivalent to XMVector4Transform
         float4 Transform(const float4& v) const {
             using namespace DirectX;
             return float4::FromXM(XMVector4Transform(v.xm(), this->xm()));
         }
 
-        // Нормаль с учётом неравномерного скейла: умножаем на inverse-transpose(3x3)
+        // Normal with non-uniform scale: multiply by inverse-transpose(3x3)
         float3 TransformNormalSafe(const float3& n) const {
             using namespace DirectX;
             XMMATRIX invT = XMMatrixTranspose(XMMatrixInverse(nullptr, this->xm()));
             return float3::FromXM(XMVector3TransformNormal(n.xm(), invT));
         }
 
-        // Операторы умножения матриц (у тебя уже были — оставь) + векторные:
-        float3 operator*(const float3& p) const { // m * p (как точка)
+        // Matrix multiplication operators (matching your existing ones) plus vector helpers:
+        float3 operator*(const float3& p) const { // m * p (treated as a point)
             return TransformPoint(p);
         }
         float4 operator*(const float4& v) const { // m * v (4D)
@@ -300,7 +300,7 @@ namespace Math
             return r;
         }
 
-        // накопительное умножение: this = this * rhs
+        // Accumulated multiplication: this = this * rhs
         mat4& operator*=(const mat4& rhs) {
             DirectX::XMMATRIX mm = DirectX::XMMatrixMultiply(this->xm(), rhs.xm());
             DirectX::XMStoreFloat4x4(&this->m, mm);
@@ -326,7 +326,7 @@ namespace Math
         float3 Extents() const { return (maxv - minv) * 0.5f; }
     };
 
-    // --- Доп. утилиты для векторов ---
+    // --- Additional vector utilities ---
     inline float  Dot(const float3& a, const float3& b) { return a.Dot(b); }
     inline float3 Cross(const float3& a, const float3& b) { return a.Cross(b); }
     inline float3 Normalize(const float3& v) { return v.Normalized(); }
@@ -338,7 +338,7 @@ namespace Math
     inline float3 Abs(const float3& a) { return float3{ std::abs(a.x), std::abs(a.y), std::abs(a.z) }; }
     inline float3 Floor(const float3& a) { return float3{ std::floor(a.x), std::floor(a.y), std::floor(a.z) }; }
 
-    // --- Свободные функции (аналоги DirectXMath) ---
+    // --- Free functions (analogues of DirectXMath) ---
     inline float3 TransformPoint(const float3& p, const mat4& m) {
         return m.TransformPoint(p);
     }
@@ -352,7 +352,7 @@ namespace Math
         return m.Transform(v);
     }
 
-    // --- Random helpers (минимум) ---
+    // --- Random helpers (minimal) ---
     inline float Rand01(uint32_t& state) {
         // xorshift32
         if (state == 0u) { state = 0x12345678u; }
@@ -362,7 +362,7 @@ namespace Math
         return (state & 0x00FFFFFFu) / 16777215.0f;
     }
     inline float3 RandUnitSphere(uint32_t& state) {
-        // простая выборка
+        // Simple sampling
         float z = Rand01(state) * 2.0f - 1.0f;
         float t = Rand01(state) * TWO_PI;
         float r = std::sqrt(std::max(0.0f, 1.0f - z * z));

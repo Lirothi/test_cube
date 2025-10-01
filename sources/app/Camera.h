@@ -16,22 +16,22 @@ public:
 
     void UpdateFromActions(InputManager& input, const ActionMap& map, float dt);
 
-    // Управление положением камеры
+    // Camera movement helpers
     void MoveForward(float d)   { MoveRelative(0, 0, d); }
     void MoveRight(float d)     { MoveRelative(d, 0, 0); }
     void MoveUp(float d)        { MoveRelative(0, d, 0); }
 
-    // Управление углами (в радианах)
+    // Angle controls (in radians)
     void AddPitch(float dp) { pitch_ += dp; ClampPitch(); }
     void AddYaw(float dy)   { yaw_   += dy; WrapYaw();    }
 
-    // Сеттеры
+    // Setters
     void SetPosition(const float3& pos) { position_ = pos; }
     void SetYawPitch(float yaw, float pitch) {
         yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw();
     }
 
-    // Получить view-матрицу
+    // Fetch the view matrix
     mat4 GetViewMatrix() const {
         mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
 		float3 look = rot.TransformPoint({ 0, 0, 1 }); // forward
@@ -39,10 +39,10 @@ public:
         return mat4::LookAtLH(position_, position_ + look, up);
     }
 
-    // Для передачи в CB/шедер
+    // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
 
-    // Управление мышью (ScreenSpace -> DeltaYaw/Pitch)
+    // Mouse input (screen-space delta -> yaw/pitch)
     void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {
         AddYaw(dx * sensitivity);
         AddPitch(dy * sensitivity);
@@ -50,8 +50,8 @@ public:
 
 private:
     float3 position_;
-    float pitch_; // вверх/вниз, ограничить [-pi/2+eps, pi/2-eps]
-    float yaw_;   // влево/вправо, можно не ограничивать
+    float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
+    float yaw_;   // Left/right, can wrap freely
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
@@ -65,7 +65,7 @@ private:
         while (yaw_ < -XM_PI) { yaw_ += XM_2PI; }
     }
 
-    // Локальное смещение (forward/right/up в системе камеры)
+    // Local offset (forward/right/up in camera space)
     void MoveRelative(float dx, float dy, float dz) {
 		float3 move = { dx, dy, dz };
 		mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);

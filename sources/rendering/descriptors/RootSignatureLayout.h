@@ -7,18 +7,18 @@ struct RootSignatureParameter {
     D3D12_ROOT_PARAMETER_TYPE type;
     UINT shaderRegister = 0;
     UINT registerSpace = 0;
-    UINT num32BitValues = 0; // для CONSTANTS
+    UINT num32BitValues = 0; // for CONSTANTS
     D3D12_SHADER_VISIBILITY visibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Для TABLE:
+    // For TABLE:
     std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
-    bool hasSamplerRanges = false; // true, если в таблице есть диапазоны типа SAMPLER
+    bool hasSamplerRanges = false; // true when the table contains SAMPLER ranges
 };
 
 struct RootSignatureLayout {
     std::vector<RootSignatureParameter> params;
 
-    // Внутренние буферы для сериализации
+    // Internal buffers used during serialization
     std::vector<D3D12_ROOT_PARAMETER> paramsD3D12;
     std::vector<std::vector<D3D12_DESCRIPTOR_RANGE>> stableRanges;
 
@@ -62,7 +62,7 @@ struct RootSignatureLayout {
         params.push_back(p);
     }
 
-    // --- Helpers для диапазонов таблиц ---
+    // --- Helpers for descriptor table ranges ---
     static D3D12_DESCRIPTOR_RANGE MakeRangeCBV(UINT baseReg, UINT num = 1, UINT space = 0) {
         D3D12_DESCRIPTOR_RANGE r{};
         r.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
@@ -103,7 +103,7 @@ struct RootSignatureLayout {
         return r;
     }
 
-    // --- Таблицы (TABLE) ---
+    // --- Tables (TABLE) ---
     void AddTable(const std::vector<D3D12_DESCRIPTOR_RANGE>& ranges,
         D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) {
         RootSignatureParameter p{};
@@ -123,7 +123,7 @@ struct RootSignatureLayout {
         params.push_back(p);
     }
 
-    // Удобный оверлоад для одной «полосы»
+    // Convenient overload for a single range
     void AddTable(D3D12_DESCRIPTOR_RANGE range,
         D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) {
         RootSignatureParameter p{};
@@ -136,14 +136,14 @@ struct RootSignatureLayout {
         params.push_back(p);
     }
 
-    // Быстрые шорткаты на одиночные таблицы
+    // Handy shortcuts for single-range tables
     void AddTableCBV(UINT baseReg, UINT num = 1, UINT space = 0, D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) { AddTable(MakeRangeCBV(baseReg, num, space), vis); }
     void AddTableSRV(UINT baseReg, UINT num = 1, UINT space = 0, D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) { AddTable(MakeRangeSRV(baseReg, num, space), vis); }
     void AddTableUAV(UINT baseReg, UINT num = 1, UINT space = 0, D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) { AddTable(MakeRangeUAV(baseReg, num, space), vis); }
     void AddTableSampler(UINT baseReg, UINT num = 1, UINT space = 0, D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) { AddTable(MakeRangeSampler(baseReg, num, space), vis); }
 
-    // --- ВАЖНО: одноэлементный SAMPLER как удобный синоним таблицы-сэмплера ---
-    // Это то, чего у тебя не хватало: парсер вызывает layout.AddSampler(sN, space)
+    // --- IMPORTANT: single SAMPLER as a shorthand for a sampler table ---
+    // This is what the parser needed: it calls layout.AddSampler(sN, space)
     void AddSampler(UINT reg, UINT space = 0, D3D12_SHADER_VISIBILITY vis = D3D12_SHADER_VISIBILITY_ALL) {
         AddTableSampler(reg, 1, space, vis);
     }
@@ -161,7 +161,7 @@ inline D3D12_ROOT_SIGNATURE_DESC MakeRootSignatureDesc(RootSignatureLayout& layo
         param.ShaderVisibility = p.visibility;
 
         if (p.type == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE) {
-            layout.stableRanges.push_back(p.ranges); // делаем копию, чтобы был стабильный буфер
+            layout.stableRanges.push_back(p.ranges); // Copy to keep a stable buffer
             param.DescriptorTable.NumDescriptorRanges = (UINT)layout.stableRanges.back().size();
             param.DescriptorTable.pDescriptorRanges = layout.stableRanges.back().data();
         }

@@ -12,10 +12,10 @@ public:
 
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
-    // --- Трансформы ---
+    // --- Transforms ---
     void SetPosition(const float3& p);
     void SetScale(const float3& s);
-    void SetRotationEulerRad(const float3& eulerXYZ);   // (pitch=X, yaw=Y, roll=Z), радианы
+    void SetRotationEulerRad(const float3& eulerXYZ);   // (pitch=X, yaw=Y, roll=Z), radians
     void SetRotationEulerDeg(const float3& eulerDegXYZ);
     void SetOrientationMatrix(const mat4& rotation3x3In4x4);
 
@@ -27,10 +27,10 @@ public:
     bool CastsShadow() const override { return true; }
 
 private:
-    void RebuildModel(); // M = R * T (под твою row-vector семантику)
+    void RebuildModel(); // M = R * T (for the row-vector convention)
 
 private:
-    mat4   rot_;   // ортонормальная 3x3 в верхнем левом блоке
+    mat4   rot_;   // Orthonormal 3x3 in the upper-left block
     float3 pos_;
     float3 scale_;
 

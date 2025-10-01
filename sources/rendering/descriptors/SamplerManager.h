@@ -10,9 +10,9 @@
 #include <mutex>
 
 class Renderer;
-class DescriptorAllocatorSampler; // твой аллокатор shader-visible sampler heap
+class DescriptorAllocatorSampler; // Your allocator for the shader-visible sampler heap
 
-// Простая нормализация/хэш desc
+// Simple normalization/hash wrapper for the sampler descriptor
 struct SamplerKey {
     D3D12_SAMPLER_DESC d{};
 
@@ -25,7 +25,7 @@ struct SamplerKey {
 };
 struct SamplerKeyHasher {
     size_t operator()(const SamplerKey& k) const noexcept {
-        // примитивный хэш по байтам
+        // Primitive byte-wise hash
         const uint64_t* p = reinterpret_cast<const uint64_t*>(&k.d);
         constexpr size_t N = sizeof(D3D12_SAMPLER_DESC)/sizeof(uint64_t);
         size_t h = 1469598103934665603ull;
@@ -38,10 +38,10 @@ class SamplerManager {
 public:
     void Init(ID3D12Device* device, UINT capacity = 256);
 
-    // Вернёт GPU-хэндл самплера для ТЕКУЩЕГО кадра (стейджит из CPU в shader-visible heap, если нужно)
+    // Return the sampler's GPU handle for the CURRENT frame (stages from CPU to the shader-visible heap if needed)
     D3D12_GPU_DESCRIPTOR_HANDLE Get(Renderer* renderer, const D3D12_SAMPLER_DESC& desc);
 
-    // Сформировать ТАБЛИЦУ из нескольких самплеров подряд и вернуть base GPU handle таблицы.
+    // Build a TABLE from consecutive samplers and return the base GPU handle of that table.
     template <size_t N>
     D3D12_GPU_DESCRIPTOR_HANDLE GetTable(Renderer* renderer, const std::array<D3D12_SAMPLER_DESC, N>& descs) {
         return GetTableImpl(renderer, descs.data(), N);
@@ -53,7 +53,7 @@ public:
 
     void Clear();
 
-    // Быстрые пресеты
+    // Handy presets
     static const D3D12_SAMPLER_DESC* LinearWrap();
     static const D3D12_SAMPLER_DESC* LinearClamp();
     static const D3D12_SAMPLER_DESC* PointClamp();
@@ -63,9 +63,9 @@ public:
 
 private:
     struct Entry {
-        UINT  cpuIndex = UINT(-1);                      // индекс в CPU heap
-        UINT  lastFrame = UINT(-1);                     // кадр, когда стейджили последний раз
-        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};              // GPU handle в shader-visible heap (на кадр lastFrame)
+        UINT  cpuIndex = UINT(-1);                      // Index within the CPU heap
+        UINT  lastFrame = UINT(-1);                     // Frame when it was last staged
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu{};              // GPU handle in the shader-visible heap (for lastFrame)
     };
 
     std::mutex mtx_;
@@ -74,7 +74,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap_;
     UINT cpuIncr_ = 0;
     UINT cpuCapacity_ = 0;
-    UINT cpuCursor_ = 0; // bump
+    UINT cpuCursor_ = 0; // bump pointer
 
     ID3D12Device* device_ = nullptr;
 

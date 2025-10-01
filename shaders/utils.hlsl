@@ -9,7 +9,7 @@ static const float kPi = 3.14159265359f;
 static const float kInvPi = 1.0f / kPi;
 static const float kMinRoughness = 0.03f;
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
-static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR~1.5 для диэлектриков
+static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for dielectrics
 
 // ============ normalize helpers ============
 inline float3 NormalizeSafe(float3 v, float3 fallback)
@@ -60,7 +60,7 @@ inline float3 NrmFrom01(float3 n01)
 	return n01 * 2.0f - 1.0f;
 }
 
-// =============== pack/unpack Roughness+Metallic в A8_UNORM ===============
+// =============== pack/unpack Roughness+Metallic into A8_UNORM ===============
 static const uint kRM_RBits = 5u; // roughness
 static const uint kRM_MBits = 3u; // metallic
 static const uint kRM_MaxU8 = 255u;
@@ -77,7 +77,7 @@ inline float PackRM(float rough, float metal)
 	return (float) packed / (float) kRM_MaxU8;
 }
 
-// A8_UNORM -> (rough, metal) в [0..1]
+// A8_UNORM -> (rough, metal) in [0..1]
 inline float2 UnpackRM(float a8)
 {
 	uint v = (uint) round(saturate(a8) * (float) kRM_MaxU8);
@@ -86,42 +86,42 @@ inline float2 UnpackRM(float a8)
 	return float2((float) r / kRM_RScale, (float) m / kRM_MScale);
 }
 
-// --- Derivative/cotangent frame (без TBN) ---
+// --- Derivative/cotangent frame (without TBN) ---
 inline float3 PerturbNormal_Deriv(float3 nTS, float3 Nws, float3 Pvs, float2 uv)
 {
-    // Базовая нормаль (world)
+    // Base normal (world)
 	float3 N = Nws;
 
-    // Fine-деривативы (устойчиво у края треугольников)
+    // Fine derivatives (stable near triangle edges)
 	float3 dp1 = ddx_fine(Pvs);
 	float3 dp2 = ddy_fine(Pvs);
 	float2 du1 = ddx_fine(uv);
 	float2 du2 = ddy_fine(uv);
 
-    // Cotangent frame (Mikk's trick) без деления на det
+    // Cotangent frame (Mikk's trick) without dividing by det
 	float3 dp2perp = cross(dp2, N);
 	float3 dp1perp = cross(N, dp1);
 	float3 T = dp2perp * du1.x + dp1perp * du2.x;
 	float3 B = dp2perp * du1.y + dp1perp * du2.y;
 
-    // Баланс масштаба T/B → сила нормалки независима от масштаба UV/проекции
+    // Balance the scale of T/B so normal strength is independent of UV/projection scale
 	float len2 = max(dot(T, T), dot(B, B));
 	if (len2 < 1e-18f)
 	{
-		return N; // вырожденная параметризация
+            return N; // Degenerate parameterization
 	}
 	float invMax = rsqrt(len2);
 	T *= invMax;
 	B *= invMax;
 
-    // Применяем tangent-space нормаль
+    // Apply tangent-space normal
 	return normalize(T * nTS.x + B * nTS.y + N * nTS.z);
 }
 
-// sRGB <-> Linear (точные piecewise функции, без трогания альфы)
-// Источник формулы: IEC 61966-2-1
-static const float SRGB_EPS_INV = 0.04045f; // sRGB -> Linear порог
-static const float SRGB_EPS_FWD = 0.0031308f; // Linear -> sRGB порог
+// sRGB <-> Linear (precise piecewise functions, alpha untouched)
+// Formula source: IEC 61966-2-1
+static const float SRGB_EPS_INV = 0.04045f; // sRGB -> Linear threshold
+static const float SRGB_EPS_FWD = 0.0031308f; // Linear -> sRGB threshold
 static const float SRGB_A = 0.055f;
 static const float SRGB_GAMMA = 2.4f;
 static const float SRGB_IGAMMA = 1.0f / 2.4f;
@@ -140,7 +140,7 @@ inline float4 SRGBToLinear(float4 c)
 
 inline float3 LinearToSRGB(float3 c)
 {
-	c = max(c, 0.0f); // защита от отрицательных после тонмапа
+    c = max(c, 0.0f); // clamp negatives that may appear after tonemapping
 	float3 low = c * 12.92f;
 	float3 high = (1.0f + SRGB_A) * pow(c, SRGB_IGAMMA) - SRGB_A;
 	return lerp(low, high, step(SRGB_EPS_FWD, c));
@@ -151,7 +151,7 @@ inline float4 LinearToSRGB(float4 c)
 	return float4(LinearToSRGB(c.rgb), c.a);
 }
 
-// Быстрые приближения (если очень надо): pow-близко, но нет piecewise
+// Fast approximations if needed: pow-based, but not piecewise accurate
 inline float3 SRGBToLinear_Fast(float3 c)
 {
 	return pow(saturate(c), 2.2f);
@@ -161,7 +161,7 @@ inline float3 LinearToSRGB_Fast(float3 c)
 	return pow(max(c, 0.0f), 1.0f / 2.2f);
 }
 
-// Произвольная "гамма": линейный <-> гамма-энкод (не sRGB, а просто pow)
+// Arbitrary “gamma”: linear <-> gamma encode (generic pow, not sRGB)
 inline float3 LinearToGamma(float3 c, float gammaOut)
 {
 	return pow(max(c, 0.0f), 1.0f / max(1e-6f, gammaOut));
@@ -196,7 +196,7 @@ inline float3 F_Schlick(float cosT, float3 F0)
 	return F0 + (1.0f - F0) * m;
 }
 
-// ===== Унифицированный BRDF =====
+// ===== Unified BRDF =====
 struct BRDFInput
 {
 	float3 albedo;
@@ -209,7 +209,7 @@ struct BRDFInput
 
 struct BRDFResult
 {
-	float3 diffBRDF; // ламберт с energy compensation
+    float3 diffBRDF; // Lambert with energy compensation
 	float3 specBRDF; // GGX Cook-Torrance
 	float NdotL;
 	float NdotV;

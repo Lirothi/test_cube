@@ -4,7 +4,7 @@
 
 cbuffer PerFrame : register(b0)
 {
-    float4x4 view;      // обычная view
+    float4x4 view;      // regular view matrix
     float4x4 proj;
     float exposure;
 }
@@ -15,16 +15,16 @@ struct VSIn {
 
 struct VSOut {
     float4 pos : SV_Position;
-    float3 dir : TEXCOORD0; // направление выборки
+    float3 dir : TEXCOORD0; // sampling direction
 };
 
 VSOut VSMain(VSIn i)
 {
-    // 1) позиция: view без трансляции, затем proj, и толкаем на дальнюю плоскость
+    // 1) Position: remove translation from view, apply proj, and push to the far plane
     float4x4 v = view;
     v._41 = 0.0;
     v._42 = 0.0;
-    v._43 = 0.0; // убрать translate (для HLSL именно _41.._43)
+    v._43 = 0.0; // remove translation (HLSL uses _41.._43)
     VSOut o;
     float4 viewPos = mul(float4(i.pos, 1.0), v);
     o.pos = mul(viewPos, proj);

@@ -15,10 +15,10 @@ public:
 
     InputLayoutManager();
 
-    // Зарегистрировать готовый лейаут под именем (если имя уже есть — перезапишем).
+    // Register a ready-made layout under the given name (overwrites when the name already exists).
     void Register(const std::string& name, const std::vector<D3D12_INPUT_ELEMENT_DESC>& elems);
 
-    // Билдер — удобный способ собрать элементы с гарантиями времени жизни строк.
+    // Builder — convenient helper to assemble elements while keeping string storage alive.
     class Builder {
     public:
         Builder& Add(const char* semanticName,
@@ -33,7 +33,7 @@ public:
             return *this;
         }
 
-        // Удобная матрица 4x4 как 4 семантики подряд (например TEXCOORD4..7), per-instance
+        // Convenience helper: 4x4 matrix as four consecutive semantics (e.g., TEXCOORD4..7), per-instance
         Builder& AddInstanceMatrix4x4(const char* baseSemantic,
                                       UINT baseIndex,
                                       UINT inputSlot) {
@@ -45,7 +45,7 @@ public:
             return *this;
         }
 
-        // Сгенерировать и зарегистрировать
+        // Generate and register the layout
         void Build(InputLayoutManager& mgr, const std::string& name);
 
     private:
@@ -61,14 +61,14 @@ public:
         std::vector<Item> items_;
     };
 
-    // Получить лейаут по имени
+    // Fetch a layout by name
     View Get(const std::string& name) const;
 
 private:
     void InitBuiltins();
 
     struct Stored {
-        std::vector<std::string>   names; // чтобы .SemanticName жили вечно
+        std::vector<std::string>   names; // keep .SemanticName buffers alive
         std::vector<D3D12_INPUT_ELEMENT_DESC> descs;
     };
     robin_hood::unordered_map<std::string, Stored> map_;

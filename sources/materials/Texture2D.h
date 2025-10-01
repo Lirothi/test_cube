@@ -10,72 +10,72 @@ class Renderer;
 
 class Texture2D {
 public:
-	enum class Usage : uint32_t {
-		AlbedoSRGB, // SRV будет *_SRGB
-		NormalMap, // линейная выборка; поддержка RGB или RG (флагом)
-		MetalRough, // линейная выборка; R=metal, G=rough
-		LinearData // любой другой линейный канал
-	};
+        enum class Usage : uint32_t {
+                AlbedoSRGB, // SRV will be *_SRGB
+                NormalMap, // linear sampling; supports RGB or RG via a flag
+                MetalRough, // linear sampling; R=metal, G=rough
+                LinearData // any other linear channel
+        };
 
-	struct CreateDesc {
-		std::wstring path; // путь к файлу (PNG/JPG/TIFF/BMP через WIC; DDS напрямую)
-		Usage usage = Usage::LinearData;
-		bool normalIsRG = false; // если Usage::NormalMap и текстура содержит только RG (BC5/RG8, либо RG в RGBA-контейнере)
-		bool generateMips = false; // зарезервировано (сейчас 1 мип для WIC, из DDS — как в файле)
-	};
+        struct CreateDesc {
+                std::wstring path; // Path to the file (PNG/JPG/TIFF/BMP via WIC; DDS directly)
+                Usage usage = Usage::LinearData;
+                bool normalIsRG = false; // When Usage::NormalMap and the texture stores only RG (BC5/RG8 or RG in an RGBA container)
+                bool generateMips = false; // Reserved (currently 1 mip for WIC, from DDS — whatever the file contains)
+        };
 
 public:
-	// Загрузка файла внутри Texture2D (WIC -> RGBA8 для обычных форматов, DDS — без перекодирования)
-	bool CreateFromFile(Renderer* renderer,
-		ID3D12GraphicsCommandList* uploadCmd,
-		const CreateDesc& desc,
-		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+        // Load the file inside Texture2D (WIC -> RGBA8 for common formats, DDS without transcoding)
+        bool CreateFromFile(Renderer* renderer,
+                ID3D12GraphicsCommandList* uploadCmd,
+                const CreateDesc& desc,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
-	// Старый путь: создание из RGBA8 буфера (оставлено для совместимости)
-	void CreateFromRGBA8(Renderer* renderer,
-		ID3D12GraphicsCommandList* uploadCmd,
-		const void* rgba8, UINT width, UINT height,
-		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+        // Legacy path: create from an RGBA8 buffer (kept for compatibility)
+        void CreateFromRGBA8(Renderer* renderer,
+                ID3D12GraphicsCommandList* uploadCmd,
+                const void* rgba8, UINT width, UINT height,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
-	// Получить GPU handle SRV в shader-visible куче текущего кадра
-	D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* renderer);
+        // Obtain the SRV GPU handle in the current frame's shader-visible heap
+        D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* renderer);
 
-	// CPU SRV, если нужно напрямую копировать в свои таблицы
-	D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return srvCPU_; }
+        // CPU SRV if you need to copy it into your own tables
+        D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return srvCPU_; }
 
 	ID3D12Resource* GetResource() const { return tex_.Get(); }
 	UINT GetWidth() const { return width_; }
 	UINT GetHeight() const { return height_; }
 	DXGI_FORMAT GetSrvFormat() const { return srvFormat_; }
 private:
-	// Загрузчики и аплоад
-	bool LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH);
-	void UploadRGBA8_(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmd,
-		const void* rgba8, UINT width, UINT height,
-		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
-		DXGI_FORMAT resourceFmt);
+        // Loaders and upload helpers
+        bool LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH);
+        void UploadRGBA8_(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmd,
+                const void* rgba8, UINT width, UINT height,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
+                DXGI_FORMAT resourceFmt);
 
-	// Новый: прямая загрузка DDS (BC1/BC2/BC3/BC4/BC5/BC7 + RGBA8), мипы, без перекодирования
-	bool CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
-		const CreateDesc& desc,
-		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+        // Direct DDS loading (BC1/BC2/BC3/BC4/BC5/BC7 + RGBA8) with mipmaps, without transcoding
+        bool CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
+                const CreateDesc& desc,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
-	// Создание CPU SRV
-	void CreateCpuSrv_(Renderer* renderer, DXGI_FORMAT srvFmt, UINT mipLevels);
+        // Create the CPU SRV
+        void CreateCpuSrv_(Renderer* renderer, DXGI_FORMAT srvFmt, UINT mipLevels);
 private:
-	Microsoft::WRL::ComPtr<ID3D12Resource> tex_;
+        Microsoft::WRL::ComPtr<ID3D12Resource> tex_;
 
-	// CPU-only heap для SRV (1 дескриптор)
-	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeapCPU_;
-	D3D12_CPU_DESCRIPTOR_HANDLE srvCPU_{};
+        // CPU-only heap for the SRV (single descriptor)
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeapCPU_;
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCPU_{};
 
-	// Кэш staged GPU handle на кадр
-	UINT stagedFrame_ = UINT(-1);
-	D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
+        // Cache of the staged GPU handle per frame
+        UINT stagedFrame_ = UINT(-1);
+        D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
 
-	// Метаданные
-	UINT width_ = 0, height_ = 0;
-	UINT mipLevels_ = 1;
-	DXGI_FORMAT resourceFormat_ = DXGI_FORMAT_UNKNOWN; // обычно R8G8B8A8_TYPELESS / BC*_TYPELESS
-	DXGI_FORMAT srvFormat_ = DXGI_FORMAT_UNKNOWN; // UNORM или SRGB
+        // Metadata
+        UINT width_ = 0, height_ = 0;
+        UINT mipLevels_ = 1;
+        DXGI_FORMAT resourceFormat_ = DXGI_FORMAT_UNKNOWN; // Typically R8G8B8A8_TYPELESS / BC*_TYPELESS
+        DXGI_FORMAT srvFormat_ = DXGI_FORMAT_UNKNOWN; // UNORM or SRGB
 };

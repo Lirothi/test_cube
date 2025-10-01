@@ -1,5 +1,5 @@
 // RootSignature: CBV(b0)
-// Используем твой общий b0 из gbuffer_common: world/view/proj
+// Use the shared b0 from gbuffer_common: world/view/proj
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 
@@ -12,5 +12,5 @@ VSOutD VSMain(VSIn i)
     return o;
 }
 
-// depth-only — PS можно оставить пустым
+// Depth-only — pixel shader can remain empty
 void PSMain(VSOutD i) { }

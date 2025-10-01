@@ -7,7 +7,7 @@
 
 class RenderContextPool {
 public:
-    // Move-only RAII — автоматически возвращает контекст в пул
+    // Move-only RAII — automatically returns the context to the pool
     class Handle {
     public:
         Handle() = default;
@@ -24,7 +24,7 @@ public:
         RenderContext* operator->()      { return ctx_; }
         operator const RenderContext&() const { return *ctx_; }
 
-        // не копируем
+        // Non-copyable
         Handle(const Handle&) = delete;
         Handle& operator=(const Handle&) = delete;
     private:

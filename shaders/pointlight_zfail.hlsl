@@ -8,4 +8,4 @@ VSOut VSMain(VSIn v)
     o.H = TransformPositionH(v.P, world, view, proj);
     return o;
 }
-float4 PSMain() : SV_Target { return 0.0.xxxx; } // no color writes (mask=0 в PSO)
+float4 PSMain() : SV_Target { return 0.0.xxxx; } // no color writes (mask=0 in the PSO)
