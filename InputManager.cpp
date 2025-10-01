@@ -8,7 +8,7 @@ void InputManager::Initialize(HWND hwnd) {
     RAWINPUTDEVICE rid{};
     rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
     rid.usUsage = HID_USAGE_GENERIC_MOUSE;
-    rid.dwFlags = RIDEV_INPUTSINK; // получать WM_INPUT даже если курсор за пределами окна (пока активны)
+    rid.dwFlags = RIDEV_INPUTSINK; // receive WM_INPUT even if the cursor leaves the window (while active)
     rid.hwndTarget = hwnd_;
     RegisterRawInputDevices(&rid, 1, sizeof(rid));
 }
@@ -92,7 +92,7 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
             keyDown_[vk] = 0;
             if (vk == VK_MENU) {
-                // если Alt отпустили — можно снять захват, если он держался только из-за камеры (логика сцены решит)
+                // if Alt was released we may drop capture if it was held solely for the camera (scene logic decides)
             }
             break;
         }

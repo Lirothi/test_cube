@@ -67,7 +67,7 @@ bool Texture2D::LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& o
         return false;
     }
 
-    // Конвертируем в RGBA8 (линейное пространство — SRGB обрабатываем выбором SRV формата)
+    // Convert to RGBA8 (linear space—SRGB is handled by choosing the SRV format)
     if (FAILED(conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
         WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
         return false;
@@ -169,7 +169,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     const CreateDesc& desc,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
-    // 1) Читаем файл целиком
+    // 1) Read the entire file
     std::ifstream f(desc.path, std::ios::binary);
     if (!f) {
         return false;
@@ -184,7 +184,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         return false;
     }
 
-    // Поддержка только 2D, без кубов и массивов
+    // Supports only 2D textures, no cubes or arrays
     const bool isCube = (hdr.caps2 & 0x00000200u) != 0; // DDSCAPS2_CUBEMAP
     if (isCube) {
         return false;
@@ -206,19 +206,19 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         }
     }
     else {
-        // Легаси FourCC
+        // Legacy FourCC
         if (hdr.ddspf.flags & DDPF_FOURCC) {
             if (!MapLegacyFourCCToPair(hdr.ddspf.fourCC, fp)) {
                 return false;
             }
         }
         else {
-            // Предположим RGBA8
+            // Assume RGBA8
             if (hdr.ddspf.RGBBitCount == 32 && hdr.ddspf.RBitMask == 0x00FF0000 && hdr.ddspf.GBitMask == 0x0000FF00 && hdr.ddspf.BBitMask == 0x000000FF && hdr.ddspf.ABitMask == 0xFF000000) {
                 MapDXGIToPair(DXGI_FORMAT_R8G8B8A8_UNORM, fp);
             }
             else {
-                return false; // неподдерживаемый формат
+                return false; // unsupported format
             }
         }
     }
@@ -227,7 +227,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     const UINT width = std::max(1u, hdr.width);
     const UINT height = std::max(1u, hdr.height);
 
-    // 2) Загружаем данные в память
+    // 2) Load data into memory
     std::vector<uint8_t> fileData;
     f.seekg(0, std::ios::end);
     const std::streamoff fileSize = f.tellg();
@@ -237,7 +237,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     f.seekg(dataStart, std::ios::beg);
     f.read(reinterpret_cast<char*>(fileData.data()), dataSize);
 
-    // 3) Создаём ресурс (TYPELESS, чтобы SRGB/UNORM SRV на выбор)
+    // 3) Create the resource (TYPELESS so SRGB/UNORM SRV can be selected later)
     auto* device = r->GetDevice();
 
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -256,7 +256,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
     tex_->SetName(L"Tex2D_RESOURCE_DDS");
 
-    // 4) Вычисляем footprints для всех мипов
+    // 4) Compute footprints for every mip
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(mipCount);
     std::vector<UINT> numRows(mipCount);
     std::vector<UINT64> rowSizes(mipCount);
@@ -279,7 +279,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
 
-    // 6) Копируем по мипам, с учётом BC-строя
+    // 6) Copy each mip while respecting the BC layout
     uint8_t* mapped = nullptr;
     D3D12_RANGE rge{ 0, 0 };
     ThrowIfFailed(upload->Map(0, &rge, reinterpret_cast<void**>(&mapped)));
@@ -339,7 +339,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     }
     r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // 9) Выбираем SRV формат по назначению (sRGB для Albedo)
+    // 9) Select the SRV format based on usage (sRGB for Albedo)
     DXGI_FORMAT srvFmt = fp.srvUnorm;
     if (desc.usage == Usage::AlbedoSRGB && fp.srvSRGB != DXGI_FORMAT_UNKNOWN) {
         srvFmt = fp.srvSRGB;
@@ -360,7 +360,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     const CreateDesc& desc,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
-    // DDS — отдельный путь
+    // DDS uses a separate path
     if (EndsWithNoCase(desc.path, L".dds")) {
         if (!CreateFromDDS_(renderer, uploadCmd, desc, keepAlive)) {
             OutputDebugStringW((L"[Texture2D] DDS load failed: " + desc.path + L"\n").c_str());
@@ -377,14 +377,14 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
         return false;
     }
 
-    // 2) Если это NormalMap и normalIsRG=true — «обнулим» B, чтобы не мусорил
+    // 2) If this is a NormalMap and normalIsRG=true, zero B to avoid noise
     if (desc.usage == Usage::NormalMap && desc.normalIsRG) {
         for (size_t i = 0; i < rgba.size(); i += 4) {
             rgba[i + 2] = 0;   // B = 0
         }
     }
 
-    // 3) Выбираем форматы: ресурс TYPELESS, SRV UNORM/SRGB
+    // 3) Choose formats: TYPELESS resource, UNORM/SRGB SRV
     DXGI_FORMAT resourceFmt = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     DXGI_FORMAT srvFmt = (desc.usage == Usage::AlbedoSRGB) ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         : DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -396,7 +396,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     width_ = w; height_ = h; mipLevels_ = 1;
     resourceFormat_ = resourceFmt; srvFormat_ = srvFmt;
 
-    // сброс staged кэша
+    // Reset the staged cache
     stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
 
     return true;
@@ -407,7 +407,7 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
     const void* rgba8, UINT width, UINT height,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
-    // По умолчанию — линейный UNORM SRV (подойдёт для normal/MR/linear)
+    // Default to a linear UNORM SRV (suitable for normal/MR/linear data)
     DXGI_FORMAT resFmt = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     DXGI_FORMAT srvFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
 
@@ -427,7 +427,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)
     }
 
     auto& da = r->GetDescAlloc();
-    auto h = da.Alloc(); // CPU/GPU пара
+    auto h = da.Alloc(); // CPU/GPU pair
     r->GetDevice()->CopyDescriptorsSimple(1, h.cpu, srvCPU_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     srvGPU_ = h.gpu;
@@ -451,7 +451,7 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     td.Width = width;
     td.Height = height;
     td.DepthOrArraySize = 1;
-    td.MipLevels = 1; // TODO: мипы по желанию (compute/graphics)
+    td.MipLevels = 1; // TODO: optional mips (compute/graphics)
     td.Format = resourceFmt; // TYPELESS
     td.SampleDesc.Count = 1;
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -518,12 +518,12 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     uploadCmd->ResourceBarrier(1, &b);
 
-    // Держим upload до исполнения
+    // Keep the upload resource alive until execution
     if (keepAlive) {
         keepAlive->push_back(upload);
     }
 
-    // Запомнить стейт в трекере
+    // Record the state in the tracker
     r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
@@ -540,7 +540,7 @@ void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels)
     srvHeapCPU_->SetName(L"Tex2D_DESC_HEAP");
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-    sd.Format = srvFmt; // UNORM или SRGB
+    sd.Format = srvFmt; // UNORM or SRGB
     sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sd.Texture2D.MipLevels = mipLevels;

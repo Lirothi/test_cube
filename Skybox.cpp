@@ -54,7 +54,7 @@ void Skybox::Init(Renderer* renderer,
         return;
     }
 
-    // Если текстура ещё не загружена через LoadDDS — можно попытаться здесь (необязательно)
+    // If the texture has not been loaded via LoadDDS yet, we can optionally try it here
     if (!cube_.GetResource() && !path_.empty()) {
         (void)cube_.CreateFromDDS(renderer, uploadCmdList, path_, uploadKeepAlive);
     }
@@ -62,12 +62,12 @@ void Skybox::Init(Renderer* renderer,
     graphicsDesc_.numRT = 1;
     graphicsDesc_.rtvFormats[0] = renderer->GetSceneColorFormat();
     graphicsDesc_.depth.DepthEnable = TRUE;
-    graphicsDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // не пишем глубину
-    graphicsDesc_.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // трюк для неба
-    graphicsDesc_.raster.CullMode = D3D12_CULL_MODE_NONE;             // рисуем "изнутри"
+    graphicsDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
+    graphicsDesc_.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // trick for the sky
+    graphicsDesc_.raster.CullMode = D3D12_CULL_MODE_NONE;             // render from the inside
     graphicsDesc_.blend.RenderTarget[0].BlendEnable = FALSE;
 
-    // Сборка геометрии (куб)
+    // Build the cube geometry
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
 
     if (!GetUniformBinder())

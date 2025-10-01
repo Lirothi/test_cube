@@ -5,7 +5,7 @@
 
 using namespace DirectX;
 
-// Гибкий аплоад произвольного формата
+// Flexible upload for an arbitrary format
 void Mesh::CreateGPUFlexible(ID3D12Device* device,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
@@ -27,7 +27,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     vertexBufferView_.StrideInBytes = vertexStride_;
     vertexBufferView_.SizeInBytes = vbSize;
 
-    // IB (поддержка 16/32-битных индексов)
+    // Index buffer (supports 16/32-bit indices)
     UINT ibSize = 0;
     if (indexFormat_ == DXGI_FORMAT_R16_UINT) {
         ibSize = sizeof(uint16_t) * indexCount_;
@@ -45,7 +45,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     up.StealKeepAlive(uploadKeepAlive);
 }
 
-// Пакетный путь под новый формат + генерация TBN
+// Batch path for the new format plus TBN generation
 void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
@@ -76,7 +76,7 @@ void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount)
     cmdList->DrawIndexedInstanced(indexCount_, instanceCount, 0, 0, 0);
 }
 
-// ====== Генерация нормалей и тангентов ======
+// ====== Normal and tangent generation ======
 static inline XMVECTOR SafeNormalize(XMVECTOR v) {
     const float eps = 1e-6f;
     XMFLOAT3 f; XMStoreFloat3(&f, v);
@@ -95,7 +95,7 @@ void Mesh::GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
     std::vector<XMFLOAT3> accT(vcount, XMFLOAT3{ 0,0,0 });
     std::vector<XMFLOAT3> accB(vcount, XMFLOAT3{ 0,0,0 });
 
-    // 1) аккумулируем по треугольникам
+    // 1) Accumulate per triangle
     for (UINT i = 0; i < indexCount; i += 3) {
         uint32_t i0 = indices[i + 0];
         uint32_t i1 = indices[i + 1];
@@ -140,13 +140,13 @@ void Mesh::GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
         add3(accB[i0], B); add3(accB[i1], B); add3(accB[i2], B);
     }
 
-    // 2) нормализуем и ортогонализуем; tangent.w = sign(bitangent)
+    // 2) Normalize and orthogonalize; tangent.w = sign(bitangent)
     for (UINT i = 0; i < vcount; ++i) {
         XMVECTOR n = SafeNormalize(XMLoadFloat3(&accN[i]));
         XMVECTOR t = SafeNormalize(XMLoadFloat3(&accT[i]));
         XMVECTOR b = SafeNormalize(XMLoadFloat3(&accB[i]));
 
-        // если нормаль в исходных данных уже была — используем её как приоритет
+        // If the source data already provided a normal, prefer it
         if (verts[i].normal.x != 0 || verts[i].normal.y != 0 || verts[i].normal.z != 0) {
             n = SafeNormalize(XMLoadFloat3(&verts[i].normal));
         }

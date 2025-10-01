@@ -26,7 +26,7 @@ static bool LoadTGA8(const std::wstring& path, int& w, int& h, std::vector<uint8
     w = hdr[12] | (hdr[13] << 8);
     h = hdr[14] | (hdr[15] << 8);
     out.resize((size_t)w * (size_t)h);
-    // данные в TGA снизу-вверх
+    // TGA stores rows bottom-to-top
     for (int y = h - 1; y >= 0; --y) {
         f.read((char*)&out[(size_t)y * (size_t)w], w);
     }
@@ -131,7 +131,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         }
     }
 
-    // загрузим атлас .tga → в RGBA8 и на GPU через твою Texture2D::CreateFromRGBA8
+    // Load the .tga atlas, convert it to RGBA8, and upload it via Texture2D::CreateFromRGBA8
     int w=0, h=0; std::vector<uint8_t> g;
     if (!LoadTGA8(tgaPath, w, h, g)) {
         return false;
@@ -146,7 +146,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     }
     tex_.CreateFromRGBA8(r, uploadCl, rgba.data(), (UINT)w, (UINT)h, uploadKeepAlive);
 
-    // Отсортируем и дедуплицируем глифы (последнее в JSON имеет приоритет)
+    // Sort and deduplicate glyphs (the last entry in JSON wins)
     if (!glyphs_.empty()) {
         std::stable_sort(glyphs_.begin(), glyphs_.end(), [](const FontGlyph& a, const FontGlyph& b) {
             return a.cp < b.cp;
@@ -164,7 +164,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         glyphs_.erase(write, glyphs_.end());
     }
 
-    // Если в JSON не было пробела — добавим синтетический с корректным advance
+    // If JSON did not contain a space glyph, add a synthetic one with the correct advance
     auto lowerBoundCp = [](const FontGlyph& glyph, uint32_t cp) {
         return glyph.cp < cp;
     };
@@ -185,7 +185,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         itSpace = glyphs_.insert(itSpace, sp);
     }
 
-    // Пересоберём remap (для компактных диапазонов используем прямой индекс)
+    // Rebuild the remap (for compact ranges use a direct index)
     glyphRemap_.clear();
     glyphRemapBase_ = 0;
     if (!glyphs_.empty()) {
@@ -201,7 +201,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         }
     }
 
-    // Отсортируем и дедуплицируем кернинги
+    // Sort and deduplicate kerning pairs
     if (!kerning_.empty()) {
         std::stable_sort(kerning_.begin(), kerning_.end(), [](const KerningPair& a, const KerningPair& b) {
             return a.key < b.key;

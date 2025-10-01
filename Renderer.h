@@ -27,7 +27,7 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        // ресурсы
+        // Resources
         ComPtr<ID3D12Resource> gb0;   // R8G8B8A8 (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // R10G10G10A2 (normalOcta+rough)
         ComPtr<ID3D12Resource> gb2;   // R11G11B10 (emissive)
@@ -38,7 +38,7 @@ public:
         ComPtr<ID3D12Resource> ssrBlur; // R16G16B16A16F
         ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
 
-        // CPU дескрипторы
+        // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,Depth(R32F)
@@ -48,7 +48,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurRTV{}, ssrBlurSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
 
-        UINT shadowRes = 4096; // атлас 4096x4096, тайлы 2048
+        UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
     };
 
     Renderer();
@@ -56,13 +56,13 @@ public:
     void Shutdown();
     void ReportLiveObjects();
 
-    // Инициализация устройства/очереди/свапа/RTV/DSV + кадровые ресурсы/фэнс
+    // Initialize device/queue/swap/RTV/DSV plus frame resources and the fence
     void InitD3D12(HWND window);
-    void InitFence(); // оставлено для совместимости, делает ничего если уже инициализировано
+    void InitFence(); // kept for compatibility; does nothing if already initialized
 
-    // Кадровой цикл
-    void BeginFrame();                 // ждёт свой кадр, ресетит allocator и командный лист
-    void EndFrame();                   // барьер RT->Present, Execute, Present, сигнал фэнса
+    // Frame cycle
+    void BeginFrame();                 // waits for its frame, resets allocator and command list
+    void EndFrame();                   // barrier RT->Present, Execute, Present, signal fence
 
     void Tick(float dt);
     bool ConsumeMaterialHotReloadFlag();
@@ -77,12 +77,12 @@ public:
     void BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
 
-    // готовые SRV-таблицы (в shader-visible heap кадра)
+    // Prebuilt SRV tables (in the frame's shader-visible heap)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
     D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2
     D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene
 
-    // форматы
+    // Formats
     DXGI_FORMAT GetLightTargetFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
     DXGI_FORMAT GetSceneColorFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
     DXGI_FORMAT GetBackbufferFormat() const { return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; }
@@ -90,8 +90,8 @@ public:
 
     const DeferredTargets& GetDeferredForFrame() const { return deferred_[currentFrameIndex_]; }
 
-    // Сервис
-    void WaitForPreviousFrame();       // полная синхронизация (используется при ресайзе/деструкторе)
+    // Utility functions
+    void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
     void OnResize(UINT width, UINT height);
 
     ThreadCL BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* initialPSO = nullptr);
@@ -106,14 +106,14 @@ public:
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);
     void RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex);
 
-    // Геттеры
+    // Getters
     ID3D12Device* GetDevice() const { return device_.Get(); }
     ID3D12CommandQueue* GetCommandQueue() const { return commandQueue_.Get(); }
     HWND GetHWND() const { return hWnd_; }
     UINT GetWidth() const { return width_; }
     UINT GetHeight() const { return height_; }
 
-    // Доступ к глобальному аллокатору дескрипторов и текущему кадру
+    // Access the global descriptor allocator and current frame
     DescriptorAllocator& GetDescAlloc() { return frameResources_[currentFrameIndex_]->GetDescAlloc(); }
     DescriptorAllocator& GetSamplerAlloc() { return frameResources_[currentFrameIndex_]->GetSamplerAlloc(); }
     FrameResource* GetFrameResource() { return frameResources_[currentFrameIndex_].get(); }
@@ -190,8 +190,8 @@ private:
 
     void CreateSwapChainAndRTVs(UINT width, UINT height);
     void CreateDepthResources(UINT width, UINT height);
-    void WaitForFrame(UINT frameIndex);   // ожидание конкретного кадра (по fence value кадра)
-    void SignalFrame(UINT frameIndex);    // сигнал на фэнсе для кадра
+    void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
+    void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
@@ -221,7 +221,7 @@ private:
         std::string name;
         ID3D12GraphicsCommandList* driver = nullptr;              // DIRECT
         std::vector<ID3D12GraphicsCommandList*> bundles;          // TYPE_BUNDLE
-        std::vector<ID3D12CommandList*>         directs;          // готовые DIRECT-CL
+        std::vector<ID3D12CommandList*>         directs;          // ready DIRECT command lists
     };
     std::vector<PassBatch_> submitTimeline_;
     std::mutex submitMtx_;
@@ -229,16 +229,16 @@ private:
     std::vector<ID3D12CommandList*> fixedSubmitScratch_;
     std::vector<D3D12_RESOURCE_BARRIER> barrierScratch_;
 
-    // Heaps CPU для offscreen-ресурсов
-    ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV: на все кадры
-    ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV: на все кадры
+    // CPU heaps for offscreen resources
+    ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
+    ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV shared across frames
     ComPtr<ID3D12DescriptorHeap> deferredSrvCpuHeap_;// SRV CPU-only
     UINT deferredRtvIncr_ = 0, deferredDsvIncr_ = 0, deferredSrvIncr_ = 0;
 
-    // per-frame наборы
+    // Per-frame sets
     DeferredTargets deferred_[kFrameCount];
 
-    // OS / размеры
+    // OS / dimensions
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
@@ -246,11 +246,11 @@ private:
     bool wireframeMode_ = false;
 
     float fps_ = 0.0f;
-    float fpsAlpha_ = 0.99f; // экспоненциальное сглаживание: 0..1 (чем больше — тем плавнее)
+    float fpsAlpha_ = 0.99f; // exponential smoothing: 0..1 (higher is smoother)
 
     uint64_t totalFrameNumber_ = 0;
     bool     shaderHotReloadEnabled_ = true;
-    float    shaderWatchIntervalSec_ = 1.0f; // раз в секунду
+    float    shaderWatchIntervalSec_ = 1.0f; // once per second
     float    shaderWatchAccumSec_ = 0.0f;
     bool     materialsHotReloaded_ = false;
 
@@ -268,13 +268,13 @@ private:
     ComPtr<ID3D12Resource>            depthBuffer_;
     UINT                              dsvDescriptorSize_ = 0;
 
-    // Синхронизация
+    // Synchronization
     ComPtr<ID3D12Fence>               fence_;
     HANDLE                            fenceEvent_ = nullptr;
-    UINT64                            nextFenceValue_ = 1;                  // глобальный инкремент
-    UINT64                            frameFenceValues_[kFrameCount] = {};  // последний сигнал для каждого кадра
+    UINT64                            nextFenceValue_ = 1;                  // global increment
+    UINT64                            frameFenceValues_[kFrameCount] = {};  // last signal value for each frame
 
-    // Кадровые ресурсы (аллокатор + upload и т.п.)
+    // Frame resources (allocator + upload, etc.)
         std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
     FrameResource*                    currentFrameResource_ = nullptr;
@@ -285,9 +285,9 @@ private:
     std::mutex knownStatesMtx_;
     robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
     struct CLState {
-        // первый требуемый стейт ресурса в данном CL (мы его не барьерим внутри CL)
+        // First required resource state in this command list (not barriered inside the CL)
         robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
-        // текущий (последний) стейт ресурса внутри ЭТОГО CL (для внутренних переходов и финала)
+        // Current (latest) resource state within THIS command list (for transitions and final state)
         robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
     };
     struct CLStateEntry {
@@ -306,7 +306,7 @@ private:
     std::atomic<uint32_t> clLaneCount_{ 0 };
     CLStateLane           clLanes_[kCLStateLanes];
 
-    // TLS: какой lane у потока и какой CL сейчас активен
+    // TLS: which lane the thread uses and which CL is currently active
     static thread_local uint32_t      tlLaneIndex_;
     static thread_local CLStateEntry* tlCurrentEntry_;
 
