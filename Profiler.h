@@ -137,6 +137,7 @@ public:
     void CollectGpuResults();
     void BeginGpuFrame(ID3D12GraphicsCommandList* cl);
     void EndGpuFrame(ID3D12GraphicsCommandList* cl);
+    void ShutdownGpu();
 #endif
 
     // Scoped marker (CPU)
@@ -243,7 +244,6 @@ private:
     void PushGpuSample(const ScopeNameKey& key, double ms);
     size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key);
     void EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx);
-    void ShutdownGpu();
 #endif
 
 #if PROF_ENABLED

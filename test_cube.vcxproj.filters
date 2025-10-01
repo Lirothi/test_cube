@@ -377,4 +377,7 @@
       <Filter>Shaders</Filter>
     </Text>
   </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="third_party\robin_hood.natvis" />
+  </ItemGroup>
 </Project>
