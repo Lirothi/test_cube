@@ -107,7 +107,7 @@ void App::InitScene()
     std::vector<ComPtr<ID3D12Resource>> pendingUploads;
     scene.SetInput(&input);
     scene.SetActions(&actions);
-    if (!actions.LoadFromJsonFile(L"bindings.json"))
+    if (!actions.LoadFromJsonFile(L"input/bindings.json"))
     {
         assert(false && "No bindings.json found!");
     }

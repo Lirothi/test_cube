@@ -58,6 +58,9 @@
     <Filter Include="Header Files\Text">
       <UniqueIdentifier>{9067f479-4cd1-45a6-89a8-00e3818f42dc}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\Third Party">
+      <UniqueIdentifier>{8f3a9a78-6e59-4abf-9b96-6683f3f3d324}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\App">
       <UniqueIdentifier>{d5431069-d1b2-4012-ac7c-79306547a28b}</UniqueIdentifier>
     </Filter>
@@ -96,6 +99,12 @@
     </Filter>
     <Filter Include="Source Files\Text">
       <UniqueIdentifier>{35ae981a-ad80-4b64-b353-d93a8897ae45}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Third Party">
+      <UniqueIdentifier>{b4e7a283-0599-4a9c-911b-16e0036b64a5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Input">
+      <UniqueIdentifier>{f697a87f-ef2e-4be5-9979-bfb4d69f795a}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -145,7 +154,7 @@
       <Filter>Source Files\Core\Task</Filter>
     </ClCompile>
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
-      <Filter>Source Files</Filter>
+      <Filter>Source Files\Third Party</Filter>
     </ClCompile>
     <ClCompile Include="sources/input/InputManager.cpp">
       <Filter>Source Files\Input</Filter>
@@ -321,7 +330,7 @@
       <Filter>Header Files\Core\Task</Filter>
     </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\Third Party</Filter>
     </ClInclude>
     <ClInclude Include="sources/input/InputManager.h">
       <Filter>Header Files\Input</Filter>
@@ -460,6 +469,11 @@
     <Text Include="shaders\ui_rect.hlsl">
       <Filter>Shaders</Filter>
     </Text>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="input\bindings.json">
+      <Filter>Input</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="third_party\robin_hood.natvis" />
