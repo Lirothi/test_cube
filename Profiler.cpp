@@ -1012,19 +1012,19 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->RegionSetAutoMeasure(reg, false);
 
     // заголовок
-    tm->AddTextf(reg, 18.0f, float4(1, 1, 0.6f, 0.95f),
+    tm->AddTextfShadow(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), true,
         L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
         (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
 
     if (captureActive || capturePending) {
         if (captureActive) {
             const uint32_t recorded = (captureTotal > captureRemaining) ? (captureTotal - captureRemaining) : 0u;
-            tm->AddTextf(reg, 16.0f, float4(1.0f, 0.85f, 0.25f, 0.95f),
+            tm->AddTextfShadow(reg, 16.0f, float4(1.0f, 0.85f, 0.25f, 0.95f), true,
                 L"[Trace capture active] recorded:%u remaining:%u  (press F10 to stop)",
                 recorded, captureRemaining);
         }
         else {
-            tm->AddTextf(reg, 16.0f, float4(0.7f, 0.85f, 1.0f, 0.95f),
+            tm->AddTextfShadow(reg, 16.0f, float4(0.7f, 0.85f, 1.0f, 0.95f), true,
                 L"[Trace capture pending] frames:%u  (press F10 again to cancel)",
                 captureTotal);
         }
@@ -1038,7 +1038,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }
-        tm->AddText(reg, 16.0f, (shown & 1) ? colOdd : colEven, r.formatted);
+        tm->AddText(reg, 16.0f, (shown & 1) ? colOdd : colEven, r.formatted, true);
         shown++;
     }
 
@@ -1052,7 +1052,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
         tm->RegionSetAutoMeasure(regGpu, false);
 
-        tm->AddTextf(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f),
+        tm->AddTextfShadow(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), true,
             L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
             (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
         tm->AddText(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
@@ -1060,7 +1060,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         int gshown = 0;
         for (const auto& r : gpuRows) {
             if (gshown >= maxLines) { break; }
-            tm->AddText(regGpu, 16.0f, (gshown & 1) ? colOdd : colEven, r.formatted);
+            tm->AddText(regGpu, 16.0f, (gshown & 1) ? colOdd : colEven, r.formatted, true);
             gshown++;
         }
     }

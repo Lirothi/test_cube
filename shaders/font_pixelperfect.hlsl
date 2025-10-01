@@ -47,11 +47,14 @@ float4 PSMain(VSOut i) : SV_Target {
     float shadowCoverage = 0.0f;
     float4 shadowColor = float4(i.shadowColor.rgb, 0.0f);
     if (i.shadowColor.a > 0.0f) {
-        float2 shadowUv = i.uv - float2(i.shadowOffset.x * atlasTexelSize.x,
-                                        i.shadowOffset.y * atlasTexelSize.y);
+        float2 shadowUv = i.uv - i.shadowOffset * atlasTexelSize;
         shadowCoverage = saturate(tex0.Sample(samp0, shadowUv).r);
         shadowColor.a = saturate(i.shadowColor.a * shadowCoverage);
+        
+        return lerp(shadowColor, textColor, saturate(coverage * 2.0f));
     }
-
-    return lerp(shadowColor, textColor, coverage);
+    else
+    {
+        return textColor;
+    }
 }

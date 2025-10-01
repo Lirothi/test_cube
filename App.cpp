@@ -193,7 +193,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     if (generateSdf) {
                         params.spread = std::max(8, params.pixelHeight / 2 + 2);
                     } else {
-                        params.spread = 2;
+                        params.spread = 6;
                     }
 
                     if (!generator.Generate(params)) {

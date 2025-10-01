@@ -561,10 +561,6 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
             offsetX *= dpi_;
             offsetY *= dpi_;
         }
-        if (scale != 0.0f) {
-            offsetX /= scale;
-            offsetY /= scale;
-        }
         else {
             offsetX = 0.0f;
             offsetY = 0.0f;

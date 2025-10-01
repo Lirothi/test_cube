@@ -64,7 +64,11 @@ float4 PSMain(VSOut i) : SV_Target {
         shadowCoverage = smoothstep(0.5 - shadowW, 0.5 + shadowW, shadowD);
         shadowCoverage = saturate(shadowCoverage);
         shadowColor.a = saturate(i.shadowColor.a * shadowCoverage);
+        
+        return lerp(shadowColor, textColor, saturate(coverage * 3.0f));
     }
-
-    return lerp(shadowColor, textColor, coverage);
+    else
+    {
+        return textColor;
+    }
 }
