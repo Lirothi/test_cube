@@ -58,11 +58,11 @@
     <Filter Include="third_party\enkiTS\src">
       <UniqueIdentifier>{2123397a-80ef-4fc1-af02-75b8aed52681}</UniqueIdentifier>
     </Filter>
-    <Filter Include="shaders">
-      <UniqueIdentifier>{43276b08-25ea-44fe-9e3e-68d490073ae0}</UniqueIdentifier>
-    </Filter>
     <Filter Include="input">
       <UniqueIdentifier>{09b469f3-2854-440a-8b45-695e11cfe0e6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shaders">
+      <UniqueIdentifier>{01504546-7cdf-4026-ad57-b74156b71b63}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -343,99 +343,95 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\\axes.hlsl">
+    <None Include="shaders\axes.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\compose_ps.hlsl">
+    <None Include="shaders\blur_ps.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\font_pixelperfect.hlsl">
+    <None Include="shaders\compose_ps.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\font_sdf.hlsl">
+    <None Include="shaders\debug_texture.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\gbuffer.hlsl">
+    <None Include="shaders\font_pixelperfect.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\gbuffer_common.hlsl">
+    <None Include="shaders\font_sdf.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\gbuffer_csm.hlsl">
+    <None Include="shaders\gbuffer.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\gbuffer_inst.hlsl">
+    <None Include="shaders\gbuffer_common.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\gbuffer_inst_csm.hlsl">
+    <None Include="shaders\gbuffer_csm.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\instance_anim.hlsl">
+    <None Include="shaders\gbuffer_inst.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\lighting_ps.hlsl">
+    <None Include="shaders\gbuffer_inst_csm.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\lines.hlsl">
+    <None Include="shaders\instance_anim.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ocean_fft.hlsl">
+    <None Include="shaders\lighting_ps.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ocean_generate_mips.hlsl">
+    <None Include="shaders\lines.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ocean_surface.hlsl">
+    <None Include="shaders\ocean_fft.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ocean_time_spectrum.hlsl">
+    <None Include="shaders\ocean_generate_mips.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\pointlight_color_fs.hlsl">
+    <None Include="shaders\ocean_surface.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\pointlight_zfail.hlsl">
+    <None Include="shaders\ocean_time_spectrum.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\shader.hlsl">
+    <None Include="shaders\pointlight_color_fs.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\shader_PNTUV.hlsl">
+    <None Include="shaders\pointlight_zfail.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\shader_comp.hlsl">
+    <None Include="shaders\shader.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\skybox.hlsl">
+    <None Include="shaders\shader_comp.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ssr_ps.hlsl">
+    <None Include="shaders\shader_PNTUV.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\tonemap_ps.hlsl">
+    <None Include="shaders\skybox.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\ui_rect.hlsl">
+    <None Include="shaders\ssr_ps.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\utils.hlsl">
+    <None Include="shaders\tonemap_ps.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\blur_ps.hlsl">
+    <None Include="shaders\ui_rect.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\\debug_texture.hlsl">
+    <None Include="shaders\utils.hlsl">
       <Filter>shaders</Filter>
     </None>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="input\\bindings.json">
+    <None Include="input\bindings.json">
       <Filter>input</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
-    <Natvis Include="third_party\\robin_hood.natvis">
-      <Filter>third_party</Filter>
-    </Natvis>
+    <Natvis Include="third_party\robin_hood.natvis" />
   </ItemGroup>
 </Project>
