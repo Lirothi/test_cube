@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <DirectXMath.h>
 
 namespace Math
@@ -37,6 +38,13 @@ namespace Math
         if (t >= 1.0f) { return b; }
         const float x = t * t * (3.0f - 2.0f * t);
         return a + (b - a) * x;
+    }
+
+    inline uint32_t FloatToUint32(float value) {
+        static_assert(sizeof(uint32_t) == sizeof(float), "FloatToUint32 requires 32-bit float");
+        uint32_t result;
+        std::memcpy(&result, &value, sizeof(result));
+        return result;
     }
 
     inline float Step(float edge, float x) { return x < edge ? 0.0f : 1.0f; }

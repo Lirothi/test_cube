@@ -316,9 +316,8 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto& rc = h.ref();
 
         std::array<uint32_t, 8> k{};
-        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
-        k[0] = f2u((float)vpW_);
-        k[1] = f2u((float)vpH_);
+        k[0] = static_cast<uint32_t>(vpW_);
+        k[1] = static_cast<uint32_t>(vpH_);
         rc.constants[1] = { k.begin(), k.end() };
 
         matRect_->Bind(cl, rc);
@@ -349,16 +348,15 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         cl->IASetVertexBuffers(0, 1, &vbv_);
         cl->IASetIndexBuffer(&ibv_);
 
-        auto f2u = [](float f)->uint32_t { uint32_t u; std::memcpy(&u, &f, 4u); return u; };
         std::array<uint32_t, 8> k{};
-        k[0] = f2u((float)vpW_);
-        k[1] = f2u((float)vpH_);
+        k[0] = static_cast<uint32_t>(vpW_);
+        k[1] = static_cast<uint32_t>(vpH_);
         const float invAtlasW = (font_->AtlasWidth() > 0) ? (1.0f / float(font_->AtlasWidth())) : 0.0f;
         const float invAtlasH = (font_->AtlasHeight() > 0) ? (1.0f / float(font_->AtlasHeight())) : 0.0f;
-        k[2] = f2u(invAtlasW);
-        k[3] = f2u(invAtlasH);
-        k[4] = f2u((float)font_->Spread());
-        k[5] = f2u((float)font_->PxSize());
+        k[2] = Math::FloatToUint32(invAtlasW);
+        k[3] = Math::FloatToUint32(invAtlasH);
+        k[4] = static_cast<uint32_t>(font_->Spread());
+        k[5] = static_cast<uint32_t>(font_->PxSize());
         rc.constants[1] = { k.begin(), k.end() };
 
         mat->Bind(cl, rc);

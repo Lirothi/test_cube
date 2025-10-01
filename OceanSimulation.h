@@ -65,8 +65,6 @@ private:
     void InitializeDefaultAssets();
     void ReleaseCpuData();
 
-    static uint32_t FloatToBits(float value);
-
 private:
     bool initialized_ = false;
 

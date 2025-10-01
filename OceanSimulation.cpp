@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <random>
 
 #include "Helpers.h"
@@ -297,13 +296,6 @@ float OceanSimulation::ComputeCascadeContribution(float kLength, UINT cascade) c
     }
 
     return 1.0f / total;
-}
-
-uint32_t OceanSimulation::FloatToBits(float value)
-{
-    uint32_t bits = 0u;
-    std::memcpy(&bits, &value, sizeof(uint32_t));
-    return bits;
 }
 
 void OceanSimulation::Initialize(Renderer* renderer,
@@ -696,7 +688,7 @@ void OceanSimulation::DispatchSpectrum(Renderer* renderer, ID3D12GraphicsCommand
     ctx.constants[0] = {
         resolution_,
         cascadeCount_,
-        FloatToBits(timeSeconds),
+        Math::FloatToUint32(timeSeconds),
         resolution_ * resolution_
     };
 

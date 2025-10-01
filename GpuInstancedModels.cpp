@@ -7,6 +7,7 @@
 #include "Renderer.h"
 #include "Helpers.h"
 #include "SamplerManager.h"
+#include "Math.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -63,9 +64,8 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
     auto& ctx = h.ref();
 
     // constants(b0) для CS
-    uint32_t dtBits = 0, angBits = 0;
-    memcpy(&dtBits, &deltaTime_, sizeof(float));
-    memcpy(&angBits, &angularSpeed_, sizeof(float));
+    const uint32_t dtBits = Math::FloatToUint32(deltaTime_);
+    const uint32_t angBits = Math::FloatToUint32(angularSpeed_);
     ctx.constants[0] = { dtBits, angBits, instanceCount_ };
 
     // таблица UAV/SRV для CS: u0 = instanceBuffer UAV
