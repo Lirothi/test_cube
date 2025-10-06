@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <wrl/client.h>
 
 #include "rendering/renderables/RenderableObject.h"
 #include "app/Camera.h"
@@ -11,6 +12,8 @@
 #include "rendering/lighting/PointLight.h"
 
 class Renderer;
+
+struct PointLightGpu;
 
 class Scene {
 public:
@@ -53,7 +56,6 @@ private:
         const mat4& invView, const mat4& invProj,
         const float3& camDir);
     void Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
-        const mat4& view, const Math::mat4& proj,
         const mat4& invView, const Math::mat4& invProj);
     void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj);
@@ -74,6 +76,7 @@ private:
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
 
     std::shared_ptr<Material> matLighting_;
+    std::shared_ptr<Material> matPointLightCS_;
     std::shared_ptr<Material> matCompose_;
     std::shared_ptr<Material> matTonemap_;
     std::shared_ptr<Material> matSSR_;
@@ -98,8 +101,20 @@ private:
             Material::CBFieldHandle shadowAtlasSize;
             Material::CBFieldHandle shadowBiasNDC;
             Material::CBFieldHandle normalBiasWS;
+            Material::CBFieldHandle screenSize;
+            Material::CBFieldHandle invScreenSize;
             void Populate(Material* material);
         } lighting;
+
+        struct PointLightHandles {
+            Material::CBFieldHandle invView;
+            Material::CBFieldHandle invProj;
+            Material::CBFieldHandle camPos;
+            Material::CBFieldHandle lightCount;
+            Material::CBFieldHandle screenSize;
+            Material::CBFieldHandle invScreenSize;
+            void Populate(Material* material);
+        } pointLights;
 
         struct SsrHandles {
             Material::CBFieldHandle view;
@@ -159,4 +174,10 @@ private:
 
     std::unique_ptr<Skybox> skyBox_;
 
+    void EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
+    Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
+    PointLightGpu* pointLightBufferCPU_ = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle_{};
+    size_t pointLightCapacity_ = 0;
 };

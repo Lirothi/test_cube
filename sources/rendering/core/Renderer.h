@@ -42,7 +42,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,Depth(R32F)
-        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
@@ -219,7 +219,7 @@ private:
     static constexpr UINT kFrameCount = 2;
 
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, Scene, SSR, SSRBlur, Shadow, SSRUAV, SSRBlurUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, LightUAV, Scene, SSR, SSRBlur, Shadow, SSRUAV, SSRBlurUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

@@ -263,13 +263,14 @@
     <None Include="shaders\gbuffer_inst.hlsl" />
     <None Include="shaders\gbuffer_inst_csm.hlsl" />
     <None Include="shaders\instance_anim.hlsl" />
-    <None Include="shaders\lighting_ps.hlsl" />
+    <None Include="shaders\lighting_cs.hlsl" />
     <None Include="shaders\lines.hlsl" />
     <None Include="shaders\ocean_fft.hlsl" />
     <None Include="shaders\ocean_generate_mips.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />
     <None Include="shaders\pointlight_color_fs.hlsl" />
+    <None Include="shaders\pointlight_cs.hlsl" />
     <None Include="shaders\pointlight_zfail.hlsl" />
     <None Include="shaders\shader.hlsl" />
     <None Include="shaders\shader_PNTUV.hlsl" />
