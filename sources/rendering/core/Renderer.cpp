@@ -1044,7 +1044,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         };
 
-    auto CreateSsrUav = [&](DXGI_FORMAT fmt,
+    auto CreateSsrTargets = [&](DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
         DeferredSrvSlot uavSlot,
         UINT f,
@@ -1186,8 +1186,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateSsrUav(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV);
-        CreateSsrUav(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV);
+        CreateSsrTargets(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV);
+        CreateSsrTargets(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV);
     }
 }
 

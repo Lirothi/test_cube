@@ -963,7 +963,6 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
@@ -1003,7 +1002,6 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
