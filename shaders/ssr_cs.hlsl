@@ -1,7 +1,8 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0) SAMPLER(s1))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
 // t0: LightTarget            (HDR color)
 // t1: GB1 (normal.xy in 0..1, rough in A)
 // t2: Depth (R32F SRV created from the DSV)
+// u0: SSR output (premultiplied RGBA)
 // s0: LinearClamp, s1: PointClamp
 
 #pragma pack_matrix(row_major)
@@ -10,6 +11,7 @@
 Texture2D   LightTarget : register(t0);
 Texture2D   GB1         : register(t1);
 Texture2D   DepthT      : register(t2);
+RWTexture2D<float4> SsrOut : register(u0);
 SamplerState gSmp       : register(s0);
 SamplerState gSmpPoint  : register(s1);
 
@@ -29,12 +31,6 @@ static const float ssrJitterStrength = 0.5f; // 0..1 — pixel offset applied to
 static const float ssrGrazingMinZ = 0.01f; // Start fading reflections when Rv.z falls below this
 static const float ssrGrazingMaxZ = 0.05f; // Fully enable reflections by this value
 static const float kEps = 1e-6f;
-
-struct VSOut { float4 H:SV_POSITION; float2 UV:TEXCOORD0; };
-VSOut VSMain(uint vid:SV_VertexID){
-    VSOut o; float2 p=float2(vid==2?3:-1, vid==1?3:-1);
-    o.H=float4(p,0,1); o.UV=float2(p.x*0.5+0.5, 1-(p.y*0.5+0.5)); return o;
-}
 
 float  DepthToViewZ_Fast(float d){ return depthB / (d - depthA); }
 float3 ReconstructPosVS(float2 uv, float d){
@@ -74,7 +70,7 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
         r.hit = 0;
         return r;
     }
-    
+
     float bias = saturate((1.0f - dot(pivot, Nv)));
     bias = bias * 0.5f;
     float thickness = ssrThicknessVS + bias;
@@ -223,27 +219,39 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     return outv;
 }
 
-float4 PSMain(VSOut i) : SV_Target
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    // Do not output anything for sky background
-    float d = ReadDepth(i.UV);
-    if (d >= 1.0f - 1e-6f) { return float4(0,0,0,0); }
+    uint width, height;
+    LightTarget.GetDimensions(width, height);
 
-    // Input vectors
-    float3 N_ws = normalize(GB1.SampleLevel(gSmp, i.UV, 0).rgb * 2 - 1);
-    float3 Pv   = ReconstructPosVS(i.UV, d);
-    float3 Nv   = normalize(mul(N_ws, (float3x3)view));
+    if (dispatchThreadId.x >= width || dispatchThreadId.y >= height)
+    {
+        return;
+    }
 
-    // Trace the ray
-    SSRHit ssr = TraceSSR_Lettier(Pv, Nv);
-    if (ssr.hit == 0) { return float4(0,0,0,0); }
+    float2 pixel = float2(dispatchThreadId.xy);
+    float2 uv = (pixel + 0.5f) / screenSize;
 
-    // Fetch color from LightTarget exactly at the hit pixel (premultiplied alpha)
-    int2 ip = int2(ssr.uv * screenSize + 0.5);
-    ip = clamp(ip, int2(0,0), int2(screenSize)-int2(1,1));
-    float3 c = LightTarget.Load(int3(ip,0)).rgb;
+    float depth = ReadDepth(uv);
+    float4 result = float4(0, 0, 0, 0);
 
-    // premultiplied: rgb *= visibility, a = visibility
-    float vis = ssr.visibility;
-    return float4(c * vis, vis);
+    if (depth < 1.0f - 1e-6f)
+    {
+        float3 N_ws = normalize(GB1.SampleLevel(gSmp, uv, 0).rgb * 2 - 1);
+        float3 Pv   = ReconstructPosVS(uv, depth);
+        float3 Nv   = normalize(mul(N_ws, (float3x3)view));
+
+        SSRHit ssr = TraceSSR_Lettier(Pv, Nv);
+        if (ssr.hit != 0)
+        {
+            int2 ip = int2(ssr.uv * screenSize + 0.5);
+            ip = clamp(ip, int2(0, 0), int2(width - 1, height - 1));
+            float3 c = LightTarget.Load(int3(ip, 0)).rgb;
+            float vis = ssr.visibility;
+            result = float4(c * vis, vis);
+        }
+    }
+
+    SsrOut[dispatchThreadId.xy] = result;
 }

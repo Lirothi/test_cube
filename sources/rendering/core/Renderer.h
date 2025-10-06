@@ -44,8 +44,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,Depth(R32F)
         D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrRTV{}, ssrSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurRTV{}, ssrBlurSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
@@ -73,8 +73,6 @@ public:
     void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
-    void BindSSRTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
-    void BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
 
     // Prebuilt SRV tables (in the frame's shader-visible heap)
@@ -220,8 +218,8 @@ private:
 private:
     static constexpr UINT kFrameCount = 2;
 
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, SSR, SSRBlur, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, Scene, SSR, SSRBlur, Shadow, Count };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, Scene, SSR, SSRBlur, Shadow, SSRUAV, SSRBlurUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

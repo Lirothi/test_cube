@@ -952,7 +952,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2, Light, Scene, SSR, SSRBlur
+        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2, Light, Scene
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
     }
     {
@@ -964,7 +964,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,Scene,SSR,SSRBlur
+        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,Scene,SSR,SSRBlur,Shadow,SSRUAV,SSRBlurUAV
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
@@ -1029,8 +1029,6 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             case DeferredRtvSlot::GB2:   D.gbRTV[2] = outRTV; break;
             case DeferredRtvSlot::Light: D.lightRTV = outRTV; break;
             case DeferredRtvSlot::Scene: D.sceneRTV = outRTV; break;
-            case DeferredRtvSlot::SSR:   D.ssrRTV = outRTV; break;
-            case DeferredRtvSlot::SSRBlur: D.ssrBlurRTV = outRTV; break;
             default: break;
             }
             switch (srvSlot) {
@@ -1040,12 +1038,55 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             case DeferredSrvSlot::Depth:  D.gbSRV[3] = outSRV; break;
             case DeferredSrvSlot::Light:  D.lightSRV = outSRV; break;
             case DeferredSrvSlot::Scene:  D.sceneSRV = outSRV; break;
-            case DeferredSrvSlot::SSR:    D.ssrSRV = outSRV; break;
-            case DeferredSrvSlot::SSRBlur:D.ssrBlurSRV = outSRV; break;
             default: break;
             }
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        };
+
+    auto CreateSsrUav = [&](DXGI_FORMAT fmt,
+        DeferredSrvSlot srvSlot,
+        DeferredSrvSlot uavSlot,
+        UINT f,
+        ComPtr<ID3D12Resource>& outRes,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outUAV)
+        {
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&outRes)));
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            outSRV = DeferredSrvCPU(f, srvSlot);
+            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
+
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = fmt;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+            outUAV = DeferredSrvCPU(f, uavSlot);
+            dev->CreateUnorderedAccessView(outRes.Get(), nullptr, &ud, outUAV);
+
+            auto& D = deferred_[f];
+            if (srvSlot == DeferredSrvSlot::SSR)
+            {
+                D.ssrSRV = outSRV;
+                D.ssrUAV = outUAV;
+            }
+            else if (srvSlot == DeferredSrvSlot::SSRBlur)
+            {
+                D.ssrBlurSRV = outSRV;
+                D.ssrBlurUAV = outUAV;
+            }
+
+            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         };
 
     auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
@@ -1145,8 +1186,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateRT(kSsrFormat, DeferredRtvSlot::SSR, DeferredSrvSlot::SSR, f, D.ssr, D.ssrRTV, D.ssrSRV);
-        CreateRT(kSsrBlurFormat, DeferredRtvSlot::SSRBlur, DeferredSrvSlot::SSRBlur, f, D.ssrBlur, D.ssrBlurRTV, D.ssrBlurSRV);
+        CreateSsrUav(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV);
+        CreateSsrUav(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV);
     }
 }
 
@@ -1225,29 +1266,9 @@ void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, boo
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.sceneRTV, c, 0, nullptr);
-    }
-}
-
-void Renderer::BindSSRTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
-    auto& D = deferred_[currentFrameIndex_];
-    cl->OMSetRenderTargets(1, &D.ssrRTV, FALSE, nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
-    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
-    if (mode != ClearMode::None) {
-        const float c[4]{ 0,0,0,0 };
-        cl->ClearRenderTargetView(D.ssrRTV, c, 0, nullptr);
-    }
-}
-void Renderer::BindSSRBlurTarget(ID3D12GraphicsCommandList* cl, ClearMode mode) {
-    auto& D = deferred_[currentFrameIndex_];
-    cl->OMSetRenderTargets(1, &D.ssrBlurRTV, FALSE, nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
-    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
-    if (mode != ClearMode::None) {
-        const float c[4]{ 0,0,0,0 };
-        cl->ClearRenderTargetView(D.ssrBlurRTV, c, 0, nullptr);
+        if (mode == ClearMode::ColorDepth && withDepth) {
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        }
     }
 }
 
