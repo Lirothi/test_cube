@@ -214,21 +214,17 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     }
 
     if (!matSSR_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/ssr_ps.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSsrFormat();
-        gd.depth.DepthEnable = FALSE;
-        matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/ssr_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSSR_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matBlur_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/blur_ps.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSsrBlurFormat();
-        gd.depth.DepthEnable = FALSE;
-        matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/blur_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matBlur_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matDebug_) {
@@ -948,11 +944,10 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSR);
         const auto& D = renderer->GetDeferredForFrame();
 
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::Color);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
         const auto& handlesSSR = cbHandles_.ssr;
@@ -968,15 +963,20 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
+        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
+        rc.table[1] = renderer->StageSrvUavTable({ D.ssrUAV }).gpu; // u0 output
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matSSR_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        t.cl->Dispatch(groupsX, groupsY, 1);
+        renderer->UAVBarrier(t.cl, D.ssr.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -988,11 +988,13 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSRBlur);
         const auto& D = renderer->GetDeferredForFrame();
-        // X Pass---
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
 
-        renderer->BindSSRBlurTarget(t.cl, Renderer::ClearMode::Color);
+        // Horizontal pass
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
         float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
@@ -1001,36 +1003,37 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
+        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.ssrBlurUAV }).gpu;
         const auto samplerDescsX = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsX);
 
         matBlur_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
-        // ---
-        // Y Pass---
-        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        t.cl->Dispatch(groupsX, groupsY, 1);
+        renderer->UAVBarrier(t.cl, D.ssrBlur.Get());
 
-        renderer->BindSSRTarget(t.cl, Renderer::ClearMode::None); // RT=ssr
+        // Vertical pass
+        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
         dir = float2(0.0f, 1.0f / renderer->GetHeight());
         matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
         matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
 
+        rc.ClearFast();
         rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.ssrUAV }).gpu;
         const auto samplerDescsY = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsY);
 
         matBlur_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
-        //---
+        t.cl->Dispatch(groupsX, groupsY, 1);
+        renderer->UAVBarrier(t.cl, D.ssr.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }

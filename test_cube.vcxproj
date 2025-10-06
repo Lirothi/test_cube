@@ -252,7 +252,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
-    <None Include="shaders\blur_ps.hlsl" />
+    <None Include="shaders\blur_cs.hlsl" />
     <None Include="shaders\compose_ps.hlsl" />
     <None Include="shaders\debug_texture.hlsl" />
     <None Include="shaders\font_pixelperfect.hlsl" />
@@ -275,7 +275,7 @@
     <None Include="shaders\shader_PNTUV.hlsl" />
     <None Include="shaders\shader_comp.hlsl" />
     <None Include="shaders\skybox.hlsl" />
-    <None Include="shaders\ssr_ps.hlsl" />
+    <None Include="shaders\ssr_cs.hlsl" />
     <None Include="shaders\tonemap_ps.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsl" />
