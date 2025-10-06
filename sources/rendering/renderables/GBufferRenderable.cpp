@@ -91,10 +91,10 @@ GBufferRenderable::GBufferRenderable(const std::string& matPreset,
 {
     auto& gd = GetGraphicsDesc();
     gd.numRT = 3;
-    gd.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    gd.rtvFormats[1] = DXGI_FORMAT_R10G10B10A2_UNORM;
-    gd.rtvFormats[2] = DXGI_FORMAT_R11G11B10_FLOAT;
-    gd.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    gd.rtvFormats[0] = Renderer::kGBuffer0Format;
+    gd.rtvFormats[1] = Renderer::kGBuffer1Format;
+    gd.rtvFormats[2] = Renderer::kGBuffer2Format;
+    gd.dsvFormat = Renderer::kDeferredDepthFormat;
 
     SetUniformBinder(std::make_unique<GBufferUniformBinder>(matParams_));
 }

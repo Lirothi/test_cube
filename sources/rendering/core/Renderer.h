@@ -28,14 +28,14 @@ public:
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
         // Resources
-        ComPtr<ID3D12Resource> gb0;   // R8G8B8A8 (albedo+metal)
-        ComPtr<ID3D12Resource> gb1;   // R10G10G10A2 (normalOcta+rough)
-        ComPtr<ID3D12Resource> gb2;   // R11G11B10 (emissive)
-        ComPtr<ID3D12Resource> depth; // D32
-        ComPtr<ID3D12Resource> light; // R16G16B16A16F
-        ComPtr<ID3D12Resource> scene; // R16G16B16A16F
-        ComPtr<ID3D12Resource> ssr;     // R16G16B16A16F premultiplied
-        ComPtr<ID3D12Resource> ssrBlur; // R16G16B16A16F
+        ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
+        ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
+        ComPtr<ID3D12Resource> gb2;   // Renderer::kGBuffer2Format (emissive)
+        ComPtr<ID3D12Resource> depth; // Renderer::kDeferredDepthFormat
+        ComPtr<ID3D12Resource> light; // Renderer::kLightTargetFormat
+        ComPtr<ID3D12Resource> scene; // Renderer::kSceneColorFormat
+        ComPtr<ID3D12Resource> ssr;     // Renderer::kSsrFormat (premultiplied)
+        ComPtr<ID3D12Resource> ssrBlur; // Renderer::kSsrBlurFormat
         ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
 
         // CPU descriptors
@@ -83,10 +83,29 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene
 
     // Formats
-    DXGI_FORMAT GetLightTargetFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
-    DXGI_FORMAT GetSceneColorFormat() const { return DXGI_FORMAT_R16G16B16A16_FLOAT; }
-    DXGI_FORMAT GetBackbufferFormat() const { return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; }
-    DXGI_FORMAT GetDsvFormat() const { return DXGI_FORMAT_D32_FLOAT_S8X24_UINT; }
+    static constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr DXGI_FORMAT kBackbufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    static constexpr DXGI_FORMAT kDepthBufferResourceFormat = DXGI_FORMAT_D32_FLOAT;
+    static constexpr DXGI_FORMAT kDepthBufferViewFormat = DXGI_FORMAT_D32_FLOAT;
+    static constexpr DXGI_FORMAT kDeferredDepthFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    static constexpr DXGI_FORMAT kDeferredDepthSrvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+    static constexpr DXGI_FORMAT kGBuffer0Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr DXGI_FORMAT kGBuffer1Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    static constexpr DXGI_FORMAT kGBuffer2Format = DXGI_FORMAT_R11G11B10_FLOAT;
+    static constexpr DXGI_FORMAT kLightTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    static constexpr DXGI_FORMAT kSsrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr DXGI_FORMAT kSsrBlurFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // Formats
+    DXGI_FORMAT GetLightTargetFormat() const { return kLightTargetFormat; }
+    DXGI_FORMAT GetSceneColorFormat() const { return kSceneColorFormat; }
+    DXGI_FORMAT GetBackbufferFormat() const { return kBackbufferFormat; }
+    DXGI_FORMAT GetBackbufferResourceFormat() const { return kBackbufferResourceFormat; }
+    DXGI_FORMAT GetDsvFormat() const { return kDeferredDepthFormat; }
+    DXGI_FORMAT GetDepthSrvFormat() const { return kDeferredDepthSrvFormat; }
+    DXGI_FORMAT GetSsrFormat() const { return kSsrFormat; }
+    DXGI_FORMAT GetSsrBlurFormat() const { return kSsrBlurFormat; }
 
     const DeferredTargets& GetDeferredForFrame() const { return deferred_[currentFrameIndex_]; }
 

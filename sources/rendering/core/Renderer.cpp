@@ -249,7 +249,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     scd.BufferCount = kFrameCount;
     scd.Width = width;
     scd.Height = height;
-    scd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    scd.Format = GetBackbufferResourceFormat();
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     scd.SampleDesc.Count = 1;
@@ -276,7 +276,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
         ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
 
         D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
-        rtvFmt.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;        // <- key
+        rtvFmt.Format = GetBackbufferFormat();        // <- key
         rtvFmt.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         rtvFmt.Texture2D.MipSlice   = 0;
         rtvFmt.Texture2D.PlaneSlice = 0;
@@ -303,7 +303,7 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
     depthDesc.Height = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.Format = kDepthBufferResourceFormat;
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -312,7 +312,7 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
     D3D12_CLEAR_VALUE cv{};
-    cv.Format = DXGI_FORMAT_D32_FLOAT;
+    cv.Format = kDepthBufferViewFormat;
     cv.DepthStencil.Depth = 1.0f;
     cv.DepthStencil.Stencil = 0;
 
@@ -1073,7 +1073,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
             // Create an SRV for depth as R32_FLOAT
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+            sd.Format = GetDepthSrvFormat();
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels = 1;
@@ -1134,19 +1134,19 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         auto& D = deferred_[f];
 
-        CreateRT(DXGI_FORMAT_R8G8B8A8_UNORM, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
-        CreateRT(DXGI_FORMAT_R10G10B10A2_UNORM, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
-        CreateRT(DXGI_FORMAT_R11G11B10_FLOAT, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
+        CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
+        CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
+        CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
 
-        CreateDepth(DXGI_FORMAT_D32_FLOAT_S8X24_UINT, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
+        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
 
         D.shadowRes = 4096; // could be driven by config/parameter
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
-        CreateRT(DXGI_FORMAT_R16G16B16A16_FLOAT, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
-        CreateRT(DXGI_FORMAT_R16G16B16A16_FLOAT, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateRT(DXGI_FORMAT_R8G8B8A8_UNORM, DeferredRtvSlot::SSR, DeferredSrvSlot::SSR, f, D.ssr, D.ssrRTV, D.ssrSRV);
-        CreateRT(DXGI_FORMAT_R8G8B8A8_UNORM, DeferredRtvSlot::SSRBlur, DeferredSrvSlot::SSRBlur, f, D.ssrBlur, D.ssrBlurRTV, D.ssrBlurSRV);
+        CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, f, D.light, D.lightRTV, D.lightSRV);
+        CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, f, D.scene, D.sceneRTV, D.sceneSRV);
+        CreateRT(kSsrFormat, DeferredRtvSlot::SSR, DeferredSrvSlot::SSR, f, D.ssr, D.ssrRTV, D.ssrSRV);
+        CreateRT(kSsrBlurFormat, DeferredRtvSlot::SSRBlur, DeferredSrvSlot::SSRBlur, f, D.ssrBlur, D.ssrBlurRTV, D.ssrBlurSRV);
     }
 }
 

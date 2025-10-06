@@ -217,7 +217,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/ssr_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.numRT = 1; gd.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;// renderer->GetSceneColorFormat();
+        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSsrFormat();
         gd.depth.DepthEnable = FALSE;
         matSSR_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
@@ -226,7 +226,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         Material::GraphicsDesc gd{};
         gd.shaderFile = L"shaders/blur_ps.hlsl";
         gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.numRT = 1; gd.rtvFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;// renderer->GetSceneColorFormat();
+        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSsrBlurFormat();
         gd.depth.DepthEnable = FALSE;
         matBlur_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
     }
