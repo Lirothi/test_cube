@@ -40,6 +40,7 @@ public:
     // Lifecycle
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     virtual void Tick(float /*dt*/) {}
+    virtual void PostTick(float /*dt*/) override {}
 
     // Base renderer: Compute -> Graphics (Bind/IssueDraw)
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
