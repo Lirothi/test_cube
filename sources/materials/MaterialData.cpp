@@ -2,6 +2,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include <algorithm>
+#include <array>
 
 using Microsoft::WRL::ComPtr;
 
@@ -50,11 +51,22 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
     defs.emplace_back("USE_TBN",         useTBN     ? "1" : "0");
 }
 
-void MaterialData::AppendGBufferSRVs(std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& dst) const
+size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset) const
 {
-    dst.push_back(albedo.GetSRVCPU());
-    dst.push_back(mr.GetSRVCPU());
-    dst.push_back(normal.GetSRVCPU());
+    size_t appended = 0;
+    if (hasAlbedo) { dst[offset + appended++] = albedo.GetSRVCPU(); }
+    if (hasMR)     { dst[offset + appended++] = mr.GetSRVCPU(); }
+    if (hasNormal) { dst[offset + appended++] = normal.GetSRVCPU(); }
+    return appended;
+}
+
+size_t MaterialData::AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t& inoutCount) const
+{
+    size_t appended = 0;
+    if (hasAlbedo) { dst[inoutCount++] = albedo.GetSRVCPU(); ++appended; }
+    if (hasMR)     { dst[inoutCount++] = mr.GetSRVCPU();     ++appended; }
+    if (hasNormal) { dst[inoutCount++] = normal.GetSRVCPU(); ++appended; }
+    return appended;
 }
 
 void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
@@ -66,19 +78,13 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
         ctx.table[srvTableRegister] = gbufferSrvCache_.gpu;
     }
     else {
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-        srvs.reserve(3);
-        if (hasAlbedo) {
-            srvs.push_back(albedo.GetSRVCPU());
-        }
-        if (hasMR) {
-            srvs.push_back(mr.GetSRVCPU());
-        }
-        if (hasNormal) {
-            srvs.push_back(normal.GetSRVCPU());
-        }
-        if (!srvs.empty()) {
-            auto tbl = r->StageSrvUavTable(srvs);
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
+        size_t count = 0;
+        if (hasAlbedo) { srvs[count++] = albedo.GetSRVCPU(); }
+        if (hasMR)     { srvs[count++] = mr.GetSRVCPU(); }
+        if (hasNormal) { srvs[count++] = normal.GetSRVCPU(); }
+        if (count > 0) {
+            auto tbl = r->StageSrvUavTable(srvs, count);
             ctx.table[srvTableRegister] = tbl.gpu;
             gbufferSrvCache_.frame = fi;
             gbufferSrvCache_.gpu = tbl.gpu;

@@ -2,7 +2,9 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <array>
+#include <cstddef>
 
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
@@ -186,9 +188,19 @@ public:
         return StageDescriptorTableRange(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, src.begin(), src.end());
     }
 
-    inline GpuDescHandle StageSrvUavTable(const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& src)
+    template<size_t N>
+    inline GpuDescHandle StageSrvUavTable(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, N>& src)
     {
-        return StageDescriptorTableRange(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, src.begin(), src.end());
+        return StageSrvUavTable(src, N);
+    }
+
+    template<size_t N>
+    inline GpuDescHandle StageSrvUavTable(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, N>& src, size_t count)
+    {
+        const size_t clamped = std::min(count, src.size());
+        const auto first = src.begin();
+        const auto last = first + static_cast<std::ptrdiff_t>(clamped);
+        return StageDescriptorTableRange(GetDescAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, first, last);
     }
 
     inline GpuDescHandle StageSamplerTable(std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> src)
@@ -196,9 +208,19 @@ public:
         return StageDescriptorTableRange(GetSamplerAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, src.begin(), src.end());
     }
 
-    inline GpuDescHandle StageSamplerTable(const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& src)
+    template<size_t N>
+    inline GpuDescHandle StageSamplerTable(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, N>& src)
     {
-        return StageDescriptorTableRange(GetSamplerAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, src.begin(), src.end());
+        return StageSamplerTable(src, N);
+    }
+
+    template<size_t N>
+    inline GpuDescHandle StageSamplerTable(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, N>& src, size_t count)
+    {
+        const size_t clamped = std::min(count, src.size());
+        const auto first = src.begin();
+        const auto last = first + static_cast<std::ptrdiff_t>(clamped);
+        return StageDescriptorTableRange(GetSamplerAlloc(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, first, last);
     }
 
 private:

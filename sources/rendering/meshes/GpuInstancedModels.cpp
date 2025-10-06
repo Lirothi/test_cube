@@ -1,5 +1,6 @@
 #include "rendering/meshes/GpuInstancedModels.h"
 
+#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -83,12 +84,14 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
 
 void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
 {
-    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-    srvs.reserve(4);
-    srvs.push_back(instanceBuffer_.GetSRVCPU()); // t0: instances
-    if (auto* data = GetMaterialData()) { data->AppendGBufferSRVs(srvs); } // t1..t3: albedo/mr/normal
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{};
+    size_t count = 0;
+    srvs[count++] = instanceBuffer_.GetSRVCPU(); // t0: instances
+    if (auto* data = GetMaterialData()) {
+        data->AppendGBufferSRVs(srvs.data(), count);
+    }
 
-    auto tbl = renderer->StageSrvUavTable(srvs);
+    auto tbl = renderer->StageSrvUavTable(srvs, count);
     ctx.table[0] = tbl.gpu;
 
     const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
