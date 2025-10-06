@@ -19,6 +19,14 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 
+struct alignas(16) PointLightGpu
+{
+    float position[3];
+    float radius;
+    float color[3];
+    float intensity;
+};
+
 void Scene::CBHandleCache::LightingHandles::Populate(Material* material)
 {
     *this = {};
@@ -39,6 +47,21 @@ void Scene::CBHandleCache::LightingHandles::Populate(Material* material)
     shadowAtlasSize = material->ComputeCB0FieldHandle("shadowAtlasSize");
     shadowBiasNDC = material->ComputeCB0FieldHandle("shadowBiasNDC");
     normalBiasWS = material->ComputeCB0FieldHandle("normalBiasWS");
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+}
+
+void Scene::CBHandleCache::PointLightHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    invView = material->ComputeCB0FieldHandle("invView");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    camPos = material->ComputeCB0FieldHandle("camPosWS");
+    lightCount = material->ComputeCB0FieldHandle("lightCount");
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
 }
 
 void Scene::CBHandleCache::SsrHandles::Populate(Material* material)
@@ -86,6 +109,10 @@ void Scene::RefreshCachedHandles(Renderer* renderer)
     {
         cbHandles_.lighting.Populate(matLighting_.get());
     }
+    if (matPointLightCS_)
+    {
+        cbHandles_.pointLights.Populate(matPointLightCS_.get());
+    }
     if (matCompose_)
     {
         cbHandles_.compose.Populate(matCompose_.get());
@@ -97,11 +124,6 @@ void Scene::RefreshCachedHandles(Renderer* renderer)
     if (matBlur_)
     {
         cbHandles_.blur.Populate(matBlur_.get());
-    }
-
-    for (auto& light : pointLights_)
-    {
-        light.OnMaterialHotReload();
     }
 
     for (auto& obj : objects_)
@@ -181,14 +203,17 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     cbHandles_ = {};
 
     if (!matLighting_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/lighting_ps.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.inputLayoutKey = ""; // fullscreen
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetLightTargetFormat();
-        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-        gd.depth.DepthEnable = FALSE;
-        matLighting_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/lighting_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matLighting_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matPointLightCS_) {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/pointlight_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matPointLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matCompose_) {
@@ -301,11 +326,6 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     AddObject(std::make_unique<DebugGrid>(100.0f));
 
     camera_.SetPosition({ 0.f, 1.f, -10.f });
-
-    for (auto& obj : pointLights_)
-    {
-        obj.Init(renderer, uploadCmdList, uploadKeepAlive);
-    }
 
     for (auto& obj : objects_)
     {
@@ -445,7 +465,7 @@ void Scene::Render(Renderer* renderer) {
     auto pPointLights = rg.AddPass("PointLights", { pLight },
         [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
-            Pass_PointLights(renderer, ctx, view, proj, invView, invProj);
+            Pass_PointLights(renderer, ctx, invView, invProj);
         });
 
     auto pSky = rg.AddPass("Skybox", { pPointLights },
@@ -802,22 +822,22 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj,
     const float3& camDir)
 {
+    (void)proj;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassLighting);
         const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->BindLightTarget(t.cl, Renderer::ClearMode::Color, false);
+        const D3D12_RESOURCE_STATES srvState =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        renderer->Transition(t.cl, D.gb0.Get(), srvState);
+        renderer->Transition(t.cl, D.gb1.Get(), srvState);
+        renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.depth.Get(), srvState);
+        renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // Allocate a dynamic constant buffer in the current frame's upload ring
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), /*align*/256);
-
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), 256);
         const auto& handles = cbHandles_.lighting;
 
         matLighting_->UpdateCBField(handles.sunDir, dirLight_.dir, (uint8_t*)cb.cpu);
@@ -830,7 +850,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         matLighting_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
 
-        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, /*arrayIndex*/0);
+        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, 0);
         matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
         matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
         matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
@@ -841,41 +861,56 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
 
         matLighting_->UpdateCBField(handles.cascadeSplits, float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.shadowAtlasSize, float2((float)renderer->GetDeferredForFrame().shadowRes, (float)renderer->GetDeferredForFrame().shadowRes), (uint8_t*)cb.cpu);
+        const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
+        matLighting_->UpdateCBField(handles.shadowAtlasSize, float2(shadowRes, shadowRes), (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.shadowBiasNDC, float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.normalBiasWS, float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
 
-        //const auto shadowBiasExtraHandle = matLighting_->ComputeCB0FieldHandle("shadowBias");
-        //matLighting_->UpdateCBField(shadowBiasExtraHandle, 0.0015f, (uint8_t*)cb.cpu);
-        //const auto pcfRadiusHandle = matLighting_->ComputeCB0FieldHandle("pcfRadius");
-        //matLighting_->UpdateCBField(pcfRadiusHandle, 1.0f, (uint8_t*)cb.cpu);
+        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float2 screenSize = float2(width, height);
+        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+        matLighting_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
+        rc.ClearFast();
 
-        rc.cbv[0] = cb.gpu; // b0 — our PerFrame buffer
+        rc.cbv[0] = cb.gpu;
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
         srvs.push_back(D.gbSRV[0]);
         srvs.push_back(D.gbSRV[1]);
         srvs.push_back(D.gbSRV[2]);
         srvs.push_back(D.gbSRV[3]);
-        srvs.push_back(D.shadowSRV); // NEW
+        srvs.push_back(D.shadowSRV);
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
         matLighting_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        if (groupsX > 0 && groupsY > 0)
+        {
+            t.cl->Dispatch(groupsX, groupsY, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.light.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
+
+
 void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
     const mat4& invView, const mat4& invProj)
 {
     if (pointLights_.empty()) { return; }
+
+    EnsurePointLightBuffer(renderer, pointLights_.size());
+    if (!pointLightBufferCPU_ || pointLightSrvHandle_.ptr == 0) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
@@ -883,32 +918,142 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPointLights);
 
         const auto& D = renderer->GetDeferredForFrame();
+        const D3D12_RESOURCE_STATES srvState =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(t.cl, D.gb0.Get(), srvState);
+        renderer->Transition(t.cl, D.gb1.Get(), srvState);
+        renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.depth.Get(), srvState);
 
-        // Light RT and depth (with the DSV bound) — write only stencil during Z-FAIL and additive color in COLOR
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-        renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, /*withDepth*/true);
-
-        // Clear only the STENCIL before each light
-        for (auto& L : pointLights_)
+        for (size_t i = 0; i < pointLights_.size(); ++i)
         {
-            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            // clear stencil=0
-            t.cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-
-            // 1) Z-FAIL performs two passes over the volume
-            L.RenderZFail(renderer, t.cl, view, proj);
-
-            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
-            // 2) Color: fullscreen, stencil!=0, additive
-            L.RenderColor(renderer, t.cl, view, proj, invView, invProj, camera_.GetPosition());
+            const auto& desc = pointLights_[i].GetDesc();
+            pointLightBufferCPU_[i].position[0] = desc.position.x;
+            pointLightBufferCPU_[i].position[1] = desc.position.y;
+            pointLightBufferCPU_[i].position[2] = desc.position.z;
+            pointLightBufferCPU_[i].radius = desc.radius;
+            pointLightBufferCPU_[i].color[0] = desc.color.x;
+            pointLightBufferCPU_[i].color[1] = desc.color.y;
+            pointLightBufferCPU_[i].color[2] = desc.color.z;
+            pointLightBufferCPU_[i].intensity = desc.intensity;
         }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matPointLightCS_->GetCBSizeBytesAligned(0, 256), 256);
+        const auto& handles = cbHandles_.pointLights;
+
+        matPointLightCS_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
+        matPointLightCS_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
+        matPointLightCS_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
+
+        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float2 screenSize = float2(width, height);
+        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+        matPointLightCS_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
+        matPointLightCS_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
+
+        const uint32_t lightCount = static_cast<uint32_t>(pointLights_.size());
+        matPointLightCS_->UpdateCBField(handles.lightCount, lightCount, (uint8_t*)cb.cpu);
+
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
+        rc.ClearFast();
+
+        rc.cbv[0] = cb.gpu;
+        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
+        srvs.push_back(D.gbSRV[0]);
+        srvs.push_back(D.gbSRV[1]);
+        srvs.push_back(D.gbSRV[2]);
+        srvs.push_back(D.gbSRV[3]);
+        srvs.push_back(pointLightSrvHandle_);
+        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+        matPointLightCS_->Bind(t.cl, rc);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        if (groupsX > 0 && groupsY > 0)
+        {
+            t.cl->Dispatch(groupsX, groupsY, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.light.Get());
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
+}
+
+void Scene::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights)
+{
+    if (requiredLights == 0)
+    {
+        return;
+    }
+
+    if (pointLightBuffer_ && pointLightBufferCPU_ && pointLightSrvHandle_.ptr != 0 && pointLightCapacity_ >= requiredLights)
+    {
+        return;
+    }
+
+    if (pointLightBuffer_)
+    {
+        pointLightBuffer_->Unmap(0, nullptr);
+        pointLightBuffer_.Reset();
+        pointLightBufferCPU_ = nullptr;
+        pointLightCapacity_ = 0;
+    }
+    pointLightSrvHeap_.Reset();
+    pointLightSrvHandle_ = {};
+
+    pointLightCapacity_ = std::max<size_t>(requiredLights, 1);
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = static_cast<UINT64>(pointLightCapacity_ * sizeof(PointLightGpu));
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    ThrowIfFailed(renderer->GetDevice()->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(buffer.GetAddressOf())));
+
+    D3D12_RANGE range{ 0, 0 };
+    void* mapped = nullptr;
+    ThrowIfFailed(buffer->Map(0, &range, &mapped));
+
+    pointLightBuffer_ = buffer;
+    pointLightBufferCPU_ = static_cast<PointLightGpu*>(mapped);
+    renderer->SetResourceState(pointLightBuffer_.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors = 1;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    ThrowIfFailed(renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(pointLightSrvHeap_.ReleaseAndGetAddressOf())));
+    pointLightSrvHandle_ = pointLightSrvHeap_->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Buffer.FirstElement = 0;
+    srvDesc.Buffer.NumElements = static_cast<UINT>(pointLightCapacity_);
+    srvDesc.Buffer.StructureByteStride = sizeof(PointLightGpu);
+    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    renderer->GetDevice()->CreateShaderResourceView(pointLightBuffer_.Get(), &srvDesc, pointLightSrvHandle_);
 }
 
 void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
@@ -1204,11 +1349,21 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
 void Scene::Clear()
 {
     matLighting_.reset();
+    matPointLightCS_.reset();
     matCompose_.reset();
     matTonemap_.reset();
     matBlur_.reset();
     matSSR_.reset();
     matDebug_.reset();
+    if (pointLightBuffer_)
+    {
+        pointLightBuffer_->Unmap(0, nullptr);
+        pointLightBuffer_.Reset();
+    }
+    pointLightBufferCPU_ = nullptr;
+    pointLightCapacity_ = 0;
+    pointLightSrvHeap_.Reset();
+    pointLightSrvHandle_ = {};
     cbHandles_ = {};
     objects_.clear();
     for (auto& bucket : renderBuckets_) {
