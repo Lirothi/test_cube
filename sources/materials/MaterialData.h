@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,8 +64,10 @@ public:
     void StageGBufferBindings(Renderer* r, RenderContext& ctx,
                               UINT srvTableRegister = 0, UINT samplerTableRegister = 0);
 
-    // For the instanced path (t0 = instances), append t1..t3
-    void AppendGBufferSRVs(std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>& dst) const;
+    // For the instanced path (t0 = instances), append t1..t3 starting at the provided offset.
+    // Returns the number of descriptors appended.
+    size_t AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset = 0) const;
+    size_t AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t& inoutCount) const;
 
 private:
     struct SrvCache {

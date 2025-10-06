@@ -878,12 +878,13 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-        srvs.push_back(D.gbSRV[0]);
-        srvs.push_back(D.gbSRV[1]);
-        srvs.push_back(D.gbSRV[2]);
-        srvs.push_back(D.gbSRV[3]);
-        srvs.push_back(D.shadowSRV);
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
+            D.gbSRV[0],
+            D.gbSRV[1],
+            D.gbSRV[2],
+            D.gbSRV[3],
+            D.shadowSRV
+        };
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
         rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
@@ -957,12 +958,13 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-        srvs.push_back(D.gbSRV[0]);
-        srvs.push_back(D.gbSRV[1]);
-        srvs.push_back(D.gbSRV[2]);
-        srvs.push_back(D.gbSRV[3]);
-        srvs.push_back(pointLightSrvHandle_);
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
+            D.gbSRV[0],
+            D.gbSRV[1],
+            D.gbSRV[2],
+            D.gbSRV[3],
+            pointLightSrvHandle_
+        };
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
         rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
@@ -1207,14 +1209,15 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         matCompose_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
 
         // === Build the SRV table for the root TABLE(SRV...) from compose_ps.hlsl ===
-        std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> srvs;
-        srvs.push_back(D.lightSRV);   // t0
-        srvs.push_back(D.gbSRV[2]);   // t1 (GB2)
-        srvs.push_back(D.gbSRV[0]);   // t2 (GB0)
-        srvs.push_back(D.gbSRV[1]);   // t3 (GB1)
-        srvs.push_back(D.gbSRV[3]);   // t4 (Depth)
-        srvs.push_back(skyBox_->GetTex()->GetSRVCPU());
-        srvs.push_back(D.ssrSRV);
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
+            D.lightSRV,                          // t0
+            D.gbSRV[2],                          // t1 (GB2)
+            D.gbSRV[0],                          // t2 (GB0)
+            D.gbSRV[1],                          // t3 (GB1)
+            D.gbSRV[3],                          // t4 (Depth)
+            skyBox_->GetTex()->GetSRVCPU(),
+            D.ssrSRV
+        };
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
