@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(SAMPLER(s0) SAMPLER(s1))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
 // t0: LightTarget (HDR)
 // t1: GB2 (Emissive)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -6,12 +6,12 @@
 // t4: Depth (R32F SRV created from the DSV)
 // t5: Skybox cubemap
 // t6: SSR blurred (premultiplied)
+// u0: Scene color (HDR)
 
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
 
-// === Resources ===
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
 Texture2D GB0 : register(t2);
@@ -20,44 +20,23 @@ Texture2D DepthT : register(t4);
 TextureCube SkyboxTex : register(t5);
 Texture2D SSRBlur : register(t6);
 
+RWTexture2D<float4> SceneColor : register(u0);
+
 SamplerState gSmp : register(s0); // LinearClamp (color)
 SamplerState gSmpPoint : register(s1); // PointClamp (depth)
 
-// === SSR parameters ===
 cbuffer PerFrame : register(b0)
 {
-    float4x4 view; // world -> view
-    float4x4 proj; // view  -> clip
     float4x4 invView; // view  -> world
     float4x4 invProj; // clip  -> view
     float skyboxIntensity; // 1.0
+    float3 camPosWS;
+    float  _padding0;
+    float2 screenSize;
+    float2 invScreenSize;
 }
 
 static const float kEps = 1e-6;
-
-struct VSOut
-{
-    float4 H : SV_POSITION;
-    float2 UV : TEXCOORD0;
-};
-
-VSOut VSMain(uint vid : SV_VertexID)
-{
-    VSOut o;
-    float2 p = float2(vid == 2 ? 3 : -1, vid == 1 ? 3 : -1);
-    o.H = float4(p, 0, 1);
-    o.UV = float2(p.x * 0.5 + 0.5, 1 - (p.y * 0.5 + 0.5));
-    return o;
-}
-
-float3 ReconstructPosVS(float2 uv, float depth)
-{
-    float2 ndc = UVtoNDC(uv);
-    float4 clip = float4(ndc, depth, 1.0);
-    float4 vpos = mul(clip, invProj); // clip->view
-    vpos.xyz /= max(kEps, vpos.w);
-    return vpos.xyz;
-}
 
 float3 FresnelSchlick(float cosTheta, float3 F0)
 {
@@ -69,18 +48,27 @@ inline float ReadDepth(float2 uv)
     return DepthT.SampleLevel(gSmpPoint, uv, 0).r; // Always sample LOD0, no bilinear
 }
 
-
-// === Pixel ===
-float4 PSMain(VSOut i) : SV_Target
+[numthreads(8,8,1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    float3 lit = LightTarget.SampleLevel(gSmp, i.UV, 0).rgb;
-    float3 emi = GB2.SampleLevel(gSmp, i.UV, 0).rgb;
+    uint width = (uint)screenSize.x;
+    uint height = (uint)screenSize.y;
+    if (dispatchThreadId.x >= width || dispatchThreadId.y >= height)
+    {
+        return;
+    }
 
-	float z = ReadDepth(i.UV);
+    float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invScreenSize;
+
+    float3 lit = LightTarget.SampleLevel(gSmp, uv, 0).rgb;
+    float3 emi = GB2.SampleLevel(gSmp, uv, 0).rgb;
+    float3 color = lit + emi;
+
+    float z = ReadDepth(uv);
     if (z < 1.0 - kEps)
     {
-        float4 gb0 = GB0.SampleLevel(gSmp, i.UV, 0);
-        float4 gb1 = GB1.SampleLevel(gSmp, i.UV, 0);
+        float4 gb0 = GB0.SampleLevel(gSmp, uv, 0);
+        float4 gb1 = GB1.SampleLevel(gSmp, uv, 0);
 
         float3 albedo = gb0.rgb;
         float2 rm = UnpackRM(gb0.a);
@@ -90,31 +78,26 @@ float4 PSMain(VSOut i) : SV_Target
         float3 N_ws = normalize(gb1.rgb * 2.0 - 1.0);
         float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
 
-        float3 Pv = ReconstructPosVS(i.UV, z);
-        float3 Vv = normalize(-Pv);
-        float3 Nv = normalize(mul(N_ws, (float3x3) view));
-        float3 Rv = normalize(reflect(-Vv, Nv));
-        float3 Rw = normalize(mul(Rv, (float3x3) invView));
+        float3 Pw = ReconstructPosWS(uv, z, invProj, invView);
+        float3 Vw = NormalizeSafe(camPosWS - Pw, float3(0.0, 0.0, 1.0));
+        float3 Rw = NormalizeSafe(reflect(-Vw, N_ws), N_ws);
 
-        float4 ssrT = SSRBlur.SampleLevel(gSmp, i.UV, 0); // premultiplied
+        float4 ssrT = SSRBlur.SampleLevel(gSmp, uv, 0); // premultiplied
         float ssrA = ssrT.a;
         float3 ssrRGB = ssrT.rgb;
 
         float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
 
-            // Skybox as fallback: (ssrColor*α + sky*(1-α))
+        // Skybox as fallback: (ssrColor*α + sky*(1-α))
         float3 refl = ssrRGB + skyCol * (1.0 - ssrA);
 
-        float cosT = saturate(dot(Nv, Vv));
+        float cosT = saturate(dot(N_ws, Vw));
         float3 F = FresnelSchlick(cosT, F0);
         float gloss = saturate(1.0 - rough);
 
         float3 spec = refl * F * pow(gloss, 1);
+        color += spec;
+    }
 
-        return float4(lit + spec + emi, 1.0);
-    }
-	else
-	{
-        return float4(lit + emi, 1.0);
-    }
+    SceneColor[dispatchThreadId.xy] = float4(color, 1.0);
 }

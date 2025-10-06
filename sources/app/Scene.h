@@ -77,8 +77,8 @@ private:
 
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matPointLightCS_;
-    std::shared_ptr<Material> matCompose_;
-    std::shared_ptr<Material> matTonemap_;
+    std::shared_ptr<Material> matComposeCS_;
+    std::shared_ptr<Material> matTonemapCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
@@ -136,11 +136,12 @@ private:
         } blur;
 
         struct ComposeHandles {
-            Material::CBFieldHandle view;
-            Material::CBFieldHandle proj;
             Material::CBFieldHandle invView;
             Material::CBFieldHandle invProj;
             Material::CBFieldHandle skyboxIntensity;
+            Material::CBFieldHandle camPos;
+            Material::CBFieldHandle screenSize;
+            Material::CBFieldHandle invScreenSize;
             void Populate(Material* material);
         } compose;
     } cbHandles_{};
