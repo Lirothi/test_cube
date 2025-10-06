@@ -181,6 +181,7 @@
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp" />
     <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp" />
+    <ClCompile Include="sources/rendering/lighting/LightManager.cpp" />
     <ClCompile Include="sources/rendering/lighting/PointLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
     <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
@@ -234,6 +235,7 @@
     <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h" />
     <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h" />
     <ClInclude Include="sources/rendering/descriptors/SamplerManager.h" />
+    <ClInclude Include="sources/rendering/lighting/LightManager.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />

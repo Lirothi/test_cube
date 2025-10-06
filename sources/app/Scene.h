@@ -9,11 +9,9 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "app/Camera.h"
 #include "rendering/lighting/Skybox.h"
-#include "rendering/lighting/PointLight.h"
+#include "rendering/lighting/LightManager.h"
 
 class Renderer;
-
-struct PointLightGpu;
 
 class Scene {
 public:
@@ -55,6 +53,10 @@ private:
         const mat4& view, const mat4& proj,
         const mat4& invView, const mat4& invProj,
         const float3& camDir);
+    void Pass_SpotShadows(Renderer* r, RenderGraph::PassContext ctx,
+        const ObjectBuckets& buckets);
+    void Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
+        const mat4& invView, const mat4& invProj);
     void Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         const mat4& invView, const Math::mat4& invProj);
     void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
@@ -77,6 +79,7 @@ private:
 
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matPointLightCS_;
+    std::shared_ptr<Material> matSpotLightCS_;
     std::shared_ptr<Material> matComposeCS_;
     std::shared_ptr<Material> matTonemapCS_;
     std::shared_ptr<Material> matSSR_;
@@ -115,6 +118,18 @@ private:
             Material::CBFieldHandle invScreenSize;
             void Populate(Material* material);
         } pointLights;
+
+        struct SpotLightHandles {
+            Material::CBFieldHandle invView;
+            Material::CBFieldHandle invProj;
+            Material::CBFieldHandle camPos;
+            Material::CBFieldHandle lightCount;
+            Material::CBFieldHandle screenSize;
+            Material::CBFieldHandle invScreenSize;
+            Material::CBFieldHandle shadowSize;
+            Material::CBFieldHandle invShadowSize;
+            void Populate(Material* material);
+        } spotLights;
 
         struct SsrHandles {
             Material::CBFieldHandle view;
@@ -156,7 +171,7 @@ private:
     float  cachedDepthBiasNDC_[kCascades] = {};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
-    std::vector<PointLight> pointLights_;
+    LightManager lightManager_{};
 
     ObjectBuckets renderBuckets_;
     Camera camera_;
@@ -175,10 +190,4 @@ private:
 
     std::unique_ptr<Skybox> skyBox_;
 
-    void EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
-    Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
-    PointLightGpu* pointLightBufferCPU_ = nullptr;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;
-    D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle_{};
-    size_t pointLightCapacity_ = 0;
 };
