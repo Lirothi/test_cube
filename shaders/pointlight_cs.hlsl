@@ -9,6 +9,14 @@
 
 #include "utils.hlsl"
 
+struct PointLightData
+{
+    float3 position;
+    float radius;
+    float3 color;
+    float intensity;
+};
+
 Texture2D GB0 : register(t0);
 Texture2D GB1 : register(t1);
 Texture2D GB2 : register(t2);
@@ -18,14 +26,6 @@ RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
 SamplerState gSmpPoint : register(s1);
-
-struct PointLightData
-{
-    float3 position;
-    float radius;
-    float3 color;
-    float intensity;
-};
 
 cbuffer PointLightFrame : register(b0)
 {

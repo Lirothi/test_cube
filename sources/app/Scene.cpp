@@ -21,9 +21,9 @@
 
 struct alignas(16) PointLightGpu
 {
-    float position[3];
+    float3 position;
     float radius;
-    float color[3];
+    float3 color;
     float intensity;
 };
 
@@ -929,13 +929,9 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         for (size_t i = 0; i < pointLights_.size(); ++i)
         {
             const auto& desc = pointLights_[i].GetDesc();
-            pointLightBufferCPU_[i].position[0] = desc.position.x;
-            pointLightBufferCPU_[i].position[1] = desc.position.y;
-            pointLightBufferCPU_[i].position[2] = desc.position.z;
+            pointLightBufferCPU_[i].position = desc.position;
             pointLightBufferCPU_[i].radius = desc.radius;
-            pointLightBufferCPU_[i].color[0] = desc.color.x;
-            pointLightBufferCPU_[i].color[1] = desc.color.y;
-            pointLightBufferCPU_[i].color[2] = desc.color.z;
+            pointLightBufferCPU_[i].color = desc.color;
             pointLightBufferCPU_[i].intensity = desc.intensity;
         }
 
