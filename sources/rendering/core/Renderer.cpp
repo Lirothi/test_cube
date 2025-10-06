@@ -283,6 +283,7 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
 
         device_->CreateRenderTargetView(renderTargets_[i].Get(), &rtvFmt, rtv);
         rtv.ptr += rtvDescriptorSize_;
+        SetResourceState(renderTargets_[i].Get(), D3D12_RESOURCE_STATE_PRESENT);
     }
 }
 
@@ -693,6 +694,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         cl->ResourceBarrier(1, &b);
+        SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
 #if PROF_GPU_ENABLED
         Profiler::Get().EndGpuFrame(cl);
 #endif
@@ -868,6 +870,7 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
+    SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // RTV/DSV
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
