@@ -147,6 +147,9 @@
     <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp">
       <Filter>sources\rendering\descriptors</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/LightManager.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/lighting/PointLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
@@ -301,6 +304,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/SamplerManager.h">
       <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/LightManager.h">
+      <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/PointLight.h">
       <Filter>sources\rendering\lighting</Filter>

@@ -937,6 +937,10 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvCPU(UINT frame, DeferredDsvSlot
     const UINT idx = frame * kDeferredDsvPerFrame + static_cast<UINT>(slot);
     return DeferredDsvAt(idx);
 }
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const {
+    const UINT base = frame * kDeferredDsvPerFrame + static_cast<UINT>(DeferredDsvSlot::Count);
+    return DeferredDsvAt(base + lightIndex);
+}
 
 void Renderer::CreateDeferredTargets(UINT width, UINT height)
 {
@@ -1217,6 +1221,72 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         D.shadowRes = 4096; // could be driven by config/parameter
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
+        auto CreateSpotShadow = [&](UINT frameIndex,
+            ComPtr<ID3D12Resource>& outRes,
+            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights>& outDSV,
+            D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+            UINT resolution)
+        {
+            if (resolution == 0) { resolution = 512; }
+
+            D3D12_CLEAR_VALUE clear{};
+            clear.Format = DXGI_FORMAT_D32_FLOAT;
+            clear.DepthStencil.Depth = 1.0f;
+            clear.DepthStencil.Stencil = 0;
+
+            D3D12_RESOURCE_DESC desc{};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            desc.Alignment = 0;
+            desc.Width = resolution;
+            desc.Height = resolution;
+            desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxSpotLights);
+            desc.MipLevels = 1;
+            desc.Format = DXGI_FORMAT_R32_TYPELESS;
+            desc.SampleDesc.Count = 1;
+            desc.SampleDesc.Quality = 0;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                &clear,
+                IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
+
+            outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::SpotShadow);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2DArray.MipLevels = 1;
+            srvDesc.Texture2DArray.FirstArraySlice = 0;
+            srvDesc.Texture2DArray.ArraySize = LightManager::kMaxSpotLights;
+            srvDesc.Texture2DArray.MostDetailedMip = 0;
+            srvDesc.Texture2DArray.PlaneSlice = 0;
+            srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+            dev->CreateShaderResourceView(outRes.Get(), &srvDesc, outSRV);
+
+            for (UINT i = 0; i < LightManager::kMaxSpotLights; ++i)
+            {
+                outDSV[i] = DeferredSpotShadowDsvCPU(frameIndex, i);
+                D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+                dsv.Format = DXGI_FORMAT_D32_FLOAT;
+                dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+                dsv.Flags = D3D12_DSV_FLAG_NONE;
+                dsv.Texture2DArray.ArraySize = 1;
+                dsv.Texture2DArray.FirstArraySlice = i;
+                dsv.Texture2DArray.MipSlice = 0;
+                dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV[i]);
+            }
+
+            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        };
+
+        D.spotShadowRes = 512;
+        CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);
+
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
         CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV);
@@ -1249,6 +1319,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.ssr);
         collect(D.ssrBlur);
         collect(D.shadow);
+        collect(D.spotShadow);
     }
 
     if (!released.empty()) {
@@ -1332,6 +1403,28 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 	else
     {
         cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    }
+}
+
+void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth)
+{
+    auto& D = deferred_[currentFrameIndex_];
+    if (lightIndex >= LightManager::kMaxSpotLights)
+    {
+        lightIndex = LightManager::kMaxSpotLights - 1;
+    }
+
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.spotShadowDSV[lightIndex]);
+
+    const float res = static_cast<float>(std::max(D.spotShadowRes, 1u));
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, res, res, 0.0f, 1.0f };
+    D3D12_RECT sc{ 0, 0, static_cast<LONG>(res), static_cast<LONG>(res) };
+    cl->RSSetViewports(1, &vp);
+    cl->RSSetScissorRects(1, &sc);
+
+    if (clearDepth)
+    {
+        cl->ClearDepthStencilView(D.spotShadowDSV[lightIndex], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
 }
 

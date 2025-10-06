@@ -3,6 +3,7 @@
 #include <memory>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "input/InputManager.h"
 #include "app/Camera.h"
@@ -18,14 +19,6 @@
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
-
-struct alignas(16) PointLightGpu
-{
-    float3 position;
-    float radius;
-    float3 color;
-    float intensity;
-};
 
 void Scene::CBHandleCache::LightingHandles::Populate(Material* material)
 {
@@ -62,6 +55,21 @@ void Scene::CBHandleCache::PointLightHandles::Populate(Material* material)
     lightCount = material->ComputeCB0FieldHandle("lightCount");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+}
+
+void Scene::CBHandleCache::SpotLightHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    invView = material->ComputeCB0FieldHandle("invView");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    camPos = material->ComputeCB0FieldHandle("camPosWS");
+    lightCount = material->ComputeCB0FieldHandle("lightCount");
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+    shadowSize = material->ComputeCB0FieldHandle("shadowSize");
+    invShadowSize = material->ComputeCB0FieldHandle("invShadowSize");
 }
 
 void Scene::CBHandleCache::SsrHandles::Populate(Material* material)
@@ -113,6 +121,10 @@ void Scene::RefreshCachedHandles(Renderer* renderer)
     if (matPointLightCS_)
     {
         cbHandles_.pointLights.Populate(matPointLightCS_.get());
+    }
+    if (matSpotLightCS_)
+    {
+        cbHandles_.spotLights.Populate(matSpotLightCS_.get());
     }
     if (matComposeCS_)
     {
@@ -217,6 +229,13 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         matPointLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matSpotLightCS_) {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/spotlight_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSpotLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matComposeCS_) {
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/compose_cs.hlsl";
@@ -260,8 +279,36 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     skyBox_->Init(renderer, uploadCmdList, uploadKeepAlive);
     skyBox_->SetExposure(0.2f);
 
-    pointLights_.emplace_back(); pointLights_.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
-    pointLights_.emplace_back(); pointLights_.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
+    auto& pointLights = lightManager_.PointLights();
+    pointLights.emplace_back(); pointLights.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
+    pointLights.emplace_back(); pointLights.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
+
+    SpotLightDesc warmSpot{};
+    warmSpot.position = float3(4.0f, 4.0f, -3.0f);
+    warmSpot.direction = float3(-1.0f, -1.0f, 0.0f).Normalized();
+    warmSpot.range = 20.0f;
+    warmSpot.innerAngle = XMConvertToRadians(18.0f);
+    warmSpot.outerAngle = XMConvertToRadians(28.0f);
+    warmSpot.color = float3(1.0f, 0.85f, 0.6f);
+    warmSpot.intensity = 15.0f;
+    warmSpot.shadowNormalBias = 0.01f;
+    warmSpot.shadowDepthBias = 0.0025f;
+    auto& spotLights = lightManager_.SpotLights();
+    spotLights.push_back({});
+    spotLights.back().SetDesc(warmSpot);
+
+    SpotLightDesc coolSpot{};
+    coolSpot.position = float3(-5.0f, 5.0f, -6.0f);
+    coolSpot.direction = float3(0.5f, -1.0f, 0.25f).Normalized();
+    coolSpot.range = 25.0f;
+    coolSpot.innerAngle = XMConvertToRadians(20.0f);
+    coolSpot.outerAngle = XMConvertToRadians(32.0f);
+    coolSpot.color = float3(0.6f, 0.8f, 1.0f);
+    coolSpot.intensity = 18.0f;
+    coolSpot.shadowNormalBias = 0.015f;
+    coolSpot.shadowDepthBias = 0.0025f;
+    spotLights.push_back({});
+    spotLights.back().SetDesc(coolSpot);
 
     dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
     //dirLight_.exposure *= 0.2f;
@@ -404,6 +451,8 @@ void Scene::Render(Renderer* renderer) {
 
     TaskSystem::Get().WaitForTrackedAsyncTasks();
 
+    lightManager_.UpdateSpotLightCache();
+
     // Frame matrices and camera/light parameters (mirrors your setup)
     const float aspect = float(renderer->GetWidth()) / float(renderer->GetHeight());
     const mat4 view = camera_.GetViewMatrix();
@@ -443,7 +492,13 @@ void Scene::Render(Renderer* renderer) {
             Pass_CSM(renderer, ctx, view, proj, invView, invProj, zNear, zFar, camDir, buckets);
         });
 
-    auto pGbuf = rg.AddPass("GBuffer", { pShadow },
+    auto pSpotShadow = rg.AddPass("SpotShadows", { pShadow },
+        [this, renderer, &buckets](RenderGraph::PassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
+            Pass_SpotShadows(renderer, ctx, buckets);
+        });
+
+    auto pGbuf = rg.AddPass("GBuffer", { pSpotShadow },
         [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
             Pass_GBuffer(renderer, ctx, view, proj, buckets);
@@ -455,7 +510,13 @@ void Scene::Render(Renderer* renderer) {
             Pass_Lighting(renderer, ctx, view, proj, invView, invProj, camDir);
         });
 
-    auto pPointLights = rg.AddPass("PointLights", { pLight },
+    auto pSpotLights = rg.AddPass("SpotLights", { pLight },
+        [this, renderer, &invView, &invProj](RenderGraph::PassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassSpotLights);
+            Pass_SpotLights(renderer, ctx, invView, invProj);
+        });
+
+    auto pPointLights = rg.AddPass("PointLights", { pSpotLights },
         [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
             Pass_PointLights(renderer, ctx, invView, invProj);
@@ -768,6 +829,52 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 #endif
 }
 
+void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
+    const ObjectBuckets& buckets)
+{
+    const size_t spotLightCount = lightManager_.GetSpotLightCount();
+    if (spotLightCount == 0)
+    {
+        return;
+    }
+
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+
+        for (size_t lightIndex = 0; lightIndex < spotLightCount; ++lightIndex)
+        {
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
+
+            const mat4& lightView = lightManager_.GetSpotView(lightIndex);
+            const mat4& lightProj = lightManager_.GetSpotProj(lightIndex);
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+            }
+
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+            }
+        }
+    }
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
+}
+
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
     const ObjectBuckets& buckets)
@@ -898,13 +1005,119 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 
 
 
+void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
+    const mat4& invView, const mat4& invProj)
+{
+    const size_t spotLightCount = lightManager_.GetSpotLightCount();
+    if (spotLightCount == 0)
+    {
+        return;
+    }
+
+    lightManager_.EnsureSpotLightBuffer(renderer, spotLightCount);
+    auto* spotLightBufferCPU = lightManager_.GetSpotLightBufferCPU();
+    const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager_.GetSpotLightSrv();
+    if (!spotLightBufferCPU || spotLightSrvHandle.ptr == 0)
+    {
+        return;
+    }
+
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotLights);
+        const auto& D = renderer->GetDeferredForFrame();
+        const D3D12_RESOURCE_STATES srvState =
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(t.cl, D.gb0.Get(), srvState);
+        renderer->Transition(t.cl, D.gb1.Get(), srvState);
+        renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.depth.Get(), srvState);
+        renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        const auto& spotLights = lightManager_.SpotLights();
+        for (size_t i = 0; i < spotLightCount; ++i)
+        {
+            const auto& desc = spotLights[i].GetDesc();
+            const mat4 viewProj = lightManager_.GetSpotView(i) * lightManager_.GetSpotProj(i);
+            const float3 dir = lightManager_.GetSpotDirection(i);
+
+            spotLightBufferCPU[i].positionRange = float4(desc.position, desc.range);
+            spotLightBufferCPU[i].directionCosOuter = float4(dir, lightManager_.GetSpotCosOuter(i));
+            spotLightBufferCPU[i].colorIntensity = float4(desc.color, desc.intensity);
+            spotLightBufferCPU[i].shadowParams = float4(lightManager_.GetSpotCosInner(i), static_cast<float>(i), lightManager_.GetSpotInvAngleRange(i), lightManager_.GetSpotDepthBias(i));
+            spotLightBufferCPU[i].shadowParams2 = float4(lightManager_.GetSpotNormalBias(i), 0.0f, 0.0f, 0.0f);
+            spotLightBufferCPU[i].viewProj = viewProj;
+        }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matSpotLightCS_->GetCBSizeBytesAligned(0, 256), 256);
+        const auto& handles = cbHandles_.spotLights;
+
+        matSpotLightCS_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
+        matSpotLightCS_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
+        matSpotLightCS_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
+
+        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float2 screenSize = float2(width, height);
+        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+        matSpotLightCS_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
+        matSpotLightCS_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
+
+        const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().spotShadowRes);
+        const float2 shadowSize = float2(shadowRes, shadowRes);
+        const float invRes = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
+        const float2 invShadowSize = float2(invRes, invRes);
+        matSpotLightCS_->UpdateCBField(handles.shadowSize, shadowSize, (uint8_t*)cb.cpu);
+        matSpotLightCS_->UpdateCBField(handles.invShadowSize, invShadowSize, (uint8_t*)cb.cpu);
+
+        const uint32_t lightCount = static_cast<uint32_t>(spotLightCount);
+        matSpotLightCS_->UpdateCBField(handles.lightCount, lightCount, (uint8_t*)cb.cpu);
+
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
+        rc.ClearFast();
+
+        rc.cbv[0] = cb.gpu;
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
+            D.gbSRV[0],
+            D.gbSRV[1],
+            D.gbSRV[2],
+            D.gbSRV[3],
+            D.spotShadowSRV,
+            spotLightSrvHandle
+        };
+        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+        matSpotLightCS_->Bind(t.cl, rc);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        if (groupsX > 0 && groupsY > 0)
+        {
+            t.cl->Dispatch(groupsX, groupsY, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.light.Get());
+    }
+
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
+}
+
 void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj)
 {
-    if (pointLights_.empty()) { return; }
+    auto& pointLights = lightManager_.PointLights();
+    if (pointLights.empty()) { return; }
 
-    EnsurePointLightBuffer(renderer, pointLights_.size());
-    if (!pointLightBufferCPU_ || pointLightSrvHandle_.ptr == 0) { return; }
+    lightManager_.EnsurePointLightBuffer(renderer, pointLights.size());
+    auto* pointLightBufferCPU = lightManager_.GetPointLightBufferCPU();
+    const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager_.GetPointLightSrv();
+    if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
@@ -920,13 +1133,13 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.gb2.Get(), srvState);
         renderer->Transition(t.cl, D.depth.Get(), srvState);
 
-        for (size_t i = 0; i < pointLights_.size(); ++i)
+        for (size_t i = 0; i < pointLights.size(); ++i)
         {
-            const auto& desc = pointLights_[i].GetDesc();
-            pointLightBufferCPU_[i].position = desc.position;
-            pointLightBufferCPU_[i].radius = desc.radius;
-            pointLightBufferCPU_[i].color = desc.color;
-            pointLightBufferCPU_[i].intensity = desc.intensity;
+            const auto& desc = pointLights[i].GetDesc();
+            pointLightBufferCPU[i].position = desc.position;
+            pointLightBufferCPU[i].radius = desc.radius;
+            pointLightBufferCPU[i].color = desc.color;
+            pointLightBufferCPU[i].intensity = desc.intensity;
         }
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matPointLightCS_->GetCBSizeBytesAligned(0, 256), 256);
@@ -943,7 +1156,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         matPointLightCS_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
         matPointLightCS_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
 
-        const uint32_t lightCount = static_cast<uint32_t>(pointLights_.size());
+        const uint32_t lightCount = static_cast<uint32_t>(pointLights.size());
         matPointLightCS_->UpdateCBField(handles.lightCount, lightCount, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
@@ -956,7 +1169,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
             D.gbSRV[1],
             D.gbSRV[2],
             D.gbSRV[3],
-            pointLightSrvHandle_
+            pointLightSrvHandle
         };
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
         rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
@@ -975,76 +1188,6 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
-}
-
-void Scene::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights)
-{
-    if (requiredLights == 0)
-    {
-        return;
-    }
-
-    if (pointLightBuffer_ && pointLightBufferCPU_ && pointLightSrvHandle_.ptr != 0 && pointLightCapacity_ >= requiredLights)
-    {
-        return;
-    }
-
-    if (pointLightBuffer_)
-    {
-        pointLightBuffer_->Unmap(0, nullptr);
-        pointLightBuffer_.Reset();
-        pointLightBufferCPU_ = nullptr;
-        pointLightCapacity_ = 0;
-    }
-    pointLightSrvHeap_.Reset();
-    pointLightSrvHandle_ = {};
-
-    pointLightCapacity_ = std::max<size_t>(requiredLights, 1);
-
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = static_cast<UINT64>(pointLightCapacity_ * sizeof(PointLightGpu));
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-
-    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    ThrowIfFailed(renderer->GetDevice()->CreateCommittedResource(
-        &heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(buffer.GetAddressOf())));
-
-    D3D12_RANGE range{ 0, 0 };
-    void* mapped = nullptr;
-    ThrowIfFailed(buffer->Map(0, &range, &mapped));
-
-    pointLightBuffer_ = buffer;
-    pointLightBufferCPU_ = static_cast<PointLightGpu*>(mapped);
-    renderer->SetResourceState(pointLightBuffer_.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
-
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 1;
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(pointLightSrvHeap_.ReleaseAndGetAddressOf())));
-    pointLightSrvHandle_ = pointLightSrvHeap_->GetCPUDescriptorHandleForHeapStart();
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Buffer.FirstElement = 0;
-    srvDesc.Buffer.NumElements = static_cast<UINT>(pointLightCapacity_);
-    srvDesc.Buffer.StructureByteStride = sizeof(PointLightGpu);
-    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-    renderer->GetDevice()->CreateShaderResourceView(pointLightBuffer_.Get(), &srvDesc, pointLightSrvHandle_);
 }
 
 void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
@@ -1377,20 +1520,13 @@ void Scene::Clear()
 {
     matLighting_.reset();
     matPointLightCS_.reset();
+    matSpotLightCS_.reset();
     matComposeCS_.reset();
     matTonemapCS_.reset();
     matBlur_.reset();
     matSSR_.reset();
     matDebug_.reset();
-    if (pointLightBuffer_)
-    {
-        pointLightBuffer_->Unmap(0, nullptr);
-        pointLightBuffer_.Reset();
-    }
-    pointLightBufferCPU_ = nullptr;
-    pointLightCapacity_ = 0;
-    pointLightSrvHeap_.Reset();
-    pointLightSrvHandle_ = {};
+    lightManager_.Reset();
     cbHandles_ = {};
     objects_.clear();
     for (auto& bucket : renderBuckets_) {

@@ -17,6 +17,7 @@
 #include "text/FontManager.h"
 #include "materials/MaterialDataManager.h"
 #include "rendering/core/RenderContextPool.h"
+#include "rendering/lighting/LightManager.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -29,7 +30,7 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 10; // gb0,gb1,gb2,depth,light,scene,tonemap,ssr,ssrBlur,shadow
+        static constexpr size_t kResourceCount = 11; // gb0,gb1,gb2,depth,light,scene,tonemap,ssr,ssrBlur,shadow,spotShadow
         // Resources
         ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
@@ -41,6 +42,7 @@ public:
         ComPtr<ID3D12Resource> ssr;     // Renderer::kSsrFormat (premultiplied)
         ComPtr<ID3D12Resource> ssrBlur; // Renderer::kSsrBlurFormat
         ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
+        ComPtr<ID3D12Resource> spotShadow; // R32_TYPELESS array for spot lights
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
@@ -52,8 +54,11 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
+        UINT spotShadowRes = 512;
     };
 
     Renderer();
@@ -79,6 +84,7 @@ public:
     void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
+    void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth);
 
     // Prebuilt SRV tables (in the frame's shader-visible heap)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
@@ -246,16 +252,17 @@ private:
     static constexpr UINT kFrameCount = 2;
 
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, LightUAV, Scene, SceneUAV, SSR, SSRBlur, Shadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, LightUAV, Scene, SceneUAV, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
     static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
-    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count;
+    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxSpotLights;
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
 
     D3D12_RESOURCE_STATES GetGlobalKnownState(ID3D12Resource* res);
     void RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl);
