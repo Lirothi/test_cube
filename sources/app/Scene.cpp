@@ -338,21 +338,32 @@ void Scene::Tick(float deltaTime) {
             showProfiler_ = !showProfiler_;
         }
     }
-    auto& tasks = TaskSystem::Get();
-
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
     TaskSystem::ParallelFor(objects_.size(),
         [this, deltaTime](size_t index) {
             if (index >= objects_.size()) {
                 return;
-			}
+            }
             objects_[index]->Tick(deltaTime);
-		}, batchSize);
+        }, batchSize);
+
+    TaskSystem::ParallelFor(objects_.size(),
+        [this, deltaTime](size_t index) {
+            if (index >= objects_.size()) {
+                return;
+            }
+            objects_[index]->PostTick(deltaTime);
+        }, batchSize);
 #else
     for (auto& obj : objects_)
     {
         obj->Tick(deltaTime);
+    }
+
+    for (auto& obj : objects_)
+    {
+        obj->PostTick(deltaTime);
     }
 #endif
 }
