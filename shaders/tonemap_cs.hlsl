@@ -4,10 +4,11 @@ Texture2D HDRColor : register(t0);
 RWTexture2D<float4> LdrTarget : register(u0);
 SamplerState gSmp : register(s0);
 
+#include "utils.hlsl"
+
 // ---- named constants ----
 static const float kGammaOut = 2.2;
 static const float kDitherAmplitude = 1.0 / 255.0; // enough to break banding
-static const float kEps = 1e-6;
 
 // ACES fitted (K. Narkowicz)
 float3 TonemapACES(float3 x)
@@ -37,7 +38,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 hdr = HDRColor.SampleLevel(gSmp, uv, 0).rgb;
 
     float3 mapped = TonemapACES(hdr);
-    float3 ldr = mapped; // pow(max(mapped, 0.0.xxx), 1.0 / max(kEps, kGammaOut));
+    float3 ldr = LinearToGamma(mapped, kGammaOut);
 
     // Optional: add identical noise to every channel — sufficient to break banding
     //float d = Dither(dispatchThreadId.xy) * kDitherAmplitude;
