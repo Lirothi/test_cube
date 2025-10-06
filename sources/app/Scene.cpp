@@ -94,11 +94,12 @@ void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
     *this = {};
     if (!material) { return; }
 
-    view = material->ComputeCB0FieldHandle("view");
-    proj = material->ComputeCB0FieldHandle("proj");
     invView = material->ComputeCB0FieldHandle("invView");
     invProj = material->ComputeCB0FieldHandle("invProj");
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
+    camPos = material->ComputeCB0FieldHandle("camPosWS");
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
 }
 
 void Scene::RefreshCachedHandles(Renderer* renderer)
@@ -113,9 +114,9 @@ void Scene::RefreshCachedHandles(Renderer* renderer)
     {
         cbHandles_.pointLights.Populate(matPointLightCS_.get());
     }
-    if (matCompose_)
+    if (matComposeCS_)
     {
-        cbHandles_.compose.Populate(matCompose_.get());
+        cbHandles_.compose.Populate(matComposeCS_.get());
     }
     if (matSSR_)
     {
@@ -216,26 +217,18 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         matPointLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
-    if (!matCompose_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/compose_ps.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "";
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-        gd.depth.DepthEnable = FALSE;
-        matCompose_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    if (!matComposeCS_) {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/compose_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matComposeCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
-    if (!matTonemap_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/tonemap_ps.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "";
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetBackbufferFormat();
-        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-        gd.depth.DepthEnable = FALSE;
-        matTonemap_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    if (!matTonemapCS_) {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/tonemap_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matTonemapCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matSSR_) {
@@ -1189,47 +1182,64 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassCompose);
         const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->BindSceneColor(t.cl, Renderer::ClearMode::Color, false);
 
-        // === Constant buffer for compose_ps ===
+        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matCompose_->GetCBSizeBytesAligned(0, 256), 256);
+        const float width = static_cast<float>(renderer->GetWidth());
+        const float height = static_cast<float>(renderer->GetHeight());
+        if (width <= 0.0f || height <= 0.0f)
+        {
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(matComposeCS_->GetCBSizeBytesAligned(0, 256), 256);
         const auto& composeHandles = cbHandles_.compose;
-        matCompose_->UpdateCBField(composeHandles.view, view, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCBField(composeHandles.proj, proj, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCBField(composeHandles.invView, invView, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCBField(composeHandles.invProj, invProj, (uint8_t*)cb.cpu);
-        matCompose_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
+        matComposeCS_->UpdateCBField(composeHandles.invView, invView, (uint8_t*)cb.cpu);
+        matComposeCS_->UpdateCBField(composeHandles.invProj, invProj, (uint8_t*)cb.cpu);
+        matComposeCS_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
+        matComposeCS_->UpdateCBField(composeHandles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
+        const float2 screenSize = float2(width, height);
+        const float2 invScreenSize = float2(1.0f / width, 1.0f / height);
+        matComposeCS_->UpdateCBField(composeHandles.screenSize, screenSize, (uint8_t*)cb.cpu);
+        matComposeCS_->UpdateCBField(composeHandles.invScreenSize, invScreenSize, (uint8_t*)cb.cpu);
 
-        // === Build the SRV table for the root TABLE(SRV...) from compose_ps.hlsl ===
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
-            D.lightSRV,                          // t0
-            D.gbSRV[2],                          // t1 (GB2)
-            D.gbSRV[0],                          // t2 (GB0)
-            D.gbSRV[1],                          // t3 (GB1)
-            D.gbSRV[3],                          // t4 (Depth)
+            D.lightSRV,
+            D.gbSRV[2],
+            D.gbSRV[0],
+            D.gbSRV[1],
+            D.gbSRV[3],
             skyBox_->GetTex()->GetSRVCPU(),
             D.ssrSRV
         };
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu; // b0
+        rc.cbv[0] = cb.gpu;
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.sceneUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matCompose_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
+        matComposeCS_->Bind(t.cl, rc);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        if (groupsX > 0 && groupsY > 0)
+        {
+            t.cl->Dispatch(groupsX, groupsY, 1);
+        }
+
+        renderer->UAVBarrier(t.cl, D.scene.Get());
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1280,19 +1290,37 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        renderer->RecordBindDefaultsNoClear(t.cl);
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.table[0] = renderer->StageTonemapSrvTable(); // t0
+        rc.table[0] = renderer->StageSrvUavTable({ D.sceneSRV }).gpu;
+        rc.table[1] = renderer->StageSrvUavTable({ D.tonemapUAV }).gpu;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
 
-        matTonemap_->Bind(t.cl, rc);
-        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        t.cl->DrawInstanced(3, 1, 0, 0);
+        matTonemapCS_->Bind(t.cl, rc);
+        constexpr UINT kGroupSize = 8;
+        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        if (groupsX > 0 && groupsY > 0)
+        {
+            t.cl->Dispatch(groupsX, groupsY, 1);
+        }
+
+        renderer->UAVBarrier(t.cl, D.tonemap.Get());
+
+        ID3D12Resource* const backbuffer = renderer->GetCurrentBackbuffer();
+        if (backbuffer)
+        {
+            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST);
+            t.cl->CopyResource(backbuffer, D.tonemap.Get());
+            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1349,8 +1377,8 @@ void Scene::Clear()
 {
     matLighting_.reset();
     matPointLightCS_.reset();
-    matCompose_.reset();
-    matTonemap_.reset();
+    matComposeCS_.reset();
+    matTonemapCS_.reset();
     matBlur_.reset();
     matSSR_.reset();
     matDebug_.reset();

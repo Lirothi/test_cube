@@ -355,7 +355,7 @@
     <None Include="shaders\blur_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\compose_ps.hlsl">
+    <None Include="shaders\compose_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\debug_texture.hlsl">
@@ -427,7 +427,7 @@
     <None Include="shaders\ssr_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\tonemap_ps.hlsl">
+    <None Include="shaders\tonemap_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ui_rect.hlsl">
