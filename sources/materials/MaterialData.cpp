@@ -80,9 +80,9 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
     else {
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
         size_t count = 0;
-        if (hasAlbedo) { srvs[count++] = albedo.GetSRVCPU(); }
-        if (hasMR)     { srvs[count++] = mr.GetSRVCPU(); }
-        if (hasNormal) { srvs[count++] = normal.GetSRVCPU(); }
+        if (hasAlbedo) { srvs[count] = albedo.GetSRVCPU(); ++count; }
+        if (hasMR)     { srvs[count] = mr.GetSRVCPU(); ++count; }
+        if (hasNormal) { srvs[count] = normal.GetSRVCPU(); ++count; }
         if (count > 0) {
             auto tbl = r->StageSrvUavTable(srvs, count);
             ctx.table[srvTableRegister] = tbl.gpu;
