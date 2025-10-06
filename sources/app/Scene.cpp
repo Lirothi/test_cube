@@ -280,8 +280,8 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     skyBox_->SetExposure(0.2f);
 
     auto& pointLights = lightManager_.PointLights();
-    pointLights.emplace_back(); pointLights.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
-    pointLights.emplace_back(); pointLights.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
+    //pointLights.emplace_back(); pointLights.back().SetDesc({ {0,2,0}, 6.0f, {1,0.8f,0.6f}, 5.0f });
+    //pointLights.emplace_back(); pointLights.back().SetDesc({ {-4,1,-2}, 5.0f, {0.6f,0.7f,1.0f}, 8.0f });
 
     SpotLightDesc warmSpot{};
     warmSpot.position = float3(4.0f, 4.0f, -3.0f);
@@ -291,8 +291,8 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     warmSpot.outerAngle = XMConvertToRadians(28.0f);
     warmSpot.color = float3(1.0f, 0.85f, 0.6f);
     warmSpot.intensity = 15.0f;
-    warmSpot.shadowNormalBias = 0.01f;
-    warmSpot.shadowDepthBias = 0.0025f;
+    warmSpot.shadowNormalBias = 0.05f;
+    warmSpot.shadowDepthBias = 0.0001f;
     auto& spotLights = lightManager_.SpotLights();
     spotLights.push_back({});
     spotLights.back().SetDesc(warmSpot);
@@ -305,14 +305,14 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     coolSpot.outerAngle = XMConvertToRadians(32.0f);
     coolSpot.color = float3(0.6f, 0.8f, 1.0f);
     coolSpot.intensity = 18.0f;
-    coolSpot.shadowNormalBias = 0.015f;
-    coolSpot.shadowDepthBias = 0.0025f;
+    coolSpot.shadowNormalBias = 0.05f;
+    coolSpot.shadowDepthBias = 0.0001f;
     spotLights.push_back({});
     spotLights.back().SetDesc(coolSpot);
 
     dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
-    //dirLight_.exposure *= 0.2f;
-    //dirLight_.ambient *= 0.2f;
+    dirLight_.exposure *= 0.02f;
+    dirLight_.ambient *= 0.02f;
 
     {
         auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
@@ -361,7 +361,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
 
-    AddObject(std::make_unique<OceanRenderable>(&camera_));
+    //AddObject(std::make_unique<OceanRenderable>(&camera_));
 
     AddObject(std::make_unique<DebugGrid>(100.0f));
 
@@ -1002,8 +1002,6 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
-
-
 
 void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj)

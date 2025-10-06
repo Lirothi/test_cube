@@ -1208,29 +1208,16 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
-    for (UINT f = 0; f < kFrameCount; ++f)
-    {
-        auto& D = deferred_[f];
-
-        CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
-        CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
-        CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
-
-        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
-
-        D.shadowRes = 4096; // could be driven by config/parameter
-        CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
-
-        auto CreateSpotShadow = [&](UINT frameIndex,
-            ComPtr<ID3D12Resource>& outRes,
-            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights>& outDSV,
-            D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-            UINT resolution)
+    auto CreateSpotShadow = [&](UINT frameIndex,
+        ComPtr<ID3D12Resource>& outRes,
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights>& outDSV,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+        UINT resolution)
         {
             if (resolution == 0) { resolution = 512; }
 
             D3D12_CLEAR_VALUE clear{};
-            clear.Format = DXGI_FORMAT_D32_FLOAT;
+            clear.Format = DXGI_FORMAT_D16_UNORM;
             clear.DepthStencil.Depth = 1.0f;
             clear.DepthStencil.Stencil = 0;
 
@@ -1241,23 +1228,19 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             desc.Height = resolution;
             desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxSpotLights);
             desc.MipLevels = 1;
-            desc.Format = DXGI_FORMAT_R32_TYPELESS;
+            desc.Format = DXGI_FORMAT_R16_TYPELESS;
             desc.SampleDesc.Count = 1;
             desc.SampleDesc.Quality = 0;
             desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
             ThrowIfFailed(dev->CreateCommittedResource(
-                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                &clear,
-                IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
+                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
 
             outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::SpotShadow);
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.Format = DXGI_FORMAT_R16_UNORM;
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2DArray.MipLevels = 1;
@@ -1272,7 +1255,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             {
                 outDSV[i] = DeferredSpotShadowDsvCPU(frameIndex, i);
                 D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-                dsv.Format = DXGI_FORMAT_D32_FLOAT;
+                dsv.Format = DXGI_FORMAT_D16_UNORM;
                 dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
                 dsv.Flags = D3D12_DSV_FLAG_NONE;
                 dsv.Texture2DArray.ArraySize = 1;
@@ -1283,6 +1266,19 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
+
+    for (UINT f = 0; f < kFrameCount; ++f)
+    {
+        auto& D = deferred_[f];
+
+        CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
+        CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
+        CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
+
+        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
+
+        D.shadowRes = 4096; // could be driven by config/parameter
+        CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
         D.spotShadowRes = 512;
         CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);

@@ -279,6 +279,7 @@
     <None Include="shaders\shader_comp.hlsl" />
     <None Include="shaders\skybox.hlsl" />
     <None Include="shaders\ssr_cs.hlsl" />
+    <None Include="shaders\spotlight_cs.hlsl" />
     <None Include="shaders\tonemap_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsl" />
