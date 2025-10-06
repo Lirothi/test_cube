@@ -1,16 +1,17 @@
 #include "app/Camera.h"
+#include "app/Systems.h"
 #include "input/InputManager.h"
-#include "input/ActionMap.h"
 
-void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float dt) {
+void Camera::UpdateFromInput(float dt) {
+    auto& input = GetInput();
     // Toggle camera rotation via the action
-    const bool lookHeld = map.IsActionDown("LookToggle", input) && !input.IsKeyDown(VK_MENU);
+    const bool lookHeld = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
     if (lookHeld) {
         if (!input.IsMouseCaptured()) {
             input.SetMouseCapture(true);
         }
-        const float dx = map.GetAxis("LookX", input);
-        const float dy = map.GetAxis("LookY", input);
+        const float dx = input.GetActionAxis("LookX");
+        const float dy = input.GetActionAxis("LookY");
         if (dx != 0.0f || dy != 0.0f) {
             // Scale already includes sensitivity/invert
             AddYaw(dx);
@@ -36,12 +37,12 @@ void Camera::UpdateFromActions(InputManager& input, const ActionMap& map, float 
 
     // Movement
     float speed = moveSpeed_ * moveSpeedMultiplier_;
-    if (map.IsActionDown("Sprint", input)) {
+    if (input.IsActionDown("Sprint")) {
         speed *= sprintMultiplier_;
     }
-    const float mx = map.GetAxis("MoveX", input);
-    const float my = map.GetAxis("MoveY", input);
-    const float mz = map.GetAxis("MoveZ", input);
+    const float mx = input.GetActionAxis("MoveX");
+    const float my = input.GetActionAxis("MoveY");
+    const float mz = input.GetActionAxis("MoveZ");
 
     if (mx != 0.0f) { MoveRight(mx * speed * dt); }
     if (my != 0.0f) { MoveUp(my * speed * dt); }

@@ -123,3 +123,23 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         }
     }
 }
+
+bool InputManager::LoadActions(const std::wstring& path) {
+    return actions_.LoadFromJsonFile(path);
+}
+
+bool InputManager::IsActionDown(const std::string& name) const {
+    return actions_.IsActionDown(name, *this);
+}
+
+bool InputManager::WasActionPressed(const std::string& name) const {
+    return actions_.WasActionPressed(name, *this);
+}
+
+bool InputManager::WasActionReleased(const std::string& name) const {
+    return actions_.WasActionReleased(name, *this);
+}
+
+float InputManager::GetActionAxis(const std::string& name) const {
+    return actions_.GetAxis(name, *this);
+}

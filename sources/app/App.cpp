@@ -1,7 +1,6 @@
 #include "app/App.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
-#include "text/FontGenerator.h"
 #include <algorithm>
 #include <cassert>
 
@@ -100,14 +99,11 @@ void App::InitScene()
     assert(systems_);
 
     auto& renderer = systems_->renderer;
-    auto& actions = systems_->actions;
     auto& scene = systems_->scene;
     auto& input = systems_->input;
 
     std::vector<ComPtr<ID3D12Resource>> pendingUploads;
-    scene.SetInput(&input);
-    scene.SetActions(&actions);
-    if (!actions.LoadFromJsonFile(L"input/bindings.json"))
+    if (!input.LoadActions(L"input/bindings.json"))
     {
         assert(false && "No bindings.json found!");
     }
@@ -134,7 +130,8 @@ void App::InitScene()
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
-    systems_ = std::make_unique<Systems>();
+    systems_ = std::make_unique<Systems::AppSystems>();
+    Systems::Set(systems_.get());
 
     {
         auto& renderer = systems_->renderer;
@@ -175,31 +172,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
-                if (input.WasKeyPressed(VK_F11)) {
-                    constexpr uint32_t kTraceFrames = 120;
-                    Profiler::Get().RequestTraceCapture(kTraceFrames);
-                }
-
-                if (input.WasKeyPressed(VK_F8)) {
-                    const bool generateSdf = input.IsKeyDown(VK_SHIFT);
-                    const FontGenerator::OutputType type = generateSdf ? FontGenerator::OutputType::Sdf : FontGenerator::OutputType::Coverage;
-
-                    FontGenerator generator;
-                    FontGenerator::Params params;
-                    params.fontFile = L"fonts/Consolas.ttf";
-                    params.pixelHeight = 32;
-                    params.type = type;
-                    params.fontsFolder = L"fonts";
-                    if (generateSdf) {
-                        params.spread = std::max(8, params.pixelHeight / 2 + 2);
-                    } else {
-                        params.spread = 6;
-                    }
-
-                    if (!generator.Generate(params)) {
-                        OutputDebugStringA("Font generation failed\n");
-                    }
-                }
+                Profiler::Get().Tick();
 
                 double now = GetTimeSeconds();
                 float deltaTime = static_cast<float>(now - lastTime);
@@ -220,6 +193,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         scene.Clear();
         renderer.Shutdown();
     }
+
+    Systems::Set(nullptr);
 
     systems_.reset();
 }

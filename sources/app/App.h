@@ -12,25 +12,15 @@
 
 #include "core/Helpers.h"
 #include "app/Camera.h"
-#include "rendering/core/Renderer.h"
-#include "app/Scene.h"
+#include "app/Systems.h"
 #include "core/task/TaskSystem.h"
-#include "input/InputManager.h"
-#include "input/ActionMap.h"
 
 class App {
 public:
-    struct Systems {
-        Renderer renderer;
-        ActionMap actions;
-        Scene scene;
-        InputManager input;
-    };
-
     void Run(HINSTANCE hInstance, int nCmdShow);
 
 private:
-    std::unique_ptr<Systems> systems_;
+    std::unique_ptr<Systems::AppSystems> systems_;
     bool isRunning_ = true;
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);

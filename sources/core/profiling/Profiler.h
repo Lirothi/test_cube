@@ -28,7 +28,6 @@
 #endif
 
 class TextManager; // forward
-
 // CPU profiler: scopes, EMA averaging, cooldown for resetting maxima,
 // overlay preparation in EndFrame (double-buffered) and infrequent sorting by average.
 class Profiler {
@@ -211,6 +210,7 @@ public:
     // while a capture is pending or active will stop/cancel it.
 #endif
     void RequestTraceCapture(uint32_t frameCount);
+    void Tick();
     void SetThreadName(const std::string& name);
 
     // Cooldown for resetting maxima
@@ -408,6 +408,7 @@ inline void Profiler::SetMaxCooldownSeconds(double) {}
 inline double Profiler::GetMaxCooldownSeconds() const { return 0.0; }
 inline void Profiler::ResetMaxNow() {}
 inline void Profiler::RequestTraceCapture(uint32_t) {}
+inline void Profiler::Tick() {}
 inline void Profiler::SetThreadName(const std::string&) {}
 #if PROF_GPU_ENABLED
 inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}

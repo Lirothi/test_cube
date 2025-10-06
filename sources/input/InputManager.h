@@ -3,6 +3,9 @@
 #include <windows.h>
 #include <array>
 #include <cstdint>
+#include <string>
+
+#include "input/ActionMap.h"
 
 class InputManager {
 public:
@@ -11,6 +14,13 @@ public:
 
     // Forward WndProc messages from App::WndProc
     void OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+    bool LoadActions(const std::wstring& path);
+
+    bool  IsActionDown(const std::string& name) const;
+    bool  WasActionPressed(const std::string& name) const;
+    bool  WasActionReleased(const std::string& name) const;
+    float GetActionAxis(const std::string& name) const;
 
     // Keyboard
     bool IsKeyDown(int vk) const {
@@ -40,6 +50,8 @@ private:
 
 private:
     HWND hwnd_ = nullptr;
+
+    ActionMap actions_;
 
     std::array<uint8_t, 256> keyDown_{};     // Current state
     std::array<uint8_t, 256> keyPressed_{};  // Triggered during this frame

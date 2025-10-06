@@ -3,8 +3,6 @@
 #include "core/Math.h"
 
 using namespace DirectX;
-class ActionMap;  // forward
-class InputManager;
 
 class Camera {
 public:
@@ -14,7 +12,7 @@ public:
         : position_(pos), pitch_(pitch), yaw_(yaw)
     {}
 
-    void UpdateFromActions(InputManager& input, const ActionMap& map, float dt);
+    void UpdateFromInput(float dt);
 
     // Camera movement helpers
     void MoveForward(float d)   { MoveRelative(0, 0, d); }

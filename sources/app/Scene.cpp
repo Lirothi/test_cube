@@ -4,8 +4,9 @@
 #include <algorithm>
 #include <array>
 
-#include "input/ActionMap.h"
+#include "input/InputManager.h"
 #include "app/Camera.h"
+#include "app/Systems.h"
 #include "rendering/debug/DebugGrid.h"
 #include "rendering/meshes/GpuInstancedModels.h"
 #include "core/Helpers.h"
@@ -325,18 +326,16 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
-    if (input_ != nullptr && actions_ != nullptr)
-    {
-        camera_.UpdateFromActions(*input_, *actions_, deltaTime);
+    auto& input = GetInput();
+    camera_.UpdateFromInput(deltaTime);
 
-        if (actions_->WasActionPressed("DebugTex", *input_))
-        {
-            debugTexMode_ = !debugTexMode_;
-        }
-        if (actions_->WasActionPressed("ToggleProfiler", *input_))
-        {
-            showProfiler_ = !showProfiler_;
-        }
+    if (input.WasActionPressed("DebugTex"))
+    {
+        debugTexMode_ = !debugTexMode_;
+    }
+    if (input.WasActionPressed("ToggleProfiler"))
+    {
+        showProfiler_ = !showProfiler_;
     }
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
@@ -374,7 +373,7 @@ void Scene::Render(Renderer* renderer) {
     }
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
-    if (actions_->WasActionPressed("Wireframe", *input_)) {
+    if (GetInput().WasActionPressed("Wireframe")) {
         renderer->SetWireframeMode(!renderer->GetWireframeMode());
     }
 
