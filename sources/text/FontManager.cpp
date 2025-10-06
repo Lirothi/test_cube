@@ -1,5 +1,9 @@
 #include "text/FontManager.h"
 #include "rendering/core/Renderer.h"
+#include "text/FontGenerator.h"
+#include "input/InputManager.h"
+#include "app/Systems.h"
+#include <algorithm>
 
 using Microsoft::WRL::ComPtr;
 
@@ -8,12 +12,32 @@ static bool FileExistsW_(const std::wstring& path) {
     return (a != INVALID_FILE_ATTRIBUTES) && ((a & FILE_ATTRIBUTE_DIRECTORY) == 0);
 }
 
+namespace {
+std::wstring JoinPath(const std::wstring& base, const std::wstring& leaf)
+{
+    if (leaf.empty()) {
+        return base;
+    }
+
+    std::wstring result = base;
+    if (!result.empty()) {
+        const wchar_t back = result.back();
+        if (back != L'\\' && back != L'/') {
+            result += L'\\';
+        }
+    }
+    result += leaf;
+    return result;
+}
+}
+
 void FontManager::LoadFromFolder(Renderer* r,
                                  ID3D12GraphicsCommandList* uploadCl,
                                  std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                  const std::wstring& folder)
 {
     renderer_ = r;
+    fontsFolder_ = folder;
 
     std::wstring pattern = folder;
     if (!pattern.empty() && pattern.back() != L'\\' && pattern.back() != L'/') {
@@ -100,4 +124,40 @@ std::vector<std::wstring> FontManager::List() const {
 void FontManager::Clear()
 {
     fonts_.clear();
+    defaultName_.clear();
+    fontsFolder_.clear();
+    renderer_ = nullptr;
+}
+
+void FontManager::Tick()
+{
+    if (fontsFolder_.empty()) {
+        return;
+    }
+
+    auto& input = Systems::GetInput();
+
+    if (!input.WasActionPressed("GenerateFont")) {
+        return;
+    }
+
+    const bool generateSdf = input.IsKeyDown(VK_SHIFT);
+    const FontGenerator::OutputType type = generateSdf ? FontGenerator::OutputType::Sdf : FontGenerator::OutputType::Coverage;
+
+    FontGenerator generator;
+    FontGenerator::Params params;
+    params.fontFile = JoinPath(fontsFolder_, L"Consolas.ttf");
+    params.pixelHeight = 32;
+    params.type = type;
+    params.fontsFolder = fontsFolder_;
+    if (generateSdf) {
+        params.spread = std::max(8, params.pixelHeight / 2 + 2);
+    }
+    else {
+        params.spread = 6;
+    }
+
+    if (!generator.Generate(params)) {
+        OutputDebugStringA("Font generation failed\n");
+    }
 }

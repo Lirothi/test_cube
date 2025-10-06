@@ -7,7 +7,6 @@
 #include "text/FontAtlas.h"
 
 class Renderer;
-
 class FontManager {
 public:
     void Init(Renderer* r) {
@@ -31,8 +30,11 @@ public:
 
     void Clear();
 
+    void Tick();
+
 private:
     Renderer* renderer_ = nullptr;
     robin_hood::unordered_map<std::wstring, std::unique_ptr<FontAtlas>> fonts_;
     std::wstring defaultName_;
+    std::wstring fontsFolder_;
 };

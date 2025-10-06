@@ -12,6 +12,8 @@
 #include <limits>
 #include "third_party/robin_hood.h"
 #include "text/TextManager.h"
+#include "input/InputManager.h"
+#include "app/Systems.h"
 
 namespace {
 
@@ -1166,6 +1168,17 @@ void Profiler::RequestTraceCapture(uint32_t frameCount) {
     traceRequestFrameCount_ = frameCount;
     traceStopRequested_ = false;
     std::printf("Profiler trace capture requested: %u frames\n", frameCount);
+}
+
+void Profiler::Tick()
+{
+#if PROF_ENABLED
+    auto& input = Systems::GetInput();
+    if (input.WasActionPressed("CaptureTrace")) {
+        constexpr uint32_t kTraceFrames = 120;
+        RequestTraceCapture(kTraceFrames);
+    }
+#endif
 }
 
 void Profiler::SetThreadName(const std::string& name) {

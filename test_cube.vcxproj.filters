@@ -75,6 +75,9 @@
     <ClCompile Include="sources/app/Scene.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/Systems.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/main.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -198,6 +201,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/Scene.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/Systems.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/Helpers.h">

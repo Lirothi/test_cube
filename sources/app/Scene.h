@@ -7,7 +7,6 @@
 
 #include "rendering/renderables/RenderableObject.h"
 #include "app/Camera.h"
-#include "input/InputManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/PointLight.h"
 
@@ -15,8 +14,6 @@ class Renderer;
 
 class Scene {
 public:
-    void SetInput(InputManager* input) { input_ = input; }
-    void SetActions(ActionMap* a) { actions_ = a; }
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }
 
@@ -146,9 +143,6 @@ private:
     std::vector<PointLight> pointLights_;
 
     ObjectBuckets renderBuckets_;
-
-    InputManager* input_ = nullptr;
-    ActionMap* actions_ = nullptr;
     Camera camera_;
 
     bool debugTexMode_ = false;

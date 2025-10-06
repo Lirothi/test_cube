@@ -8,6 +8,7 @@
 #include <mimalloc.h>
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "app/Systems.h"
 
 thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
 thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
@@ -417,6 +418,8 @@ void Renderer::ReportLiveObjects()
 
 void Renderer::Tick(float dt)
 {
+    fontManager_.Tick();
+
     if (fps_ <= 0.0f)
     {
         fps_ = 1.0f / dt;

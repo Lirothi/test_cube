@@ -157,6 +157,7 @@
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/Camera.cpp" />
     <ClCompile Include="sources/app/Scene.cpp" />
+    <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
@@ -200,6 +201,7 @@
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/Camera.h" />
     <ClInclude Include="sources/app/Scene.h" />
+    <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
     <ClInclude Include="sources/core/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
