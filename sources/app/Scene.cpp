@@ -326,7 +326,7 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
-    auto& input = GetInput();
+    auto& input = Systems::GetInput();
     camera_.UpdateFromInput(deltaTime);
 
     if (input.WasActionPressed("DebugTex"))
@@ -373,7 +373,7 @@ void Scene::Render(Renderer* renderer) {
     }
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
-    if (GetInput().WasActionPressed("Wireframe")) {
+    if (Systems::GetInput().WasActionPressed("Wireframe")) {
         renderer->SetWireframeMode(!renderer->GetWireframeMode());
     }
 
