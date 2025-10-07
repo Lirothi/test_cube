@@ -259,7 +259,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     if (!matBlur_) {
         Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/blur_cs.hlsl";
+        cd.shaderFile = L"shaders/ssr_blur_cs.hlsl";
         cd.csEntry = "CSMain";
         matBlur_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
