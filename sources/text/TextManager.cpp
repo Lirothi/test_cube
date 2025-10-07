@@ -586,20 +586,26 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         v.col = color;
         v.shadowParams = { shadowScale, shadowAlpha };
 
-        v.pos = { gx, gy };
-        v.uv = { gph->u0, gph->v0 };
+        v.pos.x = gx; v.pos.y = gy;
+        v.uv.x = gph->u0; v.uv.y = gph->v0;
         curV[0] = v;
 
-        v.pos = { gx + gw, gy };
-        v.uv = { gph->u1, gph->v0 };
+        //v.pos = { gx + gw, gy };
+        //v.uv = { gph->u1, gph->v0 };
+        v.pos.x = gx + gw;
+        v.uv.x = gph->u1;
         curV[1] = v;
 
-        v.pos = { gx + gw, gy + gh };
-        v.uv = { gph->u1, gph->v1 };
+        //v.pos = { gx + gw, gy + gh };
+        //v.uv = { gph->u1, gph->v1 };
+        v.pos.y = gy + gh;
+        v.uv.y = gph->v1;
         curV[2] = v;
 
-        v.pos = { gx, gy + gh };
-        v.uv = { gph->u0, gph->v1 };
+        //v.pos = { gx, gy + gh };
+        //v.uv = { gph->u0, gph->v1 };
+        v.pos.x = gx;
+        v.uv.x = gph->u0;
         curV[3] = v;
 
         uint32_t* curI = iData + glyphCounter * 6;

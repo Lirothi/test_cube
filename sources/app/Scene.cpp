@@ -1241,7 +1241,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj,
     float zNear, float zFar)
 {
-    return;
+    //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
@@ -1286,7 +1286,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
-    return;
+    //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
