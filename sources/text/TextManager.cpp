@@ -239,8 +239,8 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     }
 
     // 1) Reserve space for potential background rectangles
-    rectVerts_.reserve(rectVerts_.size() + regions_.size() * 4);
-    rectIdx_.reserve(rectIdx_.size() + regions_.size() * 6);
+    rectVerts_.ensureAdditional(regions_.size() * 4);
+    rectIdx_.ensureAdditional(regions_.size() * 6);
 
     // 2) Single pass over regions: backgrounds and lines
     for (const Region& rg : regions_) {
@@ -315,7 +315,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_) };
+        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_), 0u, 0u };
 
         matRect_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -347,7 +347,22 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
 
         const float invAtlasW = (font_->AtlasWidth() > 0) ? (1.0f / float(font_->AtlasWidth())) : 0.0f;
         const float invAtlasH = (font_->AtlasHeight() > 0) ? (1.0f / float(font_->AtlasHeight())) : 0.0f;
-        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_), FloatToUint32(invAtlasW), FloatToUint32(invAtlasH) };
+        float2 shadowBaseOffset = { 0.0f, 0.0f };
+        float3 shadowColorRgb = { 0.0f, 0.0f, 0.0f };
+        if (shadow_.has_value()) {
+            const ShadowDesc& desc = shadow_.value();
+            shadowBaseOffset = { desc.offsetX, desc.offsetY };
+            shadowColorRgb = { desc.color.x, desc.color.y, desc.color.z };
+        }
+
+        rc.constants[1] = {
+            FloatToUint32((float)vpW_), FloatToUint32((float)vpH_),
+            FloatToUint32(invAtlasW), FloatToUint32(invAtlasH),
+            FloatToUint32(shadowBaseOffset.x), FloatToUint32(shadowBaseOffset.y),
+            0u, 0u,
+            FloatToUint32(shadowColorRgb.x), FloatToUint32(shadowColorRgb.y),
+            FloatToUint32(shadowColorRgb.z), 0u
+        };
 
         mat->Bind(cl, rc);
 
@@ -534,31 +549,24 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
     Vertex* const vData = verts_.data() + baseVert;
     uint32_t* const iData = idx_.data() + baseIdx;
 
-    float2 shadowOffset = { 0.0f, 0.0f };
-    float4 shadowColor = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float shadowScale = 0.0f;
+    float shadowAlpha = 0.0f;
 
     if (enableShadow && shadow_.has_value()) {
         const ShadowDesc& desc = shadow_.value();
-        float offsetX = desc.offsetX;
-        float offsetY = desc.offsetY;
-        if (desc.scaleWithTextSize) {
-            offsetX *= scale;
-            offsetY *= scale;
-        }
+        float offsetScale = (desc.scaleWithTextSize ? scale : 1.0f);
         if (desc.scaleWithDpi) {
-            offsetX *= dpi_;
-            offsetY *= dpi_;
+            offsetScale *= dpi_;
         }
         else {
-            offsetX = 0.0f;
-            offsetY = 0.0f;
+            offsetScale = 0.0f;
         }
 
         const float baseAlpha = desc.color.w * desc.alphaMultiplier * color.w;
         const float finalAlpha = std::clamp(baseAlpha, 0.0f, 1.0f);
         if (finalAlpha > 0.0f) {
-            shadowOffset = { offsetX, offsetY };
-            shadowColor = { desc.color.x, desc.color.y, desc.color.z, finalAlpha };
+            shadowScale = offsetScale;
+            shadowAlpha = finalAlpha;
         }
     }
 
@@ -574,25 +582,25 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         const float gh = float(gph->h) * scale;
 
         Vertex* curV = vData + glyphCounter * 4;
-        Vertex v;
-        v.pos.x = gx; v.pos.y = gy; v.pos.z = 0.0f;
+        Vertex v{};
         v.col = color;
-        v.uv.x = gph->u0; v.uv.y = gph->v0;
-        v.shadowOffset = shadowOffset; v.shadowColor = shadowColor;
+        v.shadowParams = { shadowScale, shadowAlpha };
+
+        v.pos = { gx, gy };
+        v.uv = { gph->u0, gph->v0 };
         curV[0] = v;
-        //curV[0] = { {gx,      gy,      0.0f}, color, {gph->u0, gph->v0}, shadowOffset, shadowColor };
-        v.pos.x = gx + gw; v.pos.y = gy;
-        v.uv.x = gph->u1; v.uv.y = gph->v0;
+
+        v.pos = { gx + gw, gy };
+        v.uv = { gph->u1, gph->v0 };
         curV[1] = v;
-        //curV[1] = { {gx + gw, gy,      0.0f}, color, {gph->u1, gph->v0}, shadowOffset, shadowColor };
-        v.pos.x = gx + gw; v.pos.y = gy + gh;
-        v.uv.x = gph->u1; v.uv.y = gph->v1;
+
+        v.pos = { gx + gw, gy + gh };
+        v.uv = { gph->u1, gph->v1 };
         curV[2] = v;
-        //curV[2] = { {gx + gw, gy + gh, 0.0f}, color, {gph->u1, gph->v1}, shadowOffset, shadowColor };
-        v.pos.x = gx; v.pos.y = gy + gh;
-        v.uv.x = gph->u0; v.uv.y = gph->v1;
+
+        v.pos = { gx, gy + gh };
+        v.uv = { gph->u0, gph->v1 };
         curV[3] = v;
-        //curV[3] = { {gx,      gy + gh, 0.0f}, color, {gph->u0, gph->v1}, shadowOffset, shadowColor };
 
         uint32_t* curI = iData + glyphCounter * 6;
         const uint32_t base = static_cast<uint32_t>(baseVert + glyphCounter * 4);
@@ -616,13 +624,29 @@ void TextManager::EmitTextImmediate(int x, int y, float px, const float4& color,
 void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) {
     const float gx = (float)x, gy = (float)y;
     const float gw = w, gh = h;
-    const uint32_t base = (uint32_t)rectVerts_.size();
-    const float2 zeroOffset{ 0.0f, 0.0f };
-    const float4 zeroShadow{ 0.0f, 0.0f, 0.0f, 0.0f };
-    rectVerts_.push_back({ {gx,      gy,      0}, color, {0,0}, zeroOffset, zeroShadow });
-    rectVerts_.push_back({ {gx + gw, gy,      0}, color, {0,0}, zeroOffset, zeroShadow });
-    rectVerts_.push_back({ {gx + gw, gy + gh, 0}, color, {0,0}, zeroOffset, zeroShadow });
-    rectVerts_.push_back({ {gx,      gy + gh, 0}, color, {0,0}, zeroOffset, zeroShadow });
-    rectIdx_.push_back(base + 0u); rectIdx_.push_back(base + 1u); rectIdx_.push_back(base + 2u);
-    rectIdx_.push_back(base + 0u); rectIdx_.push_back(base + 2u); rectIdx_.push_back(base + 3u);
+    const size_t baseVert = rectVerts_.appendUninitialized(4);
+    Vertex* vData = rectVerts_.data() + baseVert;
+
+    Vertex v{};
+    v.col = color;
+    v.uv = { 0.0f, 0.0f };
+    v.shadowParams = { 0.0f, 0.0f };
+
+    v.pos = { gx, gy };
+    vData[0] = v;
+
+    v.pos = { gx + gw, gy };
+    vData[1] = v;
+
+    v.pos = { gx + gw, gy + gh };
+    vData[2] = v;
+
+    v.pos = { gx, gy + gh };
+    vData[3] = v;
+
+    const size_t baseIdx = rectIdx_.appendUninitialized(6);
+    uint32_t* iData = rectIdx_.data() + baseIdx;
+    const uint32_t base = static_cast<uint32_t>(baseVert);
+    iData[0] = base + 0u; iData[1] = base + 1u; iData[2] = base + 2u;
+    iData[3] = base + 0u; iData[4] = base + 2u; iData[5] = base + 3u;
 }
