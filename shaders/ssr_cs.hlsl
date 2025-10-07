@@ -222,16 +222,21 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 [numthreads(8, 8, 1)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    uint width, height;
-    LightTarget.GetDimensions(width, height);
+    uint renderWidth, renderHeight;
+    LightTarget.GetDimensions(renderWidth, renderHeight);
+    uint ssrWidth, ssrHeight;
+    SsrOut.GetDimensions(ssrWidth, ssrHeight);
 
-    if (dispatchThreadId.x >= width || dispatchThreadId.y >= height)
+    if (dispatchThreadId.x >= ssrWidth || dispatchThreadId.y >= ssrHeight)
     {
         return;
     }
 
-    float2 pixel = float2(dispatchThreadId.xy);
-    float2 uv = (pixel + 0.5f) / screenSize;
+    float2 fullRes = float2(renderWidth, renderHeight);
+    float2 ssrRes = float2(max(ssrWidth, 1u), max(ssrHeight, 1u));
+    float2 pixelScale = fullRes / ssrRes;
+    float2 pixel = (float2(dispatchThreadId.xy) + 0.5f) * pixelScale;
+    float2 uv = pixel / fullRes;
 
     float depth = ReadDepth(uv);
     float4 result = float4(0, 0, 0, 0);
@@ -245,8 +250,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         SSRHit ssr = TraceSSR_Lettier(Pv, Nv);
         if (ssr.hit != 0)
         {
-            int2 ip = int2(ssr.uv * screenSize + 0.5);
-            ip = clamp(ip, int2(0, 0), int2(width - 1, height - 1));
+            int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5);
+            ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
             float3 c = LightTarget.Load(int3(ip, 0)).rgb;
             float vis = ssr.visibility;
             result = float4(c * vis, vis);

@@ -2,6 +2,7 @@
 #include "core/Helpers.h"
 #include <cassert>
 #include <vector>
+#include <utility>
 #include <dxgidebug.h>
 #pragma comment(lib, "dxguid.lib")
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
@@ -1082,9 +1083,13 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         UINT f,
         ComPtr<ID3D12Resource>& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outUAV)
+        D3D12_CPU_DESCRIPTOR_HANDLE& outUAV,
+        UINT overrideWidth,
+        UINT overrideHeight)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            if (overrideWidth > 0) { rd.Width = overrideWidth; }
+            if (overrideHeight > 0) { rd.Height = overrideHeight; }
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
@@ -1125,6 +1130,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         };
+
+    const auto ssrSize = ComputeSsrTextureSize(width, height);
+    ssrTextureWidth_ = ssrSize.first > 0 ? ssrSize.first : 1;
+    ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
 
     auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
         UINT f,
@@ -1285,9 +1294,9 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV);
-        CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV);
-        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV);
+        CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
+        CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
+        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, width, height);
     }
 }
 
@@ -1324,6 +1333,71 @@ void Renderer::DestroyDeferredTargets() {
             knownStates_.erase(res);
         }
     }
+
+    ssrTextureWidth_ = 1;
+    ssrTextureHeight_ = 1;
+}
+
+std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const
+{
+    const UINT refWidth = std::max(baseWidth, 1u);
+    const UINT refHeight = std::max(baseHeight, 1u);
+
+    auto computeDim = [](UINT dim, float scale) -> UINT
+    {
+        if (scale <= 0.0f)
+        {
+            return 1u;
+        }
+        const float scaled = static_cast<float>(dim) * scale;
+        const UINT value = static_cast<UINT>(scaled + 0.5f);
+        return std::max(1u, value);
+    };
+
+    const UINT ssrWidth = computeDim(refWidth, ssrTextureScale_.x);
+    const UINT ssrHeight = computeDim(refHeight, ssrTextureScale_.y);
+    return { ssrWidth, ssrHeight };
+}
+
+void Renderer::RecreateDeferredTargets()
+{
+    if (!device_ || width_ == 0 || height_ == 0)
+    {
+        return;
+    }
+
+    WaitForPreviousFrame();
+    DestroyDeferredTargets();
+    CreateDeferredTargets(width_, height_);
+}
+
+void Renderer::SetSsrTextureScale(Math::float2 scale)
+{
+    Math::float2 sanitized{ scale.x, scale.y };
+    if (sanitized.x < 0.0f) { sanitized.x = 0.0f; }
+    if (sanitized.y < 0.0f) { sanitized.y = 0.0f; }
+
+    if (sanitized.x == ssrTextureScale_.x && sanitized.y == ssrTextureScale_.y)
+    {
+        return;
+    }
+
+    ssrTextureScale_ = sanitized;
+
+    if (deferredRtvHeap_)
+    {
+        RecreateDeferredTargets();
+    }
+}
+
+UINT Renderer::GetSsrTextureWidth() const
+{
+    return std::max(1u, ssrTextureWidth_);
+}
+
+UINT Renderer::GetSsrTextureHeight() const
+{
+    return std::max(1u, ssrTextureHeight_);
 }
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
