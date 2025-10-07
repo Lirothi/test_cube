@@ -311,8 +311,8 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     spotLights.back().SetDesc(coolSpot);
 
     dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
-    dirLight_.exposure *= 0.02f;
-    dirLight_.ambient *= 0.02f;
+    //dirLight_.exposure *= 0.02f;
+    //dirLight_.ambient *= 0.02f;
 
     {
         auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
@@ -708,6 +708,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
     r->EndThreadCommandList(t, ctx.batchIndex);
 }
 
+// #define PARALLEL_SHADOW_BATCH 1
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
     float zNear, float zFar, const float3& camDir,
@@ -720,113 +721,138 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
-    }
-    renderer->EndThreadCommandList(d, ctx.batchIndex);
 
-    const float shadowMaxDistance = 300.0f;
-    const float zFarShadow = std::min(zFar, shadowMaxDistance);
-    size_t batchIndex = ctx.batchIndex;
-
-    // Split distances (hard-coded to match your setup)
-    cachedSplitsVS_[0] = zNear;
-    cachedSplitsVS_[1] = 10.0f;
-    cachedSplitsVS_[2] = 30.0f;
-    cachedSplitsVS_[3] = 100.0f;
-    cachedSplitsVS_[4] = zFarShadow;
-
-    TaskSystem& tasks = TaskSystem::Get();
-    auto csmJob = [this, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
-    {
-        CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
-        const auto& D = renderer->GetDeferredForFrame();
-
-        float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
-        const UINT  tileRes = D.shadowRes / 2;
-
-        // Eight frustum corners (using your helper)
-        std::array<float3, 8> cornersWS;
-        BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
-
-        const float tanH = 1.0f / proj.m._11;
-        const float tanV = 1.0f / proj.m._22;
-
-        const float halfSlice = 0.5f * (sliceFar - sliceNear);
-        const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
-
-        const float kForward = 1.0f;
-        float delta = kForward * halfSlice;
-
-        auto radiusFor = [&](float d) {
-            const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
-            return std::sqrt(rf2);
-            };
-        const float overlap = 2.0f;
-        float radius = radiusFor(delta) + overlap; // +padding
-        //radius -= halfSlice;
-
-        const float3 camPos = camera_.GetPosition();
-        float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
-        float spatialStep = radius * 0.1f;
-        center = Floor(center / spatialStep) * spatialStep;
-
-        // Light view matrix
-        const float3 up(0, 1, 0);
-        mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
-
-        // AABB along Z + stabilize XY
-        float2 centerLS = (lightView * float4(center, 1)).xy();
-        float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
-        for (int k = 0; k < 8; ++k) {
-            float3 ls = (lightView * float4(cornersWS[k], 1)).xyz();
-            rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
-            minZ = std::min(minZ, ls.z);
-            maxZ = std::max(maxZ, ls.z);
-        }
-        radius = std::min(radius, rLS);
-
-        float unitsPerTexel = (2.0f * radius) / float(tileRes);
-        centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-        centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-
-        float minX = centerLS.x - radius, maxX = centerLS.x + radius;
-        float minY = centerLS.y - radius, maxY = centerLS.y + radius;
-
-        const float zPad = 25.0f;
-        float nearLS = std::max(0.001f, minZ - zPad);
-        float farLS = maxZ + zPad;
-
-        mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
-
-        const float normalBiasInTexels = 0.75f;
-        const float depthBiasInTexels = 2.0f;
-        cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
-        cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
-
-        const float2 scale = float2(float(tileRes) / float(D.shadowRes));
-        const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
-        cachedScale_[idx] = scale; cachedBias_[idx] = bias;
-        cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
-
-        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
-        if (!opaqueSimple.empty())
-        {
-            RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
-        }
-        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
-        if (!opaqueComplex.empty())
-        {
-            RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
-        }
-    };
-
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    tasks.DispatchWait(kCascades, csmJob, 1);
-#else
-    (void)tasks;
-    for (size_t idx = 0; idx < kCascades; ++idx) {
-        csmJob(idx);
-    }
+#if PARALLEL_SHADOW_BATCH
+        renderer->EndThreadCommandList(d, ctx.batchIndex);
 #endif
+
+        const float shadowMaxDistance = 300.0f;
+        const float zFarShadow = std::min(zFar, shadowMaxDistance);
+        size_t batchIndex = ctx.batchIndex;
+
+        // Split distances (hard-coded to match your setup)
+        cachedSplitsVS_[0] = zNear;
+        cachedSplitsVS_[1] = 10.0f;
+        cachedSplitsVS_[2] = 30.0f;
+        cachedSplitsVS_[3] = 100.0f;
+        cachedSplitsVS_[4] = zFarShadow;
+
+        TaskSystem& tasks = TaskSystem::Get();
+        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+            {
+                CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
+                const auto& D = renderer->GetDeferredForFrame();
+
+                float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
+                const UINT  tileRes = D.shadowRes / 2;
+
+                // Eight frustum corners (using your helper)
+                std::array<float3, 8> cornersWS;
+                BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
+
+                const float tanH = 1.0f / proj.m._11;
+                const float tanV = 1.0f / proj.m._22;
+
+                const float halfSlice = 0.5f * (sliceFar - sliceNear);
+                const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
+
+                const float kForward = 1.0f;
+                float delta = kForward * halfSlice;
+
+                auto radiusFor = [&](float d) {
+                    const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
+                    return std::sqrt(rf2);
+                    };
+                const float overlap = 2.0f;
+                float radius = radiusFor(delta) + overlap; // +padding
+                //radius -= halfSlice;
+
+                const float3 camPos = camera_.GetPosition();
+                float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
+                float spatialStep = radius * 0.1f;
+                center = Floor(center / spatialStep) * spatialStep;
+
+                // Light view matrix
+                const float3 up(0, 1, 0);
+                mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
+
+                // AABB along Z + stabilize XY
+                float2 centerLS = (lightView * float4(center, 1)).xy();
+                float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
+                for (int k = 0; k < 8; ++k) {
+                    float3 ls = (lightView * float4(cornersWS[k], 1)).xyz();
+                    rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
+                    minZ = std::min(minZ, ls.z);
+                    maxZ = std::max(maxZ, ls.z);
+                }
+                radius = std::min(radius, rLS);
+
+                float unitsPerTexel = (2.0f * radius) / float(tileRes);
+                centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+                centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+
+                float minX = centerLS.x - radius, maxX = centerLS.x + radius;
+                float minY = centerLS.y - radius, maxY = centerLS.y + radius;
+
+                const float zPad = 25.0f;
+                float nearLS = std::max(0.001f, minZ - zPad);
+                float farLS = maxZ + zPad;
+
+                mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+
+                const float normalBiasInTexels = 0.75f;
+                const float depthBiasInTexels = 2.0f;
+                cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
+                cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
+
+                const float2 scale = float2(float(tileRes) / float(D.shadowRes));
+                const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
+                cachedScale_[idx] = scale; cachedBias_[idx] = bias;
+                cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
+
+#if PARALLEL_SHADOW_BATCH
+                const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+                if (!opaqueSimple.empty())
+                {
+                    RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+                }
+                const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+                if (!opaqueComplex.empty())
+                {
+                    RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
+                }
+#else
+                const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+                const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+
+                renderer->BindShadowTarget(d.cl, (int)idx, /*clear=*/false);
+
+                for (auto obj : opaqueComplex)
+                {
+                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
+                }
+
+                for (auto obj : opaqueSimple)
+                {
+                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
+                }
+#endif
+            };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && PARALLEL_SHADOW_BATCH
+        tasks.DispatchWait(kCascades, csmJob, 1);
+#else
+        (void)tasks;
+        for (size_t idx = 0; idx < kCascades; ++idx) {
+            csmJob(idx);
+        }
+        
+#endif
+    }
+#if !PARALLEL_SHADOW_BATCH
+    renderer->EndThreadCommandList(d, ctx.batchIndex);
+#endif
+
 }
 
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
@@ -1215,6 +1241,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj,
     float zNear, float zFar)
 {
+    return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
@@ -1259,6 +1286,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
+    return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {

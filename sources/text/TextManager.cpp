@@ -574,10 +574,25 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
         const float gh = float(gph->h) * scale;
 
         Vertex* curV = vData + glyphCounter * 4;
-        curV[0] = { {gx,      gy,      0.0f}, color, {gph->u0, gph->v0}, shadowOffset, shadowColor };
-        curV[1] = { {gx + gw, gy,      0.0f}, color, {gph->u1, gph->v0}, shadowOffset, shadowColor };
-        curV[2] = { {gx + gw, gy + gh, 0.0f}, color, {gph->u1, gph->v1}, shadowOffset, shadowColor };
-        curV[3] = { {gx,      gy + gh, 0.0f}, color, {gph->u0, gph->v1}, shadowOffset, shadowColor };
+        Vertex v;
+        v.pos.x = gx; v.pos.y = gy; v.pos.z = 0.0f;
+        v.col = color;
+        v.uv.x = gph->u0; v.uv.y = gph->v0;
+        v.shadowOffset = shadowOffset; v.shadowColor = shadowColor;
+        curV[0] = v;
+        //curV[0] = { {gx,      gy,      0.0f}, color, {gph->u0, gph->v0}, shadowOffset, shadowColor };
+        v.pos.x = gx + gw; v.pos.y = gy;
+        v.uv.x = gph->u1; v.uv.y = gph->v0;
+        curV[1] = v;
+        //curV[1] = { {gx + gw, gy,      0.0f}, color, {gph->u1, gph->v0}, shadowOffset, shadowColor };
+        v.pos.x = gx + gw; v.pos.y = gy + gh;
+        v.uv.x = gph->u1; v.uv.y = gph->v1;
+        curV[2] = v;
+        //curV[2] = { {gx + gw, gy + gh, 0.0f}, color, {gph->u1, gph->v1}, shadowOffset, shadowColor };
+        v.pos.x = gx; v.pos.y = gy + gh;
+        v.uv.x = gph->u0; v.uv.y = gph->v1;
+        curV[3] = v;
+        //curV[3] = { {gx,      gy + gh, 0.0f}, color, {gph->u0, gph->v1}, shadowOffset, shadowColor };
 
         uint32_t* curI = iData + glyphCounter * 6;
         const uint32_t base = static_cast<uint32_t>(baseVert + glyphCounter * 4);
