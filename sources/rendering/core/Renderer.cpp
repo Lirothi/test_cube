@@ -972,7 +972,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,LightUAV,Scene,SceneUAV,SSR,SSRBlur,Shadow,SSRUAV,SSRBlurUAV,Tonemap,TonemapUAV
+        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,LightUAV,Scene,SceneUAV,SceneOpaque,SSR,SSRBlur,Shadow,SpotShadow,SSRUAV,SSRBlurUAV,Tonemap,TonemapUAV
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
@@ -1075,6 +1075,37 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             }
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        };
+
+    auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
+        DeferredSrvSlot srvSlot,
+        UINT f,
+        ComPtr<ID3D12Resource>& outRes,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV)
+        {
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_NONE);
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&outRes)));
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = fmt;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Texture2D.MipLevels = 1;
+
+            outSRV = DeferredSrvCPU(f, srvSlot);
+            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
+
+            auto& D = deferred_[f];
+            if (srvSlot == DeferredSrvSlot::SceneOpaque)
+            {
+                D.sceneOpaque = outRes;
+                D.sceneOpaqueSRV = outSRV;
+            }
+
+            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         };
 
     auto CreateSrvUavTexture = [&](DXGI_FORMAT fmt,
@@ -1294,6 +1325,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
+        CreateSrvTexture(kSceneColorFormat, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, width, height);
@@ -1320,6 +1352,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.depth);
         collect(D.light);
         collect(D.scene);
+        collect(D.sceneOpaque);
         collect(D.tonemap);
         collect(D.ssr);
         collect(D.ssrBlur);

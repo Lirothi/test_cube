@@ -4,6 +4,7 @@
 #include <DirectXMath.h>
 #include <string>
 #include <memory>
+#include <cstdint>
 
 #include "materials/Material.h"
 #include "rendering/meshes/Mesh.h"
@@ -29,6 +30,12 @@ public:
         bool UpdateUniform(RenderableObject& owner, const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData) const
         {
             return owner.UpdateUniform(handle, material, value, cbData);
+        }
+
+        template<typename T>
+        bool UpdateUniform(RenderableObject& owner, const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData, uint32_t arrayIndex) const
+        {
+            return owner.UpdateUniform(handle, material, value, cbData, arrayIndex);
         }
     };
 
@@ -83,6 +90,15 @@ protected:
         if (!material) { return false; }
         if (!handle.field) { return false; }
         return material->UpdateCBField(handle, value, cbData);
+    }
+
+    template<typename T>
+    bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData, uint32_t arrayIndex)
+    {
+        if (!cbData) { return false; }
+        if (!material) { return false; }
+        if (!handle.field) { return false; }
+        return material->UpdateCBField(handle, value, cbData, arrayIndex);
     }
 
 protected:
