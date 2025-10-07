@@ -73,11 +73,10 @@ public:
 
 private:
     struct Vertex {
-        float3 pos;
+        float2 pos;
         float4 col;
         float2 uv;
-        float2 shadowOffset;
-        float4 shadowColor;
+        float2 shadowParams; // x = offset scale factor, y = final shadow alpha
     };
 
     // Precomputed glyph run for a single line
@@ -227,8 +226,8 @@ private:
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     D3D12_INDEX_BUFFER_VIEW  ibv_{};
 
-    std::vector<Vertex>      rectVerts_;
-    std::vector<uint32_t>    rectIdx_;
+    GrowOnlyArray<Vertex>    rectVerts_;
+    GrowOnlyArray<uint32_t>  rectIdx_;
     D3D12_VERTEX_BUFFER_VIEW rectVBV_{};
     D3D12_INDEX_BUFFER_VIEW  rectIBV_{};
 

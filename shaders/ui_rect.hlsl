@@ -1,11 +1,10 @@
 // RootSignature: CONSTANTS(b1,count=4)
 struct VSIn
 {
-    float3 pos : POSITION;
+    float2 pos : POSITION;
     float4 col : COLOR0;
     float2 uv : TEXCOORD0;
-    float2 shadowOffset : TEXCOORD1;
-    float4 shadowColor : COLOR1;
+    float2 shadowParams : TEXCOORD1;
 };
 struct VSOut
 {
@@ -31,7 +30,7 @@ static float2 PixelToNDC(float2 p, float2 vp)
 VSOut VSMain(VSIn i)
 {
     VSOut o;
-    float2 ndc = PixelToNDC(i.pos.xy, uViewport);
+    float2 ndc = PixelToNDC(i.pos, uViewport);
     o.H = float4(ndc, 0.0, 1.0);
     o.col = i.col;
     return o;
