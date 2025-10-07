@@ -1333,7 +1333,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         const float invSsrWidth = ssrWidth > 0 ? (1.0f / static_cast<float>(ssrWidth)) : 0.0f;
         float2 dir = float2(invSsrWidth, 0.0f);
         matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.radius, 0.5f, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1356,7 +1356,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         const float invSsrHeight = ssrHeight > 0 ? (1.0f / static_cast<float>(ssrHeight)) : 0.0f;
         dir = float2(0.0f, invSsrHeight);
         matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
+        matBlur_->UpdateCBField(cbHandles_.blur.radius, 0.5f, (uint8_t*)cb.cpu);
 
         rc.ClearFast();
         rc.cbv[0] = cb.gpu;

@@ -7,7 +7,7 @@ RWTexture2D<float4> SSROut : register(u0);
 SamplerState gSmp : register(s0);
 
 #ifndef SSR_BLUR_TAP_COUNT
-#define SSR_BLUR_TAP_COUNT 5
+#define SSR_BLUR_TAP_COUNT 3
 #endif
 
 #if (SSR_BLUR_TAP_COUNT != 3) && (SSR_BLUR_TAP_COUNT != 5)
