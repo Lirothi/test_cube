@@ -708,7 +708,8 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
     r->EndThreadCommandList(t, ctx.batchIndex);
 }
 
-// #define PARALLEL_SHADOW_BATCH 1
+//#define PARALLEL_SHADOW_BATCH 1
+#define PARALLEL_SHADOW_CASCADES 1
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
     float zNear, float zFar, const float3& camDir,
@@ -717,13 +718,17 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
     {
+#if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
+		{
+#endif
         GPU_SCOPE(d.cl, ProfilerScopes::kPassCSM);
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
 
-#if PARALLEL_SHADOW_BATCH
+#if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
         renderer->EndThreadCommandList(d, ctx.batchIndex);
+		}
 #endif
 
         const float shadowMaxDistance = 300.0f;
@@ -825,6 +830,22 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
                 const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
 
+#if PARALLEL_SHADOW_CASCADES
+                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+                renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
+
+                for (auto obj : opaqueComplex)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+
+                for (auto obj : opaqueSimple)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+                renderer->EndThreadCommandList(t, batchIndex);
+#else
                 renderer->BindShadowTarget(d.cl, (int)idx, /*clear=*/false);
 
                 for (auto obj : opaqueComplex)
@@ -837,9 +858,11 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                     obj->RenderShadow(renderer, d.cl, lightView, lightProj);
                 }
 #endif
+
+#endif
             };
 
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && PARALLEL_SHADOW_BATCH
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && (PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES)
         tasks.DispatchWait(kCascades, csmJob, 1);
 #else
         (void)tasks;
@@ -849,7 +872,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         
 #endif
     }
-#if !PARALLEL_SHADOW_BATCH
+#if !PARALLEL_SHADOW_BATCH && !PARALLEL_SHADOW_CASCADES
     renderer->EndThreadCommandList(d, ctx.batchIndex);
 #endif
 
@@ -1241,7 +1264,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj,
     float zNear, float zFar)
 {
-    //return;
+    return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
@@ -1286,7 +1309,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
-    //return;
+    return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
