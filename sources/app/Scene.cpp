@@ -832,18 +832,20 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
 #if PARALLEL_SHADOW_CASCADES
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+				{
+                    //GPU_SCOPE(t.cl, ProfilerScopes::kCSMPerCascade);
+					renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
 
-                renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
+                	for (auto obj : opaqueComplex)
+                	{
+                		obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                	}
 
-                for (auto obj : opaqueComplex)
-                {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
-
-                for (auto obj : opaqueSimple)
-                {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
+                	for (auto obj : opaqueSimple)
+                	{
+                		obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                	}
+				}
                 renderer->EndThreadCommandList(t, batchIndex);
 #else
                 renderer->BindShadowTarget(d.cl, (int)idx, /*clear=*/false);
