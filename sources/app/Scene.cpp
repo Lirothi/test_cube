@@ -345,12 +345,12 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     coolSpot.intensity = 18.0f;
     coolSpot.shadowNormalBias = 0.05f;
     coolSpot.shadowDepthBias = 0.0001f;
-    spotLights.push_back({});
-    spotLights.back().SetDesc(coolSpot);
+    //spotLights.push_back({});
+    //spotLights.back().SetDesc(coolSpot);
 
     dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
-    //dirLight_.exposure *= 0.02f;
-    //dirLight_.ambient *= 0.02f;
+    dirLight_.exposure *= 0.02f;
+    dirLight_.ambient *= 0.02f;
 
     {
         auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
@@ -367,7 +367,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
 
     {
-        auto glass = std::make_unique<GlassCube>(this, "models/box.obj", float3(2.0f, 0.9f, -3.0f), float3(1.6f, 1.6f, 1.6f), 0.35f);
+        auto glass = std::make_unique<GlassCube>(this, "models/box.obj", float3(-1.8f, 0.4f, -4.2f), float3(0.6f, 0.6f, 0.6f), 0.0f);
         glass->SetTint(float3(0.78f, 0.9f, 1.0f));
         glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
         glass->SetThickness(0.65f);
@@ -1502,8 +1502,9 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     RenderGraph rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
-    rgTr.AddPass("Transparent.Driver", {}, [renderer](RenderGraph::PassContext sub) {
+    rgTr.AddPass("Transparent.Driver", {}, [renderer, &ctx](RenderGraph::PassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        driver.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
             const auto& D = renderer->GetDeferredForFrame();
@@ -1512,7 +1513,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
                 renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
                 renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
                 driver.cl->CopyResource(D.sceneOpaque.Get(), D.scene.Get());
-                renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);

@@ -1105,7 +1105,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 D.sceneOpaqueSRV = outSRV;
             }
 
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         };
 
     auto CreateSrvUavTexture = [&](DXGI_FORMAT fmt,

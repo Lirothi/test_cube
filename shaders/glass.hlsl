@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0,t1,t2,t3)) TABLE(SRV(t4,t5)) TABLE(SAMPLER(s0,s1,s2))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SRV(t4) SRV(t5)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -291,11 +291,14 @@ float4 PSMain(VSOut i) : SV_Target
 
     float3 reflectionDir = reflect(-V, N);
     float3 envRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+    //return float4(envRefl, 1.0f);
 
+    //ior = 1.0f;
     float eta = 1.0f / ior;
     float3 refrDir = refract(-V, N, eta);
     bool totalInternal = dot(refrDir, refrDir) < 1e-6f;
 
+    //thickness = 0.01f;
     float3 refrColor = 0.0f.xxx;
     if (!totalInternal)
     {
@@ -307,9 +310,11 @@ float4 PSMain(VSOut i) : SV_Target
         uv = saturate(uv);
         refrColor = SceneOpaque.Sample(LinearSampler, uv).rgb;
     }
-
+    //return float4(refrColor, 1.0f);
+    //absorption = float3(0.16f, 0.07f, 0.03f) * 1.0f;
     float3 transmittance = exp(-absorption * thickness);
     refrColor *= transmittance;
+    //return float4(refrColor, 1.0f);
 
     float cosTheta = saturate(dot(N, V));
     float r0 = (ior - 1.0f) / (ior + 1.0f);
@@ -322,12 +327,17 @@ float4 PSMain(VSOut i) : SV_Target
 
     float3 lightingColor = diffuseAccum + specAccum;
     float3 color = lightingColor + refrColor * (1.0f - F) + envRefl * (reflectionStrength * F);
-    color = max(color, 0.0f.xxx);
+
+    //color = diffuseAccum;
+
+	color = max(color, 0.0f.xxx);
 
     float transAvg = (transmittance.x + transmittance.y + transmittance.z) * (1.0f / 3.0f);
     float Favg = (F.x + F.y + F.z) * (1.0f / 3.0f);
     float alpha = saturate(1.0f - (1.0f - Favg) * transAvg);
     alpha = saturate(alpha);
 
+    //color = alpha.xxx;
+    //alpha = 1.0f;
     return float4(color, alpha);
 }

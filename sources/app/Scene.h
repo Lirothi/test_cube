@@ -15,6 +15,14 @@ class Renderer;
 
 class Scene {
 public:
+    struct DirectionalLight
+    {
+        float3 dir;
+        float3 color;
+        float exposure = 1.0f;
+        float ambient = 0.05f;
+    };
+
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }
 
@@ -192,13 +200,6 @@ private:
     bool debugTexMode_ = false;
     bool showProfiler_ = false;
 
-    struct DirectionalLight
-    {
-        float3 dir;
-        float3 color;
-        float exposure = 1.0f;
-        float ambient = 0.05f;
-    };
     DirectionalLight dirLight_;
 
     std::unique_ptr<Skybox> skyBox_;
