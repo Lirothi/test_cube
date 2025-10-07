@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <utility>
 
+#include "core/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
 #include "third_party/robin_hood.h"
@@ -171,6 +173,12 @@ public:
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
+    void SetSsrTextureScale(Math::float2 scale);
+    void SetSsrTextureScale(float scale) { SetSsrTextureScale(Math::float2(scale, scale)); }
+    Math::float2 GetSsrTextureScale() const { return ssrTextureScale_; }
+    UINT GetSsrTextureWidth() const;
+    UINT GetSsrTextureHeight() const;
+
     template<class Alloc, class It>
     inline GpuDescHandle StageDescriptorTableRange(
         Alloc& alloc,
@@ -243,6 +251,8 @@ private:
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
     void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
+    std::pair<UINT, UINT> ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const;
+    void RecreateDeferredTargets();
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
@@ -293,6 +303,10 @@ private:
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
+
+    Math::float2 ssrTextureScale_ = Math::float2(0.5f, 0.5f);
+    UINT ssrTextureWidth_ = 1;
+    UINT ssrTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
 

@@ -1301,8 +1301,10 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         matSSR_->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT ssrWidth = renderer->GetSsrTextureWidth();
+        const UINT ssrHeight = renderer->GetSsrTextureHeight();
+        const UINT groupsX = (ssrWidth + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (ssrHeight + kGroupSize - 1u) / kGroupSize;
         t.cl->Dispatch(groupsX, groupsY, 1);
         renderer->UAVBarrier(t.cl, D.ssr.Get());
     }
@@ -1318,15 +1320,18 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSRBlur);
         const auto& D = renderer->GetDeferredForFrame();
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT ssrWidth = renderer->GetSsrTextureWidth();
+        const UINT ssrHeight = renderer->GetSsrTextureHeight();
+        const UINT groupsX = (ssrWidth + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (ssrHeight + kGroupSize - 1u) / kGroupSize;
 
         // Horizontal pass
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
-        float2 dir = float2(1.0f / renderer->GetWidth(), 0.0f);
+        const float invSsrWidth = ssrWidth > 0 ? (1.0f / static_cast<float>(ssrWidth)) : 0.0f;
+        float2 dir = float2(invSsrWidth, 0.0f);
         matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
         matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
 
@@ -1348,7 +1353,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
-        dir = float2(0.0f, 1.0f / renderer->GetHeight());
+        const float invSsrHeight = ssrHeight > 0 ? (1.0f / static_cast<float>(ssrHeight)) : 0.0f;
+        dir = float2(0.0f, invSsrHeight);
         matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
         matBlur_->UpdateCBField(cbHandles_.blur.radius, 1.0f, (uint8_t*)cb.cpu);
 
