@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cassert>
 
 #include "input/InputManager.h"
 #include "app/Camera.h"
@@ -15,6 +16,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/meshes/StaticMesh.h"
+#include "rendering/renderables/GlassCube.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -108,6 +110,42 @@ void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+}
+
+const mat4& Scene::GetCascadeView(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedLightView_[index];
+}
+
+const mat4& Scene::GetCascadeProj(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedLightProj_[index];
+}
+
+float2 Scene::GetCascadeScale(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedScale_[index];
+}
+
+float2 Scene::GetCascadeBias(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedBias_[index];
+}
+
+float Scene::GetCascadeNormalBias(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedNormalBiasWS_[index];
+}
+
+float Scene::GetCascadeDepthBias(size_t index) const
+{
+    assert(index < static_cast<size_t>(kCascades));
+    return cachedDepthBiasNDC_[index];
 }
 
 void Scene::RefreshCachedHandles(Renderer* renderer)
@@ -327,6 +365,18 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     AddObject(std::make_unique<RotatingObject>("models/teapot.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-1.0f, 0.5f, -1.0f), float3(1, 1, 1)));
     AddObject(std::make_unique<RotatingObject>("models/sphere.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(-3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
     AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
+
+    {
+        auto glass = std::make_unique<GlassCube>(this, "models/box.obj", float3(2.0f, 0.9f, -3.0f), float3(1.6f, 1.6f, 1.6f), 0.35f);
+        glass->SetTint(float3(0.78f, 0.9f, 1.0f));
+        glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
+        glass->SetThickness(0.65f);
+        glass->SetReflectionStrength(1.25f);
+        glass->SetRefractionDistortion(0.02f);
+        glass->SetRoughness(0.05f);
+        glass->SetIor(1.52f);
+        AddObject(std::move(glass));
+    }
 
     {
         auto floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
@@ -1457,6 +1507,13 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
             const auto& D = renderer->GetDeferredForFrame();
+            if (D.sceneOpaque.Get())
+            {
+                renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+                renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+                driver.cl->CopyResource(D.sceneOpaque.Get(), D.scene.Get());
+                renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);

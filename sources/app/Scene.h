@@ -18,6 +18,19 @@ public:
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }
 
+    const DirectionalLight& GetDirectionalLight() const { return dirLight_; }
+    LightManager& GetLightManager() { return lightManager_; }
+    const LightManager& GetLightManager() const { return lightManager_; }
+    Skybox* GetSkybox() const { return skyBox_.get(); }
+
+    const mat4& GetCascadeView(size_t index) const;
+    const mat4& GetCascadeProj(size_t index) const;
+    float2 GetCascadeScale(size_t index) const;
+    float2 GetCascadeBias(size_t index) const;
+    float GetCascadeNormalBias(size_t index) const;
+    float GetCascadeDepthBias(size_t index) const;
+    const float* GetCascadeSplitsVS() const { return cachedSplitsVS_; }
+
     void InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
     void Tick(float deltaTime);

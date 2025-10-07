@@ -171,6 +171,9 @@
     <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp">
       <Filter>sources\rendering\meshes</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/GlassCube.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -332,6 +335,9 @@
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/GlassCube.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
@@ -386,6 +392,12 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\gbuffer_inst_csm.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\glass.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\glass_csm.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\instance_anim.hlsl">
