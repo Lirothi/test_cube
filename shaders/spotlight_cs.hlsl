@@ -112,7 +112,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float4 base = LightTarget[dispatchThreadId.xy];
     float3 accum = base.rgb;
 
-    uint count = min(lightCount, (uint)SpotLights.Length);
+    uint count = (uint)lightCount;
     for (uint i = 0; i < count; ++i)
     {
         SpotLightData light = SpotLights[i];

@@ -727,8 +727,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
 
 #if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
+        }
         renderer->EndThreadCommandList(d, ctx.batchIndex);
-		}
 #endif
 
         const float shadowMaxDistance = 300.0f;
@@ -1266,7 +1266,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& invView, const mat4& invProj,
     float zNear, float zFar)
 {
-    return;
+    //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
@@ -1313,7 +1313,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 {
-    return;
+    //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
