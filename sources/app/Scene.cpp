@@ -488,6 +488,7 @@ void Scene::Tick(float deltaTime) {
 
 void Scene::PrepareTransparentBuckets(const mat4& view)
 {
+    CPU_SCOPE(ProfilerScopes::kPrepareTransparentBuckets);
     auto computeDepthForRenderable = [&view](RenderableObject* renderable) -> float
     {
         if (!renderable)
@@ -553,7 +554,7 @@ void Scene::PrepareTransparentBuckets(const mat4& view)
         ObjectRenderType::TransparentComplex,
     };
 
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && 0
     TaskSystem::Get().DispatchWait(transparentTypes.size(), [&](std::size_t jobIndex)
     {
         const ObjectRenderType type = transparentTypes[jobIndex];

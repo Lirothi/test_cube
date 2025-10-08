@@ -21,6 +21,7 @@ public:
 
     explicit RenderGraph(size_t submitBatchIndex = (size_t)-1)
         : submitBatchIndex_(submitBatchIndex) {
+        passes_.reserve(16);
     }
 
     struct Pass {
@@ -35,6 +36,7 @@ public:
         const std::vector<size_t>& prereqs,
         ExecFn fn)
     {
+        CPU_SCOPE(ProfilerScopes::kAddPass);
         Pass p{ name, prereqs, std::move(fn), {} };
         passes_.push_back(std::move(p));
         return passes_.size() - 1;

@@ -12,8 +12,6 @@ public:
 
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
-    Math::mat4 GetOrientationMatrix() const { return Math::mat4::RotationFromEulerXYZRad(GetRotationEulerRad()); }
-
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return true; }
 

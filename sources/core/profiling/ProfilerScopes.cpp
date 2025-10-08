@@ -42,6 +42,8 @@ const Profiler::ScopeNameKey kRenderShadowBatchGpu = Profiler::RegisterTraceLite
 const Profiler::ScopeNameKey kGBufferDriver = Profiler::RegisterTraceLiteral(L"GBuffer.Driver");
 const Profiler::ScopeNameKey kTransparentDriver = Profiler::RegisterTraceLiteral(L"Transparent.Driver");
 const Profiler::ScopeNameKey kOceanRender = Profiler::RegisterTraceLiteral(L"OceanRenderable::RecordCompute");
+const Profiler::ScopeNameKey kPrepareTransparentBuckets = Profiler::RegisterTraceLiteral(L"Scene::PrepareTransparentBuckets");
+const Profiler::ScopeNameKey kAddPass = Profiler::RegisterTraceLiteral(L"RenderGraph::AddPass");
 
 const Profiler::ScopeNameKey kTextManagerBuild = Profiler::RegisterTraceLiteral(L"TextManager::Build");
 const Profiler::ScopeNameKey kTextManagerDraw = Profiler::RegisterTraceLiteral(L"TextManager::Draw");
