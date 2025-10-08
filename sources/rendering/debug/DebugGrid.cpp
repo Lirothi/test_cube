@@ -108,20 +108,6 @@ public:
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive) override
     {
-        auto& gd = GetGraphicsDesc();
-        gd.numRT = 1;
-        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
-        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        gd.blend.RenderTarget[0].BlendEnable = TRUE;
-        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-        gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-        gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-
         if (!GetUniformBinder())
         {
             SetUniformBinder(std::make_unique<GridMVPBinder>());
@@ -160,6 +146,27 @@ public:
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return false; }
+
+    void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override
+    {
+        RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+        if (renderer)
+        {
+            desc.numRT = 1;
+            desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+        }
+        desc.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+        desc.raster.CullMode = D3D12_CULL_MODE_NONE;
+        desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        D3D12_RENDER_TARGET_BLEND_DESC& blend = desc.blend.RenderTarget[0];
+        blend.BlendEnable = TRUE;
+        blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOp = D3D12_BLEND_OP_ADD;
+        blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    }
 
 private:
     void BuildGridCPU(std::vector<LineVertex>& out)
@@ -214,21 +221,6 @@ public:
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive) override
     {
-        auto& gd = GetGraphicsDesc();
-        gd.numRT = 1;
-        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
-        gd.raster.DepthBias = -150;
-        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        gd.blend.RenderTarget[0].BlendEnable = TRUE;
-        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-        gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-        gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-
         if (!GetUniformBinder())
         {
             SetUniformBinder(std::make_unique<AxesUniformBinder>(&thicknessPx_));
@@ -269,6 +261,28 @@ public:
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return false; }
+
+    void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override
+    {
+        RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+        if (renderer)
+        {
+            desc.numRT = 1;
+            desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+        }
+        desc.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        desc.raster.CullMode = D3D12_CULL_MODE_NONE;
+        desc.raster.DepthBias = -150;
+        desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        D3D12_RENDER_TARGET_BLEND_DESC& blend = desc.blend.RenderTarget[0];
+        blend.BlendEnable = TRUE;
+        blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOp = D3D12_BLEND_OP_ADD;
+        blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    }
 
 private:
     void BuildAxesCPU(std::vector<AxisVertex>& out)
