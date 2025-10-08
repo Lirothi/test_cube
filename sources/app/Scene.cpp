@@ -424,7 +424,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
 
     AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
 
-    //AddObject(std::make_unique<OceanRenderable>(&camera_));
+    AddObject(std::make_unique<OceanRenderable>(&camera_));
 
     AddObject(std::make_unique<DebugGrid>(100.0f));
 
@@ -496,18 +496,18 @@ void Scene::PrepareTransparentBuckets(const mat4& view)
         }
 
         const BoundingBox& boundsWS = renderable->GetWorldBounds();
-        Math::float3 centerWS;
+        float z = FLT_MAX;
         if (boundsWS.IsValid())
         {
-            centerWS = boundsWS.GetCenter();
+            const Math::float3 centerVS = view.TransformPoint(boundsWS.GetCenter());
+            z = centerVS.z;
         }
         else
         {
-            centerWS = renderable->GetModelMatrix().TransformPoint(Math::float3(0.0f, 0.0f, 0.0f));
+            //centerWS = renderable->GetModelMatrix().TransformPoint(Math::float3(0.0f, 0.0f, 0.0f));
         }
-
-        const Math::float3 centerVS = view.TransformPoint(centerWS);
-        return centerVS.z;
+        
+        return z;
     };
 
     auto sortTransparentBucket = [&](ObjectBucket& bucket, std::vector<TransparentSortEntry>& scratch)
