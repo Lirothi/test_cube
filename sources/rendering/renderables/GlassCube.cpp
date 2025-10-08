@@ -295,11 +295,22 @@ void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /
     const auto& deferred = renderer->GetDeferredForFrame();
     auto* sky = scene_->GetSkybox();
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{
+    D3D12_CPU_DESCRIPTOR_HANDLE normalSrv{};
+    if (hasNormalMap_)
+    {
+        normalSrv = normalMap_.GetSRVCPU();
+    }
+    if (normalSrv.ptr == 0)
+    {
+        normalSrv = deferred.sceneSRV;
+    }
+
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs{
         deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
-        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV
+        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
+        normalSrv
     };
     ctx.table[0] = renderer->StageSrvUavTable(srvs).gpu;
 
@@ -322,14 +333,6 @@ void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /
     };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-    if (hasNormalMap_)
-    {
-        auto srv = normalMap_.GetSRVCPU();
-        if (srv.ptr != 0)
-        {
-            ctx.table[6] = renderer->StageSrvUavTable({ srv }).gpu;
-        }
-    }
 }
 
 void GlassCube::MarkTransformDirty()
