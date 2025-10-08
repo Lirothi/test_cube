@@ -17,6 +17,7 @@
 #include "ocean/OceanRenderable.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/GlassCube.h"
+#include "rendering/renderables/RenderableObject.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -485,6 +486,88 @@ void Scene::Tick(float deltaTime) {
 #endif
 }
 
+void Scene::PrepareTransparentBuckets(const mat4& view)
+{
+    auto computeDepthForRenderable = [&view](RenderableObject* renderable) -> float
+    {
+        if (!renderable)
+        {
+            return 0.0f;
+        }
+
+        const BoundingBox& boundsWS = renderable->GetWorldBounds();
+        Math::float3 centerWS;
+        if (boundsWS.IsValid())
+        {
+            centerWS = boundsWS.GetCenter();
+        }
+        else
+        {
+            centerWS = renderable->GetModelMatrix().TransformPoint(Math::float3(0.0f, 0.0f, 0.0f));
+        }
+
+        const Math::float3 centerVS = view.TransformPoint(centerWS);
+        return centerVS.z;
+    };
+
+    auto sortTransparentBucket = [&](ObjectBucket& bucket, std::vector<TransparentSortEntry>& scratch)
+    {
+        const size_t count = bucket.size();
+        if (count == 0)
+        {
+            scratch.clear();
+            return;
+        }
+
+        scratch.resize(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            RenderableObjectBase* base = bucket[i];
+            TransparentSortEntry entry{};
+            entry.object = base;
+            if (auto* renderable = dynamic_cast<RenderableObject*>(base))
+            {
+                entry.depth = computeDepthForRenderable(renderable);
+            }
+            scratch[i] = entry;
+        }
+
+        std::sort(scratch.begin(), scratch.end(), [](const TransparentSortEntry& lhs, const TransparentSortEntry& rhs)
+        {
+            const float diff = lhs.depth - rhs.depth;
+            if (std::fabs(diff) < 1e-4f)
+            {
+                return lhs.object < rhs.object;
+            }
+            return lhs.depth > rhs.depth;
+        });
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            bucket[i] = scratch[i].object;
+        }
+    };
+
+    constexpr std::array<ObjectRenderType, 2> transparentTypes = {
+        ObjectRenderType::TransparentSimple,
+        ObjectRenderType::TransparentComplex,
+    };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    TaskSystem::Get().DispatchWait(transparentTypes.size(), [&](std::size_t jobIndex)
+    {
+        const ObjectRenderType type = transparentTypes[jobIndex];
+        sortTransparentBucket(renderBuckets_[ToIndex(type)], transparentSortScratch_[jobIndex]);
+    });
+#else
+    for (std::size_t jobIndex = 0; jobIndex < transparentTypes.size(); ++jobIndex)
+    {
+        const ObjectRenderType type = transparentTypes[jobIndex];
+        sortTransparentBucket(renderBuckets_[ToIndex(type)], transparentSortScratch_[jobIndex]);
+    }
+#endif
+}
+
 void Scene::Render(Renderer* renderer) {
     if (!renderer) {
         return;
@@ -507,7 +590,7 @@ void Scene::Render(Renderer* renderer) {
     //tb->AddText(8, 8 + 32, 10.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", false);
     //tb->AddText(8, 8 + 32 + 32, 16.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
     //tb->AddText(8, 8 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
-    
+
 
     renderer->BeginSubmitTimeline();
 
@@ -541,6 +624,9 @@ void Scene::Render(Renderer* renderer) {
             : (simple ? ObjectRenderType::OpaqueSimple : ObjectRenderType::OpaqueComplex);
         renderBuckets_[ToIndex(key)].push_back(obj.get());
     }
+
+    PrepareTransparentBuckets(view);
+
     const auto& buckets = renderBuckets_;
 
     RenderGraph rg;
@@ -1656,8 +1742,13 @@ void Scene::Clear()
     lightManager_.Reset();
     cbHandles_ = {};
     objects_.clear();
-    for (auto& bucket : renderBuckets_) {
+    for (auto& bucket : renderBuckets_)
+    {
         bucket.clear();
+    }
+    for (auto& scratch : transparentSortScratch_)
+    {
+        scratch.clear();
     }
     skyBox_.reset();
 }

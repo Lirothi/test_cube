@@ -11,6 +11,7 @@
 #include "rendering/core/RenderContext.h"
 #include "core/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
+#include "rendering/meshes/BoundingBox.h"
 
 class Renderer;
 
@@ -47,7 +48,7 @@ public:
     // Lifecycle
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     virtual void Tick(float /*dt*/) {}
-    virtual void PostTick(float /*dt*/) override {}
+    virtual void PostTick(float /*dt*/) override;
 
     // Base renderer: Compute -> Graphics (Bind/IssueDraw)
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
@@ -56,11 +57,18 @@ public:
 
     // Transform
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
-    void SetModelMatrix(const Math::mat4& m) { modelMatrix_ = m; }
+    void SetModelMatrix(const Math::mat4& m)
+    {
+        modelMatrix_ = m;
+        MarkWorldBoundsDirty();
+    }
 
     // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
     const Mesh* GetMesh() const { return mesh_.get(); }
+
+    BoundingBox GetLocalBounds() const;
+    const BoundingBox& GetWorldBounds() const;
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
@@ -125,4 +133,14 @@ private:
     friend class UniformBinder;
 
     std::unique_ptr<UniformBinder> uniformBinder_;
+
+protected:
+    void SetMesh(std::shared_ptr<Mesh> mesh);
+    void MarkWorldBoundsDirty();
+
+private:
+    void UpdateWorldBoundsCache() const;
+
+    mutable BoundingBox worldBoundsCache_;
+    mutable bool worldBoundsDirty_ = true;
 };

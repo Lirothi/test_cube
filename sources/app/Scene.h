@@ -55,6 +55,12 @@ private:
     using ObjectBuckets = std::array<ObjectBucket, kRenderTypeCount>;
     static constexpr size_t ToIndex(ObjectRenderType type) { return static_cast<size_t>(type); }
 
+    struct TransparentSortEntry
+    {
+        RenderableObjectBase* object = nullptr;
+        float depth = 0.0f;
+    };
+
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
     void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
@@ -97,6 +103,8 @@ private:
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
+
+    void PrepareTransparentBuckets(const mat4& view);
 
     std::shared_ptr<Material> matLighting_;
     std::shared_ptr<Material> matPointLightCS_;
@@ -195,6 +203,7 @@ private:
     LightManager lightManager_{};
 
     ObjectBuckets renderBuckets_;
+    std::array<std::vector<TransparentSortEntry>, 2> transparentSortScratch_{};
     Camera camera_;
 
     bool debugTexMode_ = false;

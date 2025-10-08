@@ -251,7 +251,7 @@ void GlassCube::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
     if (renderer && !modelName_.empty())
     {
-        mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+        SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
     }
     hasNormalMap_ = false;
     if (renderer && uploadCmdList && !normalMapPath_.empty())
@@ -275,14 +275,16 @@ void GlassCube::Tick(float deltaTime)
     MarkTransformDirty();
 }
 
-void GlassCube::PostTick(float /*deltaTime*/)
+void GlassCube::PostTick(float deltaTime)
 {
     if (!transformDirty_)
     {
+        RenderableObject::PostTick(deltaTime);
         return;
     }
     RebuildModel();
     transformDirty_ = false;
+    RenderableObject::PostTick(deltaTime);
 }
 
 void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
