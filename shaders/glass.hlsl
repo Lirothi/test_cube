@@ -330,7 +330,7 @@ float4 PSMain(VSOut i) : SV_Target
     float3 envRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
     //return float4(envRefl, 1.0f);
 
-    ior = 1.1f;
+    //ior = 1.0f;
     float eta = 1.0f / ior;
     float3 refrDir = refract(-V, N, eta);
     bool totalInternal = dot(refrDir, refrDir) < 1e-6f;

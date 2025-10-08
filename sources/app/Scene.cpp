@@ -372,7 +372,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
         glass->SetThickness(0.65f);
         glass->SetReflectionStrength(1.25f);
-        glass->SetRefractionDistortion(0.02f);
+        glass->SetRefractionDistortion(1.00f);
         glass->SetRoughness(0.05f);
         glass->SetIor(1.1f);
         glass->SetNormalMap(L"textures/damaged_plaster_normal.dds");
@@ -383,7 +383,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
         glass->SetThickness(0.65f);
         glass->SetReflectionStrength(4.25f);
-        glass->SetRefractionDistortion(0.02f);
+        glass->SetRefractionDistortion(1.00f);
         glass->SetRoughness(0.05f);
         glass->SetIor(1.1f);
         glass->SetNormalMap(L"textures/damaged_plaster_normal.dds");
