@@ -302,14 +302,6 @@ void OceanRenderable::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    auto& gd = GetGraphicsDesc();
-    gd.numRT = 1;
-    gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-    gd.dsvFormat = renderer->GetDsvFormat();
-    gd.depth.DepthEnable = TRUE;
-    gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    gd.raster.CullMode = D3D12_CULL_MODE_NONE;
-
     if (!GetUniformBinder())
     {
         SetUniformBinder(std::make_unique<OceanUniformBinder>(*this));
@@ -380,6 +372,21 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         renderer->Transition(cl, simulation_->GetDisplacementResource(), srvState);
     }
     RenderableObject::RecordGraphics(renderer, cl, ctx);
+}
+
+void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+
+    desc.numRT = 1;
+    if (renderer)
+    {
+        desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+        desc.dsvFormat = renderer->GetDsvFormat();
+    }
+    desc.depth.DepthEnable = TRUE;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.raster.CullMode = D3D12_CULL_MODE_NONE;
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

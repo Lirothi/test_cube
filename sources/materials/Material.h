@@ -145,6 +145,8 @@ public:
         return (GetCBSizeBytes(bRegister) + (alignment - 1)) & ~(alignment - 1);
     }
 
+    const GraphicsDesc& GetCachedGraphicsDesc() const { return cachedGfxDesc_; }
+
     CBFieldHandle ComputeCBFieldHandle(UINT bRegister, const std::string& name) const;
     CBFieldHandle ComputeCB0FieldHandle(const std::string& name) const { return ComputeCBFieldHandle(0, name); }
 

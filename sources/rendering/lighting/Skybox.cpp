@@ -59,14 +59,6 @@ void Skybox::Init(Renderer* renderer,
         (void)cube_.CreateFromDDS(renderer, uploadCmdList, path_, uploadKeepAlive);
     }
 
-    graphicsDesc_.numRT = 1;
-    graphicsDesc_.rtvFormats[0] = renderer->GetSceneColorFormat();
-    graphicsDesc_.depth.DepthEnable = TRUE;
-    graphicsDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
-    graphicsDesc_.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // trick for the sky
-    graphicsDesc_.raster.CullMode = D3D12_CULL_MODE_NONE;             // render from the inside
-    graphicsDesc_.blend.RenderTarget[0].BlendEnable = FALSE;
-
     // Build the cube geometry
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
 
@@ -93,4 +85,20 @@ void Skybox::BuildCubeMesh_(Renderer* r,
     BuildCubeCW(cubeVerts, cubeIndices);
 
     GetMesh()->CreateGPU_PNTUV(r->GetDevice(), uploadCmdList, keepAlive, cubeVerts, cubeIndices.data(), (UINT)cubeIndices.size(), true);
+}
+
+void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+
+    desc.numRT = 1;
+    if (renderer)
+    {
+        desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+    }
+    desc.depth.DepthEnable = TRUE;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
+    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // trick for the sky
+    desc.raster.CullMode = D3D12_CULL_MODE_NONE;             // render from the inside
+    desc.blend.RenderTarget[0].BlendEnable = FALSE;
 }

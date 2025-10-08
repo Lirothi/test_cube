@@ -89,13 +89,6 @@ GBufferRenderable::GBufferRenderable(const std::string& matPreset,
     : RenderableObject(inputLayout, graphicsShader)
     , matPreset_(matPreset)
 {
-    auto& gd = GetGraphicsDesc();
-    gd.numRT = 3;
-    gd.rtvFormats[0] = Renderer::kGBuffer0Format;
-    gd.rtvFormats[1] = Renderer::kGBuffer1Format;
-    gd.rtvFormats[2] = Renderer::kGBuffer2Format;
-    gd.dsvFormat = Renderer::kDeferredDepthFormat;
-
     SetUniformBinder(std::make_unique<GBufferUniformBinder>(matParams_));
 }
 
@@ -111,10 +104,6 @@ void GBufferRenderable::Init(Renderer* renderer,
     if (!matData_)
     {
         matData_ = renderer->GetMaterialDataManager()->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, matPreset_);
-        if (matData_)
-        {
-            matData_->ConfigureDefinesForGBuffer(GetGraphicsDesc());
-        }
     }
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
@@ -130,5 +119,21 @@ void GBufferRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsComman
     if (matData_)
     {
         matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+    }
+}
+
+void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+
+    desc.numRT = 3;
+    desc.rtvFormats[0] = Renderer::kGBuffer0Format;
+    desc.rtvFormats[1] = Renderer::kGBuffer1Format;
+    desc.rtvFormats[2] = Renderer::kGBuffer2Format;
+    desc.dsvFormat = Renderer::kDeferredDepthFormat;
+
+    if (matData_)
+    {
+        matData_->ConfigureDefinesForGBuffer(desc);
     }
 }
