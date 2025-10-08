@@ -38,7 +38,7 @@ void GpuInstancedModels::Init(Renderer* renderer,
     computeMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, computeShader_);
 
     // Model
-    mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+    SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
     {   // Resource states for VB/IB
         if (ID3D12Resource* vb = mesh_->GetVertexBufferResource()) {
             renderer->SetResourceState(vb, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
@@ -54,7 +54,7 @@ void GpuInstancedModels::Init(Renderer* renderer,
     // Register the current state (after Create — UAV)
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    modelMatrix_ = mat4::RotationY(45.0f * DEG2RAD) * mat4::Translation({0.0f, 6.0f, 10.0f});
+    SetModelMatrix(mat4::RotationY(45.0f * DEG2RAD) * mat4::Translation({0.0f, 6.0f, 10.0f}));
 }
 
 void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)

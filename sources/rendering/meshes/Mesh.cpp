@@ -17,6 +17,8 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     vertexStride_ = vertexStride;
     indexFormat_ = indexFormat;
 
+    bounds_.Reset();
+
     UploadManager up(device, uploadCmdList);
 
     // VB
@@ -60,6 +62,13 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
     CreateGPUFlexible(device, uploadCmdList, uploadKeepAlive,
         verts.data(), (UINT)verts.size(), sizeof(VertexPNTUV),
         indices, indexCount, DXGI_FORMAT_R32_UINT);
+
+    BoundingBox bounds = BoundingBox::Empty();
+    for (const auto& vert : verts)
+    {
+        bounds.Expand(Math::float3(vert.position.x, vert.position.y, vert.position.z));
+    }
+    bounds_ = bounds;
 }
 
 void Mesh::Draw(ID3D12GraphicsCommandList* cmdList) const {

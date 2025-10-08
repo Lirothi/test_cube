@@ -8,6 +8,8 @@
 
 using namespace Microsoft::WRL;
 
+#include "rendering/meshes/BoundingBox.h"
+
 // LEGACY format (compatibility)
 struct Vertex {
     DirectX::XMFLOAT3 position;
@@ -56,6 +58,8 @@ public:
     UINT GetVertexStride() const { return vertexStride_; }
     DXGI_FORMAT GetIndexFormat() const { return indexFormat_; }
 
+    const BoundingBox& GetBoundingBox() const { return bounds_; }
+
 private:
     // Generate normals/tangents (simple: per triangle with vertex averaging)
     static void GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
@@ -69,4 +73,5 @@ private:
     UINT  vertexStride_ = sizeof(Vertex);      // default to the legacy format
     DXGI_FORMAT indexFormat_ = DXGI_FORMAT_R16_UINT;
     UINT  indexCount_ = 0;
+    BoundingBox bounds_;
 };

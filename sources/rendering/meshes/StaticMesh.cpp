@@ -28,7 +28,7 @@ void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdLi
     GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);
     if (!modelName_.empty())
     {
-        mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+        SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
     }
 }
 
@@ -68,15 +68,15 @@ void StaticMesh::SetRotationEulerDeg(const float3& eulerDegXYZ)
     SetRotationEulerRad(float3(eulerDegXYZ.x * k, eulerDegXYZ.y * k, eulerDegXYZ.z * k));
 }
 
-void StaticMesh::PostTick(float /*deltaTime*/)
+void StaticMesh::PostTick(float deltaTime)
 {
-    if (!transformDirty_)
+    if (transformDirty_)
     {
-        return;
+        RebuildModel();
+        transformDirty_ = false;
     }
 
-    RebuildModel();
-    transformDirty_ = false;
+    RenderableObject::PostTick(deltaTime);
 }
 
 void StaticMesh::RebuildModel()

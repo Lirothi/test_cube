@@ -21,8 +21,8 @@ RenderableObject::RenderableObject(
     graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
     graphicsDesc_.FillDefaultsTriangle();
 
-    mesh_.reset(new Mesh());
-    modelMatrix_ = mat4::Identity();
+    SetMesh(std::make_shared<Mesh>());
+    SetModelMatrix(mat4::Identity());
 }
 
 RenderableObject::~RenderableObject() = default;
@@ -185,4 +185,62 @@ void RenderableObject::SetUniformBinder(std::unique_ptr<UniformBinder> binder)
     {
         uniformBinder_->RebuildHandles(*this);
     }
+}
+
+BoundingBox RenderableObject::GetLocalBounds() const
+{
+    if (!mesh_)
+    {
+        return BoundingBox::Empty();
+    }
+    return mesh_->GetBoundingBox();
+}
+
+const BoundingBox& RenderableObject::GetWorldBounds() const
+{
+    if (worldBoundsDirty_)
+    {
+        UpdateWorldBoundsCache();
+    }
+
+    return worldBoundsCache_;
+}
+
+void RenderableObject::PostTick(float dt)
+{
+    RenderableObjectBase::PostTick(dt);
+}
+
+void RenderableObject::SetMesh(std::shared_ptr<Mesh> mesh)
+{
+    mesh_ = std::move(mesh);
+    MarkWorldBoundsDirty();
+}
+
+void RenderableObject::MarkWorldBoundsDirty()
+{
+    worldBoundsDirty_ = true;
+}
+
+void RenderableObject::UpdateWorldBoundsCache() const
+{
+    Mesh* currentMesh = mesh_.get();
+    if (!currentMesh)
+    {
+        worldBoundsCache_ = BoundingBox::Empty();
+    }
+    else
+    {
+        const BoundingBox& localBounds = currentMesh->GetBoundingBox();
+        if (localBounds.IsValid())
+        {
+            worldBoundsCache_ = localBounds.Transform(modelMatrix_);
+        }
+        else
+        {
+            worldBoundsCache_ = BoundingBox::Empty();
+        }
+    }
+
+    worldBoundsDirty_ = false;
 }
