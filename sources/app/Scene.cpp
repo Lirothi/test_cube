@@ -345,12 +345,12 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     coolSpot.intensity = 18.0f;
     coolSpot.shadowNormalBias = 0.05f;
     coolSpot.shadowDepthBias = 0.0001f;
-    //spotLights.push_back({});
-    //spotLights.back().SetDesc(coolSpot);
+    spotLights.push_back({});
+    spotLights.back().SetDesc(coolSpot);
 
     dirLight_ = { float3(-1.5f, -0.7f, -0.5f).Normalized() , {1,1,1}, 1.0f, 0.05f };
-    dirLight_.exposure *= 0.02f;
-    dirLight_.ambient *= 0.02f;
+    //dirLight_.exposure *= 0.02f;
+    //dirLight_.ambient *= 0.02f;
 
     {
         auto box = std::make_unique<RotatingObject>("models/box.obj", "damaged_plaster", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(0.0f, 0.5f, -2.0f), float3(1, 1, 1));
@@ -374,7 +374,17 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetReflectionStrength(1.25f);
         glass->SetRefractionDistortion(0.02f);
         glass->SetRoughness(0.05f);
-        glass->SetIor(1.52f);
+        glass->SetIor(1.1f);
+        AddObject(std::move(glass));
+
+        glass = std::make_unique<GlassCube>(this, "models/sphere.obj", float3(-1.8f, 0.5f, -2.2f), float3(0.8f, 0.8f, 0.8f), 0.0f);
+        glass->SetTint(float3(0.78f, 0.9f, 1.0f));
+        glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
+        glass->SetThickness(0.65f);
+        glass->SetReflectionStrength(4.25f);
+        glass->SetRefractionDistortion(0.02f);
+        glass->SetRoughness(0.05f);
+        glass->SetIor(1.1f);
         AddObject(std::move(glass));
     }
 

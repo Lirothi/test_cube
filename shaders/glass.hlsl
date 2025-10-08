@@ -293,7 +293,7 @@ float4 PSMain(VSOut i) : SV_Target
     float3 envRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
     //return float4(envRefl, 1.0f);
 
-    //ior = 1.0f;
+    ior = 1.1f;
     float eta = 1.0f / ior;
     float3 refrDir = refract(-V, N, eta);
     bool totalInternal = dot(refrDir, refrDir) < 1e-6f;
@@ -306,7 +306,6 @@ float4 PSMain(VSOut i) : SV_Target
         float4 clip = mul(mul(float4(refrPosWS, 1.0f), view), proj);
         float2 uv = clip.xy / max(clip.w, 1e-6f);
         uv = uv * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-        uv += N.xy * refractionDistortion;
         uv = saturate(uv);
         refrColor = SceneOpaque.Sample(LinearSampler, uv).rgb;
     }
@@ -335,9 +334,9 @@ float4 PSMain(VSOut i) : SV_Target
     float transAvg = (transmittance.x + transmittance.y + transmittance.z) * (1.0f / 3.0f);
     float Favg = (F.x + F.y + F.z) * (1.0f / 3.0f);
     float alpha = saturate(1.0f - (1.0f - Favg) * transAvg);
-    alpha = saturate(alpha);
 
+    color = lerp(refrColor, color, alpha);
     //color = alpha.xxx;
     //alpha = 1.0f;
-    return float4(color, alpha);
+    return float4(color, 1.0f);
 }
