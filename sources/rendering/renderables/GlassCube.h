@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "materials/Texture2D.h"
 #include "rendering/renderables/RenderableObject.h"
 
 class Scene;
@@ -29,6 +30,10 @@ public:
     void SetRefractionDistortion(float distortion) { refractionDistortion_ = distortion; }
     void SetRoughness(float roughness) { roughness_ = roughness; }
     void SetIor(float ior) { ior_ = ior; }
+    void SetNormalMap(const std::wstring& path, bool normalIsRG = false);
+
+    bool HasNormalMap() const { return hasNormalMap_; }
+    bool IsNormalMapRG() const { return normalMapIsRG_; }
 
     bool IsSimpleRender() const override { return false; }
 
@@ -56,4 +61,9 @@ private:
     float refractionDistortion_ = 0.015f;
     float3 tint_ = float3(0.85f, 0.93f, 1.0f);
     float roughness_ = 0.07f;
+
+    Texture2D normalMap_{};
+    std::wstring normalMapPath_{};
+    bool normalMapIsRG_ = false;
+    bool hasNormalMap_ = false;
 };
