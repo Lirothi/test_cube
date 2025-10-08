@@ -305,26 +305,22 @@ void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /
         normalSrv = deferred.sceneSRV;
     }
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs{
-        deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV,
-        deferred.shadowSRV,
-        deferred.spotShadowSRV,
-        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
-        normalSrv
-    };
-    ctx.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-
     auto& lights = scene_->GetLightManager();
     const size_t pointCount = lights.PointLights().size();
     const size_t spotCount = lights.GetSpotLightCount();
     lights.EnsurePointLightBuffer(renderer, std::max<size_t>(pointCount, size_t(1)));
     lights.EnsureSpotLightBuffer(renderer, std::max<size_t>(spotCount, size_t(1)));
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2> lightSrvs{
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs{
+        deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV,
+        deferred.shadowSRV,
+        deferred.spotShadowSRV,
+        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
         lights.GetPointLightSrv(),
-        lights.GetSpotLightSrv()
+        lights.GetSpotLightSrv(),
+        normalSrv
     };
-    ctx.table[1] = renderer->StageSrvUavTable(lightSrvs).gpu;
+    ctx.table[0] = renderer->StageSrvUavTable(srvs).gpu;
 
     const auto samplerDescs = std::array{
         *SamplerManager::LinearClamp(),
