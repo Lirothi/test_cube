@@ -16,7 +16,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/meshes/StaticMesh.h"
-#include "rendering/renderables/GlassCube.h"
+#include "rendering/renderables/TransparentStaticMesh.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
@@ -368,7 +368,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
     AddObject(std::make_unique<RotatingObject>("models/corgi.obj", "brick", "PosNormTanUV", L"shaders/gbuffer.hlsl", float3(3.0f, 0.5f, -1.0f), float3(1, 1, 1)));
 
     {
-        auto glass = std::make_unique<GlassCube>(this, "models/box.obj", float3(-1.8f, 0.4f, -4.2f), float3(0.6f, 0.6f, 0.6f), 0.0f);
+        auto glass = std::make_unique<TransparentStaticMesh>(this, "models/box.obj", float3(-1.8f, 0.4f, -4.2f), float3(0.6f, 0.6f, 0.6f), 0.0f);
         glass->SetTint(float3(0.78f, 0.9f, 1.0f));
         glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
         glass->SetThickness(0.65f);
@@ -379,7 +379,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetNormalMap(L"textures/damaged_plaster_normal.dds");
         AddObject(std::move(glass));
 
-        glass = std::make_unique<GlassCube>(this, "models/sphere.obj", float3(-1.8f, 0.5f, -2.2f), float3(0.8f, 0.8f, 0.8f), 0.0f);
+        glass = std::make_unique<TransparentStaticMesh>(this, "models/sphere.obj", float3(-1.8f, 0.5f, -2.2f), float3(0.8f, 0.8f, 0.8f), 0.0f);
         glass->SetTint(float3(0.78f, 0.9f, 1.0f));
         glass->SetAbsorption(float3(0.16f, 0.07f, 0.03f));
         glass->SetThickness(0.65f);

@@ -7,13 +7,13 @@
 
 class Scene;
 
-class GlassCube final : public RenderableObject
+class TransparentStaticMesh final : public RenderableObject
 {
 public:
-    GlassCube(Scene* scene,
+    TransparentStaticMesh(Scene* scene,
         const std::string& modelName,
-        float3 position,
-        float3 scale,
+        const float3& position,
+        const float3& scale,
         float rotationSpeedRad);
 
     void Init(Renderer* renderer,
@@ -21,7 +21,6 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
-    void PostTick(float deltaTime) override;
 
     void SetTint(const float3& tint) { tint_ = tint; }
     void SetAbsorption(const float3& absorption) { absorption_ = absorption; }
@@ -41,17 +40,10 @@ protected:
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
 
 private:
-    class GlassUniformBinder;
-
-    void MarkTransformDirty();
-    void RebuildModel();
+    class TransparentUniformBinder;
 
     Scene* scene_ = nullptr;
     std::string modelName_;
-    float3 pos_{};
-    float3 scale_{};
-    float3 rotEuler_{};
-    bool transformDirty_ = false;
     float rotationSpeed_ = 0.0f;
 
     float ior_ = 1.52f;

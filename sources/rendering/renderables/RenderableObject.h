@@ -60,8 +60,19 @@ public:
     void SetModelMatrix(const Math::mat4& m)
     {
         modelMatrix_ = m;
+        transformDirty_ = false;
         MarkWorldBoundsDirty();
     }
+
+    void SetPosition(const Math::float3& p);
+    void SetScale(const Math::float3& s);
+    void SetRotationEulerRad(const Math::float3& eulerXYZ);
+    void SetRotationEulerDeg(const Math::float3& eulerDegXYZ);
+
+    Math::float3 GetPosition() const { return pos_; }
+    Math::float3 GetScale() const { return scale_; }
+    Math::float3 GetRotationEulerRad() const { return rotEuler_; }
+    Math::mat4 GetOrientationMatrix() const { return Math::mat4::RotationFromEulerXYZRad(rotEuler_); }
 
     // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
@@ -90,6 +101,8 @@ protected:
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
     virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
+
+    void MarkTransformDirty();
 
     template<typename T>
     bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)
@@ -139,8 +152,14 @@ protected:
     void MarkWorldBoundsDirty();
 
 private:
+    void RebuildModelMatrix();
     void UpdateWorldBoundsCache() const;
 
     mutable BoundingBox worldBoundsCache_;
     mutable bool worldBoundsDirty_ = true;
+
+    Math::float3 pos_{};
+    Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
+    Math::float3 rotEuler_{};
+    bool transformDirty_ = true;
 };

@@ -1,4 +1,4 @@
-#include "rendering/renderables/GlassCube.h"
+#include "rendering/renderables/TransparentStaticMesh.h"
 
 #include <algorithm>
 #include <array>
@@ -17,10 +17,10 @@ namespace
     constexpr size_t kCascadeCount = 4;
 }
 
-class GlassCube::GlassUniformBinder final : public RenderableObject::UniformBinder
+class TransparentStaticMesh::TransparentUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
-    GlassUniformBinder(Scene* scene, GlassCube* owner)
+    TransparentUniformBinder(Scene* scene, TransparentStaticMesh* owner)
         : scene_(scene)
         , owner_(owner)
     {
@@ -205,23 +205,22 @@ private:
     } shadowCb_{};
 
     Scene* scene_ = nullptr;
-    GlassCube* owner_ = nullptr;
+    TransparentStaticMesh* owner_ = nullptr;
 };
 
-GlassCube::GlassCube(Scene* scene,
+TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
     const std::string& modelName,
-    float3 position,
-    float3 scale,
+    const float3& position,
+    const float3& scale,
     float rotationSpeedRad)
     : RenderableObject("PosNormTanUV", L"shaders/glass.hlsl")
     , scene_(scene)
     , modelName_(modelName)
     , rotationSpeed_(rotationSpeedRad)
 {
-    pos_ = position;
-    scale_ = scale;
-    rotEuler_ = float3(0.0f, 0.0f, 0.0f);
-    transformDirty_ = true;
+    SetPosition(position);
+    SetScale(scale);
+    SetRotationEulerRad(float3(0.0f, 0.0f, 0.0f));
 
     auto& gd = GetGraphicsDesc();
     gd.numRT = 1;
@@ -241,10 +240,10 @@ GlassCube::GlassCube(Scene* scene,
 
     allowWireframe_ = false;
 
-    SetUniformBinder(std::make_unique<GlassUniformBinder>(scene_, this));
+    SetUniformBinder(std::make_unique<TransparentUniformBinder>(scene_, this));
 }
 
-void GlassCube::Init(Renderer* renderer,
+void TransparentStaticMesh::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
@@ -262,32 +261,20 @@ void GlassCube::Init(Renderer* renderer,
         desc.normalIsRG = normalMapIsRG_;
         hasNormalMap_ = normalMap_.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
     }
-    transformDirty_ = true;
 }
 
-void GlassCube::Tick(float deltaTime)
+void TransparentStaticMesh::Tick(float deltaTime)
 {
-    rotEuler_.y += rotationSpeed_ * deltaTime;
-    if (rotEuler_.y > XM_2PI)
+    float3 rotEuler = GetRotationEulerRad();
+    rotEuler.y += rotationSpeed_ * deltaTime;
+    if (rotEuler.y > XM_2PI)
     {
-        rotEuler_.y -= XM_2PI;
+        rotEuler.y -= XM_2PI;
     }
-    MarkTransformDirty();
+    SetRotationEulerRad(rotEuler);
 }
 
-void GlassCube::PostTick(float deltaTime)
-{
-    if (!transformDirty_)
-    {
-        RenderableObject::PostTick(deltaTime);
-        return;
-    }
-    RebuildModel();
-    transformDirty_ = false;
-    RenderableObject::PostTick(deltaTime);
-}
-
-void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
+void TransparentStaticMesh::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
 {
     if (!renderer || !scene_)
     {
@@ -330,23 +317,9 @@ void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /
         *SamplerManager::LinearClamp()
     };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
-
 }
 
-void GlassCube::MarkTransformDirty()
-{
-    transformDirty_ = true;
-}
-
-void GlassCube::RebuildModel()
-{
-    mat4 T = mat4::Translation(pos_);
-    mat4 S = mat4::Scaling(scale_);
-    mat4 R = mat4::RotationFromEulerXYZRad(rotEuler_);
-    SetModelMatrix(S * R * T);
-}
-
-void GlassCube::SetNormalMap(const std::wstring& path, bool normalIsRG)
+void TransparentStaticMesh::SetNormalMap(const std::wstring& path, bool normalIsRG)
 {
     normalMapPath_ = path;
     normalMapIsRG_ = normalIsRG;
