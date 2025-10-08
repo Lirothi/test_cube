@@ -85,13 +85,7 @@ public:
     void SetGraphicsMaterial(Material* m);
     Material* GetShadowMaterial() const { return shadowMaterial_.get(); }
 
-    // GraphicsDesc—adjust the pipeline (topology/blending/raster/depth-stencil)
-    Material::GraphicsDesc& GetGraphicsDesc() { return graphicsDesc_; }
-    void SetGraphicsDesc(const Material::GraphicsDesc& gd) { graphicsDesc_ = gd; }
-
-    virtual bool IsTransparent() const {
-        return graphicsDesc_.blend.RenderTarget[0].BlendEnable;
-    }
+    virtual bool IsTransparent() const;
 
     virtual bool CastsShadow() const { return true; }
 
@@ -123,10 +117,14 @@ protected:
     }
 
 protected:
+    Material::GraphicsDesc BuildGraphicsDesc(Renderer* renderer) const;
+    Material::GraphicsDesc BuildShadowDesc(Renderer* renderer, const Material::GraphicsDesc& baseDesc) const;
+    virtual void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const;
+    virtual void ConfigureShadowPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const;
+
+protected:
     std::shared_ptr<Material>     graphicsMaterial_; // shader variant (PSO/RS)
-    Material::GraphicsDesc        graphicsDesc_;
     std::shared_ptr<Material>     shadowMaterial_;
-    Material::GraphicsDesc        shadowDesc_;
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
@@ -146,6 +144,9 @@ private:
     friend class UniformBinder;
 
     std::unique_ptr<UniformBinder> uniformBinder_;
+
+    std::wstring graphicsShader_;
+    std::string  inputLayoutKey_;
 
 protected:
     void SetMesh(std::shared_ptr<Mesh> mesh);

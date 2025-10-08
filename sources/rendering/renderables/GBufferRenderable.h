@@ -21,6 +21,7 @@ public:
 
 protected:
     void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
 private:
     std::shared_ptr<MaterialData> matData_;

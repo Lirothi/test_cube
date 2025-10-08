@@ -222,22 +222,6 @@ TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
     SetScale(scale);
     SetRotationEulerRad(float3(0.0f, 0.0f, 0.0f));
 
-    auto& gd = GetGraphicsDesc();
-    gd.numRT = 1;
-    gd.rtvFormats[0] = Renderer::kSceneColorFormat;
-    gd.dsvFormat = Renderer::kDeferredDepthFormat;
-    gd.depth.DepthEnable = TRUE;
-    gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    gd.blend.RenderTarget[0].BlendEnable = TRUE;
-    gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-    gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-    gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-    gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-    gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    gd.raster.CullMode = D3D12_CULL_MODE_BACK;
-
     allowWireframe_ = false;
 
     SetUniformBinder(std::make_unique<TransparentUniformBinder>(scene_, this));
@@ -324,8 +308,28 @@ void TransparentStaticMesh::SetNormalMap(const std::wstring& path, bool normalIs
     normalMapPath_ = path;
     normalMapIsRG_ = normalIsRG;
     hasNormalMap_ = false;
+}
 
-    auto& defs = GetGraphicsDesc().defines;
+void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
+
+    desc.numRT = 1;
+    desc.rtvFormats[0] = Renderer::kSceneColorFormat;
+    desc.dsvFormat = Renderer::kDeferredDepthFormat;
+    desc.depth.DepthEnable = TRUE;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    desc.blend.RenderTarget[0].BlendEnable = TRUE;
+    desc.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    desc.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    desc.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    desc.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    desc.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    desc.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    desc.raster.CullMode = D3D12_CULL_MODE_BACK;
+
+    auto& defs = desc.defines;
     defs.erase(std::remove_if(defs.begin(), defs.end(), [](const auto& def) { return def.first == "NORMALMAP_IS_RG"; }), defs.end());
     if (normalMapIsRG_)
     {

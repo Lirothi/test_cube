@@ -50,6 +50,8 @@ private:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void UpdateClipLevels();
 
+    void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
+
     Math::float4 GetClipData(uint32_t index) const;
     Math::float4 GetSimulationParams() const;
     Math::float4 GetViewerParams() const;

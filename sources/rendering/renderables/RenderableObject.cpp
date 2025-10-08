@@ -21,14 +21,9 @@ namespace
 RenderableObject::RenderableObject(
     const std::string& inputLayout,
     const std::wstring& graphicsShader)
+    : graphicsShader_(graphicsShader)
+    , inputLayoutKey_(inputLayout)
 {
-    graphicsDesc_.shaderFile = graphicsShader;
-    graphicsDesc_.inputLayoutKey = inputLayout;
-    graphicsDesc_.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    graphicsDesc_.numRT = 0;
-    graphicsDesc_.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
-    graphicsDesc_.FillDefaultsTriangle();
-
     SetMesh(std::make_shared<Mesh>());
     SetModelMatrix(mat4::Identity());
 }
@@ -83,20 +78,13 @@ void RenderableObject::Init(Renderer* renderer,
         return;
     }
 
-    graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc_);
+    Material::GraphicsDesc graphicsDesc = BuildGraphicsDesc(renderer);
+    graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc);
 
     if (CastsShadow())
     {
-        shadowDesc_ = graphicsDesc_;
-        shadowDesc_.shaderFile = AppendSuffixBeforeExt(graphicsDesc_.shaderFile, L"_csm");
-        shadowDesc_.inputLayoutKey = graphicsDesc_.inputLayoutKey;
-        shadowDesc_.numRT = 0;
-        shadowDesc_.dsvFormat = DXGI_FORMAT_D16_UNORM;
-        shadowDesc_.depth.DepthEnable = TRUE;
-        shadowDesc_.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-        shadowDesc_.raster.CullMode = D3D12_CULL_MODE_BACK;
-
-        shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc_);
+        Material::GraphicsDesc shadowDesc = BuildShadowDesc(renderer, graphicsDesc);
+        shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc);
     }
     else
     {
@@ -307,4 +295,58 @@ void RenderableObject::RebuildModelMatrix()
     Math::mat4 R = Math::mat4::RotationFromEulerXYZRad(rotEuler_);
     Math::mat4 M = S * R * T;
     SetModelMatrix(M);
+}
+
+Material::GraphicsDesc RenderableObject::BuildGraphicsDesc(Renderer* renderer) const
+{
+    (void)renderer;
+    Material::GraphicsDesc desc{};
+    desc.shaderFile = graphicsShader_;
+    desc.inputLayoutKey = inputLayoutKey_;
+    desc.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.numRT = 0;
+    desc.dsvFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    ConfigureGraphicsPipeline(renderer, desc);
+    return desc;
+}
+
+Material::GraphicsDesc RenderableObject::BuildShadowDesc(Renderer* renderer, const Material::GraphicsDesc& baseDesc) const
+{
+    Material::GraphicsDesc desc = baseDesc;
+    ConfigureShadowPipeline(renderer, desc);
+    return desc;
+}
+
+void RenderableObject::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    (void)renderer;
+    (void)desc;
+}
+
+void RenderableObject::ConfigureShadowPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const
+{
+    (void)renderer;
+    const std::wstring& baseShader = desc.shaderFile.empty() ? graphicsShader_ : desc.shaderFile;
+    desc.shaderFile = AppendSuffixBeforeExt(baseShader, L"_csm");
+    if (desc.inputLayoutKey.empty())
+    {
+        desc.inputLayoutKey = inputLayoutKey_;
+    }
+    desc.numRT = 0;
+    desc.dsvFormat = DXGI_FORMAT_D16_UNORM;
+    desc.depth.DepthEnable = TRUE;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.raster.CullMode = D3D12_CULL_MODE_BACK;
+    desc.blend.RenderTarget[0].BlendEnable = FALSE;
+}
+
+bool RenderableObject::IsTransparent() const
+{
+    if (graphicsMaterial_)
+    {
+        return graphicsMaterial_->GetCachedGraphicsDesc().blend.RenderTarget[0].BlendEnable != FALSE;
+    }
+
+    Material::GraphicsDesc desc = BuildGraphicsDesc(nullptr);
+    return desc.blend.RenderTarget[0].BlendEnable != FALSE;
 }
