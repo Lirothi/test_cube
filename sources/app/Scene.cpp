@@ -375,6 +375,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetRefractionDistortion(0.02f);
         glass->SetRoughness(0.05f);
         glass->SetIor(1.1f);
+        glass->SetNormalMap(L"textures/damaged_plaster_normal.dds");
         AddObject(std::move(glass));
 
         glass = std::make_unique<GlassCube>(this, "models/sphere.obj", float3(-1.8f, 0.5f, -2.2f), float3(0.8f, 0.8f, 0.8f), 0.0f);
@@ -385,6 +386,7 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         glass->SetRefractionDistortion(0.02f);
         glass->SetRoughness(0.05f);
         glass->SetIor(1.1f);
+        glass->SetNormalMap(L"textures/damaged_plaster_normal.dds");
         AddObject(std::move(glass));
     }
 

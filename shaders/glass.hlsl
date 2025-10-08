@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SRV(t4) SRV(t5)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SRV(t4) SRV(t5)) TABLE(SRV(t6)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -21,7 +21,7 @@ struct SpotLightData
 };
 
 cbuffer GlassParams : register(b0)
-{
+{ 
     float4x4 world;
     float4x4 view;
     float4x4 proj;
@@ -30,7 +30,7 @@ cbuffer GlassParams : register(b0)
     float4 cameraPosIor;          // xyz = camera position, w = IOR
     float4 absorptionThickness;   // xyz = absorption, w = thickness
     float4 tintRoughness;         // xyz = tint color, w = roughness
-    float4 reflectionRefraction;  // x = reflection strength, y = refraction distortion, z = sky intensity, w = unused
+    float4 reflectionRefraction;  // x = reflection strength, y = refraction distortion, z = sky intensity, w = normal map enabled (0=disabled, 1=enabled)
     float4 sunDirAmbient;         // xyz = sun direction, w = ambient intensity
     float4 sunColorExposure;      // xyz = sun color, w = sun exposure
     float4 camDirWS;              // xyz = camera forward, w unused
@@ -51,6 +51,7 @@ Texture2DArray SpotShadowAtlas : register(t2);
 TextureCube SkyboxTex : register(t3);
 StructuredBuffer<PointLightData> PointLights : register(t4);
 StructuredBuffer<SpotLightData> SpotLights : register(t5);
+Texture2D NormalMap : register(t6);
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -69,6 +70,9 @@ struct VSOut
     float4 posH : SV_POSITION;
     float3 posWS : TEXCOORD0;
     float3 normalWS : TEXCOORD1;
+    float3 tangentWS : TEXCOORD2;
+    float3 bitangentWS : TEXCOORD3;
+    float2 uv : TEXCOORD4;
 };
 
 VSOut VSMain(VSIn input)
@@ -78,9 +82,21 @@ VSOut VSMain(VSIn input)
     o.posWS = worldPos.xyz;
     o.posH = mul(mul(worldPos, view), proj);
     float3x3 w3 = (float3x3) world;
-    o.normalWS = NormalizeSafe(mul(input.N, w3), float3(0.0f, 1.0f, 0.0f));
+    float3 tangentWS = mul(input.T.xyz, w3);
+    float3 normalWS = mul(input.N, w3);
+    tangentWS = normalize(tangentWS);
+    normalWS = normalize(normalWS);
+    float3 bitangentWS = normalize(cross(normalWS, tangentWS) * input.T.w);
+    o.normalWS = normalWS;
+    o.tangentWS = tangentWS;
+    o.bitangentWS = bitangentWS;
+    o.uv = input.UV;
     return o;
 }
+
+#ifndef NORMALMAP_IS_RG
+#define NORMALMAP_IS_RG 0
+#endif
 
 int ChooseCascadeIndex(float3 Pws)
 {
@@ -184,6 +200,27 @@ float4 PSMain(VSOut i) : SV_Target
     float reflectionStrength = max(reflectionRefraction.x, 0.0f);
     float refractionDistortion = reflectionRefraction.y;
     float skyIntensity = reflectionRefraction.z;
+    float normalInfo = reflectionRefraction.w;
+    float normalStrength = max(refractionDistortion, 0.0f);
+
+    bool useNormalMap = (normalInfo > 0.5f) && (normalStrength > 0.0f);
+    if (useNormalMap)
+    {
+        float3 baseN = N;
+        float3 T = normalize(i.tangentWS);
+        float3 B = normalize(i.bitangentWS);
+#if NORMALMAP_IS_RG
+        float2 nrg = NormalMap.Sample(LinearSampler, i.uv).rg * 2.0f - 1.0f;
+        float2 scaled = nrg * normalStrength;
+        float nz2 = saturate(1.0f - dot(scaled, scaled));
+        float3 nTS = float3(scaled, sqrt(nz2));
+#else
+        float3 nRGB = NormalMap.Sample(LinearSampler, i.uv).xyz * 2.0f - 1.0f;
+        float3 nTS = float3(nRGB.xy * normalStrength, nRGB.z);
+        nTS = normalize(nTS);
+#endif
+        N = normalize(T * nTS.x + B * nTS.y + baseN * nTS.z);
+    }
 
     float3 sunDir = normalize(sunDirAmbient.xyz);
     float ambientIntensity = sunDirAmbient.w;

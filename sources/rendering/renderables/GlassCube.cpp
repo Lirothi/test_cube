@@ -103,7 +103,8 @@ public:
         {
             skyIntensity = sky->GetExposure();
         }
-        UpdateUniform(obj, cb_.reflectionRefraction, material, float4(owner_->reflectionStrength_, owner_->refractionDistortion_, skyIntensity, 0.0f), cbData);
+        float normalInfo = owner_->HasNormalMap() ? 1.0f : 0.0f;
+        UpdateUniform(obj, cb_.reflectionRefraction, material, float4(owner_->reflectionStrength_, owner_->refractionDistortion_, skyIntensity, normalInfo), cbData);
 
         const auto& dirLight = scene_->GetDirectionalLight();
         UpdateUniform(obj, cb_.sunDirAmbient, material, float4(dirLight.dir, dirLight.ambient), cbData);
@@ -252,6 +253,15 @@ void GlassCube::Init(Renderer* renderer,
     {
         mesh_ = renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 });
     }
+    hasNormalMap_ = false;
+    if (renderer && uploadCmdList && !normalMapPath_.empty())
+    {
+        Texture2D::CreateDesc desc{};
+        desc.path = normalMapPath_;
+        desc.usage = Texture2D::Usage::NormalMap;
+        desc.normalIsRG = normalMapIsRG_;
+        hasNormalMap_ = normalMap_.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
+    }
     transformDirty_ = true;
 }
 
@@ -311,6 +321,15 @@ void GlassCube::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /
         *SamplerManager::LinearClamp()
     };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    if (hasNormalMap_)
+    {
+        auto srv = normalMap_.GetSRVCPU();
+        if (srv.ptr != 0)
+        {
+            ctx.table[6] = renderer->StageSrvUavTable({ srv }).gpu;
+        }
+    }
 }
 
 void GlassCube::MarkTransformDirty()
@@ -324,4 +343,18 @@ void GlassCube::RebuildModel()
     mat4 S = mat4::Scaling(scale_);
     mat4 R = mat4::RotationFromEulerXYZRad(rotEuler_);
     SetModelMatrix(S * R * T);
+}
+
+void GlassCube::SetNormalMap(const std::wstring& path, bool normalIsRG)
+{
+    normalMapPath_ = path;
+    normalMapIsRG_ = normalIsRG;
+    hasNormalMap_ = false;
+
+    auto& defs = GetGraphicsDesc().defines;
+    defs.erase(std::remove_if(defs.begin(), defs.end(), [](const auto& def) { return def.first == "NORMALMAP_IS_RG"; }), defs.end());
+    if (normalMapIsRG_)
+    {
+        defs.emplace_back("NORMALMAP_IS_RG", "1");
+    }
 }
