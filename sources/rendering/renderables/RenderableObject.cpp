@@ -10,6 +10,14 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
+namespace
+{
+    bool NearlyEqualFloat3(const Math::float3& a, const Math::float3& b)
+    {
+        return Math::NearlyEqual(a.x, b.x) && Math::NearlyEqual(a.y, b.y) && Math::NearlyEqual(a.z, b.z);
+    }
+}
+
 RenderableObject::RenderableObject(
     const std::string& inputLayout,
     const std::wstring& graphicsShader)
@@ -23,6 +31,42 @@ RenderableObject::RenderableObject(
 
     SetMesh(std::make_shared<Mesh>());
     SetModelMatrix(mat4::Identity());
+}
+
+void RenderableObject::SetPosition(const Math::float3& p)
+{
+    if (NearlyEqualFloat3(pos_, p))
+    {
+        return;
+    }
+    pos_ = p;
+    MarkTransformDirty();
+}
+
+void RenderableObject::SetScale(const Math::float3& s)
+{
+    if (NearlyEqualFloat3(scale_, s))
+    {
+        return;
+    }
+    scale_ = s;
+    MarkTransformDirty();
+}
+
+void RenderableObject::SetRotationEulerRad(const Math::float3& eulerXYZ)
+{
+    if (NearlyEqualFloat3(rotEuler_, eulerXYZ))
+    {
+        return;
+    }
+    rotEuler_ = eulerXYZ;
+    MarkTransformDirty();
+}
+
+void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
+{
+    const float k = DEG2RAD;
+    SetRotationEulerRad(Math::float3(eulerDegXYZ.x * k, eulerDegXYZ.y * k, eulerDegXYZ.z * k));
 }
 
 RenderableObject::~RenderableObject() = default;
@@ -208,6 +252,12 @@ const BoundingBox& RenderableObject::GetWorldBounds() const
 
 void RenderableObject::PostTick(float dt)
 {
+    if (transformDirty_)
+    {
+        RebuildModelMatrix();
+        transformDirty_ = false;
+    }
+
     RenderableObjectBase::PostTick(dt);
 }
 
@@ -220,6 +270,11 @@ void RenderableObject::SetMesh(std::shared_ptr<Mesh> mesh)
 void RenderableObject::MarkWorldBoundsDirty()
 {
     worldBoundsDirty_ = true;
+}
+
+void RenderableObject::MarkTransformDirty()
+{
+    transformDirty_ = true;
 }
 
 void RenderableObject::UpdateWorldBoundsCache() const
@@ -243,4 +298,13 @@ void RenderableObject::UpdateWorldBoundsCache() const
     }
 
     worldBoundsDirty_ = false;
+}
+
+void RenderableObject::RebuildModelMatrix()
+{
+    Math::mat4 T = Math::mat4::Translation(pos_);
+    Math::mat4 S = Math::mat4::Scaling(scale_);
+    Math::mat4 R = Math::mat4::RotationFromEulerXYZRad(rotEuler_);
+    Math::mat4 M = S * R * T;
+    SetModelMatrix(M);
 }

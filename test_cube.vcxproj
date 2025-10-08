@@ -189,7 +189,7 @@
     <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
     <ClCompile Include="sources/rendering/meshes/MeshManager.cpp" />
     <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp" />
-    <ClCompile Include="sources/rendering/renderables/GlassCube.cpp" />
+    <ClCompile Include="sources/rendering/renderables/TransparentStaticMesh.cpp" />
     <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp" />
@@ -245,7 +245,7 @@
     <ClInclude Include="sources/rendering/meshes/MeshManager.h" />
     <ClInclude Include="sources/rendering/meshes/StaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h" />
-    <ClInclude Include="sources/rendering/renderables/GlassCube.h" />
+    <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />
