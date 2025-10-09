@@ -73,14 +73,19 @@ public:
         return (min_ + max_) * 0.5f;
     }
 
-    Math::float3 GetExtents() const noexcept
+    Math::float3 GetHalfExtents() const noexcept
     {
         return (max_ - min_) * 0.5f;
     }
 
+    Math::float3 GetExtents() const noexcept
+    {
+        return max_ - min_;
+    }
+
     float GetRadius() const noexcept
     {
-        return GetExtents().Length();
+        return GetHalfExtents().Length();
     }
 
     void GetCorners(Math::float3(&corners)[8]) const noexcept

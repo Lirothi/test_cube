@@ -20,6 +20,7 @@
 #include "materials/MaterialDataManager.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/lighting/LightManager.h"
+#include "rendering/debug/DebugDraw.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -165,6 +166,8 @@ public:
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
     RenderContextPool* GetRenderContextPool() { return &ctxPool_; }
+    DebugDrawSystem* GetDebugDrawSystem() { return &debugDrawSystem_; }
+    const DebugDrawSystem* GetDebugDrawSystem() const { return &debugDrawSystem_; }
 
 	float GetFPS() const { return fps_; }
     void SetWireframeMode(bool w) { wireframeMode_ = w; }
@@ -387,4 +390,5 @@ private:
     TextManager textManager_;
     MaterialDataManager materialDataManager_;
     RenderContextPool ctxPool_;
+    DebugDrawSystem debugDrawSystem_;
 };

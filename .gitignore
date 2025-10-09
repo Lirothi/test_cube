@@ -368,3 +368,5 @@ traces/
 # Exclusions
 !/models/**
 !/third_party/**
+!/sources/rendering/debug/
+!/sources/rendering/debug/**

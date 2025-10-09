@@ -55,6 +55,7 @@ void Renderer::Shutdown()
     Profiler::Get().ShutdownGpu();
 #endif
 
+    debugDrawSystem_.Shutdown();
     materialManager_.Clear();
     materialDataManager_.ClearAll();
     meshManager_.Clear();
@@ -391,6 +392,7 @@ void Renderer::BeginFrame() {
     }
 
     ctxPool_.ResetForFrame();
+    debugDrawSystem_.BeginFrame();
 }
 
 void Renderer::EndFrame() {

@@ -100,6 +100,8 @@ private:
     void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
         const mat4& view, const mat4& proj,
         const ObjectBuckets& buckets);
+    void Pass_DebugDraw(Renderer* r, RenderGraph::PassContext ctx,
+        const mat4& view, const mat4& proj);
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);

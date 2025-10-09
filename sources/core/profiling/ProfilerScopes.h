@@ -35,6 +35,7 @@ extern const Profiler::ScopeNameKey kPassSSR;
 extern const Profiler::ScopeNameKey kPassSSRBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
 extern const Profiler::ScopeNameKey kPassTransparent;
+extern const Profiler::ScopeNameKey kPassDebugDraw;
 extern const Profiler::ScopeNameKey kPassTonemap;
 extern const Profiler::ScopeNameKey kPassDebug;
 extern const Profiler::ScopeNameKey kFrameAsyncWait;
