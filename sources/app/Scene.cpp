@@ -672,7 +672,7 @@ void Scene::Render(Renderer* renderer) {
             Pass_Lighting(renderer, ctx, view, proj, invView, invProj, camDir);
         });
 
-    auto pSpotLights = rg.AddPass("SpotLights", { pLight },
+    auto pSpotLights = rg.AddPassMT("SpotLights", { pLight }, { pSpotShadow },
         [this, renderer, &invView, &invProj](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
             Pass_SpotLights(renderer, ctx, invView, invProj);
@@ -1048,6 +1048,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 
 }
 
+const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
+const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
     const ObjectBuckets& buckets)
 {
@@ -1111,19 +1113,25 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
             const auto& lightView = spotLights[lightIndex].GetViewMatrix();
             const auto& lightProj = spotLights[lightIndex].GetProjMatrix();
 
-            for (auto* obj : opaqueSimple)
             {
-                if (obj)
+                CPU_SCOPE(kShadows1);
+                for (auto* obj : opaqueSimple)
                 {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                    }
                 }
             }
 
-            for (auto* obj : opaqueComplex)
             {
-                if (obj)
+                CPU_SCOPE(kShadows2);
+                for (auto* obj : opaqueComplex)
                 {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                    }
                 }
             }
         }
