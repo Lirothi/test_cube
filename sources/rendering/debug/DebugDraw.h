@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <vector>
 #include <mutex>
 
 #include <d3d12.h>
+#include <wrl/client.h>
 
 #include "core/Math.h"
 #include "rendering/meshes/BoundingBox.h"
@@ -54,6 +56,21 @@ private:
         Math::float4 color;
     };
 
+    struct InstanceBuffer
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap;
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCPU = {};
+        void* mapped = nullptr;
+        UINT capacity = 0;
+    };
+
+    struct GPUInstanceData
+    {
+        Math::mat4 mvp;
+        Math::float4 color;
+    };
+
     void AddCommand(ShapeType shape, const Math::mat4& transform,
         const Math::float4& color, bool wireframe);
 
@@ -80,6 +97,9 @@ private:
     std::vector<Command> wireframeCommands_;
     std::vector<Command> solidCommandScratch_;
     std::vector<Command> wireframeCommandScratch_;
+    std::vector<GPUInstanceData> instanceDataScratch_;
     mutable std::mutex commandMutex_;
+
+    std::array<InstanceBuffer, static_cast<size_t>(ShapeType::Cone) + 1> instanceBuffers_{};
 };
 
