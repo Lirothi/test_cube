@@ -22,51 +22,7 @@ void LightManager::UpdateSpotLightCache()
 
     for (size_t i = 0; i < cachedSpotLightCount_; ++i)
     {
-        const auto& desc = spotLights_[i].GetDesc();
-
-        float3 dir = desc.direction;
-        if (dir.Length() <= Math::EPS)
-        {
-            dir = float3(0.0f, -1.0f, 0.0f);
-        }
-        dir = dir.Normalized();
-        cachedSpotDir_[i] = dir;
-
-        float inner = std::max(0.0f, desc.innerAngle);
-        float outer = std::max(inner + Math::EPS, desc.outerAngle);
-        inner = std::min(inner, DirectX::XM_PIDIV2);
-        outer = std::min(outer, DirectX::XM_PIDIV2);
-
-        const float cosInner = std::cos(inner);
-        const float cosOuter = std::cos(outer);
-        const float denom = std::max(1e-4f, cosInner - cosOuter);
-
-        cachedSpotCosInner_[i] = cosInner;
-        cachedSpotCosOuter_[i] = cosOuter;
-        cachedSpotInvAngleRange_[i] = 1.0f / denom;
-        cachedSpotNormalBias_[i] = desc.shadowNormalBias;
-        cachedSpotDepthBias_[i] = desc.shadowDepthBias;
-
-        float3 up = std::abs(dir.y) > 0.99f ? float3(0.0f, 0.0f, 1.0f) : float3(0.0f, 1.0f, 0.0f);
-        cachedSpotView_[i] = mat4::LookAtLH(desc.position, desc.position + dir, up);
-
-        const float fov = outer * 2.0f;
-        const float aspect = 1.0f;
-        const float nearPlane = std::max(desc.nearPlane, 0.01f);
-        const float farPlane = std::max(desc.range, nearPlane + 0.1f);
-        cachedSpotProj_[i] = mat4::PerspectiveFovLH(fov, aspect, nearPlane, farPlane);
-    }
-
-    for (size_t i = cachedSpotLightCount_; i < maxLights; ++i)
-    {
-        cachedSpotDir_[i] = float3(0.0f, -1.0f, 0.0f);
-        cachedSpotCosInner_[i] = 0.0f;
-        cachedSpotCosOuter_[i] = 0.0f;
-        cachedSpotInvAngleRange_[i] = 0.0f;
-        cachedSpotNormalBias_[i] = 0.0f;
-        cachedSpotDepthBias_[i] = 0.0f;
-        cachedSpotView_[i] = mat4::Identity();
-        cachedSpotProj_[i] = mat4::Identity();
+        spotLights_[i].UpdateCachedData();
     }
 }
 
@@ -236,16 +192,5 @@ void LightManager::Reset()
     spotLights_.clear();
     cachedSpotLightCount_ = 0;
 
-    for (size_t i = 0; i < kMaxSpotLights; ++i)
-    {
-        cachedSpotDir_[i] = float3(0.0f, -1.0f, 0.0f);
-        cachedSpotCosInner_[i] = 0.0f;
-        cachedSpotCosOuter_[i] = 0.0f;
-        cachedSpotInvAngleRange_[i] = 0.0f;
-        cachedSpotNormalBias_[i] = 0.0f;
-        cachedSpotDepthBias_[i] = 0.0f;
-        cachedSpotView_[i] = mat4::Identity();
-        cachedSpotProj_[i] = mat4::Identity();
-    }
 }
 

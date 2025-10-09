@@ -317,6 +317,9 @@
     <ClInclude Include="sources/rendering/lighting/LightManager.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/SpotLight.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/lighting/PointLight.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
