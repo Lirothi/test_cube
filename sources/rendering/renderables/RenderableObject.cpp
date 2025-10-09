@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <cstring>
 
+#include "app/Systems.h"
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
@@ -247,6 +248,9 @@ void RenderableObject::PostTick(float dt)
     }
 
     RenderableObjectBase::PostTick(dt);
+
+    //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
+    //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(pos_ + GetLocalBounds().GetCenter(), GetLocalBounds().GetHalfExtents() * scale_, rotEuler_, { 0.0f, 1.0f, 0.0f, 0.7f }, true);
 }
 
 void RenderableObject::SetMesh(std::shared_ptr<Mesh> mesh)

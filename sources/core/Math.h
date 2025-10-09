@@ -101,9 +101,11 @@ namespace Math
         float3& operator-=(const float3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
         
         float3 operator*(float s) const { return { x * s, y * s, z * s }; }
+        float3 operator*(const float3& s) const { return { x * s.x, y * s.y, z * s.z }; }
         float3& operator*= (const float3 & o){ x *= o.x; y *= o.y; z *= o.z; return *this; }
         
         float3 operator/(float s) const { return { x / s, y / s, z / s }; }
+        float3 operator/(const float3& s) const { return { x / s.x, y / s.y, z / s.z }; }
         float3& operator/= (const float3& o) { x /= o.x; y /= o.y; z /= o.z; return *this; }
 
         float  Dot(const float3& o) const { return x * o.x + y * o.y + z * o.z; }
@@ -134,7 +136,9 @@ namespace Math
         float4 operator+(const float4& o) const { return { x + o.x, y + o.y, z + o.z, w + o.w }; }
         float4 operator-(const float4& o) const { return { x - o.x, y - o.y, z - o.z, w - o.w }; }
         float4 operator*(float s) const { return { x * s, y * s, z * s, w * s }; }
+        float4 operator*(const float4& s) const { return { x * s.x, y * s.y, z * s.z, w * s.w }; }
         float4 operator/(float s) const { return { x / s, y / s, z / s, w / s }; }
+        float4 operator/(const float4& s) const { return { x / s.x, y / s.y, z / s.z, w / s.w }; }
     };
 
     // --- Color (float and RGBA8) ---

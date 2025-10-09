@@ -30,6 +30,8 @@ public:
     void AddSphere(const Math::float3& center, float radius, const Math::float4& color, bool wireframe);
     void AddBox(const Math::float3& center, const Math::float3& halfExtents, const Math::quat& orientation,
         const Math::float4& color, bool wireframe);
+    void AddBox(const Math::float3& center, const Math::float3& halfExtents, const Math::float3& orientationEuler,
+        const Math::float4& color, bool wireframe);
     void AddBox(const Math::float3& center, const Math::float3& halfExtents,
         const Math::float4& color, bool wireframe);
     void AddBox(const BoundingBox& bounds, const Math::float4& color, bool wireframe);
@@ -57,6 +59,8 @@ private:
 
     Math::mat4 ComputeBoxTransform(const Math::float3& center, const Math::float3& halfExtents,
         const Math::quat& orientation) const;
+    Math::mat4 ComputeBoxTransform(const Math::float3& center, const Math::float3& halfExtents,
+        const Math::float3& orientationEuler) const;
     Math::mat4 ComputeConeTransform(const Math::float3& apex, const Math::float3& direction,
         float height, float radius) const;
 

@@ -283,6 +283,22 @@ void DebugDrawSystem::AddBox(const Math::float3& center, const Math::float3& hal
     AddCommand(ShapeType::Box, transform, color, wireframe);
 }
 
+void DebugDrawSystem::AddBox(const Math::float3& center, const Math::float3& halfExtents, const Math::float3& orientationEuler,
+    const Math::float4& color, bool wireframe)
+{
+    if (!initialized_)
+    {
+        return;
+    }
+    if (halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f)
+    {
+        return;
+    }
+
+    Math::mat4 transform = ComputeBoxTransform(center, halfExtents, orientationEuler);
+    AddCommand(ShapeType::Box, transform, color, wireframe);
+}
+
 void DebugDrawSystem::AddBox(const Math::float3& center, const Math::float3& halfExtents,
     const Math::float4& color, bool wireframe)
 {
@@ -413,6 +429,15 @@ Math::mat4 DebugDrawSystem::ComputeBoxTransform(const Math::float3& center, cons
 {
     Math::mat4 scale = Math::mat4::Scaling(halfExtents.x * 2.0f, halfExtents.y * 2.0f, halfExtents.z * 2.0f);
     Math::mat4 rotation = Math::mat4::FromQuaternion(orientation);
+    Math::mat4 translation = Math::mat4::Translation(center);
+    return scale * rotation * translation;
+}
+
+Math::mat4 DebugDrawSystem::ComputeBoxTransform(const Math::float3& center, const Math::float3& halfExtents,
+    const Math::float3& orientationEuler) const
+{
+    Math::mat4 scale = Math::mat4::Scaling(halfExtents.x * 2.0f, halfExtents.y * 2.0f, halfExtents.z * 2.0f);
+    Math::mat4 rotation = Math::mat4::RotationFromEulerXYZRad(orientationEuler);
     Math::mat4 translation = Math::mat4::Translation(center);
     return scale * rotation * translation;
 }

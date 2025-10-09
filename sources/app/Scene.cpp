@@ -710,7 +710,7 @@ void Scene::Render(Renderer* renderer) {
             Pass_DebugDraw(renderer, ctx, view, proj);
         });
 
-    auto pTone = rg.AddPass("Tonemap", { pDebugDraw },
+    auto pTone = rg.AddPass("Tonemap", { pTransp },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
 
     rg.AddPass("Debug", { pTone },
