@@ -239,6 +239,7 @@ void DebugDrawSystem::Initialize(Renderer* renderer,
 
 void DebugDrawSystem::Shutdown()
 {
+    std::lock_guard<std::mutex> lock(commandMutex_);
     solidCommands_.clear();
     wireframeCommands_.clear();
     material_.reset();
@@ -250,6 +251,7 @@ void DebugDrawSystem::Shutdown()
 
 void DebugDrawSystem::BeginFrame()
 {
+    std::lock_guard<std::mutex> lock(commandMutex_);
     solidCommands_.clear();
     wireframeCommands_.clear();
 }
@@ -334,6 +336,7 @@ void DebugDrawSystem::AddCone(const Math::mat4& transform, const Math::float4& c
 
 bool DebugDrawSystem::HasCommands() const
 {
+    std::lock_guard<std::mutex> lock(commandMutex_);
     return !solidCommands_.empty() || !wireframeCommands_.empty();
 }
 
@@ -344,14 +347,19 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     {
         return;
     }
-    if (!HasCommands())
-    {
-        return;
-    }
-
     const UINT cbSize = material_->GetCBSizeBytesAligned(0, 256);
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = ctxHandle.ref();
+
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        if (solidCommands_.empty() && wireframeCommands_.empty())
+        {
+            return;
+        }
+        solidCommandScratch_ = solidCommands_;
+        wireframeCommandScratch_ = wireframeCommands_;
+    }
 
     auto drawList = [&](const std::vector<Command>& commands, bool wireframe)
     {
@@ -379,8 +387,8 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         }
     };
 
-    drawList(solidCommands_, false);
-    drawList(wireframeCommands_, true);
+    drawList(solidCommandScratch_, false);
+    drawList(wireframeCommandScratch_, true);
 }
 
 void DebugDrawSystem::AddCommand(ShapeType shape, const Math::mat4& transform,
@@ -390,6 +398,7 @@ void DebugDrawSystem::AddCommand(ShapeType shape, const Math::mat4& transform,
     cmd.shape = shape;
     cmd.transform = transform;
     cmd.color = color;
+    std::lock_guard<std::mutex> lock(commandMutex_);
     if (wireframe)
     {
         wireframeCommands_.push_back(cmd);

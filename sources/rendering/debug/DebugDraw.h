@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <mutex>
 
 #include <d3d12.h>
 
@@ -73,5 +74,8 @@ private:
 
     std::vector<Command> solidCommands_;
     std::vector<Command> wireframeCommands_;
+    std::vector<Command> solidCommandScratch_;
+    std::vector<Command> wireframeCommandScratch_;
+    mutable std::mutex commandMutex_;
 };
 
