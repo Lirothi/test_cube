@@ -8,7 +8,6 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/FrameResource.h"
 #include "rendering/core/RenderContextPool.h"
-#include "materials/MaterialManager.h"
 
 namespace {
 struct DebugVertex
