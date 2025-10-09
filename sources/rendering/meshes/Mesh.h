@@ -10,12 +10,6 @@ using namespace Microsoft::WRL;
 
 #include "rendering/meshes/BoundingBox.h"
 
-// LEGACY format (compatibility)
-struct Vertex {
-    DirectX::XMFLOAT3 position;
-    DirectX::XMFLOAT4 color;
-};
-
 // NEW "full" format for textures/lighting
 // order matches the layout preset "PosNormTanUV":
 // POSITION (float3), NORMAL (float3), TANGENT (float4), TEXCOORD (float2)
@@ -70,7 +64,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer_;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView_ = {};
     D3D12_INDEX_BUFFER_VIEW  indexBufferView_ = {};
-    UINT  vertexStride_ = sizeof(Vertex);      // default to the legacy format
+    UINT  vertexStride_ = 0;      // explicit stride provided during upload
     DXGI_FORMAT indexFormat_ = DXGI_FORMAT_R16_UINT;
     UINT  indexCount_ = 0;
     BoundingBox bounds_;

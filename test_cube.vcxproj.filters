@@ -141,6 +141,9 @@
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/debug/DebugDraw.cpp">
+      <Filter>sources\rendering\debug</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
       <Filter>sources\rendering\descriptors</Filter>
     </ClCompile>
@@ -290,6 +293,9 @@
     <ClInclude Include="sources/rendering/debug/DebugGrid.h">
       <Filter>sources\rendering\debug</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/debug/DebugDraw.h">
+      <Filter>sources\rendering\debug</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">
       <Filter>sources\rendering\descriptors</Filter>
     </ClInclude>
@@ -316,6 +322,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/Skybox.h">
       <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/BoundingBox.h">
+      <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h">
       <Filter>sources\rendering\meshes</Filter>
@@ -371,6 +380,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\debug_texture.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\debug_draw.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\font_pixelperfect.hlsl">

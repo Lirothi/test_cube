@@ -10,6 +10,7 @@
 #include "app/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugGrid.h"
+#include "rendering/debug/DebugDraw.h"
 #include "rendering/meshes/GpuInstancedModels.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
@@ -253,6 +254,11 @@ private:
 void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     cbHandles_ = {};
+
+    if (renderer)
+    {
+        renderer->GetDebugDrawSystem()->Initialize(renderer, uploadCmdList, uploadKeepAlive);
+    }
 
     if (!matLighting_) {
         Material::ComputeDesc cd{};
@@ -698,7 +704,13 @@ void Scene::Render(Renderer* renderer) {
             Pass_Transparent(renderer, ctx, view, proj, buckets);
         });
 
-    auto pTone = rg.AddPass("Tonemap", { pTransp },
+    auto pDebugDraw = rg.AddPass("DebugDraw", { pTransp },
+        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
+            Pass_DebugDraw(renderer, ctx, view, proj);
+        });
+
+    auto pTone = rg.AddPass("Tonemap", { pDebugDraw },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
 
     rg.AddPass("Debug", { pTone },
@@ -1638,6 +1650,34 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     rgTr.Execute(renderer);
+}
+
+void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraph::PassContext ctx, const mat4& view, const mat4& proj)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem();
+    if (!debugDraw || !debugDraw->HasCommands())
+    {
+        return;
+    }
+
+    const auto& D = renderer->GetDeferredForFrame();
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassDebugDraw);
+        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+
+        debugDraw->Render(renderer, t.cl, view, proj);
+    }
+
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
 void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)

@@ -179,6 +179,7 @@
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
+    <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp" />
     <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp" />
     <ClCompile Include="sources/rendering/lighting/LightManager.cpp" />
@@ -230,6 +231,7 @@
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
+    <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h" />
     <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h" />
@@ -239,6 +241,7 @@
     <ClInclude Include="sources/rendering/lighting/LightManager.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
+    <ClInclude Include="sources/rendering/meshes/BoundingBox.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />
@@ -259,6 +262,7 @@
     <None Include="shaders\ssr_blur_cs.hlsl" />
     <None Include="shaders\compose_cs.hlsl" />
     <None Include="shaders\debug_texture.hlsl" />
+    <None Include="shaders\debug_draw.hlsl" />
     <None Include="shaders\font_pixelperfect.hlsl" />
     <None Include="shaders\font_sdf.hlsl" />
     <None Include="shaders\gbuffer.hlsl" />
