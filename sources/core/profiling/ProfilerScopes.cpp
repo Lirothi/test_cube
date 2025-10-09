@@ -22,6 +22,7 @@ const Profiler::ScopeNameKey kPassCSM = Profiler::RegisterTraceLiteral(L"Pass_CS
 const Profiler::ScopeNameKey kPassGBuffer = Profiler::RegisterTraceLiteral(L"Pass_GBuffer");
 const Profiler::ScopeNameKey kPassLighting = Profiler::RegisterTraceLiteral(L"Pass_Lighting");
 const Profiler::ScopeNameKey kPassSpotShadow = Profiler::RegisterTraceLiteral(L"Pass_SpotShadows");
+const Profiler::ScopeNameKey kSpotShadowPerLight = Profiler::RegisterTraceLiteral(L"SpotShadow.PerLight");
 const Profiler::ScopeNameKey kPassSpotLights = Profiler::RegisterTraceLiteral(L"Pass_SpotLights");
 const Profiler::ScopeNameKey kPassPointLights = Profiler::RegisterTraceLiteral(L"Pass_PointLights");
 const Profiler::ScopeNameKey kPassSkybox = Profiler::RegisterTraceLiteral(L"Pass_Skybox");

@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cassert>
+#include <string>
 
 #include "input/InputManager.h"
 #include "app/Camera.h"
@@ -1056,17 +1057,53 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         return;
     }
 
+    const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+    const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+    const auto& spotLights = lightManager_.SpotLights();
+    const auto& D = renderer->GetDeferredForFrame();
+    const std::wstring passNameW(ctx.passName.begin(), ctx.passName.end());
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    auto& tasks = TaskSystem::Get();
+    auto renderSpotShadow = [renderer, &opaqueSimple, &opaqueComplex, &spotLights, &D, batchIndex = ctx.batchIndex](std::size_t lightIndex)
+    {
+        CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
+            renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
+
+            const auto& lightView = spotLights[lightIndex].GetViewMatrix();
+            const auto& lightProj = spotLights[lightIndex].GetProjMatrix();
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+            }
+
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
+                }
+            }
+        }
+        renderer->EndThreadCommandList(t, batchIndex);
+    };
+
+    tasks.DispatchWait(spotLightCount, renderSpotShadow, 1);
+#else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    t.cl->SetName(passNameW.c_str());
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
-        const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
-        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
-
-        const auto& spotLights = lightManager_.SpotLights();
         for (size_t lightIndex = 0; lightIndex < spotLightCount; ++lightIndex)
         {
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
@@ -1092,6 +1129,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         }
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
+#endif
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
