@@ -1,8 +1,11 @@
 #include "rendering/debug/DebugDraw.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <utility>
 
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
@@ -16,11 +19,108 @@ struct DebugVertex
     Math::float4 color;
 };
 
-struct DebugDrawCB
+static_assert(sizeof(DebugDrawSystem::GPUInstanceData) == sizeof(Math::mat4) + sizeof(Math::float4),
+    "Unexpected GPUInstanceData size");
+
+static bool EnsureInstanceBuffer(ID3D12Device* device, DebugDrawSystem::InstanceBuffer& buffer,
+    UINT requiredElements, UINT stride)
 {
-    Math::mat4 modelViewProj;
-    Math::float4 color;
-};
+    if (!device)
+    {
+        return false;
+    }
+    if (requiredElements == 0)
+    {
+        return true;
+    }
+    if (buffer.resource && buffer.capacity >= requiredElements)
+    {
+        return true;
+    }
+
+    UINT newCapacity = buffer.capacity ? buffer.capacity : 64u;
+    const UINT maxValue = std::numeric_limits<UINT>::max();
+    while (newCapacity < requiredElements && newCapacity < maxValue / 2u)
+    {
+        newCapacity *= 2u;
+    }
+    if (newCapacity < requiredElements)
+    {
+        newCapacity = requiredElements;
+    }
+
+    if (buffer.resource)
+    {
+        buffer.resource->Unmap(0, nullptr);
+        buffer.resource.Reset();
+        buffer.cpuHeap.Reset();
+        buffer.srvCPU = {};
+        buffer.mapped = nullptr;
+        buffer.capacity = 0;
+    }
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = static_cast<UINT64>(newCapacity) * stride;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(resource.GetAddressOf()))))
+    {
+        return false;
+    }
+
+    D3D12_RANGE range{ 0, 0 };
+    void* mapped = nullptr;
+    if (FAILED(resource->Map(0, &range, &mapped)))
+    {
+        resource.Reset();
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors = 1;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap;
+    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(cpuHeap.GetAddressOf()))))
+    {
+        resource->Unmap(0, nullptr);
+        resource.Reset();
+        return false;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCPU = cpuHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_UNKNOWN;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Buffer.FirstElement = 0;
+    srv.Buffer.NumElements = newCapacity;
+    srv.Buffer.StructureByteStride = stride;
+    srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+    device->CreateShaderResourceView(resource.Get(), &srv, srvCPU);
+
+    buffer.resource = std::move(resource);
+    buffer.cpuHeap = std::move(cpuHeap);
+    buffer.srvCPU = srvCPU;
+    buffer.mapped = mapped;
+    buffer.capacity = newCapacity;
+    return true;
+}
 
 static void BuildSphereMesh(std::vector<DebugVertex>& outVerts, std::vector<uint16_t>& outIndices)
 {
@@ -245,6 +345,18 @@ void DebugDrawSystem::Shutdown()
     sphereMesh_ = Mesh();
     boxMesh_ = Mesh();
     coneMesh_ = Mesh();
+    for (auto& buf : instanceBuffers_)
+    {
+        if (buf.resource && buf.mapped)
+        {
+            buf.resource->Unmap(0, nullptr);
+        }
+        buf.resource.Reset();
+        buf.cpuHeap.Reset();
+        buf.srvCPU = {};
+        buf.mapped = nullptr;
+        buf.capacity = 0;
+    }
     initialized_ = false;
 }
 
@@ -362,9 +474,9 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     {
         return;
     }
-    const UINT cbSize = material_->GetCBSizeBytesAligned(0, 256);
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = ctxHandle.ref();
+    Math::mat4 viewProj = view * proj;
 
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
@@ -378,27 +490,107 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
     auto drawList = [&](const std::vector<Command>& commands, bool wireframe)
     {
+        if (commands.empty())
+        {
+            return;
+        }
+
+        constexpr size_t kShapeCount = static_cast<size_t>(ShapeType::Cone) + 1;
+        std::array<size_t, kShapeCount> counts{};
         for (const Command& cmd : commands)
         {
-            const Mesh* mesh = MeshForShape(cmd.shape);
+            const size_t shapeIndex = static_cast<size_t>(cmd.shape);
+            if (shapeIndex < counts.size())
+            {
+                ++counts[shapeIndex];
+            }
+        }
+
+        size_t totalInstances = 0;
+        for (size_t count : counts)
+        {
+            totalInstances += count;
+        }
+
+        instanceDataScratch_.resize(totalInstances);
+
+        std::array<size_t, kShapeCount> baseOffsets{};
+        size_t runningOffset = 0;
+        for (size_t i = 0; i < kShapeCount; ++i)
+        {
+            baseOffsets[i] = runningOffset;
+            runningOffset += counts[i];
+        }
+
+        auto writeOffsets = baseOffsets;
+
+        for (const Command& cmd : commands)
+        {
+            const size_t shapeIndex = static_cast<size_t>(cmd.shape);
+            if (shapeIndex >= kShapeCount)
+            {
+                continue;
+            }
+
+            const size_t dstIndex = writeOffsets[shapeIndex]++;
+            if (dstIndex >= instanceDataScratch_.size())
+            {
+                continue;
+            }
+
+            DebugDrawSystem::GPUInstanceData& data = instanceDataScratch_[dstIndex];
+            data.mvp = cmd.transform * viewProj;
+            data.color = cmd.color;
+        }
+
+        for (size_t shapeIndex = 0; shapeIndex < kShapeCount; ++shapeIndex)
+        {
+            const size_t instanceCount = counts[shapeIndex];
+            if (instanceCount == 0)
+            {
+                continue;
+            }
+
+            Mesh* mesh = MeshForShape(static_cast<ShapeType>(shapeIndex));
             if (!mesh)
             {
                 continue;
             }
 
-            auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, 256);
-            std::memset(alloc.cpu, 0, cbSize);
+            const size_t baseIndex = baseOffsets[shapeIndex];
+            if (baseIndex >= instanceDataScratch_.size() ||
+                baseIndex + instanceCount > instanceDataScratch_.size())
+            {
+                continue;
+            }
 
-            DebugDrawCB cb{};
-            cb.modelViewProj = cmd.transform * view * proj;
-            cb.color = cmd.color;
-            std::memcpy(alloc.cpu, &cb, sizeof(cb));
+            const UINT instanceCountU = static_cast<UINT>(instanceCount);
+            const UINT stride = static_cast<UINT>(sizeof(GPUInstanceData));
+            const size_t copyBytes = instanceCount * sizeof(GPUInstanceData);
 
-            ctx.cbv[0] = alloc.gpu;
+            if (!EnsureInstanceBuffer(renderer->GetDevice(), instanceBuffers_[shapeIndex], instanceCountU, stride))
+            {
+                continue;
+            }
+            auto& buffer = instanceBuffers_[shapeIndex];
+            if (!buffer.mapped)
+            {
+                continue;
+            }
 
+            std::memcpy(buffer.mapped, instanceDataScratch_.data() + baseIndex, copyBytes);
+
+            auto& descAlloc = renderer->GetFrameResource()->GetDescAlloc();
+            auto srvHandle = descAlloc.Alloc();
+
+            renderer->GetDevice()->CopyDescriptorsSimple(
+                1, srvHandle.cpu, buffer.srvCPU, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+            ctx.table[0] = srvHandle.gpu;
             material_->Bind(cl, ctx, wireframe);
-            mesh->Draw(cl);
+            mesh->DrawInstanced(cl, instanceCountU);
         }
+        ctx.table[0] = {};
     };
 
     drawList(solidCommandScratch_, false);

@@ -1,17 +1,19 @@
-// RootSignature: CBV(b0)
+// RootSignature: TABLE(SRV(t0))
 #pragma pack_matrix(row_major)
-
-cbuffer DebugDrawCB : register(b0)
-{
-    float4x4 modelViewProj;
-    float4 color;
-};
 
 struct VSInput
 {
-    float3 position : POSITION;
-    float4 color    : COLOR;
+    float3 position    : POSITION;
+    float4 vertexColor : COLOR0;
 };
+
+struct InstanceData
+{
+    row_major float4x4 mvp;
+    float4 color;
+};
+
+StructuredBuffer<InstanceData> gInstances : register(t0);
 
 struct VSOutput
 {
@@ -19,11 +21,12 @@ struct VSOutput
     float4 color    : COLOR;
 };
 
-VSOutput VSMain(VSInput input)
+VSOutput VSMain(VSInput input, uint instanceID : SV_InstanceID)
 {
     VSOutput output;
-    output.position = mul(float4(input.position, 1.0f), modelViewProj);
-    output.color = input.color * color;
+    InstanceData inst = gInstances[instanceID];
+    output.position = mul(float4(input.position, 1.0f), inst.mvp);
+    output.color = input.vertexColor * inst.color;
     return output;
 }
 
