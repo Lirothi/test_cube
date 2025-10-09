@@ -490,6 +490,12 @@ void Scene::Tick(float deltaTime) {
         obj->PostTick(deltaTime);
     }
 #endif
+
+    //for (auto& l : lightManager_.SpotLights())
+    //{
+    //    auto dbg = l.GetDebugConeParams();
+    //    Systems::GetRenderer().GetDebugDrawSystem()->AddCone(dbg.apex, dbg.direction, dbg.height, dbg.radius, { 0.0f, 0.0f, 1.0f, 0.5f }, false);
+    //}
 }
 
 void Scene::PrepareTransparentBuckets(const mat4& view)

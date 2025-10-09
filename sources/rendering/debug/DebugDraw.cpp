@@ -456,7 +456,7 @@ Math::mat4 DebugDrawSystem::ComputeConeTransform(const Math::float3& apex, const
         dir = dir * (1.0f / len);
     }
 
-    Math::quat q = RotationBetween(Math::float3(0.f, 1.f, 0.f), dir);
+    Math::quat q = RotationBetween(Math::float3(0.f, -1.f, 0.f), dir);
     Math::mat4 scale = Math::mat4::Scaling(radius * 2.0f, height, radius * 2.0f);
     Math::mat4 rotation = Math::mat4::FromQuaternion(q);
     Math::mat4 sr = scale * rotation;
