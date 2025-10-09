@@ -1792,17 +1792,15 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
             const float width = static_cast<float>(renderer->GetWidth());
             const float height = static_cast<float>(renderer->GetHeight());
             const float2 invResolution = float2(width > 0.0f ? 1.0f / width : 0.0f, height > 0.0f ? 1.0f / height : 0.0f);
-            // FXAA tuning parameters. These mirror the defaults from the NVIDIA reference
-            // implementation and can be tweaked to adjust the filter's behaviour:
-            //   * subpix: 0 disables sub-pixel AA, values in [0.5, 1.0] smooth jagged edges at the
-            //             cost of slight softening.
-            //   * edgeThreshold: relative luminance contrast required to trigger the filter. Lower
-            //                    values detect more edges but increase cost and risk blurring.
-            //   * edgeThresholdMin: absolute minimum contrast to treat as an edge. Lower values help
-            //                       catch thin geometry; higher values reject shader aliasing/noise.
-            const float subpix = 0.75f;
-            const float edgeThreshold = 0.166f;
-            const float edgeThresholdMin = 0.0833f;
+            // FXAA 3.11 tuning parameters. These map 1:1 with the reference shader controls:
+            //   * subpix: linear blend between the original color and FXAA output. 1.0 reproduces the
+            //             stock look; lower values bias towards the unfiltered image for extra
+            //             sharpness.
+            //   * edgeThreshold: relative luminance contrast required to trigger FXAA (default 1/8).
+            //   * edgeThresholdMin: absolute minimum contrast to treat as an edge (default 1/24).
+            const float subpix = 1.0f;
+            const float edgeThreshold = 0.125f;
+            const float edgeThresholdMin = 0.0416667f;
 
             matFxaaCS_->UpdateCBField(cbHandles_.fxaa.invResolution, invResolution, (uint8_t*)cb.cpu);
             matFxaaCS_->UpdateCBField(cbHandles_.fxaa.subpix, subpix, (uint8_t*)cb.cpu);

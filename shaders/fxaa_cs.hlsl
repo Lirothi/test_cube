@@ -7,25 +7,194 @@ Texture2D<float4> InputColor : register(t0);
 RWTexture2D<float4> OutputColor : register(u0);
 SamplerState gSmp : register(s0);
 
-// FXAA configuration constants. The defaults mirror the reference values from NVIDIA's
-// implementation. Adjust them on the CPU side to trade off sharpness vs. aliasing removal:
+// FXAA configuration constants. The runtime values match the knobs exposed by the FXAA 3.11
+// reference shader:
 //   * invResolution    : size of one pixel in UV space (1 / width, 1 / height)
-//   * subpix           : sub-pixel aliasing removal strength (0 disables, higher softens more)
-//   * edgeThreshold    : relative contrast required to treat a pixel as an edge (lower = more edges)
-//   * edgeThresholdMin : absolute minimum contrast required (lower catches fine edges, higher skips noise)
+//   * subpix           : linear blend between the original color and the FXAA filtered result.
+//                        Set to 1.0 to match the reference output, or reduce towards 0 to retain
+//                        more of the untouched image.
+//   * edgeThreshold    : relative contrast required to treat a pixel as an edge (default 1/8).
+//   * edgeThresholdMin : absolute minimum contrast required to trigger edge processing (default 1/24).
 cbuffer FxaaCB : register(b0)
 {
     float2 invResolution;
-    float   subpix;
-    float   edgeThreshold;
-    float   edgeThresholdMin;
+    float subpix;
+    float edgeThreshold;
+    float edgeThresholdMin;
 };
 
-static const float3 kLumaWeights = float3(0.299f, 0.587f, 0.114f);
+// Core algorithm adapted from the FXAA 3.11 reference implementation by Timothy Lottes / NVIDIA.
+static const float FXAA_SEARCH_THRESHOLD = 1.0f / 4.0f;
+static const int FXAA_SEARCH_STEPS = 32;
+static const float FXAA_SUBPIX_TRIM = 1.0f / 4.0f;
+static const float FXAA_SUBPIX_TRIM_SCALE = 1.0f / (1.0f - FXAA_SUBPIX_TRIM);
+static const float FXAA_SUBPIX_CAP = 3.0f / 4.0f;
 
-float ComputeLuma(float3 rgb)
+float3 FxaaTexSample(float2 uv)
 {
-    return dot(rgb, kLumaWeights);
+    return InputColor.SampleLevel(gSmp, uv, 0).rgb;
+}
+
+float3 FxaaTexOff(float2 uv, int2 offset, float2 rcpFrame)
+{
+    return FxaaTexSample(uv + float2(offset) * rcpFrame);
+}
+
+float FxaaLuma(float3 rgb)
+{
+    return rgb.y * (0.587f / 0.299f) + rgb.x;
+}
+
+float3 FxaaLerp3(float3 a, float3 b, float amountOfA)
+{
+    return ((a - b) * amountOfA) + b;
+}
+
+float3 FxaaPixelShader(float2 uv, float2 rcpFrame, out float3 rgbMOut)
+{
+    float3 rgbN = FxaaTexOff(uv, int2(0, -1), rcpFrame);
+    float3 rgbW = FxaaTexOff(uv, int2(-1, 0), rcpFrame);
+    float3 rgbM = FxaaTexOff(uv, int2(0, 0), rcpFrame);
+    float3 rgbE = FxaaTexOff(uv, int2(1, 0), rcpFrame);
+    float3 rgbS = FxaaTexOff(uv, int2(0, 1), rcpFrame);
+
+    rgbMOut = rgbM;
+
+    float lumaN = FxaaLuma(rgbN);
+    float lumaW = FxaaLuma(rgbW);
+    float lumaM = FxaaLuma(rgbM);
+    float lumaE = FxaaLuma(rgbE);
+    float lumaS = FxaaLuma(rgbS);
+
+    float rangeMin = min(lumaM, min(min(lumaN, lumaW), min(lumaS, lumaE)));
+    float rangeMax = max(lumaM, max(max(lumaN, lumaW), max(lumaS, lumaE)));
+
+    float range = rangeMax - rangeMin;
+    if (range < max(edgeThresholdMin, rangeMax * edgeThreshold))
+    {
+        return rgbM;
+    }
+
+    float3 rgbL = rgbN + rgbW + rgbM + rgbE + rgbS;
+
+    float lumaL = (lumaN + lumaW + lumaE + lumaS) * 0.25f;
+    float rangeL = abs(lumaL - lumaM);
+    float blendL = max(0.0f, (rangeL / range) - FXAA_SUBPIX_TRIM) * FXAA_SUBPIX_TRIM_SCALE;
+    blendL = min(FXAA_SUBPIX_CAP, blendL);
+
+    float3 rgbNW = FxaaTexOff(uv, int2(-1, -1), rcpFrame);
+    float3 rgbNE = FxaaTexOff(uv, int2(1, -1), rcpFrame);
+    float3 rgbSW = FxaaTexOff(uv, int2(-1, 1), rcpFrame);
+    float3 rgbSE = FxaaTexOff(uv, int2(1, 1), rcpFrame);
+    rgbL += (rgbNW + rgbNE + rgbSW + rgbSE);
+    rgbL *= 1.0f / 9.0f;
+
+    float lumaNW = FxaaLuma(rgbNW);
+    float lumaNE = FxaaLuma(rgbNE);
+    float lumaSW = FxaaLuma(rgbSW);
+    float lumaSE = FxaaLuma(rgbSE);
+
+    float edgeVert =
+        abs((0.25f * lumaNW) + (-0.5f * lumaN) + (0.25f * lumaNE)) +
+        abs((0.50f * lumaW) + (-1.0f * lumaM) + (0.50f * lumaE)) +
+        abs((0.25f * lumaSW) + (-0.5f * lumaS) + (0.25f * lumaSE));
+    float edgeHorz =
+        abs((0.25f * lumaNW) + (-0.5f * lumaW) + (0.25f * lumaSW)) +
+        abs((0.50f * lumaN) + (-1.0f * lumaM) + (0.50f * lumaS)) +
+        abs((0.25f * lumaNE) + (-0.5f * lumaE) + (0.25f * lumaSE));
+
+    bool horzSpan = edgeHorz >= edgeVert;
+    float lengthSign = horzSpan ? -rcpFrame.y : -rcpFrame.x;
+
+    if (!horzSpan)
+    {
+        lumaN = lumaW;
+        lumaS = lumaE;
+    }
+
+    float gradientN = abs(lumaN - lumaM);
+    float gradientS = abs(lumaS - lumaM);
+    lumaN = (lumaN + lumaM) * 0.5f;
+    lumaS = (lumaS + lumaM) * 0.5f;
+
+    if (gradientN < gradientS)
+    {
+        lumaN = lumaS;
+        gradientN = gradientS;
+        lengthSign *= -1.0f;
+    }
+
+    float2 posN;
+    posN.x = uv.x + (horzSpan ? 0.0f : lengthSign * 0.5f);
+    posN.y = uv.y + (horzSpan ? lengthSign * 0.5f : 0.0f);
+
+    float gradientThreshold = gradientN * FXAA_SEARCH_THRESHOLD;
+
+    float2 posP = posN;
+    float2 offNP = horzSpan ? float2(rcpFrame.x, 0.0f) : float2(0.0f, rcpFrame.y);
+    float lumaEndN = lumaN;
+    float lumaEndP = lumaN;
+    bool doneN = false;
+    bool doneP = false;
+    posN += offNP * float2(-1.0f, -1.0f);
+    posP += offNP * float2(1.0f, 1.0f);
+
+    [loop]
+    for (int i = 0; i < FXAA_SEARCH_STEPS; ++i)
+    {
+        if (!doneN)
+        {
+            lumaEndN = FxaaLuma(FxaaTexSample(posN));
+        }
+        if (!doneP)
+        {
+            lumaEndP = FxaaLuma(FxaaTexSample(posP));
+        }
+
+        doneN = doneN || (abs(lumaEndN - lumaN) >= gradientThreshold);
+        doneP = doneP || (abs(lumaEndP - lumaN) >= gradientThreshold);
+
+        if (doneN && doneP)
+        {
+            break;
+        }
+        if (!doneN)
+        {
+            posN -= offNP;
+        }
+        if (!doneP)
+        {
+            posP += offNP;
+        }
+    }
+
+    float dstN = horzSpan ? uv.x - posN.x : uv.y - posN.y;
+    float dstP = horzSpan ? posP.x - uv.x : posP.y - uv.y;
+    bool directionN = dstN < dstP;
+    float lumaEnd = directionN ? lumaEndN : lumaEndP;
+
+    if (((lumaM - lumaN) < 0.0f) == ((lumaEnd - lumaN) < 0.0f))
+    {
+        lengthSign = 0.0f;
+    }
+
+    float spanLength = dstP + dstN;
+    dstN = directionN ? dstN : dstP;
+    float invSpanLength = (spanLength != 0.0f) ? (-1.0f / spanLength) : 0.0f;
+    float subPixelOffset = (0.5f + (dstN * invSpanLength)) * lengthSign;
+
+    float2 finalUv = uv;
+    if (horzSpan)
+    {
+        finalUv.y += subPixelOffset;
+    }
+    else
+    {
+        finalUv.x += subPixelOffset;
+    }
+
+    float3 rgbF = FxaaTexSample(finalUv);
+    return FxaaLerp3(rgbL, rgbF, blendL);
 }
 
 [numthreads(8, 8, 1)]
@@ -41,52 +210,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invResolution;
 
-    float3 rgbM = InputColor.SampleLevel(gSmp, uv, 0).rgb;
-    float lumaM = ComputeLuma(rgbM);
+    float3 rgbM;
+    float3 fxaaColor = FxaaPixelShader(uv, invResolution, rgbM);
 
-    float lumaN = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(0.0f, invResolution.y), 0).rgb);
-    float lumaS = ComputeLuma(InputColor.SampleLevel(gSmp, uv - float2(0.0f, invResolution.y), 0).rgb);
-    float lumaE = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(invResolution.x, 0.0f), 0).rgb);
-    float lumaW = ComputeLuma(InputColor.SampleLevel(gSmp, uv - float2(invResolution.x, 0.0f), 0).rgb);
+    float subpixStrength = saturate(subpix);
+    float3 blended = lerp(rgbM, fxaaColor, subpixStrength);
 
-    float rangeMin = min(lumaM, min(min(lumaN, lumaS), min(lumaE, lumaW)));
-    float rangeMax = max(lumaM, max(max(lumaN, lumaS), max(lumaE, lumaW)));
-    float range = rangeMax - rangeMin;
-
-    if (range < max(edgeThresholdMin, rangeMax * edgeThreshold))
-    {
-        OutputColor[dispatchThreadId.xy] = float4(rgbM, 1.0f);
-        return;
-    }
-
-    float lumaNW = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(-invResolution.x, +invResolution.y), 0).rgb);
-    float lumaNE = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(+invResolution.x, +invResolution.y), 0).rgb);
-    float lumaSW = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(-invResolution.x, -invResolution.y), 0).rgb);
-    float lumaSE = ComputeLuma(InputColor.SampleLevel(gSmp, uv + float2(+invResolution.x, -invResolution.y), 0).rgb);
-
-    float2 dir;
-    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
-    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
-
-    float lumaSum = lumaN + lumaS + lumaE + lumaW;
-    float dirReduce = max(lumaSum * (0.25f * subpix), edgeThresholdMin);
-    float rcpDirMin = 1.0f / (min(abs(dir.x), abs(dir.y)) + dirReduce);
-    dir = clamp(dir * rcpDirMin, -8.0f, 8.0f) * float2(invResolution.x, invResolution.y);
-
-    float3 rgbA = 0.5f * (
-        InputColor.SampleLevel(gSmp, uv + dir * (1.0f / 3.0f - 0.5f), 0).rgb +
-        InputColor.SampleLevel(gSmp, uv + dir * (2.0f / 3.0f - 0.5f), 0).rgb);
-
-    float3 rgbB = rgbA * 0.5f +
-        0.25f * (
-            InputColor.SampleLevel(gSmp, uv + dir * -0.5f, 0).rgb +
-            InputColor.SampleLevel(gSmp, uv + dir * 0.5f, 0).rgb);
-
-    float lumaB = ComputeLuma(rgbB);
-    float rangeMin2 = min(rangeMin, min(lumaNW, min(lumaNE, min(lumaSW, lumaSE))));
-    float rangeMax2 = max(rangeMax, max(lumaNW, max(lumaNE, max(lumaSW, lumaSE))));
-
-    float3 finalColor = ((lumaB < rangeMin2) || (lumaB > rangeMax2)) ? rgbA : rgbB;
-
-    OutputColor[dispatchThreadId.xy] = float4(finalColor, 1.0f);
+    OutputColor[dispatchThreadId.xy] = float4(blended, 1.0f);
 }
