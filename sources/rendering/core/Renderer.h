@@ -33,7 +33,7 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 12; // gb0,gb1,gb2,depth,light,scene,sceneOpaque,tonemap,ssr,ssrBlur,shadow,spotShadow
+        static constexpr size_t kResourceCount = 13; // gb0,gb1,gb2,depth,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow
         // Resources
         ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
@@ -43,6 +43,7 @@ public:
         ComPtr<ID3D12Resource> scene; // Renderer::kSceneColorFormat
         ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
         ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
+        ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
         ComPtr<ID3D12Resource> ssr;     // Renderer::kSsrFormat (premultiplied)
         ComPtr<ID3D12Resource> ssrBlur; // Renderer::kSsrBlurFormat
         ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
@@ -56,6 +57,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
@@ -267,7 +269,7 @@ private:
     static constexpr UINT kFrameCount = 2;
 
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

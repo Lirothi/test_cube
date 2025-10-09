@@ -113,6 +113,7 @@ private:
     std::shared_ptr<Material> matSpotLightCS_;
     std::shared_ptr<Material> matComposeCS_;
     std::shared_ptr<Material> matTonemapCS_;
+    std::shared_ptr<Material> matFxaaCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
@@ -190,6 +191,14 @@ private:
             Material::CBFieldHandle invScreenSize;
             void Populate(Material* material);
         } compose;
+
+        struct FxaaHandles {
+            Material::CBFieldHandle invResolution;
+            Material::CBFieldHandle subpix;
+            Material::CBFieldHandle edgeThreshold;
+            Material::CBFieldHandle edgeThresholdMin;
+            void Populate(Material* material);
+        } fxaa;
     } cbHandles_{};
 
     // Cache for the lighting pass

@@ -466,6 +466,9 @@
     <None Include="shaders\tonemap_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\fxaa_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\ui_rect.hlsl">
       <Filter>shaders</Filter>
     </None>

@@ -115,6 +115,17 @@ void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
 }
 
+void Scene::CBHandleCache::FxaaHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material) { return; }
+
+    invResolution = material->ComputeCB0FieldHandle("invResolution");
+    subpix = material->ComputeCB0FieldHandle("subpix");
+    edgeThreshold = material->ComputeCB0FieldHandle("edgeThreshold");
+    edgeThresholdMin = material->ComputeCB0FieldHandle("edgeThresholdMin");
+}
+
 const mat4& Scene::GetCascadeView(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
@@ -170,6 +181,10 @@ void Scene::RefreshCachedHandles(Renderer* renderer)
     if (matComposeCS_)
     {
         cbHandles_.compose.Populate(matComposeCS_.get());
+    }
+    if (matFxaaCS_)
+    {
+        cbHandles_.fxaa.Populate(matFxaaCS_.get());
     }
     if (matSSR_)
     {
@@ -294,6 +309,13 @@ void Scene::InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList
         cd.shaderFile = L"shaders/tonemap_cs.hlsl";
         cd.csEntry = "CSMain";
         matTonemapCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matFxaaCS_) {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/fxaa_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matFxaaCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matSSR_) {
@@ -1740,6 +1762,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(t.cl, D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1760,15 +1783,59 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
 
         renderer->UAVBarrier(t.cl, D.tonemap.Get());
 
-        ID3D12Resource* const backbuffer = renderer->GetCurrentBackbuffer();
-        if (backbuffer)
+        bool ranFxaa = false;
+        if (matFxaaCS_ && groupsX > 0 && groupsY > 0)
         {
-            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+            auto cb = renderer->GetFrameResource()->AllocDynamic(matFxaaCS_->GetCBSizeBytesAligned(0, 256), 256);
+            const float width = static_cast<float>(renderer->GetWidth());
+            const float height = static_cast<float>(renderer->GetHeight());
+            const float2 invResolution = float2(width > 0.0f ? 1.0f / width : 0.0f, height > 0.0f ? 1.0f / height : 0.0f);
+            // FXAA tuning parameters. These mirror the defaults from the NVIDIA reference
+            // implementation and can be tweaked to adjust the filter's behaviour:
+            //   * subpix: 0 disables sub-pixel AA, values in [0.5, 1.0] smooth jagged edges at the
+            //             cost of slight softening.
+            //   * edgeThreshold: relative luminance contrast required to trigger the filter. Lower
+            //                    values detect more edges but increase cost and risk blurring.
+            //   * edgeThresholdMin: absolute minimum contrast to treat as an edge. Lower values help
+            //                       catch thin geometry; higher values reject shader aliasing/noise.
+            const float subpix = 0.75f;
+            const float edgeThreshold = 0.166f;
+            const float edgeThresholdMin = 0.0833f;
+
+            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.invResolution, invResolution, (uint8_t*)cb.cpu);
+            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.subpix, subpix, (uint8_t*)cb.cpu);
+            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.edgeThreshold, edgeThreshold, (uint8_t*)cb.cpu);
+            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.edgeThresholdMin, edgeThresholdMin, (uint8_t*)cb.cpu);
+
+            auto fxaaCtx = renderer->GetRenderContextPool()->Acquire();
+            auto& fxaaRC = fxaaCtx.ref();
+            fxaaRC.cbv[0] = cb.gpu;
+            fxaaRC.table[0] = renderer->StageSrvUavTable({ D.tonemapSRV }).gpu;
+            fxaaRC.table[1] = renderer->StageSrvUavTable({ D.fxaaUAV }).gpu;
+            const auto fxaaSamplers = std::array{ *SamplerManager::LinearClamp() };
+            fxaaRC.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, fxaaSamplers);
+
+            matFxaaCS_->Bind(t.cl, fxaaRC);
+            t.cl->Dispatch(groupsX, groupsY, 1);
+
+            renderer->UAVBarrier(t.cl, D.fxaa.Get());
+            ranFxaa = true;
+        }
+
+        ID3D12Resource* const backbuffer = renderer->GetCurrentBackbuffer();
+        ID3D12Resource* const resolveSource = ranFxaa ? D.fxaa.Get() : D.tonemap.Get();
+        if (backbuffer && resolveSource)
+        {
+            renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_COPY_SOURCE);
             renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST);
-            t.cl->CopyResource(backbuffer, D.tonemap.Get());
-            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            t.cl->CopyResource(backbuffer, resolveSource);
+            renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
+
+        renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1828,6 +1895,7 @@ void Scene::Clear()
     matSpotLightCS_.reset();
     matComposeCS_.reset();
     matTonemapCS_.reset();
+    matFxaaCS_.reset();
     matBlur_.reset();
     matSSR_.reset();
     matDebug_.reset();

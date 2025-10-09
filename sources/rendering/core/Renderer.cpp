@@ -1160,6 +1160,11 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 D.tonemapSRV = outSRV;
                 D.tonemapUAV = outUAV;
             }
+            else if (srvSlot == DeferredSrvSlot::Fxaa)
+            {
+                D.fxaaSRV = outSRV;
+                D.fxaaUAV = outUAV;
+            }
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         };
@@ -1331,6 +1336,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, width, height);
+        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, width, height);
     }
 }
 
@@ -1356,6 +1362,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.scene);
         collect(D.sceneOpaque);
         collect(D.tonemap);
+        collect(D.fxaa);
         collect(D.ssr);
         collect(D.ssrBlur);
         collect(D.shadow);
