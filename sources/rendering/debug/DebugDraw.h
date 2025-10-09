@@ -20,6 +20,21 @@ class DebugDrawSystem {
 public:
     enum class ShapeType { Sphere, Box, Cone };
 
+    struct InstanceBuffer
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap;
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCPU = {};
+        void* mapped = nullptr;
+        UINT capacity = 0;
+    };
+
+    struct GPUInstanceData
+    {
+        Math::mat4 mvp;
+        Math::float4 color;
+    };
+
     DebugDrawSystem() = default;
 
     void Initialize(Renderer* renderer,
@@ -53,21 +68,6 @@ private:
     struct Command {
         ShapeType shape = ShapeType::Sphere;
         Math::mat4 transform;
-        Math::float4 color;
-    };
-
-    struct InstanceBuffer
-    {
-        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap;
-        D3D12_CPU_DESCRIPTOR_HANDLE srvCPU = {};
-        void* mapped = nullptr;
-        UINT capacity = 0;
-    };
-
-    struct GPUInstanceData
-    {
-        Math::mat4 mvp;
         Math::float4 color;
     };
 
