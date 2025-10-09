@@ -394,7 +394,6 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             cb.color = cmd.color;
             std::memcpy(alloc.cpu, &cb, sizeof(cb));
 
-            ctx.ClearFast();
             ctx.cbv[0] = alloc.gpu;
 
             material_->Bind(cl, ctx, wireframe);

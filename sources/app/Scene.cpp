@@ -1194,7 +1194,6 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
@@ -1296,7 +1295,6 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
@@ -1379,7 +1377,6 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
-        rc.ClearFast();
 
         rc.cbv[0] = cb.gpu;
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
