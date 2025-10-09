@@ -239,6 +239,7 @@
     <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h" />
     <ClInclude Include="sources/rendering/descriptors/SamplerManager.h" />
     <ClInclude Include="sources/rendering/lighting/LightManager.h" />
+    <ClInclude Include="sources/rendering/lighting/SpotLight.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
     <ClInclude Include="sources/rendering/meshes/BoundingBox.h" />

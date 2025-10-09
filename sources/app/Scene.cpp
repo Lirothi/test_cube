@@ -1060,12 +1060,13 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
         const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
 
+        const auto& spotLights = lightManager_.SpotLights();
         for (size_t lightIndex = 0; lightIndex < spotLightCount; ++lightIndex)
         {
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
-            const mat4& lightView = lightManager_.GetSpotView(lightIndex);
-            const mat4& lightProj = lightManager_.GetSpotProj(lightIndex);
+            const auto& lightView = spotLights[lightIndex].GetViewMatrix();
+            const auto& lightProj = spotLights[lightIndex].GetProjMatrix();
 
             for (auto* obj : opaqueSimple)
             {
@@ -1250,15 +1251,16 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& spotLights = lightManager_.SpotLights();
         for (size_t i = 0; i < spotLightCount; ++i)
         {
-            const auto& desc = spotLights[i].GetDesc();
-            const mat4 viewProj = lightManager_.GetSpotView(i) * lightManager_.GetSpotProj(i);
-            const float3 dir = lightManager_.GetSpotDirection(i);
+            const auto& light = spotLights[i];
+            const auto& desc = light.GetDesc();
+            const mat4 viewProj = light.GetViewProjMatrix();
+            const float3 dir = light.GetDirection();
 
             spotLightBufferCPU[i].positionRange = float4(desc.position, desc.range);
-            spotLightBufferCPU[i].directionCosOuter = float4(dir, lightManager_.GetSpotCosOuter(i));
+            spotLightBufferCPU[i].directionCosOuter = float4(dir, light.GetCosOuter());
             spotLightBufferCPU[i].colorIntensity = float4(desc.color, desc.intensity);
-            spotLightBufferCPU[i].shadowParams = float4(lightManager_.GetSpotCosInner(i), static_cast<float>(i), lightManager_.GetSpotInvAngleRange(i), lightManager_.GetSpotDepthBias(i));
-            spotLightBufferCPU[i].shadowParams2 = float4(lightManager_.GetSpotNormalBias(i), 0.0f, 0.0f, 0.0f);
+            spotLightBufferCPU[i].shadowParams = float4(light.GetCosInner(), static_cast<float>(i), light.GetInvAngleRange(), light.GetShadowDepthBias());
+            spotLightBufferCPU[i].shadowParams2 = float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
             spotLightBufferCPU[i].viewProj = viewProj;
         }
 

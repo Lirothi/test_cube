@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <vector>
 #include <algorithm>
 
@@ -47,15 +46,6 @@ public:
     void UpdateSpotLightCache();
 
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
-    const Math::mat4& GetSpotView(size_t index) const { return cachedSpotView_[index]; }
-    const Math::mat4& GetSpotProj(size_t index) const { return cachedSpotProj_[index]; }
-    const Math::float3& GetSpotDirection(size_t index) const { return cachedSpotDir_[index]; }
-    float GetSpotCosInner(size_t index) const { return cachedSpotCosInner_[index]; }
-    float GetSpotCosOuter(size_t index) const { return cachedSpotCosOuter_[index]; }
-    float GetSpotInvAngleRange(size_t index) const { return cachedSpotInvAngleRange_[index]; }
-    float GetSpotNormalBias(size_t index) const { return cachedSpotNormalBias_[index]; }
-    float GetSpotDepthBias(size_t index) const { return cachedSpotDepthBias_[index]; }
-
     void EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
     void EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
@@ -74,15 +64,6 @@ private:
     std::vector<SpotLight>  spotLights_;
 
     size_t cachedSpotLightCount_ = 0;
-    std::array<Math::mat4, kMaxSpotLights>   cachedSpotView_{};
-    std::array<Math::mat4, kMaxSpotLights>   cachedSpotProj_{};
-    std::array<Math::float3, kMaxSpotLights> cachedSpotDir_{};
-    std::array<float, kMaxSpotLights>        cachedSpotCosInner_{};
-    std::array<float, kMaxSpotLights>        cachedSpotCosOuter_{};
-    std::array<float, kMaxSpotLights>        cachedSpotInvAngleRange_{};
-    std::array<float, kMaxSpotLights>        cachedSpotNormalBias_{};
-    std::array<float, kMaxSpotLights>        cachedSpotDepthBias_{};
-
     Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
     PointLightGpu* pointLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;
