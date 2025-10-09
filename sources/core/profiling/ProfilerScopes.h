@@ -28,6 +28,7 @@ extern const Profiler::ScopeNameKey kPassCSM;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassLighting;
 extern const Profiler::ScopeNameKey kPassSpotShadow;
+extern const Profiler::ScopeNameKey kSpotShadowPerLight;
 extern const Profiler::ScopeNameKey kPassSpotLights;
 extern const Profiler::ScopeNameKey kPassPointLights;
 extern const Profiler::ScopeNameKey kPassSkybox;
