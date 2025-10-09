@@ -209,7 +209,7 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
     const double perUse = (row.usages ? (row.avgMs / static_cast<double>(row.usages)) : 0.0);
     wchar_t buf[192];
     std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-        L"%-40s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
+        L"%-35s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
         name->c_str(), row.avgMs, row.maxMs, perUse, row.usages);
     row.formatted.assign(buf);
 }
@@ -1043,8 +1043,8 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     }
 
     // Estimate the region width directly, without measuring individual lines
-    // Row format: "%-40s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
-    const int namePad = 40;
+    // Row format: "%-35s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
+    const int namePad = 35;
     const int otherCols = 1 + 28;
     const int lineCols = namePad + otherCols + 16;
     const double charW = 0.60 * 16.0;
