@@ -39,6 +39,7 @@ public:
 
     // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
+    float GetMoveSpeedMult() const { return moveSpeedMultiplier_; }
 
     // Mouse input (screen-space delta -> yaw/pitch)
     void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {
