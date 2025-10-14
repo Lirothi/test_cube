@@ -492,7 +492,7 @@ void DebugDrawSystem::AddCone(const Math::mat4& transform, const Math::float4& c
 bool DebugDrawSystem::HasCommands() const
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    return !solidCommands_.empty() || !wireframeCommands_.empty();
+    return !solidCommands_.empty() || !wireframeCommands_.empty() || !solidCommandsPending_.empty() || !wireframeCommandsPending_.empty();
 }
 
 void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
