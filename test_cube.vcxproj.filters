@@ -67,6 +67,9 @@
     <Filter Include="shaders">
       <UniqueIdentifier>{01504546-7cdf-4026-ad57-b74156b71b63}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\math">
+      <UniqueIdentifier>{9245a199-dbad-464b-949f-23a9500801ad}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp">
@@ -248,9 +251,6 @@
     <ClInclude Include="sources/core/Helpers.h">
       <Filter>sources\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/core/math/Math.h">
-      <Filter>sources\core</Filter>
-    </ClInclude>
     <ClInclude Include="sources/core/profiling/Profiler.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
@@ -356,9 +356,6 @@
     <ClInclude Include="sources/rendering/lighting/Skybox.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
-    <ClInclude Include="sources/core/math/BoundingBox.h">
-      <Filter>sources\rendering\meshes</Filter>
-    </ClInclude>
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
@@ -400,6 +397,12 @@
     </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
       <Filter>third_party\enkiTS\src</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/math/Math.h">
+      <Filter>sources\core\math</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/math/BoundingBox.h">
+      <Filter>sources\core\math</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
