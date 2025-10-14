@@ -7,6 +7,9 @@
     <Filter Include="sources\app">
       <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\levels">
+      <UniqueIdentifier>{b1a2558d-4f4a-4c56-93db-0d8ae410cdbd}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core">
       <UniqueIdentifier>{e4ee6e35-a54a-4795-9849-d685ff1589ed}</UniqueIdentifier>
     </Filter>
@@ -71,6 +74,15 @@
     </ClCompile>
     <ClCompile Include="sources/app/Camera.cpp">
       <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/levels/DemoLevel.cpp">
+      <Filter>sources\app\levels</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/levels/Level.cpp">
+      <Filter>sources\app\levels</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/levels/LevelManager.cpp">
+      <Filter>sources\app\levels</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/Scene.cpp">
       <Filter>sources\app</Filter>
@@ -209,6 +221,15 @@
     <ClInclude Include="sources/app/Camera.h">
       <Filter>sources\app</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/levels/DemoLevel.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/levels/Level.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/levels/LevelManager.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/Scene.h">
       <Filter>sources\app</Filter>
     </ClInclude>
@@ -218,7 +239,7 @@
     <ClInclude Include="sources/core/Helpers.h">
       <Filter>sources\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/core/Math.h">
+    <ClInclude Include="sources/core/math/Math.h">
       <Filter>sources\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/profiling/Profiler.h">
@@ -326,7 +347,7 @@
     <ClInclude Include="sources/rendering/lighting/Skybox.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/meshes/BoundingBox.h">
+    <ClInclude Include="sources/core/math/BoundingBox.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h">

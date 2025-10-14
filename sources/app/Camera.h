@@ -1,6 +1,6 @@
 #pragma once
 #include <DirectXMath.h>
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 using namespace DirectX;
 

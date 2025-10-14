@@ -6,7 +6,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/SpotLight.h"
 

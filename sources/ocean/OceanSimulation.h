@@ -8,7 +8,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
 

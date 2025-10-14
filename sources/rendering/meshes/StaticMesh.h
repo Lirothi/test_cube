@@ -1,6 +1,6 @@
 #pragma once
 #include "rendering/renderables/GBufferRenderable.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 class StaticMesh : public GBufferRenderable
 {

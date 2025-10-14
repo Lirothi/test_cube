@@ -156,6 +156,9 @@
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/Camera.cpp" />
+    <ClCompile Include="sources/app/levels/DemoLevel.cpp" />
+    <ClCompile Include="sources/app/levels/Level.cpp" />
+    <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/Scene.cpp" />
     <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
@@ -203,10 +206,13 @@
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/Camera.h" />
+    <ClInclude Include="sources/app/levels/DemoLevel.h" />
+    <ClInclude Include="sources/app/levels/Level.h" />
+    <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/Scene.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
-    <ClInclude Include="sources/core/Math.h" />
+    <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
@@ -242,7 +248,7 @@
     <ClInclude Include="sources/rendering/lighting/SpotLight.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
-    <ClInclude Include="sources/rendering/meshes/BoundingBox.h" />
+    <ClInclude Include="sources/core/math/BoundingBox.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />

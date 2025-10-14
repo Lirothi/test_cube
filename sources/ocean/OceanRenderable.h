@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "ocean/OceanSimulation.h"
 

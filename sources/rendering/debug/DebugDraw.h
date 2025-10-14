@@ -9,8 +9,8 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "core/Math.h"
-#include "rendering/meshes/BoundingBox.h"
+#include "core/math/Math.h"
+#include "core/math/BoundingBox.h"
 #include "rendering/meshes/Mesh.h"
 
 class Renderer;

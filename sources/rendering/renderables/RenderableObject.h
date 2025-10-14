@@ -9,9 +9,9 @@
 #include "materials/Material.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/core/RenderContext.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
-#include "rendering/meshes/BoundingBox.h"
+#include "core/math/BoundingBox.h"
 
 class Renderer;
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "rendering/meshes/Mesh.h"
 #include "materials/Material.h"
 

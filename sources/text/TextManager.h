@@ -12,7 +12,7 @@
 #include <wrl/client.h>
 #include "materials/Material.h"
 #include "rendering/core/RenderContext.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 class FontAtlas;
 class Renderer;

@@ -29,4 +29,8 @@ InputManager& GetInput() {
     return Get().input;
 }
 
+LevelManager& GetLevelManager() {
+    return Get().levelManager;
+}
+
 } // namespace Systems
