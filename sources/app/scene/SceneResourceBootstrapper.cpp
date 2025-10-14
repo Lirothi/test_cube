@@ -1,7 +1,6 @@
 #include "app/scene/SceneResourceBootstrapper.h"
 
 #include "rendering/core/Renderer.h"
-#include "rendering/core/MaterialManager.h"
 #include "rendering/debug/DebugDraw.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/renderables/RenderableObject.h"
@@ -282,37 +281,37 @@ void SceneResourceBootstrapper::RefreshHandles()
     blurHandles_.Populate(matBlur_.get());
 }
 
-size_t SceneResourceBootstrapper::GetLightingCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetLightingCBSizeBytes() const
 {
     return matLighting_ ? matLighting_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetPointLightCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetPointLightCBSizeBytes() const
 {
     return matPointLightCS_ ? matPointLightCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetSpotLightCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetSpotLightCBSizeBytes() const
 {
     return matSpotLightCS_ ? matSpotLightCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetSsrCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetSsrCBSizeBytes() const
 {
     return matSSR_ ? matSSR_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetBlurCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetBlurCBSizeBytes() const
 {
     return matBlur_ ? matBlur_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetComposeCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetComposeCBSizeBytes() const
 {
     return matComposeCS_ ? matComposeCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }
 
-size_t SceneResourceBootstrapper::GetFxaaCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetFxaaCBSizeBytes() const
 {
     return matFxaaCS_ ? matFxaaCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
 }

@@ -9,7 +9,7 @@
 #include "core/math/Math.h"
 
 #include "app/scene/SceneRenderConfig.h"
-#include "rendering/materials/Material.h"
+#include "materials/Material.h"
 
 class Renderer;
 class RenderableObjectBase;
@@ -225,13 +225,13 @@ public:
     const SceneComposeCBHandles& ComposeHandles() const { return composeHandles_; }
     const SceneFxaaCBHandles& FxaaHandles() const { return fxaaHandles_; }
 
-    size_t GetLightingCBSizeBytes() const;
-    size_t GetPointLightCBSizeBytes() const;
-    size_t GetSpotLightCBSizeBytes() const;
-    size_t GetSsrCBSizeBytes() const;
-    size_t GetBlurCBSizeBytes() const;
-    size_t GetComposeCBSizeBytes() const;
-    size_t GetFxaaCBSizeBytes() const;
+    UINT GetLightingCBSizeBytes() const;
+    UINT GetPointLightCBSizeBytes() const;
+    UINT GetSpotLightCBSizeBytes() const;
+    UINT GetSsrCBSizeBytes() const;
+    UINT GetBlurCBSizeBytes() const;
+    UINT GetComposeCBSizeBytes() const;
+    UINT GetFxaaCBSizeBytes() const;
 
     void WriteLightingConstants(const LightingPassConstants& data, uint8_t* dest) const;
     void WritePointLightConstants(const PointLightPassConstants& data, uint8_t* dest) const;

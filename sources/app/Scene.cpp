@@ -762,7 +762,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     {
         return;
     }
-    const size_t cbSize = resources_.GetLightingCBSizeBytes();
+    const UINT cbSize = resources_.GetLightingCBSizeBytes();
     if (cbSize == 0)
     {
         return;
@@ -888,7 +888,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
         }
 
         auto spotMaterial = resources_.GetSpotLightMaterial();
-        const size_t cbSize = resources_.GetSpotLightCBSizeBytes();
+        const UINT cbSize = resources_.GetSpotLightCBSizeBytes();
         if (!spotMaterial || cbSize == 0)
         {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -978,7 +978,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         }
 
         auto pointMaterial = resources_.GetPointLightMaterial();
-        const size_t cbSize = resources_.GetPointLightCBSizeBytes();
+        const UINT cbSize = resources_.GetPointLightCBSizeBytes();
         if (!pointMaterial || cbSize == 0)
         {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1068,7 +1068,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto ssrMaterial = resources_.GetSsrMaterial();
-        const size_t cbSize = resources_.GetSsrCBSizeBytes();
+        const UINT cbSize = resources_.GetSsrCBSizeBytes();
         if (!ssrMaterial || cbSize == 0)
         {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1129,7 +1129,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto blurMaterial = resources_.GetBlurMaterial();
-        const size_t cbSize = resources_.GetBlurCBSizeBytes();
+        const UINT cbSize = resources_.GetBlurCBSizeBytes();
         if (!blurMaterial || cbSize == 0)
         {
             renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1208,7 +1208,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         }
 
         auto composeMaterial = resources_.GetComposeMaterial();
-        const size_t cbSize = resources_.GetComposeCBSizeBytes();
+        const UINT cbSize = resources_.GetComposeCBSizeBytes();
         if (!composeMaterial || cbSize == 0)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1374,7 +1374,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
 
         bool ranFxaa = false;
         auto fxaaMaterial = resources_.GetFxaaMaterial();
-        const size_t fxaaCbSize = resources_.GetFxaaCBSizeBytes();
+        const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
         if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
