@@ -452,9 +452,9 @@ void DebugDrawSystem::AddBox(const OBB& bounds, const Math::float4& color, bool 
     const Math::float3& axisZ = axes[2];
 
     DirectX::XMMATRIX basis(
-        axisX.x, axisY.x, axisZ.x, 0.0f,
-        axisX.y, axisY.y, axisZ.y, 0.0f,
-        axisX.z, axisY.z, axisZ.z, 0.0f,
+        axisX.x, axisX.y, axisX.z, 0.0f,
+        axisY.x, axisY.y, axisY.z, 0.0f,
+        axisZ.x, axisZ.y, axisZ.z, 0.0f,
         0.0f,    0.0f,    0.0f,    1.0f);
     Math::quat orientation = Math::quat::FromXM(DirectX::XMQuaternionRotationMatrix(basis));
 
