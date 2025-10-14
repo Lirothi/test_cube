@@ -1,8 +1,12 @@
 #include "app/App.h"
+#include "core/math/Math.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include <algorithm>
 #include <cassert>
+#include <vector>
+
+#include "app/levels/DemoLevel.h"
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -101,6 +105,7 @@ void App::InitScene()
     auto& renderer = systems_->renderer;
     auto& scene = systems_->scene;
     auto& input = systems_->input;
+    auto& levelManager = systems_->levelManager;
 
     std::vector<ComPtr<ID3D12Resource>> pendingUploads;
     if (!input.LoadActions(L"input/bindings.json"))
@@ -120,7 +125,18 @@ void App::InitScene()
     renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAlloc.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList));
 
     renderer.InitTextSystem(uploadCmdList.Get(), &pendingUploads, L"fonts");
-    scene.InitAll(&renderer, uploadCmdList.Get(), &pendingUploads);
+
+    LevelLoadContext loadCtx{};
+    loadCtx.uploadCmdList = uploadCmdList.Get();
+    loadCtx.uploadKeepAlive = &pendingUploads;
+
+    if (!levelManager.HasLevel(DemoLevel::kName))
+    {
+        levelManager.RegisterLevel<DemoLevel>();
+    }
+
+    const bool levelLoaded = levelManager.LoadLevel(DemoLevel::kName, loadCtx);
+    assert(levelLoaded && "Failed to load initial level");
 
     uploadCmdList->Close();
     ID3D12CommandList* cmdLists[] = { uploadCmdList.Get() };
@@ -137,6 +153,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         auto& renderer = systems_->renderer;
         auto& scene = systems_->scene;
         auto& input = systems_->input;
+        auto& levelManager = systems_->levelManager;
 
         InitWindow(hInstance, nCmdShow);
         TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
@@ -182,6 +199,31 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
                 renderer.Tick(deltaTime);
                 scene.Tick(deltaTime);
+
+                levelManager.Tick(deltaTime);
+
+                if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
+                {
+                    ComPtr<ID3D12CommandAllocator> levelAlloc;
+                    ComPtr<ID3D12GraphicsCommandList> levelCmdList;
+                    renderer.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&levelAlloc));
+                    renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, levelAlloc.Get(), nullptr, IID_PPV_ARGS(&levelCmdList));
+
+                    std::vector<ComPtr<ID3D12Resource>> levelUploads;
+
+                    LevelLoadContext levelCtx{};
+                    levelCtx.uploadCmdList = levelCmdList.Get();
+                    levelCtx.uploadKeepAlive = &levelUploads;
+
+                    if (levelManager.LoadLevel(*pendingLevel, levelCtx))
+                    {
+                        levelCmdList->Close();
+                        ID3D12CommandList* levelCmds[] = { levelCmdList.Get() };
+                        renderer.GetCommandQueue()->ExecuteCommandLists(1, levelCmds);
+                        renderer.WaitForPreviousFrame();
+                    }
+                }
+
                 scene.Render(&renderer);
             }
 

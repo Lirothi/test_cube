@@ -39,12 +39,16 @@ public:
     float GetCascadeDepthBias(size_t index) const;
     const float* GetCascadeSplitsVS() const { return cachedSplitsVS_; }
 
-    void InitAll(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
     void Tick(float deltaTime);
     void Render(Renderer* renderer);
 
     void Clear();
+
+    void SetDirectionalLight(DirectionalLight light);
+    void SetSkybox(std::unique_ptr<Skybox> skybox);
 
 private:
     void RefreshCachedHandles(Renderer* renderer);

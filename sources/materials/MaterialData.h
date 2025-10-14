@@ -9,7 +9,7 @@
 #include "materials/Texture2D.h"
 #include "rendering/core/RenderContext.h"
 #include "materials/Material.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 class Renderer;
 

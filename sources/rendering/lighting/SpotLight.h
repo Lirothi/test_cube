@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 struct SpotLightDesc {
     Math::float3 position = Math::float3(0.0f, 0.0f, 0.0f);

@@ -8,7 +8,7 @@
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;

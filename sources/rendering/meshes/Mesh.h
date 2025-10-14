@@ -8,7 +8,7 @@
 
 using namespace Microsoft::WRL;
 
-#include "rendering/meshes/BoundingBox.h"
+#include "core/math/BoundingBox.h"
 
 // NEW "full" format for textures/lighting
 // order matches the layout preset "PosNormTanUV":

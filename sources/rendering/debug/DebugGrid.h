@@ -4,7 +4,7 @@
 #include <wrl/client.h>
 
 #include "rendering/renderables/RenderableObjectBase.h"
-#include "core/Math.h"
+#include "core/math/Math.h"
 
 class Renderer;
 struct ID3D12GraphicsCommandList;

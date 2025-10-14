@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <utility>
 
-#include "core/Math.h"
+#include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
 #include "third_party/robin_hood.h"
