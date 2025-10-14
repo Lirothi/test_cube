@@ -220,16 +220,16 @@ void RenderableObject::SetUniformBinder(std::unique_ptr<UniformBinder> binder)
     }
 }
 
-BoundingBox RenderableObject::GetLocalBounds() const
+AABB RenderableObject::GetLocalBounds() const
 {
     if (!mesh_)
     {
-        return BoundingBox::Empty();
+        return AABB::Empty();
     }
     return mesh_->GetBoundingBox();
 }
 
-const BoundingBox& RenderableObject::GetWorldBounds() const
+const AABB& RenderableObject::GetWorldBounds() const
 {
     if (worldBoundsDirty_)
     {
@@ -274,18 +274,18 @@ void RenderableObject::UpdateWorldBoundsCache() const
     Mesh* currentMesh = mesh_.get();
     if (!currentMesh)
     {
-        worldBoundsCache_ = BoundingBox::Empty();
+        worldBoundsCache_ = AABB::Empty();
     }
     else
     {
-        const BoundingBox& localBounds = currentMesh->GetBoundingBox();
+        const AABB& localBounds = currentMesh->GetBoundingBox();
         if (localBounds.IsValid())
         {
             worldBoundsCache_ = localBounds.Transform(modelMatrix_);
         }
         else
         {
-            worldBoundsCache_ = BoundingBox::Empty();
+            worldBoundsCache_ = AABB::Empty();
         }
     }
 

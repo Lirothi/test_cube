@@ -422,7 +422,10 @@
     <ClInclude Include="sources/core/math/Math.h">
       <Filter>sources\core\math</Filter>
     </ClInclude>
-    <ClInclude Include="sources/core/math/BoundingBox.h">
+    <ClInclude Include="sources/core/math/AABB.h">
+      <Filter>sources\core\math</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/math/OBB.h">
       <Filter>sources\core\math</Filter>
     </ClInclude>
   </ItemGroup>

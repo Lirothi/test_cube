@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "core/math/BoundingBox.h"
+#include "core/math/AABB.h"
 #include "rendering/core/RenderGraph.h"
 
 class Renderer;
@@ -21,9 +21,9 @@ public:
     virtual bool CastsShadow() const = 0;
     virtual void OnMaterialHotReload(Renderer* renderer) {}
 
-    virtual const BoundingBox& GetWorldBounds() const
+    virtual const AABB& GetWorldBounds() const
     {
-        static const BoundingBox kInvalidBounds = BoundingBox::Empty();
+        static const AABB kInvalidBounds = AABB::Empty();
         return kInvalidBounds;
     }
 };

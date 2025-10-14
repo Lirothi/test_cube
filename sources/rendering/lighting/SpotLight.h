@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/math/AABB.h"
 #include "core/math/Math.h"
+#include "core/math/OBB.h"
 
 struct SpotLightDesc {
     Math::float3 position = Math::float3(0.0f, 0.0f, 0.0f);
@@ -42,6 +44,13 @@ public:
     float GetShadowNormalBias() const { return desc_.shadowNormalBias; }
     float GetShadowDepthBias() const { return desc_.shadowDepthBias; }
 
+    const AABB& GetConeBounds() const { return coneBounds_; }
+    const OBB& GetConeOBB() const { return coneObb_; }
+
+    bool PointInsideCone(const Math::float3& point) const;
+    bool SphereIntersectsCone(const Math::float3& center, float radius) const;
+    bool AABBIntersectsCone(const AABB& bounds) const;
+
     const Math::mat4& GetViewMatrix() const { return view_; }
     const Math::mat4& GetProjMatrix() const { return proj_; }
     Math::mat4 GetViewProjMatrix() const { return view_ * proj_; }
@@ -68,6 +77,8 @@ private:
     float        invAngleRange_ = 0.0f;
     Math::mat4   view_ = Math::mat4::Identity();
     Math::mat4   proj_ = Math::mat4::Identity();
+    AABB  coneBounds_{};
+    OBB   coneObb_{};
     bool         dirty_ = true;
 };
 

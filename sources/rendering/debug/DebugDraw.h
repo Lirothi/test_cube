@@ -10,7 +10,8 @@
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
-#include "core/math/BoundingBox.h"
+#include "core/math/AABB.h"
+#include "core/math/OBB.h"
 #include "rendering/meshes/Mesh.h"
 
 class Renderer;
@@ -51,7 +52,8 @@ public:
         const Math::float4& color, bool wireframe);
     void AddBox(const Math::float3& center, const Math::float3& halfExtents,
         const Math::float4& color, bool wireframe);
-    void AddBox(const BoundingBox& bounds, const Math::float4& color, bool wireframe);
+    void AddBox(const AABB& bounds, const Math::float4& color, bool wireframe);
+    void AddBox(const OBB& bounds, const Math::float4& color, bool wireframe);
     void AddBox(const Math::mat4& transform, const Math::float4& color, bool wireframe);
     void AddCone(const Math::float3& apex, const Math::float3& direction,
         float height, float radius, const Math::float4& color, bool wireframe);

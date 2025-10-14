@@ -7,6 +7,8 @@
 #include <limits>
 #include <utility>
 
+#include <DirectXMath.h>
+
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/FrameResource.h"
@@ -363,8 +365,8 @@ void DebugDrawSystem::Shutdown()
 void DebugDrawSystem::BeginFrame()
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    solidCommands_.clear();
-    wireframeCommands_.clear();
+    solidCommandScratch_.clear();
+    wireframeCommandScratch_.clear();
 }
 
 void DebugDrawSystem::AddSphere(const Math::float3& center, float radius, const Math::float4& color, bool wireframe)
@@ -417,7 +419,7 @@ void DebugDrawSystem::AddBox(const Math::float3& center, const Math::float3& hal
     AddBox(center, halfExtents, Math::quat::Identity(), color, wireframe);
 }
 
-void DebugDrawSystem::AddBox(const BoundingBox& bounds, const Math::float4& color, bool wireframe)
+void DebugDrawSystem::AddBox(const AABB& bounds, const Math::float4& color, bool wireframe)
 {
     if (!initialized_ || !bounds.IsValid())
     {
@@ -425,6 +427,28 @@ void DebugDrawSystem::AddBox(const BoundingBox& bounds, const Math::float4& colo
     }
 
     AddBox(bounds.GetCenter(), bounds.GetHalfExtents(), color, wireframe);
+}
+
+void DebugDrawSystem::AddBox(const OBB& bounds, const Math::float4& color, bool wireframe)
+{
+    if (!initialized_ || !bounds.IsValid())
+    {
+        return;
+    }
+
+    const Math::float3* axes = bounds.GetAxes();
+    const Math::float3& axisX = axes[0];
+    const Math::float3& axisY = axes[1];
+    const Math::float3& axisZ = axes[2];
+
+    DirectX::XMMATRIX basis(
+        axisX.x, axisX.y, axisX.z, 0.0f,
+        axisY.x, axisY.y, axisY.z, 0.0f,
+        axisZ.x, axisZ.y, axisZ.z, 0.0f,
+        0.0f,    0.0f,    0.0f,    1.0f);
+    Math::quat orientation = Math::quat::FromXM(DirectX::XMQuaternionRotationMatrix(basis));
+
+    AddBox(bounds.GetCenter(), bounds.GetHalfExtents(), orientation, color, wireframe);
 }
 
 void DebugDrawSystem::AddBox(const Math::mat4& transform, const Math::float4& color, bool wireframe)
@@ -477,16 +501,6 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = ctxHandle.ref();
     Math::mat4 viewProj = view * proj;
-
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        if (solidCommands_.empty() && wireframeCommands_.empty())
-        {
-            return;
-        }
-        solidCommandScratch_ = solidCommands_;
-        wireframeCommandScratch_ = wireframeCommands_;
-    }
 
     auto drawList = [&](const std::vector<Command>& commands, bool wireframe)
     {
@@ -593,8 +607,26 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         ctx.table[0] = {};
     };
 
-    drawList(solidCommandScratch_, false);
-    drawList(wireframeCommandScratch_, true);
+    while (true)
+    {
+        {
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            if (solidCommands_.empty() && wireframeCommands_.empty())
+            {
+                break;
+            }
+            solidCommandScratch_ = solidCommands_;
+            wireframeCommandScratch_ = wireframeCommands_;
+            solidCommands_.clear();
+            wireframeCommands_.clear();
+        }
+
+        drawList(solidCommandScratch_, false);
+        drawList(wireframeCommandScratch_, true);
+
+        solidCommandScratch_.clear();
+        wireframeCommandScratch_.clear();
+    }
 }
 
 void DebugDrawSystem::AddCommand(ShapeType shape, const Math::mat4& transform,

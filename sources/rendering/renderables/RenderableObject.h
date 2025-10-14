@@ -11,7 +11,7 @@
 #include "rendering/core/RenderContext.h"
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
-#include "core/math/BoundingBox.h"
+#include "core/math/AABB.h"
 
 class Renderer;
 
@@ -78,8 +78,8 @@ public:
     Mesh* GetMesh() { return mesh_.get(); }
     const Mesh* GetMesh() const { return mesh_.get(); }
 
-    BoundingBox GetLocalBounds() const;
-    const BoundingBox& GetWorldBounds() const override;
+    AABB GetLocalBounds() const;
+    const AABB& GetWorldBounds() const override;
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
@@ -156,7 +156,7 @@ private:
     void RebuildModelMatrix();
     void UpdateWorldBoundsCache() const;
 
-    mutable BoundingBox worldBoundsCache_;
+    mutable AABB worldBoundsCache_;
     mutable bool worldBoundsDirty_ = true;
 
     Math::float3 pos_{};
