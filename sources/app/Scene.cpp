@@ -798,7 +798,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         cachedSplitsVS_[4] = zFarShadow;
 
         TaskSystem& tasks = TaskSystem::Get();
-        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.dir, batchIndex](std::size_t idx)
+        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.GetDirection(), batchIndex](std::size_t idx)
             {
                 CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
                 const auto& D = renderer->GetDeferredForFrame();
@@ -1092,10 +1092,10 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), 256);
         const auto& handles = cbHandles_.lighting;
 
-        matLighting_->UpdateCBField(handles.sunDir, dirLight_.dir, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.ambient, dirLight_.ambient, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.lightRgb, dirLight_.color, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.exposure, dirLight_.exposure, (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.sunDir, dirLight_.GetDirection(), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.ambient, dirLight_.GetAmbient(), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.lightRgb, dirLight_.GetColor(), (uint8_t*)cb.cpu);
+        matLighting_->UpdateCBField(handles.exposure, dirLight_.GetExposure(), (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.camDir, camDir, (uint8_t*)cb.cpu);
         matLighting_->UpdateCBField(handles.view, view, (uint8_t*)cb.cpu);

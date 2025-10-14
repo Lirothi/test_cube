@@ -8,6 +8,7 @@
 
 #include "rendering/renderables/RenderableObject.h"
 #include "app/Camera.h"
+#include "app/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/LightManager.h"
 
@@ -15,13 +16,6 @@ class Renderer;
 
 class Scene {
 public:
-    struct DirectionalLight
-    {
-        float3 dir;
-        float3 color;
-        float exposure = 1.0f;
-        float ambient = 0.05f;
-    };
 
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }

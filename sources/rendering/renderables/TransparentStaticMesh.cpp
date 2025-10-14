@@ -107,8 +107,8 @@ public:
         UpdateUniform(obj, cb_.reflectionRefraction, material, float4(owner_->reflectionStrength_, owner_->refractionDistortion_, skyIntensity, normalInfo), cbData);
 
         const auto& dirLight = scene_->GetDirectionalLight();
-        UpdateUniform(obj, cb_.sunDirAmbient, material, float4(dirLight.dir, dirLight.ambient), cbData);
-        UpdateUniform(obj, cb_.sunColorExposure, material, float4(dirLight.color, dirLight.exposure), cbData);
+        UpdateUniform(obj, cb_.sunDirAmbient, material, float4(dirLight.GetDirection(), dirLight.GetAmbient()), cbData);
+        UpdateUniform(obj, cb_.sunColorExposure, material, float4(dirLight.GetColor(), dirLight.GetExposure()), cbData);
         UpdateUniform(obj, cb_.camDirWS, material, float4(camDir, 0.0f), cbData);
 
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
