@@ -654,12 +654,12 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
 
     if (pso.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
     {
-	    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    	pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+        pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
 
-    	if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSOWire)))) {
-    		return false;
-    	}
+        if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSOWire)))) {
+            return false;
+        }
     }
 
     outIncludes.clear();

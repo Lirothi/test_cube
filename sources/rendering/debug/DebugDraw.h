@@ -104,6 +104,8 @@ private:
     std::vector<GPUInstanceData> instanceDataScratch_;
     mutable std::mutex commandMutex_;
 
-    std::array<InstanceBuffer, static_cast<size_t>(ShapeType::Cone) + 1> instanceBuffers_{};
+    static constexpr size_t kShapeCount = static_cast<size_t>(ShapeType::Cone) + 1;
+    std::array<InstanceBuffer, kShapeCount> solidInstanceBuffers_{};
+    std::array<InstanceBuffer, kShapeCount> wireframeInstanceBuffers_{};
 };
 

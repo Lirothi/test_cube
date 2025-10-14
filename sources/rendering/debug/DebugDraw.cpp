@@ -347,18 +347,24 @@ void DebugDrawSystem::Shutdown()
     sphereMesh_ = Mesh();
     boxMesh_ = Mesh();
     coneMesh_ = Mesh();
-    for (auto& buf : instanceBuffers_)
+    auto releaseBuffers = [](auto& buffers)
     {
-        if (buf.resource && buf.mapped)
+        for (auto& buf : buffers)
         {
-            buf.resource->Unmap(0, nullptr);
+            if (buf.resource && buf.mapped)
+            {
+                buf.resource->Unmap(0, nullptr);
+            }
+            buf.resource.Reset();
+            buf.cpuHeap.Reset();
+            buf.srvCPU = {};
+            buf.mapped = nullptr;
+            buf.capacity = 0;
         }
-        buf.resource.Reset();
-        buf.cpuHeap.Reset();
-        buf.srvCPU = {};
-        buf.mapped = nullptr;
-        buf.capacity = 0;
-    }
+    };
+
+    releaseBuffers(solidInstanceBuffers_);
+    releaseBuffers(wireframeInstanceBuffers_);
     initialized_ = false;
 }
 
@@ -513,7 +519,6 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             return;
         }
 
-        constexpr size_t kShapeCount = static_cast<size_t>(ShapeType::Cone) + 1;
         std::array<size_t, kShapeCount> counts{};
         for (const Command& cmd : commands)
         {
@@ -561,6 +566,8 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             data.color = cmd.color;
         }
 
+        auto& instanceBuffers = wireframe ? wireframeInstanceBuffers_ : solidInstanceBuffers_;
+
         for (size_t shapeIndex = 0; shapeIndex < kShapeCount; ++shapeIndex)
         {
             const size_t instanceCount = counts[shapeIndex];
@@ -586,11 +593,11 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             const UINT stride = static_cast<UINT>(sizeof(GPUInstanceData));
             const size_t copyBytes = instanceCount * sizeof(GPUInstanceData);
 
-            if (!EnsureInstanceBuffer(renderer->GetDevice(), instanceBuffers_[shapeIndex], instanceCountU, stride))
+            if (!EnsureInstanceBuffer(renderer->GetDevice(), instanceBuffers[shapeIndex], instanceCountU, stride))
             {
                 continue;
             }
-            auto& buffer = instanceBuffers_[shapeIndex];
+            auto& buffer = instanceBuffers[shapeIndex];
             if (!buffer.mapped)
             {
                 continue;
