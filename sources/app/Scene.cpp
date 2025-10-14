@@ -21,106 +21,6 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 
-void Scene::CBHandleCache::LightingHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    sunDir = material->ComputeCB0FieldHandle("sunDirWS");
-    ambient = material->ComputeCB0FieldHandle("ambientIntensity");
-    lightRgb = material->ComputeCB0FieldHandle("lightRgb");
-    exposure = material->ComputeCB0FieldHandle("exposure");
-    camPos = material->ComputeCB0FieldHandle("camPosWS");
-    camDir = material->ComputeCB0FieldHandle("camDirWS");
-    view = material->ComputeCB0FieldHandle("view");
-    invView = material->ComputeCB0FieldHandle("invView");
-    invProj = material->ComputeCB0FieldHandle("invProj");
-    lightViewProj = material->ComputeCB0FieldHandle("lightViewProj");
-    cascadeScaleBias = material->ComputeCB0FieldHandle("cascadeScaleBias");
-    cascadeSplits = material->ComputeCB0FieldHandle("cascadeSplitsVS");
-    shadowAtlasSize = material->ComputeCB0FieldHandle("shadowAtlasSize");
-    shadowBiasNDC = material->ComputeCB0FieldHandle("shadowBiasNDC");
-    normalBiasWS = material->ComputeCB0FieldHandle("normalBiasWS");
-    screenSize = material->ComputeCB0FieldHandle("screenSize");
-    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-}
-
-void Scene::CBHandleCache::PointLightHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    invView = material->ComputeCB0FieldHandle("invView");
-    invProj = material->ComputeCB0FieldHandle("invProj");
-    camPos = material->ComputeCB0FieldHandle("camPosWS");
-    lightCount = material->ComputeCB0FieldHandle("lightCount");
-    screenSize = material->ComputeCB0FieldHandle("screenSize");
-    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-}
-
-void Scene::CBHandleCache::SpotLightHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    invView = material->ComputeCB0FieldHandle("invView");
-    invProj = material->ComputeCB0FieldHandle("invProj");
-    camPos = material->ComputeCB0FieldHandle("camPosWS");
-    lightCount = material->ComputeCB0FieldHandle("lightCount");
-    screenSize = material->ComputeCB0FieldHandle("screenSize");
-    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-    shadowSize = material->ComputeCB0FieldHandle("shadowSize");
-    invShadowSize = material->ComputeCB0FieldHandle("invShadowSize");
-}
-
-void Scene::CBHandleCache::SsrHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    view = material->ComputeCB0FieldHandle("view");
-    proj = material->ComputeCB0FieldHandle("proj");
-    invView = material->ComputeCB0FieldHandle("invView");
-    invProj = material->ComputeCB0FieldHandle("invProj");
-    depthA = material->ComputeCB0FieldHandle("depthA");
-    depthB = material->ComputeCB0FieldHandle("depthB");
-    zNear = material->ComputeCB0FieldHandle("zNear");
-    zFar = material->ComputeCB0FieldHandle("zFar");
-    screenSize = material->ComputeCB0FieldHandle("screenSize");
-}
-
-void Scene::CBHandleCache::BlurHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    dir = material->ComputeCB0FieldHandle("dir");
-    radius = material->ComputeCB0FieldHandle("radius");
-}
-
-void Scene::CBHandleCache::ComposeHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    invView = material->ComputeCB0FieldHandle("invView");
-    invProj = material->ComputeCB0FieldHandle("invProj");
-    skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
-    camPos = material->ComputeCB0FieldHandle("camPosWS");
-    screenSize = material->ComputeCB0FieldHandle("screenSize");
-    invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-}
-
-void Scene::CBHandleCache::FxaaHandles::Populate(Material* material)
-{
-    *this = {};
-    if (!material) { return; }
-
-    invResolution = material->ComputeCB0FieldHandle("invResolution");
-    subpix = material->ComputeCB0FieldHandle("subpix");
-    edgeThreshold = material->ComputeCB0FieldHandle("edgeThreshold");
-    edgeThresholdMin = material->ComputeCB0FieldHandle("edgeThresholdMin");
-}
 
 const mat4& Scene::GetCascadeView(size_t index) const
 {
@@ -158,50 +58,11 @@ float Scene::GetCascadeDepthBias(size_t index) const
     return cachedDepthBiasNDC_[index];
 }
 
-void Scene::RefreshCachedHandles(Renderer* renderer)
+namespace
 {
-    cbHandles_ = {};
-
-    if (matLighting_)
+    constexpr size_t BucketIndex(SceneRenderQueue::BucketType type)
     {
-        cbHandles_.lighting.Populate(matLighting_.get());
-    }
-    if (matPointLightCS_)
-    {
-        cbHandles_.pointLights.Populate(matPointLightCS_.get());
-    }
-    if (matSpotLightCS_)
-    {
-        cbHandles_.spotLights.Populate(matSpotLightCS_.get());
-    }
-    if (matComposeCS_)
-    {
-        cbHandles_.compose.Populate(matComposeCS_.get());
-    }
-    if (matFxaaCS_)
-    {
-        cbHandles_.fxaa.Populate(matFxaaCS_.get());
-    }
-    if (matSSR_)
-    {
-        cbHandles_.ssr.Populate(matSSR_.get());
-    }
-    if (matBlur_)
-    {
-        cbHandles_.blur.Populate(matBlur_.get());
-    }
-
-    for (auto& obj : objects_)
-    {
-        if (obj)
-        {
-            obj->OnMaterialHotReload(renderer);
-        }
-    }
-
-    if (skyBox_)
-    {
-        skyBox_->OnMaterialHotReload(renderer);
+        return static_cast<size_t>(type);
     }
 }
 
@@ -232,92 +93,12 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
 
 void Scene::InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    cbHandles_ = {};
-
-    if (renderer)
-    {
-        renderer->GetDebugDrawSystem()->Initialize(renderer, uploadCmdList, uploadKeepAlive);
-    }
-
-    if (!matLighting_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/lighting_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matLighting_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matPointLightCS_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/pointlight_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matPointLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matSpotLightCS_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/spotlight_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matSpotLightCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matComposeCS_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/compose_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matComposeCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matTonemapCS_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/tonemap_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matTonemapCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matFxaaCS_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/fxaa_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matFxaaCS_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matSSR_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/ssr_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matSSR_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matBlur_) {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/ssr_blur_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matBlur_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    }
-
-    if (!matDebug_) {
-        Material::GraphicsDesc gd{};
-        gd.shaderFile = L"shaders/debug_texture.hlsl";
-        gd.vsEntry = "VSMain"; gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "";
-        gd.numRT = 1; gd.rtvFormats[0] = renderer->GetBackbufferFormat();
-        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
-        gd.depth.DepthEnable = FALSE;
-        matDebug_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
-    }
+    resources_.Initialize(renderer, uploadCmdList, uploadKeepAlive);
 }
 
 void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    for (auto& obj : objects_)
-    {
-        if (obj)
-        {
-            obj->Init(renderer, uploadCmdList, uploadKeepAlive);
-        }
-    }
-
-    RefreshCachedHandles(renderer);
+    resources_.Finalize(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
 }
 
 void Scene::SetDirectionalLight(DirectionalLight light)
@@ -384,89 +165,6 @@ void Scene::Tick(float deltaTime) {
     //}
 }
 
-void Scene::PrepareTransparentBuckets(const mat4& view)
-{
-    CPU_SCOPE(ProfilerScopes::kPrepareTransparentBuckets);
-    auto computeDepthForRenderable = [&view](RenderableObject* renderable) -> float
-    {
-        if (!renderable)
-        {
-            return 0.0f;
-        }
-
-        const BoundingBox& boundsWS = renderable->GetWorldBounds();
-        float z = FLT_MAX;
-        if (boundsWS.IsValid())
-        {
-            const Math::float3 centerVS = view.TransformPoint(boundsWS.GetCenter());
-            z = centerVS.z;
-        }
-        else
-        {
-            //centerWS = renderable->GetModelMatrix().TransformPoint(Math::float3(0.0f, 0.0f, 0.0f));
-        }
-        
-        return z;
-    };
-
-    auto sortTransparentBucket = [&](ObjectBucket& bucket, std::vector<TransparentSortEntry>& scratch)
-    {
-        const size_t count = bucket.size();
-        if (count == 0)
-        {
-            scratch.clear();
-            return;
-        }
-
-        scratch.resize(count);
-        for (size_t i = 0; i < count; ++i)
-        {
-            RenderableObjectBase* base = bucket[i];
-            TransparentSortEntry entry{};
-            entry.object = base;
-            if (auto* renderable = dynamic_cast<RenderableObject*>(base))
-            {
-                entry.depth = computeDepthForRenderable(renderable);
-            }
-            scratch[i] = entry;
-        }
-
-        std::sort(scratch.begin(), scratch.end(), [](const TransparentSortEntry& lhs, const TransparentSortEntry& rhs)
-        {
-            const float diff = lhs.depth - rhs.depth;
-            if (std::fabs(diff) < 1e-4f)
-            {
-                return lhs.object < rhs.object;
-            }
-            return lhs.depth > rhs.depth;
-        });
-
-        for (size_t i = 0; i < count; ++i)
-        {
-            bucket[i] = scratch[i].object;
-        }
-    };
-
-    constexpr std::array<ObjectRenderType, 2> transparentTypes = {
-        ObjectRenderType::TransparentSimple,
-        ObjectRenderType::TransparentComplex,
-    };
-
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && 0
-    TaskSystem::Get().DispatchWait(transparentTypes.size(), [&](std::size_t jobIndex)
-    {
-        const ObjectRenderType type = transparentTypes[jobIndex];
-        sortTransparentBucket(renderBuckets_[ToIndex(type)], transparentSortScratch_[jobIndex]);
-    });
-#else
-    for (std::size_t jobIndex = 0; jobIndex < transparentTypes.size(); ++jobIndex)
-    {
-        const ObjectRenderType type = transparentTypes[jobIndex];
-        sortTransparentBucket(renderBuckets_[ToIndex(type)], transparentSortScratch_[jobIndex]);
-    }
-#endif
-}
-
 void Scene::Render(Renderer* renderer) {
     if (!renderer) {
         return;
@@ -479,7 +177,7 @@ void Scene::Render(Renderer* renderer) {
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {
-        RefreshCachedHandles(renderer);
+        resources_.RefreshMaterialHandles(renderer, objects_, skyBox_.get());
     }
 
     auto* tb = renderer->GetTextManager();
@@ -510,25 +208,10 @@ void Scene::Render(Renderer* renderer) {
     const mat4 invProj = mat4::Inverse(proj);
     const float3 camDir = invView.TransformDirection(float3(0, 0, 1)).Normalized();
 
-    // bucketize renderables into the persistent scratch arrays to avoid per-frame allocations
-    for (auto& bucket : renderBuckets_) {
-        bucket.clear();
-    }
-    for (const auto& obj : objects_) {
-        if (!obj) {
-            continue;
-        }
-        const bool tr = obj->IsTransparent();
-        const bool simple = obj->IsSimpleRender();
-        const ObjectRenderType key = tr
-            ? (simple ? ObjectRenderType::TransparentSimple : ObjectRenderType::TransparentComplex)
-            : (simple ? ObjectRenderType::OpaqueSimple : ObjectRenderType::OpaqueComplex);
-        renderBuckets_[ToIndex(key)].push_back(obj.get());
-    }
+    renderQueue_.Bucketize(objects_);
+    renderQueue_.SortTransparent(view);
 
-    PrepareTransparentBuckets(view);
-
-    const auto& buckets = renderBuckets_;
+    const auto& buckets = renderQueue_.Buckets();
 
     RenderGraph rg;
     auto pClear = rg.AddPass("PrologueClear", {},
@@ -768,7 +451,7 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
     float zNear, float zFar, const float3& camDir,
-    const ObjectBuckets& buckets)
+    const Scene::BucketArray& buckets)
 {
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
@@ -786,16 +469,13 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->EndThreadCommandList(d, ctx.batchIndex);
 #endif
 
-        const float shadowMaxDistance = 300.0f;
-        const float zFarShadow = std::min(zFar, shadowMaxDistance);
+        const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
+        for (size_t i = 0; i < splits.size(); ++i)
+        {
+            cachedSplitsVS_[i] = splits[i];
+        }
+        const float zFarShadow = splits.back();
         size_t batchIndex = ctx.batchIndex;
-
-        // Split distances (hard-coded to match your setup)
-        cachedSplitsVS_[0] = zNear;
-        cachedSplitsVS_[1] = 10.0f;
-        cachedSplitsVS_[2] = 30.0f;
-        cachedSplitsVS_[3] = 100.0f;
-        cachedSplitsVS_[4] = zFarShadow;
 
         TaskSystem& tasks = TaskSystem::Get();
         auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.GetDirection(), batchIndex](std::size_t idx)
@@ -816,25 +496,27 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 const float halfSlice = 0.5f * (sliceFar - sliceNear);
                 const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
 
-                const float kForward = 1.0f;
-                float delta = kForward * halfSlice;
+                float delta = cascadeConfig_.forwardOffset * halfSlice;
 
                 auto radiusFor = [&](float d) {
                     const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
                     return std::sqrt(rf2);
                     };
-                const float overlap = 2.0f;
-                float radius = radiusFor(delta) + overlap; // +padding
+                float radius = radiusFor(delta) + cascadeConfig_.overlap;
                 //radius -= halfSlice;
 
                 const float3 camPos = camera_.GetPosition();
                 float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
-                float spatialStep = radius * 0.1f;
-                center = Floor(center / spatialStep) * spatialStep;
+                if (cascadeConfig_.stabilizationStepFraction > 0.0f)
+                {
+                    float spatialStep = radius * cascadeConfig_.stabilizationStepFraction;
+                    center = Floor(center / spatialStep) * spatialStep;
+                }
 
                 // Light view matrix
                 const float3 up(0, 1, 0);
-                mat4 lightView = mat4::LookAtLH(center - sunDirWS * 300.0f, center, up);
+                const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
+                mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
 
                 // AABB along Z + stabilize XY
                 float2 centerLS = (lightView * float4(center, 1)).xy();
@@ -854,14 +536,14 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 float minX = centerLS.x - radius, maxX = centerLS.x + radius;
                 float minY = centerLS.y - radius, maxY = centerLS.y + radius;
 
-                const float zPad = 25.0f;
+                const float zPad = cascadeConfig_.zPadding;
                 float nearLS = std::max(0.001f, minZ - zPad);
                 float farLS = maxZ + zPad;
 
                 mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
 
-                const float normalBiasInTexels = 0.75f;
-                const float depthBiasInTexels = 2.0f;
+                const float normalBiasInTexels = cascadeConfig_.normalBiasInTexels;
+                const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
                 cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
                 cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
 
@@ -871,19 +553,19 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
 
 #if PARALLEL_SHADOW_BATCH
-                const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+                const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
                 if (!opaqueSimple.empty())
                 {
                     RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
                 }
-                const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+                const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
                 if (!opaqueComplex.empty())
                 {
                     RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
                 }
 #else
-                const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
-                const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+                const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+                const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
 
 #if PARALLEL_SHADOW_CASCADES
                 auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -938,7 +620,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
-    const ObjectBuckets& buckets)
+    const Scene::BucketArray& buckets)
 {
     const size_t spotLightCount = lightManager_.GetSpotLightCount();
     if (spotLightCount == 0)
@@ -946,8 +628,8 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         return;
     }
 
-    const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
-    const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+    const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+    const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
     const auto& spotLights = lightManager_.SpotLights();
     const auto& D = renderer->GetDeferredForFrame();
     const std::wstring passNameW(ctx.passName.begin(), ctx.passName.end());
@@ -1029,7 +711,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const ObjectBuckets& buckets)
+    const Scene::BucketArray& buckets)
 {
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
@@ -1050,7 +732,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
 
     // 1.2 Opaque simple → bundles
     rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& opaqueSimple = buckets[ToIndex(ObjectRenderType::OpaqueSimple)];
+        const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
             RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, view, proj, /*useBundles=*/true, true, 32);
@@ -1059,7 +741,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
 
     // 1.3 Opaque complex → direct command list, no clears
     rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& opaqueComplex = buckets[ToIndex(ObjectRenderType::OpaqueComplex)];
+        const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
             RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, view, proj, /*useBundles=*/false, true, 32);
@@ -1075,6 +757,17 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
     const float3& camDir)
 {
     (void)proj;
+    auto lighting = resources_.GetLightingMaterial();
+    if (!lighting)
+    {
+        return;
+    }
+    const size_t cbSize = resources_.GetLightingCBSizeBytes();
+    if (cbSize == 0)
+    {
+        return;
+    }
+
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
     {
@@ -1089,41 +782,33 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matLighting_->GetCBSizeBytesAligned(0, 256), 256);
-        const auto& handles = cbHandles_.lighting;
-
-        matLighting_->UpdateCBField(handles.sunDir, dirLight_.GetDirection(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.ambient, dirLight_.GetAmbient(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.lightRgb, dirLight_.GetColor(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.exposure, dirLight_.GetExposure(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.camDir, camDir, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.view, view, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
-
-        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[0] * cachedLightProj_[0]), (uint8_t*)cb.cpu, 0);
-        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[1] * cachedLightProj_[1]), (uint8_t*)cb.cpu, 1);
-        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[2] * cachedLightProj_[2]), (uint8_t*)cb.cpu, 2);
-        matLighting_->UpdateCBField(handles.lightViewProj, (cachedLightView_[3] * cachedLightProj_[3]), (uint8_t*)cb.cpu, 3);
-
-        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[0].x, cachedScale_[0].y, cachedBias_[0].x, cachedBias_[0].y), (uint8_t*)cb.cpu, 0);
-        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[1].x, cachedScale_[1].y, cachedBias_[1].x, cachedBias_[1].y), (uint8_t*)cb.cpu, 1);
-        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[2].x, cachedScale_[2].y, cachedBias_[2].x, cachedBias_[2].y), (uint8_t*)cb.cpu, 2);
-        matLighting_->UpdateCBField(handles.cascadeScaleBias, float4(cachedScale_[3].x, cachedScale_[3].y, cachedBias_[3].x, cachedBias_[3].y), (uint8_t*)cb.cpu, 3);
-
-        matLighting_->UpdateCBField(handles.cascadeSplits, float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]), (uint8_t*)cb.cpu);
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        LightingPassConstants constants{};
+        constants.sunDir = dirLight_.GetDirection();
+        constants.ambient = dirLight_.GetAmbient();
+        constants.lightRgb = dirLight_.GetColor();
+        constants.exposure = dirLight_.GetExposure();
+        constants.camPos = camera_.GetPosition();
+        constants.camDir = camDir;
+        constants.view = view;
+        constants.invView = invView;
+        constants.invProj = invProj;
+        for (size_t i = 0; i < constants.lightViewProj.size(); ++i)
+        {
+            constants.lightViewProj[i] = cachedLightView_[i] * cachedLightProj_[i];
+            constants.cascadeScaleBias[i] = float4(cachedScale_[i].x, cachedScale_[i].y, cachedBias_[i].x, cachedBias_[i].y);
+        }
+        constants.cascadeSplits = float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]);
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
-        matLighting_->UpdateCBField(handles.shadowAtlasSize, float2(shadowRes, shadowRes), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.shadowBiasNDC, float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]), (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.normalBiasWS, float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]), (uint8_t*)cb.cpu);
-
+        constants.shadowAtlasSize = float2(shadowRes, shadowRes);
+        constants.shadowBiasNDC = float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]);
+        constants.normalBiasWS = float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]);
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
-        const float2 screenSize = float2(width, height);
-        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
-        matLighting_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
-        matLighting_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
+        constants.screenSize = float2(width, height);
+        constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+
+        resources_.WriteLightingConstants(constants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1141,7 +826,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matLighting_->Bind(t.cl, rc);
+        lighting->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
         const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
@@ -1202,29 +887,30 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
             spotLightBufferCPU[i].viewProj = viewProj;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matSpotLightCS_->GetCBSizeBytesAligned(0, 256), 256);
-        const auto& handles = cbHandles_.spotLights;
+        auto spotMaterial = resources_.GetSpotLightMaterial();
+        const size_t cbSize = resources_.GetSpotLightCBSizeBytes();
+        if (!spotMaterial || cbSize == 0)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
 
-        matSpotLightCS_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
-        matSpotLightCS_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
-        matSpotLightCS_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
-
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        SpotLightPassConstants constants{};
+        constants.invView = invView;
+        constants.invProj = invProj;
+        constants.camPos = camera_.GetPosition();
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
-        const float2 screenSize = float2(width, height);
-        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
-        matSpotLightCS_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
-        matSpotLightCS_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
-
+        constants.screenSize = float2(width, height);
+        constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().spotShadowRes);
-        const float2 shadowSize = float2(shadowRes, shadowRes);
         const float invRes = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
-        const float2 invShadowSize = float2(invRes, invRes);
-        matSpotLightCS_->UpdateCBField(handles.shadowSize, shadowSize, (uint8_t*)cb.cpu);
-        matSpotLightCS_->UpdateCBField(handles.invShadowSize, invShadowSize, (uint8_t*)cb.cpu);
+        constants.shadowSize = float2(shadowRes, shadowRes);
+        constants.invShadowSize = float2(invRes, invRes);
+        constants.lightCount = static_cast<uint32_t>(spotLightCount);
 
-        const uint32_t lightCount = static_cast<uint32_t>(spotLightCount);
-        matSpotLightCS_->UpdateCBField(handles.lightCount, lightCount, (uint8_t*)cb.cpu);
+        resources_.WriteSpotLightConstants(constants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1243,7 +929,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matSpotLightCS_->Bind(t.cl, rc);
+        spotMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
         const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
@@ -1291,22 +977,26 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
             pointLightBufferCPU[i].intensity = desc.intensity;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matPointLightCS_->GetCBSizeBytesAligned(0, 256), 256);
-        const auto& handles = cbHandles_.pointLights;
+        auto pointMaterial = resources_.GetPointLightMaterial();
+        const size_t cbSize = resources_.GetPointLightCBSizeBytes();
+        if (!pointMaterial || cbSize == 0)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
 
-        matPointLightCS_->UpdateCBField(handles.invView, invView, (uint8_t*)cb.cpu);
-        matPointLightCS_->UpdateCBField(handles.invProj, invProj, (uint8_t*)cb.cpu);
-        matPointLightCS_->UpdateCBField(handles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
-
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        PointLightPassConstants constants{};
+        constants.invView = invView;
+        constants.invProj = invProj;
+        constants.camPos = camera_.GetPosition();
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
-        const float2 screenSize = float2(width, height);
-        const float2 invScreen = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
-        matPointLightCS_->UpdateCBField(handles.screenSize, screenSize, (uint8_t*)cb.cpu);
-        matPointLightCS_->UpdateCBField(handles.invScreenSize, invScreen, (uint8_t*)cb.cpu);
+        constants.screenSize = float2(width, height);
+        constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+        constants.lightCount = static_cast<uint32_t>(pointLights.size());
 
-        const uint32_t lightCount = static_cast<uint32_t>(pointLights.size());
-        matPointLightCS_->UpdateCBField(handles.lightCount, lightCount, (uint8_t*)cb.cpu);
+        resources_.WritePointLightConstants(constants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1324,7 +1014,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matPointLightCS_->Bind(t.cl, rc);
+        pointMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
         const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
@@ -1377,17 +1067,27 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matSSR_->GetCBSizeBytesAligned(0, 256), 256);
-        const auto& handlesSSR = cbHandles_.ssr;
-        matSSR_->UpdateCBField(handlesSSR.view, view, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.proj, proj, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.invView, invView, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.invProj, invProj, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.depthA, zFar / (zFar - zNear), (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.depthB, (zNear * zFar) / (zNear - zFar), (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.zNear, zNear, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.zFar, zFar, (uint8_t*)cb.cpu);
-        matSSR_->UpdateCBField(handlesSSR.screenSize, float2((float)renderer->GetWidth(), (float)renderer->GetHeight()), (uint8_t*)cb.cpu);
+        auto ssrMaterial = resources_.GetSsrMaterial();
+        const size_t cbSize = resources_.GetSsrCBSizeBytes();
+        if (!ssrMaterial || cbSize == 0)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        SsrPassConstants constants{};
+        constants.view = view;
+        constants.proj = proj;
+        constants.invView = invView;
+        constants.invProj = invProj;
+        constants.depthA = zFar / (zFar - zNear);
+        constants.depthB = (zNear * zFar) / (zNear - zFar);
+        constants.zNear = zNear;
+        constants.zFar = zFar;
+        constants.screenSize = float2(static_cast<float>(renderer->GetWidth()), static_cast<float>(renderer->GetHeight()));
+
+        resources_.WriteSsrConstants(constants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1398,7 +1098,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matSSR_->Bind(t.cl, rc);
+        ssrMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT ssrWidth = renderer->GetSsrTextureWidth();
         const UINT ssrHeight = renderer->GetSsrTextureHeight();
@@ -1428,11 +1128,20 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        auto blurMaterial = resources_.GetBlurMaterial();
+        const size_t cbSize = resources_.GetBlurCBSizeBytes();
+        if (!blurMaterial || cbSize == 0)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         const float invSsrWidth = ssrWidth > 0 ? (1.0f / static_cast<float>(ssrWidth)) : 0.0f;
-        float2 dir = float2(invSsrWidth, 0.0f);
-        matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCBField(cbHandles_.blur.radius, 0.5f, (uint8_t*)cb.cpu);
+        BlurPassConstants blurConstants{};
+        blurConstants.direction = float2(invSsrWidth, 0.0f);
+        blurConstants.radius = 0.5f;
+        resources_.WriteBlurConstants(blurConstants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
@@ -1443,7 +1152,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         const auto samplerDescsX = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsX);
 
-        matBlur_->Bind(t.cl, rc);
+        blurMaterial->Bind(t.cl, rc);
         t.cl->Dispatch(groupsX, groupsY, 1);
         renderer->UAVBarrier(t.cl, D.ssrBlur.Get());
 
@@ -1451,11 +1160,10 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        cb = renderer->GetFrameResource()->AllocDynamic(matBlur_->GetCBSizeBytesAligned(0, 256), 256);
+        cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         const float invSsrHeight = ssrHeight > 0 ? (1.0f / static_cast<float>(ssrHeight)) : 0.0f;
-        dir = float2(0.0f, invSsrHeight);
-        matBlur_->UpdateCBField(cbHandles_.blur.dir, dir, (uint8_t*)cb.cpu);
-        matBlur_->UpdateCBField(cbHandles_.blur.radius, 0.5f, (uint8_t*)cb.cpu);
+        blurConstants.direction = float2(0.0f, invSsrHeight);
+        resources_.WriteBlurConstants(blurConstants, (uint8_t*)cb.cpu);
 
         rc.ClearFast();
         rc.cbv[0] = cb.gpu;
@@ -1464,7 +1172,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
         const auto samplerDescsY = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsY);
 
-        matBlur_->Bind(t.cl, rc);
+        blurMaterial->Bind(t.cl, rc);
         t.cl->Dispatch(groupsX, groupsY, 1);
         renderer->UAVBarrier(t.cl, D.ssr.Get());
     }
@@ -1499,16 +1207,25 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(matComposeCS_->GetCBSizeBytesAligned(0, 256), 256);
-        const auto& composeHandles = cbHandles_.compose;
-        matComposeCS_->UpdateCBField(composeHandles.invView, invView, (uint8_t*)cb.cpu);
-        matComposeCS_->UpdateCBField(composeHandles.invProj, invProj, (uint8_t*)cb.cpu);
-        matComposeCS_->UpdateCBField(composeHandles.skyboxIntensity, skyBox_->GetExposure(), (uint8_t*)cb.cpu);
-        matComposeCS_->UpdateCBField(composeHandles.camPos, camera_.GetPosition(), (uint8_t*)cb.cpu);
-        const float2 screenSize = float2(width, height);
-        const float2 invScreenSize = float2(1.0f / width, 1.0f / height);
-        matComposeCS_->UpdateCBField(composeHandles.screenSize, screenSize, (uint8_t*)cb.cpu);
-        matComposeCS_->UpdateCBField(composeHandles.invScreenSize, invScreenSize, (uint8_t*)cb.cpu);
+        auto composeMaterial = resources_.GetComposeMaterial();
+        const size_t cbSize = resources_.GetComposeCBSizeBytes();
+        if (!composeMaterial || cbSize == 0)
+        {
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        ComposePassConstants constants{};
+        constants.invView = invView;
+        constants.invProj = invProj;
+        constants.skyboxIntensity = skyBox_ ? skyBox_->GetExposure() : 1.0f;
+        constants.camPos = camera_.GetPosition();
+        constants.screenSize = float2(width, height);
+        constants.invScreenSize = float2(1.0f / width, 1.0f / height);
+
+        resources_.WriteComposeConstants(constants, (uint8_t*)cb.cpu);
 
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
             D.lightSRV,
@@ -1528,7 +1245,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-        matComposeCS_->Bind(t.cl, rc);
+        composeMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
         const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
@@ -1546,7 +1263,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
     const mat4& view, const mat4& proj,
-    const ObjectBuckets& buckets)
+    const Scene::BucketArray& buckets)
 {
     RenderGraph rgTr(ctx.batchIndex);
 
@@ -1572,7 +1289,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     rgTr.AddPass("Transparent.Simple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& transparentSimple = buckets[ToIndex(ObjectRenderType::TransparentSimple)];
+        const auto& transparentSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
             RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, view, proj, /*useBundles=*/true, false, 32);
@@ -1580,7 +1297,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     rgTr.AddPass("Transparent.Complex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& transparentComplex = buckets[ToIndex(ObjectRenderType::TransparentComplex)];
+        const auto& transparentComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
             RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, view, proj, /*useBundles=*/false, false, 32);
@@ -1637,7 +1354,14 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
 
-        matTonemapCS_->Bind(t.cl, rc);
+        auto tonemapMaterial = resources_.GetTonemapMaterial();
+        if (!tonemapMaterial)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        tonemapMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
         const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
         const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
@@ -1649,11 +1373,13 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
         renderer->UAVBarrier(t.cl, D.tonemap.Get());
 
         bool ranFxaa = false;
-        if (matFxaaCS_ && groupsX > 0 && groupsY > 0)
+        auto fxaaMaterial = resources_.GetFxaaMaterial();
+        const size_t fxaaCbSize = resources_.GetFxaaCBSizeBytes();
+        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-            auto cb = renderer->GetFrameResource()->AllocDynamic(matFxaaCS_->GetCBSizeBytesAligned(0, 256), 256);
+            auto cb = renderer->GetFrameResource()->AllocDynamic(fxaaCbSize, Renderer::kConstantBufferAlignment);
             const float width = static_cast<float>(renderer->GetWidth());
             const float height = static_cast<float>(renderer->GetHeight());
             const float2 invResolution = float2(width > 0.0f ? 1.0f / width : 0.0f, height > 0.0f ? 1.0f / height : 0.0f);
@@ -1667,10 +1393,13 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
             const float edgeThreshold = 0.125f;
             const float edgeThresholdMin = 0.0416667f;
 
-            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.invResolution, invResolution, (uint8_t*)cb.cpu);
-            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.subpix, subpix, (uint8_t*)cb.cpu);
-            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.edgeThreshold, edgeThreshold, (uint8_t*)cb.cpu);
-            matFxaaCS_->UpdateCBField(cbHandles_.fxaa.edgeThresholdMin, edgeThresholdMin, (uint8_t*)cb.cpu);
+            FxaaPassConstants fxaaConstants{};
+            fxaaConstants.invResolution = invResolution;
+            fxaaConstants.subpix = subpix;
+            fxaaConstants.edgeThreshold = edgeThreshold;
+            fxaaConstants.edgeThresholdMin = edgeThresholdMin;
+
+            resources_.WriteFxaaConstants(fxaaConstants, (uint8_t*)cb.cpu);
 
             auto fxaaCtx = renderer->GetRenderContextPool()->Acquire();
             auto& fxaaRC = fxaaCtx.ref();
@@ -1680,7 +1409,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraph::PassContext ctx)
             const auto fxaaSamplers = std::array{ *SamplerManager::LinearClamp() };
             fxaaRC.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, fxaaSamplers);
 
-            matFxaaCS_->Bind(t.cl, fxaaRC);
+            fxaaMaterial->Bind(t.cl, fxaaRC);
             t.cl->Dispatch(groupsX, groupsY, 1);
 
             renderer->UAVBarrier(t.cl, D.fxaa.Get());
@@ -1724,7 +1453,14 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraph::PassContext ctx)
         const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 
-        matDebug_->Bind(t.cl, rc);
+        auto debugMaterial = resources_.GetDebugMaterial();
+        if (!debugMaterial)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        debugMaterial->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
     }
@@ -1753,25 +1489,9 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraph::PassContext ctx)
 
 void Scene::Clear()
 {
-    matLighting_.reset();
-    matPointLightCS_.reset();
-    matSpotLightCS_.reset();
-    matComposeCS_.reset();
-    matTonemapCS_.reset();
-    matFxaaCS_.reset();
-    matBlur_.reset();
-    matSSR_.reset();
-    matDebug_.reset();
+    resources_ = SceneResourceBootstrapper{};
     lightManager_.Reset();
-    cbHandles_ = {};
     objects_.clear();
-    for (auto& bucket : renderBuckets_)
-    {
-        bucket.clear();
-    }
-    for (auto& scratch : transparentSortScratch_)
-    {
-        scratch.clear();
-    }
+    renderQueue_.Clear();
     skyBox_.reset();
 }

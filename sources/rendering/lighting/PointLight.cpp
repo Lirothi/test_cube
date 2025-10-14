@@ -129,7 +129,9 @@ void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
     if (sphere_ == nullptr) { return; }
 
     // CB b0: world/view/proj
-    auto cb = r->GetFrameResource()->AllocDynamic(matZFail_->GetCBSizeBytesAligned(0, 256), 256);
+    auto cb = r->GetFrameResource()->AllocDynamic(
+        matZFail_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
+        Renderer::kConstantBufferAlignment);
     matZFail_->UpdateCBField(cbHandles_.zFail.world, BuildModel(), (uint8_t*)cb.cpu);
     matZFail_->UpdateCBField(cbHandles_.zFail.view, view, (uint8_t*)cb.cpu);
     matZFail_->UpdateCBField(cbHandles_.zFail.proj, proj, (uint8_t*)cb.cpu);
@@ -151,7 +153,9 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
                              const float3& camPos)
 {
     // CB b0: per-frame
-    auto cb0 = r->GetFrameResource()->AllocDynamic(matColorFS_->GetCBSizeBytesAligned(0, 256), 256);
+    auto cb0 = r->GetFrameResource()->AllocDynamic(
+        matColorFS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
+        Renderer::kConstantBufferAlignment);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.view, view, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.proj, proj, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invView, invView, (uint8_t*)cb0.cpu);
@@ -160,7 +164,9 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     matColorFS_->UpdateCBField(cbHandles_.color.frame.screenSize, float2((float)r->GetWidth(), (float)r->GetHeight()), (uint8_t*)cb0.cpu);
 
     // CB b1: per-light
-    auto cb1 = r->GetFrameResource()->AllocDynamic(matColorFS_->GetCBSizeBytesAligned(1, 256), 256);
+    auto cb1 = r->GetFrameResource()->AllocDynamic(
+        matColorFS_->GetCBSizeBytesAligned(1, Renderer::kConstantBufferAlignment),
+        Renderer::kConstantBufferAlignment);
     matColorFS_->UpdateCBField(cbHandles_.color.light.position, desc_.position, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.radius, desc_.radius, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);

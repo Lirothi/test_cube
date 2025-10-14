@@ -125,6 +125,10 @@ void App::InitScene()
     renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAlloc.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList));
 
     renderer.InitTextSystem(uploadCmdList.Get(), &pendingUploads, L"fonts");
+    if (auto* debugDraw = renderer.GetDebugDrawSystem())
+    {
+        debugDraw->Initialize(&renderer, uploadCmdList.Get(), &pendingUploads);
+    }
 
     LevelLoadContext loadCtx{};
     loadCtx.uploadCmdList = uploadCmdList.Get();

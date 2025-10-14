@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "core/math/BoundingBox.h"
 #include "rendering/core/RenderGraph.h"
 
 class Renderer;
@@ -19,4 +20,10 @@ public:
     virtual bool IsSimpleRender() const = 0;
     virtual bool CastsShadow() const = 0;
     virtual void OnMaterialHotReload(Renderer* renderer) {}
+
+    virtual const BoundingBox& GetWorldBounds() const
+    {
+        static const BoundingBox kInvalidBounds = BoundingBox::Empty();
+        return kInvalidBounds;
+    }
 };
