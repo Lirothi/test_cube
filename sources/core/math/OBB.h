@@ -62,26 +62,38 @@ public:
 
         const Math::float3 aCenter = bounds.GetCenter();
         const Math::float3 aHalf = bounds.GetHalfExtents();
+        const Math::float3 bHalf = halfExtents_;
 
         const float a[3] = { aHalf.x, aHalf.y, aHalf.z };
-        const float b[3] = { halfExtents_.x, halfExtents_.y, halfExtents_.z };
+        const float b[3] = { bHalf.x, bHalf.y, bHalf.z };
 
-        const Math::float3 diff = center_ - aCenter;
-        const float t[3] = { diff.x, diff.y, diff.z };
+        // World axes for the axis-aligned box.
+        const Math::float3 aAxes[3] = {
+            Math::float3(1.0f, 0.0f, 0.0f),
+            Math::float3(0.0f, 1.0f, 0.0f),
+            Math::float3(0.0f, 0.0f, 1.0f)
+        };
 
+        // Rotation matrix that expresses the OBB axes in the AABB basis.
         float R[3][3];
         float AbsR[3][3];
         constexpr float kEpsilon = 1e-5f;
-        for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i)
         {
-            const Math::float3 axis = axes_[j];
-            R[0][j] = axis.x;
-            R[1][j] = axis.y;
-            R[2][j] = axis.z;
-            AbsR[0][j] = std::fabs(R[0][j]) + kEpsilon;
-            AbsR[1][j] = std::fabs(R[1][j]) + kEpsilon;
-            AbsR[2][j] = std::fabs(R[2][j]) + kEpsilon;
+            for (int j = 0; j < 3; ++j)
+            {
+                R[i][j] = aAxes[i].Dot(axes_[j]);
+                AbsR[i][j] = std::fabs(R[i][j]) + kEpsilon;
+            }
         }
+
+        // Translation of the OBB center expressed in the AABB basis.
+        const Math::float3 diff = center_ - aCenter;
+        const float t[3] = {
+            diff.Dot(aAxes[0]),
+            diff.Dot(aAxes[1]),
+            diff.Dot(aAxes[2])
+        };
 
         for (int i = 0; i < 3; ++i)
         {
