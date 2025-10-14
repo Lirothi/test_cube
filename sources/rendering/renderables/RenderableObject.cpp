@@ -247,6 +247,11 @@ void RenderableObject::PostTick(float dt)
         transformDirty_ = false;
     }
 
+    if (worldBoundsDirty_)
+    {
+        UpdateWorldBoundsCache();
+    }
+
     RenderableObjectBase::PostTick(dt);
 
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
