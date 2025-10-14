@@ -8,7 +8,7 @@
 
 using namespace Microsoft::WRL;
 
-#include "core/math/BoundingBox.h"
+#include "core/math/AABB.h"
 
 // NEW "full" format for textures/lighting
 // order matches the layout preset "PosNormTanUV":
@@ -52,7 +52,7 @@ public:
     UINT GetVertexStride() const { return vertexStride_; }
     DXGI_FORMAT GetIndexFormat() const { return indexFormat_; }
 
-    const BoundingBox& GetBoundingBox() const { return bounds_; }
+    const AABB& GetBoundingBox() const { return bounds_; }
 
 private:
     // Generate normals/tangents (simple: per triangle with vertex averaging)
@@ -67,5 +67,5 @@ private:
     UINT  vertexStride_ = 0;      // explicit stride provided during upload
     DXGI_FORMAT indexFormat_ = DXGI_FORMAT_R16_UINT;
     UINT  indexCount_ = 0;
-    BoundingBox bounds_;
+    AABB bounds_;
 };

@@ -634,35 +634,87 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
     const auto& D = renderer->GetDeferredForFrame();
     const std::wstring passNameW(ctx.passName.begin(), ctx.passName.end());
 
+    const Math::float4 lightBoundsColor(1.0f, 1.0f, 0.0f, 0.25f);
+    const Math::float4 passBoundsColor(0.0f, 1.0f, 0.0f, 0.35f);
+    const Math::float4 failBoundsColor(1.0f, 0.0f, 0.0f, 0.35f);
+
+    auto drawLightBounds = [&](const SpotLight& light, DebugDrawSystem* debugDraw)
+    {
+        if (!debugDraw)
+        {
+            return;
+        }
+
+        const AABB& coneBounds = light.GetConeBounds();
+        if (coneBounds.IsValid())
+        {
+            debugDraw->AddBox(coneBounds, lightBoundsColor, true);
+        }
+
+        const OBB& coneObb = light.GetConeOBB();
+        if (coneObb.IsValid())
+        {
+            debugDraw->AddBox(coneObb, lightBoundsColor, true);
+        }
+    };
+
+    auto renderObjectsForLight = [&](ID3D12GraphicsCommandList* commandList,
+        const SpotLight& light,
+        const mat4& lightView,
+        const mat4& lightProj,
+        DebugDrawSystem* debugDraw)
+    {
+        auto renderBucket = [&](const auto& bucket)
+        {
+            for (auto* obj : bucket)
+            {
+                if (!obj)
+                {
+                    continue;
+                }
+
+                const AABB& bounds = obj->GetWorldBounds();
+                const bool inside = light.AABBIntersectsCone(bounds);
+
+                if (debugDraw && bounds.IsValid())
+                {
+                    debugDraw->AddBox(bounds, inside ? passBoundsColor : failBoundsColor, true);
+                }
+
+                if (inside)
+                {
+                    obj->RenderShadow(renderer, commandList, lightView, lightProj);
+                }
+            }
+        };
+
+        renderBucket(opaqueSimple);
+        renderBucket(opaqueComplex);
+    };
+
+    auto renderLightShadow = [&](ID3D12GraphicsCommandList* commandList, size_t lightIndex)
+    {
+        renderer->BindSpotShadowTarget(commandList, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
+
+        const auto& light = spotLights[lightIndex];
+        const auto& lightView = light.GetViewMatrix();
+        const auto& lightProj = light.GetProjMatrix();
+
+        DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem();
+        drawLightBounds(light, debugDraw);
+        renderObjectsForLight(commandList, light, lightView, lightProj, debugDraw);
+    };
+
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     auto& tasks = TaskSystem::Get();
-    auto renderSpotShadow = [renderer, &opaqueSimple, &opaqueComplex, &spotLights, &D, batchIndex = ctx.batchIndex](std::size_t lightIndex)
+    auto renderSpotShadow = [renderer, &D, batchIndex = ctx.batchIndex, &renderLightShadow](std::size_t lightIndex)
     {
         CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
             renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
-
-            const auto& lightView = spotLights[lightIndex].GetViewMatrix();
-            const auto& lightProj = spotLights[lightIndex].GetProjMatrix();
-
-            for (auto* obj : opaqueSimple)
-            {
-                if (obj)
-                {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
-            }
-
-            for (auto* obj : opaqueComplex)
-            {
-                if (obj)
-                {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
-            }
+            renderLightShadow(t.cl, lightIndex);
         }
         renderer->EndThreadCommandList(t, batchIndex);
     };
@@ -677,32 +729,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
 
         for (size_t lightIndex = 0; lightIndex < spotLightCount; ++lightIndex)
         {
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
-
-            const auto& lightView = spotLights[lightIndex].GetViewMatrix();
-            const auto& lightProj = spotLights[lightIndex].GetProjMatrix();
-
-            {
-                CPU_SCOPE(kShadows1);
-                for (auto* obj : opaqueSimple)
-                {
-                    if (obj)
-                    {
-                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                    }
-                }
-            }
-
-            {
-                CPU_SCOPE(kShadows2);
-                for (auto* obj : opaqueComplex)
-                {
-                    if (obj)
-                    {
-                        obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                    }
-                }
-            }
+            renderLightShadow(t.cl, lightIndex);
         }
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);

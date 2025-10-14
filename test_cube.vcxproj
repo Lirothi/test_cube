@@ -257,7 +257,8 @@
     <ClInclude Include="sources/rendering/lighting/SpotLight.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
-    <ClInclude Include="sources/core/math/BoundingBox.h" />
+    <ClInclude Include="sources/core/math/AABB.h" />
+    <ClInclude Include="sources/core/math/OBB.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />

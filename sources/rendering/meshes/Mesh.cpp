@@ -63,7 +63,7 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
         verts.data(), (UINT)verts.size(), sizeof(VertexPNTUV),
         indices, indexCount, DXGI_FORMAT_R32_UINT);
 
-    BoundingBox bounds = BoundingBox::Empty();
+    AABB bounds = AABB::Empty();
     for (const auto& vert : verts)
     {
         bounds.Expand(Math::float3(vert.position.x, vert.position.y, vert.position.z));

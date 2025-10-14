@@ -69,7 +69,7 @@ float SceneRenderQueue::ComputeDepth(const mat4& view, const TransparentEntry& e
         return -std::numeric_limits<float>::infinity();
     }
 
-    const BoundingBox& boundsWS = entry.base->GetWorldBounds();
+    const AABB& boundsWS = entry.base->GetWorldBounds();
     if (!boundsWS.IsValid())
     {
         return std::numeric_limits<float>::infinity();

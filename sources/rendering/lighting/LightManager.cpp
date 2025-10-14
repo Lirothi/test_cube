@@ -6,10 +6,6 @@
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
 
-using Math::float3;
-using Math::float4;
-using Math::mat4;
-
 LightManager::~LightManager()
 {
     Reset();

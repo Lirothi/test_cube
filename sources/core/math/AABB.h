@@ -1,27 +1,29 @@
 #pragma once
 
 #include <cfloat>
+#include <algorithm>
+#include <cmath>
 
 #include "core/math/Math.h"
 
-class BoundingBox
+class AABB
 {
 public:
-    BoundingBox() noexcept
+    AABB() noexcept
         : min_(Math::float3(+FLT_MAX, +FLT_MAX, +FLT_MAX))
         , max_(Math::float3(-FLT_MAX, -FLT_MAX, -FLT_MAX))
     {
     }
 
-    BoundingBox(const Math::float3& minPt, const Math::float3& maxPt) noexcept
+    AABB(const Math::float3& minPt, const Math::float3& maxPt) noexcept
         : min_(minPt)
         , max_(maxPt)
     {
     }
 
-    static BoundingBox Empty() noexcept
+    static AABB Empty() noexcept
     {
-        return BoundingBox();
+        return AABB();
     }
 
     void Reset() noexcept
@@ -48,7 +50,7 @@ public:
         max_ = Math::float3::Max(max_, point);
     }
 
-    void Expand(const BoundingBox& other) noexcept
+    void Expand(const AABB& other) noexcept
     {
         if (!other.IsValid())
         {
@@ -103,14 +105,14 @@ public:
         corners[7] = Math::float3(max.x, max.y, max.z);
     }
 
-    BoundingBox Transform(const Math::mat4& transform) const noexcept
+    AABB Transform(const Math::mat4& transform) const noexcept
     {
         if (!IsValid())
         {
             return *this;
         }
 
-        BoundingBox result = BoundingBox::Empty();
+        AABB result = AABB::Empty();
         Math::float3 corners[8];
         GetCorners(corners);
         for (const auto& corner : corners)
@@ -118,6 +120,79 @@ public:
             result.Expand(transform.TransformPoint(corner));
         }
         return result;
+    }
+
+    bool Intersects(const AABB& other) const noexcept
+    {
+        if (!IsValid() || !other.IsValid())
+        {
+            return false;
+        }
+
+        if (max_.x < other.min_.x || min_.x > other.max_.x)
+        {
+            return false;
+        }
+        if (max_.y < other.min_.y || min_.y > other.max_.y)
+        {
+            return false;
+        }
+        if (max_.z < other.min_.z || min_.z > other.max_.z)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    bool IntersectsSegment(const Math::float3& start, const Math::float3& end) const noexcept
+    {
+        if (!IsValid())
+        {
+            return false;
+        }
+
+        const Math::float3 dir = end - start;
+        float tmin = 0.0f;
+        float tmax = 1.0f;
+
+        const float startValues[3] = { start.x, start.y, start.z };
+        const float dirValues[3] = { dir.x, dir.y, dir.z };
+        const float minValues[3] = { min_.x, min_.y, min_.z };
+        const float maxValues[3] = { max_.x, max_.y, max_.z };
+
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const float s = startValues[axis];
+            const float d = dirValues[axis];
+
+            if (std::fabs(d) < Math::EPS)
+            {
+                if (s < minValues[axis] || s > maxValues[axis])
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                const float invD = 1.0f / d;
+                float t0 = (minValues[axis] - s) * invD;
+                float t1 = (maxValues[axis] - s) * invD;
+                if (t0 > t1)
+                {
+                    std::swap(t0, t1);
+                }
+
+                tmin = std::max(tmin, t0);
+                tmax = std::min(tmax, t1);
+                if (tmin > tmax)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
 private:
