@@ -161,6 +161,9 @@
     <ClCompile Include="sources/app/levels/Level.cpp" />
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/Scene.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp" />
+    <ClCompile Include="sources/app/scene/SceneResourceBootstrapper.cpp" />
     <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
@@ -213,6 +216,9 @@
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/Scene.h" />
+    <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
+    <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
+    <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
     <ClInclude Include="sources/core/math/Math.h" />

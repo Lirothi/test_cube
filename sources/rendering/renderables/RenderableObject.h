@@ -79,7 +79,7 @@ public:
     const Mesh* GetMesh() const { return mesh_.get(); }
 
     BoundingBox GetLocalBounds() const;
-    const BoundingBox& GetWorldBounds() const;
+    const BoundingBox& GetWorldBounds() const override;
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);

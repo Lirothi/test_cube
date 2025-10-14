@@ -112,6 +112,7 @@ public:
     static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     static constexpr DXGI_FORMAT kSsrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT kSsrBlurFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr UINT kConstantBufferAlignment = 256u;
 
     // Formats
     DXGI_FORMAT GetLightTargetFormat() const { return kLightTargetFormat; }
