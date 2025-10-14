@@ -363,7 +363,7 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.invView, data.invView, dest);
     matPointLightCS_->UpdateCBField(handles.invProj, data.invProj, dest);
     matPointLightCS_->UpdateCBField(handles.camPos, data.camPos, dest);
-    matPointLightCS_->UpdateCBField(handles.lightCount, static_cast<float>(data.lightCount), dest);
+    matPointLightCS_->UpdateCBField(handles.lightCount, data.lightCount, dest);
     matPointLightCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matPointLightCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
 }
@@ -379,7 +379,7 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.invView, data.invView, dest);
     matSpotLightCS_->UpdateCBField(handles.invProj, data.invProj, dest);
     matSpotLightCS_->UpdateCBField(handles.camPos, data.camPos, dest);
-    matSpotLightCS_->UpdateCBField(handles.lightCount, static_cast<float>(data.lightCount), dest);
+    matSpotLightCS_->UpdateCBField(handles.lightCount, data.lightCount, dest);
     matSpotLightCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matSpotLightCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matSpotLightCS_->UpdateCBField(handles.shadowSize, data.shadowSize, dest);
