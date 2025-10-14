@@ -41,7 +41,7 @@ static bool EnsureInstanceBuffer(ID3D12Device* device, DebugDrawSystem::Instance
     }
 
     UINT newCapacity = buffer.capacity ? buffer.capacity : 64u;
-    const UINT maxValue = std::numeric_limits<UINT>::max();
+    constexpr UINT maxValue = std::numeric_limits<UINT>::max();
     while (newCapacity < requiredElements && newCapacity < maxValue / 2u)
     {
         newCapacity *= 2u;

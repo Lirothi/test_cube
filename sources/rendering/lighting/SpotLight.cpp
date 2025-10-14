@@ -144,7 +144,7 @@ void SpotLight::UpdateCachedData()
     const float denom = std::max(1e-4f, cosInner_ - cosOuter_);
     invAngleRange_ = 1.0f / denom;
 
-    const Math::float3 up = std::abs(direction_.y) > 0.99f
+    Math::float3 up = std::abs(direction_.y) > 0.99f
         ? Math::float3(0.0f, 0.0f, 1.0f)
         : Math::float3(0.0f, 1.0f, 0.0f);
     view_ = Math::mat4::LookAtLH(desc_.position, desc_.position + direction_, up);
@@ -181,7 +181,7 @@ void SpotLight::UpdateCachedData()
         right = direction_.Cross(upCandidate);
     }
     right = right.Normalized();
-    Math::float3 up = right.Cross(direction_).Normalized();
+    up = right.Cross(direction_).Normalized();
 
     if (radius <= Math::EPS)
     {

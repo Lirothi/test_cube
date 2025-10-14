@@ -312,24 +312,6 @@ namespace Math
         }
     };
 
-    // --- AABB ---
-    struct AABB {
-        float3 minv;
-        float3 maxv;
-        static AABB Empty() { return { float3(+FLT_MAX, +FLT_MAX, +FLT_MAX), float3(-FLT_MAX,-FLT_MAX,-FLT_MAX) }; }
-        void Expand(const float3& p) {
-            minv = float3::Min(minv, p);
-            maxv = float3::Max(maxv, p);
-        }
-        bool Contains(const float3& p) const {
-            if (p.x < minv.x || p.y < minv.y || p.z < minv.z) { return false; }
-            if (p.x > maxv.x || p.y > maxv.y || p.z > maxv.z) { return false; }
-            return true;
-        }
-        float3 Center() const { return (minv + maxv) * 0.5f; }
-        float3 Extents() const { return (maxv - minv) * 0.5f; }
-    };
-
     // --- Additional vector utilities ---
     inline float  Dot(const float3& a, const float3& b) { return a.Dot(b); }
     inline float3 Cross(const float3& a, const float3& b) { return a.Cross(b); }
