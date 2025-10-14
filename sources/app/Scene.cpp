@@ -634,6 +634,20 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
     const auto& D = renderer->GetDeferredForFrame();
     const std::wstring passNameW(ctx.passName.begin(), ctx.passName.end());
 
+    auto precomputeWorldBounds = [](const auto& bucket)
+    {
+        for (auto* obj : bucket)
+        {
+            if (obj)
+            {
+                obj->GetWorldBounds();
+            }
+        }
+    };
+
+    precomputeWorldBounds(opaqueSimple);
+    precomputeWorldBounds(opaqueComplex);
+
     const Math::float4 lightBoundsColor(1.0f, 1.0f, 0.0f, 0.25f);
     const Math::float4 passBoundsColor(0.0f, 1.0f, 0.0f, 0.35f);
     const Math::float4 failBoundsColor(1.0f, 0.0f, 0.0f, 0.35f);
