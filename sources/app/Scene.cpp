@@ -159,20 +159,20 @@ void Scene::Tick(float deltaTime) {
     }
 #endif
 
-    for (auto& l : lightManager_.SpotLights())
-    {
-        auto dbg = l.GetDebugConeParams();
-        Systems::GetRenderer().GetDebugDrawSystem()->AddCone(dbg.apex, dbg.direction, dbg.height, dbg.radius, { 0.0f, 0.0f, 1.0f, 0.5f }, false);
-        const OBB& coneObb = l.GetConeOBB();
-        if (coneObb.IsValid())
-        {
-            Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, {1.0f, 1.0f, 0.0f, 0.25f}, false);
-            Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
-            Systems::GetRenderer().GetDebugDrawSystem()->AddSphere(l.GetDesc().position, 1.0f, { 0.0f, 1.0f, 0.0f, 0.25f }, false);
-        }
+    //for (auto& l : lightManager_.SpotLights())
+    //{
+    //    auto dbg = l.GetDebugConeParams();
+    //    Systems::GetRenderer().GetDebugDrawSystem()->AddCone(dbg.apex, dbg.direction, dbg.height, dbg.radius, { 0.0f, 0.0f, 1.0f, 0.5f }, false);
+    //    //const OBB& coneObb = l.GetConeOBB();
+    //    //if (coneObb.IsValid())
+    //    //{
+    //    //    Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, {1.0f, 1.0f, 0.0f, 0.25f}, false);
+    //    //    Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
+    //    //    Systems::GetRenderer().GetDebugDrawSystem()->AddSphere(l.GetDesc().position, 1.0f, { 0.0f, 1.0f, 0.0f, 0.25f }, false);
+    //    //}
 
-        //Systems::GetRenderer().GetDebugDrawSystem()->AddBox({ 0.0f, 0.0f, 0.0f }, { 2.0f, 2.0f, 2.0f }, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
-    }
+    //    //Systems::GetRenderer().GetDebugDrawSystem()->AddBox({ 0.0f, 0.0f, 0.0f }, { 2.0f, 2.0f, 2.0f }, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
+    //}
 }
 
 void Scene::Render(Renderer* renderer) {
@@ -660,14 +660,14 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         const AABB& coneBounds = light.GetConeBounds();
         if (coneBounds.IsValid())
         {
-            //debugDraw->AddBox(coneBounds, lightBoundsColor, true);
+            debugDraw->AddBox(coneBounds, lightBoundsColor, true);
         }
 
-        const OBB& coneObb = light.GetConeOBB();
-        if (coneObb.IsValid())
-        {
-            //debugDraw->AddBox(coneObb, lightBoundsColor, false);
-        }
+        //const OBB& coneObb = light.GetConeOBB();
+        //if (coneObb.IsValid())
+        //{
+        //    debugDraw->AddBox(coneObb, lightBoundsColor, false);
+        //}
     };
 
     auto renderObjectsForLight = [&](ID3D12GraphicsCommandList* commandList,
@@ -690,7 +690,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
 
                 if (debugDraw && bounds.IsValid())
                 {
-                    debugDraw->AddBox(bounds, inside ? passBoundsColor : failBoundsColor, true);
+                    //debugDraw->AddBox(bounds, inside ? passBoundsColor : failBoundsColor, true);
                 }
 
                 if (inside)
@@ -713,7 +713,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         const auto& lightProj = light.GetProjMatrix();
 
         DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem();
-        drawLightBounds(light, debugDraw);
+        //drawLightBounds(light, debugDraw);
         renderObjectsForLight(commandList, light, lightView, lightProj, debugDraw);
     };
 

@@ -135,6 +135,8 @@ void FontManager::Tick()
         return;
     }
 
+    return; // turn on only if needed
+
     auto& input = Systems::GetInput();
 
     if (!input.WasActionPressed("GenerateFont")) {

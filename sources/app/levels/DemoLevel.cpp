@@ -70,7 +70,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
     SpotLightDesc warmSpot{};
     warmSpot.position = float3(4.0f, 4.0f, -3.0f);
-    warmSpot.direction = float3(-0.0f, -1.0f, 0.0f).Normalized();
+    warmSpot.direction = float3(-1.0f, -1.0f, 0.0f).Normalized();
     warmSpot.range = 20.0f;
     warmSpot.innerAngle = DirectX::XMConvertToRadians(18.0f);
     warmSpot.outerAngle = DirectX::XMConvertToRadians(28.0f);
@@ -91,8 +91,8 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     coolSpot.intensity = 18.0f;
     coolSpot.shadowNormalBias = 0.05f;
     coolSpot.shadowDepthBias = 0.0001f;
-    //lightManager.SpotLights().push_back({});
-    //lightManager.SpotLights().back().SetDesc(coolSpot);
+    lightManager.SpotLights().push_back({});
+    lightManager.SpotLights().back().SetDesc(coolSpot);
 
     DirectionalLight dirLight;
     dirLight.SetDirection(float3(-1.5f, -0.7f, -0.5f).Normalized());
@@ -143,7 +143,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
         floor->SetPosition(float3(0.0f, -0.5f, 0.0f));
         floor->SetScale(float3(40.0f, 1.0f, 40.0f));
-        //scene.AddObject(std::move(floor));
+        scene.AddObject(std::move(floor));
 
         floor = std::make_unique<StaticMesh>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);

@@ -451,14 +451,18 @@ void DebugDrawSystem::AddBox(const OBB& bounds, const Math::float4& color, bool 
     const Math::float3& axisY = axes[1];
     const Math::float3& axisZ = axes[2];
 
-    DirectX::XMMATRIX basis(
+    DirectX::XMFLOAT4X4 basis(
         axisX.x, axisX.y, axisX.z, 0.0f,
         axisY.x, axisY.y, axisY.z, 0.0f,
         axisZ.x, axisZ.y, axisZ.z, 0.0f,
         0.0f,    0.0f,    0.0f,    1.0f);
-    Math::quat orientation = Math::quat::FromXM(DirectX::XMQuaternionRotationMatrix(basis));
+    //Math::quat orientation = Math::quat::FromXM(DirectX::XMQuaternionRotationMatrix(basis));
 
-    AddBox(bounds.GetCenter(), bounds.GetHalfExtents(), orientation, color, wireframe);
+    //AddBox(bounds.GetCenter(), bounds.GetHalfExtents(), orientation, color, wireframe);
+    auto& halfExtents = bounds.GetHalfExtents();
+    Math::mat4 scale = Math::mat4::Scaling(halfExtents.x * 2.0f, halfExtents.y * 2.0f, halfExtents.z * 2.0f);
+    Math::mat4 translation = Math::mat4::Translation(bounds.GetCenter());
+    AddBox(scale * mat4(basis) * translation, color, wireframe);
 }
 
 void DebugDrawSystem::AddBox(const Math::mat4& transform, const Math::float4& color, bool wireframe)
