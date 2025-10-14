@@ -156,6 +156,7 @@
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/Camera.cpp" />
+    <ClCompile Include="sources/app/DirectionalLight.cpp" />
     <ClCompile Include="sources/app/levels/DemoLevel.cpp" />
     <ClCompile Include="sources/app/levels/Level.cpp" />
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
@@ -187,6 +188,7 @@
     <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp" />
     <ClCompile Include="sources/rendering/lighting/LightManager.cpp" />
     <ClCompile Include="sources/rendering/lighting/PointLight.cpp" />
+    <ClCompile Include="sources/rendering/lighting/SpotLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
     <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
     <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
@@ -206,6 +208,7 @@
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/Camera.h" />
+    <ClInclude Include="sources/app/DirectionalLight.h" />
     <ClInclude Include="sources/app/levels/DemoLevel.h" />
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />

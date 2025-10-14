@@ -75,6 +75,9 @@
     <ClCompile Include="sources/app/Camera.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/DirectionalLight.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/levels/DemoLevel.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
@@ -168,6 +171,9 @@
     <ClCompile Include="sources/rendering/lighting/PointLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/SpotLight.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
@@ -219,6 +225,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/Camera.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/DirectionalLight.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/DemoLevel.h">

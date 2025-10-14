@@ -4,6 +4,7 @@
 
 #include <DirectXMath.h>
 
+#include "app/DirectionalLight.h"
 #include "app/Scene.h"
 #include "app/Systems.h"
 #include "core/math/Math.h"
@@ -93,11 +94,11 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     lightManager.SpotLights().push_back({});
     lightManager.SpotLights().back().SetDesc(coolSpot);
 
-    Scene::DirectionalLight dirLight{};
-    dirLight.dir = float3(-1.5f, -0.7f, -0.5f).Normalized();
-    dirLight.color = float3(1.0f, 1.0f, 1.0f);
-    dirLight.exposure = 1.0f;
-    dirLight.ambient = 0.05f;
+    DirectionalLight dirLight;
+    dirLight.SetDirection(float3(-1.5f, -0.7f, -0.5f).Normalized());
+    dirLight.SetColor(float3(1.0f, 1.0f, 1.0f));
+    dirLight.SetExposure(1.0f);
+    dirLight.SetAmbient(0.05f);
     scene.SetDirectionalLight(dirLight);
 
     {
