@@ -365,6 +365,10 @@ void DebugDrawSystem::Shutdown()
 void DebugDrawSystem::BeginFrame()
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
+    solidCommandsPending_.swap(solidCommands_);
+    wireframeCommandsPending_.swap(wireframeCommands_);
+    solidCommands_.clear();
+    wireframeCommands_.clear();
     solidCommandScratch_.clear();
     wireframeCommandScratch_.clear();
 }
@@ -607,26 +611,33 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         ctx.table[0] = {};
     };
 
-    while (true)
+    bool hasSolid = false;
+    bool hasWireframe = false;
     {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        if (!solidCommandsPending_.empty())
         {
-            std::lock_guard<std::mutex> lock(commandMutex_);
-            if (solidCommands_.empty() && wireframeCommands_.empty())
-            {
-                break;
-            }
-            solidCommandScratch_ = solidCommands_;
-            wireframeCommandScratch_ = wireframeCommands_;
-            solidCommands_.clear();
-            wireframeCommands_.clear();
+            solidCommandScratch_.swap(solidCommandsPending_);
+            hasSolid = true;
         }
-
-        drawList(solidCommandScratch_, false);
-        drawList(wireframeCommandScratch_, true);
-
-        solidCommandScratch_.clear();
-        wireframeCommandScratch_.clear();
+        if (!wireframeCommandsPending_.empty())
+        {
+            wireframeCommandScratch_.swap(wireframeCommandsPending_);
+            hasWireframe = true;
+        }
     }
+
+    if (hasSolid)
+    {
+        drawList(solidCommandScratch_, false);
+    }
+    if (hasWireframe)
+    {
+        drawList(wireframeCommandScratch_, true);
+    }
+
+    solidCommandScratch_.clear();
+    wireframeCommandScratch_.clear();
 }
 
 void DebugDrawSystem::AddCommand(ShapeType shape, const Math::mat4& transform,
