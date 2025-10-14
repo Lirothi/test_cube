@@ -318,40 +318,40 @@ bool SpotLight::AABBIntersectsCone(const AABB& bounds) const
         return false;
     }
 
-    if (coneBounds_.IsValid() && !bounds.Intersects(coneBounds_))
-    {
-        return false;
-    }
+    //if (coneBounds_.IsValid() && !bounds.Intersects(coneBounds_))
+    //{
+    //    return false;
+    //}
 
     if (coneObb_.IsValid() && !coneObb_.Intersects(bounds))
     {
         return false;
     }
 
-    const Math::float3 apex = desc_.position;
-    const Math::float3 dir = direction_;
+    //const Math::float3 apex = desc_.position;
+    //const Math::float3 dir = direction_;
 
-    const Math::float3 minPt = bounds.GetMin();
-    const Math::float3 maxPt = bounds.GetMax();
-    if (apex.x >= minPt.x && apex.x <= maxPt.x &&
-        apex.y >= minPt.y && apex.y <= maxPt.y &&
-        apex.z >= minPt.z && apex.z <= maxPt.z)
-    {
-        return true;
-    }
+    //const Math::float3 minPt = bounds.GetMin();
+    //const Math::float3 maxPt = bounds.GetMax();
+    //if (apex.x >= minPt.x && apex.x <= maxPt.x &&
+    //    apex.y >= minPt.y && apex.y <= maxPt.y &&
+    //    apex.z >= minPt.z && apex.z <= maxPt.z)
+    //{
+    //    return true;
+    //}
 
-    const Math::float3 coneEnd = apex + dir * range;
-    if (bounds.IntersectsSegment(apex, coneEnd))
-    {
-        return true;
-    }
+    //const Math::float3 coneEnd = apex + dir * range;
+    //if (bounds.IntersectsSegment(apex, coneEnd))
+    //{
+    //    return true;
+    //}
 
-    const Math::float3 center = bounds.GetCenter();
-    const float radius = bounds.GetRadius();
-    if (SphereIntersectsCone(center, radius))
-    {
-        return true;
-    }
+    //const Math::float3 center = bounds.GetCenter();
+    //const float radius = bounds.GetRadius();
+    //if (SphereIntersectsCone(center, radius))
+    //{
+    //    return true;
+    //}
 
-    return false;
+    return true;
 }

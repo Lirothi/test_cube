@@ -163,6 +163,15 @@ void Scene::Tick(float deltaTime) {
     {
         auto dbg = l.GetDebugConeParams();
         Systems::GetRenderer().GetDebugDrawSystem()->AddCone(dbg.apex, dbg.direction, dbg.height, dbg.radius, { 0.0f, 0.0f, 1.0f, 0.5f }, false);
+        const OBB& coneObb = l.GetConeOBB();
+        if (coneObb.IsValid())
+        {
+            Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, {1.0f, 1.0f, 0.0f, 0.25f}, false);
+            Systems::GetRenderer().GetDebugDrawSystem()->AddBox(coneObb, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
+            Systems::GetRenderer().GetDebugDrawSystem()->AddSphere(l.GetDesc().position, 1.0f, { 0.0f, 1.0f, 0.0f, 0.25f }, false);
+        }
+
+        //Systems::GetRenderer().GetDebugDrawSystem()->AddBox({ 0.0f, 0.0f, 0.0f }, { 2.0f, 2.0f, 2.0f }, { 1.0f, 1.0f, 0.0f, 0.5f }, true);
     }
 }
 
@@ -651,13 +660,13 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
         const AABB& coneBounds = light.GetConeBounds();
         if (coneBounds.IsValid())
         {
-            debugDraw->AddBox(coneBounds, lightBoundsColor, true);
+            //debugDraw->AddBox(coneBounds, lightBoundsColor, true);
         }
 
         const OBB& coneObb = light.GetConeOBB();
         if (coneObb.IsValid())
         {
-            debugDraw->AddBox(coneObb, lightBoundsColor, true);
+            //debugDraw->AddBox(coneObb, lightBoundsColor, false);
         }
     };
 

@@ -66,7 +66,7 @@ float SceneRenderQueue::ComputeDepth(const mat4& view, const TransparentEntry& e
 {
     if (!entry.base)
     {
-        return -std::numeric_limits<float>::infinity();
+        return std::numeric_limits<float>::infinity();
     }
 
     const AABB& boundsWS = entry.base->GetWorldBounds();
