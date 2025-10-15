@@ -192,6 +192,7 @@ void TaskSystem::RangeTaskSet::Reset(std::size_t jobCount,
     fn_ = std::move(fn);
     jobCount_ = jobCount;
     batchSize_ = batchSize == 0 ? 1 : batchSize;
+    pendingChunks_.store(0, std::memory_order_relaxed);
 }
 
 void TaskSystem::RangeTaskSet::Execute()
@@ -205,14 +206,7 @@ void TaskSystem::RangeTaskSet::Execute()
         return;
     }
 
-    struct RangeTaskSharedState {
-        std::mutex mutex;
-        std::condition_variable cv;
-        std::atomic<std::size_t> remaining{0};
-    };
-
-    RangeTaskSharedState state;
-    state.remaining.store(chunkCount, std::memory_order_relaxed);
+    pendingChunks_.store(chunkCount, std::memory_order_relaxed);
 
     auto processChunk = [this](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
@@ -220,17 +214,17 @@ void TaskSystem::RangeTaskSet::Execute()
         }
     };
 
-    auto signalCompletion = [&state]() {
-        if (state.remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            std::lock_guard<std::mutex> lock(state.mutex);
-            state.cv.notify_one();
+    auto signalCompletion = [this]() {
+        if (pendingChunks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            std::lock_guard<std::mutex> lock(chunkMutex_);
+            chunkCv_.notify_one();
         }
     };
 
     for (std::size_t chunk = 1; chunk < chunkCount; ++chunk) {
         std::size_t begin = chunk * batchSize_;
         std::size_t end = std::min(begin + batchSize_, jobCount_);
-        owner_.Retain(this);
+        owner_.Retain(this); // ensure the range task outlives detached chunk work
         owner_.SubmitDetach([this, begin, end, signalCompletion]() {
             for (std::size_t i = begin; i < end; ++i) {
                 fn_(i);
@@ -243,11 +237,11 @@ void TaskSystem::RangeTaskSet::Execute()
     std::size_t firstEnd = std::min(batchSize_, jobCount_);
     processChunk(0, firstEnd);
     signalCompletion();
-    while (state.remaining.load(std::memory_order_acquire) != 0) {
+    while (pendingChunks_.load(std::memory_order_acquire) != 0) {
         if (!owner_.RunInlineTask()) {
-            std::unique_lock<std::mutex> lock(state.mutex);
-            state.cv.wait(lock, [&]() {
-                return state.remaining.load(std::memory_order_acquire) == 0;
+            std::unique_lock<std::mutex> lock(chunkMutex_);
+            chunkCv_.wait(lock, [&]() {
+                return pendingChunks_.load(std::memory_order_acquire) == 0;
             });
         }
     }
