@@ -21,6 +21,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/math/AABB.h"
+#include "core/math/Frustum.h"
 
 
 const mat4& Scene::GetCascadeView(size_t index) const
@@ -221,7 +222,11 @@ void Scene::Render(Renderer* renderer) {
     renderQueue_.Bucketize(objects_);
     renderQueue_.SortTransparent(view);
 
+    const Frustum cameraFrustum = Frustum::FromInvViewProj(invView, proj);
+    renderQueue_.Cull(cameraFrustum);
+
     const auto& buckets = renderQueue_.Buckets();
+    const auto& visibleBuckets = renderQueue_.VisibleBuckets();
 
     RenderGraph rg;
     auto pClear = rg.AddPass("PrologueClear", {},
@@ -241,9 +246,9 @@ void Scene::Render(Renderer* renderer) {
         });
 
     auto pGbuf = rg.AddPass("GBuffer", { pSpotShadow },
-        [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj, &visibleBuckets](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
-            Pass_GBuffer(renderer, ctx, view, proj, buckets);
+            Pass_GBuffer(renderer, ctx, view, proj, visibleBuckets);
         });
 
     auto pLight = rg.AddPassMT("Lighting", { pGbuf }, { pShadow },
@@ -286,9 +291,9 @@ void Scene::Render(Renderer* renderer) {
         });
 
     auto pTransp = rg.AddPass("Transparent", { pCompose },
-        [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext ctx) {
+        [this, renderer, &view, &proj, &visibleBuckets](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
-            Pass_Transparent(renderer, ctx, view, proj, buckets);
+            Pass_Transparent(renderer, ctx, view, proj, visibleBuckets);
         });
 
     auto pDebugDraw = rg.AddPass("DebugDraw", { pTransp },

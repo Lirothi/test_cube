@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "core/math/Math.h"
+#include "core/math/Frustum.h"
 
 #include "rendering/renderables/RenderableObjectBase.h"
 
@@ -26,10 +27,12 @@ public:
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
     void SortTransparent(const mat4& view);
+    void Cull(const Frustum& frustum);
 
     const ObjectBucket& GetBucket(BucketType type) const;
     ObjectBucket& GetBucket(BucketType type);
     const std::array<ObjectBucket, 4>& Buckets() const { return buckets_; }
+    const std::array<ObjectBucket, 4>& VisibleBuckets() const { return visibleBuckets_; }
 
 private:
     static size_t ToIndex(BucketType type) { return static_cast<size_t>(type); }
@@ -38,4 +41,5 @@ private:
 
     std::array<ObjectBucket, 4> buckets_{};
     std::array<std::vector<TransparentEntry>, 2> transparentEntries_{};
+    std::array<ObjectBucket, 4> visibleBuckets_{};
 };
