@@ -7,6 +7,7 @@
 #include <d3d12.h>
 #include <string>
 #include <memory>
+#include <vector>
 
 class GpuInstancedModels : public GBufferRenderable {
 public:
@@ -25,6 +26,8 @@ public:
     void Tick(float deltaTime) override;
     bool IsSimpleRender() const { return false; }
     bool CastsShadow() const override { return true; }
+
+    const AABB& GetWorldBounds() const override;
 
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
@@ -46,4 +49,18 @@ private:
 
     // Model / texture
     std::string modelName_;
+
+    // CPU-side tracking of instance animation to compute bounds
+    std::vector<float> instanceRotations_;
+    mutable AABB instancedWorldBounds_;
+    mutable AABB cachedWorstCaseLocalBounds_;
+    mutable bool instanceBoundsDirty_ = true;
+    mutable Math::mat4 lastModelMatrix_;
+    mutable const Mesh* cachedMesh_ = nullptr;
+
+    void MarkInstanceBoundsDirty();
+    Math::float3 ComputeInstanceOffset(UINT index) const;
+    Math::mat4 BuildInstanceTransform(UINT index) const;
+    AABB ComputeCombinedWorstCaseLocalBounds(const AABB& meshLocalBounds) const;
+    void UpdateWorldBoundsCache() const;
 };
