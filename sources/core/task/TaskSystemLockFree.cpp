@@ -1,4 +1,4 @@
-#include "core/task/TaskSystemLockFree.h"
+#include "core/task/TaskSystem.h"
 
 #ifdef TASKSYSTEM_USE_LOCKFREE
 

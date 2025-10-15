@@ -1,6 +1,6 @@
 #include "core/task/TaskSystem.h"
 
-#ifndef TASKSYSTEM_USE_TBB
+#if !defined(TASKSYSTEM_USE_TBB) && !defined(TASKSYSTEM_USE_LOCKFREE)
 
 #include <new>
 #include <utility>
