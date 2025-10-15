@@ -243,14 +243,14 @@ void TaskSystem::RangeTaskSet::Execute()
     std::size_t firstEnd = std::min(batchSize_, jobCount_);
     processChunk(0, firstEnd);
     signalCompletion();
-    if (state.remaining.load(std::memory_order_acquire) == 0) {
-        return;
+    while (state.remaining.load(std::memory_order_acquire) != 0) {
+        if (!owner_.RunInlineTask()) {
+            std::unique_lock<std::mutex> lock(state.mutex);
+            state.cv.wait(lock, [&]() {
+                return state.remaining.load(std::memory_order_acquire) == 0;
+            });
+        }
     }
-
-    std::unique_lock<std::mutex> lock(state.mutex);
-    state.cv.wait(lock, [&]() {
-        return state.remaining.load(std::memory_order_acquire) == 0;
-    });
 }
 
 TaskSystem::LambdaTaskSet* TaskSystem::AcquireLambdaTask(Task& fn, std::size_t depCapacity)
@@ -480,6 +480,26 @@ void TaskSystem::WaitForWork()
         }
         availableTasks_.wait(expected, std::memory_order_acquire);
     }
+}
+
+bool TaskSystem::RunInlineTask()
+{
+    if (!queue_) {
+        return false;
+    }
+
+    TaskWithDeps* task = nullptr;
+    if (!queue_->pop(task)) {
+        return false;
+    }
+
+    availableTasks_.fetch_sub(1, std::memory_order_acq_rel);
+    if (!task) {
+        return true;
+    }
+
+    RunTask(task);
+    return true;
 }
 
 std::size_t TaskSystem::NextPowerOfTwo(std::size_t value) const
