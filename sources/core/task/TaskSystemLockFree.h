@@ -149,6 +149,7 @@ private:
     void FinishTask(TaskWithDeps* task);
     void WorkerLoop(std::size_t index);
     void WaitForWork();
+    bool RunInlineTask();
     std::size_t NextPowerOfTwo(std::size_t value) const;
 
     class LockFreeQueue;
