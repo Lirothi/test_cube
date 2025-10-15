@@ -125,6 +125,11 @@ private:
         std::function<void(std::size_t)> fn_;
         std::size_t jobCount_;
         std::size_t batchSize_;
+        std::mutex chunkMutex_;
+        std::condition_variable chunkCv_;
+        // Outstanding chunk count guarded by the task ref count so captured lambdas
+        // keep the range task (and its synchronization primitives) alive.
+        std::atomic<std::size_t> pendingChunks_{0};
     };
 
     ~TaskSystem();
