@@ -275,6 +275,9 @@
     <ClInclude Include="sources/core/Helpers.h">
       <Filter>sources\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/math/Frustum.h">
+      <Filter>sources\core\math</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/profiling/Profiler.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>

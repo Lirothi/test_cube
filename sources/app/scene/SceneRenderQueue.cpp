@@ -31,6 +31,10 @@ void SceneRenderQueue::Clear()
     {
         entries.clear();
     }
+    for (auto& bucket : visibleBuckets_)
+    {
+        bucket.clear();
+    }
 }
 
 void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
@@ -108,6 +112,41 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
         for (size_t i = 0; i < entries.size(); ++i)
         {
             bucket[i] = entries[i].base;
+        }
+    }
+}
+
+void SceneRenderQueue::Cull(const Frustum& frustum)
+{
+    for (auto& bucket : visibleBuckets_)
+    {
+        bucket.clear();
+    }
+
+    if (!frustum.IsValid())
+    {
+        visibleBuckets_ = buckets_;
+        return;
+    }
+
+    for (size_t bucketIndex = 0; bucketIndex < buckets_.size(); ++bucketIndex)
+    {
+        const auto& bucket = buckets_[bucketIndex];
+        auto& visibleBucket = visibleBuckets_[bucketIndex];
+        visibleBucket.reserve(bucket.size());
+
+        for (auto* obj : bucket)
+        {
+            if (!obj)
+            {
+                continue;
+            }
+
+            const AABB& bounds = obj->GetWorldBounds();
+            if (!bounds.IsValid() || frustum.Intersects(bounds))
+            {
+                visibleBucket.push_back(obj);
+            }
         }
     }
 }

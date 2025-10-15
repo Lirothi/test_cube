@@ -222,6 +222,7 @@
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
+    <ClInclude Include="sources/core/math/Frustum.h" />
     <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
