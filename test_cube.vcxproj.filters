@@ -117,7 +117,7 @@
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp">
       <Filter>sources\core\profiling</Filter>
     </ClCompile>
-    <ClCompile Include="sources/core/task/TaskSystem.cpp">
+    <ClCompile Include="sources\core\task\TaskSystemEnki.cpp">
       <Filter>sources\core\task</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/task/TaskSystemLockFree.cpp">

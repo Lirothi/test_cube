@@ -168,7 +168,7 @@
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
-    <ClCompile Include="sources/core/task/TaskSystem.cpp" />
+    <ClCompile Include="sources\core\task\TaskSystemEnki.cpp" />
     <ClCompile Include="sources/core/task/TaskSystemLockFree.cpp" />
     <ClCompile Include="sources/core/task/TaskSystemTBB.cpp" />
     <ClCompile Include="sources/input/ActionMap.cpp" />
