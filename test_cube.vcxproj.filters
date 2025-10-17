@@ -82,7 +82,7 @@
       <Filter>sources\app</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DirectionalLight.cpp">
-      <Filter>sources\app</Filter>
+      <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/levels/DemoLevel.cpp">
       <Filter>sources\app\levels</Filter>
@@ -246,7 +246,7 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DirectionalLight.h">
-      <Filter>sources\app</Filter>
+      <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/DemoLevel.h">
       <Filter>sources\app\levels</Filter>
