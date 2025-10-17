@@ -97,8 +97,6 @@ private:
 
     std::vector<Command> solidCommands_;
     std::vector<Command> wireframeCommands_;
-    std::vector<Command> solidCommandsPending_;
-    std::vector<Command> wireframeCommandsPending_;
     std::vector<Command> solidCommandScratch_;
     std::vector<Command> wireframeCommandScratch_;
     std::vector<GPUInstanceData> instanceDataScratch_;

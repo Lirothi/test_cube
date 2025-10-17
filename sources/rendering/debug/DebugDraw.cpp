@@ -371,12 +371,12 @@ void DebugDrawSystem::Shutdown()
 void DebugDrawSystem::BeginFrame()
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    solidCommandsPending_.swap(solidCommands_);
-    wireframeCommandsPending_.swap(wireframeCommands_);
-    solidCommands_.clear();
-    wireframeCommands_.clear();
+    //solidCommands_.clear();
+    //wireframeCommands_.clear();
     solidCommandScratch_.clear();
+    solidCommandScratch_.swap(solidCommands_);
     wireframeCommandScratch_.clear();
+    wireframeCommandScratch_.swap(wireframeCommands_);
 }
 
 void DebugDrawSystem::AddSphere(const Math::float3& center, float radius, const Math::float4& color, bool wireframe)
@@ -502,7 +502,7 @@ void DebugDrawSystem::AddCone(const Math::mat4& transform, const Math::float4& c
 bool DebugDrawSystem::HasCommands() const
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    return !solidCommands_.empty() || !wireframeCommands_.empty() || !solidCommandsPending_.empty() || !wireframeCommandsPending_.empty();
+    return !solidCommands_.empty() || !wireframeCommands_.empty();
 }
 
 void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -622,30 +622,8 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         ctx.table[0] = {};
     };
 
-    bool hasSolid = false;
-    bool hasWireframe = false;
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        if (!solidCommandsPending_.empty())
-        {
-            solidCommandScratch_.swap(solidCommandsPending_);
-            hasSolid = true;
-        }
-        if (!wireframeCommandsPending_.empty())
-        {
-            wireframeCommandScratch_.swap(wireframeCommandsPending_);
-            hasWireframe = true;
-        }
-    }
-
-    if (hasSolid)
-    {
-        drawList(solidCommandScratch_, false);
-    }
-    if (hasWireframe)
-    {
-        drawList(wireframeCommandScratch_, true);
-    }
+    drawList(solidCommandScratch_, false);
+    drawList(wireframeCommandScratch_, true);
 
     solidCommandScratch_.clear();
     wireframeCommandScratch_.clear();
