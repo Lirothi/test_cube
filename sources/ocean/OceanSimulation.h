@@ -45,9 +45,15 @@ public:
     const Math::float4& GetLengthScales() const { return lengthScales_; }
     const Math::float4& GetInvLengthScales() const { return invLengthScales_; }
     float GetDisplacementAmplitude() const { return displacementAmplitude_; }
+    float GetLocalWindDirectionRadians() const;
+    Math::float2 GetLocalWindDirectionVector() const;
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetDisplacementSRV() const { return displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetFoamTurbulenceSRV() const { return foamSrv_; }
     ID3D12Resource* GetDisplacementResource() const { return displacement_.Get(); }
+    ID3D12Resource* GetFoamResource() const { return foamTurbulence_.Get(); }
+
+    const FoamParams& GetFoamParams() const { return inputs_.foam; }
 
 private:
     void BuildSpectrum();
@@ -60,6 +66,8 @@ private:
     void DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void DispatchFFTPost(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    void DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList* cl, float simTime);
+    void InitializeFoamTexture(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void RefreshDerivedSettings();
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeDefaultAssets();
@@ -102,6 +110,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> displacement_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence_;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     UINT descriptorIncr_ = 0;
@@ -109,6 +118,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE waveDataSrv_{};
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementSrvs_;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementUavs_;
+    D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE foamUav_{};
 
     UINT mipCount_ = 1u;
 
@@ -116,5 +127,10 @@ private:
     std::shared_ptr<Material> fftMaterial_;
     std::shared_ptr<Material> fftPostMaterial_;
     std::shared_ptr<Material> mipMaterial_;
+    std::shared_ptr<Material> foamSimMaterial_;
+    std::shared_ptr<Material> foamInitMaterial_;
+
+    float lastFoamSimTime_ = 0.0f;
+    bool foamNeedsInit_ = true;
 };
 

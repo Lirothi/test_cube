@@ -297,6 +297,7 @@
     <None Include="shaders\lines.hlsl" />
     <None Include="shaders\ocean_fft.hlsl" />
     <None Include="shaders\ocean_generate_mips.hlsl" />
+    <None Include="shaders\ocean_foam_simulation.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />
     <None Include="shaders\pointlight_color_fs.hlsl" />
@@ -312,6 +313,11 @@
     <None Include="shaders\fxaa_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsl" />
+    <None Include="textures\ocean\ContactFoam.png" />
+    <None Include="textures\ocean\FoamAlbedo.png" />
+    <None Include="textures\ocean\FoamTrail.png" />
+    <None Include="textures\ocean\UnderwaterFoam.png" />
+    <None Include="textures\ocean\wind_gusts.png" />
   </ItemGroup>
   <ItemGroup>
     <None Include="input\bindings.json" />

@@ -6,15 +6,18 @@
 
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "materials/Texture2D.h"
 #include "ocean/OceanSimulation.h"
 
 class Camera;
 class SamplerManager;
 
+class Scene;
+
 class OceanRenderable : public RenderableObject
 {
 public:
-    explicit OceanRenderable(Camera* camera);
+    explicit OceanRenderable(Camera* camera, Scene* scene = nullptr);
     ~OceanRenderable() override = default;
 
     void Init(Renderer* renderer,
@@ -59,9 +62,33 @@ private:
     Math::float4 GetCascadeInvLengthScales() const;
     Math::float4 GetClipMapParams() const;
     Math::float4 GetClipMapViewer() const;
+    Math::float4 GetFoamParams0() const;
+    Math::float4 GetFoamParams1() const;
+    Math::float4 GetFoamCascadeWeights() const;
+    Math::float4 GetSpecularParams() const;
+    Math::float4 GetRefractionParams() const;
+    Math::float4 GetSubsurfaceParams() const;
+    Math::float4 GetHeightFogParams() const;
+    Math::float4 GetSunDirAmbient() const;
+    Math::float4 GetSunColorExposure() const;
+    Math::float4 GetDeepScatterColor() const;
+    Math::float4 GetSssColor() const;
+    Math::float4 GetDiffuseColor() const;
+    Math::float4 GetAbsorptionGradientParams() const;
+    Math::float4 GetAbsorptionColor(uint32_t index) const;
+    uint32_t GetAbsorptionColorCount() const;
+    mat4 GetWorldToWindMatrix() const;
+    Math::float4 GetWindParams0() const;
+    Math::float4 GetWindParams1() const;
+    Math::float4 GetFoamTrailParams0() const;
+    Math::float4 GetFoamTrailParams1() const;
+    Math::float4 GetFoamParams2() const;
+    Math::float4 GetFoamTint() const;
+    Math::float4 GetDepthTextureSize(const Renderer* renderer) const;
 
 private:
     Camera* camera_ = nullptr;
+    Scene* scene_ = nullptr;
     std::unique_ptr<OceanSimulation> simulation_;
 
     float elapsedTime_ = 0.0f;
@@ -78,5 +105,12 @@ private:
     Math::float3 clipMapViewer_ = Math::float3(0.0f, 0.0f, 0.0f);
     float cascadesFadeScale_ = 20.0f;
     float minMeshScale_ = 15.0f;
+
+    Texture2D foamDetailTexture_;
+    Texture2D foamAlbedoTexture_;
+    Texture2D foamUnderwaterTexture_;
+    Texture2D foamTrailTexture_;
+    Texture2D contactFoamTexture_;
+    Texture2D distantRoughnessTexture_;
 };
 
