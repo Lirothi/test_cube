@@ -195,19 +195,26 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     h0Buffer_.Reset();
     waveDataBuffer_.Reset();
     displacement_.Reset();
+    foamTurbulence_.Reset();
     descriptorHeap_.Reset();
     descriptorIncr_ = 0;
     h0Srv_ = {};
     waveDataSrv_ = {};
     displacementSrvs_.clear();
     displacementUavs_.clear();
+    foamSrv_ = {};
+    foamUav_ = {};
 
     spectrumMaterial_.reset();
     fftMaterial_.reset();
     fftPostMaterial_.reset();
     mipMaterial_.reset();
+    foamSimMaterial_.reset();
+    foamInitMaterial_.reset();
 
     mipCount_ = 1u;
+    foamNeedsInit_ = true;
+    lastFoamSimTime_ = 0.0f;
 }
 
 void OceanSimulation::SetInputsProvider(const OceanSimulationInputsProvider& provider)
@@ -380,6 +387,19 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         IID_PPV_ARGS(&displacement_)));
 
     renderer->SetResourceState(displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    if (cascadeCount_ > 0)
+    {
+        D3D12_RESOURCE_DESC foamDesc = texDesc;
+        foamDesc.DepthOrArraySize = static_cast<UINT16>(cascadeCount_);
+        foamDesc.MipLevels = 1;
+        ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+            &foamDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&foamTurbulence_)));
+        renderer->SetResourceState(foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        foamNeedsInit_ = true;
+        lastFoamSimTime_ = 0.0f;
+    }
 }
 
 void OceanSimulation::CreateDescriptors(ID3D12Device* device)
@@ -389,7 +409,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         return;
     }
 
-    const UINT descriptorCount = 2u + mipCount_ * 2u;
+    const UINT descriptorCount = 2u + mipCount_ * 2u + 2u;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.NumDescriptors = descriptorCount;
@@ -412,14 +432,17 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     displacementSrvs_.resize(mipCount_);
     displacementUavs_.resize(mipCount_);
 
+    UINT descriptorIndex = 2;
     for (UINT mip = 0; mip < mipCount_; ++mip)
     {
-        displacementSrvs_[mip] = Offset(base, 2 + mip);
+        displacementSrvs_[mip] = Offset(base, descriptorIndex++);
     }
+    foamSrv_ = Offset(base, descriptorIndex++);
     for (UINT mip = 0; mip < mipCount_; ++mip)
     {
-        displacementUavs_[mip] = Offset(base, 2 + mipCount_ + mip);
+        displacementUavs_[mip] = Offset(base, descriptorIndex++);
     }
+    foamUav_ = Offset(base, descriptorIndex++);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC bufferSrv{};
     bufferSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -452,6 +475,14 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         device->CreateShaderResourceView(displacement_.Get(), &texSrv, displacementSrvs_[mip]);
     }
 
+    if (foamTurbulence_)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC foamSrvDesc = texSrv;
+        foamSrvDesc.Texture2DArray.ArraySize = cascadeCount_;
+        foamSrvDesc.Texture2DArray.MostDetailedMip = 0;
+        device->CreateShaderResourceView(foamTurbulence_.Get(), &foamSrvDesc, foamSrv_);
+    }
+
     D3D12_UNORDERED_ACCESS_VIEW_DESC texUav{};
     texUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
     texUav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -463,6 +494,14 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     {
         texUav.Texture2DArray.MipSlice = mip;
         device->CreateUnorderedAccessView(displacement_.Get(), nullptr, &texUav, displacementUavs_[mip]);
+    }
+
+    if (foamTurbulence_)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC foamUavDesc = texUav;
+        foamUavDesc.Texture2DArray.ArraySize = cascadeCount_;
+        foamUavDesc.Texture2DArray.MipSlice = 0;
+        device->CreateUnorderedAccessView(foamTurbulence_.Get(), nullptr, &foamUavDesc, foamUav_);
     }
 }
 
@@ -497,6 +536,15 @@ void OceanSimulation::CreateMaterials(Renderer* renderer)
     mipDesc.shaderFile = L"shaders/ocean_generate_mips.hlsl";
     mipDesc.csEntry = "GenerateMip";
     mipMaterial_ = materialMgr->GetOrCreateCompute(renderer, mipDesc);
+
+    Material::ComputeDesc foamDesc{};
+    foamDesc.shaderFile = L"shaders/ocean_foam_simulation.hlsl";
+    foamDesc.csEntry = "SimulateFoam";
+    foamSimMaterial_ = materialMgr->GetOrCreateCompute(renderer, foamDesc);
+
+    Material::ComputeDesc foamInitDesc = foamDesc;
+    foamInitDesc.csEntry = "InitializeFoam";
+    foamInitMaterial_ = materialMgr->GetOrCreateCompute(renderer, foamInitDesc);
 }
 
 void OceanSimulation::BuildSpectrum()
@@ -666,11 +714,16 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     DispatchFFT(renderer, cl);
     DispatchFFTPost(renderer, cl);
     GenerateMips(renderer, cl);
+    DispatchFoam(renderer, cl, simTime);
 
     const D3D12_RESOURCE_STATES srvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, displacement_.Get(), srvState);
+    if (foamTurbulence_)
+    {
+        renderer->Transition(cl, foamTurbulence_.Get(), srvState);
+    }
 }
 
 void OceanSimulation::DispatchSpectrum(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds)
@@ -827,4 +880,97 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         srcWidth = dstWidth;
         srcHeight = dstHeight;
     }
+}
+
+void OceanSimulation::InitializeFoamTexture(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer || !cl || !foamInitMaterial_ || !foamTurbulence_ || cascadeCount_ == 0 || resolution_ == 0)
+    {
+        return;
+    }
+
+    renderer->Transition(cl, foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = ctxHandle.ref();
+
+    ctx.constants[0] = {
+        resolution_,
+        cascadeCount_,
+        0u,
+        0u,
+    };
+
+    auto srvTable = renderer->StageSrvUavTable({ displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0] });
+    auto uavTable = renderer->StageSrvUavTable({ foamUav_ });
+
+    ctx.table[0] = srvTable.gpu;
+    ctx.table[1] = uavTable.gpu;
+
+    foamInitMaterial_->Bind(cl, ctx);
+
+    const UINT groups = (resolution_ + kThreadGroupSize - 1u) / kThreadGroupSize;
+    cl->Dispatch(groups, groups, cascadeCount_);
+
+    renderer->UAVBarrier(cl, foamTurbulence_.Get());
+}
+
+void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList* cl, float simTime)
+{
+    if (!renderer || !cl || !foamSimMaterial_ || !foamTurbulence_ || cascadeCount_ == 0 || resolution_ == 0)
+    {
+        return;
+    }
+
+    if (foamNeedsInit_)
+    {
+        InitializeFoamTexture(renderer, cl);
+        foamNeedsInit_ = false;
+        lastFoamSimTime_ = simTime;
+    }
+
+    float deltaTime = simTime - lastFoamSimTime_;
+    if (deltaTime < 0.0f)
+    {
+        deltaTime = 0.0f;
+    }
+    lastFoamSimTime_ = simTime;
+
+    renderer->Transition(cl, foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, displacement_.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = ctxHandle.ref();
+
+    ctx.constants[0] = {
+        resolution_,
+        cascadeCount_,
+        Math::FloatToUint32(deltaTime),
+        Math::FloatToUint32(inputs_.foam.decayRate)
+    };
+
+    auto srvTable = renderer->StageSrvUavTable({ displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0] });
+    auto uavTable = renderer->StageSrvUavTable({ foamUav_ });
+
+    ctx.table[0] = srvTable.gpu;
+    ctx.table[1] = uavTable.gpu;
+
+    foamSimMaterial_->Bind(cl, ctx);
+
+    const UINT groups = (resolution_ + kThreadGroupSize - 1u) / kThreadGroupSize;
+    cl->Dispatch(groups, groups, cascadeCount_);
+
+    renderer->UAVBarrier(cl, foamTurbulence_.Get());
+}
+
+float OceanSimulation::GetLocalWindDirectionRadians() const
+{
+    return localWindDirection_ * Math::DEG2RAD;
+}
+
+Math::float2 OceanSimulation::GetLocalWindDirectionVector() const
+{
+    const float radians = GetLocalWindDirectionRadians();
+    return Math::float2(std::cos(radians), std::sin(radians));
 }

@@ -73,6 +73,12 @@
     <Filter Include="sources\core\math">
       <UniqueIdentifier>{9245a199-dbad-464b-949f-23a9500801ad}</UniqueIdentifier>
     </Filter>
+    <Filter Include="textures">
+      <UniqueIdentifier>{d2ecb7f1-4c6b-4c38-8b1c-e4ff1f8c5e11}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="textures\ocean">
+      <UniqueIdentifier>{4f4e25a2-8f7a-4601-8f8b-fcf539813b4e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp">
@@ -496,6 +502,9 @@
     <None Include="shaders\ocean_generate_mips.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\ocean_foam_simulation.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\ocean_surface.hlsl">
       <Filter>shaders</Filter>
     </None>
@@ -540,6 +549,21 @@
     </None>
     <None Include="shaders\utils.hlsl">
       <Filter>shaders</Filter>
+    </None>
+    <None Include="textures\ocean\ContactFoam.png">
+      <Filter>textures\ocean</Filter>
+    </None>
+    <None Include="textures\ocean\FoamAlbedo.png">
+      <Filter>textures\ocean</Filter>
+    </None>
+    <None Include="textures\ocean\FoamTrail.png">
+      <Filter>textures\ocean</Filter>
+    </None>
+    <None Include="textures\ocean\UnderwaterFoam.png">
+      <Filter>textures\ocean</Filter>
+    </None>
+    <None Include="textures\ocean\wind_gusts.png">
+      <Filter>textures\ocean</Filter>
     </None>
     <None Include="input\bindings.json">
       <Filter>input</Filter>

@@ -7,8 +7,11 @@
 #include <vector>
 
 #include "app/Camera.h"
+#include "app/Scene.h"
+#include "app/DirectionalLight.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/lighting/Skybox.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -30,6 +33,28 @@ namespace
     };
 
     constexpr int kOverlap = 2;
+
+    const Math::float4 kDeepScatterColor(0.0f, 0.012745098f, 0.04019608f, 1.0f);
+    const Math::float4 kSssColor(0.0f, 1.0f, 0.8926091f, 1.0f);
+    const Math::float4 kDiffuseColor(0.0f, 0.025490196f, 0.033333335f, 1.0f);
+    const Math::float4 kAbsorptionGradientParams(4.0f, 0.0f, 0.0f, 0.0f);
+    const std::array<Math::float4, 8> kAbsorptionColors = {
+        Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),
+        Math::float4(0.0f, 0.17351386f, 0.43203577f, 0.2f),
+        Math::float4(0.16198544f, 0.68352747f, 0.79865986f, 0.66608685f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+    };
+
+    const Math::float4 kFoamTintColor(1.0f, 1.0f, 1.0f, 1.0f);
+    const Math::float4 kWindParams0(12.0f, 1.0f, 0.5f, 0.2f);
+    const Math::float4 kFoamTrailScales(256.0f, 256.0f, 384.0f, 384.0f);
+    const Math::float2 kFoamTrailDir0 = Math::float2(0.86f, 0.52f).Normalized();
+    const Math::float2 kFoamTrailDir1 = Math::float2(-0.45f, 0.89f).Normalized();
+    const float kUnderwaterFoamParallax = 1.2f;
 
     int ClipLevelHalfSize(uint32_t vertexDensity)
     {
@@ -237,28 +262,76 @@ public:
             modelHandle_ = material->ComputeCBFieldHandle(0, "model");
             viewHandle_ = material->ComputeCBFieldHandle(0, "view");
             projHandle_ = material->ComputeCBFieldHandle(0, "proj");
+            invViewHandle_ = material->ComputeCBFieldHandle(0, "invView");
+            invProjHandle_ = material->ComputeCBFieldHandle(0, "invProj");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
             viewerParamsHandle_ = material->ComputeCBFieldHandle(0, "viewerParams");
             cascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "cascadeLengthScales");
             inverseCascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "inverseCascadeLengthScales");
             clipMapParamsHandle_ = material->ComputeCBFieldHandle(0, "clipMapParams");
             clipMapViewerHandle_ = material->ComputeCBFieldHandle(0, "clipMapViewer");
+            foamParams0Handle_ = material->ComputeCBFieldHandle(0, "foamParams0");
+            foamParams1Handle_ = material->ComputeCBFieldHandle(0, "foamParams1");
+            foamCascadeWeightsHandle_ = material->ComputeCBFieldHandle(0, "foamCascadeWeights");
+            specularParamsHandle_ = material->ComputeCBFieldHandle(0, "specularParams");
+            refractionParamsHandle_ = material->ComputeCBFieldHandle(0, "refractionParams");
+            subsurfaceParamsHandle_ = material->ComputeCBFieldHandle(0, "subsurfaceParams");
+            heightFogParamsHandle_ = material->ComputeCBFieldHandle(0, "heightFogParams");
+            sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
+            sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
+            deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
+            sssColorHandle_ = material->ComputeCBFieldHandle(0, "sssColor");
+            diffuseColorHandle_ = material->ComputeCBFieldHandle(0, "diffuseColor");
+            absorptionGradientParamsHandle_ = material->ComputeCBFieldHandle(0, "absorptionGradientParams");
+            absorptionColorsHandle_ = material->ComputeCBFieldHandle(0, "absorptionColors");
+            worldToWindHandle_ = material->ComputeCBFieldHandle(0, "worldToWind");
+            windParams0Handle_ = material->ComputeCBFieldHandle(0, "windParams0");
+            windParams1Handle_ = material->ComputeCBFieldHandle(0, "windParams1");
+            foamTrailParams0Handle_ = material->ComputeCBFieldHandle(0, "foamTrailParams0");
+            foamTrailParams1Handle_ = material->ComputeCBFieldHandle(0, "foamTrailParams1");
+            foamParams2Handle_ = material->ComputeCBFieldHandle(0, "foamParams2");
+            foamTintHandle_ = material->ComputeCBFieldHandle(0, "foamTint");
+            depthTextureSizeHandle_ = material->ComputeCBFieldHandle(0, "depthTextureSize");
         }
         else
         {
             modelHandle_ = {};
             viewHandle_ = {};
             projHandle_ = {};
+            invViewHandle_ = {};
+            invProjHandle_ = {};
             simulationParamsHandle_ = {};
             viewerParamsHandle_ = {};
             cascadeLengthScalesHandle_ = {};
             inverseCascadeLengthScalesHandle_ = {};
             clipMapParamsHandle_ = {};
             clipMapViewerHandle_ = {};
+            foamParams0Handle_ = {};
+            foamParams1Handle_ = {};
+            foamCascadeWeightsHandle_ = {};
+            specularParamsHandle_ = {};
+            refractionParamsHandle_ = {};
+            subsurfaceParamsHandle_ = {};
+            heightFogParamsHandle_ = {};
+            sunDirAmbientHandle_ = {};
+            sunColorExposureHandle_ = {};
+            deepScatterColorHandle_ = {};
+            sssColorHandle_ = {};
+            diffuseColorHandle_ = {};
+            absorptionGradientParamsHandle_ = {};
+            absorptionColorsHandle_ = {};
+            worldToWindHandle_ = {};
+            windParams0Handle_ = {};
+            windParams1Handle_ = {};
+            foamTrailParams0Handle_ = {};
+            foamTrailParams1Handle_ = {};
+            foamParams2Handle_ = {};
+            foamTintHandle_ = {};
+            depthTextureSizeHandle_ = {};
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material)
@@ -266,9 +339,14 @@ public:
             return;
         }
 
+        const mat4 invView = mat4::Inverse(view);
+        const mat4 invProj = mat4::Inverse(proj);
+
         UpdateUniform(owner, modelHandle_, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, viewHandle_, material, view, cbData);
         UpdateUniform(owner, projHandle_, material, proj, cbData);
+        UpdateUniform(owner, invViewHandle_, material, invView, cbData);
+        UpdateUniform(owner, invProjHandle_, material, invProj, cbData);
 
         UpdateUniform(owner, simulationParamsHandle_, material, owner_.GetSimulationParams(), cbData);
         UpdateUniform(owner, viewerParamsHandle_, material, owner_.GetViewerParams(), cbData);
@@ -276,6 +354,32 @@ public:
         UpdateUniform(owner, inverseCascadeLengthScalesHandle_, material, owner_.GetCascadeInvLengthScales(), cbData);
         UpdateUniform(owner, clipMapParamsHandle_, material, owner_.GetClipMapParams(), cbData);
         UpdateUniform(owner, clipMapViewerHandle_, material, owner_.GetClipMapViewer(), cbData);
+        UpdateUniform(owner, foamParams0Handle_, material, owner_.GetFoamParams0(), cbData);
+        UpdateUniform(owner, foamParams1Handle_, material, owner_.GetFoamParams1(), cbData);
+        UpdateUniform(owner, foamCascadeWeightsHandle_, material, owner_.GetFoamCascadeWeights(), cbData);
+        UpdateUniform(owner, specularParamsHandle_, material, owner_.GetSpecularParams(), cbData);
+        UpdateUniform(owner, refractionParamsHandle_, material, owner_.GetRefractionParams(), cbData);
+        UpdateUniform(owner, subsurfaceParamsHandle_, material, owner_.GetSubsurfaceParams(), cbData);
+        UpdateUniform(owner, heightFogParamsHandle_, material, owner_.GetHeightFogParams(), cbData);
+        UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
+        UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
+        UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
+        UpdateUniform(owner, sssColorHandle_, material, owner_.GetSssColor(), cbData);
+        UpdateUniform(owner, diffuseColorHandle_, material, owner_.GetDiffuseColor(), cbData);
+        UpdateUniform(owner, absorptionGradientParamsHandle_, material, owner_.GetAbsorptionGradientParams(), cbData);
+        const uint32_t absorptionCount = owner_.GetAbsorptionColorCount();
+        for (uint32_t i = 0; i < absorptionCount; ++i)
+        {
+            UpdateUniform(owner, absorptionColorsHandle_, material, owner_.GetAbsorptionColor(i), cbData, i);
+        }
+        UpdateUniform(owner, worldToWindHandle_, material, owner_.GetWorldToWindMatrix(), cbData);
+        UpdateUniform(owner, windParams0Handle_, material, owner_.GetWindParams0(), cbData);
+        UpdateUniform(owner, windParams1Handle_, material, owner_.GetWindParams1(), cbData);
+        UpdateUniform(owner, foamTrailParams0Handle_, material, owner_.GetFoamTrailParams0(), cbData);
+        UpdateUniform(owner, foamTrailParams1Handle_, material, owner_.GetFoamTrailParams1(), cbData);
+        UpdateUniform(owner, foamParams2Handle_, material, owner_.GetFoamParams2(), cbData);
+        UpdateUniform(owner, foamTintHandle_, material, owner_.GetFoamTint(), cbData);
+        UpdateUniform(owner, depthTextureSizeHandle_, material, owner_.GetDepthTextureSize(renderer), cbData);
     }
 
 private:
@@ -283,17 +387,42 @@ private:
     Material::CBFieldHandle modelHandle_{};
     Material::CBFieldHandle viewHandle_{};
     Material::CBFieldHandle projHandle_{};
+    Material::CBFieldHandle invViewHandle_{};
+    Material::CBFieldHandle invProjHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};
     Material::CBFieldHandle viewerParamsHandle_{};
     Material::CBFieldHandle cascadeLengthScalesHandle_{};
     Material::CBFieldHandle inverseCascadeLengthScalesHandle_{};
     Material::CBFieldHandle clipMapParamsHandle_{};
     Material::CBFieldHandle clipMapViewerHandle_{};
+    Material::CBFieldHandle foamParams0Handle_{};
+    Material::CBFieldHandle foamParams1Handle_{};
+    Material::CBFieldHandle foamCascadeWeightsHandle_{};
+    Material::CBFieldHandle specularParamsHandle_{};
+    Material::CBFieldHandle refractionParamsHandle_{};
+    Material::CBFieldHandle subsurfaceParamsHandle_{};
+    Material::CBFieldHandle heightFogParamsHandle_{};
+    Material::CBFieldHandle sunDirAmbientHandle_{};
+    Material::CBFieldHandle sunColorExposureHandle_{};
+    Material::CBFieldHandle deepScatterColorHandle_{};
+    Material::CBFieldHandle sssColorHandle_{};
+    Material::CBFieldHandle diffuseColorHandle_{};
+    Material::CBFieldHandle absorptionGradientParamsHandle_{};
+    Material::CBFieldHandle absorptionColorsHandle_{};
+    Material::CBFieldHandle worldToWindHandle_{};
+    Material::CBFieldHandle windParams0Handle_{};
+    Material::CBFieldHandle windParams1Handle_{};
+    Material::CBFieldHandle foamTrailParams0Handle_{};
+    Material::CBFieldHandle foamTrailParams1Handle_{};
+    Material::CBFieldHandle foamParams2Handle_{};
+    Material::CBFieldHandle foamTintHandle_{};
+    Material::CBFieldHandle depthTextureSizeHandle_{};
 };
 
-OceanRenderable::OceanRenderable(Camera* camera)
+OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
     : RenderableObject("PosLevelUV", L"shaders/ocean_surface.hlsl")
     , camera_(camera)
+    , scene_(scene)
     , simulation_(std::make_unique<OceanSimulation>())
 {
 }
@@ -314,6 +443,21 @@ void OceanRenderable::Init(Renderer* renderer,
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
     UpdateClipLevels();
+
+    auto loadTexture = [&](Texture2D& tex, const wchar_t* path, Texture2D::Usage usage)
+    {
+        Texture2D::CreateDesc desc{};
+        desc.path = path;
+        desc.usage = usage;
+        tex.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
+    };
+
+    loadTexture(distantRoughnessTexture_, L"textures/ocean/wind_gusts.png", Texture2D::Usage::LinearData);
+    loadTexture(foamDetailTexture_, L"textures/ocean/wind_gusts.png", Texture2D::Usage::LinearData);
+    loadTexture(foamAlbedoTexture_, L"textures/ocean/FoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
+    loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
+    loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
+    loadTexture(contactFoamTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::AlbedoSRGB);
 }
 
 void OceanRenderable::Tick(float deltaTime)
@@ -351,10 +495,74 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
         return;
     }
 
-    auto tbl = renderer->StageSrvUavTable({ simulation_->GetDisplacementSRV() });
+    const auto& deferred = renderer->GetDeferredForFrame();
+    Skybox* sky = scene_ ? scene_->GetSkybox() : nullptr;
+
+    auto fallbackSrv = deferred.sceneSRV;
+
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 12> srvs{};
+    size_t srvCount = 0;
+
+    auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
+    {
+        srvs[srvCount++] = srv;
+    };
+
+    auto pushTexture = [&](Texture2D& tex)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE srv = tex.GetSRVCPU();
+        if (srv.ptr == 0)
+        {
+            srv = fallbackSrv;
+        }
+        pushSrv(srv);
+    };
+
+    D3D12_CPU_DESCRIPTOR_HANDLE displacementSrv = simulation_->GetDisplacementSRV();
+    if (displacementSrv.ptr == 0)
+    {
+        displacementSrv = fallbackSrv;
+    }
+    pushSrv(displacementSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE foamSrv = simulation_->GetFoamTurbulenceSRV();
+    if (foamSrv.ptr == 0)
+    {
+        foamSrv = fallbackSrv;
+    }
+    pushSrv(foamSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneSrv = deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : fallbackSrv;
+    pushSrv(sceneSrv.ptr != 0 ? sceneSrv : fallbackSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE skySrv{};
+    if (sky && sky->GetTex())
+    {
+        skySrv = sky->GetTex()->GetSRVCPU();
+    }
+    if (skySrv.ptr == 0)
+    {
+        skySrv = fallbackSrv;
+    }
+    pushSrv(skySrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE ssrSrv = deferred.ssrSRV.ptr != 0 ? deferred.ssrSRV : fallbackSrv;
+    pushSrv(ssrSrv.ptr != 0 ? ssrSrv : fallbackSrv);
+
+    pushTexture(distantRoughnessTexture_);
+    pushTexture(foamDetailTexture_);
+    pushTexture(foamAlbedoTexture_);
+    pushTexture(foamUnderwaterTexture_);
+    pushTexture(foamTrailTexture_);
+    pushTexture(contactFoamTexture_);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE depthSrv = deferred.gbSRV[3].ptr != 0 ? deferred.gbSRV[3] : fallbackSrv;
+    pushSrv(depthSrv.ptr != 0 ? depthSrv : fallbackSrv);
+
+    auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.table[0] = tbl.gpu;
 
-    const auto samplers = std::array{ *SamplerManager::LinearWrap() };
+    const auto samplers = std::array{ *SamplerManager::LinearClamp() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 }
 
@@ -508,6 +716,167 @@ Math::float4 OceanRenderable::GetClipMapParams() const
 Math::float4 OceanRenderable::GetClipMapViewer() const
 {
     return Math::float4(clipMapViewer_.x, clipMapViewer_.y, clipMapViewer_.z, 0.0f);
+}
+
+Math::float4 OceanRenderable::GetFoamParams0() const
+{
+    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
+    return Math::float4(foam.coverage, foam.density, foam.sharpness, foam.persistence);
+}
+
+Math::float4 OceanRenderable::GetFoamParams1() const
+{
+    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
+    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, foam.decayRate);
+}
+
+Math::float4 OceanRenderable::GetFoamCascadeWeights() const
+{
+    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
+    return foam.cascadesWeights;
+}
+
+Math::float4 OceanRenderable::GetSpecularParams() const
+{
+    // spec strength, roughness scale, roughness distance, horizon fog strength
+    return Math::float4(1.1f, 0.9f, 140.0f, 0.25f);
+}
+
+Math::float4 OceanRenderable::GetRefractionParams() const
+{
+    // refraction strengths and absorption parameters
+    return Math::float4(0.28f, 0.75f, 12.0f, 0.08f);
+}
+
+Math::float4 OceanRenderable::GetSubsurfaceParams() const
+{
+    // subsurface scattering controls
+    return Math::float4(0.35f, 0.25f, 0.2f, 0.8f);
+}
+
+Math::float4 OceanRenderable::GetHeightFogParams() const
+{
+    // sss height bias, fade distance, horizon fog distance scale, reflection normal strength
+    return Math::float4(0.0f, 6.0f, 2.5f, 0.25f);
+}
+
+Math::float4 OceanRenderable::GetSunDirAmbient() const
+{
+    Math::float3 dir = Math::float3(0.0f, -1.0f, 0.0f);
+    float ambient = 0.1f;
+    if (scene_)
+    {
+        const auto& light = scene_->GetDirectionalLight();
+        dir = light.GetDirection();
+        ambient = light.GetAmbient();
+    }
+    return Math::float4(dir.x, dir.y, dir.z, ambient);
+}
+
+Math::float4 OceanRenderable::GetSunColorExposure() const
+{
+    Math::float3 color = Math::float3(1.0f, 1.0f, 1.0f);
+    float exposure = 1.0f;
+    if (scene_)
+    {
+        const auto& light = scene_->GetDirectionalLight();
+        color = light.GetColor();
+        exposure = light.GetExposure();
+    }
+    return Math::float4(color.x, color.y, color.z, exposure);
+}
+
+Math::float4 OceanRenderable::GetDeepScatterColor() const
+{
+    return kDeepScatterColor;
+}
+
+Math::float4 OceanRenderable::GetSssColor() const
+{
+    return kSssColor;
+}
+
+Math::float4 OceanRenderable::GetDiffuseColor() const
+{
+    return kDiffuseColor;
+}
+
+Math::float4 OceanRenderable::GetAbsorptionGradientParams() const
+{
+    return kAbsorptionGradientParams;
+}
+
+Math::float4 OceanRenderable::GetAbsorptionColor(uint32_t index) const
+{
+    if (index >= kAbsorptionColors.size())
+    {
+        return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    return kAbsorptionColors[index];
+}
+
+uint32_t OceanRenderable::GetAbsorptionColorCount() const
+{
+    return static_cast<uint32_t>(kAbsorptionColors.size());
+}
+
+mat4 OceanRenderable::GetWorldToWindMatrix() const
+{
+    float radians = 0.0f;
+    if (simulation_)
+    {
+        radians = simulation_->GetLocalWindDirectionRadians();
+    }
+
+    return mat4::RotationY(-radians);
+}
+
+Math::float4 OceanRenderable::GetWindParams0() const
+{
+    return kWindParams0;
+}
+
+Math::float4 OceanRenderable::GetWindParams1() const
+{
+    Math::float2 dir(1.0f, 0.0f);
+    if (simulation_)
+    {
+        dir = simulation_->GetLocalWindDirectionVector().Normalized();
+    }
+    const float amplitude = simulation_ ? simulation_->GetDisplacementAmplitude() : 1.0f;
+    return Math::float4(dir.x, dir.y, amplitude, 0.0f);
+}
+
+Math::float4 OceanRenderable::GetFoamTrailParams0() const
+{
+    return kFoamTrailScales;
+}
+
+Math::float4 OceanRenderable::GetFoamTrailParams1() const
+{
+    const Math::float2 dir0 = kFoamTrailDir0;
+    const Math::float2 dir1 = kFoamTrailDir1;
+    return Math::float4(dir0.x, dir0.y, dir1.x, dir1.y);
+}
+
+Math::float4 OceanRenderable::GetFoamParams2() const
+{
+    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
+    const float trailBlend = Math::Clamp(foam.trail, 0.0f, 1.0f);
+    const float contactStrength = Math::Clamp(foam.trailTextureStrength, 0.0f, 1.0f);
+    return Math::float4(trailBlend, contactStrength, kUnderwaterFoamParallax, 0.0f);
+}
+
+Math::float4 OceanRenderable::GetFoamTint() const
+{
+    return kFoamTintColor;
+}
+
+Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) const
+{
+    const float width = renderer ? static_cast<float>(std::max(renderer->GetWidth(), 1u)) : 1.0f;
+    const float height = renderer ? static_cast<float>(std::max(renderer->GetHeight(), 1u)) : 1.0f;
+    return Math::float4(1.0f / width, 1.0f / height, width, height);
 }
 
 void OceanRenderable::SetGridVertexDensity(uint32_t density)
