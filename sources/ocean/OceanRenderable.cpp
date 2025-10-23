@@ -562,7 +562,7 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.table[0] = tbl.gpu;
 
-    const auto samplers = std::array{ *SamplerManager::LinearClamp() };
+    const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 }
 
