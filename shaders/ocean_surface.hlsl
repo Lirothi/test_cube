@@ -695,7 +695,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     float ndotl = saturate(dot(li.normal, -li.mainLight.direction));
     color += (ndotl * 0.8f + 0.2f) * li.mainLight.color * DiffuseColor(depthScale);
     
-    return color;
+    //return color;
 
     float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
     float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb;
