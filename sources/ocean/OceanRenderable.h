@@ -17,7 +17,7 @@ class Scene;
 class OceanRenderable : public RenderableObject
 {
 public:
-    explicit OceanRenderable(Camera* camera, Scene* scene = nullptr);
+    explicit OceanRenderable(Camera* camera, Scene* scene);
     ~OceanRenderable() override = default;
 
     void Init(Renderer* renderer,

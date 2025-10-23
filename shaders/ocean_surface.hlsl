@@ -1,6 +1,8 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0) SAMPLER(s1))
 #pragma pack_matrix(row_major)
 
+#include "utils.hlsl"
+
 cbuffer OceanCB : register(b0)
 {
     float4x4 model;
@@ -68,11 +70,73 @@ struct VSOutput
     float viewDepth : TEXCOORD3;
 };
 
+struct FoamInput
+{
+    float4 derivatives;
+    float2 worldUV;
+    float viewDist;
+    float4 lodWeights;
+    float4 shoreWeights;
+    float4 positionNDC;
+    float viewDepth;
+    float time;
+    float3 viewDir;
+    float3 normal;
+};
+
+struct FoamData
+{
+    float2 coverage;
+    float3 normal;
+    float3 albedo;
+};
+
+struct FoamTurbulenceSet
+{
+    float4 cascades[4];
+};
+
+struct LightData
+{
+    float3 direction;
+    float3 color;
+    float shadowAttenuation;
+};
+
+struct LightingInput
+{
+    float3 normal;
+    float3 viewDir;
+    float viewDist;
+    float roughnessMap;
+    float3 positionWS;
+    float2 screenUV;
+    float4 shore;
+    float4 positionNDC;
+    float viewDepth;
+    float3 cameraPos;
+    float height;
+    float referenceWaveHeight;
+    float slopeFactor;
+    LightData mainLight;
+    float ambient;
+};
+
+struct BrunetonInputs
+{
+    float3 lightDirWind;
+    float3 viewDirWind;
+    float3 normalWind;
+    float3 tangentXWind;
+    float3 tangentYWind;
+    float2 slopeVarianceSquared;
+};
+
 static const float3 kSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 32.0f;
 static const float kSpecularMaxPower = 256.0f;
 static const float kLodThreshold = 0.05f;
-static const float normalScale = 4.0f;
+static const float normalScale = 1.0f;
 
 static const uint kGradientMaxKeys = 8u;
 
@@ -113,6 +177,49 @@ float3 SampleGradient(Gradient grad, float t)
         color = lerp(color, grad.colors[i].rgb, blendType);
     }
     return color;
+}
+
+float2 ComputeScreenUV(float4 clipPosition)
+{
+    float2 ndc = clipPosition.xy / max(clipPosition.w, 1e-5f);
+    return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+}
+
+float2 ScreenUVToNDC(float2 uv)
+{
+    float2 ndc;
+    ndc.x = uv.x * 2.0f - 1.0f;
+    ndc.y = 1.0f - uv.y * 2.0f;
+    return ndc;
+}
+
+float SampleSceneDepth(float2 uv)
+{
+    return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
+}
+
+float4 ViewSpacePosition(float depthSample, float2 uv)
+{
+    float2 ndc = ScreenUVToNDC(uv);
+    float clipZ = depthSample * 2.0f - 1.0f;
+    float4 clipPos = float4(ndc, clipZ, 1.0f);
+    float4 viewPos = mul(clipPos, invProj);
+    float invW = rcp(max(viewPos.w, 1e-6f));
+    return viewPos * invW;
+}
+
+float LinearEyeDepth(float depthSample, float2 uv)
+{
+    float4 viewPos = ViewSpacePosition(depthSample, uv);
+    return -viewPos.z;
+}
+
+float3 PositionWsFromDepth(float depthSample, float2 uv)
+{
+    float4 viewPos = ViewSpacePosition(depthSample, uv);
+    float4 worldPos = mul(viewPos, invView);
+    float invW = rcp(max(worldPos.w, 1e-6f));
+    return worldPos.xyz * invW;
 }
 
 float ModifiedManhattanDistance(float3 a, float3 b)
@@ -367,49 +474,6 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
     return saturate(foamParams2.y * 2.0f - depthDiff * 10.0f);
 }
 
-float2 ComputeScreenUV(float4 clipPosition)
-{
-    float2 ndc = clipPosition.xy / max(clipPosition.w, 1e-5f);
-    return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-}
-
-float2 ScreenUVToNDC(float2 uv)
-{
-    float2 ndc;
-    ndc.x = uv.x * 2.0f - 1.0f;
-    ndc.y = 1.0f - uv.y * 2.0f;
-    return ndc;
-}
-
-float SampleSceneDepth(float2 uv)
-{
-    return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
-}
-
-float4 ViewSpacePosition(float depthSample, float2 uv)
-{
-    float2 ndc = ScreenUVToNDC(uv);
-    float clipZ = depthSample * 2.0f - 1.0f;
-    float4 clipPos = float4(ndc, clipZ, 1.0f);
-    float4 viewPos = mul(clipPos, invProj);
-    float invW = rcp(max(viewPos.w, 1e-6f));
-    return viewPos * invW;
-}
-
-float LinearEyeDepth(float depthSample, float2 uv)
-{
-    float4 viewPos = ViewSpacePosition(depthSample, uv);
-    return -viewPos.z;
-}
-
-float3 PositionWsFromDepth(float depthSample, float2 uv)
-{
-    float4 viewPos = ViewSpacePosition(depthSample, uv);
-    float4 worldPos = mul(viewPos, invView);
-    float invW = rcp(max(worldPos.w, 1e-6f));
-    return worldPos.xyz * invW;
-}
-
 float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
 {
     float2 uvOffset = normal.xz * refractionStrength;
@@ -451,68 +515,6 @@ float3 TransformToWind(float3 v)
 {
     return mul(worldToWind, float4(v, 0.0f)).xyz;
 }
-
-struct FoamInput
-{
-    float4 derivatives;
-    float2 worldUV;
-    float viewDist;
-    float4 lodWeights;
-    float4 shoreWeights;
-    float4 positionNDC;
-    float viewDepth;
-    float time;
-    float3 viewDir;
-    float3 normal;
-};
-
-struct FoamData
-{
-    float2 coverage;
-    float3 normal;
-    float3 albedo;
-};
-
-struct FoamTurbulenceSet
-{
-    float4 cascades[4];
-};
-
-struct LightData
-{
-    float3 direction;
-    float3 color;
-    float shadowAttenuation;
-};
-
-struct LightingInput
-{
-    float3 normal;
-    float3 viewDir;
-    float viewDist;
-    float roughnessMap;
-    float3 positionWS;
-    float2 screenUV;
-    float4 shore;
-    float4 positionNDC;
-    float viewDepth;
-    float3 cameraPos;
-    float height;
-    float referenceWaveHeight;
-    float slopeFactor;
-    LightData mainLight;
-    float ambient;
-};
-
-struct BrunetonInputs
-{
-    float3 lightDirWind;
-    float3 viewDirWind;
-    float3 normalWind;
-    float3 tangentXWind;
-    float3 tangentYWind;
-    float2 slopeVarianceSquared;
-};
 
 float SampleDistantRoughness(float2 worldUV, float viewDist)
 {
@@ -609,13 +611,13 @@ BrunetonInputs BuildBrunetonInputs(const LightingInput li)
 
 float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
 {
-    (void)bi;
+    //(void)bi;
     return saturate(SchlickFresnel(dot(li.viewDir, li.normal)));
 }
 
 float3 Specular(const LightingInput li, const BrunetonInputs bi)
 {
-    (void)bi;
+    //(void)bi;
     float3 halfDir = normalize(-li.mainLight.direction + li.viewDir);
     float roughness = saturate(specularParams.y * (1.0f + li.roughnessMap * 0.3f));
     float specPower = lerp(kSpecularMinPower, kSpecularMaxPower, 1.0f - roughness);
@@ -624,34 +626,32 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi)
     return spec * li.mainLight.color;
 }
 
-float3 Reflection(const LightingInput li, const FoamData foamData)
+float3 Reflection(const LightingInput li)
 {
     float reflectionNormalStrength = heightFogParams.w;
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
-    float2 uv = saturate(li.screenUV);
-    float4 ssrRaw = SsrTexture.SampleLevel(LinearClampSampler, uv, 0);
-    float visibility = ssrRaw.a;
+    //float2 uv = saturate(li.screenUV);
+    //float4 ssrRaw = SsrTexture.SampleLevel(LinearClampSampler, uv, 0);
+    //float visibility = ssrRaw.a;
     float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 0).rgb;
-    return lerp(ssrRaw.rgb + skySample * (1.0f - visibility), skySample, saturate(foamData.coverage.x));
+    //return lerp(skySample, ssrRaw.rgb, visibility);
+    return skySample;
 }
 
 float3 DeepScatterColor(float depthScale)
 {
-    (void)depthScale;
     return deepScatterColor.rgb;
 }
 
 float3 SssColor(float depthScale)
 {
-    (void)depthScale;
     return sssColor.rgb;
 }
 
 float3 DiffuseColor(float depthScale)
 {
-    (void)depthScale;
     return diffuseColor.rgb;
 }
 
@@ -686,11 +686,16 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 {
     float depthScale = 0.0f;
     float3 color = DeepScatterColor(depthScale);
+    
     float3 sssColor = SssColor(depthScale);
     color += sssColor * saturate(sss.x + sss.y);
+    
+    //return color;
 
     float ndotl = saturate(dot(li.normal, -li.mainLight.direction));
     color += (ndotl * 0.8f + 0.2f) * li.mainLight.color * DiffuseColor(depthScale);
+    
+    return color;
 
     float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
     float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb;
@@ -726,8 +731,10 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
 
     float fresnel = EffectiveFresnel(li, bi);
     float3 specular = Specular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.y));
-    float3 reflected = Reflection(li, foamData);
+    float3 reflected = Reflection(li);
+    //return reflected;
     float3 refracted = Refraction(li, foamData, sss, foamLitColor);
+    return refracted;
     float4 horizon = HorizonBlend(li);
 
     float3 color = specular + lerp(refracted, reflected, fresnel);

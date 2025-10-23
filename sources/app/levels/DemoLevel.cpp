@@ -65,7 +65,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
     auto skybox = std::make_unique<Skybox>(L"textures/skybox.dds");
     skybox->Init(&renderer, ctx.uploadCmdList, ctx.uploadKeepAlive);
-    skybox->SetExposure(0.2f);
+    //skybox->SetExposure(0.2f);
     scene.SetSkybox(std::move(skybox));
 
     SpotLightDesc warmSpot{};
@@ -141,7 +141,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     {
         auto floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
-        floor->SetPosition(float3(0.0f, -0.5f, 0.0f));
+        floor->SetPosition(float3(0.0f, -0.5f - 0.3f, 0.0f));
         floor->SetScale(float3(40.0f, 1.0f, 40.0f));
         scene.AddObject(std::move(floor));
 
@@ -170,7 +170,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     }
 
     scene.AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
-    //scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef()));
+    scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
     scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
     scene.CameraRef().SetPosition({ 0.f, 1.f, -10.f });

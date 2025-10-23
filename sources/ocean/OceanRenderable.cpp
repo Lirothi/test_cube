@@ -38,15 +38,11 @@ namespace
     const Math::float4 kSssColor(0.0f, 1.0f, 0.8926091f, 1.0f);
     const Math::float4 kDiffuseColor(0.0f, 0.025490196f, 0.033333335f, 1.0f);
     const Math::float4 kAbsorptionGradientParams(4.0f, 0.0f, 0.0f, 0.0f);
-    const std::array<Math::float4, 8> kAbsorptionColors = {
+    const std::array<Math::float4, 4> kAbsorptionColors = {
         Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),
         Math::float4(0.0f, 0.17351386f, 0.43203577f, 0.2f),
         Math::float4(0.16198544f, 0.68352747f, 0.79865986f, 0.66608685f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
+        Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
     };
 
     const Math::float4 kFoamTintColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -757,7 +753,7 @@ Math::float4 OceanRenderable::GetSubsurfaceParams() const
 Math::float4 OceanRenderable::GetHeightFogParams() const
 {
     // sss height bias, fade distance, horizon fog distance scale, reflection normal strength
-    return Math::float4(0.0f, 6.0f, 2.5f, 0.25f);
+    return Math::float4(0.0f, 6.0f, 2.5f, 0.05f);
 }
 
 Math::float4 OceanRenderable::GetSunDirAmbient() const
