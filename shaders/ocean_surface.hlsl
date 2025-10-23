@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0) SAMPLER(s1))
 #pragma pack_matrix(row_major)
 
 cbuffer OceanCB : register(b0)
@@ -50,7 +50,8 @@ Texture2D FoamUnderwaterTex : register(t8);
 Texture2D FoamTrailTex : register(t9);
 Texture2D ContactFoamTex : register(t10);
 Texture2D SceneDepthTexture : register(t11);
-SamplerState LinearSampler : register(s0);
+SamplerState LinearWrapSampler : register(s0);
+SamplerState LinearClampSampler : register(s1);
 
 struct VSInput
 {
@@ -166,7 +167,7 @@ float3 SampleDisplacementCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f);
-    float4 sample = DisplacementDerivatives.SampleLevel(LinearSampler, uvw, 0);
+    float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
     return sample.xyz;
 }
 
@@ -174,7 +175,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
-    float4 sample = DisplacementDerivatives.SampleLevel(LinearSampler, uvw, 0);
+    float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
     return sample;
 }
 
@@ -256,7 +257,7 @@ float4 SampleFoamCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade);
-    return FoamTurbulence.SampleLevel(LinearSampler, uvw, 0);
+    return FoamTurbulence.SampleLevel(LinearWrapSampler, uvw, 0);
 }
 
 FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, uint clipCount)
@@ -273,7 +274,7 @@ FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, uint clipCount)
 
         float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
         float3 uvw = float3(worldXZ / lengthScale, cascade);
-        set.cascades[cascade] = FoamTurbulence.SampleLevel(LinearSampler, uvw, 0);
+        set.cascades[cascade] = FoamTurbulence.SampleLevel(LinearWrapSampler, uvw, 0);
     }
     return set;
 }
@@ -316,7 +317,7 @@ float2 RotateUV(float2 uv, float2 center, float2 rotation, float sign)
 float FoamTrailSample(float2 worldUV, float2 direction, float scale)
 {
     float2 rotated = RotateUV(worldUV, float2(0.0f, 0.0f), direction, 1.0f);
-    return FoamTrailTex.SampleLevel(LinearSampler, rotated / max(scale, 1e-3f), 0).r;
+    return FoamTrailTex.SampleLevel(LinearWrapSampler, rotated / max(scale, 1e-3f), 0).r;
 }
 
 float DeepFoam(float2 worldUV, float3 viewDir, float3 normal, float time)
@@ -324,7 +325,7 @@ float DeepFoam(float2 worldUV, float3 viewDir, float3 normal, float time)
     float denom = max(dot(normal, viewDir), 1e-3f);
     float2 parallaxDir = (viewDir.xz / denom + 0.5f * normal.xz);
     float2 uv = worldUV - parallaxDir * foamParams2.z - windParams1.xy * time;
-    return FoamUnderwaterTex.SampleLevel(LinearSampler, uv * 0.2f, 0).r;
+    return FoamUnderwaterTex.SampleLevel(LinearWrapSampler, uv * 0.2f, 0).r;
 }
 
 float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV, float deepFoam, float bias)
@@ -360,7 +361,7 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
     screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     float rawDepth = SampleSceneDepth(screenUV);
     float depthDiff = LinearEyeDepth(rawDepth, screenUV) - viewDepth;
-    float contactTexture = ContactFoamTex.SampleLevel(LinearSampler, worldUV * 0.5f, 0).r;
+    float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV * 0.5f, 0).r;
     contactTexture = saturate(1.0f - contactTexture);
     depthDiff = abs(depthDiff) * contactTexture;
     return saturate(foamParams2.y * 2.0f - depthDiff * 10.0f);
@@ -382,7 +383,7 @@ float2 ScreenUVToNDC(float2 uv)
 
 float SampleSceneDepth(float2 uv)
 {
-    return SceneDepthTexture.SampleLevel(LinearSampler, uv, 0).r;
+    return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
 }
 
 float4 ViewSpacePosition(float depthSample, float2 uv)
@@ -516,7 +517,7 @@ struct BrunetonInputs
 float SampleDistantRoughness(float2 worldUV, float viewDist)
 {
     float2 uv = worldUV * 0.001f;
-    float roughness = DistantRoughnessMap.SampleLevel(LinearSampler, uv, 0).r;
+    float roughness = DistantRoughnessMap.SampleLevel(LinearClampSampler, uv, 0).r;
     float patchLength = max(simulationParams.x, 1.0f);
     roughness *= saturate(viewDist / patchLength * 0.05f);
     return roughness;
@@ -533,7 +534,7 @@ FoamData GetFoamData(FoamInput input, uint clipCount)
     float4 activeCascades = ActiveCascadesMask(clipCount);
     float4 mixWeights = input.lodWeights * input.shoreWeights * activeCascades;
 
-    float biasSample = FoamDetailMap.SampleLevel(LinearSampler, input.worldUV * 0.01f, 0).r;
+    float biasSample = FoamDetailMap.SampleLevel(LinearWrapSampler, input.worldUV * 0.01f, 0).r;
     float bias = biasSample * saturate(input.viewDist / max(simulationParams.x, 1.0f) * 0.5f);
 
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
@@ -552,7 +553,7 @@ FoamData GetFoamData(FoamInput input, uint clipCount)
     data.normal = normalize(lerp(input.normal, foamNormal, foamBlend));
 
     float2 uv = input.worldUV * 0.5f;
-    data.albedo = FoamAlbedoTex.SampleLevel(LinearSampler, uv, 0).rgb;
+    data.albedo = FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
     return data;
 }
 
@@ -630,9 +631,9 @@ float3 Reflection(const LightingInput li, const FoamData foamData)
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
     float2 uv = saturate(li.screenUV);
-    float4 ssrRaw = SsrTexture.SampleLevel(LinearSampler, uv, 0);
+    float4 ssrRaw = SsrTexture.SampleLevel(LinearClampSampler, uv, 0);
     float visibility = ssrRaw.a;
-    float3 skySample = SkyboxTexture.SampleLevel(LinearSampler, reflectDir, 0).rgb;
+    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 0).rgb;
     return lerp(ssrRaw.rgb + skySample * (1.0f - visibility), skySample, saturate(foamData.coverage.x));
 }
 
@@ -692,7 +693,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     color += (ndotl * 0.8f + 0.2f) * li.mainLight.color * DiffuseColor(depthScale);
 
     float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
-    float3 backgroundColor = SceneColorTexture.SampleLevel(LinearSampler, refractionCoords.xy, 0).rgb;
+    float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb;
 
     float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
     float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
@@ -708,7 +709,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 float4 HorizonBlend(const LightingInput li)
 {
     float3 dir = -float3(li.viewDir.x, 0.0f, li.viewDir.z);
-    float3 horizonColor = SkyboxTexture.SampleLevel(LinearSampler, dir, 0).rgb;
+    float3 horizonColor = SkyboxTexture.SampleLevel(LinearClampSampler, dir, 0).rgb;
 
     float horizonFog = max(specularParams.w, 0.01f);
     float distanceScale = 100.0f + 7.0f * abs(li.cameraPos.y);
