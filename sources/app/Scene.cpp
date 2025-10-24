@@ -864,7 +864,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
-            D.gbSRV[3],
+            D.depthSRV,
             D.shadowSRV
         };
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
@@ -966,7 +966,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
-            D.gbSRV[3],
+            D.depthSRV,
             D.spotShadowSRV,
             spotLightSrvHandle
         };
@@ -1052,7 +1052,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
-            D.gbSRV[3],
+            D.depthSRV,
             pointLightSrvHandle
         };
         rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
@@ -1139,7 +1139,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         auto& rc = h.ref();
 
         rc.cbv[0] = cb.gpu;
-        rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.gbSRV[3] }).gpu; // t0 Light, t1 GB1, t2 Depth
+        rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.depthSRV }).gpu; // t0 Light, t1 GB1, t2 Depth
         rc.table[1] = renderer->StageSrvUavTable({ D.ssrUAV }).gpu; // u0 output
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
@@ -1278,7 +1278,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
             D.gbSRV[2],
             D.gbSRV[0],
             D.gbSRV[1],
-            D.gbSRV[3],
+            D.depthSRV,
             skyBox_->GetTex()->GetSRVCPU(),
             D.ssrSRV
         };
@@ -1320,10 +1320,23 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
             const auto& D = renderer->GetDeferredForFrame();
+            if (D.depthCopy.Get())
+            {
+                renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+                renderer->Transition(driver.cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+            }
             if (D.sceneOpaque.Get())
             {
                 renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
                 renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+            }
+            if (D.depthCopy.Get())
+            {
+                driver.cl->CopyResource(D.depthCopy.Get(), D.depth.Get());
+                renderer->Transition(driver.cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            if (D.sceneOpaque.Get())
+            {
                 driver.cl->CopyResource(D.sceneOpaque.Get(), D.scene.Get());
                 renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
