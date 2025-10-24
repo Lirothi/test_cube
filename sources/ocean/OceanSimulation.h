@@ -18,7 +18,7 @@ class Material;
 class OceanSimulation
 {
 public:
-    static constexpr UINT kClipLevels = 5;
+    static constexpr UINT kClipLevels = 6;
 
     OceanSimulation();
     ~OceanSimulation() = default;

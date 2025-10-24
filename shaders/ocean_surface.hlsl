@@ -135,8 +135,8 @@ struct BrunetonInputs
 };
 
 static const float3 kSkyColor = float3(0.24f, 0.38f, 0.55f);
-static const float kSpecularMinPower = 32.0f;
-static const float kSpecularMaxPower = 256.0f;
+static const float kSpecularMinPower = 64.0f;
+static const float kSpecularMaxPower = 512.0f;
 static const float kLodThreshold = 0.05f;
 static const float normalScale = 1.0f;
 

@@ -96,7 +96,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
     DirectionalLight dirLight;
     dirLight.SetDirection(float3(-1.5f, -0.7f, -0.5f).Normalized());
-    dirLight.SetColor(float3(1.0f, 1.0f, 1.0f));
+    dirLight.SetColor(float3(1.0f, 0.9f, 0.85f));
     dirLight.SetExposure(1.0f);
     dirLight.SetAmbient(0.05f);
     scene.SetDirectionalLight(dirLight);
