@@ -9,6 +9,7 @@
 #include "app/Camera.h"
 #include "app/Scene.h"
 #include "app/DirectionalLight.h"
+#include "app/Systems.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
@@ -288,6 +289,7 @@ public:
             foamParams2Handle_ = material->ComputeCBFieldHandle(0, "foamParams2");
             foamTintHandle_ = material->ComputeCBFieldHandle(0, "foamTint");
             depthTextureSizeHandle_ = material->ComputeCBFieldHandle(0, "depthTextureSize");
+            depthParamsHandle_ = material->ComputeCBFieldHandle(0, "depthParams");
         }
         else
         {
@@ -324,6 +326,7 @@ public:
             foamParams2Handle_ = {};
             foamTintHandle_ = {};
             depthTextureSizeHandle_ = {};
+            depthParamsHandle_ = {};
         }
     }
 
@@ -376,6 +379,7 @@ public:
         UpdateUniform(owner, foamParams2Handle_, material, owner_.GetFoamParams2(), cbData);
         UpdateUniform(owner, foamTintHandle_, material, owner_.GetFoamTint(), cbData);
         UpdateUniform(owner, depthTextureSizeHandle_, material, owner_.GetDepthTextureSize(renderer), cbData);
+        UpdateUniform(owner, depthParamsHandle_, material, owner_.GetDepthParams(), cbData);
     }
 
 private:
@@ -413,6 +417,7 @@ private:
     Material::CBFieldHandle foamParams2Handle_{};
     Material::CBFieldHandle foamTintHandle_{};
     Material::CBFieldHandle depthTextureSizeHandle_{};
+    Material::CBFieldHandle depthParamsHandle_{};
 };
 
 OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
@@ -558,7 +563,7 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.table[0] = tbl.gpu;
 
-    const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp() };
+    const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 }
 
@@ -589,7 +594,7 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
         desc.dsvFormat = renderer->GetDsvFormat();
     }
     desc.depth.DepthEnable = TRUE;
-    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
 }
 
@@ -741,7 +746,7 @@ Math::float4 OceanRenderable::GetSpecularParams() const
 Math::float4 OceanRenderable::GetRefractionParams() const
 {
     // refraction strengths and absorption parameters
-    return Math::float4(0.28f, 0.75f, 12.0f, 0.08f);
+    return Math::float4(0.28f, 0.75f, 10.0f, 0.1f);
 }
 
 Math::float4 OceanRenderable::GetSubsurfaceParams() const
@@ -873,6 +878,14 @@ Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) cons
     const float width = renderer ? static_cast<float>(std::max(renderer->GetWidth(), 1u)) : 1.0f;
     const float height = renderer ? static_cast<float>(std::max(renderer->GetHeight(), 1u)) : 1.0f;
     return Math::float4(1.0f / width, 1.0f / height, width, height);
+}
+
+Math::float2 OceanRenderable::GetDepthParams() const
+{
+    auto& scene = Systems::GetScene();
+    float zNear = scene.CameraRef().GetZNear();
+	float zFar = scene.CameraRef().GetZFar();
+    return { zFar / (zFar - zNear), (zNear * zFar) / (zNear - zFar) };
 }
 
 void OceanRenderable::SetGridVertexDensity(uint32_t density)

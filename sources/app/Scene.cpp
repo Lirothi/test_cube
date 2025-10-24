@@ -209,15 +209,17 @@ void Scene::Render(Renderer* renderer) {
     lightManager_.UpdateSpotLightCache();
 
     // Frame matrices and camera/light parameters (mirrors your setup)
-    const float aspect = float(renderer->GetWidth()) / float(renderer->GetHeight());
-    const mat4 view = camera_.GetViewMatrix();
     constexpr float HFOV = XMConvertToRadians(90.f);
-    const float VFOV = 2.f * atan(tan(HFOV * 0.5f) / aspect);
     const float zNear = 0.01f, zFar = 1000.0f;
-    const mat4 proj = mat4::PerspectiveFovLH(VFOV, aspect, zNear, zFar);
-    const mat4 invView = mat4::Inverse(view);
-    const mat4 invProj = mat4::Inverse(proj);
-    const float3 camDir = invView.TransformDirection(float3(0, 0, 1)).Normalized();
+    camera_.SetHFov(HFOV);
+    camera_.SetZNearFar(zNear, zFar);
+	camera_.CalcMatrices(renderer);
+
+    const mat4& view = camera_.GetViewMatrix();
+    const mat4& proj = camera_.GetProjMatrix();
+    const mat4& invView = camera_.GetInvViewMatrix();
+    const mat4& invProj = camera_.GetInvProjMatrix();
+	const float3 camDir = camera_.GetDirection();
 
     renderQueue_.Bucketize(objects_);
     renderQueue_.SortTransparent(view);

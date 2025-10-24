@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0) SAMPLER(s1))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -38,6 +38,7 @@ cbuffer OceanCB : register(b0)
     float4 foamParams2;                // x: trail blend, y: contact foam strength, z: underwater parallax, w: padding
     float4 foamTint;                   // xyz: foam tint, w: unused
     float4 depthTextureSize;           // xy: texel size, zw: texture size
+    float2 depthParams;                // x: zFar / (zFar - zNear) y :(zNear * zFar) / (zNear - zFar)
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -54,6 +55,7 @@ Texture2D ContactFoamTex : register(t10);
 Texture2D SceneDepthTexture : register(t11);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
+SamplerState PointSampler : register(s2);
 
 struct VSInput
 {
@@ -195,29 +197,26 @@ float2 ScreenUVToNDC(float2 uv)
 
 float SampleSceneDepth(float2 uv)
 {
-    return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
+    return SceneDepthTexture.SampleLevel(PointSampler, uv, 0).r;
 }
 
-float4 ViewSpacePosition(float depthSample, float2 uv)
+float3 ViewSpacePosition(float depthSample, float2 uv)
 {
     float2 ndc = ScreenUVToNDC(uv);
-    float clipZ = depthSample * 2.0f - 1.0f;
-    float4 clipPos = float4(ndc, clipZ, 1.0f);
+    float4 clipPos = float4(ndc, depthSample, 1.0f);
     float4 viewPos = mul(clipPos, invProj);
-    float invW = rcp(max(viewPos.w, 1e-6f));
-    return viewPos * invW;
+    return viewPos.xyz / max(viewPos.w, 1e-6f);
 }
 
-float LinearEyeDepth(float depthSample, float2 uv)
+float DepthToViewZ_Fast(float d)
 {
-    float4 viewPos = ViewSpacePosition(depthSample, uv);
-    return -viewPos.z;
+    return depthParams.y / (d - depthParams.x);
 }
 
 float3 PositionWsFromDepth(float depthSample, float2 uv)
 {
-    float4 viewPos = ViewSpacePosition(depthSample, uv);
-    float4 worldPos = mul(viewPos, invView);
+    float3 viewPos = ViewSpacePosition(depthSample, uv);
+    float4 worldPos = mul(float4(viewPos, 1.0f), invView);
     float invW = rcp(max(worldPos.w, 1e-6f));
     return worldPos.xyz * invW;
 }
@@ -353,7 +352,7 @@ VSOutput VSMain(VSInput input)
     float4 local = float4(world, 1.0f);
     float4 worldH = mul(local, model);
     float4 viewPos = mul(worldH, view);
-    output.viewDepth = -viewPos.z;
+    output.viewDepth = viewPos.z;
     float4 clipPos = mul(viewPos, proj);
     output.position = clipPos;
     output.positionNDC = clipPos;
@@ -467,29 +466,11 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
     float2 screenUV = positionNDC.xy / max(positionNDC.w, 1e-5f);
     screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     float rawDepth = SampleSceneDepth(screenUV);
-    float depthDiff = LinearEyeDepth(rawDepth, screenUV) - viewDepth;
+    float depthDiff = DepthToViewZ_Fast(rawDepth) - viewDepth;
     float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV * 0.5f, 0).r;
     contactTexture = saturate(1.0f - contactTexture);
     depthDiff = abs(depthDiff) * contactTexture;
     return saturate(foamParams2.y * 2.0f - depthDiff * 10.0f);
-}
-
-float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
-{
-    float2 uvOffset = normal.xz * refractionStrength;
-    uvOffset.y *= depthTextureSize.z * abs(depthTextureSize.y);
-
-    float2 baseUV = ComputeScreenUV(positionNDC);
-    float2 refractedUV = saturate(baseUV + uvOffset);
-    float depthSample = SampleSceneDepth(refractedUV);
-    float refractedDepth = LinearEyeDepth(depthSample, refractedUV);
-
-    float depthDiff = refractedDepth - viewDepth;
-    uvOffset *= saturate(depthDiff);
-
-    refractedUV = saturate(baseUV + uvOffset);
-    depthSample = SampleSceneDepth(refractedUV);
-    return float3(refractedUV, depthSample);
 }
 
 float Pow5(float x)
@@ -682,6 +663,33 @@ float3 ColorThroughWater(float3 color, float3 volumeColor, float distThroughWate
     return lerp(tinted, volumeColor, saturate(fog));
 }
 
+//float2 ComputeScreenUV(float4 clipPosition)
+//{
+//    float2 ndc = clipPosition.xy / max(clipPosition.w, 1e-5f);
+//    return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+//}
+
+float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
+{
+    float2 uvOffset = normal.xz * refractionStrength * 1;
+    uvOffset.y *= depthTextureSize.z * abs(depthTextureSize.y);
+
+    float2 refractedUV = ((positionNDC.xy + uvOffset) / positionNDC.w);
+    refractedUV = saturate(refractedUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f));
+    
+    float depthSample = SampleSceneDepth(refractedUV);
+    float refractedDepth = DepthToViewZ_Fast(depthSample);
+
+    float depthDiff = refractedDepth - viewDepth;
+    uvOffset *= saturate(depthDiff);
+
+    refractedUV = ((positionNDC.xy + uvOffset) / positionNDC.w);
+    refractedUV = saturate(refractedUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f));
+
+    depthSample = SampleSceneDepth(refractedUV);
+    return float3(refractedUV, depthSample);
+}
+
 float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, float3 foamColor)
 {
     float depthScale = 0.0f;
@@ -700,9 +708,13 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
     float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb;
 
+    //return backgroundColor;
+
     float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
     float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
     color = ColorThroughWater(backgroundColor, color, backgroundDistance, -backgroundPositionWS.y);
+
+    return color;
 
     float underwaterFoamVisibility = 20.0f / (20.0f + li.viewDist);
     float3 tint = AbsorptionTint(0.8f);

@@ -48,3 +48,17 @@ void Camera::UpdateFromInput(float dt) {
     if (my != 0.0f) { MoveUp(my * speed * dt); }
     if (mz != 0.0f) { MoveForward(mz * speed * dt); }
 }
+
+void Camera::CalcMatrices(Renderer* r)
+{
+    mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
+    float3 look = rot.TransformPoint({ 0, 0, 1 }); // forward
+    float3 up = rot.TransformPoint({ 0, 1, 0 }); // up
+    view = mat4::LookAtLH(position_, position_ + look, up);
+	invView = mat4::Inverse(view);
+    const float aspect = float(r->GetWidth()) / float(r->GetHeight());
+    const float vfov = 2.f * atan(tan(HFov_ * 0.5f) / aspect);
+	proj = mat4::PerspectiveFovLH(vfov, aspect, zNear, zFar);
+	invProj = mat4::Inverse(proj);
+	dir_ = look.Normalized();
+}

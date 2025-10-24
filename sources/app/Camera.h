@@ -4,6 +4,8 @@
 
 using namespace DirectX;
 
+class Renderer;
+
 class Camera {
 public:
     Camera(
@@ -29,13 +31,22 @@ public:
         yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw();
     }
 
+    void SetHFov(float fov) { HFov_ = fov; }
+	float GetHFov() const { return HFov_; }
+
+	void SetZNearFar(float znear, float zfar) { zNear = znear; zFar = zfar; }
+	float GetZNear() const { return zNear; }
+	float GetZFar() const { return zFar; }
+
     // Fetch the view matrix
-    mat4 GetViewMatrix() const {
-        mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
-		float3 look = rot.TransformPoint({ 0, 0, 1 }); // forward
-		float3 up = rot.TransformPoint({ 0, 1, 0 }); // up
-        return mat4::LookAtLH(position_, position_ + look, up);
-    }
+    const mat4& GetViewMatrix() const {return view;}
+	const mat4& GetProjMatrix() const { return proj; }
+	const mat4& GetInvViewMatrix() const { return invView; }
+	const mat4& GetInvProjMatrix() const { return invProj; }
+
+    const float3& GetDirection() const { return dir_; }
+
+    void CalcMatrices(Renderer* r);
 
     // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
@@ -48,12 +59,20 @@ public:
     }
 
 private:
+    mat4 view;
+    mat4 proj;
+	mat4 invView;
+	mat4 invProj;
+    float3 dir_;
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
     float yaw_;   // Left/right, can wrap freely
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
+    float HFov_;
+    float zNear;
+    float zFar;
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

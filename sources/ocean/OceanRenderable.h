@@ -85,6 +85,7 @@ private:
     Math::float4 GetFoamParams2() const;
     Math::float4 GetFoamTint() const;
     Math::float4 GetDepthTextureSize(const Renderer* renderer) const;
+    Math::float2 GetDepthParams() const;
 
 private:
     Camera* camera_ = nullptr;
