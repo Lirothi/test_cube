@@ -61,8 +61,8 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     SystemParametersInfo(SPI_GETWORKAREA, 0, &screenRect, 0);
 
     float scale = 1.0f, aspect = 9.0f/16.0f;
-    LONG defWidth = (LONG)(1600 * scale);
-	LONG defHeight = (LONG)(900 * scale);
+    LONG defWidth = (LONG)(1920 * scale);
+	LONG defHeight = (LONG)(1080 * scale);
 
     defWidth = std::min(defWidth, (screenRect.right - screenRect.left) - 8);
     defHeight = LONG(defWidth * aspect);
