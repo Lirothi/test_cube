@@ -127,6 +127,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE displacementFullSrv_{};
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementSrvs_;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementUavs_;
+    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> foamSrvs_;
+    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> foamUavs_;
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE foamUav_{};
 
