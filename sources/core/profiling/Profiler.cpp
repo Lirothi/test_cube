@@ -270,7 +270,6 @@ Profiler::~Profiler() {
 
     TraceSampleNode* tracePool = traceSamplePool_.exchange(nullptr, std::memory_order_acq_rel);
     destroyTraceList(tracePool);
-    }
 #endif
 }
 
@@ -435,13 +434,22 @@ Profiler& Profiler::Get() {
 
 #if PROF_GPU_ENABLED
 Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key)
+#if PROF_ENABLED
     : cl_(cl)
+#endif
 {
+#if PROF_ENABLED
     idx_ = Profiler::Get().BeginGpuSample(cl, key);
+#else
+    (void)cl;
+    (void)key;
+#endif
 }
 
 Profiler::ScopedGpu::~ScopedGpu() {
+#if PROF_ENABLED
     Profiler::Get().EndGpuSample(cl_, idx_);
+#endif
 }
 #endif
 

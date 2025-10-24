@@ -418,7 +418,10 @@ inline Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring, uint3
     return {};
 }
 #if PROF_GPU_ENABLED
+inline void Profiler::InitGpu(ID3D12Device*, ID3D12CommandQueue*, UINT) {}
+inline void Profiler::CollectGpuResults() {}
 inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}
 inline void Profiler::EndGpuFrame(ID3D12GraphicsCommandList*) {}
+inline void Profiler::ShutdownGpu() {}
 #endif
 #endif
