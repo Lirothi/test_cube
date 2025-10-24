@@ -400,6 +400,8 @@ private:
 };
 
 #if !PROF_ENABLED
+inline Profiler::Profiler() = default;
+inline Profiler::~Profiler() = default;
 inline Profiler& Profiler::Get() { static Profiler p; return p; }
 inline void Profiler::BeginFrame(uint64_t) {}
 inline void Profiler::EndFrame() {}
@@ -410,6 +412,11 @@ inline void Profiler::ResetMaxNow() {}
 inline void Profiler::RequestTraceCapture(uint32_t) {}
 inline void Profiler::Tick() {}
 inline void Profiler::SetThreadName(const std::string&) {}
+inline Profiler::ScopeNameKey Profiler::RegisterTraceLiteral(const wchar_t*) { return {}; }
+inline Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring, uint32_t* outIndex) {
+    if (outIndex) { *outIndex = 0; }
+    return {};
+}
 #if PROF_GPU_ENABLED
 inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}
 inline void Profiler::EndGpuFrame(ID3D12GraphicsCommandList*) {}
