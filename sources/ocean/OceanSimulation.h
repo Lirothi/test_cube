@@ -48,7 +48,15 @@ public:
     float GetLocalWindDirectionRadians() const;
     Math::float2 GetLocalWindDirectionVector() const;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE GetDisplacementSRV() const { return displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetDisplacementSRV() const
+    {
+        if (displacementFullSrv_.ptr != 0)
+        {
+            return displacementFullSrv_;
+        }
+
+        return displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0];
+    }
     D3D12_CPU_DESCRIPTOR_HANDLE GetFoamTurbulenceSRV() const { return foamSrv_; }
     ID3D12Resource* GetDisplacementResource() const { return displacement_.Get(); }
     ID3D12Resource* GetFoamResource() const { return foamTurbulence_.Get(); }
@@ -116,6 +124,7 @@ private:
     UINT descriptorIncr_ = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE h0Srv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE waveDataSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE displacementFullSrv_{};
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementSrvs_;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementUavs_;
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_{};
