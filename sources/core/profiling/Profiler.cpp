@@ -222,20 +222,15 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
 Profiler::SampleNode* const Profiler::kSampleListClosed = reinterpret_cast<Profiler::SampleNode*>(1);
 Profiler::TraceSampleNode* const Profiler::kTraceListClosed = reinterpret_cast<Profiler::TraceSampleNode*>(1);
 
-#endif
-
 Profiler::Profiler() {
-#if PROF_ENABLED
     frameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
 #if PROF_GPU_ENABLED
     gpuFrameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
 #endif
     traceSampleHead_.store(kTraceListClosed, std::memory_order_relaxed);
-#endif
 }
 
 Profiler::~Profiler() {
-#if PROF_ENABLED
     auto destroyList = [](SampleNode* head) {
         while (head) {
             SampleNode* next = head->next;
@@ -270,37 +265,19 @@ Profiler::~Profiler() {
 
     TraceSampleNode* tracePool = traceSamplePool_.exchange(nullptr, std::memory_order_acq_rel);
     destroyTraceList(tracePool);
-#endif
 }
 
 Profiler::ScopeNameKey Profiler::RegisterTraceLiteral(const wchar_t* name) {
-#if PROF_ENABLED
     return GetTraceStringTable().RegisterLiteral(name);
-#else
-    (void)name;
-    return {};
-#endif
 }
 
 Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring name, uint32_t* outIndex) {
-#if PROF_ENABLED
     return GetTraceStringTable().RegisterDynamic(std::move(name), outIndex);
-#else
-    (void)name;
-    (void)outIndex;
-    return {};
-#endif
 }
 
 void Profiler::ReleaseTraceNameKeys(const std::vector<Profiler::ScopeNameKey>& keys) {
-#if PROF_ENABLED
     GetTraceStringTable().ReleaseDynamicKeys(keys);
-#else
-    (void)keys;
-#endif
 }
-
-#if PROF_ENABLED
 
 Profiler::SampleNode* Profiler::AcquireSampleNode() {
     SampleNode* node = sampleNodePool_.load(std::memory_order_acquire);
