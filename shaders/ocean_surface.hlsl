@@ -558,7 +558,7 @@ float2 SubsurfaceScatteringFactor(const LightingInput li)
     heightFactor = pow(abs(heightFactor), max(1.0f, li.referenceWaveHeight * 0.4f));
 
     float spread = max(subsurfaceParams.z, 1e-3f);
-    float sunDot = saturate(dot(li.mainLight.direction, -li.viewDir));
+    float sunDot = saturate(dot(-li.mainLight.direction, -li.viewDir));
     float sunExponent = min(50.0f, 1.0f / spread);
     float sun = subsurfaceParams.x * normalFactor * heightFactor * pow(sunDot, sunExponent);
 
@@ -663,15 +663,9 @@ float3 ColorThroughWater(float3 color, float3 volumeColor, float distThroughWate
     return lerp(tinted, volumeColor, saturate(fog));
 }
 
-//float2 ComputeScreenUV(float4 clipPosition)
-//{
-//    float2 ndc = clipPosition.xy / max(clipPosition.w, 1e-5f);
-//    return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-//}
-
 float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
 {
-    float2 uvOffset = normal.xz * refractionStrength * 1;
+    float2 uvOffset = normal.xz * refractionStrength;
     uvOffset.y *= depthTextureSize.z * abs(depthTextureSize.y);
 
     float2 refractedUV = ((positionNDC.xy + uvOffset) / positionNDC.w);

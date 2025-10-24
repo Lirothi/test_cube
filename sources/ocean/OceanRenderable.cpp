@@ -594,7 +594,7 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
         desc.dsvFormat = renderer->GetDsvFormat();
     }
     desc.depth.DepthEnable = TRUE;
-    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
 }
 
@@ -752,6 +752,7 @@ Math::float4 OceanRenderable::GetRefractionParams() const
 Math::float4 OceanRenderable::GetSubsurfaceParams() const
 {
     // subsurface scattering controls
+    // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     return Math::float4(0.35f, 0.25f, 0.2f, 0.8f);
 }
 
