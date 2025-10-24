@@ -757,7 +757,7 @@ Math::float4 OceanRenderable::GetSubsurfaceParams() const
 {
     // subsurface scattering controls
     // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
-    return Math::float4(0.35f, 0.25f, 0.2f, 0.8f);
+    return Math::float4(0.35f, 0.35f, 0.2f, 0.8f);
 }
 
 Math::float4 OceanRenderable::GetHeightFogParams() const

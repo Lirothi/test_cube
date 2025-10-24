@@ -281,7 +281,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
-    //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
+    //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 3);
 	float4 sample = DisplacementDerivatives.Sample(LinearWrapSampler, uvw);
     return sample;
 }
@@ -563,8 +563,9 @@ float2 SubsurfaceScatteringFactor(const LightingInput li)
     float sunExponent = min(50.0f, 1.0f / spread);
     float sun = subsurfaceParams.x * normalFactor * heightFactor * pow(sunDot, sunExponent);
 
+    float distFade = heightFogParams.y;
     float environment = subsurfaceParams.y * normalFactor * heightFactor * saturate(1.0f - li.viewDir.y);
-    float fade = heightFogParams.y / (heightFogParams.y + li.viewDist + 1e-3f);
+    float fade = distFade / (distFade + li.viewDist + 1e-3f);
     return float2(sun, environment) * fade;
 }
 
@@ -608,7 +609,7 @@ float MeanFresnel(float3 V, float3 N, float2 sigmaSq)
 float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
 {
     //(void)bi;
-    return saturate(SchlickFresnel(dot(li.viewDir, li.normal)));
+    //return saturate(SchlickFresnel(dot(li.viewDir, li.normal)));
 
     const float R = 0.02f;
     float fresnel = R + (1.0f - R) * MeanFresnel(
@@ -638,8 +639,7 @@ float3 Reflection(const LightingInput li)
     //float2 uv = saturate(li.screenUV);
     //float4 ssrRaw = SsrTexture.SampleLevel(LinearClampSampler, uv, 0);
     //float visibility = ssrRaw.a;
-    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 0).rgb;
-    skySample = float3(0.0f, 0.0f, 1.0f);
+    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 3).rgb;
     //return lerp(skySample, ssrRaw.rgb, visibility);
     return skySample;
 }
@@ -768,7 +768,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
     //return horizon.aaa;
 
     float3 color = specular + lerp(refracted, reflected, fresnel);
-    color = fresnel.xxx;
+    //color = fresnel.xxx;
     //color = lerp(color, foamLitColor, foamData.coverage.x);
     color = lerp(color, horizon.rgb, horizon.a);
     return color;
@@ -790,7 +790,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float denomZ = max(1e-3f, 1.0f + deriv.w);
     float2 slope = float2(deriv.x / denomX, deriv.y / denomZ) * normalScale;
     float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
-    return float4(normal, 1);
+    //return float4(normal, 1);
 
     float3 viewDir = normalize(clipMapViewer.xyz - input.worldPos);
     float3 lightDir = normalize(sunDirAmbient.xyz);

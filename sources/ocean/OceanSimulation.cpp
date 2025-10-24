@@ -487,7 +487,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     if (displacementFullSrv_.ptr != 0)
     {
         auto fullSrvDesc = texSrv;
-        fullSrvDesc.Texture2DArray.MipLevels = mipCount_;
+        fullSrvDesc.Texture2DArray.MipLevels = std::min(4u, mipCount_);
         device->CreateShaderResourceView(displacement_.Get(), &fullSrvDesc, displacementFullSrv_);
     }
 
