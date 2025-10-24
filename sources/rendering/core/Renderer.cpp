@@ -974,7 +974,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,Light,LightUAV,Scene,SceneUAV,SceneOpaque,SSR,SSRBlur,Shadow,SpotShadow,SSRUAV,SSRBlurUAV,Tonemap,TonemapUAV
+        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,DepthCopy,Light,LightUAV,Scene,SceneUAV,SceneOpaque,SSR,SSRBlur,Shadow,SpotShadow,SSRUAV,SSRBlurUAV,Tonemap,TonemapUAV,Fxaa,FxaaUAV
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
@@ -1061,7 +1061,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             case DeferredSrvSlot::GB0:    D.gbSRV[0] = outSRV; break;
             case DeferredSrvSlot::GB1:    D.gbSRV[1] = outSRV; break;
             case DeferredSrvSlot::GB2:    D.gbSRV[2] = outSRV; break;
-            case DeferredSrvSlot::Depth:  D.gbSRV[3] = outSRV; break;
+            case DeferredSrvSlot::Depth:  D.depthSRV = outSRV; break;
             case DeferredSrvSlot::Light:  D.lightSRV = outSRV; break;
             case DeferredSrvSlot::Scene:  D.sceneSRV = outSRV; break;
             default: break;
@@ -1083,7 +1083,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         DeferredSrvSlot srvSlot,
         UINT f,
         ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV)
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+        DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_NONE);
 
@@ -1092,7 +1093,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&outRes)));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = fmt;
+            sd.Format = srvFormat == DXGI_FORMAT_UNKNOWN ? fmt : srvFormat;
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels = 1;
@@ -1105,6 +1106,11 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             {
                 D.sceneOpaque = outRes;
                 D.sceneOpaqueSRV = outSRV;
+            }
+            else if (srvSlot == DeferredSrvSlot::DepthCopy)
+            {
+                D.depthCopy = outRes;
+                D.depthCopySRV = outSRV;
             }
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1204,7 +1210,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             sd.Texture2D.MipLevels = 1;
             outDepthSRV = DeferredSrvCPU(f, DeferredSrvSlot::Depth);
             dev->CreateShaderResourceView(outRes.Get(), &sd, outDepthSRV);
-            D.gbSRV[3] = outDepthSRV;
+            D.depthSRV = outDepthSRV;
 
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
@@ -1322,7 +1328,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
 
-        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.gbSRV[3]);
+        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
+        CreateSrvTexture(kDeferredDepthFormat, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, GetDepthSrvFormat());
 
         D.shadowRes = 4096; // could be driven by config/parameter
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
@@ -1358,6 +1365,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.gb1);
         collect(D.gb2);
         collect(D.depth);
+        collect(D.depthCopy);
         collect(D.light);
         collect(D.scene);
         collect(D.sceneOpaque);
@@ -1542,7 +1550,7 @@ void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightInd
 
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageGBufferSrvTable() {
     auto& D = deferred_[currentFrameIndex_];
-    auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3] });
+    auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.depthSRV });
     return tbl.gpu; // shader key t0
 }
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageComposeSrvTable() {

@@ -557,8 +557,12 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
     pushTexture(foamTrailTexture_);
     pushTexture(contactFoamTexture_);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE depthSrv = deferred.gbSRV[3].ptr != 0 ? deferred.gbSRV[3] : fallbackSrv;
-    pushSrv(depthSrv.ptr != 0 ? depthSrv : fallbackSrv);
+    D3D12_CPU_DESCRIPTOR_HANDLE depthSrv = deferred.depthCopySRV.ptr != 0 ? deferred.depthCopySRV : deferred.depthSRV;
+    if (depthSrv.ptr == 0)
+    {
+        depthSrv = fallbackSrv;
+    }
+    pushSrv(depthSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.table[0] = tbl.gpu;
