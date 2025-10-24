@@ -213,6 +213,7 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     descriptorIncr_ = 0;
     h0Srv_ = {};
     waveDataSrv_ = {};
+    displacementFullSrv_ = {};
     displacementSrvs_.clear();
     displacementUavs_.clear();
     foamSrv_ = {};
@@ -422,7 +423,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         return;
     }
 
-    const UINT descriptorCount = 2u + mipCount_ * 2u + 2u;
+    const UINT descriptorCount = 3u + mipCount_ * 2u + 2u;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.NumDescriptors = descriptorCount;
@@ -441,11 +442,12 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
 
     h0Srv_ = base;
     waveDataSrv_ = Offset(base, 1);
+    displacementFullSrv_ = Offset(base, 2);
 
     displacementSrvs_.resize(mipCount_);
     displacementUavs_.resize(mipCount_);
 
-    UINT descriptorIndex = 2;
+    UINT descriptorIndex = 3;
     for (UINT mip = 0; mip < mipCount_; ++mip)
     {
         displacementSrvs_[mip] = Offset(base, descriptorIndex++);
@@ -481,6 +483,13 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     texSrv.Texture2DArray.MipLevels = 1;
     texSrv.Texture2DArray.PlaneSlice = 0;
     texSrv.Texture2DArray.ResourceMinLODClamp = 0.0f;
+
+    if (displacementFullSrv_.ptr != 0)
+    {
+        auto fullSrvDesc = texSrv;
+        fullSrvDesc.Texture2DArray.MipLevels = mipCount_;
+        device->CreateShaderResourceView(displacement_.Get(), &fullSrvDesc, displacementFullSrv_);
+    }
 
     for (UINT mip = 0; mip < mipCount_; ++mip)
     {
