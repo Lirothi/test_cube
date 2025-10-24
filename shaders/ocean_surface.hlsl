@@ -364,10 +364,10 @@ float4 SampleFoamCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade);
-    return FoamTurbulence.SampleLevel(LinearWrapSampler, uvw, 0);
+    return FoamTurbulence.Sample(LinearWrapSampler, uvw);
 }
 
-FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, uint clipCount)
+FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 lodWeights, uint clipCount)
 {
     FoamTurbulenceSet set;
     [unroll]
@@ -379,9 +379,13 @@ FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, uint clipCount)
             continue;
         }
 
-        float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
-        float3 uvw = float3(worldXZ / lengthScale, cascade);
-        set.cascades[cascade] = FoamTurbulence.SampleLevel(LinearWrapSampler, uvw, 0);
+        float w = lodWeights[cascade];
+        if (cascade == 0 || w > kLodThreshold)
+        {
+            float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
+            float3 uvw = float3(worldXZ / lengthScale, cascade);
+            set.cascades[cascade] = FoamTurbulence.Sample(LinearWrapSampler, uvw);
+        }
     }
     return set;
 }
@@ -514,7 +518,7 @@ FoamData GetFoamData(FoamInput input, uint clipCount)
     data.normal = input.normal;
     data.albedo = float3(1.0f, 1.0f, 1.0f);
 
-    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, clipCount);
+    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights, clipCount);
     float4 activeCascades = ActiveCascadesMask(clipCount);
     float4 mixWeights = input.lodWeights * input.shoreWeights * activeCascades;
 
