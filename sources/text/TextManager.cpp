@@ -554,7 +554,7 @@ void TextManager::EmitGlyphRun(int x, int y, float xOffset, const float4& color,
 
     if (enableShadow && shadow_.has_value()) {
         const ShadowDesc& desc = shadow_.value();
-        float offsetScale = (desc.scaleWithTextSize ? scale : 1.0f);
+        float offsetScale = (desc.scaleWithTextSize ? 1.0f / scale : 1.0f);
         if (desc.scaleWithDpi) {
             offsetScale *= dpi_;
         }

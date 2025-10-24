@@ -196,10 +196,10 @@ void Scene::Render(Renderer* renderer) {
     int y = 8;
     tb->AddTextfShadow(8, 8, 32.0f, float4(1, 1, 1, 0.6f), true, L"FPS:%.0f MS:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS());
     auto& camPos = camera_.GetPosition();
-    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.6f), true, L"Cam: %0.2f %0.2f %0.2f, speed: %0.2f", camPos.x, camPos.y, camPos.z, camera_.GetMoveSpeedMult());
-    //tb->AddText(8, 8 + 32, 10.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", false);
-    //tb->AddText(8, 8 + 32 + 32, 16.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
-    //tb->AddText(8, 8 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
+    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true, L"Cam: %0.2f %0.2f %0.2f, speed: %0.2f", camPos.x, camPos.y, camPos.z, camera_.GetMoveSpeedMult());
+    //tb->AddText(8, 8 + 32 + 32, 10.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", false);
+    //tb->AddText(8, 8 + 32 + 32 + 32, 16.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
+    //tb->AddText(8, 8 + 32 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
 
 
     renderer->BeginSubmitTimeline();

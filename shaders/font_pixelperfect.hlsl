@@ -37,13 +37,15 @@ Texture2D tex0 : register(t0);
 SamplerState samp0 : register(s0);
 
 float4 PSMain(VSOut i) : SV_Target {
-    const float2 atlasTexelSize = viewportAtlas.zw;
+    //const float2 atlasTexelSize = viewportAtlas.zw;
+    const float2 atlasTexelSize = 1.0f / viewportAtlas.xy;
     float coverage = saturate(tex0.Sample(samp0, i.uv).r);
     float4 textColor = float4(i.col.rgb, i.col.a * coverage);
 
     float shadowAlpha = i.shadowParams.y;
-    if (shadowAlpha > 0.0f) {
-        float2 baseOffset = shadowOffsetBase.xy;
+    if (shadowAlpha > 0.0f)
+    {
+        float2 baseOffset = shadowOffsetBase.xy * 1.0;
         float2 shadowUv = i.uv - baseOffset * i.shadowParams.x * atlasTexelSize;
         float shadowCoverage = saturate(tex0.Sample(samp0, shadowUv).r);
         float finalAlpha = saturate(shadowAlpha * shadowCoverage);
