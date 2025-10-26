@@ -77,7 +77,7 @@ public:
     void ReportLiveObjects();
 
     // Initialize device/queue/swap/RTV/DSV plus frame resources and the fence
-    void InitD3D12(HWND window);
+    void InitD3D12(HWND window, UINT width, UINT height);
     void InitFence(); // kept for compatibility; does nothing if already initialized
 
     // Frame cycle

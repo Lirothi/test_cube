@@ -91,7 +91,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
 
     auto& renderer = systems_->renderer;
     auto& input = systems_->input;
-    renderer.InitD3D12(hWnd);
+    renderer.InitD3D12(hWnd, defWidth, defHeight);
     input.Initialize(hWnd);
 #if PROF_GPU_ENABLED
     Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue());

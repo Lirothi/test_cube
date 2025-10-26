@@ -130,8 +130,10 @@ void Renderer::Shutdown()
     //mi_stats_print(nullptr);
 }
 
-void Renderer::InitD3D12(HWND window) {
+void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     hWnd_ = window;
+    width_ = width;
+    height_ = height;
 
 #ifdef _DEBUG
     {
