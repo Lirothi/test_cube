@@ -36,8 +36,8 @@ namespace
     constexpr int kOverlap = 2;
 
     const Math::float4 kDeepScatterColor(0.0f, 0.012745098f, 0.04019608f, 1.0f);
-    const Math::float4 kSssColor(0.0f, 1.0f, 0.8926091f, 1.0f);
-    const Math::float4 kDiffuseColor(0.0f, 0.025490196f, 0.033333335f, 1.0f);
+    const Math::float4 kSssColor(0.13333334f, 0.9411765f, 0.6039216f, 1.0f);
+    const Math::float4 kDiffuseColor(0.0f, 0.025490196f, 0.02745098f, 1.0f);
     const Math::float4 kAbsorptionGradientParams(4.0f, 0.0f, 0.0f, 0.0f);
     const std::array<Math::float4, 4> kAbsorptionColors = {
         Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),

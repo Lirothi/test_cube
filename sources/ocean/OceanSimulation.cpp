@@ -139,7 +139,7 @@ void OceanSimulation::InitializeDefaultAssets()
     //    1.0f,
     //    calmFoam);
     //defaultLocalPreset_ = addLocalPreset(0.0f,
-    //    makeSpectrum(1.0f, 100.0f, 3.0f, 0.1f, 0.01f, 1.0f, 0.0f),
+    //    makeSpectrum(0.5f, 100.0f, 3.0f, 0.1f, 0.01f, 1.0f, 0.0f),
     //    0.0f,
     //    1.0f,
     //    calmFoam);
