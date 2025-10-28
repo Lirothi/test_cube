@@ -141,7 +141,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     {
         auto floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
-        floor->SetPosition(float3(0.0f, -0.5f, 0.0f));
+        floor->SetPosition(float3(0.0f, -0.5f - 0.3f, 0.0f));
         floor->SetScale(float3(40.0f, 1.0f, 40.0f));
         scene.AddObject(std::move(floor));
 

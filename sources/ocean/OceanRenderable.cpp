@@ -808,7 +808,7 @@ Math::float4 OceanRenderable::GetFoamCascadeWeights() const
 Math::float4 OceanRenderable::GetSpecularParams() const
 {
     // spec strength, roughness scale, roughness distance, horizon fog strength
-    return Math::float4(1.1f, 0.9f, 140.0f, 0.55f);
+    return Math::float4(1.1f, 0.7f, 150.0f, 0.55f);
 }
 
 Math::float4 OceanRenderable::GetRefractionParams() const

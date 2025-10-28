@@ -210,7 +210,7 @@ void Scene::Render(Renderer* renderer) {
 
     // Frame matrices and camera/light parameters (mirrors your setup)
     constexpr float HFOV = XMConvertToRadians(90.f);
-    const float zNear = 0.01f, zFar = 2000.0f;
+    const float zNear = 0.01f, zFar = 10000.0f;
     camera_.SetHFov(HFOV);
     camera_.SetZNearFar(zNear, zFar);
 	camera_.CalcMatrices(renderer);
