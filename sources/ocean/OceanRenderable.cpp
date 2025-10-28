@@ -48,10 +48,6 @@ namespace
 
     const Math::float4 kFoamTintColor(1.0f, 1.0f, 1.0f, 1.0f);
     const Math::float4 kWindParams0(12.0f, 1.0f, 0.5f, 0.2f);
-    const Math::float4 kFoamTrailScales(256.0f, 256.0f, 384.0f, 384.0f);
-    const Math::float2 kFoamTrailDir0 = Math::float2(0.86f, 0.52f).Normalized();
-    const Math::float2 kFoamTrailDir1 = Math::float2(-0.45f, 0.89f).Normalized();
-    const float kUnderwaterFoamParallax = 1.2f;
 
     int ClipLevelHalfSize(uint32_t vertexDensity)
     {
@@ -426,6 +422,16 @@ OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
     , scene_(scene)
     , simulation_(std::make_unique<OceanSimulation>())
 {
+    const FoamParams defaultFoam = FoamParams::GetDefault();
+    foamTrailTextureSize0_ = defaultFoam.trailTextureSize;
+    foamTrailTextureSize1_ = defaultFoam.trailTextureSize;
+    foamTrailDirection0_ = Math::float2(1.0f, 0.0f);
+    foamTrailDirection1_ = Math::float2(1.0f, 0.0f);
+    foamTrailBlendValue_ = 0.0f;
+    foamTrailBlendStartTime_ = 0.0f;
+    foamTrailBlendDuration_ = 0.0f;
+    foamTrailBlendActive_ = false;
+    foamTrailHasHistory_ = false;
 }
 
 void OceanRenderable::Init(Renderer* renderer,
@@ -459,6 +465,8 @@ void OceanRenderable::Init(Renderer* renderer,
     loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
     loadTexture(contactFoamTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::AlbedoSRGB);
+
+    UpdateFoamTrailState();
 }
 
 void OceanRenderable::Tick(float deltaTime)
@@ -487,6 +495,7 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     simulation_->Update(renderer, cl, elapsedTime_);
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
+    UpdateFoamTrailState();
 }
 
 void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
@@ -678,6 +687,73 @@ void OceanRenderable::UpdateClipLevels()
     }
 }
 
+void OceanRenderable::UpdateFoamTrailState()
+{
+    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
+
+    Math::float2 windDir(1.0f, 0.0f);
+    if (simulation_)
+    {
+        windDir = simulation_->GetLocalWindDirectionVector();
+    }
+    if (windDir.Length() > Math::EPS)
+    {
+        windDir = windDir.Normalized();
+    }
+    else
+    {
+        windDir = Math::float2(1.0f, 0.0f);
+    }
+
+    const float updateTime = simulation_ ? simulation_->GetFoamTrailUpdateTime() : 0.0f;
+
+    if (updateTime <= Math::EPS)
+    {
+        foamTrailTextureSize0_ = foam.trailTextureSize;
+        foamTrailTextureSize1_ = foam.trailTextureSize;
+        foamTrailDirection0_ = windDir;
+        foamTrailDirection1_ = windDir;
+        foamTrailBlendValue_ = 0.0f;
+        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendDuration_ = 0.0f;
+        foamTrailBlendActive_ = false;
+        foamTrailHasHistory_ = false;
+        return;
+    }
+
+    if (!foamTrailHasHistory_)
+    {
+        foamTrailTextureSize0_ = foam.trailTextureSize;
+        foamTrailTextureSize1_ = foam.trailTextureSize;
+        foamTrailDirection0_ = windDir;
+        foamTrailDirection1_ = windDir;
+        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendValue_ = 0.0f;
+        foamTrailBlendDuration_ = updateTime;
+        foamTrailHasHistory_ = true;
+        foamTrailBlendActive_ = true;
+        return;
+    }
+
+    const float timeSinceStart = elapsedTime_ - foamTrailBlendStartTime_;
+    if (!foamTrailBlendActive_ || timeSinceStart >= updateTime)
+    {
+        foamTrailTextureSize0_ = foamTrailTextureSize1_;
+        foamTrailDirection0_ = foamTrailDirection1_;
+        foamTrailTextureSize1_ = foam.trailTextureSize;
+        foamTrailDirection1_ = windDir;
+        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendValue_ = 0.0f;
+        foamTrailBlendDuration_ = updateTime;
+        foamTrailBlendActive_ = true;
+        return;
+    }
+
+    const float denom = std::max(updateTime, Math::EPS);
+    foamTrailBlendValue_ = Math::Clamp(timeSinceStart / denom, 0.0f, 1.0f);
+    foamTrailBlendDuration_ = updateTime;
+}
+
 Math::float4 OceanRenderable::GetSimulationParams() const
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
@@ -843,22 +919,21 @@ Math::float4 OceanRenderable::GetWindParams1() const
 
 Math::float4 OceanRenderable::GetFoamTrailParams0() const
 {
-    return kFoamTrailScales;
+    return Math::float4(foamTrailTextureSize0_.x, foamTrailTextureSize0_.y,
+        foamTrailTextureSize1_.x, foamTrailTextureSize1_.y);
 }
 
 Math::float4 OceanRenderable::GetFoamTrailParams1() const
 {
-    const Math::float2 dir0 = kFoamTrailDir0;
-    const Math::float2 dir1 = kFoamTrailDir1;
-    return Math::float4(dir0.x, dir0.y, dir1.x, dir1.y);
+    return Math::float4(foamTrailDirection0_.x, foamTrailDirection0_.y,
+        foamTrailDirection1_.x, foamTrailDirection1_.y);
 }
 
 Math::float4 OceanRenderable::GetFoamParams2() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
-    const float trailBlend = Math::Clamp(foam.trail, 0.0f, 1.0f);
-    const float contactStrength = 0.2f;
-    return Math::float4(trailBlend, contactStrength, kUnderwaterFoamParallax, 0.0f);
+    const float blendValue = Math::Clamp(foamTrailBlendValue_, 0.0f, 1.0f);
+    return Math::float4(blendValue, foam.contact, foam.underwaterParallax, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamTint() const

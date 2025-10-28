@@ -47,6 +47,7 @@ public:
     float GetDisplacementAmplitude() const { return displacementAmplitude_; }
     float GetLocalWindDirectionRadians() const;
     Math::float2 GetLocalWindDirectionVector() const;
+    float GetFoamTrailUpdateTime() const;
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetDisplacementSRV() const
     {

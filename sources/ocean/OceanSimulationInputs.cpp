@@ -34,6 +34,8 @@ FoamParams FoamParams::Lerp(const FoamParams& lhs, const FoamParams& rhs, float 
         Math::Lerp(lhs.trailTextureSize.x, rhs.trailTextureSize.x, t),
         Math::Lerp(lhs.trailTextureSize.y, rhs.trailTextureSize.y, t));
     result.underwater = Math::Lerp(lhs.underwater, rhs.underwater, t);
+    result.contact = Math::Lerp(lhs.contact, rhs.contact, t);
+    result.underwaterParallax = Math::Lerp(lhs.underwaterParallax, rhs.underwaterParallax, t);
     result.cascadesWeights = Math::float4(
         Math::Lerp(lhs.cascadesWeights.x, rhs.cascadesWeights.x, t),
         Math::Lerp(lhs.cascadesWeights.y, rhs.cascadesWeights.y, t),
