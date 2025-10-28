@@ -720,7 +720,7 @@ Math::float4 OceanRenderable::GetFoamParams0() const
 Math::float4 OceanRenderable::GetFoamParams1() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
-    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, foam.decayRate);
+    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamCascadeWeights() const
