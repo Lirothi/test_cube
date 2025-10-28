@@ -318,7 +318,7 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
 
     D3D12_CLEAR_VALUE cv{};
     cv.Format = kDepthBufferViewFormat;
-    cv.DepthStencil.Depth = 1.0f;
+    cv.DepthStencil.Depth = 0.0f;
     cv.DepthStencil.Stencil = 0;
 
     ThrowIfFailed(device_->CreateCommittedResource(
@@ -897,7 +897,7 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     // Clear
     const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     cl->ClearRenderTargetView(rtv, clear, 0, nullptr);
-    cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
 }
 
 void Renderer::RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl) {
@@ -1189,7 +1189,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
-            D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = 1.0f; cv.DepthStencil.Stencil = 0;
+            D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = 0.0f; cv.DepthStencil.Stencil = 0;
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
@@ -1468,7 +1468,7 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
         }
         if (mode == ClearMode::ColorDepth)
         {
-            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
         }
     }
 }
@@ -1495,7 +1495,7 @@ void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, boo
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.sceneRTV, c, 0, nullptr);
         if (mode == ClearMode::ColorDepth && withDepth) {
-            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
         }
     }
 }

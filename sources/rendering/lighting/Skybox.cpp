@@ -98,7 +98,7 @@ void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDes
     }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
-    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // trick for the sky
+    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL; // reverse-Z depth test for the sky
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;             // render from the inside
     desc.blend.RenderTarget[0].BlendEnable = FALSE;
 }

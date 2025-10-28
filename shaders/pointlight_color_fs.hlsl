@@ -7,7 +7,7 @@ static const float PI = 3.14159265359;
 Texture2D GB0    : register(t0); // Albedo.rgb + Metal (a)
 Texture2D GB1    : register(t1); // NormalOct.xy (0..1), Roughness (a)
 Texture2D GB2    : register(t2); // Emissive (optional here)
-Texture2D DepthT : register(t3); // Linear depth [0..1]
+Texture2D DepthT : register(t3); // Reverse-Z depth [0..1]
 
 SamplerState SampLin : register(s0);
 SamplerState SampPt  : register(s1);
@@ -53,7 +53,7 @@ float4 PSMain(VSOut i) : SV_Target
     float4 g0 = GB0.Sample(SampLin, uv);
     float4 g1 = GB1.Sample(SampLin, uv);
     float z = DepthT.Sample(SampPt, uv).r;
-    if (z >= 1.0 - kEpsilon)
+    if (z <= kEpsilon)
     {
         discard;
     }

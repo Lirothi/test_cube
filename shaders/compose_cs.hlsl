@@ -65,7 +65,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 color = lit + emi;
 
     float z = ReadDepth(uv);
-    if (z < 1.0 - kEps)
+    if (z > kEps)
     {
         float4 gb0 = GB0.SampleLevel(gSmp, uv, 0);
         float4 gb1 = GB1.SampleLevel(gSmp, uv, 0);

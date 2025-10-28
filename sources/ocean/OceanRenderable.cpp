@@ -955,7 +955,7 @@ Math::float2 OceanRenderable::GetDepthParams() const
     auto& scene = Systems::GetScene();
     float zNear = scene.CameraRef().GetZNear();
 	float zFar = scene.CameraRef().GetZFar();
-    return { zFar / (zFar - zNear), (zNear * zFar) / (zNear - zFar) };
+    return { zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear) };
 }
 
 void OceanRenderable::SetGridVertexDensity(uint32_t density)

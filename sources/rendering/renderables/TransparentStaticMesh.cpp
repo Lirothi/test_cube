@@ -319,7 +319,7 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.dsvFormat = Renderer::kDeferredDepthFormat;
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
     desc.blend.RenderTarget[0].BlendEnable = TRUE;
     desc.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
     desc.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;

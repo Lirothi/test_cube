@@ -241,7 +241,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float depth = ReadDepth(uv);
     float4 result = float4(0, 0, 0, 0);
 
-    if (depth < 1.0f - 1e-6f)
+    if (depth > 1e-6f)
     {
         float3 N_ws = normalize(GB1.SampleLevel(gSmp, uv, 0).rgb * 2 - 1);
         float3 Pv   = ReconstructPosVS(uv, depth);

@@ -96,7 +96,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float4 g0 = GB0.SampleLevel(gSmpLinear, uv, 0);
     float4 g1 = GB1.SampleLevel(gSmpLinear, uv, 0);
     float z = DepthT.SampleLevel(gSmpPoint, uv, 0).r;
-    if (z >= 1.0 - kEpsilon)
+    if (z <= kEpsilon)
     {
         return;
     }

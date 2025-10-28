@@ -247,6 +247,17 @@ namespace Math
         static mat4 PerspectiveFovLH(float fovY, float aspect, float zn, float zf) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixPerspectiveFovLH(fovY, aspect, zn, zf)); return r;
         }
+
+        static mat4 PerspectiveFovLHReverseZ(float fovY, float aspect, float zn, float zf)
+        {
+            mat4 r;
+            XMStoreFloat4x4(&r.m, XMMatrixPerspectiveFovLH(fovY, aspect, zn, zf));
+            const float a = zn / (zn - zf);
+            const float b = (zn * zf) / (zf - zn);
+            r.m._33 = a;
+            r.m._43 = b;
+            return r;
+        }
         static mat4 OrthoLH(float w, float h, float zn, float zf) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixOrthographicLH(w, h, zn, zf)); return r;
         }
