@@ -28,7 +28,7 @@ VSOut VSMain(VSIn i)
     VSOut o;
     float4 viewPos = mul(float4(i.pos, 1.0), v);
     o.pos = mul(viewPos, proj);
-    o.pos.z = o.pos.w;
+    o.pos.z = 0.0f;
 
     //float3 dirWS = mul(viewPos.xyz, (float3x3) invView).xyz;
     float3 dirWS = i.pos;

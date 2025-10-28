@@ -10,7 +10,7 @@ static D3D12_DEPTH_STENCIL_DESC MakeZFail_DS()
     D3D12_DEPTH_STENCIL_DESC ds{};
     ds.DepthEnable = TRUE;
     ds.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    ds.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    ds.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
     ds.StencilEnable = TRUE;
     ds.StencilReadMask = 0xFF;
     ds.StencilWriteMask = 0xFF;

@@ -1127,8 +1127,8 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
         constants.proj = proj;
         constants.invView = invView;
         constants.invProj = invProj;
-        constants.depthA = zFar / (zFar - zNear);
-        constants.depthB = (zNear * zFar) / (zNear - zFar);
+        constants.depthA = zNear / (zNear - zFar);
+        constants.depthB = (zNear * zFar) / (zFar - zNear);
         constants.zNear = zNear;
         constants.zFar = zFar;
         constants.screenSize = float2(static_cast<float>(renderer->GetWidth()), static_cast<float>(renderer->GetHeight()));

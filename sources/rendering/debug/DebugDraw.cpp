@@ -297,7 +297,7 @@ void DebugDrawSystem::Initialize(Renderer* renderer,
     gd.raster.FillMode = D3D12_FILL_MODE_SOLID;
     gd.depth.DepthEnable = TRUE;
     gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
 
     // Enable standard alpha blending
     D3D12_RENDER_TARGET_BLEND_DESC blend{};

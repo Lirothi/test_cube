@@ -38,7 +38,7 @@ cbuffer OceanCB : register(b0)
     float4 foamParams2;                // x: trail blend, y: contact foam strength, z: underwater parallax, w: padding
     float4 foamTint;                   // xyz: foam tint, w: unused
     float4 depthTextureSize;           // xy: texel size, zw: texture size
-    float2 depthParams;                // x: zFar / (zFar - zNear) y :(zNear * zFar) / (zNear - zFar)
+    float2 depthParams;                // x: zNear / (zNear - zFar) y :(zNear * zFar) / (zFar - zNear)
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);

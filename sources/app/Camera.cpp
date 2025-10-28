@@ -58,7 +58,7 @@ void Camera::CalcMatrices(Renderer* r)
 	invView = mat4::Inverse(view);
     const float aspect = float(r->GetWidth()) / float(r->GetHeight());
     const float vfov = 2.f * atan(tan(HFov_ * 0.5f) / aspect);
-	proj = mat4::PerspectiveFovLH(vfov, aspect, zNear, zFar);
+    proj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, zNear, zFar);
 	invProj = mat4::Inverse(proj);
 	dir_ = look.Normalized();
 }

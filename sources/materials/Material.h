@@ -75,7 +75,7 @@ public:
             ZeroMemory(&depth, sizeof(depth));
             depth.DepthEnable = TRUE;
             depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-            depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+            depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
             depth.StencilEnable = FALSE;
         }
     };

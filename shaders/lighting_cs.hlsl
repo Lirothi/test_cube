@@ -128,6 +128,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float3 N = normalize(gb1.rgb * 2.0 - 1.0);
     float z = DepthT.SampleLevel(gSmpPoint, uv, 0).r;
+    if (z <= kEpsilon)
+    {
+        LightTarget[dispatchThreadId.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
 
     const float3 V = normalize(camPosWS - P);

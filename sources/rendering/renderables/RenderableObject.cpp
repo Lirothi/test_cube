@@ -345,6 +345,7 @@ void RenderableObject::ConfigureShadowPipeline(Renderer* renderer, Material::Gra
     desc.dsvFormat = DXGI_FORMAT_D16_UNORM;
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
     desc.blend.RenderTarget[0].BlendEnable = FALSE;
 }
