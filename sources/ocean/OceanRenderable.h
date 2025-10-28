@@ -85,6 +85,7 @@ private:
     Math::float4 GetFoamTint() const;
     Math::float4 GetDepthTextureSize(const Renderer* renderer) const;
     Math::float2 GetDepthParams() const;
+    void UpdateFoamTrailState();
 
 private:
     Camera* camera_ = nullptr;
@@ -111,5 +112,15 @@ private:
     Texture2D foamTrailTexture_;
     Texture2D contactFoamTexture_;
     Texture2D distantRoughnessTexture_;
+
+    Math::float2 foamTrailTextureSize0_ = Math::float2(100.0f, 50.0f);
+    Math::float2 foamTrailTextureSize1_ = Math::float2(100.0f, 50.0f);
+    Math::float2 foamTrailDirection0_ = Math::float2(1.0f, 0.0f);
+    Math::float2 foamTrailDirection1_ = Math::float2(1.0f, 0.0f);
+    float foamTrailBlendValue_ = 0.0f;
+    float foamTrailBlendStartTime_ = 0.0f;
+    float foamTrailBlendDuration_ = 0.0f;
+    bool foamTrailBlendActive_ = false;
+    bool foamTrailHasHistory_ = false;
 };
 

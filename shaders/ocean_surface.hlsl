@@ -463,10 +463,11 @@ float2 RotateUV(float2 uv, float2 center, float2 rotation, float sign)
     return uv;
 }
 
-float FoamTrailSample(float2 worldUV, float2 direction, float scale)
+float FoamTrailSample(float2 worldUV, float2 direction, float2 scale)
 {
     float2 rotated = RotateUV(worldUV, float2(0.0f, 0.0f), direction, 1.0f);
-    return FoamTrailTex.SampleLevel(LinearWrapSampler, rotated / max(scale, 1e-3f), 0).r;
+    float2 safeScale = max(scale, float2(1e-3f, 1e-3f));
+    return FoamTrailTex.SampleLevel(LinearWrapSampler, rotated / safeScale, 0).r;
 }
 
 float DeepFoam(float2 worldUV, float3 viewDir, float3 normal, float time)
@@ -486,11 +487,11 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     foamValueCurrent -= 1.0f;
     foamValuePersistent -= 1.0f;
 
-    float trail0 = FoamTrailSample(worldUV, foamTrailParams1.xy, max(foamTrailParams0.x, 1e-3f));
+    float trail0 = FoamTrailSample(worldUV, foamTrailParams1.xy, foamTrailParams0.xy);
     float trailTexture = trail0;
     if (foamParams2.x > 0.0f)
     {
-        float trail1 = FoamTrailSample(worldUV, foamTrailParams1.zw, max(foamTrailParams0.z, 1e-3f));
+        float trail1 = FoamTrailSample(worldUV, foamTrailParams1.zw, foamTrailParams0.zw);
         trailTexture = lerp(trail0, trail1, saturate(foamParams2.x));
     }
 

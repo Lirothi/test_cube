@@ -1092,3 +1092,8 @@ Math::float2 OceanSimulation::GetLocalWindDirectionVector() const
     const float radians = GetLocalWindDirectionRadians();
     return Math::float2(std::cos(radians), std::sin(radians));
 }
+
+float OceanSimulation::GetFoamTrailUpdateTime() const
+{
+    return inputs_.foamTrailUpdateTime;
+}
