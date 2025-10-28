@@ -720,7 +720,7 @@ Math::float4 OceanRenderable::GetFoamParams0() const
 Math::float4 OceanRenderable::GetFoamParams1() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
-    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, 0.0f);
+    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, 0.6f);
 }
 
 Math::float4 OceanRenderable::GetFoamCascadeWeights() const
@@ -857,7 +857,7 @@ Math::float4 OceanRenderable::GetFoamParams2() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
     const float trailBlend = Math::Clamp(foam.trail, 0.0f, 1.0f);
-    const float contactStrength = Math::Clamp(foam.trailTextureStrength, 0.0f, 1.0f);
+    const float contactStrength = 0.2f;
     return Math::float4(trailBlend, contactStrength, kUnderwaterFoamParallax, 0.0f);
 }
 

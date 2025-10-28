@@ -11,14 +11,14 @@ cbuffer OceanCB : register(b0)
     float4x4 invView;
     float4x4 invProj;
     float4x4 worldToWind;
-    float4 simulationParams;           // x: patch length, y: inv patch length, z: time, w: clip level count
+    float4 simulationParams;           // x: patch length, y: inv patch length, z: time, w: cascades count
     float4 viewerParams;               // x: viewer x, y: viewer z, z: amplitude, w: fade distance
     float4 cascadeLengthScales;        // length scales per cascade
     float4 inverseCascadeLengthScales; // inv length scales per cascade
     float4 clipMapParams;              // x: scale, y: level half size, z: vertex density, w: fade distance
     float4 clipMapViewer;              // xyz: viewer position
     float4 foamParams0;                // x: coverage, y: density, z: sharpness, w: persistence
-    float4 foamParams1;                // x: trail, y: trail strength, z: underwater intensity, w: unused
+    float4 foamParams1;                // x: trail, y: trail strength, z: underwater intensity, w: normal strength
     float4 foamCascadeWeights;         // per-cascade foam weighting
     float4 specularParams;             // x: spec strength, y: roughness scale, z: roughness distance, w: horizon fog strength
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
@@ -145,7 +145,6 @@ static const float kSpecularMaxPower = 512.0f;
 static const float kLodThreshold = 0.05f;
 
 static const uint kGradientMaxKeys = 8u;
-static const float kFoamNormalDetail = 0.6f;
 
 struct Gradient
 {
@@ -347,11 +346,13 @@ float4 CombineDerivatives(DerivativesSet derivatives, float4 weights)
     return combined;
 }
 
+static const float kNormalScale = 1.5f;
+
 float3 NormalFromCombinedDerivatives(float4 derivatives)
 {
     float denomX = max(1e-3f, 1.0f + derivatives.z);
     float denomZ = max(1e-3f, 1.0f + derivatives.w);
-    float2 slope = float2(derivatives.x / denomX, derivatives.y / denomZ);
+    float2 slope = float2(derivatives.x / denomX, derivatives.y / denomZ) * kNormalScale;
     return normalize(float3(-slope.x, 1.0f, -slope.y));
 }
 
@@ -509,10 +510,10 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
     screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     float rawDepth = SampleSceneDepth(screenUV);
     float depthDiff = DepthToViewZ_Fast(rawDepth) - viewDepth;
-    float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV * 0.5f, 0).r;
+    float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV, 0).r;
     contactTexture = saturate(1.0f - contactTexture);
     depthDiff = abs(depthDiff) * contactTexture;
-    return saturate(foamParams2.y * 2.0f - depthDiff * 10.0f);
+    return saturate(10 * (foamParams2.y * 2 - depthDiff));
 }
 
 float Pow5(float x)
@@ -541,10 +542,10 @@ float3 TransformToWind(float3 v)
 
 float SampleDistantRoughness(float2 worldUV, float viewDist)
 {
-    float2 uv = worldUV * 0.001f;
+    float2 uv = worldUV * 0.001f * 0.01f;
     float roughness = DistantRoughnessMap.SampleLevel(LinearWrapSampler, uv, 0).r;
     float patchLength = max(simulationParams.x, 1.0f);
-    roughness *= saturate(viewDist / patchLength * 0.05f);
+    roughness *= saturate((viewDist / patchLength) * 0.05f);
     return roughness;
 }
 
@@ -559,8 +560,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights * input.shoreWeights, cascadesCount);
     float4 mixWeights = input.lodWeights * activeCascades;
 
-    float biasSample = FoamDetailMap.SampleLevel(LinearWrapSampler, input.worldUV * 0.01f, 0).r;
+    float biasSample = FoamDetailMap.SampleLevel(LinearWrapSampler, input.worldUV * 0.01f * 0.01f, 0).r;
     float bias = biasSample * saturate(input.viewDist / max(simulationParams.x, 1.0f) * 0.5f);
+    
+    //data.coverage.x = bias;
+    //return data;
 
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
     data.coverage = Coverage(turbulence, mixWeights, input.worldUV, deepFoam, bias);
@@ -570,12 +574,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
         data.coverage.x = saturate(data.coverage.x + ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
     }
 
-    float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + kFoamNormalDetail) * activeCascades;
+    float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
     float3 foamNormal = NormalFromDerivatives(input.derivatives, foamNormalWeights);
-    float foamBlend = saturate(data.coverage.x);
-    data.normal = normalize(lerp(input.normal, foamNormal, foamBlend));
+    data.normal = foamNormal;
 
-    float2 uv = input.worldUV * 0.5f;
+    float2 uv = input.worldUV * 1.0f;
     data.albedo = FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
     return data;
 }
@@ -770,7 +773,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
     color = ColorThroughWater(backgroundColor, color, backgroundDistance, -backgroundPositionWS.y);
 
-    return color;
+    //return color;
 
     float underwaterFoamVisibility = 20.0f / (20.0f + li.viewDist);
     float3 tint = AbsorptionTint(0.8f);
@@ -808,7 +811,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
 
     float3 color = specular + lerp(refracted, reflected, fresnel);
     //color = fresnel.xxx;
-    //color = lerp(color, foamLitColor, foamData.coverage.x);
+    color = lerp(color, foamLitColor, foamData.coverage.x);
     color = lerp(color, horizon.rgb, horizon.a);
     return color;
 }
@@ -848,9 +851,10 @@ float4 PSMain(VSOutput input) : SV_TARGET
     foamInput.viewDepth = input.viewDepth;
 
     FoamData foamData = GetFoamData(foamInput, cascadesCount);
-    //return float4(foamData.normal, 1);
+    //return float4(foamData.coverage.xxx, 1);
 
     float roughnessMap = SampleDistantRoughness(input.baseXZ, viewDist);
+    //return float4(roughnessMap.xxx, 1);
     
     LightData light;
     light.direction = lightDir;
