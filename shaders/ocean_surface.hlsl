@@ -505,7 +505,7 @@ float3 TransformToWind(float3 v)
 float SampleDistantRoughness(float2 worldUV, float viewDist)
 {
     float2 uv = worldUV * 0.001f;
-    float roughness = DistantRoughnessMap.SampleLevel(LinearClampSampler, uv, 0).r;
+    float roughness = DistantRoughnessMap.SampleLevel(LinearWrapSampler, uv, 0).r;
     float patchLength = max(simulationParams.x, 1.0f);
     roughness *= saturate(viewDist / patchLength * 0.05f);
     return roughness;
@@ -815,9 +815,10 @@ float4 PSMain(VSOutput input) : SV_TARGET
     foamInput.viewDepth = input.viewDepth;
 
     FoamData foamData = GetFoamData(foamInput, clipCount);
+    //return float4(foamData.normal, 1);
 
     float roughnessMap = SampleDistantRoughness(input.baseXZ, viewDist);
-
+    
     LightData light;
     light.direction = lightDir;
     light.color = sunColorExposure.xyz * sunColorExposure.w;
