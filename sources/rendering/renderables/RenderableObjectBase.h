@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/math/AABB.h"
+#include "rendering/RenderLayers.h"
 #include "rendering/core/RenderGraph.h"
 
 class Renderer;
@@ -10,6 +11,7 @@ class Renderer;
 class RenderableObjectBase
 {
 public:
+    RenderableObjectBase() = default;
     virtual ~RenderableObjectBase() noexcept = default;
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) = 0;
     virtual void Tick(float /*dt*/) = 0;
@@ -26,4 +28,13 @@ public:
         static const AABB kInvalidBounds = AABB::Empty();
         return kInvalidBounds;
     }
+
+    uint32_t GetRenderLayerMask() const { return renderLayerMask_; }
+    void SetRenderLayerMask(uint32_t mask) { renderLayerMask_ = mask; }
+    void SetRenderLayer(RenderLayer layer) { renderLayerMask_ = RenderLayerMask(layer); }
+    void AddRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
+    void RemoveRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
+
+protected:
+    uint32_t renderLayerMask_ = RenderLayerMask(RenderLayer::Default);
 };

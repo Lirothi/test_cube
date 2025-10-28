@@ -16,16 +16,10 @@ public:
 
     using ObjectBucket = std::vector<RenderableObjectBase*>;
 
-    struct TransparentEntry
-    {
-        RenderableObjectBase* base = nullptr;
-        float depth = 0.0f;
-    };
-
     SceneRenderQueue();
 
     void Clear();
-    void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+    void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask);
     void SortTransparent(const mat4& view);
     void Cull(const Frustum& frustum);
 
@@ -35,11 +29,17 @@ public:
     const std::array<ObjectBucket, 4>& VisibleBuckets() const { return visibleBuckets_; }
 
 private:
+    struct TransparentEntry
+    {
+        RenderableObjectBase* base = nullptr;
+        float depth = 0.0f;
+    };
+
     static size_t ToIndex(BucketType type) { return static_cast<size_t>(type); }
 
     float ComputeDepth(const mat4& view, const TransparentEntry& entry) const;
 
     std::array<ObjectBucket, 4> buckets_{};
-    std::array<std::vector<TransparentEntry>, 2> transparentEntries_{};
     std::array<ObjectBucket, 4> visibleBuckets_{};
+    std::array<std::vector<TransparentEntry>, 2> transparentEntries_{};
 };

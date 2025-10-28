@@ -221,11 +221,11 @@ void Scene::Render(Renderer* renderer) {
     const mat4& invProj = camera_.GetInvProjMatrix();
 	const float3 camDir = camera_.GetDirection();
 
-    renderQueue_.Bucketize(objects_);
-    renderQueue_.SortTransparent(view);
+    renderQueue_.Bucketize(objects_, camera_.GetRenderLayerMask());
 
     const Frustum cameraFrustum = Frustum::FromInvViewProj(invView, proj, zNear, zFar);
     renderQueue_.Cull(cameraFrustum);
+    renderQueue_.SortTransparent(view);
 
     const auto& buckets = renderQueue_.Buckets();
     const auto& visibleBuckets = renderQueue_.VisibleBuckets();
