@@ -432,6 +432,7 @@ OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
     foamTrailBlendDuration_ = 0.0f;
     foamTrailBlendActive_ = false;
     foamTrailHasHistory_ = false;
+    SetRenderLayerMask(RenderLayerMask(RenderLayer::Transparent));
 }
 
 void OceanRenderable::Init(Renderer* renderer,

@@ -1,6 +1,7 @@
 #pragma once
 #include <DirectXMath.h>
 #include "core/math/Math.h"
+#include "rendering/RenderLayers.h"
 
 using namespace DirectX;
 
@@ -52,6 +53,11 @@ public:
     const float3& GetPosition() const { return position_; }
     float GetMoveSpeedMult() const { return moveSpeedMultiplier_; }
 
+    uint32_t GetRenderLayerMask() const { return renderLayerMask_; }
+    void SetRenderLayerMask(uint32_t mask) { renderLayerMask_ = mask; }
+    void EnableRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
+    void DisableRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
+
     // Mouse input (screen-space delta -> yaw/pitch)
     void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {
         AddYaw(dx * sensitivity);
@@ -73,6 +79,7 @@ private:
     float HFov_;
     float zNear;
     float zFar;
+    uint32_t renderLayerMask_ = kRenderLayerAll;
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

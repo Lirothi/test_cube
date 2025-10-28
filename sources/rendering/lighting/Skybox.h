@@ -12,6 +12,7 @@ public:
         path_(filePath)
     {
         allowWireframe_ = false;
+        SetRenderLayer(RenderLayer::Sky);
     }
 
     ~Skybox() override = default;

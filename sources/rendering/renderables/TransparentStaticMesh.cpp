@@ -221,6 +221,7 @@ TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
     SetPosition(position);
     SetScale(scale);
     SetRotationEulerRad(float3(0.0f, 0.0f, 0.0f));
+    SetRenderLayer(RenderLayer::Transparent);
 
     allowWireframe_ = false;
 

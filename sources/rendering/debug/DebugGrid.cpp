@@ -338,6 +338,7 @@ DebugGrid::DebugGrid(float halfSize, float step, float axisLen, float yPlane,
     , axisAlpha_(axisAlpha)
     , axisThicknessPx_(axisThicknessPx)
 {
+    SetRenderLayer(RenderLayer::Gizmo);
 }
 
 DebugGrid::~DebugGrid()
