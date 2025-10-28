@@ -286,13 +286,13 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
     return sample;
 }
 
-float3 SampleDisplacement(float2 worldXZ, float4 weights, uint clipCount)
+float3 SampleDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
 {
     float3 displacement = float3(0.0f, 0.0f, 0.0f);
     [unroll]
     for (uint cascade = 0; cascade < 4; ++cascade)
     {
-        if (cascade >= clipCount)
+        if (cascade >= cascadesCount)
         {
             break;
         }
@@ -305,13 +305,13 @@ float3 SampleDisplacement(float2 worldXZ, float4 weights, uint clipCount)
     return displacement;
 }
 
-float4 SampleDerivatives(float2 worldXZ, float4 weights, uint clipCount)
+float4 SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
 {
     float4 derivatives = float4(0.0f, 0.0f, 0.0f, 0.0f);
     [unroll]
     for (uint cascade = 0; cascade < 4; ++cascade)
     {
-        if (cascade >= clipCount)
+        if (cascade >= cascadesCount)
         {
             break;
         }
@@ -328,7 +328,7 @@ VSOutput VSMain(VSInput input)
 {
     VSOutput output;
 
-    uint clipCount = max((uint)simulationParams.w, 1u);
+    uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float3 baseWorld = ClipMapVertex(input.position.xyz, input.uv);
     float2 worldUV = baseWorld.xz;
@@ -343,7 +343,7 @@ VSOutput VSMain(VSInput input)
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
 
-    float3 displacement = SampleDisplacement(worldUV, weights, clipCount);
+    float3 displacement = SampleDisplacement(worldUV, weights, cascadesCount);
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
     output.worldPos = world;
@@ -367,14 +367,14 @@ float4 SampleFoamCascade(float2 worldXZ, uint cascade)
     return FoamTurbulence.Sample(LinearWrapSampler, uvw);
 }
 
-FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 lodWeights, uint clipCount)
+FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 lodWeights, uint cascadesCount)
 {
     FoamTurbulenceSet set;
     [unroll]
     for (uint cascade = 0; cascade < 4; ++cascade)
     {
         set.cascades[cascade] = float4(-5.0f, -5.0f, -5.0f, -5.0f);
-        if (cascade >= clipCount)
+        if (cascade >= cascadesCount)
         {
             continue;
         }
@@ -390,13 +390,13 @@ FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 lodWeights, uint c
     return set;
 }
 
-float4 ActiveCascadesMask(uint clipCount)
+float4 ActiveCascadesMask(uint cascadesCount)
 {
     return float4(
-        clipCount > 0 ? 1.0f : 0.0f,
-        clipCount > 1 ? 1.0f : 0.0f,
-        clipCount > 2 ? 1.0f : 0.0f,
-        clipCount > 3 ? 1.0f : 0.0f);
+        cascadesCount > 0 ? 1.0f : 0.0f,
+        cascadesCount > 1 ? 1.0f : 0.0f,
+        cascadesCount > 2 ? 1.0f : 0.0f,
+        cascadesCount > 3 ? 1.0f : 0.0f);
 }
 
 float4 MixTurbulence(FoamTurbulenceSet turbulence, float4 foamWeights, float4 mixWeights)
@@ -511,15 +511,15 @@ float SampleDistantRoughness(float2 worldUV, float viewDist)
     return roughness;
 }
 
-FoamData GetFoamData(FoamInput input, uint clipCount)
+FoamData GetFoamData(FoamInput input, uint cascadesCount)
 {
     FoamData data;
     data.coverage = float2(0.0f, 0.0f);
     data.normal = input.normal;
     data.albedo = float3(1.0f, 1.0f, 1.0f);
 
-    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights, clipCount);
-    float4 activeCascades = ActiveCascadesMask(clipCount);
+    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights, cascadesCount);
+    float4 activeCascades = ActiveCascadesMask(cascadesCount);
     float4 mixWeights = input.lodWeights * input.shoreWeights * activeCascades;
 
     float biasSample = FoamDetailMap.SampleLevel(LinearWrapSampler, input.worldUV * 0.01f, 0).r;
@@ -780,7 +780,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
 
 float4 PSMain(VSOutput input) : SV_TARGET
 {
-    uint clipCount = max((uint)simulationParams.w, 1u);
+    uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);
     float3 viewVector = baseWorld - clipMapViewer.xyz;
@@ -788,7 +788,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float2 screenUV = ComputeScreenUV(input.positionNDC);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    float4 deriv = SampleDerivatives(input.baseXZ, weights, clipCount);
+    float4 deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
 
     float denomX = max(1e-3f, 1.0f + deriv.z);
     float denomZ = max(1e-3f, 1.0f + deriv.w);
@@ -814,7 +814,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     foamInput.normal = normal;
     foamInput.viewDepth = input.viewDepth;
 
-    FoamData foamData = GetFoamData(foamInput, clipCount);
+    FoamData foamData = GetFoamData(foamInput, cascadesCount);
     //return float4(foamData.normal, 1);
 
     float roughnessMap = SampleDistantRoughness(input.baseXZ, viewDist);

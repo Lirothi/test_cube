@@ -676,25 +676,13 @@ void OceanRenderable::UpdateClipLevels()
         clipLevels_[level].offset = Math::float2(snappedX, snappedZ);
         clipLevels_[level].step = step;
     }
-
-    activeClipLevels_ = static_cast<uint32_t>(clipLevels_.size());
-}
-
-Math::float4 OceanRenderable::GetClipData(uint32_t index) const
-{
-    if (index >= activeClipLevels_ || index >= clipLevels_.size())
-    {
-        return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
-    }
-    const auto& lvl = clipLevels_[index];
-    return Math::float4(lvl.offset.x, lvl.offset.y, lvl.halfExtent, lvl.step);
 }
 
 Math::float4 OceanRenderable::GetSimulationParams() const
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
     const float invPatch = (patchLength > Math::EPS) ? (1.0f / patchLength) : 0.0f;
-    return Math::float4(patchLength, invPatch, elapsedTime_, static_cast<float>(activeClipLevels_));
+    return Math::float4(patchLength, invPatch, elapsedTime_, (float)simulation_->GetCascadeCount());
 }
 
 Math::float4 OceanRenderable::GetViewerParams() const

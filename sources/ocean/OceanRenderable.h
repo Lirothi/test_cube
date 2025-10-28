@@ -55,7 +55,6 @@ private:
 
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
-    Math::float4 GetClipData(uint32_t index) const;
     Math::float4 GetSimulationParams() const;
     Math::float4 GetViewerParams() const;
     Math::float4 GetCascadeLengthScales() const;
@@ -96,7 +95,6 @@ private:
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;
     std::array<ClipLevel, OceanSimulation::kClipLevels> clipLevels_{};
-    uint32_t activeClipLevels_ = OceanSimulation::kClipLevels;
     Math::float4 lengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
     Math::float4 invLengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
 
