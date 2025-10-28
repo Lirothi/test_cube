@@ -224,7 +224,7 @@ void Scene::Render(Renderer* renderer) {
     renderQueue_.Bucketize(objects_);
     renderQueue_.SortTransparent(view);
 
-    const Frustum cameraFrustum = Frustum::FromInvViewProj(invView, proj);
+    const Frustum cameraFrustum = Frustum::FromInvViewProj(invView, proj, zNear, zFar);
     renderQueue_.Cull(cameraFrustum);
 
     const auto& buckets = renderQueue_.Buckets();
