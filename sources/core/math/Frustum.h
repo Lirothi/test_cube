@@ -12,16 +12,24 @@ class Frustum
 public:
     Frustum() = default;
 
-    static Frustum FromViewProj(const Math::mat4& view, const Math::mat4& proj)
+    static Frustum FromViewProj(
+        const Math::mat4& view,
+        const Math::mat4& proj,
+        float nearPlane = 0.0f,
+        float farPlane = 0.0f)
     {
         const Math::mat4 invView = Math::mat4::Inverse(view);
-        return FromInvViewProj(invView, proj);
+        return FromInvViewProj(invView, proj, nearPlane, farPlane);
     }
 
-    static Frustum FromInvViewProj(const Math::mat4& invView, const Math::mat4& proj)
+    static Frustum FromInvViewProj(
+        const Math::mat4& invView,
+        const Math::mat4& proj,
+        float nearPlane = 0.0f,
+        float farPlane = 0.0f)
     {
         Frustum frustum;
-        frustum.Build(invView, proj);
+        frustum.Build(invView, proj, nearPlane, farPlane);
         return frustum;
     }
 
@@ -46,10 +54,20 @@ public:
     }
 
 private:
-    void Build(const Math::mat4& invView, const Math::mat4& proj)
+    void Build(
+        const Math::mat4& invView,
+        const Math::mat4& proj,
+        float nearPlane,
+        float farPlane)
     {
         DirectX::BoundingFrustum viewFrustum;
         DirectX::BoundingFrustum::CreateFromMatrix(viewFrustum, proj.xm());
+
+        if (nearPlane > 0.0f && farPlane > nearPlane)
+        {
+            viewFrustum.Near = nearPlane;
+            viewFrustum.Far = farPlane;
+        }
 
         DirectX::BoundingFrustum worldFrustum;
         viewFrustum.Transform(worldFrustum, invView.xm());
