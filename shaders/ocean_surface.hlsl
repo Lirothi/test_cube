@@ -18,7 +18,7 @@ cbuffer OceanCB : register(b0)
     float4 clipMapParams;              // x: scale, y: level half size, z: vertex density, w: fade distance
     float4 clipMapViewer;              // xyz: viewer position
     float4 foamParams0;                // x: coverage, y: density, z: sharpness, w: persistence
-    float4 foamParams1;                // x: trail, y: trail strength, z: underwater intensity, w: foam normal detail
+    float4 foamParams1;                // x: trail, y: trail strength, z: underwater intensity, w: unused
     float4 foamCascadeWeights;         // per-cascade foam weighting
     float4 specularParams;             // x: spec strength, y: roughness scale, z: roughness distance, w: horizon fog strength
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
@@ -72,9 +72,14 @@ struct VSOutput
     float viewDepth : TEXCOORD3;
 };
 
+struct DerivativesSet
+{
+    float4 cascades[4];
+};
+
 struct FoamInput
 {
-    float4 derivatives;
+    DerivativesSet derivatives;
     float2 worldUV;
     float viewDist;
     float4 lodWeights;
@@ -138,9 +143,9 @@ static const float3 kSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
 static const float kLodThreshold = 0.05f;
-static const float normalScale = 1.5;
 
 static const uint kGradientMaxKeys = 8u;
+static const float kFoamNormalDetail = 0.6f;
 
 struct Gradient
 {
@@ -282,7 +287,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
     //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 3);
-	float4 sample = DisplacementDerivatives.Sample(LinearWrapSampler, uvw);
+    float4 sample = DisplacementDerivatives.Sample(LinearWrapSampler, uvw);
     return sample;
 }
 
@@ -305,9 +310,15 @@ float3 SampleDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
     return displacement;
 }
 
-float4 SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
+DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
 {
-    float4 derivatives = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    DerivativesSet derivatives;
+    [unroll]
+    for (uint cascade = 0; cascade < 4; ++cascade)
+    {
+        derivatives.cascades[cascade] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
     [unroll]
     for (uint cascade = 0; cascade < 4; ++cascade)
     {
@@ -315,13 +326,39 @@ float4 SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
         {
             break;
         }
+
         float w = weights[cascade];
         if (cascade == 0 || w > kLodThreshold)
         {
-            derivatives += w * SampleDerivativesCascade(worldXZ, cascade);
+            derivatives.cascades[cascade] = SampleDerivativesCascade(worldXZ, cascade) * w;
         }
     }
     return derivatives;
+}
+
+float4 CombineDerivatives(DerivativesSet derivatives, float4 weights)
+{
+    float4 combined = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    [unroll]
+    for (uint cascade = 0; cascade < 4; ++cascade)
+    {
+        combined += derivatives.cascades[cascade] * weights[cascade];
+    }
+    return combined;
+}
+
+float3 NormalFromCombinedDerivatives(float4 derivatives)
+{
+    float denomX = max(1e-3f, 1.0f + derivatives.z);
+    float denomZ = max(1e-3f, 1.0f + derivatives.w);
+    float2 slope = float2(derivatives.x / denomX, derivatives.y / denomZ);
+    return normalize(float3(-slope.x, 1.0f, -slope.y));
+}
+
+float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
+{
+    float4 combined = CombineDerivatives(derivatives, normalWeights);
+    return NormalFromCombinedDerivatives(combined);
 }
 
 VSOutput VSMain(VSInput input)
@@ -367,24 +404,24 @@ float4 SampleFoamCascade(float2 worldXZ, uint cascade)
     return FoamTurbulence.Sample(LinearWrapSampler, uvw);
 }
 
-FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 lodWeights, uint cascadesCount)
+FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 weights, uint cascadesCount)
 {
     FoamTurbulenceSet set;
     [unroll]
     for (uint cascade = 0; cascade < 4; ++cascade)
     {
-        set.cascades[cascade] = float4(-5.0f, -5.0f, -5.0f, -5.0f);
+        set.cascades[cascade] = float4(0.0f, 0.0f, 0.0f, 0.0f);
         if (cascade >= cascadesCount)
         {
             continue;
         }
 
-        float w = lodWeights[cascade];
+        float w = weights[cascade];
         if (cascade == 0 || w > kLodThreshold)
         {
             float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
             float3 uvw = float3(worldXZ / lengthScale, cascade);
-            set.cascades[cascade] = FoamTurbulence.Sample(LinearWrapSampler, uvw);
+            set.cascades[cascade] = FoamTurbulence.Sample(LinearWrapSampler, uvw) * w;
         }
     }
     return set;
@@ -518,9 +555,9 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     data.normal = input.normal;
     data.albedo = float3(1.0f, 1.0f, 1.0f);
 
-    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights, cascadesCount);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
-    float4 mixWeights = input.lodWeights * input.shoreWeights * activeCascades;
+    FoamTurbulenceSet turbulence = SampleFoamTurbulence(input.worldUV, input.lodWeights * input.shoreWeights, cascadesCount);
+    float4 mixWeights = input.lodWeights * activeCascades;
 
     float biasSample = FoamDetailMap.SampleLevel(LinearWrapSampler, input.worldUV * 0.01f, 0).r;
     float bias = biasSample * saturate(input.viewDist / max(simulationParams.x, 1.0f) * 0.5f);
@@ -533,10 +570,8 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
         data.coverage.x = saturate(data.coverage.x + ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
     }
 
-    float denomX = max(1e-3f, 1.0f + input.derivatives.z);
-    float denomZ = max(1e-3f, 1.0f + input.derivatives.w);
-    float2 slope = float2(input.derivatives.x / denomX, input.derivatives.y / denomZ);
-    float3 foamNormal = normalize(float3(-slope.x, 1.0f, -slope.y));
+    float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + kFoamNormalDetail) * activeCascades;
+    float3 foamNormal = NormalFromDerivatives(input.derivatives, foamNormalWeights);
     float foamBlend = saturate(data.coverage.x);
     data.normal = normalize(lerp(input.normal, foamNormal, foamBlend));
 
@@ -788,12 +823,10 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float2 screenUV = ComputeScreenUV(input.positionNDC);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    float4 deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
-
-    float denomX = max(1e-3f, 1.0f + deriv.z);
-    float denomZ = max(1e-3f, 1.0f + deriv.w);
-    float2 slope = float2(deriv.x / denomX, deriv.y / denomZ) * normalScale;
-    float3 normal = normalize(float3(-slope.x, 1.0f, -slope.y));
+    DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
+    float4 activeCascades = ActiveCascadesMask(cascadesCount);
+    float4 combinedDerivatives = CombineDerivatives(deriv, float4(1.0f, 1.0f, 1.0f, 1.0f));
+    float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
     //return float4(normal, 1);
 
     float3 viewDir = normalize(clipMapViewer.xyz - input.worldPos);
