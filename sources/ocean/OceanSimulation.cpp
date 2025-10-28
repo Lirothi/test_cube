@@ -138,17 +138,17 @@ void OceanSimulation::InitializeDefaultAssets()
     //    1.0f,
     //    1.0f,
     //    calmFoam);
-    //defaultLocalPreset_ = addLocalPreset(0.0f,
-    //    makeSpectrum(0.5f, 100.0f, 3.0f, 0.1f, 0.01f, 1.0f, 0.0f),
-    //    0.0f,
-    //    1.0f,
-    //    calmFoam);
-    defaultLocalPreset_ = addLocalPreset(5.0f,
-        makeSpectrum(9.2f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-        3.4f,
-        1.49f,
-        makeFoam(0.02f, 0.575f, 13.99f, 0.5f, 0.762f, 0.265f, 0.5f,
-            Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
+    defaultLocalPreset_ = addLocalPreset(0.0f,
+        makeSpectrum(0.5f, 100.0f, 3.0f, 0.1f, 0.01f, 1.0f, 0.0f),
+        0.0f,
+        1.0f,
+        calmFoam);
+    //defaultLocalPreset_ = addLocalPreset(5.0f,
+    //    makeSpectrum(9.2f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
+    //    3.4f,
+    //    1.49f,
+    //    makeFoam(0.02f, 0.575f, 13.99f, 0.5f, 0.762f, 0.265f, 0.5f,
+    //        Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
 
     addLocalPreset(1.0f,
         makeSpectrum(1.5f, 100.0f, 3.3f, 0.248f, 0.01f, 1.0f, 0.0f),
@@ -184,7 +184,7 @@ void OceanSimulation::InitializeDefaultAssets()
             Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
 
     inputsProvider_ = OceanSimulationInputsProvider();
-    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Fixed);
+    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Scale);
     //inputsProvider_.SetTimeScale(0.001f);
     inputsProvider_.SetTimeScale(1.0f);
     inputsProvider_.SetDepth(1000.0f);
@@ -193,7 +193,7 @@ void OceanSimulation::InitializeDefaultAssets()
     inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
     inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
 
-    //windForce01_ = 0.01f;
+    windForce01_ = 1.0f;
     inputsProvider_.SetDisplayWindForce(windForce01_);
 }
 

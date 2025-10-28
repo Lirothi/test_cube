@@ -20,8 +20,6 @@ struct FoamParams
     float trailTextureStrength = 0.5f;
     Math::float2 trailTextureSize = Math::float2(100.0f, 50.0f);
     float underwater = 0.0f;
-    float contact = 0.2f;
-    float underwaterParallax = 1.2f;
     Math::float4 cascadesWeights = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     static FoamParams GetDefault();

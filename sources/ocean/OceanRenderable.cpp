@@ -933,7 +933,9 @@ Math::float4 OceanRenderable::GetFoamParams2() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
     const float blendValue = Math::Clamp(foamTrailBlendValue_, 0.0f, 1.0f);
-    return Math::float4(blendValue, foam.contact, foam.underwaterParallax, 0.0f);
+    const float contactFoam = 0.1f;
+    const float underwaterParallax = 1.6f;
+    return Math::float4(blendValue, contactFoam, underwaterParallax, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamTint() const

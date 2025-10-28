@@ -494,7 +494,7 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
         float trail1 = FoamTrailSample(worldUV, foamTrailParams1.zw, foamTrailParams0.zw);
         trailTexture = lerp(trail0, trail1, saturate(foamParams2.x));
     }
-
+    
     foamValuePersistent += saturate(foamValuePersistent + 1.0f) * trailTexture * foamParams1.y;
     float foamValue = max(foamValuePersistent + foamParams1.x * (1.0f - bias),
         foamValueCurrent + foamParams0.x * (1.0f - bias));
@@ -573,6 +573,8 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     if (foamParams2.y > 0.0f)
     {
         data.coverage.x = saturate(data.coverage.x + ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
+        //data.coverage.x = saturate(ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
+        //return data;
     }
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
