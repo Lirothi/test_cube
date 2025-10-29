@@ -102,16 +102,15 @@ TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
     return taskPtr;
 }
 
-void TaskSystem::SetDependencies(TaskHandle handle, const std::vector<TaskHandle>& deps) {
+void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std::size_t depCount) {
     if (!handle) { return; }
     auto* taskPtr = static_cast<TaskWithDeps*>(handle);
-    if (taskPtr->deps.size() < deps.size()) {
-        taskPtr->deps.resize(deps.size());
+    if (taskPtr->deps.size() < depCount) {
+        taskPtr->deps.resize(depCount);
     }
-    size_t i = 0;
-    for (auto* d : deps) {
-        if (d) { taskPtr->SetDependency(taskPtr->deps[i], d); }
-        ++i;
+    for (std::size_t i = 0; i < depCount; ++i) {
+        TaskHandle dep = deps[i];
+        if (dep) { taskPtr->SetDependency(taskPtr->deps[i], dep); }
     }
 }
 

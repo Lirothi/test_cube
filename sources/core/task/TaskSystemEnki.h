@@ -31,7 +31,7 @@ public:
                                std::function<void(std::size_t)> fn,
                                std::size_t batchSize = 1,
                                std::size_t depCount = 0);
-    void SetDependencies(TaskHandle handle, const std::vector<TaskHandle>& deps);
+    void SetDependencies(TaskHandle handle, const TaskHandle* deps, std::size_t depCount);
     void Submit(TaskHandle handle);
     TaskHandle Dispatch(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,

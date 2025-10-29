@@ -1,56 +1,89 @@
 #pragma once
+#include <array>
 #include <functional>
 #include <string>
-#include <vector>
-#include <queue>
+#include <string_view>
 #include <cassert>
+#include <cstddef>
+#include <initializer_list>
+#include <utility>
 #include "rendering/core/Renderer.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "core/containers/inl_vector.h"
 
+struct RenderGraphPassContext {
+    Renderer* renderer = nullptr;
+    size_t      batchIndex = (size_t)-1;
+    std::string_view passName;
+};
+
+template <std::size_t MaxPasses>
 class RenderGraph {
 public:
-    struct PassContext {
-        Renderer* renderer = nullptr;
-        size_t      batchIndex = (size_t)-1;
-        std::string passName;
-    };
+    using PassContext = RenderGraphPassContext;
 
     using ExecFn = std::function<void(PassContext)>;
 
     explicit RenderGraph(size_t submitBatchIndex = (size_t)-1)
         : submitBatchIndex_(submitBatchIndex) {
-        passes_.reserve(16);
+        static_assert(MaxPasses > 0, "RenderGraph must allow at least one pass");
     }
 
+    static constexpr size_t kMinAdjacencyBucketSize = 4;
+    static constexpr size_t kAdjacencyCapacity =
+        (MaxPasses <= kMinAdjacencyBucketSize)
+            ? MaxPasses
+            : ((MaxPasses / kMinAdjacencyBucketSize) < kMinAdjacencyBucketSize
+                    ? size_t{kMinAdjacencyBucketSize}
+                    : MaxPasses / kMinAdjacencyBucketSize);
+
+    using SuccessorList = tc::inl_vector<size_t, kAdjacencyCapacity>;
+
+    static constexpr size_t kPassDependencyCapacity = 4;
+    using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
+
     struct Pass {
-        std::string           name;
-        std::vector<size_t>   prereqs;     // batch opening order (DAG)
-        ExecFn                exec;        // pass body
-        std::vector<size_t>   mtDeps;      // runtime dependencies (which passes must complete)
+        std::string   name;
+        DependencyList prereqs; // batch opening order (DAG)
+        ExecFn        exec;     // pass body
+        DependencyList mtDeps;  // runtime dependencies (which passes must complete)
+        SuccessorList successors;
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
     size_t AddPass(const std::string& name,
-        const std::vector<size_t>& prereqs,
+        std::initializer_list<size_t> prereqs,
         ExecFn fn)
     {
         CPU_SCOPE(ProfilerScopes::kAddPass);
-        Pass p{ name, prereqs, std::move(fn), {} };
-        passes_.push_back(std::move(p));
-        return passes_.size() - 1;
+        return AddPassInternal(name, prereqs, std::initializer_list<size_t>{}, std::move(fn));
+    }
+
+    size_t AddPass(const std::string& name,
+        const DependencyList& prereqs,
+        ExecFn fn)
+    {
+        CPU_SCOPE(ProfilerScopes::kAddPass);
+        return AddPassInternal(name, prereqs, DependencyList{}, std::move(fn));
     }
 
     // Overload with explicit mt-deps (more precise)
     size_t AddPassMT(const std::string& name,
-        const std::vector<size_t>& prereqs,
-        const std::vector<size_t>& mtDeps,
+        std::initializer_list<size_t> prereqs,
+        std::initializer_list<size_t> mtDeps,
         ExecFn fn)
     {
-        Pass p{ name, prereqs, std::move(fn), mtDeps };
-        passes_.push_back(std::move(p));
-        return passes_.size() - 1;
+        return AddPassInternal(name, prereqs, mtDeps, std::move(fn));
+    }
+
+    size_t AddPassMT(const std::string& name,
+        const DependencyList& prereqs,
+        const DependencyList& mtDeps,
+        ExecFn fn)
+    {
+        return AddPassInternal(name, prereqs, mtDeps, std::move(fn));
     }
 
     struct FlatNode { size_t pass; size_t batch; };
@@ -64,7 +97,7 @@ public:
     }
 
     // Build a plan without executing (for parallel scheduling)
-    const std::vector<FlatNode>& BuildSchedule(Renderer* renderer)
+    const tc::inl_vector<FlatNode, MaxPasses>& BuildSchedule(Renderer* renderer)
     {
         scheduleScratch_.clear();
         if (renderer == nullptr) { return scheduleScratch_; }
@@ -87,7 +120,7 @@ public:
 
         const size_t N = passes_.size();
 
-        passDoneScratch_.assign(N, nullptr);
+        passDoneScratch_.resize(N, nullptr);
 
         // create all tasks first
         for (const auto& n : flat) {
@@ -117,7 +150,7 @@ public:
                 }
             }
 
-            tasks.SetDependencies(passDoneScratch_[passIdx], dependencyScratch_);
+            tasks.SetDependencies(passDoneScratch_[passIdx], dependencyScratch_.data(), dependencyScratch_.size());
         }
 
         // finally submit tasks for execution
@@ -138,39 +171,46 @@ public:
         }
     }
 
-    void Clear() { passes_.clear(); }
+    void Clear()
+    {
+        passes_.clear();
+        for (auto& pending : pendingSuccessors_) {
+            pending.clear_fast();
+        }
+    }
 
 private:
     // General unrolling: build the topological order, create batches, or execute inplace
-    void Unroll(Renderer* renderer, bool executeInplace, std::vector<FlatNode>* outFlat)
+    void Unroll(Renderer* renderer, bool executeInplace, tc::inl_vector<FlatNode, MaxPasses>* outFlat)
     {
         const size_t N = passes_.size();
         if (N == 0u) { return; }
 
-        std::vector<size_t> indeg(N, 0);
-        std::vector<std::vector<size_t>> adj(N);
+        tc::inl_vector<size_t, MaxPasses> indeg;
+        indeg.resize(N, 0);
         for (size_t i = 0; i < N; ++i) {
-            for (size_t d : passes_[i].prereqs) {
-                if (d < N) {
-                    ++indeg[i];
-                    adj[d].push_back(i);
+            size_t degree = 0;
+            for (size_t prereq : passes_[i].prereqs) {
+                if (prereq < N) {
+                    ++degree;
                 }
             }
+            indeg[i] = degree;
         }
 
-        std::queue<size_t> q;
+        tc::inl_vector<size_t, MaxPasses> q;
         for (size_t i = 0; i < N; ++i) {
-            if (indeg[i] == 0u) { q.push(i); }
+            if (indeg[i] == 0u) { q.push_back(i); }
         }
 
         if (!executeInplace && outFlat != nullptr) {
             outFlat->clear();
-            outFlat->reserve(N);
         }
 
         size_t produced = 0;
-        while (!q.empty()) {
-            const size_t u = q.front(); q.pop();
+        size_t qIndex = 0;
+        while (qIndex < q.size()) {
+            const size_t u = q[qIndex++];
             const auto& p = passes_[u];
 
             if (p.exec) {
@@ -192,10 +232,10 @@ private:
             }
 
             ++produced;
-            for (size_t v : adj[u]) {
+            for (size_t v : passes_[u].successors) {
                 if (v < N) {
                     if (indeg[v] > 0u) { --indeg[v]; }
-                    if (indeg[v] == 0u) { q.push(v); }
+                    if (indeg[v] == 0u) { q.push_back(v); }
                 }
             }
         }
@@ -203,9 +243,51 @@ private:
     }
 
 private:
-    std::vector<Pass>                  passes_;
+    template <typename RangePrereqs, typename RangeDeps>
+    size_t AddPassInternal(const std::string& name,
+        const RangePrereqs& prereqs,
+        const RangeDeps& deps,
+        ExecFn fn)
+    {
+        assert(passes_.size() < MaxPasses && "RenderGraph capacity exceeded");
+        const size_t newIndex = passes_.size();
+
+        Pass p{};
+        p.name = name;
+        p.exec = std::move(fn);
+        CopyRange(p.prereqs, prereqs);
+        CopyRange(p.mtDeps, deps);
+        passes_.push_back(std::move(p));
+
+        for (size_t prereq : passes_.back().prereqs) {
+            if (prereq < passes_.size()) {
+                passes_[prereq].successors.push_back(newIndex);
+            } else if (prereq < MaxPasses) {
+                pendingSuccessors_[prereq].push_back(newIndex);
+            }
+        }
+
+        for (size_t dependent : pendingSuccessors_[newIndex]) {
+            passes_.back().successors.push_back(dependent);
+        }
+        pendingSuccessors_[newIndex].clear_fast();
+
+        return newIndex;
+    }
+
+    template <typename Range>
+    static void CopyRange(DependencyList& dst, const Range& range)
+    {
+        dst.clear_fast();
+        for (size_t value : range) {
+            dst.push_back(value);
+        }
+    }
+
+    tc::inl_vector<Pass, MaxPasses>     passes_;
     size_t                             submitBatchIndex_ = (size_t)-1;
-    std::vector<FlatNode>              scheduleScratch_;
-    std::vector<TaskSystem::TaskHandle> passDoneScratch_;
-    std::vector<TaskSystem::TaskHandle> dependencyScratch_;
+    tc::inl_vector<FlatNode, MaxPasses> scheduleScratch_;
+    tc::inl_vector<TaskSystem::TaskHandle, MaxPasses> passDoneScratch_;
+    tc::inl_vector<TaskSystem::TaskHandle, kPassDependencyCapacity> dependencyScratch_;
+    std::array<SuccessorList, MaxPasses> pendingSuccessors_{};
 };

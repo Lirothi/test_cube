@@ -76,7 +76,7 @@ public:
     return Capacity;
   }
 
-  void resize(size_type count)
+  void resize(size_type count, const value_type &defaultValue = value_type())
   {
     assert(count <= Capacity && "inl_vector cannot resize beyond its static capacity");
 
@@ -93,7 +93,7 @@ public:
       for (size_type i = m_size; i < count; ++i)
       {
         auto *ptr = storage_ptr(i);
-        ::new (static_cast<void *>(ptr)) value_type();
+        ::new (static_cast<void *>(ptr)) value_type(defaultValue);
       }
     }
 
