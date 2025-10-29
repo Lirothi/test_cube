@@ -41,11 +41,7 @@ public:
 
     using SuccessorList = tc::inl_vector<size_t, kAdjacencyCapacity>;
 
-    static constexpr size_t kDependencyInlineCapacity = 4;
-    static constexpr size_t kPassDependencyCapacity =
-        (MaxPasses <= kDependencyInlineCapacity)
-            ? kDependencyInlineCapacity
-            : MaxPasses;
+    static constexpr size_t kPassDependencyCapacity = 4;
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
 
     struct Pass {
@@ -289,17 +285,6 @@ private:
         for (size_t value : range) {
             if (value >= MaxPasses) {
                 assert(false && "RenderGraph dependency index exceeds graph capacity");
-                continue;
-            }
-
-            bool alreadyPresent = false;
-            for (size_t existing : dst) {
-                if (existing == value) {
-                    alreadyPresent = true;
-                    break;
-                }
-            }
-            if (alreadyPresent) {
                 continue;
             }
 
