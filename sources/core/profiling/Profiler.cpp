@@ -1234,7 +1234,12 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
     localtime_r(&tt, &tm);
 #endif
     std::ostringstream fname;
-    fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S")
+#if defined(NDEBUG)
+    constexpr const char* kTraceBuildSuffix = "_release";
+#else
+    constexpr const char* kTraceBuildSuffix = "_debug";
+#endif
+    fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << kTraceBuildSuffix
           << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
     const std::string fileName = fname.str();
     std::filesystem::create_directory("traces");
