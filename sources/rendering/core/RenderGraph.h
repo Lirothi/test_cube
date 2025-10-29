@@ -1,7 +1,6 @@
 #pragma once
 #include <array>
 #include <functional>
-#include <string>
 #include <string_view>
 #include <cassert>
 #include <cstddef>
@@ -12,11 +11,12 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/containers/inl_vector.h"
+#include "rendering/core/RenderPass.h"
 
 struct RenderGraphPassContext {
     Renderer* renderer = nullptr;
     size_t      batchIndex = (size_t)-1;
-    std::string_view passName;
+    RenderPass  pass{};
 };
 
 template <std::size_t MaxPasses>
@@ -45,7 +45,7 @@ public:
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
 
     struct Pass {
-        std::string name;
+        RenderPass name{};
         DependencyList prereqs; // batch opening order (DAG)
         ExecFn exec;     // pass body
         DependencyList mtDeps;  // runtime dependencies (which passes must complete)
@@ -53,7 +53,7 @@ public:
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
-    size_t AddPass(const std::string& name,
+    size_t AddPass(RenderPass name,
         std::initializer_list<size_t> prereqs,
         ExecFn fn)
     {
@@ -61,7 +61,7 @@ public:
         return AddPassInternal(name, prereqs, std::initializer_list<size_t>{}, std::move(fn));
     }
 
-    size_t AddPass(const std::string& name,
+    size_t AddPass(RenderPass name,
         const DependencyList& prereqs,
         ExecFn fn)
     {
@@ -70,7 +70,7 @@ public:
     }
 
     // Overload with explicit mt-deps (more precise)
-    size_t AddPassMT(const std::string& name,
+    size_t AddPassMT(RenderPass name,
         std::initializer_list<size_t> prereqs,
         std::initializer_list<size_t> mtDeps,
         ExecFn fn)
@@ -78,7 +78,7 @@ public:
         return AddPassInternal(name, prereqs, mtDeps, std::move(fn));
     }
 
-    size_t AddPassMT(const std::string& name,
+    size_t AddPassMT(RenderPass name,
         const DependencyList& prereqs,
         const DependencyList& mtDeps,
         ExecFn fn)
@@ -125,7 +125,7 @@ public:
                 PassContext ctx;
                 ctx.renderer = renderer;
                 ctx.batchIndex = n.batch;
-                ctx.passName = passes_[passIdx].name;
+                ctx.pass = passes_[passIdx].name;
                 passes_[passIdx].exec(ctx);
             }, passes_[passIdx].mtDeps.size());
 
@@ -211,14 +211,14 @@ private:
             if (p.exec) {
                 const size_t batch =
                     (submitBatchIndex_ == (size_t)-1)
-                    ? renderer->BeginSubmitBatch(p.name)
+                    ? renderer->BeginSubmitBatch()
                     : submitBatchIndex_;
 
                 if (executeInplace) {
                     PassContext ctx;
                     ctx.renderer = renderer;
                     ctx.batchIndex = batch;
-                    ctx.passName = p.name;
+                    ctx.pass = p.name;
                     p.exec(ctx);
                 }
                 else if (outFlat != nullptr) {
@@ -239,14 +239,14 @@ private:
 
 private:
     template <typename RangePrereqs, typename RangeDeps>
-    size_t AddPassInternal(const std::string& name,
+    size_t AddPassInternal(RenderPass name,
         const RangePrereqs& prereqs,
         const RangeDeps& deps,
         ExecFn fn)
     {
         assert(passesNum_ < MaxPasses && "RenderGraph capacity exceeded");
         const size_t newIndex = passesNum_;
-		++passesNum_;
+        ++passesNum_;
 
         Pass& p = passes_[newIndex];
         p.name = name;
