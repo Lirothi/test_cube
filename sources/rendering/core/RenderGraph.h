@@ -41,7 +41,11 @@ public:
 
     using SuccessorList = tc::inl_vector<size_t, kAdjacencyCapacity>;
 
-    static constexpr size_t kPassDependencyCapacity = 4;
+    static constexpr size_t kDependencyInlineCapacity = 4;
+    static constexpr size_t kPassDependencyCapacity =
+        (MaxPasses <= kDependencyInlineCapacity)
+            ? kDependencyInlineCapacity
+            : MaxPasses;
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
 
     struct Pass {
@@ -254,9 +258,12 @@ private:
 
         Pass p{};
         p.name = name;
+        const bool prereqCopyOk = CopyRange(p.prereqs, prereqs);
+        const bool depCopyOk = CopyRange(p.mtDeps, deps);
+        assert(prereqCopyOk && depCopyOk && "RenderGraph dependency list capacity exceeded");
+        (void)prereqCopyOk;
+        (void)depCopyOk;
         p.exec = std::move(fn);
-        CopyRange(p.prereqs, prereqs);
-        CopyRange(p.mtDeps, deps);
         passes_.push_back(std::move(p));
 
         for (size_t prereq : passes_.back().prereqs) {
@@ -276,12 +283,33 @@ private:
     }
 
     template <typename Range>
-    static void CopyRange(DependencyList& dst, const Range& range)
+    static bool CopyRange(DependencyList& dst, const Range& range)
     {
         dst.clear_fast();
         for (size_t value : range) {
+            if (value >= MaxPasses) {
+                assert(false && "RenderGraph dependency index exceeds graph capacity");
+                continue;
+            }
+
+            bool alreadyPresent = false;
+            for (size_t existing : dst) {
+                if (existing == value) {
+                    alreadyPresent = true;
+                    break;
+                }
+            }
+            if (alreadyPresent) {
+                continue;
+            }
+
+            if (dst.size() >= dst.capacity()) {
+                return false;
+            }
+
             dst.push_back(value);
         }
+        return true;
     }
 
     tc::inl_vector<Pass, MaxPasses>     passes_;
