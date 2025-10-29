@@ -14,6 +14,7 @@
 #include "core/math/AABB.h"
 
 class Renderer;
+class Camera;
 
 class RenderableObject: public RenderableObjectBase {
 public:
@@ -23,7 +24,7 @@ public:
         virtual ~UniformBinder() = default;
 
         virtual void RebuildHandles(RenderableObject& /*owner*/) {}
-        virtual void UpdateMainCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*view*/, const mat4& /*proj*/, uint8_t* /*cbData*/) {}
+        virtual void UpdateMainCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const Camera& /*camera*/, uint8_t* /*cbData*/) {}
         virtual void UpdateShadowCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* /*cbData*/) {}
 
     protected:
@@ -51,7 +52,7 @@ public:
     virtual void PostTick(float /*dt*/) override;
 
     // Base renderer: Compute -> Graphics (Bind/IssueDraw)
-    virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj);
+    virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera);
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
     virtual void OnMaterialHotReload(Renderer* renderer);
 

@@ -4,6 +4,7 @@
 #include <array>
 
 #include "app/Scene.h"
+#include "app/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/LightManager.h"
@@ -63,7 +64,7 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& obj, Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& obj, Renderer* renderer, const Camera& camera, uint8_t* cbData) override
     {
         if (!renderer || !scene_ || !owner_)
         {
@@ -75,10 +76,12 @@ public:
             return;
         }
 
-        const mat4 invView = mat4::Inverse(view);
-        const mat4 invProj = mat4::Inverse(proj);
-        const float3 camPos = scene_->CameraRef().GetPosition();
-        float3 camDir = invView.TransformDirection(float3(0.0f, 0.0f, 1.0f));
+        const mat4& view = camera.GetViewMatrix();
+        const mat4& proj = camera.GetProjMatrix();
+        const mat4& invView = camera.GetInvViewMatrix();
+        const mat4& invProj = camera.GetInvProjMatrix();
+        const float3 camPos = camera.GetPosition();
+        float3 camDir = camera.GetDirection();
         if (camDir.Length() > Math::EPS)
         {
             camDir = camDir.Normalized();
