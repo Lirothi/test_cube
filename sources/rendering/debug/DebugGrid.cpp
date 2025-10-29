@@ -1,6 +1,8 @@
 #include "rendering/debug/DebugGrid.h"
 
 #include <DirectXMath.h>
+
+#include "app/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/core/Renderer.h"
 #include "materials/UploadManager.h"
@@ -25,12 +27,12 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const Camera& camera, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material) { return; }
 
-        mat4 mvp = owner.GetModelMatrix() * view * proj;
+        mat4 mvp = owner.GetModelMatrix() * camera.GetViewMatrix() * camera.GetProjMatrix();
         UpdateUniform(owner, mvpHandle_, material, mvp, cbData);
     }
 
@@ -57,12 +59,12 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const Camera& camera, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material || !renderer) { return; }
 
-        mat4 mvp = owner.GetModelMatrix() * view * proj;
+        mat4 mvp = owner.GetModelMatrix() * camera.GetViewMatrix() * camera.GetProjMatrix();
         UpdateUniform(owner, mvpHandle_, material, mvp, cbData);
 
         const UINT w = renderer->GetWidth();
@@ -364,13 +366,12 @@ void DebugGrid::Tick(float dt)
 
 void DebugGrid::Render(Renderer* renderer,
     ID3D12GraphicsCommandList* cl,
-    const mat4& view,
-    const mat4& proj)
+    const Camera& camera)
 {
     if (grid_) {
-        grid_->Render(renderer, cl, view, proj);
+        grid_->Render(renderer, cl, camera);
     }
     if (axes_) {
-        axes_->Render(renderer, cl, view, proj);
+        axes_->Render(renderer, cl, camera);
     }
 }
