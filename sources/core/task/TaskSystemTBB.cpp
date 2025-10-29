@@ -199,12 +199,13 @@ TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
     return new RangeTaskSet(*this, jobCount, std::move(fn), batchSize, depCount);
 }
 
-void TaskSystem::SetDependencies(TaskHandle handle, const std::vector<TaskHandle>& deps)
+void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std::size_t depCount)
 {
     if (!handle) { return; }
 
     bool registeredDependency = false;
-    for (auto* dep : deps) {
+    for (std::size_t i = 0; i < depCount; ++i) {
+        TaskHandle dep = deps[i];
         if (!dep) { continue; }
         handle->IncrementDependency();
         dep->AddDependent(handle);

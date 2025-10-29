@@ -58,35 +58,35 @@ private:
     void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
-    void Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     using BucketArray = std::array<SceneRenderQueue::ObjectBucket, 4>;
 
-    void Pass_CSM(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_SpotShadows(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
+    void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
+    void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_Skybox(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_SSR(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_SSR(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_SSR_Blur(Renderer* r, RenderGraph::PassContext ctx);
-    void Pass_Compose(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_DebugDraw(Renderer* r, RenderGraph::PassContext ctx,
+    void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
-    void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
-    void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
-    void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
+    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx);
 
     static constexpr int kCascades = 4;
 
