@@ -275,6 +275,7 @@
     <ClInclude Include="sources/text/FontGenerator.h" />
     <ClInclude Include="sources/text/FontManager.h" />
     <ClInclude Include="sources/text/TextManager.h" />
+    <ClInclude Include="sources\core\containers\inl_vector.h" />
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h" />
   </ItemGroup>
   <ItemGroup>

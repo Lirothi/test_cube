@@ -79,6 +79,9 @@
     <Filter Include="textures\ocean">
       <UniqueIdentifier>{4f4e25a2-8f7a-4601-8f8b-fcf539813b4e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\containers">
+      <UniqueIdentifier>{b4d6f3fb-1d2f-45a3-8ea3-34403ce09d15}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp">
@@ -442,6 +445,9 @@
     </ClInclude>
     <ClInclude Include="sources/core/math/OBB.h">
       <Filter>sources\core\math</Filter>
+    </ClInclude>
+    <ClInclude Include="sources\core\containers\inl_vector.h">
+      <Filter>sources\core\containers</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
