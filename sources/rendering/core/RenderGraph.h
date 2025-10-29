@@ -45,9 +45,9 @@ public:
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
 
     struct Pass {
-        std::string   name;
+        std::string name;
         DependencyList prereqs; // batch opening order (DAG)
-        ExecFn        exec;     // pass body
+        ExecFn exec;     // pass body
         DependencyList mtDeps;  // runtime dependencies (which passes must complete)
         SuccessorList successors;
     };
@@ -96,15 +96,6 @@ public:
         Unroll(renderer, /*executeInplace=*/true, nullptr);
     }
 
-    // Build a plan without executing (for parallel scheduling)
-    const tc::inl_vector<FlatNode, MaxPasses>& BuildSchedule(Renderer* renderer)
-    {
-        scheduleScratch_.clear();
-        if (renderer == nullptr) { return scheduleScratch_; }
-        Unroll(renderer, /*executeInplace=*/false, &scheduleScratch_);
-        return scheduleScratch_;
-    }
-
     // Parallel path: create batches in topological order, then
     // submit actual pass tasks that wait on their mt-deps.
     void ExecuteParallel(Renderer* renderer, TaskSystem& tasks)
@@ -115,15 +106,18 @@ public:
         Execute(renderer);
         return;
 #endif
-        const auto& flat = BuildSchedule(renderer);
-        if (flat.empty()) { return; }
+        tc::inl_vector<FlatNode, MaxPasses> schedule;
+        Unroll(renderer, /*executeInplace=*/false, &schedule);
+        if (schedule.empty()) { return; }
 
-        const size_t N = passes_.size();
+        const size_t N = passesNum_;
 
-        passDoneScratch_.resize(N, nullptr);
+        tc::inl_vector<TaskSystem::TaskHandle, MaxPasses> passDone;
+
+        passDone.resize(N, nullptr);
 
         // create all tasks first
-        for (const auto& n : flat) {
+        for (const auto& n : schedule) {
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
 
@@ -135,45 +129,46 @@ public:
                 passes_[passIdx].exec(ctx);
             }, passes_[passIdx].mtDeps.size());
 
-            passDoneScratch_[passIdx] = handle;
+            passDone[passIdx] = handle;
         }
 
+        tc::inl_vector<TaskSystem::TaskHandle, kPassDependencyCapacity> deps;
         // set up dependencies between created tasks
-        for (const auto& n : flat) {
+        for (const auto& n : schedule) {
             const size_t passIdx = n.pass;
             if (!passes_[passIdx].exec) { continue; }
 
-            dependencyScratch_.clear();
+            deps.clear();
             for (size_t dep : passes_[passIdx].mtDeps) {
-                if (dep < passDoneScratch_.size() && passDoneScratch_[dep]) {
-                    dependencyScratch_.push_back(passDoneScratch_[dep]);
+                if (dep < passDone.size() && passDone[dep]) {
+                    deps.push_back(passDone[dep]);
                 }
             }
 
-            tasks.SetDependencies(passDoneScratch_[passIdx], dependencyScratch_.data(), dependencyScratch_.size());
+            tasks.SetDependencies(passDone[passIdx], deps.data(), deps.size());
         }
 
         // finally submit tasks for execution
-        for (const auto& n : flat) {
+        for (const auto& n : schedule) {
             const size_t passIdx = n.pass;
             auto& pass = passes_[passIdx];
             if (!pass.exec || pass.mtDeps.size() > 0) { continue; }
-            tasks.Submit(passDoneScratch_[passIdx]);
+            tasks.Submit(passDone[passIdx]);
         }
 
         for (size_t i = 0; i < N; ++i) {
-            if (passDoneScratch_[i]) {
-                tasks.Wait(passDoneScratch_[i]);
+            if (passDone[i]) {
+                tasks.Wait(passDone[i]);
             }
         }
         for (size_t i = N; i-- > 0;) {
-            tasks.Release(passDoneScratch_[i]);
+            tasks.Release(passDone[i]);
         }
     }
 
     void Clear()
     {
-        passes_.clear();
+        //passes_.clear();
         for (auto& pending : pendingSuccessors_) {
             pending.clear_fast();
         }
@@ -183,7 +178,7 @@ private:
     // General unrolling: build the topological order, create batches, or execute inplace
     void Unroll(Renderer* renderer, bool executeInplace, tc::inl_vector<FlatNode, MaxPasses>* outFlat)
     {
-        const size_t N = passes_.size();
+        const size_t N = passesNum_;
         if (N == 0u) { return; }
 
         tc::inl_vector<size_t, MaxPasses> indeg;
@@ -249,10 +244,11 @@ private:
         const RangeDeps& deps,
         ExecFn fn)
     {
-        assert(passes_.size() < MaxPasses && "RenderGraph capacity exceeded");
-        const size_t newIndex = passes_.size();
+        assert(passesNum_ < MaxPasses && "RenderGraph capacity exceeded");
+        const size_t newIndex = passesNum_;
+		++passesNum_;
 
-        Pass p{};
+        Pass& p = passes_[newIndex];
         p.name = name;
         const bool prereqCopyOk = CopyRange(p.prereqs, prereqs);
         const bool depCopyOk = CopyRange(p.mtDeps, deps);
@@ -260,10 +256,10 @@ private:
         (void)prereqCopyOk;
         (void)depCopyOk;
         p.exec = std::move(fn);
-        passes_.push_back(std::move(p));
+        //passes_.push_back(std::move(p));
 
-        for (size_t prereq : passes_.back().prereqs) {
-            if (prereq < passes_.size()) {
+        for (size_t prereq : p.prereqs) {
+            if (prereq < passesNum_) {
                 passes_[prereq].successors.push_back(newIndex);
             } else if (prereq < MaxPasses) {
                 pendingSuccessors_[prereq].push_back(newIndex);
@@ -273,7 +269,7 @@ private:
         if (newIndex < pendingSuccessors_.size())
         {
 	        for (size_t dependent : pendingSuccessors_[newIndex]) {
-	        	passes_.back().successors.push_back(dependent);
+	        	p.successors.push_back(dependent);
 	        }
         	pendingSuccessors_[newIndex].clear_fast();
         }
@@ -304,10 +300,9 @@ private:
         return true;
     }
 
-    tc::inl_vector<Pass, MaxPasses> passes_;
+    //tc::inl_vector<Pass, MaxPasses> passes_;
+    Pass passes_[MaxPasses];
+    size_t passesNum_ = 0;
     size_t submitBatchIndex_ = (size_t)-1;
-    tc::inl_vector<FlatNode, MaxPasses> scheduleScratch_;
-    tc::inl_vector<TaskSystem::TaskHandle, MaxPasses> passDoneScratch_;
-    tc::inl_vector<TaskSystem::TaskHandle, kPassDependencyCapacity> dependencyScratch_;
     std::array<SuccessorList, MaxPasses> pendingSuccessors_{};
 };
