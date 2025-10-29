@@ -356,6 +356,9 @@
     <ClInclude Include="sources/rendering/core/RenderGraph.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderPass.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>

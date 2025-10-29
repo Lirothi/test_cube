@@ -5,8 +5,11 @@
 #include <memory>
 #include <vector>
 #include <wrl/client.h>
+#include <cstdint>
 
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/core/RenderGraph.h"
+#include "rendering/core/RenderPass.h"
 #include "app/Camera.h"
 #include "app/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
@@ -20,6 +23,14 @@ class Renderer;
 
 class Scene {
 public:
+
+    static constexpr size_t kMainRenderGraphPassCount = static_cast<size_t>(RenderPass::Main_Count);
+    static constexpr size_t kEpilogueRenderGraphPassCount = static_cast<size_t>(RenderPass::Epilogue_Count)
+        - static_cast<size_t>(RenderPass::Epilogue_Overlay);
+    static constexpr size_t kGBufferRenderGraphPassCount = static_cast<size_t>(RenderPass::GBuffer_Count)
+        - static_cast<size_t>(RenderPass::GBuffer_Driver);
+    static constexpr size_t kTransparentRenderGraphPassCount = static_cast<size_t>(RenderPass::Transparent_Count)
+        - static_cast<size_t>(RenderPass::Transparent_Driver);
 
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }

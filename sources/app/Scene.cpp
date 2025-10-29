@@ -15,6 +15,7 @@
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
+#include "rendering/core/RenderPass.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
@@ -22,6 +23,16 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/math/AABB.h"
 #include "core/math/Frustum.h"
+
+
+static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
+{
+    const auto nameW = RenderPassToWString(pass);
+    if (!nameW.empty() && cl)
+    {
+        cl->SetName(nameW.data());
+    }
+}
 
 
 const mat4& Scene::GetCascadeView(size_t index) const
@@ -222,75 +233,75 @@ void Scene::Render(Renderer* renderer) {
     renderQueue.Cull(cameraFrustum);
     renderQueue.SortTransparent(camera_.GetViewMatrix());
 
-    static constexpr std::size_t kMainRenderGraphPasses = 20;
-    RenderGraph<kMainRenderGraphPasses> rg;
-    auto pClear = rg.AddPass("PrologueClear", {},
+    using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
+    MainRenderGraph rg;
+    auto pClear = rg.AddPass(RenderPass::Main_PrologueClear, {},
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
 
-    auto pShadow = rg.AddPass("CSM", { pClear },
+    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pClear },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
             Pass_CSM(renderer, ctx, camera_);
         });
 
-    auto pSpotShadow = rg.AddPass("SpotShadows", { pShadow },
+    auto pSpotShadow = rg.AddPass(RenderPass::Main_SpotShadows, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
             Pass_SpotShadows(renderer, ctx, camera_);
         });
 
-    auto pGbuf = rg.AddPass("GBuffer", { pSpotShadow },
+    auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
             Pass_GBuffer(renderer, ctx, camera_);
         });
 
-    auto pLight = rg.AddPassMT("Lighting", { pGbuf }, { pShadow },
+    auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
             Pass_Lighting(renderer, ctx, camera_);
         });
 
-    auto pSpotLights = rg.AddPassMT("SpotLights", { pLight }, { pSpotShadow },
+    auto pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
             Pass_SpotLights(renderer, ctx, camera_);
         });
 
-    auto pPointLights = rg.AddPass("PointLights", { pSpotLights },
+    auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
             Pass_PointLights(renderer, ctx, camera_);
         });
 
-    auto pSky = rg.AddPass("Skybox", { pPointLights },
+    auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSkybox);
             Pass_Skybox(renderer, ctx, camera_);
         });
 
-    auto pSSR = rg.AddPass("SSR", { pSky },
+    auto pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSSR);
             Pass_SSR(renderer, ctx, camera_);
         });
 
-    auto pBlur = rg.AddPass("SSR.Blur", { pSSR },
+    auto pBlur = rg.AddPass(RenderPass::Main_SSRBlur, { pSSR },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassSSRBlur); Pass_SSR_Blur(renderer, ctx); });
 
-    auto pCompose = rg.AddPass("Compose", { pBlur },
+    auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCompose);
             Pass_Compose(renderer, ctx, camera_);
         });
 
-    auto pTransp = rg.AddPass("Transparent", { pCompose },
+    auto pTransp = rg.AddPass(RenderPass::Main_Transparent, { pCompose },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
             Pass_Transparent(renderer, ctx, camera_);
         });
 
-    auto pDebugDraw = rg.AddPass("DebugDraw", { pTransp },
+    auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pTransp },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
             Pass_DebugDraw(renderer, ctx, camera_);
@@ -298,10 +309,10 @@ void Scene::Render(Renderer* renderer) {
 
     // Ensure tonemapping runs after the debug draw pass so the resolved backbuffer
     // always includes any debug geometry submitted during rendering.
-    auto pTone = rg.AddPass("Tonemap", { pDebugDraw },
+    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pDebugDraw },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
 
-    rg.AddPass("Debug", { pTone },
+    rg.AddPass(RenderPass::Main_Debug, { pTone },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassDebug); Pass_Debug(renderer, ctx); });
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
@@ -315,8 +326,8 @@ void Scene::Render(Renderer* renderer) {
         TaskSystem::Get().WaitForTrackedAsyncTasks();
     }
 
-    RenderGraph<4> epilogueRG;
-    epilogueRG.AddPass("Overlay", {},
+    RenderGraph<kEpilogueRenderGraphPassCount> epilogueRG;
+    epilogueRG.AddPass(RenderPass::Epilogue_Overlay, {},
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx); });
     epilogueRG.Execute(renderer);
     
@@ -449,7 +460,7 @@ void Scene::RenderShadowBatch(Renderer* renderer,
 void Scene::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
 {
     auto t = r->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPrologueClear);
         r->RecordBindAndClear(t.cl);
@@ -464,7 +475,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
 {
     const BucketArray& buckets = camera.GetRenderQueue().Buckets();
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    d.cl->SetName(L"CSM");
+    SetCommandListName(d.cl, ctx.pass);
     {
 #if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
 		{
@@ -650,7 +661,6 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
     const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
     const auto& spotLights = lightManager_.SpotLights();
     const auto& D = renderer->GetDeferredForFrame();
-    const std::wstring passNameW(ctx.passName.begin(), ctx.passName.end());
 
     const Math::float4 lightBoundsColor(1.0f, 1.0f, 0.0f, 0.25f);
     const Math::float4 passBoundsColor(0.0f, 1.0f, 0.0f, 0.35f);
@@ -740,7 +750,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
     tasks.DispatchWait(spotLightCount, renderSpotShadow, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(passNameW.c_str());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
         renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -757,9 +767,10 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    RenderGraph<4> rgGB(ctx.batchIndex);
-    rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraphPassContext sub) {
+    RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
+    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(driver.cl, sub.pass);
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kGBufferDriver);
 
@@ -775,7 +786,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
@@ -785,7 +796,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.3 Opaque complex → direct command list, no clears
-    rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
@@ -812,7 +823,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
     }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassLighting);
         const auto& D = renderer->GetDeferredForFrame();
@@ -904,7 +915,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
     }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotLights);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1002,7 +1013,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
     if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPointLights);
 
@@ -1080,7 +1091,7 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
 {
     if (!skyBox_) { return; }
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSkybox);
 
@@ -1102,7 +1113,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
 {
     //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSR);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1165,7 +1176,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx)
 {
     //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSRBlur);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1234,7 +1245,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassCompose);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1313,12 +1324,12 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    RenderGraph<4> rgTr(ctx.batchIndex);
+    RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
-    rgTr.AddPass("Transparent.Driver", {}, [renderer, &ctx](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        driver.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        SetCommandListName(driver.cl, sub.pass);
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
             const auto& D = renderer->GetDeferredForFrame();
@@ -1349,7 +1360,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass("Transparent.Simple", {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
@@ -1358,7 +1369,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         }
         });
 
-    rgTr.AddPass("Transparent.Complex", {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
@@ -1385,7 +1396,7 @@ void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ctx, const
 
     const auto& D = renderer->GetDeferredForFrame();
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebugDraw);
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1401,7 +1412,7 @@ void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ctx, const
 void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1504,7 +1515,7 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
     }
     const auto& D = renderer->GetDeferredForFrame();
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-    t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+    SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebug);
         renderer->RecordBindDefaultsNoClear(t.cl);
@@ -1535,7 +1546,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
 {
     if (auto* tm = renderer->GetTextManager()) {
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
+        SetCommandListName(t.cl, ctx.pass);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
             renderer->RecordBindDefaultsNoClear(t.cl);

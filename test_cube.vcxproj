@@ -247,6 +247,7 @@
     <ClInclude Include="sources/rendering/core/RenderContext.h" />
     <ClInclude Include="sources/rendering/core/RenderContextPool.h" />
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
+    <ClInclude Include="sources/rendering/core/RenderPass.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />

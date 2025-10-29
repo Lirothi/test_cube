@@ -140,7 +140,7 @@ public:
     void EndThreadCommandBundle(ThreadCL& b, size_t batchIndex);
 
     void BeginSubmitTimeline();
-    size_t BeginSubmitBatch(const std::string& passName);
+    size_t BeginSubmitBatch();
     void ExecuteTimelineAndPresent();
     void RecordBindAndClear(ID3D12GraphicsCommandList* cl);
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);

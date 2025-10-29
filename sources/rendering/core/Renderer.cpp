@@ -523,7 +523,7 @@ void Renderer::BeginSubmitTimeline() {
     submitTimeline_.clear();
 }
 
-size_t Renderer::BeginSubmitBatch(const std::string& passName) {
+size_t Renderer::BeginSubmitBatch() {
     std::lock_guard<std::mutex> lk(submitMtx_);
     const size_t idx = submitTimeline_.size();
     submitTimeline_.push_back({});
