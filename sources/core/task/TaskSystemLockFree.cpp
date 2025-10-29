@@ -1,3 +1,5 @@
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
 
 #ifdef TASKSYSTEM_USE_LOCKFREE
@@ -101,7 +103,7 @@ TaskSystem::TaskWithDeps::TaskWithDeps(TaskSystem& owner, TaskKind kind, std::si
     : owner_(owner)
     , kind_(kind)
 {
-    dependents_.reserve(depCapacity);
+    //dependents_.reserve(depCapacity);
     completionFuture_ = completionPromise_.get_future().share();
 }
 
@@ -109,10 +111,11 @@ void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
 {
     pendingDeps_.store(0, std::memory_order_relaxed);
     if (dependents_.capacity() < depCapacity) {
-        dependents_.reserve(depCapacity);
+        //dependents_.reserve(depCapacity);
+        assert(false && "dependents_.capacity() < depCapacity");
     }
     dependents_.clear();
-    completionPromise_ = std::promise<void>();
+    //completionPromise_ = std::promise<void>(); // we set it in recycle
     completionFuture_ = completionPromise_.get_future().share();
     submitted_.store(false, std::memory_order_relaxed);
     scheduled_.store(false, std::memory_order_relaxed);

@@ -527,7 +527,6 @@ size_t Renderer::BeginSubmitBatch(const std::string& passName) {
     std::lock_guard<std::mutex> lk(submitMtx_);
     const size_t idx = submitTimeline_.size();
     submitTimeline_.push_back({});
-    submitTimeline_.back().name = passName;
     return idx;
 }
 
@@ -560,7 +559,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     // Gather batches in order
     {
-        CPU_SCOPE(ProfilerScopes::kService1);
+        //CPU_SCOPE(ProfilerScopes::kService1);
         std::lock_guard<std::mutex> lk(submitMtx_);
         size_t expectedListCount = 0;
         for (const auto& pb : submitTimeline_) {
@@ -622,7 +621,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 #endif
 
     {
-        CPU_SCOPE(ProfilerScopes::kService2);
+        //CPU_SCOPE(ProfilerScopes::kService2);
 
         for (auto* cmd : submitListsScratch_) {
             const CLState* st = FindCLStateForCmd(cmd);
@@ -712,7 +711,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
 	{
-        CPU_SCOPE(ProfilerScopes::kService3);
+        //CPU_SCOPE(ProfilerScopes::kService3);
 		if (!fixedSubmitScratch_.empty()) {
 			commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
 		}
@@ -725,7 +724,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
     {
-        CPU_SCOPE(ProfilerScopes::kService4);
+        //CPU_SCOPE(ProfilerScopes::kService4);
         ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
     }
     //ThrowIfFailed(swapChain_->Present(1, 0));

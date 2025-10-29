@@ -12,6 +12,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <core/containers/inl_vector.h>
 
 #ifndef TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
 #define TASKSYSTEM_ENABLE_PARALLEL_EXECUTION 1
@@ -39,7 +40,8 @@ public:
         TaskKind kind_;
         TaskWithDeps* nextFree_{nullptr};
         std::atomic<std::size_t> pendingDeps_{0};
-        std::vector<TaskHandle> dependents_;
+        //std::vector<TaskHandle> dependents_;
+        tc::inl_vector<TaskHandle, 4> dependents_;
         std::promise<void> completionPromise_;
         std::shared_future<void> completionFuture_;
         std::atomic<bool> submitted_{false};

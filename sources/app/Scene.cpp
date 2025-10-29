@@ -222,7 +222,7 @@ void Scene::Render(Renderer* renderer) {
     renderQueue.Cull(cameraFrustum);
     renderQueue.SortTransparent(camera_.GetViewMatrix());
 
-    static constexpr std::size_t kMainRenderGraphPasses = 32;
+    static constexpr std::size_t kMainRenderGraphPasses = 20;
     RenderGraph<kMainRenderGraphPasses> rg;
     auto pClear = rg.AddPass("PrologueClear", {},
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
@@ -757,7 +757,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    RenderGraph<8> rgGB(ctx.batchIndex);
+    RenderGraph<4> rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
@@ -1313,7 +1313,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    RenderGraph<8> rgTr(ctx.batchIndex);
+    RenderGraph<4> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
     rgTr.AddPass("Transparent.Driver", {}, [renderer, &ctx](RenderGraphPassContext sub) {

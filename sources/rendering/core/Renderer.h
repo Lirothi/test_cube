@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <utility>
 
+#include "core/containers/inl_vector.h"
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
@@ -289,11 +290,11 @@ private:
     void RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl);
     void UnregisterCurrentThreadCL();
 
+    static constexpr size_t kMaxNumCLsInPass = 8;
     struct PassBatch_ {
-        std::string name;
         ID3D12GraphicsCommandList* driver = nullptr;              // DIRECT
-        std::vector<ID3D12GraphicsCommandList*> bundles;          // TYPE_BUNDLE
-        std::vector<ID3D12CommandList*>         directs;          // ready DIRECT command lists
+        tc::inl_vector<ID3D12GraphicsCommandList*, kMaxNumCLsInPass> bundles;          // TYPE_BUNDLE
+        tc::inl_vector<ID3D12CommandList*, kMaxNumCLsInPass> directs;          // ready DIRECT command lists
     };
     std::vector<PassBatch_> submitTimeline_;
     std::mutex submitMtx_;

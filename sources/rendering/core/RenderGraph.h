@@ -270,10 +270,17 @@ private:
             }
         }
 
-        for (size_t dependent : pendingSuccessors_[newIndex]) {
-            passes_.back().successors.push_back(dependent);
+        if (newIndex < pendingSuccessors_.size())
+        {
+	        for (size_t dependent : pendingSuccessors_[newIndex]) {
+	        	passes_.back().successors.push_back(dependent);
+	        }
+        	pendingSuccessors_[newIndex].clear_fast();
         }
-        pendingSuccessors_[newIndex].clear_fast();
+        else
+        {
+            assert(newIndex < pendingSuccessors_.size() && "RenderGraph capacity exceeded");
+        }
 
         return newIndex;
     }
@@ -297,8 +304,8 @@ private:
         return true;
     }
 
-    tc::inl_vector<Pass, MaxPasses>     passes_;
-    size_t                             submitBatchIndex_ = (size_t)-1;
+    tc::inl_vector<Pass, MaxPasses> passes_;
+    size_t submitBatchIndex_ = (size_t)-1;
     tc::inl_vector<FlatNode, MaxPasses> scheduleScratch_;
     tc::inl_vector<TaskSystem::TaskHandle, MaxPasses> passDoneScratch_;
     tc::inl_vector<TaskSystem::TaskHandle, kPassDependencyCapacity> dependencyScratch_;

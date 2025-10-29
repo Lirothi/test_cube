@@ -129,6 +129,7 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
 
 void SceneRenderQueue::Cull(const Frustum& frustum)
 {
+    CPU_SCOPE(ProfilerScopes::kService3);
     for (auto& bucket : visibleBuckets_)
     {
         bucket.clear();
