@@ -682,31 +682,38 @@ void Renderer::ExecuteTimelineAndPresent() {
             previousState = currentState;
         }
 
-        if (previousCmd != nullptr) {
-            if (previousState && !previousState->current.empty()) {
-                for (auto& kv : previousState->current) {
-                    knownStates_[kv.first] = kv.second;
-                }
+        if (previousState && !previousState->current.empty()) {
+            for (auto& kv : previousState->current) {
+                knownStates_[kv.first] = kv.second;
             }
+        }
 
-            D3D12_RESOURCE_BARRIER presentBarrier{};
-            presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            presentBarrier.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
-            presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-            presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        ID3D12GraphicsCommandList* epilogueCmd = previousCmd;
+        if (epilogueCmd == nullptr) {
+            auto& fr = frameResources_[currentFrameIndex_];
+            ID3D12CommandAllocator* alloc =
+                fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+            epilogueCmd =
+                fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+        }
 
-            previousCmd->ResourceBarrier(1, &presentBarrier);
-            SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
+        D3D12_RESOURCE_BARRIER presentBarrier{};
+        presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        presentBarrier.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
+        presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+        presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        epilogueCmd->ResourceBarrier(1, &presentBarrier);
+        SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
 #if PROF_GPU_ENABLED
-            Profiler::Get().EndGpuFrame(previousCmd);
+        Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
-            ThrowIfFailed(previousCmd->Close());
-            fixedSubmitScratch_.push_back(previousCmd);
+        ThrowIfFailed(epilogueCmd->Close());
+        fixedSubmitScratch_.push_back(epilogueCmd);
 
-            if (renderTargets_[currentFrameIndex_]) {
-                knownStates_[renderTargets_[currentFrameIndex_].Get()] = D3D12_RESOURCE_STATE_PRESENT;
-            }
+        if (renderTargets_[currentFrameIndex_]) {
+            knownStates_[renderTargets_[currentFrameIndex_].Get()] = D3D12_RESOURCE_STATE_PRESENT;
         }
     }
 
