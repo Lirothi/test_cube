@@ -501,7 +501,6 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandList);
     if (!t.cl) { return; }
-    ThrowIfFailed(t.cl->Close());
 
     {
         std::lock_guard<std::mutex> lk(submitMtx_);
@@ -577,7 +576,6 @@ void Renderer::ExecuteTimelineAndPresent() {
                         pb.driver->ExecuteBundle(b);
                     }
                 }
-                ThrowIfFailed(pb.driver->Close());
                 submitListsScratch_.push_back(pb.driver);
             }
             else if (!pb.bundles.empty()) {
@@ -593,7 +591,6 @@ void Renderer::ExecuteTimelineAndPresent() {
                         cl->ExecuteBundle(b);
                     }
                 }
-                ThrowIfFailed(cl->Close());
                 submitListsScratch_.push_back(cl);
             }
 
@@ -623,17 +620,24 @@ void Renderer::ExecuteTimelineAndPresent() {
     {
         //CPU_SCOPE(ProfilerScopes::kService2);
 
+        ID3D12GraphicsCommandList* previousCmd = nullptr;
+        const CLState* previousState = nullptr;
+
         for (auto* cmd : submitListsScratch_) {
-            const CLState* st = FindCLStateForCmd(cmd);
+            auto* currentCmd = static_cast<ID3D12GraphicsCommandList*>(cmd);
+            const CLState* currentState = FindCLStateForCmd(cmd);
 
-            // 3.1: if a command list needs transitions on first use — insert a prologue with prev→firstUse barriers
-            if (st && !st->firstUse.empty()) {
+            barrierScratch_.clear();
 
-                // Gather the barrier list
-                barrierScratch_.clear();
-                barrierScratch_.reserve(st->firstUse.size());
+            if (previousState && !previousState->current.empty()) {
+                for (auto& kv : previousState->current) {
+                    knownStates_[kv.first] = kv.second;
+                }
+            }
 
-                for (auto& kv : st->firstUse) {
+            if (currentState && !currentState->firstUse.empty()) {
+                barrierScratch_.reserve(currentState->firstUse.size());
+                for (auto& kv : currentState->firstUse) {
                     ID3D12Resource* res = kv.first;
                     const D3D12_RESOURCE_STATES want = kv.second;
 
@@ -650,72 +654,68 @@ void Renderer::ExecuteTimelineAndPresent() {
                         b.Transition.StateAfter = want;
                         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                         barrierScratch_.push_back(b);
-
                     }
+
                     knownStates_[res] = want;
-                }
-
-                // Create the prologue ONLY when there is something to transition
-                if (!barrierScratch_.empty()) {
-                    auto& fr = frameResources_[currentFrameIndex_];
-                    ID3D12CommandAllocator* alloc =
-                        fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-                    ID3D12GraphicsCommandList* prologue =
-                        fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
-
-                    prologue->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
-                    ThrowIfFailed(prologue->Close());
-                    fixedSubmitScratch_.push_back(prologue);
                 }
             }
 
-            // 3.2: the command list itself
-            fixedSubmitScratch_.push_back(cmd);
+            if (previousCmd != nullptr) {
+                if (!barrierScratch_.empty()) {
+                    previousCmd->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
+                }
 
-            // 3.3: after executing, update the global final state of its resources
-            if (st && !st->current.empty()) {
-                for (auto& kv : st->current) {
+                ThrowIfFailed(previousCmd->Close());
+                fixedSubmitScratch_.push_back(previousCmd);
+            } else if (!barrierScratch_.empty()) {
+                auto& fr = frameResources_[currentFrameIndex_];
+                ID3D12CommandAllocator* alloc =
+                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                ID3D12GraphicsCommandList* prologue =
+                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                prologue->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
+                ThrowIfFailed(prologue->Close());
+                fixedSubmitScratch_.push_back(prologue);
+            }
+
+            previousCmd = currentCmd;
+            previousState = currentState;
+        }
+
+        if (previousCmd != nullptr) {
+            if (previousState && !previousState->current.empty()) {
+                for (auto& kv : previousState->current) {
                     knownStates_[kv.first] = kv.second;
                 }
+            }
+
+            D3D12_RESOURCE_BARRIER presentBarrier{};
+            presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            presentBarrier.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
+            presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+            presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+            previousCmd->ResourceBarrier(1, &presentBarrier);
+            SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
+#if PROF_GPU_ENABLED
+            Profiler::Get().EndGpuFrame(previousCmd);
+#endif
+            ThrowIfFailed(previousCmd->Close());
+            fixedSubmitScratch_.push_back(previousCmd);
+
+            if (renderTargets_[currentFrameIndex_]) {
+                knownStates_[renderTargets_[currentFrameIndex_].Get()] = D3D12_RESOURCE_STATE_PRESENT;
             }
         }
     }
 
-    // Epilogue: transition RT → Present
-    ID3D12GraphicsCommandList* epilogueCL = nullptr;
     {
-        auto& fr = frameResources_[currentFrameIndex_];
-        ID3D12CommandAllocator* alloc =
-            fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-        ID3D12GraphicsCommandList* cl =
-            fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
-
-        D3D12_RESOURCE_BARRIER b{};
-        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
-        b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-        cl->ResourceBarrier(1, &b);
-        SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
-#if PROF_GPU_ENABLED
-        Profiler::Get().EndGpuFrame(cl);
-#endif
-        ThrowIfFailed(cl->Close());
-        epilogueCL = cl;
-    }
-    if (epilogueCL)
-    {
-        fixedSubmitScratch_.push_back(epilogueCL);
-    }
-
-	{
         //CPU_SCOPE(ProfilerScopes::kService3);
-		if (!fixedSubmitScratch_.empty()) {
-			commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
-		}
-	}
+        if (!fixedSubmitScratch_.empty()) {
+            commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
+        }
+    }
 
     const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
     for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
