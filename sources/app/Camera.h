@@ -2,6 +2,7 @@
 #include <DirectXMath.h>
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
+#include "app/scene/SceneRenderQueue.h"
 
 using namespace DirectX;
 
@@ -49,6 +50,9 @@ public:
 
     void CalcMatrices(Renderer* r);
 
+    SceneRenderQueue& GetRenderQueue() { return renderQueue_; }
+    const SceneRenderQueue& GetRenderQueue() const { return renderQueue_; }
+
     // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
     float GetMoveSpeedMult() const { return moveSpeedMultiplier_; }
@@ -80,6 +84,7 @@ private:
     float zNear;
     float zFar;
     uint32_t renderLayerMask_ = kRenderLayerAll;
+    SceneRenderQueue renderQueue_{};
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

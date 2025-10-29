@@ -215,93 +215,84 @@ void Scene::Render(Renderer* renderer) {
     camera_.SetZNearFar(zNear, zFar);
 	camera_.CalcMatrices(renderer);
 
-    const mat4& view = camera_.GetViewMatrix();
-    const mat4& proj = camera_.GetProjMatrix();
-    const mat4& invView = camera_.GetInvViewMatrix();
-    const mat4& invProj = camera_.GetInvProjMatrix();
-	const float3 camDir = camera_.GetDirection();
+    auto& renderQueue = camera_.GetRenderQueue();
+    renderQueue.Bucketize(objects_, camera_.GetRenderLayerMask());
 
-    renderQueue_.Bucketize(objects_, camera_.GetRenderLayerMask());
-
-    const Frustum cameraFrustum = Frustum::FromInvViewProj(invView, proj, zNear, zFar);
-    renderQueue_.Cull(cameraFrustum);
-    renderQueue_.SortTransparent(view);
-
-    const auto& buckets = renderQueue_.Buckets();
-    const auto& visibleBuckets = renderQueue_.VisibleBuckets();
+    const Frustum cameraFrustum = Frustum::FromInvViewProj(camera_.GetInvViewMatrix(), camera_.GetProjMatrix(), camera_.GetZNear(), camera_.GetZFar());
+    renderQueue.Cull(cameraFrustum);
+    renderQueue.SortTransparent(camera_.GetViewMatrix());
 
     RenderGraph rg;
     auto pClear = rg.AddPass("PrologueClear", {},
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
 
     auto pShadow = rg.AddPass("CSM", { pClear },
-        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar, camDir, &buckets]
-        (RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
-            Pass_CSM(renderer, ctx, view, proj, invView, invProj, zNear, zFar, camDir, buckets);
+            Pass_CSM(renderer, ctx, camera_);
         });
 
     auto pSpotShadow = rg.AddPass("SpotShadows", { pShadow },
-        [this, renderer, &buckets](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
-            Pass_SpotShadows(renderer, ctx, buckets);
+            Pass_SpotShadows(renderer, ctx, camera_);
         });
 
     auto pGbuf = rg.AddPass("GBuffer", { pSpotShadow },
-        [this, renderer, &view, &proj, &visibleBuckets](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
-            Pass_GBuffer(renderer, ctx, view, proj, visibleBuckets);
+            Pass_GBuffer(renderer, ctx, camera_);
         });
 
     auto pLight = rg.AddPassMT("Lighting", { pGbuf }, { pShadow },
-        [this, renderer, &view, &proj, &invView, &invProj, camDir](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
-            Pass_Lighting(renderer, ctx, view, proj, invView, invProj, camDir);
+            Pass_Lighting(renderer, ctx, camera_);
         });
 
     auto pSpotLights = rg.AddPassMT("SpotLights", { pLight }, { pSpotShadow },
-        [this, renderer, &invView, &invProj](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
-            Pass_SpotLights(renderer, ctx, invView, invProj);
+            Pass_SpotLights(renderer, ctx, camera_);
         });
 
     auto pPointLights = rg.AddPass("PointLights", { pSpotLights },
-        [this, renderer, &view, &proj, &invView, &invProj](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
-            Pass_PointLights(renderer, ctx, invView, invProj);
+            Pass_PointLights(renderer, ctx, camera_);
         });
 
     auto pSky = rg.AddPass("Skybox", { pPointLights },
-        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSkybox);
-            Pass_Skybox(renderer, ctx, view, proj);
+            Pass_Skybox(renderer, ctx, camera_);
         });
 
     auto pSSR = rg.AddPass("SSR", { pSky },
-        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSSR);
-            Pass_SSR(renderer, ctx, view, proj, invView, invProj, zNear, zFar);
+            Pass_SSR(renderer, ctx, camera_);
         });
 
     auto pBlur = rg.AddPass("SSR.Blur", { pSSR },
         [this, renderer](RenderGraph::PassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassSSRBlur); Pass_SSR_Blur(renderer, ctx); });
 
     auto pCompose = rg.AddPass("Compose", { pBlur },
-        [this, renderer, &view, &proj, &invView, &invProj, zNear, zFar](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCompose);
-            Pass_Compose(renderer, ctx, view, proj, invView, invProj, zNear, zFar);
+            Pass_Compose(renderer, ctx, camera_);
         });
 
     auto pTransp = rg.AddPass("Transparent", { pCompose },
-        [this, renderer, &view, &proj, &visibleBuckets](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
-            Pass_Transparent(renderer, ctx, view, proj, visibleBuckets);
+            Pass_Transparent(renderer, ctx, camera_);
         });
 
     auto pDebugDraw = rg.AddPass("DebugDraw", { pTransp },
-        [this, renderer, &view, &proj](RenderGraph::PassContext ctx) {
+        [this, renderer](RenderGraph::PassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
-            Pass_DebugDraw(renderer, ctx, view, proj);
+            Pass_DebugDraw(renderer, ctx, camera_);
         });
 
     // Ensure tonemapping runs after the debug draw pass so the resolved backbuffer
@@ -338,7 +329,7 @@ void Scene::Render(Renderer* renderer) {
 void Scene::RenderObjectBatch(Renderer* renderer,
     const std::vector<RenderableObjectBase*>& objects,
     size_t batchIndex,
-    const mat4& view, const mat4& proj,
+    const Camera& camera,
     bool useBundles,
     bool bindGbufOrScene,
     size_t chunkSize)
@@ -352,7 +343,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
-    auto renderJob = [renderer, &view, &proj, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
     {
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
@@ -362,7 +353,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
             auto b = renderer->BeginThreadCommandBundle(nullptr);
             for (size_t i = begin; i < end; ++i) {
                 if (auto* obj = objects[i]) {
-                    obj->Render(renderer, b.cl, view, proj);
+                    obj->Render(renderer, b.cl, camera);
                 }
             }
             renderer->EndThreadCommandBundle(b, batchIndex);
@@ -382,7 +373,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
 
                 for (size_t i = begin; i < end; ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->Render(renderer, t.cl, view, proj);
+                        obj->Render(renderer, t.cl, camera);
                     }
                 }
             }
@@ -468,10 +459,9 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraph::PassContext ctx)
 //#define PARALLEL_SHADOW_BATCH 1
 #define PARALLEL_SHADOW_CASCADES 1
 void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj, const mat4& invView, const mat4& invProj,
-    float zNear, float zFar, const float3& camDir,
-    const Scene::BucketArray& buckets)
+    const Camera& camera)
 {
+    const BucketArray& buckets = camera.GetRenderQueue().Buckets();
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     d.cl->SetName(L"CSM");
     {
@@ -488,6 +478,8 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->EndThreadCommandList(d, ctx.batchIndex);
 #endif
 
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
         const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
         for (size_t i = 0; i < splits.size(); ++i)
         {
@@ -496,8 +488,14 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
         const float zFarShadow = splits.back();
         size_t batchIndex = ctx.batchIndex;
 
+        const mat4& proj = camera.GetProjMatrix();
+        const mat4& invView = camera.GetInvViewMatrix();
+        const mat4& invProj = camera.GetInvProjMatrix();
+        const float3 camDir = camera.GetDirection();
+        const float3 camPos = camera.GetPosition();
+
         TaskSystem& tasks = TaskSystem::Get();
-        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, sunDirWS = dirLight_.GetDirection(), batchIndex](std::size_t idx)
+        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, camPos, sunDirWS = dirLight_.GetDirection(), batchIndex](std::size_t idx)
             {
                 CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
                 const auto& D = renderer->GetDeferredForFrame();
@@ -524,7 +522,6 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
                 float radius = radiusFor(delta) + cascadeConfig_.overlap;
                 //radius -= halfSlice;
 
-                const float3 camPos = camera_.GetPosition();
                 float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
                 if (cascadeConfig_.stabilizationStepFraction > 0.0f)
                 {
@@ -639,8 +636,9 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraph::PassContext ctx,
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
-    const Scene::BucketArray& buckets)
+    const Camera& camera)
 {
+    const BucketArray& buckets = camera.GetRenderQueue().Buckets();
     const size_t spotLightCount = lightManager_.GetSpotLightCount();
     if (spotLightCount == 0)
     {
@@ -756,8 +754,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
-    const Scene::BucketArray& buckets)
+    const Camera& camera)
 {
     RenderGraph rgGB(ctx.batchIndex);
     rgGB.AddPass("GBuffer.Driver", {}, [renderer](RenderGraph::PassContext sub) {
@@ -777,20 +774,22 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+    rgGB.AddPass("GBuffer.OpaqueSimple", {}, [this, renderer, &camera](RenderGraph::PassContext sub) {
+        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+        const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, view, proj, /*useBundles=*/true, true, 32);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, 32);
         }
         });
 
     // 1.3 Opaque complex → direct command list, no clears
-    rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+    rgGB.AddPass("GBuffer.OpaqueComplex", {}, [this, renderer, &camera](RenderGraph::PassContext sub) {
+        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+        const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, view, proj, /*useBundles=*/false, true, 32);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, 32);
         }
         });
 
@@ -798,11 +797,8 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
-    const mat4& invView, const mat4& invProj,
-    const float3& camDir)
+    const Camera& camera)
 {
-    (void)proj;
     auto lighting = resources_.GetLightingMaterial();
     if (!lighting)
     {
@@ -830,11 +826,15 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         LightingPassConstants constants{};
+        const mat4& view = camera.GetViewMatrix();
+        const mat4& invView = camera.GetInvViewMatrix();
+        const mat4& invProj = camera.GetInvProjMatrix();
+        const float3 camDir = camera.GetDirection();
         constants.sunDir = dirLight_.GetDirection();
         constants.ambient = dirLight_.GetAmbient();
         constants.lightRgb = dirLight_.GetColor();
         constants.exposure = dirLight_.GetExposure();
-        constants.camPos = camera_.GetPosition();
+        constants.camPos = camera.GetPosition();
         constants.camDir = camDir;
         constants.view = view;
         constants.invView = invView;
@@ -886,7 +886,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& invView, const mat4& invProj)
+    const Camera& camera)
 {
     const size_t spotLightCount = lightManager_.GetSpotLightCount();
     if (spotLightCount == 0)
@@ -943,9 +943,9 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         SpotLightPassConstants constants{};
-        constants.invView = invView;
-        constants.invProj = invProj;
-        constants.camPos = camera_.GetPosition();
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
+        constants.camPos = camera.GetPosition();
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
         constants.screenSize = float2(width, height);
@@ -990,7 +990,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& invView, const mat4& invProj)
+    const Camera& camera)
 {
     auto& pointLights = lightManager_.PointLights();
     if (pointLights.empty()) { return; }
@@ -1033,9 +1033,9 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         PointLightPassConstants constants{};
-        constants.invView = invView;
-        constants.invProj = invProj;
-        constants.camPos = camera_.GetPosition();
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
+        constants.camPos = camera.GetPosition();
         const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
         constants.screenSize = float2(width, height);
@@ -1075,7 +1075,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj)
+    const Camera& camera)
 {
     if (!skyBox_) { return; }
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -1090,16 +1090,14 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraph::PassContext ctx,
         // RTV = SceneColor, DSV = GBuffer Depth (read-only), no clears
         renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
 
-        skyBox_->Render(renderer, t.cl, view, proj);
+        skyBox_->Render(renderer, t.cl, camera);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
 void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
-    const mat4& invView, const mat4& invProj,
-    float zNear, float zFar)
+    const Camera& camera)
 {
     //return;
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -1123,6 +1121,12 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         SsrPassConstants constants{};
+        const mat4& view = camera.GetViewMatrix();
+        const mat4& proj = camera.GetProjMatrix();
+        const mat4& invView = camera.GetInvViewMatrix();
+        const mat4& invProj = camera.GetInvProjMatrix();
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
         constants.view = view;
         constants.proj = proj;
         constants.invView = invView;
@@ -1226,9 +1230,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraph::PassContext ctx)
 }
 
 void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
-    const mat4& invView, const mat4& invProj,
-    float zNear, float zFar)
+    const Camera& camera)
 {
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     t.cl->SetName(std::wstring(ctx.passName.begin(), ctx.passName.end()).data());
@@ -1264,10 +1266,10 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         ComposePassConstants constants{};
-        constants.invView = invView;
-        constants.invProj = invProj;
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
         constants.skyboxIntensity = skyBox_ ? skyBox_->GetExposure() : 1.0f;
-        constants.camPos = camera_.GetPosition();
+        constants.camPos = camera.GetPosition();
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 
@@ -1308,8 +1310,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraph::PassContext ctx,
 }
 
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
-    const mat4& view, const mat4& proj,
-    const Scene::BucketArray& buckets)
+    const Camera& camera)
 {
     RenderGraph rgTr(ctx.batchIndex);
 
@@ -1347,26 +1348,28 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraph::PassContext ctx,
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass("Transparent.Simple", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& transparentSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
+    rgTr.AddPass("Transparent.Simple", {}, [this, renderer, &camera](RenderGraph::PassContext sub) {
+        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+        const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
-            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, view, proj, /*useBundles=*/true, false, 32);
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, 32);
         }
         });
 
-    rgTr.AddPass("Transparent.Complex", {}, [this, renderer, &view, &proj, &buckets](RenderGraph::PassContext sub) {
-        const auto& transparentComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
+    rgTr.AddPass("Transparent.Complex", {}, [this, renderer, &camera](RenderGraph::PassContext sub) {
+        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+        const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, view, proj, /*useBundles=*/false, false, 32);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, 32);
         }
         });
 
     rgTr.Execute(renderer);
 }
 
-void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraph::PassContext ctx, const mat4& view, const mat4& proj)
+void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraph::PassContext ctx, const Camera& camera)
 {
     if (!renderer)
     {
@@ -1388,7 +1391,7 @@ void Scene::Pass_DebugDraw(Renderer* renderer, RenderGraph::PassContext ctx, con
         renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
 
-        debugDraw->Render(renderer, t.cl, view, proj);
+        debugDraw->Render(renderer, t.cl, camera.GetViewMatrix(), camera.GetProjMatrix());
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1551,6 +1554,6 @@ void Scene::Clear()
     resources_ = SceneResourceBootstrapper{};
     lightManager_.Reset();
     objects_.clear();
-    renderQueue_.Clear();
+    camera_.GetRenderQueue().Clear();
     skyBox_.reset();
 }

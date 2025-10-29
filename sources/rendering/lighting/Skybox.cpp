@@ -2,6 +2,7 @@
 #include "rendering/core/Renderer.h"
 #include "materials/UploadManager.h"
 #include "rendering/core/FrameResource.h"
+#include "app/Camera.h"
 
 #include <memory>
 
@@ -28,13 +29,13 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const Camera& camera, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material) { return; }
 
-        UpdateUniform(owner, viewHandle_, material, view, cbData);
-        UpdateUniform(owner, projHandle_, material, proj, cbData);
+        UpdateUniform(owner, viewHandle_, material, camera.GetViewMatrix(), cbData);
+        UpdateUniform(owner, projHandle_, material, camera.GetProjMatrix(), cbData);
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
     }
 

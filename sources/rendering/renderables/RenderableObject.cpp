@@ -118,7 +118,7 @@ void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandL
     graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
-void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& view, const mat4& proj)
+void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera)
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
@@ -136,7 +136,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     RecordCompute(renderer, cl);
     if (uniformBinder_)
     {
-        uniformBinder_->UpdateMainCB(*this, renderer, view, proj, cbData);
+        uniformBinder_->UpdateMainCB(*this, renderer, camera, cbData);
     }
     PopulateContext(renderer, cl, ctx);
     RecordGraphics(renderer, cl, ctx);

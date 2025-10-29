@@ -326,7 +326,7 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const mat4& view, const mat4& proj, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* renderer, const Camera& camera, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material)
@@ -334,8 +334,10 @@ public:
             return;
         }
 
-        const mat4 invView = mat4::Inverse(view);
-        const mat4 invProj = mat4::Inverse(proj);
+        const mat4& view = camera.GetViewMatrix();
+        const mat4& proj = camera.GetProjMatrix();
+        const mat4& invView = camera.GetInvViewMatrix();
+        const mat4& invProj = camera.GetInvProjMatrix();
 
         UpdateUniform(owner, modelHandle_, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, viewHandle_, material, view, cbData);

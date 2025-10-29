@@ -54,7 +54,7 @@ public:
 private:
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const mat4& view, const mat4& proj, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
+        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
     void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
@@ -62,40 +62,28 @@ private:
     using BucketArray = std::array<SceneRenderQueue::ObjectBucket, 4>;
 
     void Pass_CSM(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const mat4& invView, const mat4& invProj,
-        float zNear, float zFar,
-        const float3& camDir,
-        const BucketArray& buckets);
+        const Camera& camera);
     void Pass_GBuffer(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const BucketArray& buckets);
+        const Camera& camera);
     void Pass_Lighting(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const mat4& invView, const mat4& invProj,
-        const float3& camDir);
+        const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraph::PassContext ctx,
-        const BucketArray& buckets);
+        const Camera& camera);
     void Pass_SpotLights(Renderer* renderer, RenderGraph::PassContext ctx,
-        const mat4& invView, const mat4& invProj);
+        const Camera& camera);
     void Pass_PointLights(Renderer* renderer, RenderGraph::PassContext ctx,
-        const mat4& invView, const Math::mat4& invProj);
+        const Camera& camera);
     void Pass_Skybox(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj);
+        const Camera& camera);
     void Pass_SSR(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const mat4& invView, const mat4& invProj,
-        float zNear, float zFar);
+        const Camera& camera);
     void Pass_SSR_Blur(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const mat4& invView, const mat4& invProj,
-        float zNear, float zFar);
+        const Camera& camera);
     void Pass_Transparent(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj,
-        const BucketArray& buckets);
+        const Camera& camera);
     void Pass_DebugDraw(Renderer* r, RenderGraph::PassContext ctx,
-        const mat4& view, const mat4& proj);
+        const Camera& camera);
     void Pass_Tonemap(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraph::PassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraph::PassContext ctx);
@@ -103,7 +91,6 @@ private:
     static constexpr int kCascades = 4;
 
     SceneResourceBootstrapper resources_{};
-    SceneRenderQueue renderQueue_{};
     CascadeShadowConfig cascadeConfig_{};
 
     // Cache for the lighting pass
