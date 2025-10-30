@@ -680,9 +680,26 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
 
 void TaskSystem::Wait(TaskHandle handle)
 {
+    CPU_SCOPE(ProfilerScopes::kService2);
     if (!handle) {
         return;
     }
+
+    using namespace std::chrono_literals;
+    //handle->completionFuture_.wait_for(10us);
+
+    while (handle->completionFuture_.wait_for(0us) != std::future_status::ready) {
+        if (!RunInlineTask()) {
+            handle->completionFuture_.wait_for(10us);
+            //UINT32 count = 0;
+            //while (handle->completionFuture_.wait_for(0s) != std::future_status::ready || count <= 400)
+            //{
+            //    _mm_pause();
+            //    ++count;
+            //}
+        }
+    }
+
     handle->completionFuture_.wait();
 }
 
