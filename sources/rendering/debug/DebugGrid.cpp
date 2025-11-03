@@ -2,7 +2,7 @@
 
 #include <DirectXMath.h>
 
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/core/Renderer.h"
 #include "materials/UploadManager.h"

@@ -10,6 +10,9 @@
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\camera">
+      <UniqueIdentifier>{8d2abf54-69b6-4d38-8341-5ef5780f5d74}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\levels">
       <UniqueIdentifier>{b1a2558d-4f4a-4c56-93db-0d8ae410cdbd}</UniqueIdentifier>
     </Filter>
@@ -87,10 +90,10 @@
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/Camera.cpp">
-      <Filter>sources\app</Filter>
+    <ClCompile Include="sources/app/camera/Camera.cpp">
+      <Filter>sources\app\camera</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/DirectionalLight.cpp">
+    <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/levels/DemoLevel.cpp">
@@ -102,8 +105,8 @@
     <ClCompile Include="sources/app/levels/LevelManager.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/Scene.cpp">
-      <Filter>sources\app</Filter>
+    <ClCompile Include="sources/app/scene/Scene.cpp">
+      <Filter>sources\app\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp">
       <Filter>sources\app\scene</Filter>
@@ -251,10 +254,10 @@
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/Camera.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/app/camera/Camera.h">
+      <Filter>sources\app\camera</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/DirectionalLight.h">
+    <ClInclude Include="sources/rendering/lighting/DirectionalLight.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/DemoLevel.h">
@@ -266,8 +269,8 @@
     <ClInclude Include="sources/app/levels/LevelManager.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/Scene.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/app/scene/Scene.h">
+      <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
       <Filter>sources\app\scene</Filter>

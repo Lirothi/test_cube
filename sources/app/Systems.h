@@ -1,7 +1,7 @@
 #pragma once
 
 #include "rendering/core/Renderer.h"
-#include "app/Scene.h"
+#include "app/scene/Scene.h"
 #include "input/InputManager.h"
 #include "app/levels/LevelManager.h"
 

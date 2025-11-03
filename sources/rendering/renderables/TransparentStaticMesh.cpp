@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 
-#include "app/Scene.h"
-#include "app/Camera.h"
+#include "app/scene/Scene.h"
+#include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/LightManager.h"

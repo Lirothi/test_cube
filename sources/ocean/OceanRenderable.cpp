@@ -6,9 +6,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "app/Camera.h"
-#include "app/Scene.h"
-#include "app/DirectionalLight.h"
+#include "app/camera/Camera.h"
+#include "app/scene/Scene.h"
+#include "rendering/lighting/DirectionalLight.h"
 #include "app/Systems.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"

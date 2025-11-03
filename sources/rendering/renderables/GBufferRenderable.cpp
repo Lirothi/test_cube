@@ -1,6 +1,6 @@
 #include "rendering/renderables/GBufferRenderable.h"
 
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "materials/MaterialDataManager.h"
 
