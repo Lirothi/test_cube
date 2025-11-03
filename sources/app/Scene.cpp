@@ -815,10 +815,6 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
             renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
-
-            const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
-            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
@@ -1394,10 +1390,6 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
-
-            const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
-            const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
-            const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
