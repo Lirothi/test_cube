@@ -25,7 +25,6 @@
 #include "core/math/Frustum.h"
 #include "core/containers/inl_vector.h"
 
-
 static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
 {
     const auto nameW = RenderPassToWString(pass);
@@ -34,7 +33,6 @@ static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
         cl->SetName(nameW.data());
     }
 }
-
 
 const mat4& Scene::GetCascadeView(size_t index) const
 {
@@ -339,6 +337,7 @@ void Scene::Tick(float deltaTime) {
 
 void Scene::PrepareViews(Renderer* renderer)
 {
+    CPU_SCOPE(ProfilerScopes::kPrepareViews);
     if (!renderer)
     {
         return;
@@ -385,6 +384,7 @@ void Scene::PrepareViews(Renderer* renderer)
 
     auto prepareQueue = [this](SceneView& view)
     {
+        CPU_SCOPE(ProfilerScopes::kPrepareQueue);
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
         {
             view.queue.Clear();

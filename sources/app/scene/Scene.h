@@ -64,6 +64,7 @@ public:
     void SetSkybox(std::unique_ptr<Skybox> skybox);
 
 private:
+    static constexpr int kCascades = 4;
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
@@ -104,8 +105,6 @@ private:
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx);
 
     void PrepareViews(Renderer* renderer);
-
-    static constexpr int kCascades = 4;
 
     SceneResourceBootstrapper resources_{};
     CascadeShadowConfig cascadeConfig_{};

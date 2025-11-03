@@ -163,6 +163,7 @@ void SceneRenderQueue::Cull(const Frustum& frustum)
 
             const AABB& bounds = obj->GetWorldBounds();
             const bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
+            //const bool visible = true;
             if (visible)
             {
                 visibleBucket.push_back(obj);
