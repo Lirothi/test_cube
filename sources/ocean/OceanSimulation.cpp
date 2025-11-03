@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <vector>
 
 #include "core/Helpers.h"
 #include "materials/Material.h"
@@ -902,19 +903,17 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
 
     renderer->Transition(cl, displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    auto computeMipExtent = [](UINT base, UINT mip) -> UINT
-    {
-        UINT size = base;
-        for (UINT level = 0; level < mip; ++level)
-        {
-            size = std::max<UINT>(1u, size / 2u);
-        }
-        return std::max<UINT>(1u, size);
-    };
-
     if (displacementFullSrv_.ptr == 0)
     {
         return;
+    }
+
+    std::vector<UINT> mipExtents(mipCount_);
+    UINT mipSize = std::max<UINT>(1u, resolution_);
+    for (UINT level = 0; level < mipCount_; ++level)
+    {
+        mipExtents[level] = mipSize;
+        mipSize = std::max<UINT>(1u, mipSize / 2u);
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE srcSrv = displacementFullSrv_;
@@ -927,10 +926,10 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         {
             break;
         }
-        const UINT srcWidth = computeMipExtent(resolution_, srcMip);
-        const UINT srcHeight = computeMipExtent(resolution_, srcMip);
-        const UINT dstWidth = computeMipExtent(resolution_, dstMip);
-        const UINT dstHeight = computeMipExtent(resolution_, dstMip);
+        const UINT srcWidth = mipExtents[srcMip];
+        const UINT srcHeight = mipExtents[srcMip];
+        const UINT dstWidth = mipExtents[dstMip];
+        const UINT dstHeight = mipExtents[dstMip];
 
         auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
         auto& ctx = ctxHandle.ref();
@@ -1062,15 +1061,13 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
     if (mipMaterial_ && mipCount_ > 1 && cascadeCount_ > 0 &&
         foamSrv_.ptr != 0 && !foamUavs_.empty())
     {
-        auto computeMipExtent = [](UINT base, UINT mip) -> UINT
+        std::vector<UINT> mipExtents(mipCount_);
+        UINT mipSize = std::max<UINT>(1u, resolution_);
+        for (UINT level = 0; level < mipCount_; ++level)
         {
-            UINT size = base;
-            for (UINT level = 0; level < mip; ++level)
-            {
-                size = std::max<UINT>(1u, size / 2u);
-            }
-            return std::max<UINT>(1u, size);
-        };
+            mipExtents[level] = mipSize;
+            mipSize = std::max<UINT>(1u, mipSize / 2u);
+        }
 
         for (UINT dstMip = 1; dstMip < mipCount_;)
         {
@@ -1080,10 +1077,10 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             {
                 break;
             }
-            const UINT srcWidth = computeMipExtent(resolution_, srcMip);
-            const UINT srcHeight = computeMipExtent(resolution_, srcMip);
-            const UINT dstWidth = computeMipExtent(resolution_, dstMip);
-            const UINT dstHeight = computeMipExtent(resolution_, dstMip);
+            const UINT srcWidth = mipExtents[srcMip];
+            const UINT srcHeight = mipExtents[srcMip];
+            const UINT dstWidth = mipExtents[dstMip];
+            const UINT dstHeight = mipExtents[dstMip];
 
             auto ctxHandleMip = renderer->GetRenderContextPool()->Acquire();
             auto& ctxMip = ctxHandleMip.ref();
