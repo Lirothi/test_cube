@@ -353,6 +353,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
+    mipExtents_.clear();
+
     if (!renderer || resolution_ == 0 || cascadeCount_ == 0)
     {
         return;
@@ -378,6 +380,14 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     {
         size = std::max<UINT>(1u, size / 2u);
         ++mipCount_;
+    }
+
+    mipExtents_.resize(mipCount_);
+    UINT mipSize = std::max<UINT>(1u, resolution_);
+    for (UINT level = 0; level < mipCount_; ++level)
+    {
+        mipExtents_[level] = mipSize;
+        mipSize = std::max<UINT>(1u, mipSize / 2u);
     }
 
     auto* device = renderer->GetDevice();
@@ -908,12 +918,9 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         return;
     }
 
-    std::vector<UINT> mipExtents(mipCount_);
-    UINT mipSize = std::max<UINT>(1u, resolution_);
-    for (UINT level = 0; level < mipCount_; ++level)
+    if (mipExtents_.size() < mipCount_)
     {
-        mipExtents[level] = mipSize;
-        mipSize = std::max<UINT>(1u, mipSize / 2u);
+        return;
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE srcSrv = displacementFullSrv_;
@@ -926,10 +933,10 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         {
             break;
         }
-        const UINT srcWidth = mipExtents[srcMip];
-        const UINT srcHeight = mipExtents[srcMip];
-        const UINT dstWidth = mipExtents[dstMip];
-        const UINT dstHeight = mipExtents[dstMip];
+        const UINT srcWidth = mipExtents_[srcMip];
+        const UINT srcHeight = mipExtents_[srcMip];
+        const UINT dstWidth = mipExtents_[dstMip];
+        const UINT dstHeight = mipExtents_[dstMip];
 
         auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
         auto& ctx = ctxHandle.ref();
@@ -1061,12 +1068,9 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
     if (mipMaterial_ && mipCount_ > 1 && cascadeCount_ > 0 &&
         foamSrv_.ptr != 0 && !foamUavs_.empty())
     {
-        std::vector<UINT> mipExtents(mipCount_);
-        UINT mipSize = std::max<UINT>(1u, resolution_);
-        for (UINT level = 0; level < mipCount_; ++level)
+        if (mipExtents_.size() < mipCount_)
         {
-            mipExtents[level] = mipSize;
-            mipSize = std::max<UINT>(1u, mipSize / 2u);
+            return;
         }
 
         for (UINT dstMip = 1; dstMip < mipCount_;)
@@ -1077,10 +1081,10 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             {
                 break;
             }
-            const UINT srcWidth = mipExtents[srcMip];
-            const UINT srcHeight = mipExtents[srcMip];
-            const UINT dstWidth = mipExtents[dstMip];
-            const UINT dstHeight = mipExtents[dstMip];
+            const UINT srcWidth = mipExtents_[srcMip];
+            const UINT srcHeight = mipExtents_[srcMip];
+            const UINT dstWidth = mipExtents_[dstMip];
+            const UINT dstHeight = mipExtents_[dstMip];
 
             auto ctxHandleMip = renderer->GetRenderContextPool()->Acquire();
             auto& ctxMip = ctxHandleMip.ref();
