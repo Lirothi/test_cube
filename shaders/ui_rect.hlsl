@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b1,count=4)
+// RootSignature: CONSTANTS(b0,count=4)
 struct VSIn
 {
     float2 pos : POSITION;
@@ -13,7 +13,7 @@ struct VSOut
 };
 
 // Same root constants as for text rendering: we only need the first two (viewport.xy)
-cbuffer UIConsts : register(b1)
+cbuffer UIConsts : register(b0)
 {
     float2 uViewport;
     float2 uAtlasTexelSize;

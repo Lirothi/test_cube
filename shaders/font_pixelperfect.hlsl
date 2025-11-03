@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b1,count=12) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+// RootSignature: CONSTANTS(b0,count=12) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
 
 struct VSIn {
     float2 pos : POSITION;
@@ -13,7 +13,7 @@ struct VSOut {
     float2 shadowParams : TEXCOORD1;
 };
 
-cbuffer TextParams : register(b1)
+cbuffer TextParams : register(b0)
 {
     float4 viewportAtlas;    // xy = viewport size, zw = atlas texel size
     float4 shadowOffsetBase; // xy = base shadow offset, zw unused

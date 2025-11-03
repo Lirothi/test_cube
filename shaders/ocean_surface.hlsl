@@ -285,7 +285,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
-    //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 3);
+    //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
     float4 sample = DisplacementDerivatives.Sample(LinearWrapSampler, uvw);
     return sample;
 }

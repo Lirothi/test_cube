@@ -315,7 +315,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.constants[1] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_), 0u, 0u };
+        rc.constants[0] = { FloatToUint32((float)vpW_), FloatToUint32((float)vpH_), 0u, 0u };
 
         matRect_->Bind(cl, rc);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -355,7 +355,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
             shadowColorRgb = { desc.color.x, desc.color.y, desc.color.z };
         }
 
-        rc.constants[1] = {
+        rc.constants[0] = {
             FloatToUint32((float)vpW_), FloatToUint32((float)vpH_),
             FloatToUint32(invAtlasW), FloatToUint32(invAtlasH),
             FloatToUint32(shadowBaseOffset.x), FloatToUint32(shadowBaseOffset.y),
