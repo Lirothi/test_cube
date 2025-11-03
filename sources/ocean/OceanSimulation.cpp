@@ -17,6 +17,7 @@ namespace
 {
     constexpr UINT kThreadGroupSize = 8;
     constexpr UINT kFftFlagPermute = 1u << 1;
+    constexpr UINT kMipsPerDispatch = 4u;
 }
 
 OceanSimulation::OceanSimulation()
@@ -423,11 +424,13 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         return;
     }
 
-    UINT descriptorCount = 3u + mipCount_ * 2u;
+    UINT descriptorCount = 3u; // h0 SRV, wave SRV, full displacement SRV
+    descriptorCount += 1u;     // base displacement SRV
+    descriptorCount += mipCount_; // displacement UAVs
     if (cascadeCount_ > 0)
     {
-        descriptorCount += 1u; // foam aggregate SRV
-        descriptorCount += mipCount_ * 2u; // foam per-mip SRVs and UAVs
+        descriptorCount += 1u;        // foam aggregate SRV
+        descriptorCount += mipCount_; // foam UAVs
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
@@ -449,32 +452,24 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     waveDataSrv_ = Offset(base, 1);
     displacementFullSrv_ = Offset(base, 2);
 
-    displacementSrvs_.resize(mipCount_);
+    displacementSrvs_.resize(1u);
     displacementUavs_.resize(mipCount_);
+    foamSrvs_.clear();
     if (cascadeCount_ > 0)
     {
-        foamSrvs_.resize(mipCount_);
         foamUavs_.resize(mipCount_);
     }
     else
     {
-        foamSrvs_.clear();
         foamUavs_.clear();
     }
 
     UINT descriptorIndex = 3;
-    for (UINT mip = 0; mip < mipCount_; ++mip)
-    {
-        displacementSrvs_[mip] = Offset(base, descriptorIndex++);
-    }
+    displacementSrvs_[0] = Offset(base, descriptorIndex++);
 
     if (cascadeCount_ > 0)
     {
         foamSrv_ = Offset(base, descriptorIndex++);
-        for (UINT mip = 0; mip < mipCount_; ++mip)
-        {
-            foamSrvs_[mip] = Offset(base, descriptorIndex++);
-        }
     }
     else
     {
@@ -527,15 +522,13 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     if (displacementFullSrv_.ptr != 0)
     {
         auto fullSrvDesc = texSrv;
-        fullSrvDesc.Texture2DArray.MipLevels = std::min(4u, mipCount_);
+        fullSrvDesc.Texture2DArray.MipLevels = mipCount_;
         device->CreateShaderResourceView(displacement_.Get(), &fullSrvDesc, displacementFullSrv_);
     }
 
-    for (UINT mip = 0; mip < mipCount_; ++mip)
-    {
-        texSrv.Texture2DArray.MostDetailedMip = mip;
-        device->CreateShaderResourceView(displacement_.Get(), &texSrv, displacementSrvs_[mip]);
-    }
+    texSrv.Texture2DArray.MipLevels = 1;
+    texSrv.Texture2DArray.MostDetailedMip = 0;
+    device->CreateShaderResourceView(displacement_.Get(), &texSrv, displacementSrvs_[0]);
 
     if (foamTurbulence_ && cascadeCount_ > 0)
     {
@@ -545,12 +538,6 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         foamSrvDesc.Texture2DArray.MipLevels = mipCount_;
         device->CreateShaderResourceView(foamTurbulence_.Get(), &foamSrvDesc, foamSrv_);
 
-        foamSrvDesc.Texture2DArray.MipLevels = 1;
-        for (UINT mip = 0; mip < mipCount_; ++mip)
-        {
-            foamSrvDesc.Texture2DArray.MostDetailedMip = mip;
-            device->CreateShaderResourceView(foamTurbulence_.Get(), &foamSrvDesc, foamSrvs_[mip]);
-        }
     }
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC texUav{};
@@ -915,13 +902,35 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
 
     renderer->Transition(cl, displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    UINT srcWidth = resolution_;
-    UINT srcHeight = resolution_;
-
-    for (UINT mip = 1; mip < mipCount_; ++mip)
+    auto computeMipExtent = [](UINT base, UINT mip) -> UINT
     {
-        const UINT dstWidth = std::max<UINT>(1u, srcWidth / 2u);
-        const UINT dstHeight = std::max<UINT>(1u, srcHeight / 2u);
+        UINT size = base;
+        for (UINT level = 0; level < mip; ++level)
+        {
+            size = std::max<UINT>(1u, (size + 1u) / 2u);
+        }
+        return std::max<UINT>(1u, size);
+    };
+
+    if (displacementFullSrv_.ptr == 0)
+    {
+        return;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srcSrv = displacementFullSrv_;
+
+    for (UINT dstMip = 1; dstMip < mipCount_;)
+    {
+        const UINT srcMip = dstMip - 1u;
+        const UINT batchCount = std::min<UINT>(kMipsPerDispatch, mipCount_ - dstMip);
+        if (batchCount == 0)
+        {
+            break;
+        }
+        const UINT srcWidth = computeMipExtent(resolution_, srcMip);
+        const UINT srcHeight = computeMipExtent(resolution_, srcMip);
+        const UINT dstWidth = computeMipExtent(resolution_, dstMip);
+        const UINT dstHeight = computeMipExtent(resolution_, dstMip);
 
         auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
         auto& ctx = ctxHandle.ref();
@@ -929,16 +938,30 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         ctx.constants[0] = {
             srcWidth,
             srcHeight,
-            dstWidth,
-            dstHeight,
             arraySliceCount_,
-            mip,
-            0u,
-            0u
+            srcMip,
+            dstMip,
+            batchCount,
+            dstWidth,
+            dstHeight
         };
 
-        auto srvTable = renderer->StageSrvUavTable({ displacementSrvs_[mip - 1] });
-        auto uavTable = renderer->StageSrvUavTable({ displacementUavs_[mip] });
+        auto srvTable = renderer->StageSrvUavTable({ srcSrv });
+
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMipsPerDispatch> uavs{};
+        for (UINT i = 0; i < batchCount; ++i)
+        {
+            uavs[i] = displacementUavs_[dstMip + i];
+        }
+        if (batchCount < kMipsPerDispatch)
+        {
+            const D3D12_CPU_DESCRIPTOR_HANDLE pad = uavs[batchCount - 1];
+            for (UINT i = batchCount; i < kMipsPerDispatch; ++i)
+            {
+                uavs[i] = pad;
+            }
+        }
+        auto uavTable = renderer->StageSrvUavTable(uavs);
 
         ctx.table[0] = srvTable.gpu;
         ctx.table[1] = uavTable.gpu;
@@ -951,8 +974,7 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
 
         renderer->UAVBarrier(cl, displacement_.Get());
 
-        srcWidth = dstWidth;
-        srcHeight = dstHeight;
+        dstMip += batchCount;
     }
 }
 
@@ -1038,15 +1060,30 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
     renderer->UAVBarrier(cl, foamTurbulence_.Get());
 
     if (mipMaterial_ && mipCount_ > 1 && cascadeCount_ > 0 &&
-        !foamSrvs_.empty() && !foamUavs_.empty())
+        foamSrv_.ptr != 0 && !foamUavs_.empty())
     {
-        UINT srcWidth = resolution_;
-        UINT srcHeight = resolution_;
-
-        for (UINT mip = 1; mip < mipCount_; ++mip)
+        auto computeMipExtent = [](UINT base, UINT mip) -> UINT
         {
-            const UINT dstWidth = std::max<UINT>(1u, srcWidth / 2u);
-            const UINT dstHeight = std::max<UINT>(1u, srcHeight / 2u);
+            UINT size = base;
+            for (UINT level = 0; level < mip; ++level)
+            {
+                size = std::max<UINT>(1u, (size + 1u) / 2u);
+            }
+            return std::max<UINT>(1u, size);
+        };
+
+        for (UINT dstMip = 1; dstMip < mipCount_;)
+        {
+            const UINT srcMip = dstMip - 1u;
+            const UINT batchCount = std::min<UINT>(kMipsPerDispatch, mipCount_ - dstMip);
+            if (batchCount == 0)
+            {
+                break;
+            }
+            const UINT srcWidth = computeMipExtent(resolution_, srcMip);
+            const UINT srcHeight = computeMipExtent(resolution_, srcMip);
+            const UINT dstWidth = computeMipExtent(resolution_, dstMip);
+            const UINT dstHeight = computeMipExtent(resolution_, dstMip);
 
             auto ctxHandleMip = renderer->GetRenderContextPool()->Acquire();
             auto& ctxMip = ctxHandleMip.ref();
@@ -1054,16 +1091,30 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             ctxMip.constants[0] = {
                 srcWidth,
                 srcHeight,
-                dstWidth,
-                dstHeight,
                 cascadeCount_,
-                mip,
-                0u,
-                0u
+                srcMip,
+                dstMip,
+                batchCount,
+                dstWidth,
+                dstHeight
             };
 
-            auto srvTable = renderer->StageSrvUavTable({ foamSrvs_[mip - 1] });
-            auto uavTable = renderer->StageSrvUavTable({ foamUavs_[mip] });
+            auto srvTable = renderer->StageSrvUavTable({ foamSrv_ });
+
+            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMipsPerDispatch> uavs{};
+            for (UINT i = 0; i < batchCount; ++i)
+            {
+                uavs[i] = foamUavs_[dstMip + i];
+            }
+            if (batchCount < kMipsPerDispatch)
+            {
+                const D3D12_CPU_DESCRIPTOR_HANDLE pad = uavs[batchCount - 1];
+                for (UINT i = batchCount; i < kMipsPerDispatch; ++i)
+                {
+                    uavs[i] = pad;
+                }
+            }
+            auto uavTable = renderer->StageSrvUavTable(uavs);
 
             ctxMip.table[0] = srvTable.gpu;
             ctxMip.table[1] = uavTable.gpu;
@@ -1076,8 +1127,7 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
 
             renderer->UAVBarrier(cl, foamTurbulence_.Get());
 
-            srcWidth = dstWidth;
-            srcHeight = dstHeight;
+            dstMip += batchCount;
         }
     }
 }
