@@ -907,7 +907,7 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         UINT size = base;
         for (UINT level = 0; level < mip; ++level)
         {
-            size = std::max<UINT>(1u, (size + 1u) / 2u);
+            size = std::max<UINT>(1u, size / 2u);
         }
         return std::max<UINT>(1u, size);
     };
@@ -1067,7 +1067,7 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             UINT size = base;
             for (UINT level = 0; level < mip; ++level)
             {
-                size = std::max<UINT>(1u, (size + 1u) / 2u);
+                size = std::max<UINT>(1u, size / 2u);
             }
             return std::max<UINT>(1u, size);
         };
