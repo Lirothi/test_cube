@@ -763,22 +763,91 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     }
     renderer->EndThreadCommandList(d, ctx.batchIndex);
 
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    const RenderPass passName = ctx.pass;
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName](std::size_t cascadeIndex)
+    {
+        if (cascadeIndex >= cascadeViews.size())
+        {
+            return;
+        }
+
+        CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
+        const SceneView& view = cascadeViews[cascadeIndex];
+        const auto& visibleBuckets = view.queue.VisibleBuckets();
+        const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+        const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+        if (opaqueSimple.empty() && opaqueComplex.empty())
+        {
+            return;
+        }
+
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(t.cl, passName);
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
+            renderer->BindShadowTarget(t.cl, static_cast<int>(cascadeIndex), /*clear=*/false);
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
+
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
+        }
+
+        renderer->EndThreadCommandList(t, batchIndex);
+    };
+
+    TaskSystem::Get().DispatchWait(cascadeViews.size(), renderCascade, 1);
+#else
     for (size_t idx = 0; idx < cascadeViews.size(); ++idx)
     {
+        CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
         const SceneView& view = cascadeViews[idx];
         const auto& visibleBuckets = view.queue.VisibleBuckets();
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-        if (!opaqueSimple.empty())
+        const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+        if (opaqueSimple.empty() && opaqueComplex.empty())
         {
-            RenderShadowBatch(renderer, opaqueSimple, ctx.batchIndex, view.view, view.proj, static_cast<UINT>(idx), 64);
+            continue;
         }
 
-        const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
-        if (!opaqueComplex.empty())
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(t.cl, ctx.pass);
         {
-            RenderShadowBatch(renderer, opaqueComplex, ctx.batchIndex, view.view, view.proj, static_cast<UINT>(idx), 64);
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
+            renderer->BindShadowTarget(t.cl, static_cast<int>(idx), /*clear=*/false);
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
+
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
         }
+
+        renderer->EndThreadCommandList(t, ctx.batchIndex);
     }
+#endif
 }
 
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
