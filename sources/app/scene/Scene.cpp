@@ -23,6 +23,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/math/AABB.h"
 #include "core/math/Frustum.h"
+#include "core/containers/inl_vector.h"
 
 
 static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
@@ -77,6 +78,22 @@ namespace
     {
         return static_cast<size_t>(type);
     }
+
+    void FilterShadowCasters(SceneRenderQueue& queue)
+    {
+        auto filterBucket = [](SceneRenderQueue::ObjectBucket& bucket)
+        {
+            bucket.erase(std::remove_if(bucket.begin(), bucket.end(), [](RenderableObjectBase* obj)
+            {
+                return !obj || !obj->CastsShadow();
+            }), bucket.end());
+        };
+
+        filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::OpaqueSimple));
+        filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::OpaqueComplex));
+        filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::TransparentSimple));
+        filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::TransparentComplex));
+    }
 }
 
 static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
@@ -112,6 +129,139 @@ void Scene::InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandL
 void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     resources_.Finalize(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
+}
+
+void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    const float zNear = camera.GetZNear();
+    const float zFar = camera.GetZFar();
+    const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
+    for (size_t i = 0; i < splits.size(); ++i)
+    {
+        cachedSplitsVS_[i] = splits[i];
+    }
+
+    const auto& deferred = renderer->GetDeferredForFrame();
+    const UINT tileRes = deferred.shadowRes > 0 ? deferred.shadowRes / 2u : 0u;
+    if (tileRes == 0)
+    {
+        for (auto& view : cascadeViews_)
+        {
+            view.frustum = Frustum{};
+            view.type = SceneView::Type::Shadow;
+            view.renderLayerMask = camera.GetRenderLayerMask();
+            view.zNear = 0.0f;
+            view.zFar = 0.0f;
+            view.hfov = 0.0f;
+            view.queue.Clear();
+        }
+        return;
+    }
+
+    const mat4& proj = camera.GetProjMatrix();
+    const mat4& invView = camera.GetInvViewMatrix();
+    const mat4& invProj = camera.GetInvProjMatrix();
+    const float3 camDir = camera.GetDirection();
+    const float3 camPos = camera.GetPosition();
+    const float3 sunDirWS = dirLight_.GetDirection();
+
+    const float tanH = 1.0f / proj.m._11;
+    const float tanV = 1.0f / proj.m._22;
+
+    for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
+    {
+        const float sliceNear = cachedSplitsVS_[idx];
+        const float sliceFar = cachedSplitsVS_[idx + 1];
+
+        std::array<float3, 8> cornersWS{};
+        BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
+
+        const float halfSlice = 0.5f * (sliceFar - sliceNear);
+        const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
+
+        float delta = cascadeConfig_.forwardOffset * halfSlice;
+        auto radiusFor = [&](float d)
+        {
+            const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
+            return std::sqrt(rf2);
+        };
+
+        float radius = radiusFor(delta) + cascadeConfig_.overlap;
+        float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
+        if (cascadeConfig_.stabilizationStepFraction > 0.0f)
+        {
+            const float spatialStep = radius * cascadeConfig_.stabilizationStepFraction;
+            if (spatialStep > 0.0f)
+            {
+                center = Floor(center / spatialStep) * spatialStep;
+            }
+        }
+
+        const float3 up(0, 1, 0);
+        const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
+        const mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
+
+        float2 centerLS = (lightView * float4(center, 1)).xy();
+        float minZ = +1e9f;
+        float maxZ = -1e9f;
+        float rLS = 0.0f;
+        for (const auto& corner : cornersWS)
+        {
+            const float3 ls = (lightView * float4(corner, 1)).xyz();
+            rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
+            minZ = std::min(minZ, ls.z);
+            maxZ = std::max(maxZ, ls.z);
+        }
+        radius = std::min(radius, rLS);
+
+        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
+        if (unitsPerTexel > 0.0f)
+        {
+            centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+            centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+        }
+
+        const float minX = centerLS.x - radius;
+        const float maxX = centerLS.x + radius;
+        const float minY = centerLS.y - radius;
+        const float maxY = centerLS.y + radius;
+
+        const float zPad = cascadeConfig_.zPadding;
+        const float nearLS = std::max(0.001f, minZ - zPad);
+        const float farLS = maxZ + zPad;
+
+        const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+
+        const float normalBiasInTexels = cascadeConfig_.normalBiasInTexels;
+        const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
+        cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
+        cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
+
+        const float2 scale = float2(static_cast<float>(tileRes) / static_cast<float>(deferred.shadowRes));
+        const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
+        cachedScale_[idx] = scale;
+        cachedBias_[idx] = bias;
+        cachedLightView_[idx] = lightView;
+        cachedLightProj_[idx] = lightProj;
+
+        SceneView& cascadeView = cascadeViews_[idx];
+        cascadeView.view = lightView;
+        cascadeView.proj = lightProj;
+        cascadeView.invView = mat4::Inverse(lightView);
+        cascadeView.invProj = mat4::Inverse(lightProj);
+        cascadeView.frustum = Frustum::FromInvViewProj(cascadeView.invView, cascadeView.proj, nearLS, farLS);
+        cascadeView.renderLayerMask = camera.GetRenderLayerMask();
+        cascadeView.position = center;
+        cascadeView.type = SceneView::Type::Shadow;
+        cascadeView.zNear = nearLS;
+        cascadeView.zFar = farLS;
+        cascadeView.hfov = 0.0f;
+    }
 }
 
 void Scene::SetDirectionalLight(DirectionalLight light)
@@ -187,6 +337,115 @@ void Scene::Tick(float deltaTime) {
     //}
 }
 
+void Scene::PrepareViews(Renderer* renderer)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    constexpr float kHFovRadians = XMConvertToRadians(90.0f);
+    const float zNear = 0.01f;
+    const float zFar = 10000.0f;
+    camera_.SetHFov(kHFovRadians);
+    camera_.SetZNearFar(zNear, zFar);
+    camera_.CalcMatrices(renderer);
+
+    SceneView& mainView = camera_.GetView();
+    mainView.renderLayerMask = camera_.GetRenderLayerMask();
+    mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, camera_.GetZNear(), camera_.GetZFar());
+    mainView.type = SceneView::Type::Camera;
+
+    UpdateCascades(camera_, renderer);
+
+    spotShadowViews_.clear();
+    const size_t spotLightCount = lightManager_.GetSpotLightCount();
+    const auto& spotLights = lightManager_.SpotLights();
+    spotShadowViews_.reserve(spotLightCount);
+    for (size_t i = 0; i < spotLightCount; ++i)
+    {
+        const auto& light = spotLights[i];
+        SceneView view{};
+        view.type = SceneView::Type::Shadow;
+        view.view = light.GetViewMatrix();
+        view.proj = light.GetProjMatrix();
+        view.invView = mat4::Inverse(view.view);
+        view.invProj = mat4::Inverse(view.proj);
+        const auto& desc = light.GetDesc();
+        const float nearPlane = std::max(desc.nearPlane, 0.01f);
+        const float farPlane = std::max(desc.range, nearPlane + 0.1f);
+        view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
+        view.renderLayerMask = camera_.GetRenderLayerMask();
+        view.position = desc.position;
+        view.zNear = nearPlane;
+        view.zFar = farPlane;
+        view.hfov = 0.0f;
+        spotShadowViews_.push_back(std::move(view));
+    }
+
+    auto prepareQueue = [this](SceneView& view)
+    {
+        if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
+        {
+            view.queue.Clear();
+            return;
+        }
+
+        view.queue.Bucketize(objects_, view.renderLayerMask);
+        if (view.type == SceneView::Type::Shadow)
+        {
+            FilterShadowCasters(view.queue);
+        }
+        view.queue.Cull(view.frustum);
+        if (view.type == SceneView::Type::Camera)
+        {
+            view.queue.SortTransparent(view.view);
+        }
+    };
+
+    tc::inl_vector<SceneView*, 16> viewsToCull;
+    auto enqueueView = [&viewsToCull, &prepareQueue](SceneView& view)
+    {
+        if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
+        {
+            prepareQueue(view);
+            return;
+        }
+
+        if (viewsToCull.size() < viewsToCull.capacity())
+        {
+            viewsToCull.push_back(&view);
+        }
+        else
+        {
+            prepareQueue(view);
+        }
+    };
+
+    enqueueView(mainView);
+    for (auto& cascadeView : cascadeViews_)
+    {
+        enqueueView(cascadeView);
+    }
+    for (auto& spotView : spotShadowViews_)
+    {
+        enqueueView(spotView);
+    }
+
+    if (!viewsToCull.empty())
+    {
+        TaskSystem::Get().DispatchWait(viewsToCull.size(), [prepareQueue, &viewsToCull](std::size_t index)
+        {
+            if (index >= viewsToCull.size())
+            {
+                return;
+            }
+
+            prepareQueue(*viewsToCull[index]);
+        }, 1);
+    }
+}
+
 void Scene::Render(Renderer* renderer) {
     if (!renderer) {
         return;
@@ -219,19 +478,7 @@ void Scene::Render(Renderer* renderer) {
 
     lightManager_.UpdateSpotLightCache();
 
-    // Frame matrices and camera/light parameters (mirrors your setup)
-    constexpr float HFOV = XMConvertToRadians(90.f);
-    const float zNear = 0.01f, zFar = 10000.0f;
-    camera_.SetHFov(HFOV);
-    camera_.SetZNearFar(zNear, zFar);
-	camera_.CalcMatrices(renderer);
-
-    auto& renderQueue = camera_.GetRenderQueue();
-    renderQueue.Bucketize(objects_, camera_.GetRenderLayerMask());
-
-    const Frustum cameraFrustum = Frustum::FromInvViewProj(camera_.GetInvViewMatrix(), camera_.GetProjMatrix(), camera_.GetZNear(), camera_.GetZFar());
-    renderQueue.Cull(cameraFrustum);
-    renderQueue.SortTransparent(camera_.GetViewMatrix());
+    PrepareViews(renderer);
 
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
     MainRenderGraph rg;
@@ -247,19 +494,19 @@ void Scene::Render(Renderer* renderer) {
     auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pCompute },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
-            Pass_CSM(renderer, ctx, camera_);
+            Pass_CSM(renderer, ctx, cascadeViews_);
         });
 
     auto pSpotShadow = rg.AddPass(RenderPass::Main_SpotShadows, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
-            Pass_SpotShadows(renderer, ctx, camera_);
+            Pass_SpotShadows(renderer, ctx, spotShadowViews_);
         });
 
     auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
-            Pass_GBuffer(renderer, ctx, camera_);
+            Pass_GBuffer(renderer, ctx, camera_, camera_.GetView());
         });
 
     auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
@@ -304,7 +551,7 @@ void Scene::Render(Renderer* renderer) {
     auto pTransp = rg.AddPass(RenderPass::Main_Transparent, { pCompose },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
-            Pass_Transparent(renderer, ctx, camera_);
+            Pass_Transparent(renderer, ctx, camera_, camera_.GetView());
         });
 
     auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pTransp },
@@ -498,290 +745,100 @@ void Scene::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx)
     renderer->EndThreadCommandList(compute, ctx.batchIndex);
 }
 
-//#define PARALLEL_SHADOW_BATCH 1
-#define PARALLEL_SHADOW_CASCADES 1
 void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
-    const Camera& camera)
+    const std::array<SceneView, kCascades>& cascadeViews)
 {
-    const BucketArray& buckets = camera.GetRenderQueue().Buckets();
-    const auto& shadowSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-    const auto& shadowComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+    if (!renderer)
+    {
+        return;
+    }
 
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(d.cl, ctx.pass);
     {
-#if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
-		{
-#endif
         GPU_SCOPE(d.cl, ProfilerScopes::kPassCSM);
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
-
-#if PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES
-        }
-        renderer->EndThreadCommandList(d, ctx.batchIndex);
-#endif
-
-        const float zNear = camera.GetZNear();
-        const float zFar = camera.GetZFar();
-        const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
-        for (size_t i = 0; i < splits.size(); ++i)
-        {
-            cachedSplitsVS_[i] = splits[i];
-        }
-        const float zFarShadow = splits.back();
-        size_t batchIndex = ctx.batchIndex;
-
-        const mat4& proj = camera.GetProjMatrix();
-        const mat4& invView = camera.GetInvViewMatrix();
-        const mat4& invProj = camera.GetInvProjMatrix();
-        const float3 camDir = camera.GetDirection();
-        const float3 camPos = camera.GetPosition();
-
-        TaskSystem& tasks = TaskSystem::Get();
-        auto csmJob = [this, &d, renderer, &buckets, &invView, &invProj, &proj, camDir, camPos, sunDirWS = dirLight_.GetDirection(), batchIndex](std::size_t idx)
-            {
-                CPU_SCOPE(ProfilerScopes::kCSMPerCascade);
-                const auto& D = renderer->GetDeferredForFrame();
-
-                float sliceNear = cachedSplitsVS_[idx], sliceFar = cachedSplitsVS_[idx + 1];
-                const UINT  tileRes = D.shadowRes / 2;
-
-                // Eight frustum corners (using your helper)
-                std::array<float3, 8> cornersWS;
-                BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
-
-                const float tanH = 1.0f / proj.m._11;
-                const float tanV = 1.0f / proj.m._22;
-
-                const float halfSlice = 0.5f * (sliceFar - sliceNear);
-                const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
-
-                float delta = cascadeConfig_.forwardOffset * halfSlice;
-
-                auto radiusFor = [&](float d) {
-                    const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
-                    return std::sqrt(rf2);
-                    };
-                float radius = radiusFor(delta) + cascadeConfig_.overlap;
-                //radius -= halfSlice;
-
-                float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
-                if (cascadeConfig_.stabilizationStepFraction > 0.0f)
-                {
-                    float spatialStep = radius * cascadeConfig_.stabilizationStepFraction;
-                    center = Floor(center / spatialStep) * spatialStep;
-                }
-
-                // Light view matrix
-                const float3 up(0, 1, 0);
-                const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
-                mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
-
-                // AABB along Z + stabilize XY
-                float2 centerLS = (lightView * float4(center, 1)).xy();
-                float minZ = +1e9f, maxZ = -1e9f, rLS = 0.0f;
-                for (int k = 0; k < 8; ++k) {
-                    float3 ls = (lightView * float4(cornersWS[k], 1)).xyz();
-                    rLS = std::max(rLS, std::max(std::abs(ls.x - centerLS.x), std::abs(ls.y - centerLS.y)));
-                    minZ = std::min(minZ, ls.z);
-                    maxZ = std::max(maxZ, ls.z);
-                }
-                radius = std::min(radius, rLS);
-
-                float unitsPerTexel = (2.0f * radius) / float(tileRes);
-                centerLS.x = floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-                centerLS.y = floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-
-                float minX = centerLS.x - radius, maxX = centerLS.x + radius;
-                float minY = centerLS.y - radius, maxY = centerLS.y + radius;
-
-                const float zPad = cascadeConfig_.zPadding;
-                float nearLS = std::max(0.001f, minZ - zPad);
-                float farLS = maxZ + zPad;
-
-                mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
-
-                const float normalBiasInTexels = cascadeConfig_.normalBiasInTexels;
-                const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
-                cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
-                cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
-
-                const float2 scale = float2(float(tileRes) / float(D.shadowRes));
-                const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
-                cachedScale_[idx] = scale; cachedBias_[idx] = bias;
-                cachedLightView_[idx] = lightView; cachedLightProj_[idx] = lightProj;
-
-#if PARALLEL_SHADOW_BATCH
-                const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-                if (!opaqueSimple.empty())
-                {
-                    RenderShadowBatch(renderer, opaqueSimple, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
-                }
-                const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
-                if (!opaqueComplex.empty())
-                {
-                    RenderShadowBatch(renderer, opaqueComplex, batchIndex, cachedLightView_[idx], cachedLightProj_[idx], (UINT)idx, /*chunk*/64);
-                }
-#else
-                const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-                const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
-
-#if PARALLEL_SHADOW_CASCADES
-                auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-				{
-                    //GPU_SCOPE(t.cl, ProfilerScopes::kCSMPerCascade);
-					renderer->BindShadowTarget(t.cl, (int)idx, /*clear=*/false);
-
-                	for (auto obj : opaqueComplex)
-                	{
-                		obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                	}
-
-                	for (auto obj : opaqueSimple)
-                	{
-                		obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                	}
-				}
-                renderer->EndThreadCommandList(t, batchIndex);
-#else
-                renderer->BindShadowTarget(d.cl, (int)idx, /*clear=*/false);
-
-                for (auto obj : opaqueComplex)
-                {
-                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
-                }
-
-                for (auto obj : opaqueSimple)
-                {
-                    obj->RenderShadow(renderer, d.cl, lightView, lightProj);
-                }
-#endif
-
-#endif
-            };
-
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION && (PARALLEL_SHADOW_BATCH || PARALLEL_SHADOW_CASCADES)
-        tasks.DispatchWait(kCascades, csmJob, 1);
-#else
-        (void)tasks;
-        for (size_t idx = 0; idx < kCascades; ++idx) {
-            csmJob(idx);
-        }
-        
-#endif
     }
-#if !PARALLEL_SHADOW_BATCH && !PARALLEL_SHADOW_CASCADES
     renderer->EndThreadCommandList(d, ctx.batchIndex);
-#endif
 
+    for (size_t idx = 0; idx < cascadeViews.size(); ++idx)
+    {
+        const SceneView& view = cascadeViews[idx];
+        const auto& visibleBuckets = view.queue.VisibleBuckets();
+        const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+        if (!opaqueSimple.empty())
+        {
+            RenderShadowBatch(renderer, opaqueSimple, ctx.batchIndex, view.view, view.proj, static_cast<UINT>(idx), 64);
+        }
+
+        const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+        if (!opaqueComplex.empty())
+        {
+            RenderShadowBatch(renderer, opaqueComplex, ctx.batchIndex, view.view, view.proj, static_cast<UINT>(idx), 64);
+        }
+    }
 }
 
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
-    const Camera& camera)
+    const std::vector<SceneView>& spotViews)
 {
-    const BucketArray& buckets = camera.GetRenderQueue().Buckets();
-    const size_t spotLightCount = lightManager_.GetSpotLightCount();
-    if (spotLightCount == 0)
+    if (!renderer)
     {
         return;
     }
 
-    const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-    const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+    const size_t availableLights = lightManager_.GetSpotLightCount();
+    const size_t viewCount = std::min(spotViews.size(), availableLights);
+    if (viewCount == 0)
+    {
+        return;
+    }
 
-    const auto& spotLights = lightManager_.SpotLights();
     const auto& D = renderer->GetDeferredForFrame();
 
-    const Math::float4 lightBoundsColor(1.0f, 1.0f, 0.0f, 0.25f);
-    const Math::float4 passBoundsColor(0.0f, 1.0f, 0.0f, 0.35f);
-    const Math::float4 failBoundsColor(1.0f, 0.0f, 0.0f, 0.35f);
-
-    auto drawLightBounds = [&](const SpotLight& light, DebugDrawSystem* debugDraw)
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex](std::size_t lightIndex)
     {
-        if (!debugDraw)
+        if (lightIndex >= spotViews.size())
         {
             return;
         }
 
-        const AABB& coneBounds = light.GetConeBounds();
-        if (coneBounds.IsValid())
-        {
-            debugDraw->AddBox(coneBounds, lightBoundsColor, true);
-        }
-
-        //const OBB& coneObb = light.GetConeOBB();
-        //if (coneObb.IsValid())
-        //{
-        //    debugDraw->AddBox(coneObb, lightBoundsColor, false);
-        //}
-    };
-
-    auto renderObjectsForLight = [&](ID3D12GraphicsCommandList* commandList,
-        const SpotLight& light,
-        const mat4& lightView,
-        const mat4& lightProj,
-        DebugDrawSystem* debugDraw)
-    {
-        auto renderBucket = [&](const auto& bucket)
-        {
-            for (auto* obj : bucket)
-            {
-                if (!obj)
-                {
-                    continue;
-                }
-
-                const AABB& bounds = obj->GetWorldBounds();
-                const bool inside = light.AABBIntersectsCone(bounds);
-
-                if (debugDraw && bounds.IsValid())
-                {
-                    //debugDraw->AddBox(bounds, inside ? passBoundsColor : failBoundsColor, true);
-                }
-
-                if (inside)
-                {
-                    obj->RenderShadow(renderer, commandList, lightView, lightProj);
-                }
-            }
-        };
-
-        renderBucket(opaqueSimple);
-        renderBucket(opaqueComplex);
-    };
-
-    auto renderLightShadow = [&](ID3D12GraphicsCommandList* commandList, size_t lightIndex)
-    {
-        renderer->BindSpotShadowTarget(commandList, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
-
-        const auto& light = spotLights[lightIndex];
-        const auto& lightView = light.GetViewMatrix();
-        const auto& lightProj = light.GetProjMatrix();
-
-        DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem();
-        //drawLightBounds(light, debugDraw);
-        renderObjectsForLight(commandList, light, lightView, lightProj, debugDraw);
-    };
-
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    auto& tasks = TaskSystem::Get();
-    auto renderSpotShadow = [renderer, &D, batchIndex = ctx.batchIndex, &renderLightShadow](std::size_t lightIndex)
-    {
         CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
             renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            renderLightShadow(t.cl, lightIndex);
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
+
+            const SceneView& view = spotViews[lightIndex];
+            const auto& visibleBuckets = view.queue.VisibleBuckets();
+            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
         }
         renderer->EndThreadCommandList(t, batchIndex);
     };
 
-    tasks.DispatchWait(spotLightCount, renderSpotShadow, 1);
+    TaskSystem::Get().DispatchWait(viewCount, renderSpotShadow, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -789,9 +846,29 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
         renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-        for (size_t lightIndex = 0; lightIndex < spotLightCount; ++lightIndex)
+        for (size_t lightIndex = 0; lightIndex < viewCount; ++lightIndex)
         {
-            renderLightShadow(t.cl, lightIndex);
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
+
+            const SceneView& view = spotViews[lightIndex];
+            const auto& visibleBuckets = view.queue.VisibleBuckets();
+            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                }
+            }
         }
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -799,10 +876,10 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
 }
 
 void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
-    const Camera& camera)
+    const Camera& camera, const SceneView& mainView)
 {
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
-    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [this, renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -820,8 +897,8 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
@@ -830,8 +907,8 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.3 Opaque complex → direct command list, no clears
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
@@ -1356,12 +1433,12 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 }
 
 void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
-    const Camera& camera)
+    const Camera& camera, const SceneView& mainView)
 {
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
-    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -1394,8 +1471,8 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
@@ -1403,8 +1480,8 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         }
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
@@ -1600,6 +1677,11 @@ void Scene::Clear()
     resources_ = SceneResourceBootstrapper{};
     lightManager_.Reset();
     objects_.clear();
-    camera_.GetRenderQueue().Clear();
+    camera_.GetView().queue.Clear();
+    for (auto& view : cascadeViews_)
+    {
+        view.queue.Clear();
+    }
+    spotShadowViews_.clear();
     skyBox_.reset();
 }
