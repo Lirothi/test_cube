@@ -94,8 +94,13 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
     renderer->UAVBarrier(cl, instanceBuffer_.GetResource());
 }
 
-void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
+void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
+    if (!renderer)
+    {
+        return;
+    }
+
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{};
     size_t count = 0;
     srvs[count++] = instanceBuffer_.GetSRVCPU(); // t0: instances
@@ -108,20 +113,16 @@ void GpuInstancedModels::PopulateContext(Renderer* renderer, ID3D12GraphicsComma
 
     const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *aniso);
-}
 
-void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
-{
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
 
-    RenderableObject::RecordGraphics(renderer, cl, ctx);
+    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
-void GpuInstancedModels::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl)
 {
-    if (!renderer) { return; }
     if (!cl) { return; }
     mesh_->DrawInstanced(cl, instanceCount_);
 }

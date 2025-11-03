@@ -98,24 +98,39 @@ void RenderableObject::Init(Renderer* renderer,
     }
 }
 
-void RenderableObject::IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+void RenderableObject::ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
     if (!renderer) { return; }
-    if (!GetMesh()) { return; }
     if (cl == nullptr) { return; }
-    GetMesh()->Draw(cl);
+    RecordCompute(renderer, cl);
 }
 
-void RenderableObject::PopulateContext(Renderer* /*renderer*/, ID3D12GraphicsCommandList* /*cl*/, RenderContext& /*ctx*/)
+void RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
+    if (uniformBinder_)
+    {
+        uniformBinder_->UpdateMainCB(*this, renderer, camera, cbData);
+    }
+    graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
-void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
+void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl)
+{
+    if (cl == nullptr) { return; }
+    if (auto* mesh = GetMesh())
+    {
+        mesh->Draw(cl);
+    }
+}
+
+void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
     if (!graphicsMaterial_) { return; }
-    graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
+
+    UpdateAndBindGraphics(renderer, cl, ctx, camera, cbData);
+    DrawGeometry(cl);
 }
 
 void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera)
@@ -133,15 +148,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     auto& ctx = h.ref();
     ctx.cbv[0] = alloc.gpu;
 
-    RecordCompute(renderer, cl);
-    if (uniformBinder_)
-    {
-        uniformBinder_->UpdateMainCB(*this, renderer, camera, cbData);
-    }
-    PopulateContext(renderer, cl, ctx);
-    RecordGraphics(renderer, cl, ctx);
-
-    IssueDraw(renderer, cl);
+    RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -199,7 +206,7 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     }
 
     RecordShadow(renderer, cl, lightView, lightProj, ctx);
-    IssueDraw(renderer, cl);
+    DrawGeometry(cl);
 }
 
 void RenderableObject::SetGraphicsMaterial(Material* m)

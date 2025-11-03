@@ -51,8 +51,9 @@ public:
     virtual void Tick(float /*dt*/) {}
     virtual void PostTick(float /*dt*/) override;
 
-    // Base renderer: Compute -> Graphics (Bind/IssueDraw)
+    // Base renderer: Compute -> Graphics
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera);
+    void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj);
     virtual void OnMaterialHotReload(Renderer* renderer);
 
@@ -92,10 +93,10 @@ public:
 
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
-    virtual void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
-    virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx);
-    virtual void IssueDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
+    void UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
+    virtual void DrawGeometry(ID3D12GraphicsCommandList* cl);
 
     void MarkTransformDirty();
 

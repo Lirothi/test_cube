@@ -5,6 +5,7 @@
 
 enum class RenderPass : uint16_t {
     Main_PrologueClear,
+    Main_ObjectCompute,
     Main_CSM,
     Main_SpotShadows,
     Main_GBuffer,
@@ -42,6 +43,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     switch (pass)
     {
     case RenderPass::Main_PrologueClear: return L"PrologueClear";
+    case RenderPass::Main_ObjectCompute: return L"ObjectCompute";
     case RenderPass::Main_CSM: return L"CSM";
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
     case RenderPass::Main_GBuffer: return L"GBuffer";

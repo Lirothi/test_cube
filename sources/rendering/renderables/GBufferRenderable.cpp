@@ -110,7 +110,7 @@ void GBufferRenderable::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
-void GBufferRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
+void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer)
     {
@@ -121,6 +121,8 @@ void GBufferRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsComman
     {
         matData_->StageGBufferBindings(renderer, ctx, 0, 0);
     }
+
+    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const

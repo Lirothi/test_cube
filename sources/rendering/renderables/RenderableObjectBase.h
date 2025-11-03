@@ -18,6 +18,7 @@ public:
     virtual void Tick(float /*dt*/) = 0;
     virtual void PostTick(float /*dt*/) {}
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera) = 0;
+    virtual void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) { (void)renderer; (void)cl; }
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj) = 0;
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;

@@ -136,8 +136,9 @@ public:
         um.StealKeepAlive(uploadKeepAlive);
     }
 
-    void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
+    void DrawGeometry(ID3D12GraphicsCommandList* cl) override
     {
+        if (!cl) { return; }
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         cl->IASetVertexBuffers(0, 1, &vbv_);
         if (vertexCount_ > 0u) {
@@ -251,8 +252,9 @@ public:
 
     float GetThicknessPx() const { return thicknessPx_; }
 
-    void IssueDraw(Renderer* /*renderer*/, ID3D12GraphicsCommandList* cl) override
+    void DrawGeometry(ID3D12GraphicsCommandList* cl) override
     {
+        if (!cl) { return; }
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         cl->IASetVertexBuffers(0, 1, &vbv_);
         if (vertexCount_ > 0u) {
