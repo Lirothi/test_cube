@@ -35,15 +35,59 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
         };
 
     auto ParseTableRanges = [](const std::string& inside, std::vector<D3D12_DESCRIPTOR_RANGE>& out) {
-        // Include SAMPLER and register 's'
-        std::regex rangeRe(R"((CBV|SRV|UAV|SAMPLER)\((b|t|u|s)(\d+)(?:,space=(\d+))?\))", std::regex::icase);
+        auto Trim = [](const std::string& str) {
+            size_t first = 0;
+            while (first < str.size() && std::isspace(static_cast<unsigned char>(str[first]))) { ++first; }
+            if (first == str.size()) { return std::string(); }
+            size_t last = str.size() - 1;
+            while (last > first && std::isspace(static_cast<unsigned char>(str[last]))) { --last; }
+            return str.substr(first, last - first + 1);
+        };
+
+        std::regex rangeRe(R"((CBV|SRV|UAV|SAMPLER)\(([^)]*)\))", std::regex::icase);
         auto begin = std::sregex_iterator(inside.begin(), inside.end(), rangeRe);
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string type = (*it)[1].str();
-            // char regType = (*it)[2].str()[0]; // can be used if desired
-            int regNum = std::stoi((*it)[3].str());
-            int regSpace = (*it)[4].matched ? std::stoi((*it)[4].str()) : 0;
+            std::string args = (*it)[2].str();
+
+            // Split arguments by comma while trimming whitespace
+            std::vector<std::string> tokens;
+            size_t pos = 0;
+            while (pos < args.size()) {
+                size_t comma = args.find(',', pos);
+                std::string part = (comma == std::string::npos) ? args.substr(pos) : args.substr(pos, comma - pos);
+                tokens.push_back(Trim(part));
+                if (comma == std::string::npos) { break; }
+                pos = comma + 1;
+            }
+            if (tokens.empty()) { continue; }
+
+            std::regex regRe(R"(([btsu])(\d+))", std::regex::icase);
+            std::smatch regMatch;
+            if (!std::regex_match(tokens[0], regMatch, regRe)) { continue; }
+
+            int regNum = std::stoi(regMatch[2].str());
+            int regSpace = 0;
+            UINT numDescriptors = 1;
+
+            for (size_t idx = 1; idx < tokens.size(); ++idx) {
+                const std::string& token = tokens[idx];
+                if (token.empty()) { continue; }
+
+                std::regex spaceRe(R"(space\s*=\s*(\d+))", std::regex::icase);
+                std::smatch spaceMatch;
+                if (std::regex_match(token, spaceMatch, spaceRe)) {
+                    regSpace = std::stoi(spaceMatch[1].str());
+                    continue;
+                }
+
+                std::regex countRe(R"(numDescriptors\s*=\s*(\d+))", std::regex::icase);
+                std::smatch countMatch;
+                if (std::regex_match(token, countMatch, countRe)) {
+                    numDescriptors = static_cast<UINT>(std::stoul(countMatch[1].str()));
+                }
+            }
 
             D3D12_DESCRIPTOR_RANGE range = {};
             if (type == "CBV" || type == "cbv") {
@@ -61,10 +105,10 @@ inline void ParseRootSignatureFromSource(const std::string& shaderSource, RootSi
             else {
                 continue;
             }
-            range.NumDescriptors = 1;
+
+            range.NumDescriptors = numDescriptors;
             range.BaseShaderRegister = regNum;
             range.RegisterSpace = regSpace;
-            // Important: append properly, not "0"
             range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
             out.push_back(range);
         }
