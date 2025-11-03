@@ -1,4 +1,4 @@
-﻿#include "app/Scene.h"
+#include "app/scene/Scene.h"
 
 #include <memory>
 #include <algorithm>
@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "input/InputManager.h"
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h"

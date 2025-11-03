@@ -1,4 +1,4 @@
-#include "app/DirectionalLight.h"
+#include "rendering/lighting/DirectionalLight.h"
 
 DirectionalLight::DirectionalLight()
     : direction_(0.0f)

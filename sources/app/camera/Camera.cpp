@@ -1,4 +1,4 @@
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 #include "app/Systems.h"
 #include "input/InputManager.h"
 

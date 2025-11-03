@@ -2,7 +2,7 @@
 #include "rendering/core/Renderer.h"
 #include "materials/UploadManager.h"
 #include "rendering/core/FrameResource.h"
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 
 #include <memory>
 

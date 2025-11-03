@@ -10,8 +10,8 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
-#include "app/Camera.h"
-#include "app/DirectionalLight.h"
+#include "app/camera/Camera.h"
+#include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/LightManager.h"
 

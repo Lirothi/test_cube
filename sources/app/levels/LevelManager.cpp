@@ -2,7 +2,7 @@
 
 #include <cassert>
 
-#include "app/Scene.h"
+#include "app/scene/Scene.h"
 #include "app/Systems.h"
 
 void LevelManager::RegisterLevel(std::unique_ptr<Level> level)

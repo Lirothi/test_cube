@@ -4,8 +4,8 @@
 
 #include <DirectXMath.h>
 
-#include "app/DirectionalLight.h"
-#include "app/Scene.h"
+#include "rendering/lighting/DirectionalLight.h"
+#include "app/scene/Scene.h"
 #include "app/Systems.h"
 #include "core/math/Math.h"
 #include "rendering/debug/DebugGrid.h"

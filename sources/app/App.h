@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 #include "core/Helpers.h"
-#include "app/Camera.h"
+#include "app/camera/Camera.h"
 #include "app/Systems.h"
 #include "core/task/TaskSystem.h"
 
