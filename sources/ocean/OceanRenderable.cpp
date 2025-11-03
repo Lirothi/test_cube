@@ -501,7 +501,7 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     UpdateFoamTrailState();
 }
 
-void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
+void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer || !simulation_)
     {
@@ -581,22 +581,13 @@ void OceanRenderable::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandL
 
     const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
-}
 
-void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx)
-{
-    if (!renderer || !cl)
-    {
-        return;
-    }
-    if (simulation_)
-    {
-        const D3D12_RESOURCE_STATES srvState =
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        renderer->Transition(cl, simulation_->GetDisplacementResource(), srvState);
-    }
-    RenderableObject::RecordGraphics(renderer, cl, ctx);
+    const D3D12_RESOURCE_STATES srvState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    renderer->Transition(cl, simulation_->GetDisplacementResource(), srvState);
+
+    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const

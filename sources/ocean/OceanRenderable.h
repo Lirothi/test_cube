@@ -27,8 +27,7 @@ public:
     void Tick(float deltaTime) override;
 
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx) override;
+    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
 
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return false; }

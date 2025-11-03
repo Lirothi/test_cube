@@ -70,6 +70,7 @@ private:
         const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
     using BucketArray = std::array<SceneRenderQueue::ObjectBucket, 4>;
 
     void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,

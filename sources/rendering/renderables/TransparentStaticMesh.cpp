@@ -262,7 +262,7 @@ void TransparentStaticMesh::Tick(float deltaTime)
     SetRotationEulerRad(rotEuler);
 }
 
-void TransparentStaticMesh::PopulateContext(Renderer* renderer, ID3D12GraphicsCommandList* /*cl*/, RenderContext& ctx)
+void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer || !scene_)
     {
@@ -305,6 +305,8 @@ void TransparentStaticMesh::PopulateContext(Renderer* renderer, ID3D12GraphicsCo
         *SamplerManager::LinearClamp()
     };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void TransparentStaticMesh::SetNormalMap(const std::wstring& path, bool normalIsRG)

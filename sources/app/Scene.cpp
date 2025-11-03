@@ -238,7 +238,13 @@ void Scene::Render(Renderer* renderer) {
     auto pClear = rg.AddPass(RenderPass::Main_PrologueClear, {},
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
 
-    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pClear },
+    auto pCompute = rg.AddPass(RenderPass::Main_ObjectCompute, { pClear },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassObjectCompute);
+            Pass_ObjectCompute(renderer, ctx);
+        });
+
+    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pCompute },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
             Pass_CSM(renderer, ctx, camera_);
@@ -403,7 +409,6 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     }
 #endif
 }
-
 void Scene::RenderShadowBatch(Renderer* renderer,
     const std::vector<RenderableObjectBase*>& objects,
     size_t batchIndex,
@@ -468,12 +473,40 @@ void Scene::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
     r->EndThreadCommandList(t, ctx.batchIndex);
 }
 
+void Scene::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    if (!renderer || objects_.empty())
+    {
+        return;
+    }
+
+    auto compute = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(compute.cl, ctx.pass);
+    {
+        GPU_SCOPE(compute.cl, ProfilerScopes::kPassObjectCompute);
+        for (const auto& obj : objects_)
+        {
+            if (!obj)
+            {
+                continue;
+            }
+
+            obj->ExecuteCompute(renderer, compute.cl);
+        }
+    }
+
+    renderer->EndThreadCommandList(compute, ctx.batchIndex);
+}
+
 //#define PARALLEL_SHADOW_BATCH 1
 #define PARALLEL_SHADOW_CASCADES 1
 void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
     const BucketArray& buckets = camera.GetRenderQueue().Buckets();
+    const auto& shadowSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+    const auto& shadowComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(d.cl, ctx.pass);
     {
@@ -659,6 +692,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
 
     const auto& opaqueSimple = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
     const auto& opaqueComplex = buckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
     const auto& spotLights = lightManager_.SpotLights();
     const auto& D = renderer->GetDeferredForFrame();
 
@@ -768,7 +802,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
-    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [renderer](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -781,6 +815,10 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
             renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
+
+            const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
@@ -1327,7 +1365,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
-    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [renderer](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -1356,6 +1394,10 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
+
+            const auto& visibleBuckets = camera.GetRenderQueue().VisibleBuckets();
+            const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
+            const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
