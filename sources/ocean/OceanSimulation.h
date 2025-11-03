@@ -134,6 +134,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE foamUav_{};
 
     UINT mipCount_ = 1u;
+    std::vector<UINT> mipExtents_;
 
     std::shared_ptr<Material> spectrumMaterial_;
     std::shared_ptr<Material> fftMaterial_;
