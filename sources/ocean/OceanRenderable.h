@@ -95,7 +95,9 @@ private:
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;
-    std::array<ClipLevel, OceanSimulation::kClipLevels> clipLevels_{};
+
+    static constexpr UINT kClipLevels = 7;
+    std::array<ClipLevel, kClipLevels> clipLevels_{};
     Math::float4 lengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
     Math::float4 invLengthScales_ = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
 

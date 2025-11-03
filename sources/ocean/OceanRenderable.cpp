@@ -627,7 +627,7 @@ void OceanRenderable::BuildMesh(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    const uint32_t levels = OceanSimulation::kClipLevels;
+    const uint32_t levels = kClipLevels;
     const int clipHalfSize = ClipLevelHalfSize(meshVertexDensity_);
 
     MeshData combined;

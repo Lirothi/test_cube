@@ -260,9 +260,9 @@ void OceanSimulation::RefreshDerivedSettings()
 
     float* invData = &invLengthScales_.x;
     float* lengthData = &lengthScales_.x;
-    for (UINT i = 0; i < kClipLevels; ++i)
+    for (UINT i = 0; i < cascadeCount_; ++i)
     {
-        if (i < cascadeCount_ && lengthData[i] > Math::EPS)
+        if (lengthData[i] > Math::EPS)
         {
             invData[i] = 1.0f / lengthData[i];
         }
