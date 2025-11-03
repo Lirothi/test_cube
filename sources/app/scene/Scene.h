@@ -17,6 +17,7 @@
 
 #include "app/scene/SceneRenderConfig.h"
 #include "app/scene/SceneRenderQueue.h"
+#include "app/scene/SceneView.h"
 #include "app/scene/SceneResourceBootstrapper.h"
 
 class Renderer;
@@ -73,14 +74,16 @@ private:
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
     using BucketArray = std::array<SceneRenderQueue::ObjectBucket, 4>;
 
+    void UpdateCascades(const Camera& camera, Renderer* renderer);
+
     void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const std::array<SceneView, kCascades>& cascadeViews);
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, const SceneView& mainView);
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const std::vector<SceneView>& spotViews);
     void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
@@ -93,12 +96,14 @@ private:
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, const SceneView& mainView);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx);
+
+    void PrepareViews(Renderer* renderer);
 
     static constexpr int kCascades = 4;
 
@@ -115,6 +120,8 @@ private:
     float  cachedDepthBiasNDC_[kCascades] = {};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
+    std::array<SceneView, kCascades> cascadeViews_{};
+    std::vector<SceneView> spotShadowViews_{};
     LightManager lightManager_{};
     Camera camera_;
 

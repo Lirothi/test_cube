@@ -2,7 +2,7 @@
 #include <DirectXMath.h>
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
-#include "app/scene/SceneRenderQueue.h"
+#include "app/scene/SceneView.h"
 
 using namespace DirectX;
 
@@ -14,7 +14,13 @@ public:
         float3 pos = { 0, 0, -4 },
         float pitch = 0, float yaw = 0)
         : position_(pos), pitch_(pitch), yaw_(yaw)
-    {}
+    {
+        view_.type = SceneView::Type::Camera;
+        view_.renderLayerMask = kRenderLayerAll;
+        view_.hfov = XMConvertToRadians(90.0f);
+        view_.zNear = 0.01f;
+        view_.zFar = 10000.0f;
+    }
 
     void UpdateFromInput(float dt);
 
@@ -33,34 +39,46 @@ public:
         yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw();
     }
 
-    void SetHFov(float fov) { HFov_ = fov; }
-	float GetHFov() const { return HFov_; }
+    void SetHFov(float fov) { view_.hfov = fov; }
+    float GetHFov() const { return view_.hfov; }
 
-	void SetZNearFar(float znear, float zfar) { zNear = znear; zFar = zfar; }
-	float GetZNear() const { return zNear; }
-	float GetZFar() const { return zFar; }
+    void SetZNearFar(float znear, float zfar) { view_.zNear = znear; view_.zFar = zfar; }
+    float GetZNear() const { return view_.zNear; }
+    float GetZFar() const { return view_.zFar; }
 
     // Fetch the view matrix
-    const mat4& GetViewMatrix() const {return view;}
-	const mat4& GetProjMatrix() const { return proj; }
-	const mat4& GetInvViewMatrix() const { return invView; }
-	const mat4& GetInvProjMatrix() const { return invProj; }
+    const mat4& GetViewMatrix() const { return view_.view; }
+    const mat4& GetProjMatrix() const { return view_.proj; }
+    const mat4& GetInvViewMatrix() const { return view_.invView; }
+    const mat4& GetInvProjMatrix() const { return view_.invProj; }
 
     const float3& GetDirection() const { return dir_; }
 
     void CalcMatrices(Renderer* r);
 
-    SceneRenderQueue& GetRenderQueue() { return renderQueue_; }
-    const SceneRenderQueue& GetRenderQueue() const { return renderQueue_; }
+    SceneView& GetView() { return view_; }
+    const SceneView& GetView() const { return view_; }
 
     // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
     float GetMoveSpeedMult() const { return moveSpeedMultiplier_; }
 
     uint32_t GetRenderLayerMask() const { return renderLayerMask_; }
-    void SetRenderLayerMask(uint32_t mask) { renderLayerMask_ = mask; }
-    void EnableRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
-    void DisableRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
+    void SetRenderLayerMask(uint32_t mask)
+    {
+        renderLayerMask_ = mask;
+        view_.renderLayerMask = mask;
+    }
+    void EnableRenderLayer(RenderLayer layer)
+    {
+        EnableLayer(renderLayerMask_, layer);
+        view_.renderLayerMask = renderLayerMask_;
+    }
+    void DisableRenderLayer(RenderLayer layer)
+    {
+        DisableLayer(renderLayerMask_, layer);
+        view_.renderLayerMask = renderLayerMask_;
+    }
 
     // Mouse input (screen-space delta -> yaw/pitch)
     void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {
@@ -69,10 +87,7 @@ public:
     }
 
 private:
-    mat4 view;
-    mat4 proj;
-	mat4 invView;
-	mat4 invProj;
+    SceneView view_{};
     float3 dir_;
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
@@ -80,11 +95,7 @@ private:
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
-    float HFov_;
-    float zNear;
-    float zFar;
     uint32_t renderLayerMask_ = kRenderLayerAll;
-    SceneRenderQueue renderQueue_{};
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;
