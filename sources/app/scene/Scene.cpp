@@ -1382,7 +1382,7 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx)
         const float invSsrWidth = ssrWidth > 0 ? (1.0f / static_cast<float>(ssrWidth)) : 0.0f;
         BlurPassConstants blurConstants{};
         blurConstants.direction = float2(invSsrWidth, 0.0f);
-        blurConstants.radius = 0.5f;
+        blurConstants.radius = 1.0f;
         resources_.WriteBlurConstants(blurConstants, (uint8_t*)cb.cpu);
 
         auto h = renderer->GetRenderContextPool()->Acquire();

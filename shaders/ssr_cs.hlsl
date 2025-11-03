@@ -23,8 +23,8 @@ cbuffer PerFrame : register(b0)
 }
 
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
-static const float ssrResolution = 0.9f; // 0..1 (coarse-pass step size in screen space)
-static const int ssrRefineSteps = 12; // number of refinement iterations
+static const float ssrResolution = 0.6f; // 0..1 (coarse-pass step size in screen space)
+static const int ssrRefineSteps = 32; // number of refinement iterations
 static const float ssrThicknessVS = 0.15f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // Smooth fade width near the screen border in pixels (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — pixel offset applied to the start
