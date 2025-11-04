@@ -680,7 +680,7 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
 
 void TaskSystem::Wait(TaskHandle handle)
 {
-    CPU_SCOPE(ProfilerScopes::kService2);
+    //CPU_SCOPE(ProfilerScopes::kService2);
     if (!handle) {
         return;
     }

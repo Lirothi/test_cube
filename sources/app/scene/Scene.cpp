@@ -443,7 +443,7 @@ void Scene::PrepareViews(Renderer* renderer)
         }
 
         {
-            CPU_SCOPE(ProfilerScopes::kService1);
+            //CPU_SCOPE(ProfilerScopes::kService1);
             view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
         }
 

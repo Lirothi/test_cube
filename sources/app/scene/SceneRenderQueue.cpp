@@ -137,7 +137,7 @@ void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
     const float3& cameraPosition, const float3& cameraDirection,
     float minDepth, float maxDepth)
 {
-    CPU_SCOPE(ProfilerScopes::kService3);
+    //CPU_SCOPE(ProfilerScopes::kService3);
     for (auto& bucket : visibleBuckets_)
     {
         bucket.clear();

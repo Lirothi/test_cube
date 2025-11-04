@@ -558,7 +558,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     // Gather batches in order
     {
-        //CPU_SCOPE(ProfilerScopes::kService1);
+        CPU_SCOPE(ProfilerScopes::kService1);
         std::lock_guard<std::mutex> lk(submitMtx_);
         size_t expectedListCount = 0;
         for (const auto& pb : submitTimeline_) {
@@ -618,7 +618,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 #endif
 
     {
-        //CPU_SCOPE(ProfilerScopes::kService2);
+        CPU_SCOPE(ProfilerScopes::kService2);
 
         ID3D12GraphicsCommandList* previousCmd = nullptr;
         const CLState* previousState = nullptr;
@@ -718,7 +718,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
     {
-        //CPU_SCOPE(ProfilerScopes::kService3);
+        CPU_SCOPE(ProfilerScopes::kService3);
         if (!fixedSubmitScratch_.empty()) {
             commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
         }
@@ -731,7 +731,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
     {
-        //CPU_SCOPE(ProfilerScopes::kService4);
+        CPU_SCOPE(ProfilerScopes::kService4);
         ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
     }
     //ThrowIfFailed(swapChain_->Present(1, 0));
