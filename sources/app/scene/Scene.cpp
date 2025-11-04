@@ -252,7 +252,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascadeView.proj = lightProj;
         cascadeView.invView = mat4::Inverse(lightView);
         cascadeView.invProj = mat4::Inverse(lightProj);
-        cascadeView.frustum = Frustum::FromInvViewProj(cascadeView.invView, cascadeView.proj, nearLS, farLS);
+        cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY, nearLS, farLS);
         cascadeView.renderLayerMask = camera.GetRenderLayerMask();
         cascadeView.position = center;
         cascadeView.type = SceneView::Type::Shadow;
