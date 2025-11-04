@@ -176,7 +176,8 @@ void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
                 const float3 center = bounds.GetCenter();
                 const float radius = bounds.GetRadius();
                 const float3 toCenter = center - cameraPosition;
-                const float depth = toCenter.Dot(cameraDirection);
+                //const float depth = toCenter.Dot(cameraDirection);
+                const float depth = toCenter.Length();
                 const float objMinDepth = depth - radius;
                 const float objMaxDepth = depth + radius;
 

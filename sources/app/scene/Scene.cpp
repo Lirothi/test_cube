@@ -261,7 +261,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascadeView.zNear = sliceNear;
         cascadeView.zFar = sliceFar;
         cascadeView.hfov = 0.0f;
-        cascadeView.requiresDepthCheck = true;
+        cascadeView.requiresDepthCheck = false;
     }
 }
 
