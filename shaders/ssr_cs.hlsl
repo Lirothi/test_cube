@@ -21,17 +21,17 @@ cbuffer PerFrame : register(b0)
     float    depthA, depthB, zNear, zFar;
     float2   screenSize;
     float2   invScreenSize;
-    uint     technique;
+    uint     tech;
     float3   _padding;
 }
 
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
 static const float ssrResolution = 0.6f; // 0..1 (coarse-pass step size in screen space)
-static const int ssrRefineSteps = 32; // number of refinement iterations
-static const int ssrLogMarchSteps = 24; // number of logarithmic steps for the hybrid tracer
-static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
-static const float ssrStrideGrowth = 1.35f; // multiplicative stride growth per step
-static const float ssrThicknessVS = 0.15f; // thickness (view units)
+static const int ssrRefineSteps = 16; // number of refinement iterations
+static const int ssrLogMarchSteps = 128; // number of logarithmic steps for the hybrid tracer
+static const float ssrMinStrideVS = 0.01f; // minimum ray step in view space
+static const float ssrStrideGrowth = 1.02f; // multiplicative stride growth per step
+static const float ssrThicknessVS = 0.05f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // Smooth fade width near the screen border in pixels (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — pixel offset applied to the start
 static const float ssrGrazingMinZ = 0.01f; // Start fading reflections when Rv.z falls below this
@@ -250,6 +250,7 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
     float step = max(ssrMinStrideVS, length(Pv) * 0.02f);
     float tPrev = 0.0f;
     float tCurr = step;
+    float thick = ssrThicknessVS;
 
     for (int i = 0; i < ssrLogMarchSteps && tCurr <= ssrMaxDistanceVS; ++i)
     {
@@ -317,9 +318,11 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
                 }
             }
 
-            if (diffHigh < ssrThicknessVS)
+            //if (diffHigh < ssrThicknessVS)
+            if (diffHigh < thick)
             {
-                return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, ssrThicknessVS, diffHigh);
+                //return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, ssrThicknessVS, diffHigh);
+                return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, thick, diffHigh);
             }
 
             break;
@@ -327,6 +330,7 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
 
         tPrev = tCurr;
         step *= ssrStrideGrowth;
+        thick *= ssrStrideGrowth * 1.01f;
         tCurr += step;
     }
 
@@ -362,7 +366,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 
         SSRHit ssr;
-        if (technique == SSR_TECHNIQUE_LOGMARCH)
+        if (tech == SSR_TECHNIQUE_LOGMARCH)
         {
             float2 seed = float2(dispatchThreadId.xy);
             ssr = TraceSSR_LogMarch(Pv, Nv, seed);

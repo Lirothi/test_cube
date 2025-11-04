@@ -135,6 +135,6 @@ private:
 
     std::unique_ptr<Skybox> skyBox_;
 
-    SsrTechnique ssrTechnique_ = SsrTechnique::Lettier;
+    SsrTechnique ssrTechnique_ = SsrTechnique::LogMarch;
 
 };

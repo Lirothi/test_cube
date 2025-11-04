@@ -84,7 +84,7 @@ void SceneSsrCBHandles::Populate(Material* material)
     zFar = material->ComputeCB0FieldHandle("zFar");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-    technique = material->ComputeCB0FieldHandle("technique");
+    technique = material->ComputeCB0FieldHandle("tech");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
