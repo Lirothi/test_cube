@@ -380,6 +380,34 @@ void Scene::PrepareViews(Renderer* renderer)
         view.hfov = 0.0f;
     }
 
+    if (DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem())
+    {
+        const Math::float4 cameraColor(0.0f, 1.0f, 0.0f, 0.4f);
+        if (mainView.frustum.IsValid())
+        {
+            debugDraw->AddFrustum(mainView.frustum, cameraColor);
+        }
+
+        const Math::float4 cascadeColor(1.0f, 0.8f, 0.0f, 0.35f);
+        for (const SceneView& cascadeView : cascadeViews_)
+        {
+            if (cascadeView.frustum.IsValid())
+            {
+                debugDraw->AddFrustum(cascadeView.frustum, cascadeColor);
+            }
+        }
+
+        const Math::float4 spotColor(1.0f, 0.2f, 0.2f, 0.35f);
+        for (size_t i = 0; i < spotLightCount; ++i)
+        {
+            const SceneView& spotView = spotShadowViews_[i];
+            if (spotView.frustum.IsValid())
+            {
+                debugDraw->AddFrustum(spotView.frustum, spotColor);
+            }
+        }
+    }
+
     auto prepareQueue = [this](SceneView& view)
     {
         CPU_SCOPE(ProfilerScopes::kPrepareQueue);
