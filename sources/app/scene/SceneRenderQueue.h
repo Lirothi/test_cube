@@ -19,7 +19,7 @@ public:
     SceneRenderQueue();
 
     void Clear();
-    void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask);
+    void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
     void Cull(const Frustum& frustum);
 

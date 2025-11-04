@@ -389,11 +389,11 @@ void Scene::PrepareViews(Renderer* renderer)
             return;
         }
 
-        view.queue.Bucketize(objects_, view.renderLayerMask);
-        if (view.type == SceneView::Type::Shadow)
         {
-            FilterShadowCasters(view.queue);
+            CPU_SCOPE(ProfilerScopes::kService1);
+            view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
         }
+
         view.queue.Cull(view.frustum);
         if (view.type == SceneView::Type::Camera)
         {

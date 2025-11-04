@@ -43,7 +43,7 @@ void SceneRenderQueue::Clear()
     }
 }
 
-void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask)
+void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster)
 {
     Clear();
 
@@ -55,6 +55,11 @@ void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObj
         }
 
         if ((obj->GetRenderLayerMask() & renderLayerMask) == 0)
+        {
+            continue;
+        }
+
+        if (filterShadowCaster && !obj->CastsShadow())
         {
             continue;
         }
