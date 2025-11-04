@@ -12,6 +12,7 @@
 #include "core/math/Math.h"
 #include "core/math/AABB.h"
 #include "core/math/OBB.h"
+#include "core/math/Frustum.h"
 #include "rendering/meshes/Mesh.h"
 
 class Renderer;
@@ -58,6 +59,8 @@ public:
     void AddCone(const Math::float3& apex, const Math::float3& direction,
         float height, float radius, const Math::float4& color, bool wireframe);
     void AddCone(const Math::mat4& transform, const Math::float4& color, bool wireframe);
+    void AddLine(const Math::float3& a, const Math::float3& b, const Math::float4& color);
+    void AddFrustum(const Frustum& frustum, const Math::float4& color);
 
     bool HasCommands() const;
 
@@ -100,10 +103,25 @@ private:
     std::vector<Command> solidCommandScratch_;
     std::vector<Command> wireframeCommandScratch_;
     std::vector<GPUInstanceData> instanceDataScratch_;
+    struct LineCommand
+    {
+        Math::float3 a;
+        Math::float3 b;
+        Math::float4 color;
+    };
+    std::vector<LineCommand> lineCommands_;
+    std::vector<LineCommand> lineCommandScratch_;
+    struct LineVertex
+    {
+        Math::float3 position;
+        Math::float4 color;
+    };
+    std::vector<LineVertex> lineVertexScratch_;
     mutable std::mutex commandMutex_;
 
     static constexpr size_t kShapeCount = static_cast<size_t>(ShapeType::Cone) + 1;
     std::array<InstanceBuffer, kShapeCount> solidInstanceBuffers_{};
     std::array<InstanceBuffer, kShapeCount> wireframeInstanceBuffers_{};
+    std::shared_ptr<Material> lineMaterial_;
 };
 

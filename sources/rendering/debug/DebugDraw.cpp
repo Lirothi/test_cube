@@ -317,6 +317,28 @@ void DebugDrawSystem::Initialize(Renderer* renderer,
         return;
     }
 
+    Material::GraphicsDesc lineDesc{};
+    lineDesc.shaderFile = L"shaders/lines.hlsl";
+    lineDesc.vsEntry = "VSMain";
+    lineDesc.psEntry = "PSMain";
+    lineDesc.inputLayoutKey = "PosColor";
+    lineDesc.numRT = 1;
+    lineDesc.rtvFormats[0] = renderer->GetSceneColorFormat();
+    lineDesc.dsvFormat = Renderer::kDeferredDepthFormat;
+    lineDesc.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    lineDesc.raster.CullMode = D3D12_CULL_MODE_NONE;
+    lineDesc.raster.FillMode = D3D12_FILL_MODE_SOLID;
+    lineDesc.depth.DepthEnable = TRUE;
+    lineDesc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    lineDesc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+    lineDesc.blend.RenderTarget[0] = blend;
+
+    lineMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, lineDesc);
+    if (!lineMaterial_)
+    {
+        return;
+    }
+
     std::vector<DebugVertex> verts;
     std::vector<uint16_t> indices;
 
@@ -343,7 +365,13 @@ void DebugDrawSystem::Shutdown()
     std::lock_guard<std::mutex> lock(commandMutex_);
     solidCommands_.clear();
     wireframeCommands_.clear();
+    lineCommands_.clear();
+    solidCommandScratch_.clear();
+    wireframeCommandScratch_.clear();
+    lineCommandScratch_.clear();
+    lineVertexScratch_.clear();
     material_.reset();
+    lineMaterial_.reset();
     sphereMesh_ = Mesh();
     boxMesh_ = Mesh();
     coneMesh_ = Mesh();
@@ -377,6 +405,8 @@ void DebugDrawSystem::BeginFrame()
     solidCommandScratch_.swap(solidCommands_);
     wireframeCommandScratch_.clear();
     wireframeCommandScratch_.swap(wireframeCommands_);
+    lineCommandScratch_.clear();
+    lineCommandScratch_.swap(lineCommands_);
 }
 
 void DebugDrawSystem::AddSphere(const Math::float3& center, float radius, const Math::float4& color, bool wireframe)
@@ -499,10 +529,56 @@ void DebugDrawSystem::AddCone(const Math::mat4& transform, const Math::float4& c
     AddCommand(ShapeType::Cone, transform, color, wireframe);
 }
 
+void DebugDrawSystem::AddLine(const Math::float3& a, const Math::float3& b, const Math::float4& color)
+{
+    if (!initialized_)
+    {
+        return;
+    }
+
+    LineCommand cmd{};
+    cmd.a = a;
+    cmd.b = b;
+    cmd.color = color;
+    std::lock_guard<std::mutex> lock(commandMutex_);
+    lineCommands_.push_back(cmd);
+}
+
+void DebugDrawSystem::AddFrustum(const Frustum& frustum, const Math::float4& color)
+{
+    if (!initialized_ || !frustum.IsValid())
+    {
+        return;
+    }
+
+    Math::float3 corners[8] = {};
+    if (!frustum.GetCorners(corners))
+    {
+        return;
+    }
+
+    static constexpr int edgePairs[][2] =
+    {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+
+    std::lock_guard<std::mutex> lock(commandMutex_);
+    for (const auto& edge : edgePairs)
+    {
+        LineCommand cmd{};
+        cmd.a = corners[edge[0]];
+        cmd.b = corners[edge[1]];
+        cmd.color = color;
+        lineCommands_.push_back(cmd);
+    }
+}
+
 bool DebugDrawSystem::HasCommands() const
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    return !solidCommands_.empty() || !wireframeCommands_.empty();
+    return !solidCommands_.empty() || !wireframeCommands_.empty() || !lineCommands_.empty();
 }
 
 void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -625,8 +701,67 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     drawList(solidCommandScratch_, false);
     drawList(wireframeCommandScratch_, true);
 
+    auto drawLines = [&]()
+    {
+        if (!lineMaterial_ || lineCommandScratch_.empty())
+        {
+            return;
+        }
+
+        const size_t vertexCount = lineCommandScratch_.size() * 2;
+        if (vertexCount == 0)
+        {
+            return;
+        }
+
+        lineVertexScratch_.resize(vertexCount);
+        for (size_t i = 0; i < lineCommandScratch_.size(); ++i)
+        {
+            const LineCommand& cmd = lineCommandScratch_[i];
+            lineVertexScratch_[i * 2].position = cmd.a;
+            lineVertexScratch_[i * 2].color = cmd.color;
+            lineVertexScratch_[i * 2 + 1].position = cmd.b;
+            lineVertexScratch_[i * 2 + 1].color = cmd.color;
+        }
+
+        const UINT vbSize = static_cast<UINT>(lineVertexScratch_.size() * sizeof(LineVertex));
+        auto vbAlloc = renderer->GetFrameResource()->AllocDynamic(vbSize, 16);
+        if (!vbAlloc.cpu || vbAlloc.gpu == 0)
+        {
+            return;
+        }
+
+        std::memcpy(vbAlloc.cpu, lineVertexScratch_.data(), vbSize);
+
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = vbAlloc.gpu;
+        vbv.SizeInBytes = vbSize;
+        vbv.StrideInBytes = sizeof(LineVertex);
+
+        auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(sizeof(Math::mat4), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
+        if (!cbAlloc.cpu || cbAlloc.gpu == 0)
+        {
+            return;
+        }
+
+        std::memcpy(cbAlloc.cpu, &viewProj, sizeof(Math::mat4));
+
+        ctx.cbv[0] = cbAlloc.gpu;
+        lineMaterial_->Bind(cl, ctx);
+
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        cl->IASetVertexBuffers(0, 1, &vbv);
+        cl->DrawInstanced(static_cast<UINT>(vertexCount), 1, 0, 0);
+
+        ctx.cbv[0] = 0;
+    };
+
+    drawLines();
+
     solidCommandScratch_.clear();
     wireframeCommandScratch_.clear();
+    lineCommandScratch_.clear();
+    lineVertexScratch_.clear();
 }
 
 void DebugDrawSystem::AddCommand(ShapeType shape, const Math::mat4& transform,

@@ -51,6 +51,34 @@ public:
 
     bool IsValid() const { return valid_; }
 
+    bool GetCorners(Math::float3 outCorners[8]) const
+    {
+        if (!outCorners || !valid_)
+        {
+            return false;
+        }
+
+        DirectX::XMFLOAT3 corners[8] = {};
+        switch (type_)
+        {
+        case Type::Perspective:
+            frustum_.GetCorners(corners);
+            break;
+        case Type::OrthoBox:
+            orthoBox_.GetCorners(corners);
+            break;
+        default:
+            return false;
+        }
+
+        for (int i = 0; i < 8; ++i)
+        {
+            outCorners[i] = Math::float3(corners[i]);
+        }
+
+        return true;
+    }
+
     bool Intersects(const AABB& bounds) const
     {
         if (!valid_)
