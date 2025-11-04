@@ -84,7 +84,7 @@ private:
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::vector<SceneView>& spotViews);
+        const std::array<SceneView, LightManager::kMaxSpotLights>& views);
     void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
@@ -120,7 +120,7 @@ private:
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     std::array<SceneView, kCascades> cascadeViews_{};
-    std::vector<SceneView> spotShadowViews_{};
+    std::array<SceneView, LightManager::kMaxSpotLights> spotShadowViews_{};
     LightManager lightManager_{};
     Camera camera_;
 

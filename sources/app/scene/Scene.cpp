@@ -358,14 +358,12 @@ void Scene::PrepareViews(Renderer* renderer)
 
     UpdateCascades(camera_, renderer);
 
-    spotShadowViews_.clear();
     const size_t spotLightCount = lightManager_.GetSpotLightCount();
     const auto& spotLights = lightManager_.SpotLights();
-    spotShadowViews_.reserve(spotLightCount);
     for (size_t i = 0; i < spotLightCount; ++i)
     {
         const auto& light = spotLights[i];
-        SceneView view{};
+        SceneView& view = spotShadowViews_[i];
         view.type = SceneView::Type::Shadow;
         view.view = light.GetViewMatrix();
         view.proj = light.GetProjMatrix();
@@ -380,7 +378,6 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zNear = nearPlane;
         view.zFar = farPlane;
         view.hfov = 0.0f;
-        spotShadowViews_.push_back(std::move(view));
     }
 
     auto prepareQueue = [this](SceneView& view)
@@ -428,9 +425,9 @@ void Scene::PrepareViews(Renderer* renderer)
     {
         enqueueView(cascadeView);
     }
-    for (auto& spotView : spotShadowViews_)
+    for (int i = 0; i < lightManager_.GetSpotLightCount(); ++i)
     {
-        enqueueView(spotView);
+        enqueueView(spotShadowViews_[i]);
     }
 
     if (!viewsToCull.empty())
@@ -854,7 +851,7 @@ void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
-    const std::vector<SceneView>& spotViews)
+    const std::array<SceneView, LightManager::kMaxSpotLights>& spotViews)
 {
     if (!renderer)
     {
@@ -1752,6 +1749,5 @@ void Scene::Clear()
     {
         view.queue.Clear();
     }
-    spotShadowViews_.clear();
     skyBox_.reset();
 }
