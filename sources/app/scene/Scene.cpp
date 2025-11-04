@@ -131,6 +131,7 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
 
 void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 {
+    CPU_SCOPE(ProfilerScopes::kUpdateCascades);
     if (!renderer)
     {
         return;

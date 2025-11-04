@@ -55,6 +55,7 @@ extern const Profiler::ScopeNameKey kPrepareTransparentBuckets;
 extern const Profiler::ScopeNameKey kAddPass;
 extern const Profiler::ScopeNameKey kPrepareViews;
 extern const Profiler::ScopeNameKey kPrepareQueue;
+extern const Profiler::ScopeNameKey kUpdateCascades;
 
 // TextManager
 extern const Profiler::ScopeNameKey kTextManagerBuild;
