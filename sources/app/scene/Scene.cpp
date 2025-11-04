@@ -275,6 +275,19 @@ void Scene::SetSkybox(std::unique_ptr<Skybox> skybox)
     skyBox_ = std::move(skybox);
 }
 
+void Scene::SetSsrTechnique(SsrTechnique technique)
+{
+    ssrTechnique_ = technique;
+}
+
+void Scene::CycleSsrTechnique()
+{
+    using Technique = SsrTechnique;
+    const uint32_t current = static_cast<uint32_t>(ssrTechnique_);
+    const uint32_t next = (current + 1u) % static_cast<uint32_t>(Technique::Count);
+    ssrTechnique_ = static_cast<Technique>(next);
+}
+
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
     objects_.push_back(std::move(obj));
 }
@@ -292,6 +305,10 @@ void Scene::Tick(float deltaTime) {
     if (input.WasActionPressed("ToggleProfiler"))
     {
         showProfiler_ = !showProfiler_;
+    }
+    if (input.WasActionPressed("ToggleSSR"))
+    {
+        CycleSsrTechnique();
     }
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
@@ -1365,6 +1382,10 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
         constants.zNear = zNear;
         constants.zFar = zFar;
         constants.screenSize = float2(static_cast<float>(renderer->GetWidth()), static_cast<float>(renderer->GetHeight()));
+        constants.invScreenSize = float2(
+            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+        constants.technique = static_cast<uint32_t>(ssrTechnique_);
 
         resources_.WriteSsrConstants(constants, (uint8_t*)cb.cpu);
 

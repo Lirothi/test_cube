@@ -76,6 +76,8 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle zNear;
     Material::CBFieldHandle zFar;
     Material::CBFieldHandle screenSize;
+    Material::CBFieldHandle invScreenSize;
+    Material::CBFieldHandle technique;
 
     void Populate(Material* material);
 };
@@ -153,6 +155,13 @@ struct SpotLightPassConstants
     float2 invShadowSize{};
 };
 
+enum class SsrTechnique : uint32_t
+{
+    Lettier = 0,
+    LogMarch = 1,
+    Count
+};
+
 struct SsrPassConstants
 {
     mat4 view{};
@@ -164,6 +173,9 @@ struct SsrPassConstants
     float zNear = 0.1f;
     float zFar = 1000.0f;
     float2 screenSize{};
+    float2 invScreenSize{};
+    uint32_t technique = 0;
+    float techniquePadding[3] = {};
 };
 
 struct BlurPassConstants

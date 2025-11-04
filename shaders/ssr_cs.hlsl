@@ -20,17 +20,26 @@ cbuffer PerFrame : register(b0)
     float4x4 view, proj, invView, invProj;
     float    depthA, depthB, zNear, zFar;
     float2   screenSize;
+    float2   invScreenSize;
+    uint     technique;
+    float3   _padding;
 }
 
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
 static const float ssrResolution = 0.6f; // 0..1 (coarse-pass step size in screen space)
 static const int ssrRefineSteps = 32; // number of refinement iterations
+static const int ssrLogMarchSteps = 24; // number of logarithmic steps for the hybrid tracer
+static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
+static const float ssrStrideGrowth = 1.35f; // multiplicative stride growth per step
 static const float ssrThicknessVS = 0.15f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // Smooth fade width near the screen border in pixels (16–48)
 static const float ssrJitterStrength = 0.5f; // 0..1 — pixel offset applied to the start
 static const float ssrGrazingMinZ = 0.01f; // Start fading reflections when Rv.z falls below this
 static const float ssrGrazingMaxZ = 0.05f; // Fully enable reflections by this value
 static const float kEps = 1e-6f;
+
+static const uint SSR_TECHNIQUE_LETTIER = 0u;
+static const uint SSR_TECHNIQUE_LOGMARCH = 1u;
 
 float  DepthToViewZ_Fast(float d){ return depthB / (d - depthA); }
 float3 ReconstructPosVS(float2 uv, float d){
@@ -50,6 +59,27 @@ float Hash12(float2 p)
 }
 
 struct SSRHit { float2 uv; float visibility; int hit; };
+
+SSRHit BuildSsrHit(float3 pivot, float3 unitPositionFrom, float3 Pv, float2 uv, float depthRaw, float thicknessVS, float depthDiff)
+{
+    SSRHit outv;
+    outv.uv = uv;
+
+    float visibility = 1.0f;
+    float3 positionTo = ReconstructPosVS(uv, depthRaw);
+    visibility *= (1.0f - max(dot(-unitPositionFrom, pivot), 0.0f));
+    float thicknessSafe = max(thicknessVS, 1e-4f);
+    visibility *= (1.0f - clamp(depthDiff / thicknessSafe, 0.0f, 1.0f));
+    visibility *= (1.0f - clamp(length(positionTo - Pv) / ssrMaxDistanceVS, 0.0f, 1.0f));
+    visibility *= EdgeFadePx(uv);
+    float grazing = saturate((pivot.z - ssrGrazingMinZ) / (ssrGrazingMaxZ - ssrGrazingMinZ));
+    visibility *= grazing;
+    visibility = clamp(visibility, 0.0f, 1.0f);
+
+    outv.visibility = visibility;
+    outv.hit = (visibility > 0.0f) ? 1 : 0;
+    return outv;
+}
 
 SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
 {
@@ -183,39 +213,123 @@ SSRHit TraceSSR_Lettier(float3 Pv, float3 Nv)
     float visibility = (float) hit1;
     if (visibility > 0.0f)
     {
-        float3 positionTo = ReconstructPosVS(uv, ReadDepth(uv));
-
-        // 1 - facing the camera (as in the article: dot(-unitPos, pivot))
-        {
-            visibility *= (1.0f - max(dot(-unitPositionFrom, pivot), 0.0f));
-        }
-        // Proximity to the found hit
-        {
-            visibility *= (1.0f - clamp(depthDiff / thickness, 0.0f, 1.0f));
-        }
-        // Distance-based fade
-        {
-            visibility *= (1.0f - clamp(length(positionTo - Pv) / ssrMaxDistanceVS, 0.0f, 1.0f));
-        }
-        // Outside of the screen
-        {
-            visibility *= ((uv.x < 0.0f || uv.x > 1.0f) ? 0.0f : 1.0f) * ((uv.y < 0.0f || uv.y > 1.0f) ? 0.0f : 1.0f);
-        }
-
-        {
-            visibility *= EdgeFadePx(uv);
-            float grazing = saturate((pivot.z - ssrGrazingMinZ) / (ssrGrazingMaxZ - ssrGrazingMinZ));
-            visibility *= grazing;
-        }
-
-        {
-            visibility = clamp(visibility, 0.0f, 1.0f);
-        }
+        const float depthRaw = ReadDepth(uv);
+        outv = BuildSsrHit(pivot, unitPositionFrom, Pv, uv, depthRaw, thickness, depthDiff);
+    }
+    else
+    {
+        outv.uv = uv;
+        outv.visibility = 0.0f;
+        outv.hit = 0;
     }
 
-    outv.uv = uv;
-    outv.visibility = visibility;
-    outv.hit = (visibility > 0.0f) ? 1 : 0;
+    return outv;
+}
+
+// Hybrid logarithmic screen-space tracing inspired by Mara & McGuire's "Efficient GPU Screen-Space Ray Tracing".
+SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
+{
+    SSRHit outv;
+    outv.uv = 0.0f.xx;
+    outv.visibility = 0.0f;
+    outv.hit = 0;
+
+    float3 unitPositionFrom = normalize(Pv);
+    float3 pivot = normalize(reflect(unitPositionFrom, Nv));
+
+    if (pivot.z <= 0.0f)
+    {
+        return outv;
+    }
+
+    float2 jitterSeed = pixelCoord * invScreenSize;
+    float jitter = (Hash12(jitterSeed) * 2.0f - 1.0f) * ssrJitterStrength;
+    float3 origin = Pv + Nv * ssrThicknessVS;
+    origin += pivot * (jitter * ssrThicknessVS);
+
+    float step = max(ssrMinStrideVS, length(Pv) * 0.02f);
+    float tPrev = 0.0f;
+    float tCurr = step;
+
+    for (int i = 0; i < ssrLogMarchSteps && tCurr <= ssrMaxDistanceVS; ++i)
+    {
+        float3 sampleVS = origin + pivot * tCurr;
+        float4 sampleClip = mul(float4(sampleVS, 1.0f), proj);
+        if (sampleClip.w <= 0.0f)
+        {
+            break;
+        }
+
+        float2 sampleUV = float2(sampleClip.x / sampleClip.w * 0.5f + 0.5f,
+                                 -sampleClip.y / sampleClip.w * 0.5f + 0.5f);
+
+        if (any(sampleUV < 0.0f) || any(sampleUV > 1.0f))
+        {
+            break;
+        }
+
+        float depthRaw = ReadDepth(sampleUV);
+        float depthLin = DepthToViewZ_Fast(depthRaw);
+        float depthDiff = sampleVS.z - depthLin;
+
+        if (depthDiff > 0.0f)
+        {
+            float tLow = tPrev;
+            float tHigh = tCurr;
+            float2 uvHigh = sampleUV;
+            float depthHighRaw = depthRaw;
+            float diffHigh = depthDiff;
+
+            for (int j = 0; j < ssrRefineSteps; ++j)
+            {
+                float tMid = 0.5f * (tLow + tHigh);
+                float3 midVS = origin + pivot * tMid;
+                float4 midClip = mul(float4(midVS, 1.0f), proj);
+                if (midClip.w <= 0.0f)
+                {
+                    tHigh = tMid;
+                    continue;
+                }
+
+                float2 midUV = float2(midClip.x / midClip.w * 0.5f + 0.5f,
+                                      -midClip.y / midClip.w * 0.5f + 0.5f);
+
+                if (any(midUV < 0.0f) || any(midUV > 1.0f))
+                {
+                    tHigh = tMid;
+                    continue;
+                }
+
+                float midDepthRaw = ReadDepth(midUV);
+                float midDepthLin = DepthToViewZ_Fast(midDepthRaw);
+                float diffMid = midVS.z - midDepthLin;
+
+                if (diffMid > 0.0f)
+                {
+                    tHigh = tMid;
+                    uvHigh = midUV;
+                    depthHighRaw = midDepthRaw;
+                    diffHigh = diffMid;
+                }
+                else
+                {
+                    tLow = tMid;
+                }
+            }
+
+            if (diffHigh < ssrThicknessVS)
+            {
+                return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, ssrThicknessVS, diffHigh);
+            }
+
+            break;
+        }
+
+        tPrev = tCurr;
+        step *= ssrStrideGrowth;
+        tCurr += step;
+    }
+
     return outv;
 }
 
@@ -247,7 +361,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 Pv   = ReconstructPosVS(uv, depth);
         float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 
-        SSRHit ssr = TraceSSR_Lettier(Pv, Nv);
+        SSRHit ssr;
+        if (technique == SSR_TECHNIQUE_LOGMARCH)
+        {
+            float2 seed = float2(dispatchThreadId.xy);
+            ssr = TraceSSR_LogMarch(Pv, Nv, seed);
+        }
+        else
+        {
+            ssr = TraceSSR_Lettier(Pv, Nv);
+        }
         if (ssr.hit != 0)
         {
             int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5);

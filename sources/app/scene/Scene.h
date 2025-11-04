@@ -63,6 +63,10 @@ public:
     void SetDirectionalLight(DirectionalLight light);
     void SetSkybox(std::unique_ptr<Skybox> skybox);
 
+    void SetSsrTechnique(SsrTechnique technique);
+    void CycleSsrTechnique();
+    SsrTechnique GetSsrTechnique() const { return ssrTechnique_; }
+
 private:
     static constexpr int kCascades = 4;
 
@@ -130,5 +134,7 @@ private:
     DirectionalLight dirLight_;
 
     std::unique_ptr<Skybox> skyBox_;
+
+    SsrTechnique ssrTechnique_ = SsrTechnique::Lettier;
 
 };
