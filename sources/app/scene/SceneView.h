@@ -26,6 +26,7 @@ struct SceneView
     float hfov = 0.0f;
     float zNear = 0.0f;
     float zFar = 0.0f;
+    bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };
 

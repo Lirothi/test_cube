@@ -21,10 +21,13 @@ public:
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
-    void Cull(const Frustum& frustum);
+    void Cull(const Frustum& frustum, bool clampDepthRange,
+        const float3& cameraPosition, const float3& cameraDirection,
+        float minDepth, float maxDepth);
 
     const ObjectBucket& GetBucket(BucketType type) const;
     ObjectBucket& GetBucket(BucketType type);
+    ObjectBucket& GetVisibleBucket(BucketType type);
     const std::array<ObjectBucket, 4>& Buckets() const { return buckets_; }
     const std::array<ObjectBucket, 4>& VisibleBuckets() const { return visibleBuckets_; }
 

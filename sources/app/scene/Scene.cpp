@@ -157,6 +157,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             view.zNear = 0.0f;
             view.zFar = 0.0f;
             view.hfov = 0.0f;
+            view.requiresDepthCheck = false;
             view.queue.Clear();
         }
         return;
@@ -257,9 +258,10 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascadeView.renderLayerMask = camera.GetRenderLayerMask();
         cascadeView.position = center;
         cascadeView.type = SceneView::Type::Shadow;
-        cascadeView.zNear = nearLS;
-        cascadeView.zFar = farLS;
+        cascadeView.zNear = sliceNear;
+        cascadeView.zFar = sliceFar;
         cascadeView.hfov = 0.0f;
+        cascadeView.requiresDepthCheck = true;
     }
 }
 
@@ -355,6 +357,7 @@ void Scene::PrepareViews(Renderer* renderer)
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
     mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, camera_.GetZNear(), camera_.GetZFar());
     mainView.type = SceneView::Type::Camera;
+    mainView.requiresDepthCheck = false;
 
     UpdateCascades(camera_, renderer);
 
@@ -378,6 +381,7 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zNear = nearPlane;
         view.zFar = farPlane;
         view.hfov = 0.0f;
+        view.requiresDepthCheck = false;
     }
 
     //if (DebugDrawSystem* debugDraw = renderer->GetDebugDrawSystem())
@@ -408,7 +412,11 @@ void Scene::PrepareViews(Renderer* renderer)
     //    }
     //}
 
-    auto prepareQueue = [this](SceneView& view)
+    const float3 cameraPosition = camera_.GetPosition();
+    const float3 cameraDirection = camera_.GetDirection();
+    const float cascadeOverlap = cascadeConfig_.overlap;
+
+    auto prepareQueue = [this, cameraPosition, cameraDirection, cascadeOverlap](SceneView& view)
     {
         CPU_SCOPE(ProfilerScopes::kPrepareQueue);
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
@@ -422,7 +430,10 @@ void Scene::PrepareViews(Renderer* renderer)
             view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
         }
 
-        view.queue.Cull(view.frustum);
+        const bool clampDepthRange = view.requiresDepthCheck && view.zFar > view.zNear;
+        const float minDepth = clampDepthRange ? (view.zNear - cascadeOverlap) : 0.0f;
+        const float maxDepth = clampDepthRange ? (view.zFar + cascadeOverlap) : 0.0f;
+        view.queue.Cull(view.frustum, clampDepthRange, cameraPosition, cameraDirection, minDepth, maxDepth);
         if (view.type == SceneView::Type::Camera)
         {
             view.queue.SortTransparent(view.view);

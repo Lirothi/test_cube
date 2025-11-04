@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 
+#include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 
 namespace
@@ -132,7 +133,9 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
     }
 }
 
-void SceneRenderQueue::Cull(const Frustum& frustum)
+void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
+    const float3& cameraPosition, const float3& cameraDirection,
+    float minDepth, float maxDepth)
 {
     CPU_SCOPE(ProfilerScopes::kService3);
     for (auto& bucket : visibleBuckets_)
@@ -167,8 +170,22 @@ void SceneRenderQueue::Cull(const Frustum& frustum)
             }
 
             const AABB& bounds = obj->GetWorldBounds();
-            const bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
-            //const bool visible = true;
+            bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
+            if (visible && clampDepthRange && bounds.IsValid())
+            {
+                const float3 center = bounds.GetCenter();
+                const float radius = bounds.GetRadius();
+                const float3 toCenter = center - cameraPosition;
+                const float depth = toCenter.Dot(cameraDirection);
+                const float objMinDepth = depth - radius;
+                const float objMaxDepth = depth + radius;
+
+                if (objMaxDepth < minDepth || objMinDepth > maxDepth)
+                {
+                    visible = false;
+                }
+            }
+
             if (visible)
             {
                 visibleBucket.push_back(obj);
@@ -189,4 +206,9 @@ const SceneRenderQueue::ObjectBucket& SceneRenderQueue::GetBucket(BucketType typ
 SceneRenderQueue::ObjectBucket& SceneRenderQueue::GetBucket(BucketType type)
 {
     return buckets_[ToIndex(type)];
+}
+
+SceneRenderQueue::ObjectBucket& SceneRenderQueue::GetVisibleBucket(BucketType type)
+{
+    return visibleBuckets_[ToIndex(type)];
 }
