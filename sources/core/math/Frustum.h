@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 
 #include <DirectXCollision.h>
 
@@ -49,6 +51,13 @@ public:
         return frustum;
     }
 
+    static Frustum FromCorners(const std::array<Math::float3, 8>& corners)
+    {
+        Frustum frustum;
+        frustum.BuildFromCorners(corners);
+        return frustum;
+    }
+
     bool IsValid() const { return valid_; }
 
     bool GetCorners(Math::float3 outCorners[8]) const
@@ -66,6 +75,12 @@ public:
             break;
         case Type::OrthoBox:
             orthoBox_.GetCorners(corners);
+            break;
+        case Type::CornerPoints:
+            for (int i = 0; i < 8; ++i)
+            {
+                corners[i] = cornerPoints_[i].xf();
+            }
             break;
         default:
             return false;
@@ -105,6 +120,28 @@ public:
             return orthoBox_.Intersects(box);
         }
 
+        if (type_ == Type::CornerPoints)
+        {
+            const Math::float3 center = bounds.GetCenter();
+            const Math::float3 extents = bounds.GetHalfExtents();
+
+            for (const auto& plane : planes_)
+            {
+                const Math::float3 normal(plane.x, plane.y, plane.z);
+                const float distance = normal.Dot(center) + plane.w;
+                const float radius = std::fabs(normal.x) * extents.x
+                    + std::fabs(normal.y) * extents.y
+                    + std::fabs(normal.z) * extents.z;
+
+                if (distance + radius < 0.0f)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         return true;
     }
 
@@ -114,6 +151,7 @@ private:
         Invalid,
         Perspective,
         OrthoBox,
+        CornerPoints,
     };
 
     void Build(
@@ -175,8 +213,72 @@ private:
         valid_ = true;
     }
 
+    void BuildFromCorners(const std::array<Math::float3, 8>& corners)
+    {
+        cornerPoints_ = corners;
+
+        Math::float3 center(0.0f, 0.0f, 0.0f);
+        for (const auto& c : corners)
+        {
+            center += c;
+        }
+        center = center / static_cast<float>(corners.size());
+
+        bool ok = true;
+        planes_[0] = CreatePlane(corners[0], corners[2], corners[4], center, ok); // Near
+        planes_[1] = CreatePlane(corners[1], corners[5], corners[3], center, ok); // Far
+        planes_[2] = CreatePlane(corners[0], corners[6], corners[7], center, ok); // Left
+        planes_[3] = CreatePlane(corners[2], corners[3], corners[5], center, ok); // Right
+        planes_[4] = CreatePlane(corners[4], corners[7], corners[5], center, ok); // Top
+        planes_[5] = CreatePlane(corners[0], corners[3], corners[1], center, ok); // Bottom
+
+        if (ok)
+        {
+            type_ = Type::CornerPoints;
+            valid_ = true;
+        }
+        else
+        {
+            type_ = Type::Invalid;
+            valid_ = false;
+        }
+    }
+
+    static Math::float4 CreatePlane(
+        const Math::float3& a,
+        const Math::float3& b,
+        const Math::float3& c,
+        const Math::float3& insidePoint,
+        bool& ok)
+    {
+        if (!ok)
+        {
+            return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        Math::float3 normal = (b - a).Cross(c - a);
+        const float length = normal.Length();
+        if (length < Math::EPS)
+        {
+            ok = false;
+            return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        normal = normal / length;
+        float d = -normal.Dot(a);
+        if (normal.Dot(insidePoint) + d < 0.0f)
+        {
+            normal = normal * -1.0f;
+            d = -d;
+        }
+
+        return Math::float4(normal, d);
+    }
+
     DirectX::BoundingFrustum frustum_{};
     DirectX::BoundingOrientedBox orthoBox_{};
+    std::array<Math::float3, 8> cornerPoints_{};
+    std::array<Math::float4, 6> planes_{};
     Type type_ = Type::Invalid;
     bool valid_ = false;
 };
