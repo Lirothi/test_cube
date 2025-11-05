@@ -181,7 +181,10 @@ void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
                 const float objMinDepth = depth - radius;
                 const float objMaxDepth = depth + radius;
 
-                if (objMaxDepth < minDepth || objMinDepth > maxDepth)
+                constexpr float minDepthDist = 50.0f;
+                constexpr float overlap = 10.0f;
+
+                if (depth >= minDepthDist && (objMaxDepth < (minDepth - overlap) || objMinDepth > (maxDepth + overlap)))
                 {
                     visible = false;
                 }
