@@ -1072,7 +1072,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     // CPU region
     auto reg = tm->CreateRegion(x, y, TextManager::Align::Left);
     tm->RegionSetPadding(reg, 8, 6);
-    tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.55f));
+    tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.75f));
     tm->RegionSetFixedWidth(reg, (float)boxW);
     tm->RegionSetAutoMeasure(reg, false);
 
@@ -1113,7 +1113,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         const int gpuX = x + (int)boxW + 16;
         auto regGpu = tm->CreateRegion(gpuX, y, TextManager::Align::Left);
         tm->RegionSetPadding(regGpu, 8, 6);
-        tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.55f));
+        tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.75f));
         tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
         tm->RegionSetAutoMeasure(regGpu, false);
 

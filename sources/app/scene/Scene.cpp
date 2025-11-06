@@ -1790,7 +1790,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
             renderer->RecordBindDefaultsNoClear(t.cl);
             if (showProfiler_)
             {
-                Profiler::Get().EmitOverlay(tm, /*x=*/8, /*y=*/48, /*maxLines=*/20);
+                Profiler::Get().EmitOverlay(tm, /*x=*/16, /*y=*/64, /*maxLines=*/20);
             }
             tm->Build(renderer, t.cl);
             tm->Draw(renderer, t.cl);
