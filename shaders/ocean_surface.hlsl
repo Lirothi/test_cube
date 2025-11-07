@@ -8,6 +8,9 @@ cbuffer OceanCB : register(b0)
     float4x4 model;
     float4x4 view;
     float4x4 proj;
+    float4x4 prevModel;
+    float4x4 viewProj;
+    float4x4 prevViewProj;
     float4x4 invView;
     float4x4 invProj;
     float4x4 worldToWind;
@@ -70,6 +73,7 @@ struct VSOutput
     float2 baseXZ : TEXCOORD1;
     float4 positionNDC : TEXCOORD2;
     float viewDepth : TEXCOORD3;
+    float4 prevPositionNDC : TEXCOORD4;
 };
 
 struct DerivativesSet
@@ -392,9 +396,11 @@ VSOutput VSMain(VSInput input)
     float4 worldH = mul(local, model);
     float4 viewPos = mul(worldH, view);
     output.viewDepth = viewPos.z;
-    float4 clipPos = mul(viewPos, proj);
+    float4 clipPos = mul(worldH, viewProj);
     output.position = clipPos;
     output.positionNDC = clipPos;
+    float4 prevWorld = mul(local, prevModel);
+    output.prevPositionNDC = mul(prevWorld, prevViewProj);
     return output;
 }
 
@@ -819,7 +825,13 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
     return color;
 }
 
-float4 PSMain(VSOutput input) : SV_TARGET
+struct PSOut
+{
+    float4 color : SV_Target0;
+    float2 velocity : SV_Target1;
+};
+
+PSOut PSMain(VSOutput input)
 {
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
@@ -882,5 +894,14 @@ float4 PSMain(VSOutput input) : SV_TARGET
     li.ambient = sunDirAmbient.w;
 
     float3 color = GetOceanColor(li, foamData);
-    return float4(saturate(color), 1.0f);
+    float4 outColor = float4(saturate(color), 1.0f);
+
+    float2 currUv = ClipToUV(input.positionNDC);
+    float2 prevUv = ClipToUV(input.prevPositionNDC);
+    float2 motion = currUv - prevUv;
+
+    PSOut o;
+    o.color = outColor;
+    o.velocity = motion;
+    return o;
 }

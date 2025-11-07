@@ -4,6 +4,7 @@
 struct InstanceData
 {
     row_major float4x4 world;
+    row_major float4x4 prevWorld;
     float rotationY;
     float3 pad_;
 };
@@ -88,5 +89,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
     //    0, 0, 0, 1
     //};
 
+    gInstances[idx].prevWorld = gInstances[idx].world;
     gInstances[idx].world = mul(mul(S, R), T);
 }

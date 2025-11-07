@@ -103,8 +103,7 @@ void PointLight::RebuildHandleCache()
     if (matZFail_)
     {
         cbHandles_.zFail.world = matZFail_->ComputeCBFieldHandle(0, "world");
-        cbHandles_.zFail.view = matZFail_->ComputeCBFieldHandle(0, "view");
-        cbHandles_.zFail.proj = matZFail_->ComputeCBFieldHandle(0, "proj");
+        cbHandles_.zFail.viewProj = matZFail_->ComputeCBFieldHandle(0, "viewProj");
     }
 
     if (matColorFS_)
@@ -128,13 +127,13 @@ void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
 {
     if (sphere_ == nullptr) { return; }
 
-    // CB b0: world/view/proj
+    // CB b0: world/viewProj
     auto cb = r->GetFrameResource()->AllocDynamic(
         matZFail_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
         Renderer::kConstantBufferAlignment);
+    const mat4 viewProj = view * proj;
     matZFail_->UpdateCBField(cbHandles_.zFail.world, BuildModel(), (uint8_t*)cb.cpu);
-    matZFail_->UpdateCBField(cbHandles_.zFail.view, view, (uint8_t*)cb.cpu);
-    matZFail_->UpdateCBField(cbHandles_.zFail.proj, proj, (uint8_t*)cb.cpu);
+    matZFail_->UpdateCBField(cbHandles_.zFail.viewProj, viewProj, (uint8_t*)cb.cpu);
 
     // Reset the stencil ref to 0 (color pass tests for != 0)
     cl->OMSetStencilRef(0);
@@ -172,7 +171,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.intensity, desc_.intensity, (uint8_t*)cb1.cpu);
 
-    // GBuffer SRV table: t0..t3 = GB0, GB1, GB2, Depth
+    // GBuffer SRV table: t0..t4 = GB0, GB1, GB2, GBVelocity, Depth
     auto tbl = r->StageGBufferSrvTable();
 
     auto h = r->GetRenderContextPool()->Acquire();

@@ -15,6 +15,7 @@ void InstanceBuffer::Create(ID3D12Device* device, UINT numInstances,
     std::vector<InstanceData> init(instanceCount_);
     for (UINT i = 0; i < instanceCount_; ++i) {
         DirectX::XMStoreFloat4x4(&init[i].world, DirectX::XMMatrixIdentity());
+        DirectX::XMStoreFloat4x4(&init[i].prevWorld, DirectX::XMMatrixIdentity());
         init[i].rotationY = 0.0f;
         init[i]._pad[0] = init[i]._pad[1] = init[i]._pad[2] = 0.0f;
     }

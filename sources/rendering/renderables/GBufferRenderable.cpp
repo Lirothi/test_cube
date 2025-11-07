@@ -19,8 +19,9 @@ public:
         if (Material* material = owner.GetGraphicsMaterial())
         {
             cbHandles_.world = material->ComputeCBFieldHandle(0, "world");
-            cbHandles_.view = material->ComputeCBFieldHandle(0, "view");
-            cbHandles_.proj = material->ComputeCBFieldHandle(0, "proj");
+            cbHandles_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
+            cbHandles_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
+            cbHandles_.prevViewProj = material->ComputeCBFieldHandle(0, "prevViewProj");
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
@@ -30,8 +31,7 @@ public:
         if (Material* shadowMaterial = owner.GetShadowMaterial())
         {
             shadowHandles_.world = shadowMaterial->ComputeCBFieldHandle(0, "world");
-            shadowHandles_.view = shadowMaterial->ComputeCBFieldHandle(0, "view");
-            shadowHandles_.proj = shadowMaterial->ComputeCBFieldHandle(0, "proj");
+            shadowHandles_.viewProj = shadowMaterial->ComputeCBFieldHandle(0, "viewProj");
         }
     }
 
@@ -41,8 +41,9 @@ public:
         if (!material) { return; }
 
         UpdateUniform(owner, cbHandles_.world, material, owner.GetModelMatrix(), cbData);
-        UpdateUniform(owner, cbHandles_.view, material, camera.GetViewMatrix(), cbData);
-        UpdateUniform(owner, cbHandles_.proj, material, camera.GetProjMatrix(), cbData);
+        UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
+        UpdateUniform(owner, cbHandles_.viewProj, material, camera.GetViewProjMatrix(), cbData);
+        UpdateUniform(owner, cbHandles_.prevViewProj, material, camera.GetPrevViewProjMatrix(), cbData);
 
         const auto& p = params_;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
@@ -56,17 +57,18 @@ public:
         Material* material = owner.GetShadowMaterial();
         if (!material) { return; }
 
+        const mat4 viewProj = lightView * lightProj;
         UpdateUniform(owner, shadowHandles_.world, material, owner.GetModelMatrix(), cbData);
-        UpdateUniform(owner, shadowHandles_.view, material, lightView, cbData);
-        UpdateUniform(owner, shadowHandles_.proj, material, lightProj, cbData);
+        UpdateUniform(owner, shadowHandles_.viewProj, material, viewProj, cbData);
     }
 
 private:
     struct CBHandles
     {
         Material::CBFieldHandle world;
-        Material::CBFieldHandle view;
-        Material::CBFieldHandle proj;
+        Material::CBFieldHandle prevWorld;
+        Material::CBFieldHandle viewProj;
+        Material::CBFieldHandle prevViewProj;
         Material::CBFieldHandle baseColor;
         Material::CBFieldHandle metalRough;
         Material::CBFieldHandle texOffsScale;
@@ -76,8 +78,7 @@ private:
     struct ShadowCBHandles
     {
         Material::CBFieldHandle world;
-        Material::CBFieldHandle view;
-        Material::CBFieldHandle proj;
+        Material::CBFieldHandle viewProj;
     } shadowHandles_{};
 
     MaterialParams& params_;
@@ -129,10 +130,11 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 3;
+    desc.numRT = 4;
     desc.rtvFormats[0] = Renderer::kGBuffer0Format;
     desc.rtvFormats[1] = Renderer::kGBuffer1Format;
     desc.rtvFormats[2] = Renderer::kGBuffer2Format;
+    desc.rtvFormats[3] = Renderer::kGBufferVelocityFormat;
     desc.dsvFormat = Renderer::kDeferredDepthFormat;
 
     if (matData_)

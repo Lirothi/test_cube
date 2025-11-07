@@ -36,6 +36,9 @@ public:
             cb_.world = material->ComputeCBFieldHandle(0, "world");
             cb_.view = material->ComputeCBFieldHandle(0, "view");
             cb_.proj = material->ComputeCBFieldHandle(0, "proj");
+            cb_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
+            cb_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
+            cb_.prevViewProj = material->ComputeCBFieldHandle(0, "prevViewProj");
             cb_.invView = material->ComputeCBFieldHandle(0, "invView");
             cb_.invProj = material->ComputeCBFieldHandle(0, "invProj");
             cb_.cameraPosIor = material->ComputeCBFieldHandle(0, "cameraPosIor");
@@ -94,6 +97,9 @@ public:
         UpdateUniform(obj, cb_.world, material, obj.GetModelMatrix(), cbData);
         UpdateUniform(obj, cb_.view, material, view, cbData);
         UpdateUniform(obj, cb_.proj, material, proj, cbData);
+        UpdateUniform(obj, cb_.prevWorld, material, obj.GetPreviousModelMatrix(), cbData);
+        UpdateUniform(obj, cb_.viewProj, material, camera.GetViewProjMatrix(), cbData);
+        UpdateUniform(obj, cb_.prevViewProj, material, camera.GetPrevViewProjMatrix(), cbData);
         UpdateUniform(obj, cb_.invView, material, invView, cbData);
         UpdateUniform(obj, cb_.invProj, material, invProj, cbData);
 
@@ -180,6 +186,9 @@ private:
         Material::CBFieldHandle world;
         Material::CBFieldHandle view;
         Material::CBFieldHandle proj;
+        Material::CBFieldHandle prevWorld;
+        Material::CBFieldHandle viewProj;
+        Material::CBFieldHandle prevViewProj;
         Material::CBFieldHandle invView;
         Material::CBFieldHandle invProj;
         Material::CBFieldHandle cameraPosIor;
@@ -320,8 +329,9 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 1;
+    desc.numRT = 2;
     desc.rtvFormats[0] = Renderer::kSceneColorFormat;
+    desc.rtvFormats[1] = Renderer::kGBufferVelocityFormat;
     desc.dsvFormat = Renderer::kDeferredDepthFormat;
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -333,6 +343,8 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
     desc.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     desc.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    desc.blend.RenderTarget[1].BlendEnable = FALSE;
+    desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
 
     auto& defs = desc.defines;

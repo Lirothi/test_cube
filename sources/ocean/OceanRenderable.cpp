@@ -255,6 +255,9 @@ public:
             modelHandle_ = material->ComputeCBFieldHandle(0, "model");
             viewHandle_ = material->ComputeCBFieldHandle(0, "view");
             projHandle_ = material->ComputeCBFieldHandle(0, "proj");
+            prevModelHandle_ = material->ComputeCBFieldHandle(0, "prevModel");
+            viewProjHandle_ = material->ComputeCBFieldHandle(0, "viewProj");
+            prevViewProjHandle_ = material->ComputeCBFieldHandle(0, "prevViewProj");
             invViewHandle_ = material->ComputeCBFieldHandle(0, "invView");
             invProjHandle_ = material->ComputeCBFieldHandle(0, "invProj");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
@@ -292,6 +295,9 @@ public:
             modelHandle_ = {};
             viewHandle_ = {};
             projHandle_ = {};
+            prevModelHandle_ = {};
+            viewProjHandle_ = {};
+            prevViewProjHandle_ = {};
             invViewHandle_ = {};
             invProjHandle_ = {};
             simulationParamsHandle_ = {};
@@ -342,6 +348,9 @@ public:
         UpdateUniform(owner, modelHandle_, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, viewHandle_, material, view, cbData);
         UpdateUniform(owner, projHandle_, material, proj, cbData);
+        UpdateUniform(owner, prevModelHandle_, material, owner.GetPreviousModelMatrix(), cbData);
+        UpdateUniform(owner, viewProjHandle_, material, camera.GetViewProjMatrix(), cbData);
+        UpdateUniform(owner, prevViewProjHandle_, material, camera.GetPrevViewProjMatrix(), cbData);
         UpdateUniform(owner, invViewHandle_, material, invView, cbData);
         UpdateUniform(owner, invProjHandle_, material, invProj, cbData);
 
@@ -385,6 +394,9 @@ private:
     Material::CBFieldHandle modelHandle_{};
     Material::CBFieldHandle viewHandle_{};
     Material::CBFieldHandle projHandle_{};
+    Material::CBFieldHandle prevModelHandle_{};
+    Material::CBFieldHandle viewProjHandle_{};
+    Material::CBFieldHandle prevViewProjHandle_{};
     Material::CBFieldHandle invViewHandle_{};
     Material::CBFieldHandle invProjHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};
@@ -594,15 +606,18 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 1;
+    desc.numRT = 2;
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+        desc.rtvFormats[1] = Renderer::kGBufferVelocityFormat;
         desc.dsvFormat = renderer->GetDsvFormat();
     }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
+    desc.blend.RenderTarget[1].BlendEnable = FALSE;
+    desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

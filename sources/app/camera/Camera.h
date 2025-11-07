@@ -51,6 +51,11 @@ public:
     const mat4& GetProjMatrix() const { return view_.proj; }
     const mat4& GetInvViewMatrix() const { return view_.invView; }
     const mat4& GetInvProjMatrix() const { return view_.invProj; }
+    const mat4& GetPrevViewMatrix() const { return prevView_; }
+    const mat4& GetPrevProjMatrix() const { return prevProj_; }
+    const mat4& GetViewProjMatrix() const { return viewProj_; }
+    const mat4& GetPrevViewProjMatrix() const { return prevViewProj_; }
+    void ResetHistory();
 
     const float3& GetDirection() const { return dir_; }
 
@@ -88,6 +93,10 @@ public:
 
 private:
     SceneView view_{};
+    mat4 prevView_ = mat4::Identity();
+    mat4 prevProj_ = mat4::Identity();
+    mat4 viewProj_ = mat4::Identity();
+    mat4 prevViewProj_ = mat4::Identity();
     float3 dir_;
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
@@ -96,6 +105,7 @@ private:
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
     uint32_t renderLayerMask_ = kRenderLayerAll;
+    bool hasPrevViewProj_ = false;
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

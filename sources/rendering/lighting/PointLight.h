@@ -47,8 +47,7 @@ private:
     struct CBHandleCache {
         struct ZFailHandles {
             Material::CBFieldHandle world;
-            Material::CBFieldHandle view;
-            Material::CBFieldHandle proj;
+            Material::CBFieldHandle viewProj;
         } zFail;
 
         struct ColorHandles {
