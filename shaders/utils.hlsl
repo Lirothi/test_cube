@@ -49,8 +49,8 @@ inline float2 NDCToUV(float2 ndc)
 inline float2 ClipToUV(float4 clip)
 {
         float w = clip.w;
-        float clampedW = (w >= 0.0f) ? max(kEpsilon, w) : min(-kEpsilon, w);
-        float2 ndc = clip.xy * rcp(clampedW);
+        //float clampedW = (w >= 0.0f) ? max(kEpsilon, w) : min(-kEpsilon, w);
+        float2 ndc = clip.xy * rcp(w);
         return NDCToUV(ndc);
 }
 
