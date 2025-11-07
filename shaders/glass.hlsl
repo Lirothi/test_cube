@@ -72,6 +72,7 @@ struct VSOut
 {
     float4 posH : SV_POSITION;
     float4 prevPosH : TEXCOORD5;
+    float4 clipPos : TEXCOORD6;
     float3 posWS : TEXCOORD0;
     float3 normalWS : TEXCOORD1;
     float3 tangentWS : TEXCOORD2;
@@ -86,6 +87,7 @@ VSOut VSMain(VSIn input)
     float4 worldPos = mul(localPos, world);
     o.posWS = worldPos.xyz;
     o.posH = mul(worldPos, viewProj);
+    o.clipPos = o.posH;
     float4 prevWorldPos = mul(localPos, prevWorld);
     o.prevPosH = mul(prevWorldPos, prevViewProj);
     float3x3 w3 = (float3x3) world;
@@ -389,7 +391,7 @@ PSOut PSMain(VSOut i)
     //color = alpha.xxx;
     //alpha = 1.0f;
 
-    float2 currUv = ClipToUV(i.posH);
+    float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPosH);
     float2 motion = currUv - prevUv;
 

@@ -43,6 +43,7 @@ struct VSInInst
 struct VSOut
 {
     float4 H : SV_POSITION;
+    float4 clipH : TEXCOORD4;
     float4 prevH : TEXCOORD3;
     float3 NWS : TEXCOORD1;
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
@@ -70,6 +71,7 @@ inline VSOut BaseVS(float3 pos,
     float4 posH = float4(pos, 1.0f);
     float4 worldPos = mul(posH, world);
     o.H = mul(worldPos, viewProj);
+    o.clipH = o.H;
     o.prevH = mul(mul(posH, prevWorld), prevViewProj);
 
     float3x3 w3 = (float3x3) world;

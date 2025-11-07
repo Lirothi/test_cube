@@ -19,6 +19,7 @@ struct VSOut {
     float4 pos : SV_Position;
     float4 prevPos : TEXCOORD1;
     float3 dir : TEXCOORD0; // sampling direction
+    float4 clipPos : TEXCOORD2;
 };
 
 VSOut VSMain(VSIn i)
@@ -32,6 +33,7 @@ VSOut VSMain(VSIn i)
     float4 viewPos = mul(float4(i.pos, 1.0), v);
     o.pos = mul(viewPos, proj);
     o.pos.z = 0.0f;
+    o.clipPos = o.pos;
 
     float4x4 pv = prevView;
     pv._41 = 0.0;
@@ -61,7 +63,7 @@ PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
     //c = SRGBToLinear(c);
-    float2 currUv = ClipToUV(i.pos);
+    float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPos);
     float2 motion = currUv - prevUv;
 
