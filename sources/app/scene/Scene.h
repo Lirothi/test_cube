@@ -71,7 +71,7 @@ private:
     static constexpr int kCascades = 4;
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, size_t chunkSize);
+        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize);
     void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
