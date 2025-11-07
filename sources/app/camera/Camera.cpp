@@ -51,15 +51,45 @@ void Camera::UpdateFromInput(float dt) {
 
 void Camera::CalcMatrices(Renderer* r)
 {
+    mat4 lastView = view_.view;
+    mat4 lastProj = view_.proj;
+
+    if (hasPrevViewProj_)
+    {
+        prevView_ = lastView;
+        prevProj_ = lastProj;
+    }
+
     mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
     float3 look = rot.TransformPoint({ 0, 0, 1 }); // forward
     float3 up = rot.TransformPoint({ 0, 1, 0 }); // up
-    view_.view = mat4::LookAtLH(position_, position_ + look, up);
-    view_.invView = mat4::Inverse(view_.view);
+    mat4 newView = mat4::LookAtLH(position_, position_ + look, up);
+    view_.view = newView;
+    view_.invView = mat4::Inverse(newView);
     const float aspect = float(r->GetWidth()) / float(r->GetHeight());
     const float vfov = 2.f * atan(tan(view_.hfov * 0.5f) / aspect);
-    view_.proj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, view_.zNear, view_.zFar);
-    view_.invProj = mat4::Inverse(view_.proj);
+    mat4 newProj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, view_.zNear, view_.zFar);
+    view_.proj = newProj;
+    view_.invProj = mat4::Inverse(newProj);
     view_.position = position_;
     dir_ = look.Normalized();
+
+    viewProj_ = view_.view * view_.proj;
+    prevViewProj_ = prevView_ * prevProj_;
+
+    if (!hasPrevViewProj_)
+    {
+        prevView_ = view_.view;
+        prevProj_ = view_.proj;
+        prevViewProj_ = viewProj_;
+        hasPrevViewProj_ = true;
+    }
+}
+
+void Camera::ResetHistory()
+{
+    prevView_ = view_.view;
+    prevProj_ = view_.proj;
+    prevViewProj_ = viewProj_;
+    hasPrevViewProj_ = true;
 }

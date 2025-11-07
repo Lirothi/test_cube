@@ -248,10 +248,23 @@ const AABB& RenderableObject::GetWorldBounds() const
 
 void RenderableObject::PostTick(float dt)
 {
+    if (!prevModelMatrixValid_)
+    {
+        prevModelMatrix_ = modelMatrix_;
+        prevModelMatrixValid_ = true;
+    }
+
     if (transformDirty_)
     {
+        prevModelMatrix_ = modelMatrix_;
         RebuildModelMatrix();
         transformDirty_ = false;
+        modelMatrixChangedThisTick_ = true;
+    }
+
+    if (!modelMatrixChangedThisTick_)
+    {
+        prevModelMatrix_ = modelMatrix_;
     }
 
     if (worldBoundsDirty_)
@@ -260,6 +273,8 @@ void RenderableObject::PostTick(float dt)
     }
 
     RenderableObjectBase::PostTick(dt);
+
+    modelMatrixChangedThisTick_ = false;
 
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(pos_ + GetLocalBounds().GetCenter(), GetLocalBounds().GetHalfExtents() * scale_, rotEuler_, { 0.0f, 1.0f, 0.0f, 0.7f }, true);

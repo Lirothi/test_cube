@@ -7,8 +7,9 @@
 cbuffer PerObject : register(b0)
 {
     float4x4 world;
-    float4x4 view;
-    float4x4 proj;
+    float4x4 prevWorld;
+    float4x4 viewProj;
+    float4x4 prevViewProj;
 
     float4 baseColor; // fallback Albedo (linear)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
@@ -42,6 +43,7 @@ struct VSInInst
 struct VSOut
 {
     float4 H : SV_POSITION;
+    float4 prevH : TEXCOORD3;
     float3 NWS : TEXCOORD1;
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
     float2 UV : TEXCOORD0;
@@ -52,12 +54,23 @@ struct PSOut
     float4 RT0 : SV_Target0; // Albedo.rgb + A=pack(rough,metal)
     float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + A=1
     float4 RT2 : SV_Target2; // Emissive.rgb
+    float2 RT3 : SV_Target3; // Motion vector (UV delta)
 };
 
-inline VSOut BaseVS(float3 pos, float4x4 world, float4x4 view, float4x4 proj, float3 norm, float4 tangent, float2 uv)
+inline VSOut BaseVS(float3 pos,
+                    float4x4 world,
+                    float4x4 prevWorld,
+                    float4x4 viewProj,
+                    float4x4 prevViewProj,
+                    float3 norm,
+                    float4 tangent,
+                    float2 uv)
 {
     VSOut o;
-    o.H = TransformPositionH(pos, world, view, proj);
+    float4 posH = float4(pos, 1.0f);
+    float4 worldPos = mul(posH, world);
+    o.H = mul(worldPos, viewProj);
+    o.prevH = mul(mul(posH, prevWorld), prevViewProj);
 
     float3x3 w3 = (float3x3) world;
     float3 N = NormalizeSafe(TransformDirectionWS(norm, w3), float3(0, 0, 1));
@@ -69,7 +82,7 @@ inline VSOut BaseVS(float3 pos, float4x4 world, float4x4 view, float4x4 proj, fl
 }
 
 // Final MRT output using prepared values
-inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
+inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss, float2 motion)
 {
     PSOut o;
     float metal = mr.x;
@@ -80,6 +93,7 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss)
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
     o.RT1 = float4(NrmTo01(NWS), 1.0);
     o.RT2 = emiss;
+    o.RT3 = motion;
     return o;
 }
 

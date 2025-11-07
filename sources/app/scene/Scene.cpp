@@ -651,6 +651,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     const Camera& camera,
     bool useBundles,
     bool bindGbufOrScene,
+    bool bindVelocity,
     size_t chunkSize)
 {
     if (objects.empty()) {
@@ -662,7 +663,7 @@ void Scene::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene](std::size_t jobIndex)
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity](std::size_t jobIndex)
     {
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
@@ -687,7 +688,16 @@ void Scene::RenderObjectBatch(Renderer* renderer,
                 }
                 else
                 {
-                    renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                    if (bindVelocity)
+                    {
+                        const auto& D = renderer->GetDeferredForFrame();
+                        renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->BindSceneColorWithVelocity(t.cl, Renderer::ClearMode::None, true);
+                    }
+                    else
+                    {
+                        renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                    }
                 }
 
                 for (size_t i = begin; i < end; ++i) {
@@ -1025,7 +1035,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, 32);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, false, 32);
         }
         });
 
@@ -1035,7 +1045,7 @@ void Scene::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, 32);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, false, 32);
         }
         });
 
@@ -1066,6 +1076,7 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.gb0.Get(), srvState);
         renderer->Transition(t.cl, D.gb1.Get(), srvState);
         renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
         renderer->Transition(t.cl, D.depth.Get(), srvState);
         renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1106,10 +1117,11 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         auto& rc = h.ref();
 
         rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
+            D.gbSRV[3],
             D.depthSRV,
             D.shadowSRV
         };
@@ -1160,6 +1172,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.gb0.Get(), srvState);
         renderer->Transition(t.cl, D.gb1.Get(), srvState);
         renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
         renderer->Transition(t.cl, D.depth.Get(), srvState);
         renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -1208,10 +1221,11 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         auto& rc = h.ref();
 
         rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
+            D.gbSRV[3],
             D.depthSRV,
             D.spotShadowSRV,
             spotLightSrvHandle
@@ -1258,6 +1272,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.gb0.Get(), srvState);
         renderer->Transition(t.cl, D.gb1.Get(), srvState);
         renderer->Transition(t.cl, D.gb2.Get(), srvState);
+        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
         renderer->Transition(t.cl, D.depth.Get(), srvState);
 
         for (size_t i = 0; i < pointLights.size(); ++i)
@@ -1294,10 +1309,11 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
         auto& rc = h.ref();
 
         rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs = {
+        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
             D.gbSRV[0],
             D.gbSRV[1],
             D.gbSRV[2],
+            D.gbSRV[3],
             D.depthSRV,
             pointLightSrvHandle
         };
@@ -1331,10 +1347,11 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
 
         const auto& D = renderer->GetDeferredForFrame();
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
 
-        // RTV = SceneColor, DSV = GBuffer Depth (read-only), no clears
-        renderer->BindLightTarget(t.cl, Renderer::ClearMode::None, true);
+        // RTVs = Light + Velocity, DSV = GBuffer Depth (read-only), no clears
+        renderer->BindLightTargetWithVelocity(t.cl, Renderer::ClearMode::None, true);
 
         skyBox_->Render(renderer, t.cl, camera);
     }
@@ -1593,7 +1610,8 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
             }
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            renderer->BindSceneColor(driver.cl, Renderer::ClearMode::None, true);
+            renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
@@ -1603,7 +1621,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
-            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, 32);
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, true, 32);
         }
         });
 
@@ -1612,7 +1630,7 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, 32);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, true, 32);
         }
         });
 

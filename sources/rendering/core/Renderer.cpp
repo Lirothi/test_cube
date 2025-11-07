@@ -1058,20 +1058,22 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             // Store the handles in deferred_[f]
             auto& D = deferred_[f];
             switch (rtvSlot) {
-            case DeferredRtvSlot::GB0:   D.gbRTV[0] = outRTV; break;
-            case DeferredRtvSlot::GB1:   D.gbRTV[1] = outRTV; break;
-            case DeferredRtvSlot::GB2:   D.gbRTV[2] = outRTV; break;
-            case DeferredRtvSlot::Light: D.lightRTV = outRTV; break;
-            case DeferredRtvSlot::Scene: D.sceneRTV = outRTV; break;
+            case DeferredRtvSlot::GB0:        D.gbRTV[0] = outRTV; break;
+            case DeferredRtvSlot::GB1:        D.gbRTV[1] = outRTV; break;
+            case DeferredRtvSlot::GB2:        D.gbRTV[2] = outRTV; break;
+            case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
+            case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
+            case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
             default: break;
             }
             switch (srvSlot) {
-            case DeferredSrvSlot::GB0:    D.gbSRV[0] = outSRV; break;
-            case DeferredSrvSlot::GB1:    D.gbSRV[1] = outSRV; break;
-            case DeferredSrvSlot::GB2:    D.gbSRV[2] = outSRV; break;
-            case DeferredSrvSlot::Depth:  D.depthSRV = outSRV; break;
-            case DeferredSrvSlot::Light:  D.lightSRV = outSRV; break;
-            case DeferredSrvSlot::Scene:  D.sceneSRV = outSRV; break;
+            case DeferredSrvSlot::GB0:        D.gbSRV[0] = outSRV; break;
+            case DeferredSrvSlot::GB1:        D.gbSRV[1] = outSRV; break;
+            case DeferredSrvSlot::GB2:        D.gbSRV[2] = outSRV; break;
+            case DeferredSrvSlot::GBVelocity: D.gbSRV[3] = outSRV; break;
+            case DeferredSrvSlot::Depth:      D.depthSRV = outSRV; break;
+            case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
+            case DeferredSrvSlot::Scene:      D.sceneSRV = outSRV; break;
             default: break;
             }
             if (uavSlot != DeferredSrvSlot::Count)
@@ -1335,6 +1337,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
         CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
+        CreateRT(kGBufferVelocityFormat, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
 
         CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
         CreateSrvTexture(kDeferredDepthFormat, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, GetDepthSrvFormat());
@@ -1372,6 +1375,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.gb0);
         collect(D.gb1);
         collect(D.gb2);
+        collect(D.gbVelocity);
         collect(D.depth);
         collect(D.depthCopy);
         collect(D.light);
@@ -1460,8 +1464,8 @@ UINT Renderer::GetSsrTextureHeight() const
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = deferred_[currentFrameIndex_];
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2] };
-    cl->OMSetRenderTargets(3, rtvs, FALSE, &D.dsv);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3] };
+    cl->OMSetRenderTargets(4, rtvs, FALSE, &D.dsv);
 
     D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
@@ -1469,7 +1473,7 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
         }
         if (mode == ClearMode::ColorDepth)
@@ -1488,6 +1492,10 @@ void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bo
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.lightRTV, c, 0, nullptr);
+        if (mode == ClearMode::ColorDepth && withDepth)
+        {
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+        }
     }
 }
 
@@ -1501,6 +1509,42 @@ void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, boo
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(D.sceneRTV, c, 0, nullptr);
         if (mode == ClearMode::ColorDepth && withDepth) {
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+        }
+    }
+}
+
+void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
+    auto& D = deferred_[currentFrameIndex_];
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.lightRTV, D.gbRTV[3] };
+    cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(rtvs[0], c, 0, nullptr);
+        cl->ClearRenderTargetView(rtvs[1], c, 0, nullptr);
+        if (mode == ClearMode::ColorDepth && withDepth)
+        {
+            cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+        }
+    }
+}
+
+void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
+    auto& D = deferred_[currentFrameIndex_];
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.sceneRTV, D.gbRTV[3] };
+    cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+    if (mode != ClearMode::None) {
+        const float c[4]{ 0,0,0,0 };
+        cl->ClearRenderTargetView(rtvs[0], c, 0, nullptr);
+        cl->ClearRenderTargetView(rtvs[1], c, 0, nullptr);
+        if (mode == ClearMode::ColorDepth && withDepth)
+        {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
         }
     }

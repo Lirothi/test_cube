@@ -26,9 +26,9 @@ inline float3 NormalizeSafe(float3 v, float3 fallback)
 }
 
 // =============== transforms (row-vector) ===============
-inline float4 TransformPositionH(float3 p, float4x4 world, float4x4 view, float4x4 proj)
+inline float4 TransformPositionH(float3 p, float4x4 world, float4x4 viewProj)
 {
-	return mul(mul(mul(float4(p, 1.0f), world), view), proj);
+        return mul(mul(float4(p, 1.0f), world), viewProj);
 }
 
 inline float3 TransformDirectionWS(float3 n, float3x3 world3x3)
@@ -38,14 +38,26 @@ inline float3 TransformDirectionWS(float3 n, float3x3 world3x3)
 
 inline float2 UVtoNDC(float2 uv)
 {
-	return uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+        return uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+}
+
+inline float2 NDCToUV(float2 ndc)
+{
+        return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+}
+
+inline float2 ClipToUV(float4 clip)
+{
+        float invW = rcp(max(kEpsilon, clip.w));
+        float2 ndc = clip.xy * invW;
+        return NDCToUV(ndc);
 }
 
 inline float3 ReconstructPosWS(float2 uv, float depth, float4x4 invProj, float4x4 invView)
 {
-	const float2 ndc = UVtoNDC(uv);
-	float4 clip = float4(ndc, depth, 1.0f);
-	float4 vpos = mul(clip, invProj); // → view
+        const float2 ndc = UVtoNDC(uv);
+        float4 clip = float4(ndc, depth, 1.0f);
+        float4 vpos = mul(clip, invProj); // → view
 	vpos.xyz /= max(kEpsilon, vpos.w);
 	return mul(float4(vpos.xyz, 1.0f), invView).xyz; // → world
 }

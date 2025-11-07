@@ -19,12 +19,16 @@ public:
     {
         viewHandle_ = {};
         projHandle_ = {};
+        prevViewHandle_ = {};
+        prevProjHandle_ = {};
         exposureHandle_ = {};
 
         if (Material* material = owner.GetGraphicsMaterial())
         {
             viewHandle_ = material->ComputeCBFieldHandle(0, "view");
             projHandle_ = material->ComputeCBFieldHandle(0, "proj");
+            prevViewHandle_ = material->ComputeCBFieldHandle(0, "prevView");
+            prevProjHandle_ = material->ComputeCBFieldHandle(0, "prevProj");
             exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
         }
     }
@@ -36,6 +40,8 @@ public:
 
         UpdateUniform(owner, viewHandle_, material, camera.GetViewMatrix(), cbData);
         UpdateUniform(owner, projHandle_, material, camera.GetProjMatrix(), cbData);
+        UpdateUniform(owner, prevViewHandle_, material, camera.GetPrevViewMatrix(), cbData);
+        UpdateUniform(owner, prevProjHandle_, material, camera.GetPrevProjMatrix(), cbData);
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
     }
 
@@ -43,6 +49,8 @@ private:
     Skybox& owner_;
     Material::CBFieldHandle viewHandle_{};
     Material::CBFieldHandle projHandle_{};
+    Material::CBFieldHandle prevViewHandle_{};
+    Material::CBFieldHandle prevProjHandle_{};
     Material::CBFieldHandle exposureHandle_{};
 };
 } // namespace
@@ -94,14 +102,17 @@ void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDes
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 1;
+    desc.numRT = 2;
     if (renderer)
     {
-        desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+        desc.rtvFormats[0] = renderer->GetLightTargetFormat();
+        desc.rtvFormats[1] = Renderer::kGBufferVelocityFormat;
     }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
     desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL; // reverse-Z depth test for the sky
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;             // render from the inside
     desc.blend.RenderTarget[0].BlendEnable = FALSE;
+    desc.blend.RenderTarget[1].BlendEnable = FALSE;
+    desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 }

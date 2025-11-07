@@ -1,6 +1,7 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
-// t0..t3 : GBuffer (GB0, GB1, GB2, Depth)
-// t4     : StructuredBuffer<PointLightData>
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
+// t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
+// t4     : Depth
+// t5     : StructuredBuffer<PointLightData>
 // u0     : Light accumulation RWTexture2D
 // s0     : LinearClamp
 // s1     : PointClamp
@@ -20,8 +21,9 @@ struct PointLightData
 Texture2D GB0 : register(t0);
 Texture2D GB1 : register(t1);
 Texture2D GB2 : register(t2);
-Texture2D DepthT : register(t3);
-StructuredBuffer<PointLightData> PointLights : register(t4);
+Texture2D GBVelocity : register(t3);
+Texture2D DepthT : register(t4);
+StructuredBuffer<PointLightData> PointLights : register(t5);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);

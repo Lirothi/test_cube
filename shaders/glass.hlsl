@@ -21,10 +21,13 @@ struct SpotLightData
 };
 
 cbuffer GlassParams : register(b0)
-{ 
+{
     float4x4 world;
     float4x4 view;
     float4x4 proj;
+    float4x4 prevWorld;
+    float4x4 viewProj;
+    float4x4 prevViewProj;
     float4x4 invView;
     float4x4 invProj;
     float4 cameraPosIor;          // xyz = camera position, w = IOR
@@ -68,6 +71,7 @@ struct VSIn
 struct VSOut
 {
     float4 posH : SV_POSITION;
+    float4 prevPosH : TEXCOORD5;
     float3 posWS : TEXCOORD0;
     float3 normalWS : TEXCOORD1;
     float3 tangentWS : TEXCOORD2;
@@ -78,9 +82,12 @@ struct VSOut
 VSOut VSMain(VSIn input)
 {
     VSOut o;
-    float4 worldPos = mul(float4(input.P, 1.0f), world);
+    float4 localPos = float4(input.P, 1.0f);
+    float4 worldPos = mul(localPos, world);
     o.posWS = worldPos.xyz;
-    o.posH = mul(mul(worldPos, view), proj);
+    o.posH = mul(worldPos, viewProj);
+    float4 prevWorldPos = mul(localPos, prevWorld);
+    o.prevPosH = mul(prevWorldPos, prevViewProj);
     float3x3 w3 = (float3x3) world;
     float3 tangentWS = mul(input.T.xyz, w3);
     float3 normalWS = mul(input.N, w3);
@@ -187,7 +194,13 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndot
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
 }
 
-float4 PSMain(VSOut i) : SV_Target
+struct PSOut
+{
+    float4 color : SV_Target0;
+    float2 velocity : SV_Target1;
+};
+
+PSOut PSMain(VSOut i)
 {
     float3 N = normalize(i.normalWS);
     float3 camPos = cameraPosIor.xyz;
@@ -375,5 +388,13 @@ float4 PSMain(VSOut i) : SV_Target
     color = lerp(refrColor, color, alpha);
     //color = alpha.xxx;
     //alpha = 1.0f;
-    return float4(color, 1.0f);
+
+    float2 currUv = ClipToUV(i.posH);
+    float2 prevUv = ClipToUV(i.prevPosH);
+    float2 motion = currUv - prevUv;
+
+    PSOut o;
+    o.color = float4(color, 1.0f);
+    o.velocity = motion;
+    return o;
 }

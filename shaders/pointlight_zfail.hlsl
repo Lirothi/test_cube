@@ -5,7 +5,7 @@
 VSOut VSMain(VSIn v)
 {
     VSOut o;
-    o.H = TransformPositionH(v.P, world, view, proj);
+    o.H = TransformPositionH(v.P, world, viewProj);
     return o;
 }
 float4 PSMain() : SV_Target { return 0.0.xxxx; } // no color writes (mask=0 in the PSO)

@@ -1,11 +1,12 @@
 // RootSignature: CBV(b0) TABLE(SRV(t0))
-// Use the shared b0 from gbuffer_common: world/view/proj
+// Use the shared b0 from gbuffer_common
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 
 struct InstanceData
 {
     row_major float4x4 world;
+    row_major float4x4 prevWorld;
     float rotationY;
     float3 _pad_;
 };
@@ -18,7 +19,7 @@ VSOutD VSMain(VSInInst i)
 {
     VSOutD o;
     float4x4 w = mul(gInstances[i.IID].world, world);
-    o.H = TransformPositionH(i.P, w, view, proj);
+    o.H = TransformPositionH(i.P, w, viewProj);
     return o;
 }
 

@@ -59,10 +59,27 @@ public:
 
     // Transform
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
+    const Math::mat4& GetPreviousModelMatrix() const { return prevModelMatrix_; }
+    void ResetMotionHistory()
+    {
+        prevModelMatrix_ = modelMatrix_;
+        prevModelMatrixValid_ = true;
+        modelMatrixChangedThisTick_ = false;
+    }
     void SetModelMatrix(const Math::mat4& m)
     {
+        if (prevModelMatrixValid_)
+        {
+            prevModelMatrix_ = modelMatrix_;
+        }
+        else
+        {
+            prevModelMatrix_ = m;
+            prevModelMatrixValid_ = true;
+        }
         modelMatrix_ = m;
         transformDirty_ = false;
+        modelMatrixChangedThisTick_ = true;
         MarkWorldBoundsDirty();
     }
 
@@ -130,6 +147,7 @@ protected:
 
     std::shared_ptr<Mesh> mesh_;
     Math::mat4 modelMatrix_;
+    Math::mat4 prevModelMatrix_;
 
     // CB (upload, per-object)
     bool allowWireframe_ = true;
@@ -165,4 +183,6 @@ private:
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
     Math::float3 rotEuler_{};
     bool transformDirty_ = true;
+    bool prevModelMatrixValid_ = false;
+    bool modelMatrixChangedThisTick_ = false;
 };

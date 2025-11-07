@@ -10,6 +10,7 @@ class Renderer;
 #pragma pack(push, 16)
 struct InstanceData {
     DirectX::XMFLOAT4X4 world;
+    DirectX::XMFLOAT4X4 prevWorld;
     float rotationY;
     float _pad[3];
 };

@@ -34,11 +34,12 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 14; // gb0,gb1,gb2,depth,depthCopy,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow
+        static constexpr size_t kResourceCount = 15; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow
         // Resources
         ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
         ComPtr<ID3D12Resource> gb2;   // Renderer::kGBuffer2Format (emissive)
+        ComPtr<ID3D12Resource> gbVelocity; // Renderer::kGBufferVelocityFormat (motion vectors)
         ComPtr<ID3D12Resource> depth; // Renderer::kDeferredDepthFormat
         ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
         ComPtr<ID3D12Resource> light; // Renderer::kLightTargetFormat
@@ -52,9 +53,9 @@ public:
         ComPtr<ID3D12Resource> spotShadow; // R32_TYPELESS array for spot lights
 
         // CPU descriptors
-        D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[3]{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
-        D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[3]{}; // GB0,GB1,GB2
+        D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,GBVelocity
         D3D12_CPU_DESCRIPTOR_HANDLE depthSRV{};  // Depth(R32F)
         D3D12_CPU_DESCRIPTOR_HANDLE depthCopySRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
@@ -94,6 +95,8 @@ public:
     void BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode);
     void BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
+    void BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
+    void BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
     void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth);
 
@@ -112,6 +115,7 @@ public:
     static constexpr DXGI_FORMAT kGBuffer0Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT kGBuffer1Format = DXGI_FORMAT_R10G10B10A2_UNORM;
     static constexpr DXGI_FORMAT kGBuffer2Format = DXGI_FORMAT_R11G11B10_FLOAT;
+    static constexpr DXGI_FORMAT kGBufferVelocityFormat = DXGI_FORMAT_R16G16_FLOAT;
     static constexpr DXGI_FORMAT kLightTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     static constexpr DXGI_FORMAT kSsrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -273,8 +277,8 @@ private:
 private:
     static constexpr UINT kFrameCount = 2;
 
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, Count };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

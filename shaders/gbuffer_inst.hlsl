@@ -6,6 +6,7 @@
 struct InstanceData
 {
     row_major float4x4 world;
+    row_major float4x4 prevWorld;
     float rotationY;
     float3 _pad_;
 };
@@ -19,7 +20,8 @@ SamplerState gSmp : register(s0);
 VSOut VSMain(VSInInst i)
 {
     float4x4 w = mul(gInstances[i.IID].world, world);
-    return BaseVS(i.P, w, view, proj, i.N, i.T, i.UV);
+    float4x4 pw = mul(gInstances[i.IID].prevWorld, prevWorld);
+    return BaseVS(i.P, w, pw, viewProj, prevViewProj, i.N, i.T, i.UV);
 }
 
 PSOut PSMain(VSOut i)
@@ -38,5 +40,9 @@ PSOut PSMain(VSOut i)
         N = NNorm;
     }
 
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0));
+    float2 currUv = ClipToUV(i.H);
+    float2 prevUv = ClipToUV(i.prevH);
+    float2 motion = currUv - prevUv;
+
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);
 }

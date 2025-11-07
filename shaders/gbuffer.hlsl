@@ -9,7 +9,7 @@ SamplerState gSmp : register(s0);
 
 VSOut VSMain(VSIn i)
 {
-    return BaseVS(i.P, world, view, proj, i.N, i.T, i.UV);
+    return BaseVS(i.P, world, prevWorld, viewProj, prevViewProj, i.N, i.T, i.UV);
 }
 
 PSOut PSMain(VSOut i)
@@ -27,6 +27,10 @@ PSOut PSMain(VSOut i)
     {
         N = NNorm;
     }
+    float2 currUv = ClipToUV(i.H);
+    float2 prevUv = ClipToUV(i.prevH);
+    float2 motion = currUv - prevUv;
+
     //albedo = N * 0.5 + 0.5;
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0));
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);
 }
