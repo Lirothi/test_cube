@@ -40,7 +40,7 @@ PSOut PSMain(VSOut i)
         N = NNorm;
     }
 
-    float2 currUv = ClipToUV(i.H);
+    float2 currUv = ClipToUV(i.clipH);
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
