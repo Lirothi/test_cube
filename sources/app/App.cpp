@@ -4,9 +4,12 @@
 #include "core/profiling/ProfilerScopes.h"
 #include <algorithm>
 #include <cassert>
+#include <mimalloc.h>
 #include <vector>
 
 #include "app/levels/DemoLevel.h"
+
+static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -243,4 +246,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
     Systems::Set(nullptr);
 
     systems_.reset();
+
+    mi_register_output(MiOut, nullptr);
+    mi_collect(true);
+    mi_option_set(mi_option_show_stats, 1);
+    //mi_stats_print(nullptr);
 }

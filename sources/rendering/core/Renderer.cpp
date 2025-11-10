@@ -5,13 +5,13 @@
 #include <vector>
 #include <utility>
 #include <dxgidebug.h>
-#pragma comment(lib, "dxguid.lib")
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
-#include <mimalloc.h>
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "app/Systems.h"
 #include "streamline/include/sl.h"
+
+#pragma comment(lib, "dxguid.lib")
 
 thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
 thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
@@ -32,7 +32,6 @@ Renderer::~Renderer() {
     }
 }
 
-static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 static void logFunctionCallback(sl::LogType type, const char* msg)
 {
     OutputDebugStringA(msg);
@@ -131,11 +130,6 @@ void Renderer::Shutdown()
     }
 
     inShutdown = false;
-
-    mi_register_output(MiOut, nullptr);
-    mi_collect(true);
-    mi_option_set(mi_option_show_stats, 1);
-    //mi_stats_print(nullptr);
 }
 
 void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
