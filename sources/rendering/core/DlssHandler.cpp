@@ -140,7 +140,6 @@ void DlssHandler::UpdateSettings()
     options.outputHeight = renderer_.height_;
 
     sl::DLSSOptimalSettings optimal{};
-    sl::Result result = sl::Result::eError;
     if (SL_SUCCEEDED(result, slDLSSGetOptimalSettings(options, optimal)) &&
         optimal.optimalRenderWidth > 0 && optimal.optimalRenderHeight > 0)
     {
@@ -353,4 +352,4 @@ void DlssHandler::HandleAllocationFailure()
         renderer_.RecreateDeferredTargets();
     }
 }
-*** End Patch
+

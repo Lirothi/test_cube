@@ -181,10 +181,6 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.renderAPI = sl::RenderAPI::eD3D12;
 
     auto slRes = slInit(pref, sl::kSDKVersion);
-    if (dlssHandler_)
-    {
-        dlssHandler_->OnStreamlineInitialized(slRes);
-    }
 
 #ifdef _DEBUG
     {
@@ -199,6 +195,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
 
     slSetD3DDevice(device_.Get());
+
+    if (dlssHandler_)
+    {
+        dlssHandler_->OnStreamlineInitialized(slRes);
+    }
 
     UpdateRenderResolutionFromScale();
 
@@ -231,9 +232,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     // --- Depth ---
     CreateDepthResources(width_, height_);
-
     CreateDeferredTargets(width_, height_);
-    AllocateDlssResourcesIfNeeded();
 
     // --- Fence + event ---
     if (!fence_) {
@@ -255,6 +254,8 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
         frameFenceValues_[i] = 0;
         frameResources_[i]->InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
     }
+
+    AllocateDlssResourcesIfNeeded();
 
     RefreshCurrentFrameCaches();
 

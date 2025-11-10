@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
 

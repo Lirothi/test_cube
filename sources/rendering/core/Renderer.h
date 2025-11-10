@@ -23,6 +23,7 @@
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/debug/DebugDraw.h"
+#include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
 
