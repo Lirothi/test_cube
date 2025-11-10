@@ -381,6 +381,7 @@ void Scene::PrepareViews(Renderer* renderer)
     camera_.SetHFov(kHFovRadians);
     camera_.SetZNearFar(zNear, zFar);
     camera_.CalcMatrices(renderer);
+    renderer->UpdateDlssCameraData(camera_);
 
     SceneView& mainView = camera_.GetView();
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
@@ -1685,14 +1686,27 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        bool ranDlss = false;
+        if (renderer->IsDlssActive())
+        {
+            ranDlss = renderer->EvaluateDLSS(t.cl);
+            if (ranDlss)
+            {
+                renderer->Transition(t.cl, D.dlssOutput.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+        }
+        if (!ranDlss)
+        {
+            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         renderer->Transition(t.cl, D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.table[0] = renderer->StageSrvUavTable({ D.sceneSRV }).gpu;
+        D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
+        rc.table[0] = renderer->StageSrvUavTable({ tonemapSrc }).gpu;
         rc.table[1] = renderer->StageSrvUavTable({ D.tonemapUAV }).gpu;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);

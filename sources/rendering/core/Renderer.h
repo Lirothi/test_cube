@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <utility>
 
 #include "core/containers/inl_vector.h"
@@ -22,8 +23,14 @@
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/debug/DebugDraw.h"
+#include "streamline/include/sl_core_types.h"
+#include "streamline/include/sl_dlss.h"
 
 using Microsoft::WRL::ComPtr;
+
+class Camera;
+
+class DlssHandler;
 
 class Renderer {
 public:
@@ -34,7 +41,7 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 15; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow
+        static constexpr size_t kResourceCount = 16; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
         // Resources
         ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
@@ -51,6 +58,7 @@ public:
         ComPtr<ID3D12Resource> ssrBlur; // Renderer::kSsrBlurFormat
         ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
         ComPtr<ID3D12Resource> spotShadow; // R32_TYPELESS array for spot lights
+        ComPtr<ID3D12Resource> dlssOutput; // Renderer::kSceneColorFormat upscaled
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
@@ -68,6 +76,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -103,7 +113,7 @@ public:
     // Prebuilt SRV tables (in the frame's shader-visible heap)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
     D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2
-    D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene
+    D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene or DLSS output
 
     // Formats
     static constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -198,6 +208,10 @@ public:
     UINT GetSsrTextureWidth() const;
     UINT GetSsrTextureHeight() const;
     void SetRenderResolutionScale(float scale);
+    void UpdateDlssCameraData(const Camera& camera);
+    bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
+    bool IsDlssActive() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE GetTonemapSourceSrvCPU() const;
 
     template<class Alloc, class It>
     inline GpuDescHandle StageDescriptorTableRange(
@@ -283,7 +297,7 @@ private:
     static constexpr UINT kFrameCount = 2;
 
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
@@ -364,7 +378,7 @@ private:
     UINT64                            frameFenceValues_[kFrameCount] = {};  // last signal value for each frame
 
     // Frame resources (allocator + upload, etc.)
-        std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
+    std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
     FrameResource*                    currentFrameResource_ = nullptr;
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
@@ -399,15 +413,24 @@ private:
     static thread_local uint32_t      tlLaneIndex_;
     static thread_local CLStateEntry* tlCurrentEntry_;
 
+    // Streamline / DLSS integration
+    sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
+    std::unique_ptr<DlssHandler> dlssHandler_;
+
+    void UpdateDlssSettings();
+    void AllocateDlssResourcesIfNeeded();
+
     const CLState* FindCLStateForCmd(ID3D12CommandList* cmd) const;
 
     SamplerManager samplerManager_;
     MaterialManager materialManager_;
     InputLayoutManager inputLayoutManager_;
-	MeshManager meshManager_;
+    MeshManager meshManager_;
     FontManager fontManager_;
     TextManager textManager_;
     MaterialDataManager materialDataManager_;
     RenderContextPool ctxPool_;
     DebugDrawSystem debugDrawSystem_;
+
+    friend class DlssHandler;
 };

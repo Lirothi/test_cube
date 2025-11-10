@@ -9,6 +9,8 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "app/Systems.h"
+#include "app/camera/Camera.h"
+#include "rendering/core/DlssHandler.h"
 #include "streamline/include/sl.h"
 
 #pragma comment(lib, "dxguid.lib")
@@ -17,8 +19,8 @@ thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
 thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
 
 Renderer::Renderer()
+    : dlssHandler_(std::make_unique<DlssHandler>(*this))
 {
-
 }
 
 Renderer::~Renderer() {
@@ -122,6 +124,11 @@ void Renderer::Shutdown()
         commandQueue_.Reset();
     }
 
+    if (dlssHandler_)
+    {
+        dlssHandler_->Shutdown();
+    }
+
     slShutdown();
 
     // 8) Release the device last
@@ -136,7 +143,6 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     hWnd_ = window;
     width_ = width;
     height_ = height;
-    UpdateRenderResolutionFromScale();
 
     sl::Preferences pref;
 
@@ -152,6 +158,8 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.logLevel = sl::LogLevel::eDefault;
 	//pref.logLevel = sl::LogLevel::eOff;
 #endif
+
+    pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 
     sl::Feature featuresToLoad[] = {
         sl::kFeatureDLSS,
@@ -172,11 +180,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     pref.renderAPI = sl::RenderAPI::eD3D12;
 
-    //pref.flags |= sl::PreferenceFlags::eUseManualHooking;
-
-	//pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-
     auto slRes = slInit(pref, sl::kSDKVersion);
+    if (dlssHandler_)
+    {
+        dlssHandler_->OnStreamlineInitialized(slRes);
+    }
 
 #ifdef _DEBUG
     {
@@ -191,6 +199,8 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
 
     slSetD3DDevice(device_.Get());
+
+    UpdateRenderResolutionFromScale();
 
     //sl::AdapterInfo adapterInfo{};
     //if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureDLSS, adapterInfo)))
@@ -223,6 +233,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     CreateDepthResources(width_, height_);
 
     CreateDeferredTargets(width_, height_);
+    AllocateDlssResourcesIfNeeded();
 
     // --- Fence + event ---
     if (!fence_) {
@@ -429,6 +440,11 @@ void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
+
+    if (dlssHandler_)
+    {
+        dlssHandler_->OnBeginFrame();
+    }
 
     RefreshCurrentFrameCaches();
     FrameResource* fr = currentFrameResource_;
@@ -808,7 +824,14 @@ void Renderer::OnResize(UINT width, UINT height) {
     }
     width_ = width;
     height_ = height;
-    UpdateRenderResolutionFromScale();
+    if (dlssHandler_)
+    {
+        dlssHandler_->OnDisplaySizeChanged();
+    }
+    else
+    {
+        UpdateRenderResolutionFromScale();
+    }
 
     // Important: wait for the GPU before replacing resources
     WaitForPreviousFrame();
@@ -832,6 +855,7 @@ void Renderer::OnResize(UINT width, UINT height) {
     CreateSwapChainAndRTVs(width_, height_);
     CreateDepthResources(width_, height_);
     CreateDeferredTargets(width_, height_);
+    AllocateDlssResourcesIfNeeded();
 
     RefreshCurrentFrameCaches();
 }
@@ -1182,7 +1206,6 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
                 D.depthCopy = outRes;
                 D.depthCopySRV = outSRV;
             }
-
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         };
 
@@ -1417,6 +1440,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
+        CreateSrvUavTexture(kSceneColorFormat, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
         CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
         CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
     }
@@ -1451,6 +1475,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.ssrBlur);
         collect(D.shadow);
         collect(D.spotShadow);
+        collect(D.dlssOutput);
     }
 
     if (!released.empty()) {
@@ -1528,6 +1553,12 @@ UINT Renderer::GetSsrTextureHeight() const
 
 void Renderer::UpdateRenderResolutionFromScale()
 {
+    if (dlssHandler_)
+    {
+        dlssHandler_->RefreshRenderResolution();
+        return;
+    }
+
     const float clampedScale = std::clamp(renderResolutionScale_, 0.1f, 1.0f);
     renderResolutionScale_ = clampedScale;
     const float baseWidth = static_cast<float>(std::max(width_, 1u));
@@ -1552,12 +1583,61 @@ void Renderer::SetRenderResolutionScale(float scale)
     }
 
     renderResolutionScale_ = sanitized;
-    UpdateRenderResolutionFromScale();
-
-    if (deferredRtvHeap_)
+    if (dlssHandler_)
     {
-        RecreateDeferredTargets();
+        dlssHandler_->OnRenderResolutionScaleChanged();
     }
+    else
+    {
+        UpdateRenderResolutionFromScale();
+        if (deferredRtvHeap_)
+        {
+            RecreateDeferredTargets();
+        }
+    }
+}
+
+void Renderer::UpdateDlssSettings()
+{
+    if (dlssHandler_)
+    {
+        dlssHandler_->UpdateSettings();
+    }
+    else
+    {
+        UpdateRenderResolutionFromScale();
+    }
+}
+
+void Renderer::AllocateDlssResourcesIfNeeded()
+{
+    if (dlssHandler_)
+    {
+        dlssHandler_->AllocateResourcesIfNeeded();
+    }
+}
+
+void Renderer::UpdateDlssCameraData(const Camera& camera)
+{
+    if (dlssHandler_)
+    {
+        dlssHandler_->UpdateCameraData(camera);
+    }
+}
+
+bool Renderer::EvaluateDLSS(ID3D12GraphicsCommandList* cl)
+{
+    if (!dlssHandler_)
+    {
+        return false;
+    }
+
+    return dlssHandler_->Evaluate(cl);
+}
+
+bool Renderer::IsDlssActive() const
+{
+    return dlssHandler_ && dlssHandler_->IsActive();
 }
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
@@ -1710,8 +1790,23 @@ D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageComposeSrvTable() {
 }
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageTonemapSrvTable() {
     auto& D = deferred_[currentFrameIndex_];
-    auto tbl = StageSrvUavTable({ D.sceneSRV });
+    D3D12_CPU_DESCRIPTOR_HANDLE src = D.sceneSRV;
+    if (dlssHandler_ && dlssHandler_->ShouldUseUpscaledOutput() && D.dlssOutputSRV.ptr != 0)
+    {
+        src = D.dlssOutputSRV;
+    }
+    auto tbl = StageSrvUavTable({ src });
     return tbl.gpu;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::GetTonemapSourceSrvCPU() const
+{
+    const auto& D = deferred_[currentFrameIndex_];
+    if (dlssHandler_ && dlssHandler_->ShouldUseUpscaledOutput() && D.dlssOutputSRV.ptr != 0)
+    {
+        return D.dlssOutputSRV;
+    }
+    return D.sceneSRV;
 }
 
 void Renderer::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl) {
