@@ -156,6 +156,9 @@ public:
     HWND GetHWND() const { return hWnd_; }
     UINT GetWidth() const { return width_; }
     UINT GetHeight() const { return height_; }
+    UINT GetRenderWidth() const { return renderWidth_; }
+    UINT GetRenderHeight() const { return renderHeight_; }
+    float GetRenderResolutionScale() const { return renderResolutionScale_; }
 
     ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < kFrameCount ? renderTargets_[currentFrameIndex_].Get() : nullptr; }
 
@@ -194,6 +197,7 @@ public:
     Math::float2 GetSsrTextureScale() const { return ssrTextureScale_; }
     UINT GetSsrTextureWidth() const;
     UINT GetSsrTextureHeight() const;
+    void SetRenderResolutionScale(float scale);
 
     template<class Alloc, class It>
     inline GpuDescHandle StageDescriptorTableRange(
@@ -269,6 +273,7 @@ private:
     void RefreshCurrentFrameCaches();
     std::pair<UINT, UINT> ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const;
     void RecreateDeferredTargets();
+    void UpdateRenderResolutionFromScale();
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
@@ -319,6 +324,9 @@ private:
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
+    float renderResolutionScale_ = 1.0f;
+    UINT  renderWidth_ = width_;
+    UINT  renderHeight_ = height_;
 
     Math::float2 ssrTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT ssrTextureWidth_ = 1;

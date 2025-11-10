@@ -54,6 +54,17 @@ static bool KeyReleasedCompat(int vk, const InputManager& in) {
     return in.WasKeyReleased(vk);
 }
 
+static bool IsMouseButtonDownCompat(int mb, const InputManager& in)
+{
+    switch (mb)
+    {
+    case 0: return in.IsLButtonDown();
+    case 1: return in.IsRButtonDown();
+    case 2: return in.IsMButtonDown();
+    default: return false;
+    }
+}
+
 bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
     std::ifstream f(path);
     if (!f) {
@@ -84,6 +95,9 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
                         int vk = VkFromString(s.get<std::string>());
                         if (vk != 0) { d.keys.push_back(vk); }
                     }
+                }
+                if (a.contains("allKeys") && a["allKeys"].is_boolean()) {
+                    d.requireAllKeys = a["allKeys"].get<bool>();
                 }
                 if (!d.keys.empty()) {
                     act.digitals.push_back(d);
@@ -176,13 +190,40 @@ bool ActionMap::IsActionDown(const std::string& name, const InputManager& input)
     if (a == nullptr) { return false; }
 
     for (const auto& d : a->digitals) {
-        for (int vk : d.keys) {
-            if (KeyDownCompat(vk, input)) { return true; }
+        bool keysOk = d.keys.empty();
+        if (!d.keys.empty()) {
+            if (d.requireAllKeys) {
+                keysOk = true;
+                for (int vk : d.keys) {
+                    if (!KeyDownCompat(vk, input)) {
+                        keysOk = false;
+                        break;
+                    }
+                }
+            } else {
+                keysOk = false;
+                for (int vk : d.keys) {
+                    if (KeyDownCompat(vk, input)) {
+                        keysOk = true;
+                        break;
+                    }
+                }
+            }
         }
-        for (int mb : d.mouseButtons) {
-            if (mb == 0 && input.IsLButtonDown()) { return true; }
-            if (mb == 1 && input.IsRButtonDown()) { return true; }
-            if (mb == 2 && input.IsMButtonDown()) { return true; }
+
+        bool mouseOk = d.mouseButtons.empty();
+        if (!d.mouseButtons.empty()) {
+            mouseOk = true;
+            for (int mb : d.mouseButtons) {
+                if (!IsMouseButtonDownCompat(mb, input)) {
+                    mouseOk = false;
+                    break;
+                }
+            }
+        }
+
+        if (keysOk && mouseOk) {
+            return true;
         }
     }
     return false;
@@ -192,8 +233,52 @@ bool ActionMap::WasActionPressed(const std::string& name, const InputManager& in
     auto a = Find(name);
     if (a == nullptr) { return false; }
     for (const auto& d : a->digitals) {
-        for (int vk : d.keys) {
-            if (KeyPressedCompat(vk, input)) { return true; }
+        bool keysSatisfied = d.keys.empty();
+        bool keyTriggered = false;
+        if (!d.keys.empty()) {
+            if (d.requireAllKeys) {
+                keysSatisfied = true;
+                for (int vk : d.keys) {
+                    if (!KeyDownCompat(vk, input)) {
+                        keysSatisfied = false;
+                        break;
+                    }
+                    if (KeyPressedCompat(vk, input)) {
+                        keyTriggered = true;
+                    }
+                }
+                if (!keyTriggered) {
+                    keysSatisfied = false;
+                }
+            } else {
+                keysSatisfied = false;
+                for (int vk : d.keys) {
+                    if (KeyPressedCompat(vk, input)) {
+                        keysSatisfied = true;
+                        keyTriggered = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!keysSatisfied) {
+            continue;
+        }
+
+        bool mouseOk = d.mouseButtons.empty();
+        if (!d.mouseButtons.empty()) {
+            mouseOk = true;
+            for (int mb : d.mouseButtons) {
+                if (!IsMouseButtonDownCompat(mb, input)) {
+                    mouseOk = false;
+                    break;
+                }
+            }
+        }
+
+        if (mouseOk && (keyTriggered || d.keys.empty())) {
+            return true;
         }
     }
     return false;

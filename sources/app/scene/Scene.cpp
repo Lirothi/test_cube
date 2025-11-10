@@ -310,6 +310,18 @@ void Scene::Tick(float deltaTime) {
     {
         CycleSsrTechnique();
     }
+    if (input.WasActionPressed("RenderScale100"))
+    {
+        Systems::GetRenderer().SetRenderResolutionScale(1.0f);
+    }
+    if (input.WasActionPressed("RenderScale66"))
+    {
+        Systems::GetRenderer().SetRenderResolutionScale(0.66f);
+    }
+    if (input.WasActionPressed("RenderScale50"))
+    {
+        Systems::GetRenderer().SetRenderResolutionScale(0.5f);
+    }
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
     TaskSystem::ParallelFor(objects_.size(),
@@ -1107,8 +1119,8 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         constants.shadowAtlasSize = float2(shadowRes, shadowRes);
         constants.shadowBiasNDC = float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]);
         constants.normalBiasWS = float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]);
-        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
 
@@ -1133,8 +1145,8 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
 
         lighting->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
         if (groupsX > 0 && groupsY > 0)
         {
             t.cl->Dispatch(groupsX, groupsY, 1);
@@ -1206,8 +1218,8 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
         constants.camPos = camera.GetPosition();
-        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().spotShadowRes);
@@ -1238,8 +1250,8 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
 
         spotMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
         if (groupsX > 0 && groupsY > 0)
         {
             t.cl->Dispatch(groupsX, groupsY, 1);
@@ -1298,8 +1310,8 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
         constants.camPos = camera.GetPosition();
-        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         constants.lightCount = static_cast<uint32_t>(pointLights.size());
@@ -1325,8 +1337,8 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
 
         pointMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
         if (groupsX > 0 && groupsY > 0)
         {
             t.cl->Dispatch(groupsX, groupsY, 1);
@@ -1399,7 +1411,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
         constants.depthB = (zNear * zFar) / (zFar - zNear);
         constants.zNear = zNear;
         constants.zFar = zFar;
-        constants.screenSize = float2(static_cast<float>(renderer->GetWidth()), static_cast<float>(renderer->GetHeight()));
+        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
         constants.invScreenSize = float2(
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
@@ -1514,8 +1526,8 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        const float width = static_cast<float>(renderer->GetWidth());
-        const float height = static_cast<float>(renderer->GetHeight());
+        const float width = static_cast<float>(renderer->GetRenderWidth());
+        const float height = static_cast<float>(renderer->GetRenderHeight());
         if (width <= 0.0f || height <= 0.0f)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1563,8 +1575,8 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 
         composeMaterial->Bind(t.cl, rc);
         constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
+        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
         if (groupsX > 0 && groupsY > 0)
         {
             t.cl->Dispatch(groupsX, groupsY, 1);

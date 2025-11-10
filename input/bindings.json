@@ -16,6 +16,9 @@
     { "name": "ToggleSSR", "keys": ["F5"] },
     { "name": "ToggleProfiler", "keys": ["F9"] },
     { "name": "CaptureTrace", "keys": ["F11"] },
-    { "name": "GenerateFont", "keys": ["F8"] }
+    { "name": "GenerateFont", "keys": ["F8"] },
+    { "name": "RenderScale100", "keys": ["Ctrl", "1"], "allKeys": true },
+    { "name": "RenderScale66", "keys": ["Ctrl", "2"], "allKeys": true },
+    { "name": "RenderScale50", "keys": ["Ctrl", "3"], "allKeys": true }
   ]
 }

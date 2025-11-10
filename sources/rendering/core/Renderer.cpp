@@ -1,6 +1,7 @@
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include <cassert>
+#include <cmath>
 #include <vector>
 #include <utility>
 #include <dxgidebug.h>
@@ -134,6 +135,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     hWnd_ = window;
     width_ = width;
     height_ = height;
+    UpdateRenderResolutionFromScale();
 
 #ifdef _DEBUG
     {
@@ -757,6 +759,7 @@ void Renderer::OnResize(UINT width, UINT height) {
     }
     width_ = width;
     height_ = height;
+    UpdateRenderResolutionFromScale();
 
     // Important: wait for the GPU before replacing resources
     WaitForPreviousFrame();
@@ -993,11 +996,19 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     heapProps.CreationNodeMask = 1;
     heapProps.VisibleNodeMask = 1;
 
+    const UINT rtWidth = std::max(1u, renderWidth_);
+    const UINT rtHeight = std::max(1u, renderHeight_);
+    const UINT displayWidthClamped = std::max(1u, width);
+    const UINT displayHeightClamped = std::max(1u, height);
+
+    UINT currentTargetWidth = rtWidth;
+    UINT currentTargetHeight = rtHeight;
+
     auto MakeTex2DDesc = [&](DXGI_FORMAT fmt, D3D12_RESOURCE_FLAGS flags) {
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width = width ? width : 1;
-        rd.Height = height ? height : 1;
+        rd.Width = currentTargetWidth ? currentTargetWidth : 1;
+        rd.Height = currentTargetHeight ? currentTargetHeight : 1;
         rd.DepthOrArraySize = 1;
         rd.MipLevels = 1;
         rd.Format = fmt;
@@ -1185,7 +1196,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         };
 
-    const auto ssrSize = ComputeSsrTextureSize(width, height);
+    const auto ssrSize = ComputeSsrTextureSize(rtWidth, rtHeight);
     ssrTextureWidth_ = ssrSize.first > 0 ? ssrSize.first : 1;
     ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
 
@@ -1334,6 +1345,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         auto& D = deferred_[f];
 
+        currentTargetWidth = rtWidth;
+        currentTargetHeight = rtHeight;
         CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
         CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
@@ -1353,8 +1366,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         CreateSrvTexture(kSceneColorFormat, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
-        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, width, height);
-        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, width, height);
+        currentTargetWidth = displayWidthClamped;
+        currentTargetHeight = displayHeightClamped;
+        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
+        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
     }
 }
 
@@ -1462,13 +1477,47 @@ UINT Renderer::GetSsrTextureHeight() const
     return std::max(1u, ssrTextureHeight_);
 }
 
+void Renderer::UpdateRenderResolutionFromScale()
+{
+    const float clampedScale = std::clamp(renderResolutionScale_, 0.1f, 1.0f);
+    renderResolutionScale_ = clampedScale;
+    const float baseWidth = static_cast<float>(std::max(width_, 1u));
+    const float baseHeight = static_cast<float>(std::max(height_, 1u));
+
+    renderWidth_ = std::max(1u, static_cast<UINT>(baseWidth * clampedScale + 0.5f));
+    renderHeight_ = std::max(1u, static_cast<UINT>(baseHeight * clampedScale + 0.5f));
+}
+
+void Renderer::SetRenderResolutionScale(float scale)
+{
+    float sanitized = scale;
+    if (!std::isfinite(sanitized))
+    {
+        sanitized = 1.0f;
+    }
+    sanitized = std::clamp(sanitized, 0.1f, 1.0f);
+
+    if (std::abs(sanitized - renderResolutionScale_) < 1e-4f)
+    {
+        return;
+    }
+
+    renderResolutionScale_ = sanitized;
+    UpdateRenderResolutionFromScale();
+
+    if (deferredRtvHeap_)
+    {
+        RecreateDeferredTargets();
+    }
+}
+
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = deferred_[currentFrameIndex_];
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3] };
     cl->OMSetRenderTargets(4, rtvs, FALSE, &D.dsv);
 
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
 
     if (mode != ClearMode::None) {
@@ -1486,8 +1535,8 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = deferred_[currentFrameIndex_];
     cl->OMSetRenderTargets(1, &D.lightRTV, FALSE, withDepth ? &D.dsv : nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
@@ -1502,8 +1551,8 @@ void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bo
 void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = deferred_[currentFrameIndex_];
     cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, withDepth ? &D.dsv : nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
@@ -1518,8 +1567,8 @@ void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearM
     auto& D = deferred_[currentFrameIndex_];
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.lightRTV, D.gbRTV[3] };
     cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
@@ -1536,8 +1585,8 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
     auto& D = deferred_[currentFrameIndex_];
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.sceneRTV, D.gbRTV[3] };
     cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
-    D3D12_VIEWPORT vp{ 0,0,float(width_),float(height_),0,1 };
-    D3D12_RECT     sr{ 0,0,(LONG)width_,(LONG)height_ };
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };

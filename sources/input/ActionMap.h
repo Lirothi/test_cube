@@ -22,7 +22,7 @@ private:
         // Returns true when any key or mouse button is active
         std::vector<int> keys;           // VK_*
         std::vector<int> mouseButtons;   // 0=Left,1=Right,2=Middle
-        // Optional: modifiers in the future
+        bool requireAllKeys = false;
     };
     struct Axis {
         // Either a key pair or a mouse axis

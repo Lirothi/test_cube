@@ -954,8 +954,8 @@ Math::float4 OceanRenderable::GetFoamTint() const
 
 Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) const
 {
-    const float width = renderer ? static_cast<float>(std::max(renderer->GetWidth(), 1u)) : 1.0f;
-    const float height = renderer ? static_cast<float>(std::max(renderer->GetHeight(), 1u)) : 1.0f;
+    const float width = renderer ? static_cast<float>(std::max(renderer->GetRenderWidth(), 1u)) : 1.0f;
+    const float height = renderer ? static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)) : 1.0f;
     return Math::float4(1.0f / width, 1.0f / height, width, height);
 }
 

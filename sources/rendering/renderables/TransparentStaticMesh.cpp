@@ -120,8 +120,8 @@ public:
         UpdateUniform(obj, cb_.sunColorExposure, material, float4(dirLight.GetColor(), dirLight.GetExposure()), cbData);
         UpdateUniform(obj, cb_.camDirWS, material, float4(camDir, 0.0f), cbData);
 
-        const float width = static_cast<float>(std::max(renderer->GetWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetHeight(), 1u));
+        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         const float invWidth = width > 0.0f ? 1.0f / width : 0.0f;
         const float invHeight = height > 0.0f ? 1.0f / height : 0.0f;
         UpdateUniform(obj, cb_.screenSizeInv, material, float4(width, height, invWidth, invHeight), cbData);
