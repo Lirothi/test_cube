@@ -10,6 +10,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "app/Systems.h"
+#include "streamline/include/sl.h"
 
 thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
 thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
@@ -31,6 +32,10 @@ Renderer::~Renderer() {
 }
 
 static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
+static void logFunctionCallback(sl::LogType type, const char* msg)
+{
+    OutputDebugStringA(msg);
+}
 
 void Renderer::Shutdown()
 {
@@ -117,6 +122,8 @@ void Renderer::Shutdown()
         commandQueue_.Reset();
     }
 
+    slShutdown();
+
     // 8) Release the device last
     if (device_) {
         device_.Reset();
@@ -135,6 +142,46 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     width_ = width;
     height_ = height;
 
+    sl::Preferences pref;
+
+    pref.applicationId = 0x12345678U;
+
+#if _DEBUG
+    pref.showConsole = true;
+    pref.logMessageCallback = &logFunctionCallback;
+    pref.logLevel = sl::LogLevel::eDefault;
+#else
+    pref.showConsole = true;
+    pref.logMessageCallback = &logFunctionCallback;
+    pref.logLevel = sl::LogLevel::eDefault;
+	//pref.logLevel = sl::LogLevel::eOff;
+#endif
+
+    sl::Feature featuresToLoad[] = {
+        sl::kFeatureDLSS,
+#ifdef STREAMLINE_FEATURE_NIS
+        sl::kFeatureNIS,
+#endif
+#ifdef STREAMLINE_FEATURE_DLSS_FG
+        sl::kFeatureDLSS_G,
+#endif
+#ifdef STREAMLINE_FEATURE_REFLEX
+        sl::kFeatureReflex,
+#endif
+        // PCL is always implicitly loaded, but request it to ensure we never have 0-sized array
+        sl::kFeaturePCL
+    };
+    pref.featuresToLoad = featuresToLoad;
+    pref.numFeaturesToLoad = static_cast<uint32_t>(std::size(featuresToLoad));
+
+    pref.renderAPI = sl::RenderAPI::eD3D12;
+
+    //pref.flags |= sl::PreferenceFlags::eUseManualHooking;
+
+	//pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+
+    auto slRes = slInit(pref, sl::kSDKVersion);
+
 #ifdef _DEBUG
     {
         ComPtr<ID3D12Debug> dbg;
@@ -146,6 +193,14 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     // --- Device ---
     ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
+
+    slSetD3DDevice(device_.Get());
+
+    sl::AdapterInfo adapterInfo{};
+    if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureDLSS, adapterInfo)))
+    {
+        int a = 0;
+    }
 
 #ifdef _DEBUG
     {
