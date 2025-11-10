@@ -192,11 +192,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     slSetD3DDevice(device_.Get());
 
-    sl::AdapterInfo adapterInfo{};
-    if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureDLSS, adapterInfo)))
-    {
-        int a = 0;
-    }
+    //sl::AdapterInfo adapterInfo{};
+    //if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureDLSS, adapterInfo)))
+    //{
+    //    int a = 0;
+    //}
 
 #ifdef _DEBUG
     {
