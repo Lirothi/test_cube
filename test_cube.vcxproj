@@ -185,6 +185,7 @@
     <ClCompile Include="sources/ocean/OceanSpectrum.cpp" />
     <ClCompile Include="sources/rendering/core/FrameResource.cpp" />
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
+    <ClCompile Include="sources/rendering/core/DlssHandler.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
@@ -246,6 +247,7 @@
     <ClInclude Include="sources/rendering/core/FrameResource.h" />
     <ClInclude Include="sources/rendering/core/RenderContext.h" />
     <ClInclude Include="sources/rendering/core/RenderContextPool.h" />
+    <ClInclude Include="sources/rendering/core/DlssHandler.h" />
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
     <ClInclude Include="sources/rendering/core/RenderPass.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
