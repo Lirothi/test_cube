@@ -160,7 +160,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invView, invView, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invProj, invProj, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.camPos, camPos, (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.frame.screenSize, float2((float)r->GetWidth(), (float)r->GetHeight()), (uint8_t*)cb0.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.frame.screenSize, float2((float)r->GetRenderWidth(), (float)r->GetRenderHeight()), (uint8_t*)cb0.cpu);
 
     // CB b1: per-light
     auto cb1 = r->GetFrameResource()->AllocDynamic(
