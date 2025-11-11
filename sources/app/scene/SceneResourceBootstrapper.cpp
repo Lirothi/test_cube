@@ -19,7 +19,6 @@ void SceneLightingCBHandles::Populate(Material* material)
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
-    view = material->ComputeCB0FieldHandle("view");
     invView = material->ComputeCB0FieldHandle("invView");
     invProj = material->ComputeCB0FieldHandle("invProj");
     lightViewProj = material->ComputeCB0FieldHandle("lightViewProj");
@@ -62,7 +61,6 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     lightCount = material->ComputeCB0FieldHandle("lightCount");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
-    shadowSize = material->ComputeCB0FieldHandle("shadowSize");
     invShadowSize = material->ComputeCB0FieldHandle("invShadowSize");
 }
 
@@ -332,7 +330,6 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);
-    matLighting_->UpdateCBField(handles.view, data.view, dest);
     matLighting_->UpdateCBField(handles.invView, data.invView, dest);
     matLighting_->UpdateCBField(handles.invProj, data.invProj, dest);
 
@@ -383,7 +380,6 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.lightCount, data.lightCount, dest);
     matSpotLightCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matSpotLightCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
-    matSpotLightCS_->UpdateCBField(handles.shadowSize, data.shadowSize, dest);
     matSpotLightCS_->UpdateCBField(handles.invShadowSize, data.invShadowSize, dest);
 }
 

@@ -38,7 +38,6 @@ public:
             cb_.proj = material->ComputeCBFieldHandle(0, "proj");
             cb_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
             cb_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
-            cb_.prevViewProj = material->ComputeCBFieldHandle(0, "prevViewProj");
             cb_.viewProjNoJitter = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
             cb_.prevViewProjNoJitter = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
             cb_.invView = material->ComputeCBFieldHandle(0, "invView");
@@ -101,7 +100,6 @@ public:
         UpdateUniform(obj, cb_.proj, material, proj, cbData);
         UpdateUniform(obj, cb_.prevWorld, material, obj.GetPreviousModelMatrix(), cbData);
         UpdateUniform(obj, cb_.viewProj, material, camera.GetViewProjMatrix(), cbData);
-        UpdateUniform(obj, cb_.prevViewProj, material, camera.GetPrevViewProjMatrix(), cbData);
         UpdateUniform(obj, cb_.viewProjNoJitter, material, camera.GetViewProjMatrixNoJitter(), cbData);
         UpdateUniform(obj, cb_.prevViewProjNoJitter, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
         UpdateUniform(obj, cb_.invView, material, invView, cbData);
@@ -192,7 +190,6 @@ private:
         Material::CBFieldHandle proj;
         Material::CBFieldHandle prevWorld;
         Material::CBFieldHandle viewProj;
-        Material::CBFieldHandle prevViewProj;
         Material::CBFieldHandle viewProjNoJitter;
         Material::CBFieldHandle prevViewProjNoJitter;
         Material::CBFieldHandle invView;

@@ -21,7 +21,6 @@ public:
             cbHandles_.world = material->ComputeCBFieldHandle(0, "world");
             cbHandles_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
             cbHandles_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
-            cbHandles_.prevViewProj = material->ComputeCBFieldHandle(0, "prevViewProj");
             cbHandles_.viewProjNoJitter = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
             cbHandles_.prevViewProjNoJitter = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
@@ -45,7 +44,6 @@ public:
         UpdateUniform(owner, cbHandles_.world, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.viewProj, material, camera.GetViewProjMatrix(), cbData);
-        UpdateUniform(owner, cbHandles_.prevViewProj, material, camera.GetPrevViewProjMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.viewProjNoJitter, material, camera.GetViewProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, cbHandles_.prevViewProjNoJitter, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
 
@@ -72,7 +70,6 @@ private:
         Material::CBFieldHandle world;
         Material::CBFieldHandle prevWorld;
         Material::CBFieldHandle viewProj;
-        Material::CBFieldHandle prevViewProj;
         Material::CBFieldHandle viewProjNoJitter;
         Material::CBFieldHandle prevViewProjNoJitter;
         Material::CBFieldHandle baseColor;

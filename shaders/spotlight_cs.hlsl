@@ -43,7 +43,6 @@ cbuffer SpotLightFrame : register(b0)
     uint   lightCount;
     float2 screenSize;
     float2 invScreenSize;
-    float2 shadowSize;
     float2 invShadowSize;
 };
 
