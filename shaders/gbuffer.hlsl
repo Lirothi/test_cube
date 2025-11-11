@@ -27,8 +27,8 @@ PSOut PSMain(VSOut i)
     {
         N = NNorm;
     }
-    float2 currUv = ClipToUV(i.clipNoJitter) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevNoJitter) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipH) + cameraJitter;
+    float2 prevUv = ClipToUV(i.prevH) + prevCameraJitter;
     float2 motion = currUv - prevUv;
 
     //albedo = N * 0.5 + 0.5;

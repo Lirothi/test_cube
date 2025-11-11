@@ -24,8 +24,6 @@ struct VSOut {
     float4 prevPos : TEXCOORD1;
     float3 dir : TEXCOORD0; // sampling direction
     float4 clipPos : TEXCOORD2;
-    float4 clipPosNoJitter : TEXCOORD3;
-    float4 prevPosNoJitter : TEXCOORD4;
 };
 
 VSOut VSMain(VSIn i)
@@ -39,21 +37,17 @@ VSOut VSMain(VSIn i)
     float4 viewPos = mul(float4(i.pos, 1.0), v);
     o.pos = mul(viewPos, proj);
     o.pos.z = 0.0f;
-    o.clipPos = o.pos;
     float4 clipNoJitter = mul(viewPos, projNoJitter);
     clipNoJitter.z = 0.0f;
-    o.clipPosNoJitter = clipNoJitter;
+    o.clipPos = clipNoJitter;
 
     float4x4 pv = prevView;
     pv._41 = 0.0;
     pv._42 = 0.0;
     pv._43 = 0.0;
     float4 prevViewPos = mul(float4(i.pos, 1.0), pv);
-    o.prevPos = mul(prevViewPos, prevProj);
+    o.prevPos = mul(prevViewPos, prevProjNoJitter);
     o.prevPos.z = 0.0f;
-    float4 prevNoJitter = mul(prevViewPos, prevProjNoJitter);
-    prevNoJitter.z = 0.0f;
-    o.prevPosNoJitter = prevNoJitter;
 
     //float3 dirWS = mul(viewPos.xyz, (float3x3) invView).xyz;
     float3 dirWS = i.pos;
@@ -75,8 +69,8 @@ PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
     //c = SRGBToLinear(c);
-    float2 currUv = ClipToUV(i.clipPosNoJitter) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevPosNoJitter) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipPos) + cameraJitter;
+    float2 prevUv = ClipToUV(i.prevPos) + prevCameraJitter;
     float2 motion = currUv - prevUv;
 
     PSOut o;
