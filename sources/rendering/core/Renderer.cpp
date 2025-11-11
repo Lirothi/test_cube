@@ -153,7 +153,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.logMessageCallback = &logFunctionCallback;
     pref.logLevel = sl::LogLevel::eDefault;
 #else
-    pref.showConsole = true;
+    pref.showConsole = false;
     pref.logMessageCallback = &logFunctionCallback;
     pref.logLevel = sl::LogLevel::eDefault;
 	//pref.logLevel = sl::LogLevel::eOff;

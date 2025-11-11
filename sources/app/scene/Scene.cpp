@@ -501,7 +501,7 @@ void Scene::PrepareViews(Renderer* renderer)
         }
     };
 
-    tc::inl_vector<SceneView*, 16> viewsToCull;
+    tc::inl_vector<SceneView*, 32> viewsToCull;
     auto enqueueView = [&viewsToCull, &prepareQueue](SceneView& view)
     {
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
