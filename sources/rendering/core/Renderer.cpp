@@ -1674,6 +1674,9 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
         return;
     }
 
+    const UINT previousRenderWidth = renderWidth_;
+    const UINT previousRenderHeight = renderHeight_;
+
     dlssMode_ = mode;
 
     if (mode == sl::DLSSMode::eOff)
@@ -1690,6 +1693,12 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
     if (mode != sl::DLSSMode::eOff)
     {
         AllocateDlssResourcesIfNeeded();
+
+        if (deferredRtvHeap_ &&
+            (renderWidth_ != previousRenderWidth || renderHeight_ != previousRenderHeight))
+        {
+            RecreateDeferredTargets();
+        }
     }
 }
 
