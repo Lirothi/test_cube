@@ -1,6 +1,7 @@
 #include "app/camera/Camera.h"
 #include "app/Systems.h"
 #include "input/InputManager.h"
+#include "rendering/core/Renderer.h"
 
 void Camera::UpdateFromInput(float dt) {
     auto& input = Systems::GetInput();
@@ -53,11 +54,17 @@ void Camera::CalcMatrices(Renderer* r)
 {
     mat4 lastView = view_.view;
     mat4 lastProj = view_.proj;
+    mat4 lastViewProj = viewProj_;
+    mat4 lastNonJitteredProj = nonJitteredProj_;
+    mat4 lastNonJitteredViewProj = nonJitteredViewProj_;
 
     if (hasPrevViewProj_)
     {
         prevView_ = lastView;
         prevProj_ = lastProj;
+        prevViewProj_ = lastViewProj;
+        prevNonJitteredProj_ = lastNonJitteredProj;
+        prevNonJitteredViewProj_ = lastNonJitteredViewProj;
     }
 
     mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
@@ -68,20 +75,41 @@ void Camera::CalcMatrices(Renderer* r)
     view_.invView = mat4::Inverse(newView);
     const float aspect = float(r->GetWidth()) / float(r->GetHeight());
     const float vfov = 2.f * atan(tan(view_.hfov * 0.5f) / aspect);
-    mat4 newProj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, view_.zNear, view_.zFar);
-    view_.proj = newProj;
-    view_.invProj = mat4::Inverse(newProj);
+    mat4 baseProj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, view_.zNear, view_.zFar);
+
+    nonJitteredProj_ = baseProj;
+    invNonJitteredProj_ = mat4::Inverse(baseProj);
+
+    Math::float2 jitter(0.0f, 0.0f);
+    if (r)
+    {
+        jitter = r->GetCameraJitter();
+    }
+
+    mat4 jitteredProj = baseProj;
+    if (jitter.x != 0.0f || jitter.y != 0.0f)
+    {
+        jitteredProj.m._31 += jitter.x * 2.0f;
+        jitteredProj.m._32 -= jitter.y * 2.0f;
+    }
+
+    view_.proj = jitteredProj;
+    view_.invProj = mat4::Inverse(jitteredProj);
     view_.position = position_;
     dir_ = look.Normalized();
 
     viewProj_ = view_.view * view_.proj;
+    nonJitteredViewProj_ = view_.view * nonJitteredProj_;
     prevViewProj_ = prevView_ * prevProj_;
+    prevNonJitteredViewProj_ = prevView_ * prevNonJitteredProj_;
 
     if (!hasPrevViewProj_)
     {
         prevView_ = view_.view;
         prevProj_ = view_.proj;
         prevViewProj_ = viewProj_;
+        prevNonJitteredProj_ = nonJitteredProj_;
+        prevNonJitteredViewProj_ = nonJitteredViewProj_;
         hasPrevViewProj_ = true;
     }
 }
@@ -91,5 +119,7 @@ void Camera::ResetHistory()
     prevView_ = view_.view;
     prevProj_ = view_.proj;
     prevViewProj_ = viewProj_;
+    prevNonJitteredProj_ = nonJitteredProj_;
+    prevNonJitteredViewProj_ = nonJitteredViewProj_;
     hasPrevViewProj_ = true;
 }

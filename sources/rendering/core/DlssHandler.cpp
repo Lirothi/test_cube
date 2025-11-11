@@ -23,6 +23,19 @@ namespace
     {
         return sl::float3(v.x, v.y, v.z);
     }
+
+    float Halton(uint32_t index, uint32_t base)
+    {
+        float result = 0.0f;
+        float f = 1.0f;
+        while (index > 0)
+        {
+            f /= static_cast<float>(base);
+            result += f * static_cast<float>(index % base);
+            index /= base;
+        }
+        return result;
+    }
 }
 
 DlssHandler::DlssHandler(Renderer& renderer)
@@ -47,6 +60,23 @@ DlssHandler::DlssHandler(Renderer& renderer)
     constants_.motionVectorsInvalidValue = sl::INVALID_FLOAT;
 }
 
+void DlssHandler::ResetJitterSequence()
+{
+    haltonIndex_ = 0;
+    jitterPixels_ = Math::float2(0.0f, 0.0f);
+    constants_.jitterOffset = sl::float2(0.0f, 0.0f);
+    constants_.motionVectorsJittered = sl::Boolean::eFalse;
+}
+
+Math::float2 DlssHandler::GenerateJitterSample()
+{
+    const uint32_t sampleIndex = (haltonIndex_ % kHaltonSequenceLength_) + 1;
+    const float jitterX = Halton(sampleIndex, 2) - 0.5f;
+    const float jitterY = Halton(sampleIndex, 3) - 0.5f;
+    haltonIndex_ = (haltonIndex_ + 1) % kHaltonSequenceLength_;
+    return Math::float2(jitterX, jitterY);
+}
+
 void DlssHandler::Shutdown()
 {
     if (resourcesAllocated_)
@@ -59,6 +89,7 @@ void DlssHandler::Shutdown()
     active_ = false;
     available_ = false;
     outputValid_ = false;
+    ResetJitterSequence();
 }
 
 void DlssHandler::OnStreamlineInitialized(sl::Result initResult)
@@ -68,6 +99,7 @@ void DlssHandler::OnStreamlineInitialized(sl::Result initResult)
     frameToken_ = nullptr;
     outputValid_ = false;
     resetPending_ = true;
+    ResetJitterSequence();
 
     if (available_)
     {
@@ -87,12 +119,31 @@ void DlssHandler::OnBeginFrame()
     if (!available_)
     {
         frameToken_ = nullptr;
+        ResetJitterSequence();
         return;
     }
 
     if (slGetNewFrameToken(frameToken_) != sl::Result::eOk)
     {
         frameToken_ = nullptr;
+    }
+
+    if (frameToken_ == nullptr)
+    {
+        ResetJitterSequence();
+        outputValid_ = false;
+        return;
+    }
+
+    if (IsActive())
+    {
+        jitterPixels_ = GenerateJitterSample();
+        constants_.jitterOffset = sl::float2(jitterPixels_.x, jitterPixels_.y);
+        constants_.motionVectorsJittered = sl::Boolean::eTrue;
+    }
+    else
+    {
+        ResetJitterSequence();
     }
 }
 
@@ -109,6 +160,7 @@ void DlssHandler::OnDisplaySizeChanged()
 
     resetPending_ = true;
     outputValid_ = false;
+    ResetJitterSequence();
 }
 
 void DlssHandler::OnRenderResolutionScaleChanged()
@@ -121,16 +173,21 @@ void DlssHandler::OnRenderResolutionScaleChanged()
     {
         renderer_.RecreateDeferredTargets();
     }
+
+    ResetJitterSequence();
 }
 
 void DlssHandler::UpdateSettings()
 {
+    const bool wasActive = active_;
+
     if (renderer_.dlssMode_ == sl::DLSSMode::eOff)
     {
         active_ = false;
         dlssRenderWidth_ = std::max(renderer_.width_, 1u);
         dlssRenderHeight_ = std::max(renderer_.height_, 1u);
         RefreshRenderResolution();
+        ResetJitterSequence();
         return;
     }
 
@@ -140,6 +197,7 @@ void DlssHandler::UpdateSettings()
         dlssRenderWidth_ = std::max(renderer_.width_, 1u);
         dlssRenderHeight_ = std::max(renderer_.height_, 1u);
         RefreshRenderResolution();
+        ResetJitterSequence();
         return;
     }
 
@@ -167,6 +225,11 @@ void DlssHandler::UpdateSettings()
     outputValid_ = false;
     resetPending_ = true;
     RefreshRenderResolution();
+
+    if (active_ != wasActive)
+    {
+        ResetJitterSequence();
+    }
 }
 
 void DlssHandler::AllocateResourcesIfNeeded()
@@ -197,11 +260,11 @@ void DlssHandler::UpdateCameraData(const Camera& camera)
         return;
     }
 
-    const Math::mat4& proj = camera.GetProjMatrix();
-    const Math::mat4& invProj = camera.GetInvProjMatrix();
+    const Math::mat4& proj = camera.GetProjMatrixNoJitter();
+    const Math::mat4& invProj = camera.GetInvProjMatrixNoJitter();
     const Math::mat4& invView = camera.GetInvViewMatrix();
     const Math::mat4& prevView = camera.GetPrevViewMatrix();
-    const Math::mat4& prevProj = camera.GetPrevProjMatrix();
+    const Math::mat4& prevProj = camera.GetPrevProjMatrixNoJitter();
 
     Math::mat4 clipToView = invProj;
     Math::mat4 clipToPrevClip = clipToView * invView * prevView * prevProj;
@@ -211,6 +274,7 @@ void DlssHandler::UpdateCameraData(const Camera& camera)
     constants_.clipToCameraView = ToSlMatrix(invProj);
     constants_.clipToPrevClip = ToSlMatrix(clipToPrevClip);
     constants_.prevClipToClip = ToSlMatrix(prevClipToClip);
+    constants_.jitterOffset = sl::float2(jitterPixels_.x, jitterPixels_.y);
 
     constants_.cameraPos = ToSlFloat3(camera.GetPosition());
 
@@ -325,7 +389,21 @@ bool DlssHandler::IsActive() const
 
 void DlssHandler::SetActive(bool active)
 {
-	active_ = active;
+    if (active_ == active)
+    {
+        return;
+    }
+
+    active_ = active;
+
+    if (!active_)
+    {
+        ResetJitterSequence();
+    }
+    else
+    {
+        haltonIndex_ = 0;
+    }
 }
 
 void DlssHandler::RefreshRenderResolution()
@@ -363,6 +441,7 @@ void DlssHandler::HandleAllocationFailure()
     outputValid_ = false;
     resetPending_ = true;
     RefreshRenderResolution();
+    ResetJitterSequence();
 
     if (renderer_.deferredRtvHeap_)
     {
