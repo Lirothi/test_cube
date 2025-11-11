@@ -57,6 +57,7 @@ void Camera::CalcMatrices(Renderer* r)
     mat4 lastViewProj = viewProj_;
     mat4 lastNonJitteredProj = nonJitteredProj_;
     mat4 lastNonJitteredViewProj = nonJitteredViewProj_;
+    Math::float2 lastJitter = jitter_;
 
     if (hasPrevViewProj_)
     {
@@ -65,6 +66,7 @@ void Camera::CalcMatrices(Renderer* r)
         prevViewProj_ = lastViewProj;
         prevNonJitteredProj_ = lastNonJitteredProj;
         prevNonJitteredViewProj_ = lastNonJitteredViewProj;
+        prevJitter_ = lastJitter;
     }
 
     mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
@@ -85,6 +87,8 @@ void Camera::CalcMatrices(Renderer* r)
     {
         jitter = r->GetCameraJitter();
     }
+
+    jitter_ = jitter;
 
     mat4 jitteredProj = baseProj;
     if (jitter.x != 0.0f || jitter.y != 0.0f)
@@ -110,6 +114,7 @@ void Camera::CalcMatrices(Renderer* r)
         prevViewProj_ = viewProj_;
         prevNonJitteredProj_ = nonJitteredProj_;
         prevNonJitteredViewProj_ = nonJitteredViewProj_;
+        prevJitter_ = jitter_;
         hasPrevViewProj_ = true;
     }
 }
@@ -121,5 +126,6 @@ void Camera::ResetHistory()
     prevViewProj_ = viewProj_;
     prevNonJitteredProj_ = nonJitteredProj_;
     prevNonJitteredViewProj_ = nonJitteredViewProj_;
+    prevJitter_ = jitter_;
     hasPrevViewProj_ = true;
 }

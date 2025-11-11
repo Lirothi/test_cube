@@ -22,6 +22,10 @@ public:
             cbHandles_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
             cbHandles_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
             cbHandles_.prevViewProj = material->ComputeCBFieldHandle(0, "prevViewProj");
+            cbHandles_.viewProjNoJitter = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
+            cbHandles_.prevViewProjNoJitter = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
+            cbHandles_.cameraJitter = material->ComputeCBFieldHandle(0, "cameraJitter");
+            cbHandles_.prevCameraJitter = material->ComputeCBFieldHandle(0, "prevCameraJitter");
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
@@ -44,6 +48,10 @@ public:
         UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.viewProj, material, camera.GetViewProjMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.prevViewProj, material, camera.GetPrevViewProjMatrix(), cbData);
+        UpdateUniform(owner, cbHandles_.viewProjNoJitter, material, camera.GetViewProjMatrixNoJitter(), cbData);
+        UpdateUniform(owner, cbHandles_.prevViewProjNoJitter, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
+        UpdateUniform(owner, cbHandles_.cameraJitter, material, camera.GetJitter(), cbData);
+        UpdateUniform(owner, cbHandles_.prevCameraJitter, material, camera.GetPrevJitter(), cbData);
 
         const auto& p = params_;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
@@ -69,6 +77,10 @@ private:
         Material::CBFieldHandle prevWorld;
         Material::CBFieldHandle viewProj;
         Material::CBFieldHandle prevViewProj;
+        Material::CBFieldHandle viewProjNoJitter;
+        Material::CBFieldHandle prevViewProjNoJitter;
+        Material::CBFieldHandle cameraJitter;
+        Material::CBFieldHandle prevCameraJitter;
         Material::CBFieldHandle baseColor;
         Material::CBFieldHandle metalRough;
         Material::CBFieldHandle texOffsScale;
