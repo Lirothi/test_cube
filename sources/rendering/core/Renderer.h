@@ -170,6 +170,7 @@ public:
     UINT GetRenderWidth() const { return renderWidth_; }
     UINT GetRenderHeight() const { return renderHeight_; }
     float GetRenderResolutionScale() const { return renderResolutionScale_; }
+    Math::float2 GetCameraJitter() const;
 
     ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < kFrameCount ? renderTargets_[currentFrameIndex_].Get() : nullptr; }
 

@@ -1639,6 +1639,19 @@ void Renderer::UpdateDlssCameraData(const Camera& camera)
     }
 }
 
+Math::float2 Renderer::GetCameraJitter() const
+{
+    if (dlssHandler_ && dlssHandler_->IsActive())
+    {
+        const Math::float2 jitterPixels = dlssHandler_->GetCurrentJitterPixels();
+        const float renderWidth = static_cast<float>(std::max(renderWidth_, 1u));
+        const float renderHeight = static_cast<float>(std::max(renderHeight_, 1u));
+        return Math::float2(jitterPixels.x / renderWidth, jitterPixels.y / renderHeight);
+    }
+
+    return Math::float2(0.0f, 0.0f);
+}
+
 bool Renderer::EvaluateDLSS(ID3D12GraphicsCommandList* cl)
 {
     if (!dlssHandler_)

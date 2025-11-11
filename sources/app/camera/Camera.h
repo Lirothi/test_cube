@@ -53,8 +53,13 @@ public:
     const mat4& GetInvProjMatrix() const { return view_.invProj; }
     const mat4& GetPrevViewMatrix() const { return prevView_; }
     const mat4& GetPrevProjMatrix() const { return prevProj_; }
+    const mat4& GetProjMatrixNoJitter() const { return nonJitteredProj_; }
+    const mat4& GetInvProjMatrixNoJitter() const { return invNonJitteredProj_; }
+    const mat4& GetPrevProjMatrixNoJitter() const { return prevNonJitteredProj_; }
     const mat4& GetViewProjMatrix() const { return viewProj_; }
     const mat4& GetPrevViewProjMatrix() const { return prevViewProj_; }
+    const mat4& GetViewProjMatrixNoJitter() const { return nonJitteredViewProj_; }
+    const mat4& GetPrevViewProjMatrixNoJitter() const { return prevNonJitteredViewProj_; }
     void ResetHistory();
 
     const float3& GetDirection() const { return dir_; }
@@ -97,6 +102,11 @@ private:
     mat4 prevProj_ = mat4::Identity();
     mat4 viewProj_ = mat4::Identity();
     mat4 prevViewProj_ = mat4::Identity();
+    mat4 nonJitteredProj_ = mat4::Identity();
+    mat4 invNonJitteredProj_ = mat4::Identity();
+    mat4 nonJitteredViewProj_ = mat4::Identity();
+    mat4 prevNonJitteredProj_ = mat4::Identity();
+    mat4 prevNonJitteredViewProj_ = mat4::Identity();
     float3 dir_;
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]

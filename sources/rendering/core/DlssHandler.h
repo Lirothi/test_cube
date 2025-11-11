@@ -8,6 +8,8 @@
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
 
+#include "core/math/Math.h"
+
 class Camera;
 class Renderer;
 
@@ -27,6 +29,8 @@ public:
     bool Evaluate(ID3D12GraphicsCommandList* cl);
     void RefreshRenderResolution();
 
+    Math::float2 GetCurrentJitterPixels() const { return jitterPixels_; }
+
     bool IsActive() const;
     void SetActive(bool active);
     bool IsAvailable() const { return available_; }
@@ -35,6 +39,8 @@ public:
 
 private:
     void HandleAllocationFailure();
+    void ResetJitterSequence();
+    Math::float2 GenerateJitterSample();
 
 private:
     Renderer& renderer_;
@@ -49,4 +55,7 @@ private:
     sl::FrameToken* frameToken_ = nullptr;
     UINT dlssRenderWidth_ = 0;
     UINT dlssRenderHeight_ = 0;
+    Math::float2 jitterPixels_ = Math::float2(0.0f, 0.0f);
+    uint32_t haltonIndex_ = 0;
+    static constexpr uint32_t kHaltonSequenceLength_ = 1024;
 };
