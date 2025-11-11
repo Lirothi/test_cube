@@ -265,7 +265,9 @@ public:
             cascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "cascadeLengthScales");
             inverseCascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "inverseCascadeLengthScales");
             clipMapParamsHandle_ = material->ComputeCBFieldHandle(0, "clipMapParams");
+            prevClipMapParamsHandle_ = material->ComputeCBFieldHandle(0, "prevClipMapParams");
             clipMapViewerHandle_ = material->ComputeCBFieldHandle(0, "clipMapViewer");
+            prevClipMapViewerHandle_ = material->ComputeCBFieldHandle(0, "prevClipMapViewer");
             foamParams0Handle_ = material->ComputeCBFieldHandle(0, "foamParams0");
             foamParams1Handle_ = material->ComputeCBFieldHandle(0, "foamParams1");
             foamCascadeWeightsHandle_ = material->ComputeCBFieldHandle(0, "foamCascadeWeights");
@@ -305,7 +307,9 @@ public:
             cascadeLengthScalesHandle_ = {};
             inverseCascadeLengthScalesHandle_ = {};
             clipMapParamsHandle_ = {};
+            prevClipMapParamsHandle_ = {};
             clipMapViewerHandle_ = {};
+            prevClipMapViewerHandle_ = {};
             foamParams0Handle_ = {};
             foamParams1Handle_ = {};
             foamCascadeWeightsHandle_ = {};
@@ -359,7 +363,9 @@ public:
         UpdateUniform(owner, cascadeLengthScalesHandle_, material, owner_.GetCascadeLengthScales(), cbData);
         UpdateUniform(owner, inverseCascadeLengthScalesHandle_, material, owner_.GetCascadeInvLengthScales(), cbData);
         UpdateUniform(owner, clipMapParamsHandle_, material, owner_.GetClipMapParams(), cbData);
+        UpdateUniform(owner, prevClipMapParamsHandle_, material, owner_.GetPrevClipMapParams(), cbData);
         UpdateUniform(owner, clipMapViewerHandle_, material, owner_.GetClipMapViewer(), cbData);
+        UpdateUniform(owner, prevClipMapViewerHandle_, material, owner_.GetPrevClipMapViewer(), cbData);
         UpdateUniform(owner, foamParams0Handle_, material, owner_.GetFoamParams0(), cbData);
         UpdateUniform(owner, foamParams1Handle_, material, owner_.GetFoamParams1(), cbData);
         UpdateUniform(owner, foamCascadeWeightsHandle_, material, owner_.GetFoamCascadeWeights(), cbData);
@@ -404,7 +410,9 @@ private:
     Material::CBFieldHandle cascadeLengthScalesHandle_{};
     Material::CBFieldHandle inverseCascadeLengthScalesHandle_{};
     Material::CBFieldHandle clipMapParamsHandle_{};
+    Material::CBFieldHandle prevClipMapParamsHandle_{};
     Material::CBFieldHandle clipMapViewerHandle_{};
+    Material::CBFieldHandle prevClipMapViewerHandle_{};
     Material::CBFieldHandle foamParams0Handle_{};
     Material::CBFieldHandle foamParams1Handle_{};
     Material::CBFieldHandle foamCascadeWeightsHandle_{};
@@ -464,6 +472,7 @@ void OceanRenderable::Init(Renderer* renderer,
     simulation_->Initialize(renderer, uploadCmdList, uploadKeepAlive);
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
+    clipMapHasHistory_ = false;
     UpdateClipLevels();
 
     auto loadTexture = [&](Texture2D& tex, const wchar_t* path, Texture2D::Usage usage)
@@ -525,7 +534,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 12> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -549,6 +558,17 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         displacementSrv = fallbackSrv;
     }
     pushSrv(displacementSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE prevDisplacementSrv = {};
+    if (simulation_->HasPreviousDisplacement())
+    {
+        prevDisplacementSrv = simulation_->GetPreviousDisplacementSRV();
+    }
+    if (prevDisplacementSrv.ptr == 0)
+    {
+        prevDisplacementSrv = displacementSrv;
+    }
+    pushSrv(prevDisplacementSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv = simulation_->GetFoamTurbulenceSRV();
     if (foamSrv.ptr == 0)
@@ -598,6 +618,10 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, simulation_->GetDisplacementResource(), srvState);
+    if (auto* prevDisplacement = simulation_->GetPreviousDisplacementResource())
+    {
+        renderer->Transition(cl, prevDisplacement, srvState);
+    }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
@@ -664,6 +688,12 @@ void OceanRenderable::UpdateClipLevels()
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
 
+    const Math::float3 previousViewer = clipMapViewer_;
+    const float previousScale = clipMapScale_;
+    const float previousHalfSize = clipMapLevelHalfSize_;
+    const float previousFade = cascadesFadeScale_;
+    const bool hadHistory = clipMapHasHistory_;
+
     clipMapLevelHalfSize_ = static_cast<float>(ClipLevelHalfSize(meshVertexDensity_));
     clipMapViewer_ = Math::float3(viewerXZ_.x, viewerHeight_, viewerXZ_.y);
     const float absHeight = std::abs(clipMapViewer_.y);
@@ -681,6 +711,23 @@ void OceanRenderable::UpdateClipLevels()
     const float halfSize = std::max(1.0f, clipMapLevelHalfSize_);
     clipMapScale_ = (minMeshScale_ / halfSize) * std::pow(2.0f, static_cast<float>(meshExponent));
     clipMapScale_ = std::max(clipMapScale_, 1.0e-3f);
+
+    if (!hadHistory)
+    {
+        prevClipMapViewer_ = clipMapViewer_;
+        prevClipMapScale_ = clipMapScale_;
+        prevClipMapLevelHalfSize_ = clipMapLevelHalfSize_;
+        prevCascadesFadeScale_ = cascadesFadeScale_;
+        clipMapHasHistory_ = true;
+    }
+    else
+    {
+        prevClipMapViewer_ = previousViewer;
+        prevClipMapScale_ = previousScale;
+        prevClipMapLevelHalfSize_ = previousHalfSize;
+        prevCascadesFadeScale_ = previousFade;
+    }
+
     for (uint32_t level = 0; level < clipLevels_.size(); ++level)
     {
         const float scale = patchLength * std::pow(2.0f, static_cast<float>(level));
@@ -794,6 +841,16 @@ Math::float4 OceanRenderable::GetClipMapParams() const
 Math::float4 OceanRenderable::GetClipMapViewer() const
 {
     return Math::float4(clipMapViewer_.x, clipMapViewer_.y, clipMapViewer_.z, 0.0f);
+}
+
+Math::float4 OceanRenderable::GetPrevClipMapParams() const
+{
+    return Math::float4(prevClipMapScale_, prevClipMapLevelHalfSize_, static_cast<float>(meshVertexDensity_), prevCascadesFadeScale_);
+}
+
+Math::float4 OceanRenderable::GetPrevClipMapViewer() const
+{
+    return Math::float4(prevClipMapViewer_.x, prevClipMapViewer_.y, prevClipMapViewer_.z, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamParams0() const
@@ -975,5 +1032,6 @@ void OceanRenderable::SetGridVertexDensity(uint32_t density)
         return;
     }
     meshVertexDensity_ = clamped;
+    clipMapHasHistory_ = false;
     UpdateClipLevels();
 }
