@@ -9,7 +9,6 @@ cbuffer PerObject : register(b0)
     float4x4 world;
     float4x4 prevWorld;
     float4x4 viewProj;
-    float4x4 prevViewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
 
@@ -64,7 +63,6 @@ inline VSOut BaseVS(float3 pos,
                     float4x4 world,
                     float4x4 prevWorld,
                     float4x4 viewProj,
-                    float4x4 prevViewProj,
                     float3 norm,
                     float4 tangent,
                     float2 uv)

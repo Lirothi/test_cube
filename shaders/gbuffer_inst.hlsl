@@ -21,7 +21,7 @@ VSOut VSMain(VSInInst i)
 {
     float4x4 w = mul(gInstances[i.IID].world, world);
     float4x4 pw = mul(gInstances[i.IID].prevWorld, prevWorld);
-    return BaseVS(i.P, w, pw, viewProj, prevViewProj, i.N, i.T, i.UV);
+    return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV);
 }
 
 PSOut PSMain(VSOut i)

@@ -1139,7 +1139,6 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         constants.exposure = dirLight_.GetExposure();
         constants.camPos = camera.GetPosition();
         constants.camDir = camDir;
-        constants.view = view;
         constants.invView = invView;
         constants.invProj = invProj;
         for (size_t i = 0; i < constants.lightViewProj.size(); ++i)
@@ -1257,7 +1256,6 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().spotShadowRes);
         const float invRes = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
-        constants.shadowSize = float2(shadowRes, shadowRes);
         constants.invShadowSize = float2(invRes, invRes);
         constants.lightCount = static_cast<uint32_t>(spotLightCount);
 

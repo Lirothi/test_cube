@@ -9,7 +9,7 @@ SamplerState gSmp : register(s0);
 
 VSOut VSMain(VSIn i)
 {
-    return BaseVS(i.P, world, prevWorld, viewProj, prevViewProj, i.N, i.T, i.UV);
+    return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV);
 }
 
 PSOut PSMain(VSOut i)

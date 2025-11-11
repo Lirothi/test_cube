@@ -52,12 +52,9 @@ private:
 
         struct ColorHandles {
             struct PerFrame {
-                Material::CBFieldHandle view;
-                Material::CBFieldHandle proj;
                 Material::CBFieldHandle invView;
                 Material::CBFieldHandle invProj;
                 Material::CBFieldHandle camPos;
-                Material::CBFieldHandle screenSize;
             } frame;
 
             struct PerLight {

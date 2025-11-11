@@ -14,14 +14,10 @@ SamplerState SampPt  : register(s1);
 
 cbuffer PerFrame : register(b0)
 {
-    float4x4 view;
-    float4x4 proj;
     float4x4 invView;
     float4x4 invProj;
     float3   camPosWS;
     float    _pad0;
-    float2   screenSize;
-    float2   _pad1;
 };
 
 cbuffer LightCB : register(b1)

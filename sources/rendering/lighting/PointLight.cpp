@@ -108,12 +108,9 @@ void PointLight::RebuildHandleCache()
 
     if (matColorFS_)
     {
-        cbHandles_.color.frame.view = matColorFS_->ComputeCBFieldHandle(0, "view");
-        cbHandles_.color.frame.proj = matColorFS_->ComputeCBFieldHandle(0, "proj");
         cbHandles_.color.frame.invView = matColorFS_->ComputeCBFieldHandle(0, "invView");
         cbHandles_.color.frame.invProj = matColorFS_->ComputeCBFieldHandle(0, "invProj");
         cbHandles_.color.frame.camPos = matColorFS_->ComputeCBFieldHandle(0, "camPosWS");
-        cbHandles_.color.frame.screenSize = matColorFS_->ComputeCBFieldHandle(0, "screenSize");
 
         cbHandles_.color.light.position = matColorFS_->ComputeCBFieldHandle(1, "lightPosWS");
         cbHandles_.color.light.radius = matColorFS_->ComputeCBFieldHandle(1, "lightRadius");
@@ -151,16 +148,16 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
                              const mat4& invView, const mat4& invProj,
                              const float3& camPos)
 {
+    (void)view;
+    (void)proj;
+
     // CB b0: per-frame
     auto cb0 = r->GetFrameResource()->AllocDynamic(
         matColorFS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
         Renderer::kConstantBufferAlignment);
-    matColorFS_->UpdateCBField(cbHandles_.color.frame.view, view, (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.frame.proj, proj, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invView, invView, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invProj, invProj, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.camPos, camPos, (uint8_t*)cb0.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.frame.screenSize, float2((float)r->GetRenderWidth(), (float)r->GetRenderHeight()), (uint8_t*)cb0.cpu);
 
     // CB b1: per-light
     auto cb1 = r->GetFrameResource()->AllocDynamic(

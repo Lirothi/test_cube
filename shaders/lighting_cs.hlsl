@@ -30,7 +30,6 @@ cbuffer PerFrame : register(b0)
     float3 camPosWS;
     float3 camDirWS;
 
-    float4x4 view;
     float4x4 invView;
     float4x4 invProj;
 

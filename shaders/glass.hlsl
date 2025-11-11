@@ -27,7 +27,6 @@ cbuffer GlassParams : register(b0)
     float4x4 proj;
     float4x4 prevWorld;
     float4x4 viewProj;
-    float4x4 prevViewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
     float4x4 invView;

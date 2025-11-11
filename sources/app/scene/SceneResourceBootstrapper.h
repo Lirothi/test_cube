@@ -24,7 +24,6 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
-    Material::CBFieldHandle view;
     Material::CBFieldHandle invView;
     Material::CBFieldHandle invProj;
     Material::CBFieldHandle lightViewProj;
@@ -59,7 +58,6 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle lightCount;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
-    Material::CBFieldHandle shadowSize;
     Material::CBFieldHandle invShadowSize;
 
     void Populate(Material* material);
@@ -120,7 +118,6 @@ struct LightingPassConstants
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};
-    mat4 view{};
     mat4 invView{};
     mat4 invProj{};
     std::array<mat4, 4> lightViewProj{};
@@ -151,7 +148,6 @@ struct SpotLightPassConstants
     uint32_t lightCount = 0;
     float2 screenSize{};
     float2 invScreenSize{};
-    float2 shadowSize{};
     float2 invShadowSize{};
 };
 
