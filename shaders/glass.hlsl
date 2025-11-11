@@ -77,8 +77,6 @@ struct VSOut
     float4 posH : SV_POSITION;
     float4 prevPosH : TEXCOORD5;
     float4 clipPos : TEXCOORD6;
-    float4 clipPosNoJitter : TEXCOORD7;
-    float4 prevClipNoJitter : TEXCOORD8;
     float3 posWS : TEXCOORD0;
     float3 normalWS : TEXCOORD1;
     float3 tangentWS : TEXCOORD2;
@@ -93,11 +91,9 @@ VSOut VSMain(VSIn input)
     float4 worldPos = mul(localPos, world);
     o.posWS = worldPos.xyz;
     o.posH = mul(worldPos, viewProj);
-    o.clipPos = o.posH;
-    o.clipPosNoJitter = mul(worldPos, viewProjNoJitter);
+    o.clipPos = mul(worldPos, viewProjNoJitter);
     float4 prevWorldPos = mul(localPos, prevWorld);
-    o.prevPosH = mul(prevWorldPos, prevViewProj);
-    o.prevClipNoJitter = mul(prevWorldPos, prevViewProjNoJitter);
+    o.prevPosH = mul(prevWorldPos, prevViewProjNoJitter);
     float3x3 w3 = (float3x3) world;
     float3 tangentWS = mul(input.T.xyz, w3);
     float3 normalWS = mul(input.N, w3);
@@ -399,8 +395,8 @@ PSOut PSMain(VSOut i)
     //color = alpha.xxx;
     //alpha = 1.0f;
 
-    float2 currUv = ClipToUV(i.clipPosNoJitter) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevClipNoJitter) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipPos) + cameraJitter;
+    float2 prevUv = ClipToUV(i.prevPosH) + prevCameraJitter;
     float2 motion = currUv - prevUv;
 
     PSOut o;

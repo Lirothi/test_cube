@@ -49,8 +49,6 @@ struct VSOut
     float4 H : SV_POSITION;
     float4 clipH : TEXCOORD4;
     float4 prevH : TEXCOORD3;
-    float4 clipNoJitter : TEXCOORD5;
-    float4 prevNoJitter : TEXCOORD6;
     float3 NWS : TEXCOORD1;
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
     float2 UV : TEXCOORD0;
@@ -77,10 +75,8 @@ inline VSOut BaseVS(float3 pos,
     float4 posH = float4(pos, 1.0f);
     float4 worldPos = mul(posH, world);
     o.H = mul(worldPos, viewProj);
-    o.clipH = o.H;
-    o.prevH = mul(mul(posH, prevWorld), prevViewProj);
-    o.clipNoJitter = mul(worldPos, viewProjNoJitter);
-    o.prevNoJitter = mul(mul(posH, prevWorld), prevViewProjNoJitter);
+    o.clipH = mul(worldPos, viewProjNoJitter);
+    o.prevH = mul(mul(posH, prevWorld), prevViewProjNoJitter);
 
     float3x3 w3 = (float3x3) world;
     float3 N = NormalizeSafe(TransformDirectionWS(norm, w3), float3(0, 0, 1));

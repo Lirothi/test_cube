@@ -40,8 +40,8 @@ PSOut PSMain(VSOut i)
         N = NNorm;
     }
 
-    float2 currUv = ClipToUV(i.clipNoJitter) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevNoJitter) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipH) + cameraJitter;
+    float2 prevUv = ClipToUV(i.prevH) + prevCameraJitter;
     float2 motion = currUv - prevUv;
 
     return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);

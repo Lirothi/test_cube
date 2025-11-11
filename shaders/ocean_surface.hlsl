@@ -81,8 +81,6 @@ struct VSOutput
     float4 positionNDC : TEXCOORD2;
     float viewDepth : TEXCOORD3;
     float4 prevPositionNDC : TEXCOORD4;
-    float4 positionNDCNoJitter : TEXCOORD5;
-    float4 prevPositionNDCNoJitter : TEXCOORD6;
 };
 
 struct DerivativesSet
@@ -443,13 +441,10 @@ VSOutput VSMain(VSInput input)
     output.viewDepth = viewPos.z;
     float4 clipPos = mul(worldH, viewProj);
     output.position = clipPos;
-    output.positionNDC = clipPos;
-    float4 clipPosNoJitter = mul(worldH, viewProjNoJitter);
-    output.positionNDCNoJitter = clipPosNoJitter;
+    output.positionNDC = mul(worldH, viewProjNoJitter);
     float4 prevLocal = float4(prevWorldPos, 1.0f);
     float4 prevWorld = mul(prevLocal, prevModel);
-    output.prevPositionNDC = mul(prevWorld, prevViewProj);
-    output.prevPositionNDCNoJitter = mul(prevWorld, prevViewProjNoJitter);
+    output.prevPositionNDC = mul(prevWorld, prevViewProjNoJitter);
     return output;
 }
 
@@ -945,8 +940,8 @@ PSOut PSMain(VSOutput input)
     float3 color = GetOceanColor(li, foamData);
     float4 outColor = float4(saturate(color), 1.0f);
 
-    float2 currUv = ClipToUV(input.positionNDCNoJitter) + cameraJitter;
-    float2 prevUv = ClipToUV(input.prevPositionNDCNoJitter) + prevCameraJitter;
+    float2 currUv = ClipToUV(input.positionNDC) + cameraJitter;
+    float2 prevUv = ClipToUV(input.prevPositionNDC) + prevCameraJitter;
     float2 motion = currUv - prevUv;
 
     PSOut o;
