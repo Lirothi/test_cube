@@ -212,6 +212,7 @@ public:
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
     bool IsDlssActive() const;
+    void SetDlssActive(bool active);
     D3D12_CPU_DESCRIPTOR_HANDLE GetTonemapSourceSrvCPU() const;
 
     template<class Alloc, class It>

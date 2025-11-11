@@ -14,6 +14,7 @@
     { "name": "Wireframe", "keys": ["F3"] },
     { "name": "DebugTex", "keys": ["F4"] },
     { "name": "ToggleSSR", "keys": ["F5"] },
+    { "name": "ToggleDLSS", "keys": ["F6"] },
     { "name": "ToggleProfiler", "keys": ["F9"] },
     { "name": "CaptureTrace", "keys": ["F11"] },
     { "name": "GenerateFont", "keys": ["F8"] },

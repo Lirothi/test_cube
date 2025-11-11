@@ -28,6 +28,7 @@ public:
     void RefreshRenderResolution();
 
     bool IsActive() const;
+    void SetActive(bool active);
     bool IsAvailable() const { return available_; }
     bool ShouldUseUpscaledOutput() const { return IsActive() && outputValid_; }
     void InvalidateOutput() { outputValid_ = false; }
@@ -42,7 +43,7 @@ private:
     bool resourcesAllocated_ = false;
     bool resetPending_ = true;
     bool outputValid_ = false;
-    sl::ViewportHandle viewport_{ 0 };
+    sl::ViewportHandle viewport_{ 1 };
     sl::DLSSOptions options_{};
     sl::Constants constants_{};
     sl::FrameToken* frameToken_ = nullptr;

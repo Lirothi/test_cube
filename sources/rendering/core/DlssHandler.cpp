@@ -167,7 +167,9 @@ void DlssHandler::AllocateResourcesIfNeeded()
         return;
     }
 
-    if (slAllocateResources(nullptr, sl::kFeatureDLSS, viewport_) == sl::Result::eOk)
+    //auto res = slAllocateResources(nullptr, sl::kFeatureDLSS, viewport_);
+    auto res = sl::Result::eOk;
+    if (res == sl::Result::eOk)
     {
         resourcesAllocated_ = true;
         resetPending_ = true;
@@ -297,7 +299,8 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
         return false;
     }
 
-    if (slEvaluateFeature(sl::kFeatureDLSS, *frameToken_, nullptr, 0, reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
+    const sl::BaseStructure* inputs[] = { &viewport_ };
+    if (slEvaluateFeature(sl::kFeatureDLSS, *frameToken_, inputs, _countof(inputs), reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
     {
         return false;
     }
@@ -309,6 +312,11 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
 bool DlssHandler::IsActive() const
 {
     return available_ && active_ && resourcesAllocated_;
+}
+
+void DlssHandler::SetActive(bool active)
+{
+	active_ = active;
 }
 
 void DlssHandler::RefreshRenderResolution()

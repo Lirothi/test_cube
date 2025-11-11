@@ -15,5 +15,5 @@ float4 PSMain(VSOut i):SV_Target
 {
     float4 d = ShadowAtlas.SampleLevel(Smp, i.UV, 0);
     //return float4(d.rrr * 1,1);
-    return float4(d.rg, 0, 1);
+    return float4(d.rg * 20, 0, 1);
 }

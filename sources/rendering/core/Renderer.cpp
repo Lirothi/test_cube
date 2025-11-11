@@ -1641,6 +1641,14 @@ bool Renderer::IsDlssActive() const
     return dlssHandler_ && dlssHandler_->IsActive();
 }
 
+void Renderer::SetDlssActive(bool active)
+{
+	if (dlssHandler_)
+	{
+		dlssHandler_->SetActive(active);
+	}
+}
+
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = deferred_[currentFrameIndex_];
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3] };
