@@ -130,6 +130,7 @@ private:
 
     bool debugTexMode_ = false;
     bool showProfiler_ = false;
+    bool doFxaa_ = false;
 
     DirectionalLight dirLight_;
 

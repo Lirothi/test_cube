@@ -315,6 +315,10 @@ void Scene::Tick(float deltaTime) {
     {
         renderer.SetDlssActive(!renderer.IsDlssActive());
     }
+    if (input.WasActionPressed("ToggleFXAA"))
+    {
+		doFxaa_ = !doFxaa_;
+    }
 
     const auto setDlssMode = [&renderer](sl::DLSSMode mode)
     {
@@ -560,8 +564,8 @@ void Scene::Render(Renderer* renderer) {
     int y = 8;
     tb->AddTextfShadow(8, 8, 32.0f, float4(1, 1, 1, 0.6f), true, L"FPS:%.0f MS:%0.2f Scale:%0.2f", renderer->GetFPS(), 1000.0f / renderer->GetFPS(), renderer->GetRenderResolutionScale());
     auto& camPos = camera_.GetPosition();
-    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true, L"Cam: %0.2f %0.2f %0.2f, speed: %0.2f, DLSS: %i, SSR: %i", camPos.x, camPos.y, camPos.z, camera_.GetMoveSpeedMult(),
-        renderer->IsDlssActive() ? (int)renderer->GetDlssMode() : -1, (int)ssrTechnique_);
+    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true, L"Cam: %0.2f %0.2f %0.2f, speed: %0.2f, DLSS: %i, SSR: %i, FXAA: %i", camPos.x, camPos.y, camPos.z, camera_.GetMoveSpeedMult(),
+        renderer->IsDlssActive() ? (int)renderer->GetDlssMode() : -1, (int)ssrTechnique_, (int)doFxaa_);
     //tb->AddText(8, 8 + 32 + 32, 10.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", false);
     //tb->AddText(8, 8 + 32 + 32 + 32, 16.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
     //tb->AddText(8, 8 + 32 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.9f), L"The quick brown fox jumps over the lazy dog 0123456789", true);
@@ -1759,11 +1763,10 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
         renderer->UAVBarrier(t.cl, D.tonemap.Get());
 
-        constexpr bool shouldRunFxaa = false;
         bool ranFxaa = false;
         auto fxaaMaterial = resources_.GetFxaaMaterial();
         const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
-        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && shouldRunFxaa)
+        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && doFxaa_)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
