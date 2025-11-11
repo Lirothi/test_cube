@@ -18,8 +18,12 @@
     { "name": "ToggleProfiler", "keys": ["F9"] },
     { "name": "CaptureTrace", "keys": ["F11"] },
     { "name": "GenerateFont", "keys": ["F8"] },
-    { "name": "RenderScale100", "keys": ["Ctrl", "1"], "allKeys": true },
-    { "name": "RenderScale66", "keys": ["Ctrl", "2"], "allKeys": true },
-    { "name": "RenderScale50", "keys": ["Ctrl", "3"], "allKeys": true }
+    { "name": "SetDlssQualityOff", "keys": ["Ctrl", "1"], "allKeys": true },
+    { "name": "SetDlssQualityMaxPerformance", "keys": ["Ctrl", "2"], "allKeys": true },
+    { "name": "SetDlssQualityBalanced", "keys": ["Ctrl", "3"], "allKeys": true },
+    { "name": "SetDlssQualityMaxQuality", "keys": ["Ctrl", "4"], "allKeys": true },
+    { "name": "SetDlssQualityUltraPerformance", "keys": ["Ctrl", "5"], "allKeys": true },
+    { "name": "SetDlssQualityUltraQuality", "keys": ["Ctrl", "6"], "allKeys": true },
+    { "name": "SetDlssQualityDLAA", "keys": ["Ctrl", "7"], "allKeys": true }
   ]
 }

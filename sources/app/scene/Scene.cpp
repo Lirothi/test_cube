@@ -297,6 +297,7 @@ void Scene::Tick(float deltaTime) {
 
     auto& input = Systems::GetInput();
     camera_.UpdateFromInput(deltaTime);
+    auto& renderer = Systems::GetRenderer();
 
     if (input.WasActionPressed("DebugTex"))
     {
@@ -312,20 +313,41 @@ void Scene::Tick(float deltaTime) {
     }
     if (input.WasActionPressed("ToggleDLSS"))
     {
-		auto& r = Systems::GetRenderer();
-        r.SetDlssActive(!r.IsDlssActive());
+        renderer.SetDlssActive(!renderer.IsDlssActive());
     }
-    if (input.WasActionPressed("RenderScale100"))
+
+    const auto setDlssMode = [&renderer](sl::DLSSMode mode)
     {
-        Systems::GetRenderer().SetRenderResolutionScale(1.0f);
+        renderer.SetDlssMode(mode);
+    };
+
+    if (input.WasActionPressed("SetDlssQualityOff"))
+    {
+        setDlssMode(sl::DLSSMode::eOff);
     }
-    if (input.WasActionPressed("RenderScale66"))
+    if (input.WasActionPressed("SetDlssQualityMaxPerformance"))
     {
-        Systems::GetRenderer().SetRenderResolutionScale(0.66f);
+        setDlssMode(sl::DLSSMode::eMaxPerformance);
     }
-    if (input.WasActionPressed("RenderScale50"))
+    if (input.WasActionPressed("SetDlssQualityBalanced"))
     {
-        Systems::GetRenderer().SetRenderResolutionScale(0.5f);
+        setDlssMode(sl::DLSSMode::eBalanced);
+    }
+    if (input.WasActionPressed("SetDlssQualityMaxQuality"))
+    {
+        setDlssMode(sl::DLSSMode::eMaxQuality);
+    }
+    if (input.WasActionPressed("SetDlssQualityUltraPerformance"))
+    {
+        setDlssMode(sl::DLSSMode::eUltraPerformance);
+    }
+    if (input.WasActionPressed("SetDlssQualityUltraQuality"))
+    {
+        setDlssMode(sl::DLSSMode::eUltraQuality);
+    }
+    if (input.WasActionPressed("SetDlssQualityDLAA"))
+    {
+        setDlssMode(sl::DLSSMode::eDLAA);
     }
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
