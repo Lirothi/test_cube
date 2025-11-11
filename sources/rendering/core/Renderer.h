@@ -213,6 +213,7 @@ public:
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
     bool IsDlssActive() const;
     void SetDlssActive(bool active);
+    sl::DLSSMode GetDlssMode() const { return dlssMode_; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetTonemapSourceSrvCPU() const;
     void BindDescriptorHeaps(ID3D12GraphicsCommandList* cl) const;
 
