@@ -60,6 +60,8 @@ public:
     const mat4& GetPrevViewProjMatrix() const { return prevViewProj_; }
     const mat4& GetViewProjMatrixNoJitter() const { return nonJitteredViewProj_; }
     const mat4& GetPrevViewProjMatrixNoJitter() const { return prevNonJitteredViewProj_; }
+    Math::float2 GetJitter() const { return jitter_; }
+    Math::float2 GetPrevJitter() const { return prevJitter_; }
     void ResetHistory();
 
     const float3& GetDirection() const { return dir_; }
@@ -111,6 +113,8 @@ private:
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
     float yaw_;   // Left/right, can wrap freely
+    Math::float2 jitter_ = Math::float2(0.0f, 0.0f);
+    Math::float2 prevJitter_ = Math::float2(0.0f, 0.0f);
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;

@@ -21,6 +21,10 @@ public:
         projHandle_ = {};
         prevViewHandle_ = {};
         prevProjHandle_ = {};
+        projNoJitterHandle_ = {};
+        prevProjNoJitterHandle_ = {};
+        cameraJitterHandle_ = {};
+        prevCameraJitterHandle_ = {};
         exposureHandle_ = {};
 
         if (Material* material = owner.GetGraphicsMaterial())
@@ -29,6 +33,10 @@ public:
             projHandle_ = material->ComputeCBFieldHandle(0, "proj");
             prevViewHandle_ = material->ComputeCBFieldHandle(0, "prevView");
             prevProjHandle_ = material->ComputeCBFieldHandle(0, "prevProj");
+            projNoJitterHandle_ = material->ComputeCBFieldHandle(0, "projNoJitter");
+            prevProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "prevProjNoJitter");
+            cameraJitterHandle_ = material->ComputeCBFieldHandle(0, "cameraJitter");
+            prevCameraJitterHandle_ = material->ComputeCBFieldHandle(0, "prevCameraJitter");
             exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
         }
     }
@@ -42,6 +50,10 @@ public:
         UpdateUniform(owner, projHandle_, material, camera.GetProjMatrix(), cbData);
         UpdateUniform(owner, prevViewHandle_, material, camera.GetPrevViewMatrix(), cbData);
         UpdateUniform(owner, prevProjHandle_, material, camera.GetPrevProjMatrix(), cbData);
+        UpdateUniform(owner, projNoJitterHandle_, material, camera.GetProjMatrixNoJitter(), cbData);
+        UpdateUniform(owner, prevProjNoJitterHandle_, material, camera.GetPrevProjMatrixNoJitter(), cbData);
+        UpdateUniform(owner, cameraJitterHandle_, material, camera.GetJitter(), cbData);
+        UpdateUniform(owner, prevCameraJitterHandle_, material, camera.GetPrevJitter(), cbData);
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
     }
 
@@ -51,6 +63,10 @@ private:
     Material::CBFieldHandle projHandle_{};
     Material::CBFieldHandle prevViewHandle_{};
     Material::CBFieldHandle prevProjHandle_{};
+    Material::CBFieldHandle projNoJitterHandle_{};
+    Material::CBFieldHandle prevProjNoJitterHandle_{};
+    Material::CBFieldHandle cameraJitterHandle_{};
+    Material::CBFieldHandle prevCameraJitterHandle_{};
     Material::CBFieldHandle exposureHandle_{};
 };
 } // namespace
