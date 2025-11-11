@@ -260,8 +260,6 @@ public:
             prevViewProjHandle_ = material->ComputeCBFieldHandle(0, "prevViewProj");
             viewProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
             prevViewProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
-            cameraJitterHandle_ = material->ComputeCBFieldHandle(0, "cameraJitter");
-            prevCameraJitterHandle_ = material->ComputeCBFieldHandle(0, "prevCameraJitter");
             invViewHandle_ = material->ComputeCBFieldHandle(0, "invView");
             invProjHandle_ = material->ComputeCBFieldHandle(0, "invProj");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
@@ -306,8 +304,6 @@ public:
             prevViewProjHandle_ = {};
             viewProjNoJitterHandle_ = {};
             prevViewProjNoJitterHandle_ = {};
-            cameraJitterHandle_ = {};
-            prevCameraJitterHandle_ = {};
             invViewHandle_ = {};
             invProjHandle_ = {};
             simulationParamsHandle_ = {};
@@ -365,8 +361,6 @@ public:
         UpdateUniform(owner, prevViewProjHandle_, material, camera.GetPrevViewProjMatrix(), cbData);
         UpdateUniform(owner, viewProjNoJitterHandle_, material, camera.GetViewProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, prevViewProjNoJitterHandle_, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
-        UpdateUniform(owner, cameraJitterHandle_, material, camera.GetJitter(), cbData);
-        UpdateUniform(owner, prevCameraJitterHandle_, material, camera.GetPrevJitter(), cbData);
         UpdateUniform(owner, invViewHandle_, material, invView, cbData);
         UpdateUniform(owner, invProjHandle_, material, invProj, cbData);
 
@@ -417,8 +411,6 @@ private:
     Material::CBFieldHandle prevViewProjHandle_{};
     Material::CBFieldHandle viewProjNoJitterHandle_{};
     Material::CBFieldHandle prevViewProjNoJitterHandle_{};
-    Material::CBFieldHandle cameraJitterHandle_{};
-    Material::CBFieldHandle prevCameraJitterHandle_{};
     Material::CBFieldHandle invViewHandle_{};
     Material::CBFieldHandle invProjHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};

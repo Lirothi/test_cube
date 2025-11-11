@@ -30,8 +30,6 @@ cbuffer GlassParams : register(b0)
     float4x4 prevViewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
-    float2 cameraJitter;
-    float2 prevCameraJitter;
     float4x4 invView;
     float4x4 invProj;
     float4 cameraPosIor;          // xyz = camera position, w = IOR
@@ -395,8 +393,8 @@ PSOut PSMain(VSOut i)
     //color = alpha.xxx;
     //alpha = 1.0f;
 
-    float2 currUv = ClipToUV(i.clipPos) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevPosH) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipPos);
+    float2 prevUv = ClipToUV(i.prevPosH);
     float2 motion = currUv - prevUv;
 
     PSOut o;

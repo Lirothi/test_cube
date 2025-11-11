@@ -10,8 +10,6 @@ cbuffer PerFrame : register(b0)
     float4x4 prevProj;
     float4x4 projNoJitter;
     float4x4 prevProjNoJitter;
-    float2 cameraJitter;
-    float2 prevCameraJitter;
     float exposure;
 }
 
@@ -69,8 +67,8 @@ PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
     //c = SRGBToLinear(c);
-    float2 currUv = ClipToUV(i.clipPos) + cameraJitter;
-    float2 prevUv = ClipToUV(i.prevPos) + prevCameraJitter;
+    float2 currUv = ClipToUV(i.clipPos);
+    float2 prevUv = ClipToUV(i.prevPos);
     float2 motion = currUv - prevUv;
 
     PSOut o;

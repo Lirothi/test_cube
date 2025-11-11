@@ -13,8 +13,6 @@ cbuffer OceanCB : register(b0)
     float4x4 prevViewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
-    float2 cameraJitter;
-    float2 prevCameraJitter;
     float4x4 invView;
     float4x4 invProj;
     float4x4 worldToWind;
@@ -314,7 +312,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
     //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -1.0f); //give more details far away
+    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -2.0f); //give more details far away
     return sample;
 }
 
@@ -940,8 +938,8 @@ PSOut PSMain(VSOutput input)
     float3 color = GetOceanColor(li, foamData);
     float4 outColor = float4(saturate(color), 1.0f);
 
-    float2 currUv = ClipToUV(input.positionNDC) + cameraJitter;
-    float2 prevUv = ClipToUV(input.prevPositionNDC) + prevCameraJitter;
+    float2 currUv = ClipToUV(input.positionNDC);
+    float2 prevUv = ClipToUV(input.prevPositionNDC);
     float2 motion = currUv - prevUv;
 
     PSOut o;

@@ -139,7 +139,8 @@ void DlssHandler::OnBeginFrame()
     {
         jitterPixels_ = GenerateJitterSample();
         constants_.jitterOffset = sl::float2(jitterPixels_.x, jitterPixels_.y);
-        constants_.motionVectorsJittered = sl::Boolean::eTrue;
+        //constants_.motionVectorsJittered = sl::Boolean::eTrue;
+        constants_.motionVectorsJittered = sl::Boolean::eFalse;
     }
     else
     {

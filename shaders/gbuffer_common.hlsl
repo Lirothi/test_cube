@@ -12,8 +12,6 @@ cbuffer PerObject : register(b0)
     float4x4 prevViewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
-    float2 cameraJitter;
-    float2 prevCameraJitter;
 
     float4 baseColor; // fallback Albedo (linear)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
