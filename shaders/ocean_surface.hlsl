@@ -310,7 +310,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
     //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -4.0f); //give more details far away
+    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -1.0f); //give more details far away
     return sample;
 }
 
