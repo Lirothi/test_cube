@@ -561,9 +561,22 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     return ThreadCL{ alloc, cl, type };
 }
 
+void Renderer::BindDescriptorHeaps(ID3D12GraphicsCommandList* cl) const
+{
+    if (!cl)
+    {
+        return;
+    }
+
+    if (currentFrameDescriptorHeapCount_ > 0)
+    {
+        cl->SetDescriptorHeaps(currentFrameDescriptorHeapCount_, currentFrameDescriptorHeaps_.data());
+    }
+}
+
 Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initialPSO)
 {
-	return BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_BUNDLE, initialPSO);
+    return BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_BUNDLE, initialPSO);
 }
 
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
