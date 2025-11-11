@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11) SRV(t12)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -20,6 +20,8 @@ cbuffer OceanCB : register(b0)
     float4 inverseCascadeLengthScales; // inv length scales per cascade
     float4 clipMapParams;              // x: scale, y: level half size, z: vertex density, w: fade distance
     float4 clipMapViewer;              // xyz: viewer position
+    float4 prevClipMapParams;          // previous frame clipmap params
+    float4 prevClipMapViewer;          // previous frame viewer position
     float4 foamParams0;                // x: coverage, y: density, z: sharpness, w: persistence
     float4 foamParams1;                // x: trail, y: trail strength, z: underwater intensity, w: normal strength
     float4 foamCascadeWeights;         // per-cascade foam weighting
@@ -45,17 +47,18 @@ cbuffer OceanCB : register(b0)
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
-Texture2DArray<float4> FoamTurbulence : register(t1);
-Texture2D SceneColorTexture : register(t2);
-TextureCube SkyboxTexture : register(t3);
-Texture2D SsrTexture : register(t4);
-Texture2D DistantRoughnessMap : register(t5);
-Texture2D FoamDetailMap : register(t6);
-Texture2D FoamAlbedoTex : register(t7);
-Texture2D FoamUnderwaterTex : register(t8);
-Texture2D FoamTrailTex : register(t9);
-Texture2D ContactFoamTex : register(t10);
-Texture2D SceneDepthTexture : register(t11);
+Texture2DArray<float4> PrevDisplacementDerivatives : register(t1);
+Texture2DArray<float4> FoamTurbulence : register(t2);
+Texture2D SceneColorTexture : register(t3);
+TextureCube SkyboxTexture : register(t4);
+Texture2D SsrTexture : register(t5);
+Texture2D DistantRoughnessMap : register(t6);
+Texture2D FoamDetailMap : register(t7);
+Texture2D FoamAlbedoTex : register(t8);
+Texture2D FoamUnderwaterTex : register(t9);
+Texture2D FoamTrailTex : register(t10);
+Texture2D ContactFoamTex : register(t11);
+Texture2D SceneDepthTexture : register(t12);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -253,12 +256,12 @@ float4 LodWeights(float viewDist, float lodScale)
         EaseInOutClamped(x.w));
 }
 
-float3 ClipMapVertex(float3 positionOS, float2 uv)
+float3 ClipMapVertexInternal(float3 positionOS,
+    float2 uv,
+    float clipScale,
+    float levelHalfSize,
+    float3 viewerPosition)
 {
-    float clipScale = clipMapParams.x;
-    float levelHalfSize = clipMapParams.y;
-    float3 viewerPosition = clipMapViewer.xyz;
-
     float3 morphOffset = float3(uv.x, 0.0f, uv.y);
     positionOS *= clipScale;
     float meshScale = positionOS.y;
@@ -277,11 +280,28 @@ float3 ClipMapVertex(float3 positionOS, float2 uv)
     return worldPos;
 }
 
-float3 SampleDisplacementCascade(float2 worldXZ, uint cascade)
+float3 ClipMapVertex(float3 positionOS, float2 uv)
+{
+    return ClipMapVertexInternal(positionOS, uv, clipMapParams.x, clipMapParams.y, clipMapViewer.xyz);
+}
+
+float3 ClipMapVertexPrev(float3 positionOS, float2 uv)
+{
+    return ClipMapVertexInternal(positionOS, uv, prevClipMapParams.x, prevClipMapParams.y, prevClipMapViewer.xyz);
+}
+
+float2 ApplyClipMapWarp(float2 worldUV, float viewDistXzSquared, float warpDistance)
+{
+    float warpScale = min(1.0f, viewDistXzSquared / max(warpDistance * warpDistance * 100.0f, 1.0f));
+    float2 warpOffset = sin(worldUV.yx / max(warpDistance, 1e-3f)) * warpDistance * 0.4f * windParams0.w;
+    return worldUV + warpOffset * warpScale;
+}
+
+float3 SampleDisplacementCascadeTexture(Texture2DArray<float4> tex, float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f);
-    float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
+    float4 sample = tex.SampleLevel(LinearWrapSampler, uvw, 0);
     return sample.xyz;
 }
 
@@ -294,7 +314,7 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
     return sample;
 }
 
-float3 SampleDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
+float3 SampleDisplacementTexture(Texture2DArray<float4> tex, float2 worldXZ, float4 weights, uint cascadesCount)
 {
     float3 displacement = float3(0.0f, 0.0f, 0.0f);
     [unroll]
@@ -307,10 +327,20 @@ float3 SampleDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
         float w = weights[cascade];
         if (cascade == 0 || w > kLodThreshold)
         {
-            displacement += w * SampleDisplacementCascade(worldXZ, cascade);
+            displacement += w * SampleDisplacementCascadeTexture(tex, worldXZ, cascade);
         }
     }
     return displacement;
+}
+
+float3 SampleCurrentDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
+{
+    return SampleDisplacementTexture(DisplacementDerivatives, worldXZ, weights, cascadesCount);
+}
+
+float3 SamplePreviousDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
+{
+    return SampleDisplacementTexture(PrevDisplacementDerivatives, worldXZ, weights, cascadesCount);
 }
 
 DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
@@ -373,21 +403,30 @@ VSOutput VSMain(VSInput input)
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float3 baseWorld = ClipMapVertex(input.position.xyz, input.uv);
+    float3 prevBaseWorld = ClipMapVertexPrev(input.position.xyz, input.uv);
+
     float2 worldUV = baseWorld.xz;
+    float2 prevWorldUV = prevBaseWorld.xz;
+
     float3 viewVector = baseWorld - clipMapViewer.xyz;
+    float3 prevViewVector = prevBaseWorld - prevClipMapViewer.xyz;
     float viewDist = length(viewVector);
+    float prevViewDist = length(prevViewVector);
     float viewDistXzSquared = dot(viewVector.xz, viewVector.xz);
+    float prevViewDistXzSquared = dot(prevViewVector.xz, prevViewVector.xz);
 
     float warpDistance = max(cascadeLengthScales.x, 1.0f) * 0.5f;
-    float warpScale = min(1.0f, viewDistXzSquared / max(warpDistance * warpDistance * 100.0f, 1.0f));
-    float2 warpOffset = sin(worldUV.yx / max(warpDistance, 1e-3f)) * warpDistance * 0.4f * windParams0.w;
-    worldUV += warpOffset * warpScale;
+    worldUV = ApplyClipMapWarp(worldUV, viewDistXzSquared, warpDistance);
+    prevWorldUV = ApplyClipMapWarp(prevWorldUV, prevViewDistXzSquared, warpDistance);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
+    float4 prevWeights = LodWeights(prevViewDist, prevClipMapParams.w);
 
-    float3 displacement = SampleDisplacement(worldUV, weights, cascadesCount);
+    float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
+    float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
+    float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);
     output.worldPos = world;
 
     output.baseXZ = worldUV;
@@ -399,7 +438,8 @@ VSOutput VSMain(VSInput input)
     float4 clipPos = mul(worldH, viewProj);
     output.position = clipPos;
     output.positionNDC = clipPos;
-    float4 prevWorld = mul(local, prevModel);
+    float4 prevLocal = float4(prevWorldPos, 1.0f);
+    float4 prevWorld = mul(prevLocal, prevModel);
     output.prevPositionNDC = mul(prevWorld, prevViewProj);
     return output;
 }

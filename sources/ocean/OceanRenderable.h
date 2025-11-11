@@ -60,6 +60,8 @@ private:
     Math::float4 GetCascadeInvLengthScales() const;
     Math::float4 GetClipMapParams() const;
     Math::float4 GetClipMapViewer() const;
+    Math::float4 GetPrevClipMapParams() const;
+    Math::float4 GetPrevClipMapViewer() const;
     Math::float4 GetFoamParams0() const;
     Math::float4 GetFoamParams1() const;
     Math::float4 GetFoamCascadeWeights() const;
@@ -104,6 +106,11 @@ private:
     float clipMapScale_ = 1.0f;
     float clipMapLevelHalfSize_ = 0.0f;
     Math::float3 clipMapViewer_ = Math::float3(0.0f, 0.0f, 0.0f);
+    float prevClipMapScale_ = 1.0f;
+    float prevClipMapLevelHalfSize_ = 0.0f;
+    Math::float3 prevClipMapViewer_ = Math::float3(0.0f, 0.0f, 0.0f);
+    float prevCascadesFadeScale_ = 20.0f;
+    bool clipMapHasHistory_ = false;
     float cascadesFadeScale_ = 20.0f;
     float minMeshScale_ = 15.0f;
 

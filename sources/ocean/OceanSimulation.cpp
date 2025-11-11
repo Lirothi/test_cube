@@ -210,6 +210,7 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     h0Buffer_.Reset();
     waveDataBuffer_.Reset();
     displacement_.Reset();
+    prevDisplacement_.Reset();
     foamTurbulence_.Reset();
     descriptorHeap_.Reset();
     descriptorIncr_ = 0;
@@ -217,6 +218,7 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     waveDataSrv_ = {};
     displacementFullSrv_ = {};
     displacementSrvs_.clear();
+    prevDisplacementSrv_ = {};
     displacementUavs_.clear();
     foamSrv_ = {};
     foamUav_ = {};
@@ -230,6 +232,8 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
 
     mipCount_ = 1u;
     foamNeedsInit_ = true;
+    hasDisplacementHistory_ = false;
+    prevDisplacementValid_ = false;
     lastFoamSimTime_ = 0.0f;
 }
 
@@ -414,6 +418,19 @@ void OceanSimulation::CreateResources(Renderer* renderer,
 
     renderer->SetResourceState(displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    D3D12_RESOURCE_DESC prevDesc = texDesc;
+    prevDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &prevDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&prevDisplacement_)));
+
+    const D3D12_RESOURCE_STATES prevSrvState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    renderer->SetResourceState(prevDisplacement_.Get(), prevSrvState);
+    hasDisplacementHistory_ = false;
+    prevDisplacementValid_ = false;
+
     if (cascadeCount_ > 0)
     {
         D3D12_RESOURCE_DESC foamDesc = texDesc;
@@ -437,6 +454,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
 
     UINT descriptorCount = 3u; // h0 SRV, wave SRV, full displacement SRV
     descriptorCount += 1u;     // base displacement SRV
+    descriptorCount += 1u;     // previous displacement SRV
     descriptorCount += mipCount_; // displacement UAVs
     if (cascadeCount_ > 0)
     {
@@ -477,6 +495,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
 
     UINT descriptorIndex = 3;
     displacementSrvs_[0] = Offset(base, descriptorIndex++);
+    prevDisplacementSrv_ = Offset(base, descriptorIndex++);
 
     if (cascadeCount_ > 0)
     {
@@ -540,6 +559,11 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     texSrv.Texture2DArray.MipLevels = 1;
     texSrv.Texture2DArray.MostDetailedMip = 0;
     device->CreateShaderResourceView(displacement_.Get(), &texSrv, displacementSrvs_[0]);
+
+    if (prevDisplacementSrv_.ptr != 0 && prevDisplacement_)
+    {
+        device->CreateShaderResourceView(prevDisplacement_.Get(), &texSrv, prevDisplacementSrv_);
+    }
 
     if (foamTurbulence_ && cascadeCount_ > 0)
     {
@@ -780,6 +804,27 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
         Initialize(renderer, cl, nullptr);
     }
 
+    const D3D12_RESOURCE_STATES srvState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    if (displacement_ && prevDisplacement_)
+    {
+        if (hasDisplacementHistory_)
+        {
+            renderer->Transition(cl, displacement_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            renderer->Transition(cl, prevDisplacement_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+            cl->CopyResource(prevDisplacement_.Get(), displacement_.Get());
+            renderer->Transition(cl, prevDisplacement_.Get(), srvState);
+            prevDisplacementValid_ = true;
+        }
+        else
+        {
+            renderer->Transition(cl, prevDisplacement_.Get(), srvState);
+            prevDisplacementValid_ = false;
+        }
+    }
+
     const float simTime = timeSeconds * timeScale_;
 
     DispatchSpectrum(renderer, cl, simTime);
@@ -788,14 +833,13 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     GenerateMips(renderer, cl);
     DispatchFoam(renderer, cl, simTime);
 
-    const D3D12_RESOURCE_STATES srvState =
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, displacement_.Get(), srvState);
     if (foamTurbulence_)
     {
         renderer->Transition(cl, foamTurbulence_.Get(), srvState);
     }
+
+    hasDisplacementHistory_ = true;
 }
 
 void OceanSimulation::DispatchSpectrum(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds)

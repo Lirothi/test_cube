@@ -56,8 +56,11 @@ public:
 
         return displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0];
     }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetPreviousDisplacementSRV() const { return prevDisplacementSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetFoamTurbulenceSRV() const { return foamSrv_; }
     ID3D12Resource* GetDisplacementResource() const { return displacement_.Get(); }
+    ID3D12Resource* GetPreviousDisplacementResource() const { return prevDisplacement_.Get(); }
+    bool HasPreviousDisplacement() const { return prevDisplacementValid_; }
     ID3D12Resource* GetFoamResource() const { return foamTurbulence_.Get(); }
 
     const FoamParams& GetFoamParams() const { return inputs_.foam; }
@@ -117,6 +120,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> displacement_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> prevDisplacement_;
     Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence_;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
@@ -125,6 +129,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE waveDataSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE displacementFullSrv_{};
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementSrvs_;
+    D3D12_CPU_DESCRIPTOR_HANDLE prevDisplacementSrv_{};
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> displacementUavs_;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> foamSrvs_;
     std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> foamUavs_;
@@ -143,5 +148,7 @@ private:
 
     float lastFoamSimTime_ = 0.0f;
     bool foamNeedsInit_ = true;
+    bool hasDisplacementHistory_ = false;
+    bool prevDisplacementValid_ = false;
 };
 
