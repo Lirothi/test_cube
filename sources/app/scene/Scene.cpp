@@ -1707,6 +1707,8 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         renderer->Transition(t.cl, D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+        renderer->BindDescriptorHeaps(t.cl);
+
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 

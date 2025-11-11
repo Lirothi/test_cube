@@ -214,6 +214,7 @@ public:
     bool IsDlssActive() const;
     void SetDlssActive(bool active);
     D3D12_CPU_DESCRIPTOR_HANDLE GetTonemapSourceSrvCPU() const;
+    void BindDescriptorHeaps(ID3D12GraphicsCommandList* cl) const;
 
     template<class Alloc, class It>
     inline GpuDescHandle StageDescriptorTableRange(
