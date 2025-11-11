@@ -1656,10 +1656,41 @@ bool Renderer::IsDlssActive() const
 
 void Renderer::SetDlssActive(bool active)
 {
-	if (dlssHandler_)
-	{
-		dlssHandler_->SetActive(active);
-	}
+    if (dlssHandler_)
+    {
+        dlssHandler_->SetActive(active);
+        if (active && dlssMode_ != sl::DLSSMode::eOff)
+        {
+            UpdateDlssSettings();
+            AllocateDlssResourcesIfNeeded();
+        }
+    }
+}
+
+void Renderer::SetDlssMode(sl::DLSSMode mode)
+{
+    if (dlssMode_ == mode)
+    {
+        return;
+    }
+
+    dlssMode_ = mode;
+
+    if (mode == sl::DLSSMode::eOff)
+    {
+        if (dlssHandler_)
+        {
+            dlssHandler_->SetActive(false);
+        }
+        SetRenderResolutionScale(1.0f);
+    }
+
+    UpdateDlssSettings();
+
+    if (mode != sl::DLSSMode::eOff)
+    {
+        AllocateDlssResourcesIfNeeded();
+    }
 }
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {

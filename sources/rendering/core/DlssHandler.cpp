@@ -125,6 +125,15 @@ void DlssHandler::OnRenderResolutionScaleChanged()
 
 void DlssHandler::UpdateSettings()
 {
+    if (renderer_.dlssMode_ == sl::DLSSMode::eOff)
+    {
+        active_ = false;
+        dlssRenderWidth_ = std::max(renderer_.width_, 1u);
+        dlssRenderHeight_ = std::max(renderer_.height_, 1u);
+        RefreshRenderResolution();
+        return;
+    }
+
     if (!available_ || renderer_.width_ == 0 || renderer_.height_ == 0)
     {
         active_ = false;
