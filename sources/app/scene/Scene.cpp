@@ -1736,10 +1736,11 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
         renderer->UAVBarrier(t.cl, D.tonemap.Get());
 
+        constexpr bool shouldRunFxaa = false;
         bool ranFxaa = false;
         auto fxaaMaterial = resources_.GetFxaaMaterial();
         const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
-        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0)
+        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && shouldRunFxaa)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
