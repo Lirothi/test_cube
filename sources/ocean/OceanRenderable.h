@@ -35,6 +35,9 @@ public:
 
     void OnMaterialHotReload(Renderer* renderer) override;
 
+    OceanSimulation* GetSimulation() { return simulation_; }
+    const OceanSimulation* GetSimulation() const { return simulation_; }
+
     void SetGridVertexDensity(uint32_t density);
 
 private:
@@ -86,12 +89,14 @@ private:
     Math::float4 GetFoamTint() const;
     Math::float4 GetDepthTextureSize(const Renderer* renderer) const;
     Math::float2 GetDepthParams() const;
+    Math::float4 GetShoreViewParams() const;
+    Math::float4 GetShoreDepthParams() const;
     void UpdateFoamTrailState();
 
 private:
     Camera* camera_ = nullptr;
     Scene* scene_ = nullptr;
-    std::unique_ptr<OceanSimulation> simulation_;
+    OceanSimulation* simulation_ = nullptr;
 
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);

@@ -48,7 +48,6 @@ public:
     float GetCascadeNormalBias(size_t index) const;
     float GetCascadeDepthBias(size_t index) const;
     const float* GetCascadeSplitsVS() const { return cachedSplitsVS_; }
-
     CascadeShadowConfig& CascadeConfig() { return cascadeConfig_; }
     const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
 
@@ -95,6 +94,8 @@ private:
         const Camera& camera);
     void Pass_Skybox(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    void Pass_ShoreDepth(Renderer* r, RenderGraphPassContext ctx,
+        const SceneView* view);
     void Pass_SSR(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);

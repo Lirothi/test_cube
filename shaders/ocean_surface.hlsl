@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11) SRV(t12)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11) SRV(t12) SRV(t13)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -14,6 +14,8 @@ cbuffer OceanCB : register(b0)
     float4x4 prevViewProjNoJitter;
     float4x4 invView;
     float4x4 invProj;
+    float4 shoreViewParams;            // x: center x, y: center z, z: height, w: inv extent (1 / 500)
+    float4 shoreDepthParams;           // x: zNear, y: zFar
     float4x4 worldToWind;
     float4 simulationParams;           // x: patch length, y: inv patch length, z: time, w: cascades count
     float4 viewerParams;               // x: viewer x, y: viewer z, z: amplitude, w: fade distance
@@ -60,6 +62,7 @@ Texture2D FoamUnderwaterTex : register(t9);
 Texture2D FoamTrailTex : register(t10);
 Texture2D ContactFoamTex : register(t11);
 Texture2D SceneDepthTexture : register(t12);
+Texture2D ShoreDepthTexture : register(t13);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -231,6 +234,23 @@ float3 PositionWsFromDepth(float depthSample, float2 uv)
     float4 worldPos = mul(float4(viewPos, 1.0f), invView);
     float invW = rcp(max(worldPos.w, 1e-6f));
     return worldPos.xyz * invW;
+}
+
+float SampleShoreDepth(float2 uv)
+{
+    return ShoreDepthTexture.SampleLevel(PointSampler, uv, 0).r;
+}
+
+float2 ShoreDepthUV(float2 baseXZ)
+{
+    float2 offsetXZ = baseXZ - shoreViewParams.xy;
+    float invExtent = shoreViewParams.w;
+    return float2(offsetXZ.x * invExtent + 0.5f, 0.5f - offsetXZ.y * invExtent);
+}
+
+float ShoreViewDepth(float depthSample)
+{
+    return lerp(shoreDepthParams.x, shoreDepthParams.y, depthSample);
 }
 
 float ModifiedManhattanDistance(float3 a, float3 b)
@@ -425,6 +445,23 @@ VSOutput VSMain(VSInput input)
 
     float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
     float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
+
+    float attenuation = 1.0f;
+    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
+    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
+    {
+        float shoreDepth = SampleShoreDepth(shoreUV);
+        if (shoreDepth > 0.0f)
+        {
+            float viewDepth = ShoreViewDepth(shoreDepth);
+            float terrainHeight = shoreViewParams.z - viewDepth;
+            float waterDepth = -terrainHeight;
+            attenuation = saturate(waterDepth);
+        }
+    }
+
+    displacement *= attenuation;
+    prevDisplacement *= attenuation;
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
     float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);

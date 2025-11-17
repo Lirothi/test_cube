@@ -1,6 +1,7 @@
 #include "app/Systems.h"
 
 #include <cassert>
+#include <memory>
 
 namespace Systems {
 
@@ -31,6 +32,22 @@ InputManager& GetInput() {
 
 LevelManager& GetLevelManager() {
     return Get().levelManager;
+}
+
+OceanSimulation* GetOceanSimulation()
+{
+    auto& systems = Get();
+    return systems.oceanSimulation.get();
+}
+
+OceanSimulation* EnsureOceanSimulation()
+{
+    auto& systems = Get();
+    if (!systems.oceanSimulation)
+    {
+        systems.oceanSimulation = std::make_unique<OceanSimulation>();
+    }
+    return systems.oceanSimulation.get();
 }
 
 } // namespace Systems
