@@ -11,6 +11,7 @@
 #include "rendering/core/RenderContextPool.h"
 #include "materials/UploadManager.h"
 #include "ocean/OceanSpectrum.h"
+#include "app/camera/Camera.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -353,6 +354,44 @@ void OceanSimulation::OnHotReload(Renderer* renderer)
     CreateMaterials(renderer);
 }
 
+float2 OceanSimulation::GetShoreViewCenter() const
+{
+    return float2(shoreDepthView_.position.x, shoreDepthView_.position.z);
+}
+
+float OceanSimulation::GetShoreViewHeight() const
+{
+    return shoreDepthView_.position.y;
+}
+
+float2 OceanSimulation::GetShoreDepthRange() const
+{
+    return float2(shoreDepthView_.zNear, shoreDepthView_.zFar);
+}
+
+void OceanSimulation::UpdateShoreView(const Camera& camera)
+{
+    constexpr float kShoremapExtent = 250.0f;
+    constexpr float kShoreNearPlane = 0.1f;
+    constexpr float kShoreFarPlane = 50.0f;
+    constexpr float kShoreHeight = 20.0f;
+
+    SceneView& shoreView = shoreDepthView_;
+    const float3 cameraPosition = camera.GetPosition();
+    shoreView.type = SceneView::Type::ShoreDepth;
+    shoreView.renderLayerMask = RenderLayerMask(RenderLayer::Terrain);
+    shoreView.position = float3(cameraPosition.x, kShoreHeight, cameraPosition.z);
+    shoreView.view = mat4::LookAtLH(shoreView.position, shoreView.position + float3(0.0f, -1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f));
+    shoreView.proj = mat4::OrthoOffCenterLH(-kShoremapExtent, kShoremapExtent, -kShoremapExtent, kShoremapExtent, kShoreNearPlane, kShoreFarPlane);
+    shoreView.invView = mat4::Inverse(shoreView.view);
+    shoreView.invProj = mat4::Inverse(shoreView.proj);
+    shoreView.frustum = Frustum::FromInvViewProj(shoreView.invView, shoreView.proj, kShoreNearPlane, kShoreFarPlane);
+    shoreView.zNear = kShoreNearPlane;
+    shoreView.zFar = kShoreFarPlane;
+    shoreView.hfov = 0.0f;
+    shoreView.requiresDepthCheck = false;
+}
+
 void OceanSimulation::CreateResources(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
@@ -363,6 +402,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     {
         return;
     }
+
+    CreateShoreDepth(renderer);
 
     UploadManager uploader(renderer->GetDevice(), uploadCmdList);
 
@@ -445,6 +486,67 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     }
 }
 
+void OceanSimulation::CreateShoreDepth(Renderer* renderer)
+{
+    shoreDepth_.Reset();
+    shoreDepthDsvHeap_.Reset();
+    shoreDepthDsv_ = {};
+    shoreDepthSrv_ = {};
+    shoreDepthWidth_ = 0u;
+    shoreDepthHeight_ = 0u;
+
+    if (!renderer)
+    {
+        return;
+    }
+
+    ID3D12Device* device = renderer->GetDevice();
+    if (!device)
+    {
+        return;
+    }
+
+    constexpr UINT kShoreDepthSize = 512u;
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC depthDesc{};
+    depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthDesc.Width = kShoreDepthSize;
+    depthDesc.Height = kShoreDepthSize;
+    depthDesc.DepthOrArraySize = 1;
+    depthDesc.MipLevels = 1;
+    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+    depthDesc.SampleDesc.Count = 1;
+    depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format = DXGI_FORMAT_D32_FLOAT;
+    clear.DepthStencil.Depth = 1.0f;
+    clear.DepthStencil.Stencil = 0;
+
+    ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&shoreDepth_)));
+    renderer->SetResourceState(shoreDepth_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+    shoreDepthWidth_ = static_cast<UINT>(depthDesc.Width);
+    shoreDepthHeight_ = static_cast<UINT>(depthDesc.Height);
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvDesc{};
+    dsvDesc.NumDescriptors = 1;
+    dsvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    ThrowIfFailed(device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&shoreDepthDsvHeap_)));
+
+    shoreDepthDsv_ = shoreDepthDsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvView{};
+    dsvView.Format = DXGI_FORMAT_D32_FLOAT;
+    dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(shoreDepth_.Get(), &dsvView, shoreDepthDsv_);
+}
+
 void OceanSimulation::CreateDescriptors(ID3D12Device* device)
 {
     if (!device || !displacement_ || arraySliceCount_ == 0)
@@ -460,6 +562,10 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     {
         descriptorCount += 1u;        // foam aggregate SRV
         descriptorCount += mipCount_; // foam UAVs
+    }
+    if (shoreDepth_)
+    {
+        descriptorCount += 1u;        // shore depth SRV
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
@@ -504,6 +610,15 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     else
     {
         foamSrv_ = {};
+    }
+
+    if (shoreDepth_)
+    {
+        shoreDepthSrv_ = Offset(base, descriptorIndex++);
+    }
+    else
+    {
+        shoreDepthSrv_ = {};
     }
 
     for (UINT mip = 0; mip < mipCount_; ++mip)
@@ -573,6 +688,16 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         foamSrvDesc.Texture2DArray.MipLevels = mipCount_;
         device->CreateShaderResourceView(foamTurbulence_.Get(), &foamSrvDesc, foamSrv_);
 
+    }
+
+    if (shoreDepthSrv_.ptr != 0 && shoreDepth_)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC shoreSrv{};
+        shoreSrv.Format = DXGI_FORMAT_R32_FLOAT;
+        shoreSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        shoreSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        shoreSrv.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(shoreDepth_.Get(), &shoreSrv, shoreDepthSrv_);
     }
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC texUav{};

@@ -261,6 +261,8 @@ public:
             prevViewProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
             invViewHandle_ = material->ComputeCBFieldHandle(0, "invView");
             invProjHandle_ = material->ComputeCBFieldHandle(0, "invProj");
+            shoreViewParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreViewParams");
+            shoreDepthParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreDepthParams");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
             viewerParamsHandle_ = material->ComputeCBFieldHandle(0, "viewerParams");
             cascadeLengthScalesHandle_ = material->ComputeCBFieldHandle(0, "cascadeLengthScales");
@@ -304,6 +306,8 @@ public:
             prevViewProjNoJitterHandle_ = {};
             invViewHandle_ = {};
             invProjHandle_ = {};
+            shoreViewParamsHandle_ = {};
+            shoreDepthParamsHandle_ = {};
             simulationParamsHandle_ = {};
             viewerParamsHandle_ = {};
             cascadeLengthScalesHandle_ = {};
@@ -360,6 +364,8 @@ public:
         UpdateUniform(owner, prevViewProjNoJitterHandle_, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, invViewHandle_, material, invView, cbData);
         UpdateUniform(owner, invProjHandle_, material, invProj, cbData);
+        UpdateUniform(owner, shoreViewParamsHandle_, material, owner_.GetShoreViewParams(), cbData);
+        UpdateUniform(owner, shoreDepthParamsHandle_, material, owner_.GetShoreDepthParams(), cbData);
 
         UpdateUniform(owner, simulationParamsHandle_, material, owner_.GetSimulationParams(), cbData);
         UpdateUniform(owner, viewerParamsHandle_, material, owner_.GetViewerParams(), cbData);
@@ -409,6 +415,8 @@ private:
     Material::CBFieldHandle prevViewProjNoJitterHandle_{};
     Material::CBFieldHandle invViewHandle_{};
     Material::CBFieldHandle invProjHandle_{};
+    Material::CBFieldHandle shoreViewParamsHandle_{};
+    Material::CBFieldHandle shoreDepthParamsHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};
     Material::CBFieldHandle viewerParamsHandle_{};
     Material::CBFieldHandle cascadeLengthScalesHandle_{};
@@ -446,8 +454,9 @@ OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
     : RenderableObject("PosLevelUV", L"shaders/ocean_surface.hlsl")
     , camera_(camera)
     , scene_(scene)
-    , simulation_(std::make_unique<OceanSimulation>())
 {
+    simulation_ = Systems::EnsureOceanSimulation();
+
     const FoamParams defaultFoam = FoamParams::GetDefault();
     foamTrailTextureSize0_ = defaultFoam.trailTextureSize;
     foamTrailTextureSize1_ = defaultFoam.trailTextureSize;
@@ -473,9 +482,13 @@ void OceanRenderable::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     BuildMesh(renderer, uploadCmdList, uploadKeepAlive);
-    simulation_->Initialize(renderer, uploadCmdList, uploadKeepAlive);
-    lengthScales_ = simulation_->GetLengthScales();
-    invLengthScales_ = simulation_->GetInvLengthScales();
+    simulation_ = Systems::EnsureOceanSimulation();
+    if (simulation_)
+    {
+        simulation_->Initialize(renderer, uploadCmdList, uploadKeepAlive);
+        lengthScales_ = simulation_->GetLengthScales();
+        invLengthScales_ = simulation_->GetInvLengthScales();
+    }
     clipMapHasHistory_ = false;
     UpdateClipLevels();
 
@@ -538,7 +551,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -611,6 +624,17 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         depthSrv = fallbackSrv;
     }
     pushSrv(depthSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthSrv = fallbackSrv;
+    if (simulation_ && simulation_->GetShoreDepthSrv().ptr != 0)
+    {
+        shoreDepthSrv = simulation_->GetShoreDepthSrv();
+    }
+    else if (depthSrv.ptr != 0)
+    {
+        shoreDepthSrv = depthSrv;
+    }
+    pushSrv(shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.table[0] = tbl.gpu;
@@ -1024,8 +1048,33 @@ Math::float2 OceanRenderable::GetDepthParams() const
 {
     auto& scene = Systems::GetScene();
     float zNear = scene.CameraRef().GetZNear();
-	float zFar = scene.CameraRef().GetZFar();
+    float zFar = scene.CameraRef().GetZFar();
     return { zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear) };
+}
+
+Math::float4 OceanRenderable::GetShoreViewParams() const
+{
+    Math::float2 center = Math::float2(0.0f, 0.0f);
+    float height = 0.0f;
+    if (simulation_)
+    {
+        center = simulation_->GetShoreViewCenter();
+        height = simulation_->GetShoreViewHeight();
+    }
+
+    constexpr float kInvExtent = 1.0f / 500.0f;
+    return { center.x, center.y, height, kInvExtent };
+}
+
+Math::float4 OceanRenderable::GetShoreDepthParams() const
+{
+    if (simulation_)
+    {
+        const float2 nearFar = simulation_->GetShoreDepthRange();
+        return { nearFar.x, nearFar.y, 0.0f, 0.0f };
+    }
+
+    return { 0.1f, 50.0f, 0.0f, 0.0f };
 }
 
 void OceanRenderable::SetGridVertexDensity(uint32_t density)

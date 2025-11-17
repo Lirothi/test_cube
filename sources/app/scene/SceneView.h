@@ -13,6 +13,7 @@ struct SceneView
     {
         Camera,
         Shadow,
+        ShoreDepth,
     };
 
     mat4 view = mat4::Identity();

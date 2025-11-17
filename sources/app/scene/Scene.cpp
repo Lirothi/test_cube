@@ -17,6 +17,8 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "ocean/OceanRenderable.h"
+#include "ocean/OceanSimulation.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -409,6 +411,9 @@ void Scene::PrepareViews(Renderer* renderer)
     constexpr float kHFovRadians = XMConvertToRadians(90.0f);
     const float zNear = 0.01f;
     const float zFar = 10000.0f;
+    const float3 cameraPosition = camera_.GetPosition();
+    const float3 cameraDirection = camera_.GetDirection();
+    OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
     camera_.SetHFov(kHFovRadians);
     camera_.SetZNearFar(zNear, zFar);
     camera_.CalcMatrices(renderer);
@@ -420,6 +425,12 @@ void Scene::PrepareViews(Renderer* renderer)
     mainView.type = SceneView::Type::Camera;
     mainView.requiresDepthCheck = false;
 
+    SceneView* shoreViewPtr = nullptr;
+    if (oceanSimulation)
+    {
+        oceanSimulation->UpdateShoreView(camera_);
+        shoreViewPtr = &oceanSimulation->GetShoreDepthView();
+    }
     UpdateCascades(camera_, renderer);
 
     const size_t spotLightCount = lightManager_.GetSpotLightCount();
@@ -473,8 +484,6 @@ void Scene::PrepareViews(Renderer* renderer)
     //    }
     //}
 
-    const float3 cameraPosition = camera_.GetPosition();
-    const float3 cameraDirection = camera_.GetDirection();
     const float cascadeOverlap = cascadeConfig_.overlap;
 
     auto prepareQueue = [this, cameraPosition, cameraDirection, cascadeOverlap](SceneView& view)
@@ -521,6 +530,10 @@ void Scene::PrepareViews(Renderer* renderer)
     };
 
     enqueueView(mainView);
+    if (shoreViewPtr)
+    {
+        enqueueView(*shoreViewPtr);
+    }
     for (auto& cascadeView : cascadeViews_)
     {
         enqueueView(cascadeView);
@@ -590,7 +603,15 @@ void Scene::Render(Renderer* renderer) {
             Pass_ObjectCompute(renderer, ctx);
         });
 
-    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pCompute },
+    auto pShoreDepth = rg.AddPass(RenderPass::Main_TerrainDepth, { pCompute },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassShoreDepth);
+            OceanSimulation* oceanSim = Systems::GetOceanSimulation();
+            const SceneView* shoreView = oceanSim ? &oceanSim->GetShoreDepthView() : nullptr;
+            Pass_ShoreDepth(renderer, ctx, shoreView);
+        });
+
+    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShoreDepth },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
             Pass_CSM(renderer, ctx, cascadeViews_);
@@ -852,6 +873,89 @@ void Scene::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx)
     }
 
     renderer->EndThreadCommandList(compute, ctx.batchIndex);
+}
+
+void Scene::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext ctx,
+    const SceneView* view)
+{
+    if (!renderer || !view)
+    {
+        return;
+    }
+
+    OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
+    if (!oceanSimulation)
+    {
+        return;
+    }
+
+    const auto& visibleBuckets = view->queue.VisibleBuckets();
+    const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+    const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+    if (opaqueSimple.empty() && opaqueComplex.empty())
+    {
+        return;
+    }
+
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassShoreDepth);
+        ID3D12Resource* shoreDepth = oceanSimulation->GetShoreDepthResource();
+        if (shoreDepth)
+        {
+            renderer->Transition(t.cl, shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        }
+
+        const D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv = oceanSimulation->GetShoreDepthDsv();
+        if (shoreDepthDsv.ptr == 0)
+        {
+            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            return;
+        }
+
+        t.cl->OMSetRenderTargets(0, nullptr, FALSE, &shoreDepthDsv);
+
+        float width = static_cast<float>(oceanSimulation->GetShoreDepthWidth());
+        float height = static_cast<float>(oceanSimulation->GetShoreDepthHeight());
+        if (shoreDepth)
+        {
+            const auto desc = shoreDepth->GetDesc();
+            width = static_cast<float>(desc.Width);
+            height = static_cast<float>(desc.Height);
+        }
+
+        D3D12_VIEWPORT vp{ 0.0f, 0.0f, width, height, 0.0f, 1.0f };
+        D3D12_RECT sc{ 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+        t.cl->RSSetViewports(1, &vp);
+        t.cl->RSSetScissorRects(1, &sc);
+
+        t.cl->ClearDepthStencilView(shoreDepthDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+        for (auto* obj : opaqueSimple)
+        {
+            if (obj)
+            {
+                obj->RenderShadow(renderer, t.cl, view->view, view->proj);
+            }
+        }
+
+        for (auto* obj : opaqueComplex)
+        {
+            if (obj)
+            {
+                obj->RenderShadow(renderer, t.cl, view->view, view->proj);
+            }
+        }
+
+        if (shoreDepth)
+        {
+            renderer->Transition(t.cl, shoreDepth,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+    }
+
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
 void Scene::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,

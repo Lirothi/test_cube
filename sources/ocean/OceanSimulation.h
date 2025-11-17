@@ -11,9 +11,11 @@
 #include "core/math/Math.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
+#include "app/scene/SceneView.h"
 
 class Renderer;
 class Material;
+class Camera;
 
 class OceanSimulation
 {
@@ -62,6 +64,17 @@ public:
     ID3D12Resource* GetPreviousDisplacementResource() const { return prevDisplacement_.Get(); }
     bool HasPreviousDisplacement() const { return prevDisplacementValid_; }
     ID3D12Resource* GetFoamResource() const { return foamTurbulence_.Get(); }
+    ID3D12Resource* GetShoreDepthResource() const { return shoreDepth_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetShoreDepthDsv() const { return shoreDepthDsv_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetShoreDepthSrv() const { return shoreDepthSrv_; }
+    SceneView& GetShoreDepthView() { return shoreDepthView_; }
+    const SceneView& GetShoreDepthView() const { return shoreDepthView_; }
+    UINT GetShoreDepthWidth() const { return shoreDepthWidth_; }
+    UINT GetShoreDepthHeight() const { return shoreDepthHeight_; }
+    float2 GetShoreViewCenter() const;
+    float GetShoreViewHeight() const;
+    float2 GetShoreDepthRange() const;
+    void UpdateShoreView(const Camera& camera);
 
     const FoamParams& GetFoamParams() const { return inputs_.foam; }
 
@@ -82,6 +95,7 @@ private:
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeDefaultAssets();
     void ReleaseCpuData();
+    void CreateShoreDepth(Renderer* renderer);
 
 private:
     bool initialized_ = false;
@@ -122,6 +136,14 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> displacement_;
     Microsoft::WRL::ComPtr<ID3D12Resource> prevDisplacement_;
     Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepth_;
+    SceneView shoreDepthView_{};
+    UINT shoreDepthWidth_ = 0u;
+    UINT shoreDepthHeight_ = 0u;
+
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shoreDepthDsvHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthSrv_{};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     UINT descriptorIncr_ = 0;
