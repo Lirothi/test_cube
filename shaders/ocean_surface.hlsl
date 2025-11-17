@@ -447,7 +447,7 @@ VSOutput VSMain(VSInput input)
     float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
 
     float attenuation = 1.0f;
-    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
+    float2 shoreUV = ShoreDepthUV(worldUV);
     if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
     {
         float shoreDepth = SampleShoreDepth(shoreUV);
@@ -977,6 +977,21 @@ PSOut PSMain(VSOutput input)
     float2 currUv = ClipToUV(input.positionNDC);
     float2 prevUv = ClipToUV(input.prevPositionNDC);
     float2 motion = currUv - prevUv;
+
+    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
+    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
+    {
+        float shoreDepth = SampleShoreDepth(shoreUV);
+        if (shoreDepth > 0.0f)
+        {
+            float viewDepth = ShoreViewDepth(shoreDepth);
+            float terrainHeight = shoreViewParams.z - viewDepth;
+            float waterDepth = -terrainHeight;
+            float attenuation = saturate(waterDepth);
+
+            outColor = float4(attenuation.xxx, 1.0f);
+        }
+    }
 
     PSOut o;
     o.color = outColor;

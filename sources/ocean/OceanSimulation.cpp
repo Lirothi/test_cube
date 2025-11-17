@@ -385,7 +385,8 @@ void OceanSimulation::UpdateShoreView(const Camera& camera)
     shoreView.proj = mat4::OrthoOffCenterLH(-kShoremapExtent, kShoremapExtent, -kShoremapExtent, kShoremapExtent, kShoreNearPlane, kShoreFarPlane);
     shoreView.invView = mat4::Inverse(shoreView.view);
     shoreView.invProj = mat4::Inverse(shoreView.proj);
-    shoreView.frustum = Frustum::FromInvViewProj(shoreView.invView, shoreView.proj, kShoreNearPlane, kShoreFarPlane);
+    shoreView.frustum = Frustum::FromOrthoBounds(shoreView.invView, kShoremapExtent, kShoremapExtent, kShoreFarPlane - kShoreNearPlane,
+        float3(shoreView.position.x, shoreView.position.y - (kShoreFarPlane - kShoreNearPlane) * 0.5f, shoreView.position.z) );
     shoreView.zNear = kShoreNearPlane;
     shoreView.zFar = kShoreFarPlane;
     shoreView.hfov = 0.0f;
@@ -518,13 +519,13 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     depthDesc.Height = kShoreDepthSize;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+    depthDesc.Format = DXGI_FORMAT_R16_TYPELESS;
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
     D3D12_CLEAR_VALUE clear{};
-    clear.Format = DXGI_FORMAT_D32_FLOAT;
+    clear.Format = DXGI_FORMAT_D16_UNORM;
     clear.DepthStencil.Depth = 1.0f;
     clear.DepthStencil.Stencil = 0;
 
@@ -542,7 +543,7 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
 
     shoreDepthDsv_ = shoreDepthDsvHeap_->GetCPUDescriptorHandleForHeapStart();
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvView{};
-    dsvView.Format = DXGI_FORMAT_D32_FLOAT;
+    dsvView.Format = DXGI_FORMAT_D16_UNORM;
     dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
     device->CreateDepthStencilView(shoreDepth_.Get(), &dsvView, shoreDepthDsv_);
 }
@@ -693,7 +694,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     if (shoreDepthSrv_.ptr != 0 && shoreDepth_)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC shoreSrv{};
-        shoreSrv.Format = DXGI_FORMAT_R32_FLOAT;
+        shoreSrv.Format = DXGI_FORMAT_R16_UNORM;
         shoreSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         shoreSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         shoreSrv.Texture2D.MipLevels = 1;

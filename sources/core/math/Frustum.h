@@ -45,7 +45,19 @@ public:
         float farPlane)
     {
         Frustum frustum;
-        frustum.BuildOrtho(invView, minX, maxX, minY, maxY, nearPlane, farPlane);
+	    frustum.BuildOrthoLs(invView, minX, maxX, minY, maxY, nearPlane, farPlane);
+        return frustum;
+    }
+
+    static Frustum FromOrthoBounds(
+        const Math::mat4& invView,
+        float halfX,
+        float halfY,
+        float halfZ,
+		const float3& centerWS)
+    {
+        Frustum frustum;
+        frustum.BuildOrthoWs(invView, halfX, halfY, halfZ, centerWS);
         return frustum;
     }
 
@@ -139,7 +151,7 @@ private:
         valid_ = true;
     }
 
-    void BuildOrtho(
+    void BuildOrthoLs(
         const Math::mat4& invView,
         float minX,
         float maxX,
@@ -160,6 +172,29 @@ private:
 
         // Transform center into world space.
         const Math::float3 centerWS = (invView * Math::float4(centerLS, 1.0f)).xyz();
+
+        DirectX::XMVECTOR scale{};
+        DirectX::XMVECTOR rotation{};
+        DirectX::XMVECTOR translation{};
+        DirectX::XMMatrixDecompose(&scale, &rotation, &translation, invView.xm());
+        rotation = DirectX::XMQuaternionNormalize(rotation);
+
+        orthoBox_.Center = centerWS.xf();
+        orthoBox_.Extents = halfExtents.xf();
+        DirectX::XMStoreFloat4(&orthoBox_.Orientation, rotation);
+
+        type_ = Type::OrthoBox;
+        valid_ = true;
+    }
+
+    void BuildOrthoWs(
+        const Math::mat4& invView,
+        float halfX,
+        float halfY,
+        float halfZ,
+        const float3& centerWS)
+    {
+        const Math::float3 halfExtents(halfX, halfY, halfZ);
 
         DirectX::XMVECTOR scale{};
         DirectX::XMVECTOR rotation{};
