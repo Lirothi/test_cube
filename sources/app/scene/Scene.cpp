@@ -892,10 +892,6 @@ void Scene::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext ctx,
     const auto& visibleBuckets = view->queue.VisibleBuckets();
     const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
     const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
-    if (opaqueSimple.empty() && opaqueComplex.empty())
-    {
-        return;
-    }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
