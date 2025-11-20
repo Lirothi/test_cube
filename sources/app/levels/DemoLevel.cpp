@@ -155,6 +155,30 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
         floor->SetRenderLayer(RenderLayer::Terrain);
         scene.AddObject(std::move(floor));
 
+    	floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
+        floor->SetPosition(float3(0.0f, -0.5f - 2.0f, -39.0f));
+        floor->SetRotationEulerDeg(float3(-5.0f, 0.0f, 0.0f));
+        floor->SetScale(float3(40.0f, 1.0f, 40.0f));
+        floor->SetRenderLayer(RenderLayer::Terrain);
+        scene.AddObject(std::move(floor));
+
+        floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
+        floor->SetPosition(float3(-39.0f, -0.5f - 2.0f, 0.0f));
+        floor->SetRotationEulerDeg(float3(0.0f, 0.0f, 5.0f));
+        floor->SetScale(float3(40.0f, 1.0f, 40.0f));
+        floor->SetRenderLayer(RenderLayer::Terrain);
+        scene.AddObject(std::move(floor));
+
+        floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
+        floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
+        floor->SetPosition(float3(39.0f, -0.5f - 2.0f, 0.0f));
+        floor->SetRotationEulerDeg(float3(0.0f, 0.0f, -5.0f));
+        floor->SetScale(float3(40.0f, 1.0f, 40.0f));
+        floor->SetRenderLayer(RenderLayer::Terrain);
+        scene.AddObject(std::move(floor));
+
         floor = std::make_unique<StaticMesh>("models/box.obj", "bronze", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.5f, 0.0f, 10.0f, 10.0f);
         floor->MaterialParamsRef().texFlags.w = 0.01f;
