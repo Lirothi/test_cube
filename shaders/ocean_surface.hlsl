@@ -238,7 +238,7 @@ float3 PositionWsFromDepth(float depthSample, float2 uv)
 
 float SampleShoreDepth(float2 uv)
 {
-    return ShoreDepthTexture.SampleLevel(PointSampler, uv, 0).r;
+    return ShoreDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
 }
 
 float2 ShoreDepthUV(float2 baseXZ)
@@ -456,7 +456,7 @@ VSOutput VSMain(VSInput input)
             float viewDepth = ShoreViewDepth(shoreDepth);
             float terrainHeight = shoreViewParams.z - viewDepth;
             float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth);
+            attenuation = saturate(waterDepth * 0.5f);
         }
     }
 
@@ -918,10 +918,24 @@ PSOut PSMain(VSOutput input)
     float viewDist = length(viewVector);
     float2 screenUV = ComputeScreenUV(input.positionNDC);
 
+    float attenuation = 1.0f;
+    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
+    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
+    {
+        float shoreDepth = SampleShoreDepth(shoreUV);
+        if (shoreDepth > 0.0f)
+        {
+            float viewDepth = ShoreViewDepth(shoreDepth);
+            float terrainHeight = shoreViewParams.z - viewDepth;
+            float waterDepth = -terrainHeight;
+            attenuation = saturate(waterDepth * 0.5f);
+        }
+    }
+
     float4 weights = LodWeights(viewDist, clipMapParams.w);
     DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
-    float4 combinedDerivatives = CombineDerivatives(deriv, float4(1.0f, 1.0f, 1.0f, 1.0f));
+    float4 combinedDerivatives = CombineDerivatives(deriv, max(attenuation.xxxx, 0.1f.xxxx) /*float4(1.0f, 1.0f, 1.0f, 1.0f)*/);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
     //return float4(normal, 1);
 
@@ -936,7 +950,7 @@ PSOut PSMain(VSOutput input)
     foamInput.worldUV = input.baseXZ;
     foamInput.viewDist = viewDist;
     foamInput.lodWeights = weights;
-    foamInput.shoreWeights = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    foamInput.shoreWeights = attenuation.xxxx; //float4(1.0f, 1.0f, 1.0f, 1.0f);
     foamInput.positionNDC = input.positionNDC;
     foamInput.time = simulationParams.z;
     foamInput.viewDir = viewDir;
@@ -978,20 +992,7 @@ PSOut PSMain(VSOutput input)
     float2 prevUv = ClipToUV(input.prevPositionNDC);
     float2 motion = currUv - prevUv;
 
-    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
-    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
-    {
-        float shoreDepth = SampleShoreDepth(shoreUV);
-        if (shoreDepth > 0.0f)
-        {
-            float viewDepth = ShoreViewDepth(shoreDepth);
-            float terrainHeight = shoreViewParams.z - viewDepth;
-            float waterDepth = -terrainHeight;
-            float attenuation = saturate(waterDepth);
-
-            outColor = float4(attenuation.xxx, 1.0f);
-        }
-    }
+    //outColor = float4(attenuation.xxx, 1.0f);
 
     PSOut o;
     o.color = outColor;

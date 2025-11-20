@@ -375,9 +375,12 @@ void OceanSimulation::UpdateShoreView(const Camera& camera)
     constexpr float kShoreNearPlane = 0.1f;
     constexpr float kShoreFarPlane = 50.0f;
     constexpr float kShoreHeight = 20.0f;
+    constexpr float kSpatialStep = 5.0f;
 
-    SceneView& shoreView = shoreDepthView_;
-    const float3 cameraPosition = camera.GetPosition();
+	SceneView& shoreView = shoreDepthView_;
+    float3 cameraPosition = camera.GetPosition();
+	cameraPosition.x = std::floor(cameraPosition.x / kSpatialStep) * kSpatialStep;
+	cameraPosition.z = std::floor(cameraPosition.z / kSpatialStep) * kSpatialStep;
     shoreView.type = SceneView::Type::ShoreDepth;
     shoreView.renderLayerMask = RenderLayerMask(RenderLayer::Terrain);
     shoreView.position = float3(cameraPosition.x, kShoreHeight, cameraPosition.z);
@@ -391,6 +394,10 @@ void OceanSimulation::UpdateShoreView(const Camera& camera)
     shoreView.zFar = kShoreFarPlane;
     shoreView.hfov = 0.0f;
     shoreView.requiresDepthCheck = false;
+
+    shouldRenderShoreDepth_ = std::abs(cameraPosition.x - prevShoreDepthPos_.x) > 0.001f || std::abs(cameraPosition.z - prevShoreDepthPos_.y) > 0.001f;
+
+	prevShoreDepthPos_ = float2(cameraPosition.x, cameraPosition.z);
 }
 
 void OceanSimulation::CreateResources(Renderer* renderer,

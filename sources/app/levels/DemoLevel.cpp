@@ -149,7 +149,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
         floor = std::make_unique<StaticMesh>("models/box.obj", "sandstone_cracks", "PosNormTanUV", L"shaders/gbuffer.hlsl");
         floor->MaterialParamsRef().texOffsScale = float4(0.0f, 0.0f, 20.0f, 20.0f);
-        floor->SetPosition(float3(0.0f, -0.5f - 1.7f, 39.0f));
+        floor->SetPosition(float3(0.0f, -0.5f - 2.0f, 39.0f));
         floor->SetRotationEulerDeg(float3(5.0f,0.0f,0.0f));
         floor->SetScale(float3(40.0f, 1.0f, 40.0f));
         floor->SetRenderLayer(RenderLayer::Terrain);

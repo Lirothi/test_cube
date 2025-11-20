@@ -75,6 +75,7 @@ public:
     float GetShoreViewHeight() const;
     float2 GetShoreDepthRange() const;
     void UpdateShoreView(const Camera& camera);
+	bool ShouldRenderShoreDepth() const { return shouldRenderShoreDepth_; }
 
     const FoamParams& GetFoamParams() const { return inputs_.foam; }
 
@@ -140,6 +141,7 @@ private:
     SceneView shoreDepthView_{};
     UINT shoreDepthWidth_ = 0u;
     UINT shoreDepthHeight_ = 0u;
+    float2 prevShoreDepthPos_ = {FLT_MAX, FLT_MAX};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shoreDepthDsvHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv_{};
@@ -172,5 +174,6 @@ private:
     bool foamNeedsInit_ = true;
     bool hasDisplacementHistory_ = false;
     bool prevDisplacementValid_ = false;
+    bool shouldRenderShoreDepth_ = true;
 };
 

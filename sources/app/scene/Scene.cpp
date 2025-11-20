@@ -884,7 +884,7 @@ void Scene::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext ctx,
     }
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    if (!oceanSimulation)
+    if (!oceanSimulation || !oceanSimulation->ShouldRenderShoreDepth())
     {
         return;
     }
