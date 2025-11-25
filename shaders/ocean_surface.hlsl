@@ -424,27 +424,27 @@ VSOutput VSMain(VSInput input)
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float3 baseWorld = ClipMapVertex(input.position.xyz, input.uv);
-    float3 prevBaseWorld = ClipMapVertexPrev(input.position.xyz, input.uv);
+    //float3 prevBaseWorld = ClipMapVertexPrev(input.position.xyz, input.uv);
 
     float2 worldUV = baseWorld.xz;
-    float2 prevWorldUV = prevBaseWorld.xz;
+    //float2 prevWorldUV = prevBaseWorld.xz;
 
     float3 viewVector = baseWorld - clipMapViewer.xyz;
-    float3 prevViewVector = prevBaseWorld - prevClipMapViewer.xyz;
+    //float3 prevViewVector = prevBaseWorld - prevClipMapViewer.xyz;
     float viewDist = length(viewVector);
-    float prevViewDist = length(prevViewVector);
+    //float prevViewDist = length(prevViewVector);
     float viewDistXzSquared = dot(viewVector.xz, viewVector.xz);
-    float prevViewDistXzSquared = dot(prevViewVector.xz, prevViewVector.xz);
+    //float prevViewDistXzSquared = dot(prevViewVector.xz, prevViewVector.xz);
 
     float warpDistance = max(cascadeLengthScales.x, 1.0f) * 0.5f;
     worldUV = ApplyClipMapWarp(worldUV, viewDistXzSquared, warpDistance);
-    prevWorldUV = ApplyClipMapWarp(prevWorldUV, prevViewDistXzSquared, warpDistance);
+    //prevWorldUV = ApplyClipMapWarp(prevWorldUV, prevViewDistXzSquared, warpDistance);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    float4 prevWeights = LodWeights(prevViewDist, prevClipMapParams.w);
+    //float4 prevWeights = LodWeights(prevViewDist, prevClipMapParams.w);
 
     float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
-    float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
+    //float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
 
     float attenuation = 1.0f;
     float2 shoreUV = ShoreDepthUV(worldUV);
@@ -461,10 +461,11 @@ VSOutput VSMain(VSInput input)
     }
 
     displacement *= attenuation;
-    prevDisplacement *= attenuation;
+    //prevDisplacement *= attenuation;
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
-    float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);
+    //float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);
+    float3 prevWorldPos = world;
     output.worldPos = world;
 
     output.baseXZ = worldUV;
@@ -998,6 +999,6 @@ PSOut PSMain(VSOutput input)
     PSOut o;
     o.color = outColor;
     o.velocity = motion;
-    o.bias = 1.0f;
+    o.bias = 0.0f;
     return o;
 }
