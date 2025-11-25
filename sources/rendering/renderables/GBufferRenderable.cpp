@@ -134,11 +134,14 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
     desc.numRT = 4;
-    desc.rtvFormats[0] = Renderer::kGBuffer0Format;
-    desc.rtvFormats[1] = Renderer::kGBuffer1Format;
-    desc.rtvFormats[2] = Renderer::kGBuffer2Format;
-    desc.rtvFormats[3] = Renderer::kGBufferVelocityFormat;
-    desc.dsvFormat = Renderer::kDeferredDepthFormat;
+    if (renderer)
+    {
+        desc.rtvFormats[0] = renderer->GetGBuffer0Format();
+        desc.rtvFormats[1] = renderer->GetGBuffer1Format();
+        desc.rtvFormats[2] = renderer->GetGBuffer2Format();
+        desc.rtvFormats[3] = renderer->GetGBufferVelocityFormat();
+        desc.dsvFormat = renderer->GetDeferredDepthFormat();
+    }
 
     if (matData_)
     {

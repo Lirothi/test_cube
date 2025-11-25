@@ -312,7 +312,7 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     }
 
     auto& deferred = renderer_.deferred_[renderer_.currentFrameIndex_];
-    if (!deferred.scene || !deferred.depth || !deferred.gbVelocity || !deferred.dlssOutput)
+    if (!deferred.scene || !deferred.depth || !deferred.gbVelocity || !deferred.dlssBias || !deferred.dlssOutput)
     {
         return false;
     }
@@ -320,36 +320,44 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     renderer_.Transition(cl, deferred.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer_.Transition(cl, deferred.dlssBias.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     sl::Resource color(sl::ResourceType::eTex2d, deferred.scene.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     color.width = std::max(renderer_.renderWidth_, 1u);
     color.height = std::max(renderer_.renderHeight_, 1u);
-    color.nativeFormat = static_cast<uint32_t>(Renderer::kSceneColorFormat);
+    color.nativeFormat = static_cast<uint32_t>(renderer_.GetSceneColorFormat());
     color.mipLevels = 1;
 
     sl::Resource motion(sl::ResourceType::eTex2d, deferred.gbVelocity.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     motion.width = std::max(renderer_.renderWidth_, 1u);
     motion.height = std::max(renderer_.renderHeight_, 1u);
-    motion.nativeFormat = static_cast<uint32_t>(Renderer::kGBufferVelocityFormat);
+    motion.nativeFormat = static_cast<uint32_t>(renderer_.GetGBufferVelocityFormat());
     motion.mipLevels = 1;
 
     sl::Resource depth(sl::ResourceType::eTex2d, deferred.depth.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     depth.width = std::max(renderer_.renderWidth_, 1u);
     depth.height = std::max(renderer_.renderHeight_, 1u);
-    depth.nativeFormat = static_cast<uint32_t>(Renderer::kDeferredDepthFormat);
+    depth.nativeFormat = static_cast<uint32_t>(renderer_.GetDeferredDepthFormat());
     depth.mipLevels = 1;
+
+    sl::Resource bias(sl::ResourceType::eTex2d, deferred.dlssBias.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    bias.width = std::max(renderer_.renderWidth_, 1u);
+    bias.height = std::max(renderer_.renderHeight_, 1u);
+    bias.nativeFormat = static_cast<uint32_t>(renderer_.GetDlssBiasFormat());
+    bias.mipLevels = 1;
 
     sl::Resource output(sl::ResourceType::eTex2d, deferred.dlssOutput.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
     output.width = std::max(renderer_.width_, 1u);
     output.height = std::max(renderer_.height_, 1u);
-    output.nativeFormat = static_cast<uint32_t>(Renderer::kSceneColorFormat);
+    output.nativeFormat = static_cast<uint32_t>(renderer_.GetSceneColorFormat());
     output.mipLevels = 1;
 
-    std::array<sl::ResourceTag, 4> tags = {
+    std::array<sl::ResourceTag, 5> tags = {
         sl::ResourceTag(&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(&bias, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent)
     };
 

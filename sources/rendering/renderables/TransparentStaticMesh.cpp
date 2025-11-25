@@ -332,10 +332,11 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 2;
-    desc.rtvFormats[0] = Renderer::kSceneColorFormat;
-    desc.rtvFormats[1] = Renderer::kGBufferVelocityFormat;
-    desc.dsvFormat = Renderer::kDeferredDepthFormat;
+    desc.numRT = 3;
+    desc.rtvFormats[0] = renderer->GetSceneColorFormat();
+    desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
+    desc.rtvFormats[2] = renderer->GetDlssBiasFormat();
+    desc.dsvFormat = renderer->GetDsvFormat();
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
@@ -348,6 +349,8 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.blend.RenderTarget[2].BlendEnable = FALSE;
+    desc.blend.RenderTarget[2].RenderTargetWriteMask = 0;
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
 
     auto& defs = desc.defines;

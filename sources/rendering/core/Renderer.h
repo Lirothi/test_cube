@@ -42,7 +42,7 @@ public:
     };
     enum class ClearMode { None, Color, ColorDepth };
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 16; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
+        static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
         // Resources
         ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
         ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
@@ -53,6 +53,7 @@ public:
         ComPtr<ID3D12Resource> light; // Renderer::kLightTargetFormat
         ComPtr<ID3D12Resource> scene; // Renderer::kSceneColorFormat
         ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
+        ComPtr<ID3D12Resource> dlssBias; // Renderer::kDlssBiasFormat
         ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
         ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
         ComPtr<ID3D12Resource> ssr;     // Renderer::kSsrFormat (premultiplied)
@@ -70,6 +71,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssBiasRTV{}, dlssBiasSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
@@ -128,6 +130,7 @@ public:
     static constexpr DXGI_FORMAT kGBufferVelocityFormat = DXGI_FORMAT_R16G16_FLOAT;
     static constexpr DXGI_FORMAT kLightTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    static constexpr DXGI_FORMAT kDlssBiasFormat = DXGI_FORMAT_R8_UNORM;
     static constexpr DXGI_FORMAT kSsrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT kSsrBlurFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr UINT kConstantBufferAlignment = 256u;
@@ -135,10 +138,16 @@ public:
     // Formats
     DXGI_FORMAT GetLightTargetFormat() const { return kLightTargetFormat; }
     DXGI_FORMAT GetSceneColorFormat() const { return kSceneColorFormat; }
+    DXGI_FORMAT GetDlssBiasFormat() const { return kDlssBiasFormat; }
     DXGI_FORMAT GetBackbufferFormat() const { return kBackbufferFormat; }
     DXGI_FORMAT GetBackbufferResourceFormat() const { return kBackbufferResourceFormat; }
+    DXGI_FORMAT GetGBuffer0Format() const { return kGBuffer0Format; }
+    DXGI_FORMAT GetGBuffer1Format() const { return kGBuffer1Format; }
+    DXGI_FORMAT GetGBuffer2Format() const { return kGBuffer2Format; }
+    DXGI_FORMAT GetDeferredDepthFormat() const { return kDeferredDepthFormat; }
     DXGI_FORMAT GetDsvFormat() const { return kDeferredDepthFormat; }
     DXGI_FORMAT GetDepthSrvFormat() const { return kDeferredDepthSrvFormat; }
+    DXGI_FORMAT GetGBufferVelocityFormat() const { return kGBufferVelocityFormat; }
     DXGI_FORMAT GetSsrFormat() const { return kSsrFormat; }
     DXGI_FORMAT GetSsrBlurFormat() const { return kSsrBlurFormat; }
 
@@ -301,8 +310,8 @@ private:
 private:
     static constexpr UINT kFrameCount = 2;
 
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

@@ -1755,6 +1755,9 @@ void Scene::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.dlssBias.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            const float clearBias[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
+            driver.cl->ClearRenderTargetView(D.dlssBiasRTV, clearBias, 0, nullptr);
             renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
