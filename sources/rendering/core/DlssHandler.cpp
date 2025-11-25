@@ -358,6 +358,7 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
         sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&bias, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent),
+        //sl::ResourceTag(&bias, sl::kBufferTypeReactiveMaskHint, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent)
     };
 
