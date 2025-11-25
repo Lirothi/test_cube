@@ -201,6 +201,7 @@ struct PSOut
 {
     float4 color : SV_Target0;
     float2 velocity : SV_Target1;
+    float bias : SV_Target2;
 };
 
 PSOut PSMain(VSOut i)
@@ -399,5 +400,6 @@ PSOut PSMain(VSOut i)
     PSOut o;
     o.color = float4(color, 1.0f);
     o.velocity = motion;
+    o.bias = 0.0f;
     return o;
 }

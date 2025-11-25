@@ -1060,7 +1060,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2, Light, Scene
+        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,Light,Scene,DLSS bias
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
     }
     {
@@ -1162,6 +1162,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
             case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
             case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
+            case DeferredRtvSlot::DlssBias:   D.dlssBiasRTV = outRTV; break;
             default: break;
             }
             switch (srvSlot) {
@@ -1172,6 +1173,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
             case DeferredSrvSlot::Depth:      D.depthSRV = outSRV; break;
             case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
             case DeferredSrvSlot::Scene:      D.sceneSRV = outSRV; break;
+            case DeferredSrvSlot::DlssBias:   D.dlssBiasSRV = outSRV; break;
             default: break;
             }
             if (uavSlot != DeferredSrvSlot::Count)
@@ -1449,6 +1451,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
         CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
+        CreateRT(kDlssBiasFormat, DeferredRtvSlot::DlssBias, DeferredSrvSlot::DlssBias, DeferredSrvSlot::Count, f, D.dlssBias, D.dlssBiasRTV, D.dlssBiasSRV, float4(0, 0, 0, 0));
         CreateSrvTexture(kSceneColorFormat, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
         CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
@@ -1482,6 +1485,7 @@ void Renderer::DestroyDeferredTargets() {
         collect(D.depthCopy);
         collect(D.light);
         collect(D.scene);
+        collect(D.dlssBias);
         collect(D.sceneOpaque);
         collect(D.tonemap);
         collect(D.fxaa);
@@ -1787,8 +1791,8 @@ void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearM
 
 void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = deferred_[currentFrameIndex_];
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.sceneRTV, D.gbRTV[3] };
-    cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.sceneRTV, D.gbRTV[3], D.dlssBiasRTV };
+    cl->OMSetRenderTargets(3, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
@@ -1796,6 +1800,7 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(rtvs[0], c, 0, nullptr);
         cl->ClearRenderTargetView(rtvs[1], c, 0, nullptr);
+        cl->ClearRenderTargetView(rtvs[2], c, 0, nullptr);
         if (mode == ClearMode::ColorDepth && withDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);

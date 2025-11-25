@@ -114,7 +114,7 @@ void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDes
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetLightTargetFormat();
-        desc.rtvFormats[1] = Renderer::kGBufferVelocityFormat;
+        desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
     }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;      // do not write depth
