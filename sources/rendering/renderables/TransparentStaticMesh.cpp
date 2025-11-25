@@ -350,7 +350,7 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
-    desc.blend.RenderTarget[2].RenderTargetWriteMask = 0;
+    desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
 
     auto& defs = desc.defines;
