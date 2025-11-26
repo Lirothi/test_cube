@@ -70,6 +70,7 @@ void DlssHandler::ResetJitterSequence()
 
 Math::float2 DlssHandler::GenerateJitterSample()
 {
+    //return Math::float2(0, 0);
     const uint32_t sampleIndex = (haltonIndex_ % kHaltonSequenceLength_) + 1;
     const float jitterX = Halton(sampleIndex, 2) - 0.5f;
     const float jitterY = Halton(sampleIndex, 3) - 0.5f;

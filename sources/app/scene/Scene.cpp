@@ -500,7 +500,7 @@ void Scene::PrepareViews(Renderer* renderer)
             view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
         }
 
-        const bool clampDepthRange = view.requiresDepthCheck && view.zFar > view.zNear;
+        const bool clampDepthRange = false;// view.requiresDepthCheck&& view.zFar > view.zNear; //doesnt work well, fix in future
         const float minDepth = clampDepthRange ? (view.zNear - cascadeOverlap) : 0.0f;
         const float maxDepth = clampDepthRange ? (view.zFar + cascadeOverlap) : 0.0f;
         view.queue.Cull(view.frustum, clampDepthRange, cameraPosition, cameraDirection, minDepth, maxDepth);
@@ -1941,9 +1941,9 @@ void Scene::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        //rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
+        rc.table[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
         //rc.table[0] = renderer->StageSrvUavTable({ D.gbSRV[3] }).gpu; // t0
-        rc.table[0] = renderer->StageSrvUavTable({ D.dlssBiasSRV }).gpu; // t0
+        //rc.table[0] = renderer->StageSrvUavTable({ D.dlssBiasSRV }).gpu; // t0
         const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 

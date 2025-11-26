@@ -81,6 +81,7 @@ struct VSOutput
     float4 positionNDC : TEXCOORD2;
     float viewDepth : TEXCOORD3;
     float4 prevPositionNDC : TEXCOORD4;
+    float4 positionNDCJitter : TEXCOORD5;
 };
 
 struct DerivativesSet
@@ -477,6 +478,7 @@ VSOutput VSMain(VSInput input)
     float4 clipPos = mul(worldH, viewProj);
     output.position = clipPos;
     output.positionNDC = mul(worldH, viewProjNoJitter);
+    output.positionNDCJitter = mul(worldH, viewProj);
     float4 prevLocal = float4(prevWorldPos, 1.0f);
     float4 prevWorld = mul(prevLocal, prevModel);
     output.prevPositionNDC = mul(prevWorld, prevViewProjNoJitter);
@@ -918,7 +920,7 @@ PSOut PSMain(VSOutput input)
     float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);
     float3 viewVector = baseWorld - clipMapViewer.xyz;
     float viewDist = length(viewVector);
-    float2 screenUV = ComputeScreenUV(input.positionNDC);
+    float2 screenUV = ComputeScreenUV(input.positionNDCJitter);
 
     float attenuation = 1.0f;
     float2 shoreUV = ShoreDepthUV(baseWorld.xz);
@@ -953,7 +955,7 @@ PSOut PSMain(VSOutput input)
     foamInput.viewDist = viewDist;
     foamInput.lodWeights = weights;
     foamInput.shoreWeights = attenuation.xxxx; //float4(1.0f, 1.0f, 1.0f, 1.0f);
-    foamInput.positionNDC = input.positionNDC;
+    foamInput.positionNDC = input.positionNDCJitter;
     foamInput.time = simulationParams.z;
     foamInput.viewDir = viewDir;
     foamInput.normal = normal;
@@ -981,7 +983,7 @@ PSOut PSMain(VSOutput input)
     li.viewDepth = input.viewDepth;
     li.cameraPos = clipMapViewer.xyz;
     li.height = height;
-    li.positionNDC = input.positionNDC;
+    li.positionNDC = input.positionNDCJitter;
     li.referenceWaveHeight = windParams1.z;
     li.slopeFactor = slopeFactor;
     li.mainLight = light;
