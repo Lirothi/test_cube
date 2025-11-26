@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -75,7 +76,11 @@ public:
     float GetShoreViewHeight() const;
     float2 GetShoreDepthRange() const;
     void UpdateShoreView(const Camera& camera);
-	bool ShouldRenderShoreDepth() const { return shouldRenderShoreDepth_; }
+    bool ShouldRenderShoreDepth() const { return shouldRenderShoreDepth_; }
+    void SetShoreViewSnapMultiplier(float multiplier)
+    {
+        shoreViewSnapMultiplier_ = std::max(multiplier, 1.0f);
+    }
 
     const FoamParams& GetFoamParams() const { return inputs_.foam; }
 
@@ -111,6 +116,7 @@ private:
     float windForce01_ = 0.0f;
     float waterDepth_ = 1000.0f;
     float chopValue_ = 1.0f;
+    float shoreViewSnapMultiplier_ = 4.0f;
 
     std::shared_ptr<EqualizerPreset> defaultEqualizerPreset_;
     std::shared_ptr<SwellPreset> defaultSwellPreset_;
