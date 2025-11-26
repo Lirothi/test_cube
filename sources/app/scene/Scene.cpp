@@ -586,8 +586,6 @@ void Scene::Render(Renderer* renderer) {
 
     renderer->BeginSubmitTimeline();
 
-    TaskSystem::Get().WaitForTrackedAsyncTasks();
-
     lightManager_.UpdateSpotLightCache();
 
     PrepareViews(renderer);

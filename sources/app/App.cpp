@@ -173,6 +173,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         double lastTime = GetTimeSeconds();
         while (isRunning_) {
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
+            TaskSystem::Get().WaitForTrackedAsyncTasks();
             renderer.BeginFrame();
 #if PROF_GPU_ENABLED
             Profiler::Get().CollectGpuResults();
