@@ -1059,13 +1059,14 @@ Math::float4 OceanRenderable::GetShoreViewParams() const
 {
     Math::float2 center = Math::float2(0.0f, 0.0f);
     float height = 0.0f;
+    float kInvExtent = 1.0f / 500.0f;
     if (simulation_)
     {
         center = simulation_->GetShoreViewCenter();
         height = simulation_->GetShoreViewHeight();
+        kInvExtent = 1.0f / (simulation_->GetShoreDepthHalfExtent() * 2.0f);
     }
-
-    constexpr float kInvExtent = 1.0f / 500.0f;
+     
     return { center.x, center.y, height, kInvExtent };
 }
 

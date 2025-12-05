@@ -75,6 +75,7 @@ public:
     float2 GetShoreViewCenter() const;
     float GetShoreViewHeight() const;
     float2 GetShoreDepthRange() const;
+    float GetShoreDepthHalfExtent() const { return shoreDepthHalfExtent_; }
     void UpdateShoreView(const Camera& camera);
     bool ShouldRenderShoreDepth() const { return shouldRenderShoreDepth_; }
     void SetShoreViewSnapMultiplier(float multiplier)
@@ -147,6 +148,7 @@ private:
     SceneView shoreDepthView_{};
     UINT shoreDepthWidth_ = 0u;
     UINT shoreDepthHeight_ = 0u;
+    float shoreDepthHalfExtent_ = 250.0f;
     float2 prevShoreDepthPos_ = {FLT_MAX, FLT_MAX};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shoreDepthDsvHeap_;

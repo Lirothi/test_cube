@@ -206,7 +206,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
     scene.AddObject(std::make_unique<GpuInstancedModels>("models/teapot.obj", 100, "bronze", "PosNormTanUV", L"shaders/gbuffer_inst.hlsl", L"shaders/instance_anim.hlsl"));
     scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
-    //scene.AddObject(std::make_unique<DebugGrid>(100.0f));
+    scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
     scene.CameraRef().SetPosition({ 0.f, 1.f, -10.f });
 }

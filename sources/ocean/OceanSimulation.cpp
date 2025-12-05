@@ -371,13 +371,12 @@ float2 OceanSimulation::GetShoreDepthRange() const
 
 void OceanSimulation::UpdateShoreView(const Camera& camera)
 {
-    constexpr float kShoremapExtent = 250.0f;
     constexpr float kShoreNearPlane = 0.1f;
     constexpr float kShoreFarPlane = 50.0f;
     constexpr float kShoreHeight = 20.0f;
 
     const float shoreDepthResolution = static_cast<float>(std::max(shoreDepthWidth_, 1u));
-    const float shoreTexelSize = (kShoremapExtent * 2.0f) / shoreDepthResolution;
+    const float shoreTexelSize = (shoreDepthHalfExtent_ * 2.0f) / shoreDepthResolution;
     const float shoreSnapStep = shoreTexelSize * shoreViewSnapMultiplier_;
 
     SceneView& shoreView = shoreDepthView_;
@@ -389,10 +388,10 @@ void OceanSimulation::UpdateShoreView(const Camera& camera)
     shoreView.renderLayerMask = RenderLayerMask(RenderLayer::Terrain);
     shoreView.position = float3(cameraPosition.x, kShoreHeight, cameraPosition.z);
     shoreView.view = mat4::LookAtLH(shoreView.position, shoreView.position + float3(0.0f, -1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f));
-    shoreView.proj = mat4::OrthoOffCenterLH(-kShoremapExtent, kShoremapExtent, -kShoremapExtent, kShoremapExtent, kShoreNearPlane, kShoreFarPlane);
+    shoreView.proj = mat4::OrthoOffCenterLH(-shoreDepthHalfExtent_, shoreDepthHalfExtent_, -shoreDepthHalfExtent_, shoreDepthHalfExtent_, kShoreNearPlane, kShoreFarPlane);
     shoreView.invView = mat4::Inverse(shoreView.view);
     shoreView.invProj = mat4::Inverse(shoreView.proj);
-    shoreView.frustum = Frustum::FromOrthoBounds(shoreView.invView, kShoremapExtent, kShoremapExtent, kShoreFarPlane - kShoreNearPlane,
+    shoreView.frustum = Frustum::FromOrthoBounds(shoreView.invView, shoreDepthHalfExtent_, shoreDepthHalfExtent_, kShoreFarPlane - kShoreNearPlane,
         float3(shoreView.position.x, shoreView.position.y - (kShoreFarPlane - kShoreNearPlane) * 0.5f, shoreView.position.z) );
     shoreView.zNear = kShoreNearPlane;
     shoreView.zFar = kShoreFarPlane;
