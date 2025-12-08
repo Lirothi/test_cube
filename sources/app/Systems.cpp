@@ -6,15 +6,24 @@
 namespace Systems {
 
 namespace {
-AppSystems* gSystems = nullptr;
+    AppSystems* gSystems = nullptr;
+    std::mutex gSystemsMutex;
 }
 
-void Set(AppSystems* systems) {
+void Init(AppSystems* systems) {
+    std::lock_guard<std::mutex> lock(gSystemsMutex);
+    assert(gSystems == nullptr && "Systems already initialized");
     gSystems = systems;
 }
 
+void Shutdown() {
+    std::lock_guard<std::mutex> lock(gSystemsMutex);
+    gSystems = nullptr;
+}
+
 AppSystems& Get() {
-    assert(gSystems != nullptr);
+    std::lock_guard<std::mutex> lock(gSystemsMutex);
+    assert(gSystems != nullptr && "Systems not initialized");
     return *gSystems;
 }
 
@@ -43,6 +52,8 @@ OceanSimulation* GetOceanSimulation()
 OceanSimulation* EnsureOceanSimulation()
 {
     auto& systems = Get();
+    static std::mutex oceanMutex;
+    std::lock_guard<std::mutex> lock(oceanMutex);
     if (!systems.oceanSimulation)
     {
         systems.oceanSimulation = std::make_unique<OceanSimulation>();

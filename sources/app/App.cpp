@@ -154,7 +154,7 @@ void App::InitScene()
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
     systems_ = std::make_unique<Systems::AppSystems>();
-    Systems::Set(systems_.get());
+    Systems::Init(systems_.get());
 
     {
         auto& renderer = systems_->renderer;
@@ -244,8 +244,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         renderer.Shutdown();
     }
 
-    Systems::Set(nullptr);
-
+    Systems::Shutdown();
     systems_.reset();
 
     mi_register_output(MiOut, nullptr);

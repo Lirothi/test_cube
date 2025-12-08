@@ -18,7 +18,10 @@ struct AppSystems {
     std::unique_ptr<OceanSimulation> oceanSimulation;
 };
 
-void Set(AppSystems* systems);
+// Explicit lifecycle control to avoid implicit global mutation.
+void Init(AppSystems* systems);
+void Shutdown();
+
 AppSystems& Get();
 Renderer& GetRenderer();
 Scene& GetScene();
