@@ -346,6 +346,7 @@
       grid: "rgba(40, 240, 255, 0.06)",
       player: "#25f0ff",
       bullet: "#b160ff",
+      rail: "#9af5ff",
       aura: "rgba(70, 255, 143, 0.24)",
       auraStroke: "rgba(70, 255, 143, 0.60)",
       gem: "#ffd94a",
@@ -457,6 +458,7 @@
        ============================ */
     const enemies = [];
     const bullets = [];
+    const rails = [];
     const axes = [];
     const enemyShots = [];
     const gems = [];
@@ -477,6 +479,7 @@
     }), 260);
 
     const bulletPool= makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3,   dmg:8,  life:0 }), 260);
+    const railPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:4.4, dmg:60, life:0, pierce:0 }), 160);
     const axePool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6,   dmg:18, life:0, rot:0, spin:0 }), 120);
     const shotPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:"rgba(255,217,74,.95)" }), 240);
 
@@ -492,12 +495,14 @@
     const weapons = {
       magic: { unlocked:true, level:1, t:0 },
       aura:  { unlocked:false, level:0, tick:0 },
+      rail:  { unlocked:false, level:0, t:0 },
       axe:   { unlocked:false, level:0, t:0 },
     };
 
     function resetWeapons(){
       weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.t = 0;
       weapons.aura.unlocked  = false; weapons.aura.level  = 0; weapons.aura.tick = 0;
+      weapons.rail.unlocked  = false; weapons.rail.level  = 0; weapons.rail.t = 0;
       weapons.axe.unlocked   = false; weapons.axe.level   = 0; weapons.axe.t = 0;
     }
 
@@ -529,6 +534,16 @@
       const knock = 160 + lv * 22;
       return { cd, dmg, speed, count, gravity, knock };
     }
+    function railStats(){
+      const lv = weapons.rail.level;
+      const cd = Math.max(1.8, 4.6 - lv * 0.36);
+      const dmg = 96 + lv * 28;
+      const speed = 1160 + lv * 60;
+      const pierce = 2 + Math.floor((lv+1) / 2);
+      const range = 1480 + lv * 90;
+      const knock = 240 + lv * 28;
+      return { cd, dmg, speed, pierce, range, knock };
+    }
 
     /* ============================
        Upgrades
@@ -550,6 +565,13 @@
         tag: () => `Weapon • ${weapons.aura.unlocked ? `Lv ${weapons.aura.level}/6` : "Unlock"}`,
         can: () => (!weapons.aura.unlocked) || weapons.aura.level < 6,
         apply: () => { if (!weapons.aura.unlocked){ weapons.aura.unlocked=true; weapons.aura.level=1; } else weapons.aura.level=Math.min(6,weapons.aura.level+1); }
+      },
+      {
+        id: "rail", title: "Railgun",
+        desc: "Charges a piercing rail shot that crosses the map with huge damage.",
+        tag: () => `Weapon • ${weapons.rail.unlocked ? `Lv ${weapons.rail.level}/6` : "Unlock"}`,
+        can: () => (!weapons.rail.unlocked) || weapons.rail.level < 6,
+        apply: () => { if (!weapons.rail.unlocked){ weapons.rail.unlocked=true; weapons.rail.level=1; } else weapons.rail.level=Math.min(6,weapons.rail.level+1); }
       },
       {
         id: "axe", title: "Axe Throw",
@@ -598,7 +620,7 @@
           const u = available[i];
           if (used.has(u.id)) continue;
           let w = 1;
-          if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked)) w = 2.2;
+          if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked)) w = 2.2;
           if (u.id==="pickup") w *= 1.2;
           const s = Math.random() * w;
           if (s > bestScore){ bestScore = s; best = u; }
@@ -615,6 +637,7 @@
       const parts = [];
       parts.push(`Magic Bullet Lv ${weapons.magic.level}`);
       if (weapons.aura.unlocked) parts.push(`Holy Aura Lv ${weapons.aura.level}`);
+      if (weapons.rail.unlocked) parts.push(`Railgun Lv ${weapons.rail.level}`);
       if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}`);
       if (upgradeState.speedLv) parts.push(`Speed +${upgradeState.speedLv}`);
       if (upgradeState.hpLv) parts.push(`Max HP +${upgradeState.hpLv}`);
@@ -958,6 +981,30 @@
       }
     }
 
+    function fireRailShot(){
+      const s = railStats();
+      const target = findNearestEnemy(player.x, player.y, s.range);
+      if (!target) return;
+
+      const dx = target.x - player.x;
+      const dy = target.y - player.y;
+      const ang = Math.atan2(dy, dx);
+
+      const r = railPool.get();
+      r.alive = true;
+      r.x = player.x;
+      r.y = player.y;
+      r.r = 5.0;
+      r.dmg = s.dmg;
+      r.pierce = s.pierce;
+      r.life = s.range / s.speed;
+      r.vx = Math.cos(ang) * s.speed;
+      r.vy = Math.sin(ang) * s.speed;
+      rails.push(r);
+
+      addParticles(player.x, player.y, COLORS.rail, 10, 520);
+    }
+
     function throwAxe(){
       const s = axeStats();
       const target = findNearestEnemy(player.x, player.y, 920);
@@ -1013,6 +1060,14 @@
               damageEnemy(e, s.dmg, nx, ny, s.knock, true);
             }
           }
+        }
+      }
+
+      if (weapons.rail.unlocked){
+        weapons.rail.t -= dt;
+        if (weapons.rail.t <= 0){
+          weapons.rail.t += railStats().cd;
+          fireRailShot();
         }
       }
 
@@ -1102,6 +1157,7 @@
     function restart(){
       for (let i=enemies.length-1;i>=0;i--) enemyPool.put(enemies.pop());
       for (let i=bullets.length-1;i>=0;i--) bulletPool.put(bullets.pop());
+      for (let i=rails.length-1;i>=0;i--) railPool.put(rails.pop());
       for (let i=axes.length-1;i>=0;i--) axePool.put(axes.pop());
       for (let i=enemyShots.length-1;i>=0;i--) shotPool.put(enemyShots.pop());
       for (let i=gems.length-1;i>=0;i--) gemPool.put(gems.pop());
@@ -1303,6 +1359,41 @@
           bullets[i] = bullets[bullets.length-1];
           bullets.pop();
           bulletPool.put(b);
+        }
+      }
+    }
+
+    function updateRailShots(dt){
+      const s = railStats();
+      for (let i=rails.length-1;i>=0;i--){
+        const r = rails[i];
+        if (!r.alive){ rails[i] = rails[rails.length-1]; rails.pop(); railPool.put(r); continue; }
+
+        r.life -= dt;
+        r.x += r.vx * dt;
+        r.y += r.vy * dt;
+
+        for (let j=0;j<enemies.length;j++){
+          const e = enemies[j];
+          if (!e.alive) continue;
+          const dx = e.x - r.x;
+          const dy = e.y - r.y;
+          const rr = e.r + r.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            const d = hypot(r.vx, r.vy) || 1;
+            const px = r.vx / d, py = r.vy / d;
+            damageEnemy(e, r.dmg, px, py, s.knock, true);
+            r.pierce--;
+            if (r.pierce <= 0){ r.alive = false; break; }
+          }
+        }
+
+        if (r.life <= 0) r.alive = false;
+
+        if (!r.alive){
+          rails[i] = rails[rails.length-1];
+          rails.pop();
+          railPool.put(r);
         }
       }
     }
@@ -1599,6 +1690,18 @@
         neonCircle(s.x, s.y, s.r, s.color, 18);
       }
 
+      for (let i=0;i<rails.length;i++){
+        const r = rails[i];
+        ctx.save();
+        ctx.shadowColor = COLORS.rail;
+        ctx.shadowBlur = 24;
+        ctx.fillStyle = COLORS.rail;
+        ctx.beginPath();
+        ctx.ellipse(r.x, r.y, r.r * 1.6, r.r, Math.atan2(r.vy, r.vx), 0, TAU);
+        ctx.fill();
+        ctx.restore();
+      }
+
       for (let i=0;i<bullets.length;i++){
         const b = bullets[i];
         neonCircle(b.x, b.y, b.r, COLORS.bullet, 18);
@@ -1722,6 +1825,7 @@
       updateEnemies(dt);
       updateEnemyShots(dt);
       updateBullets(dt);
+      updateRailShots(dt);
       updateAxes(dt);
       updateGems(dt);
       updateParticles(dt);
