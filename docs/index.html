@@ -23,6 +23,7 @@
     }
 
     html,body{height:100%; margin:0; background:var(--bg); overflow:hidden; font-family:var(--font); color:var(--text);}
+    body{padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0);}
     canvas{display:block; width:100vw; height:100vh; outline:none;}
 
     #hud{
@@ -199,11 +200,25 @@
       .topRow{flex-direction:column; align-items:stretch;}
       #bars{justify-content:stretch;}
     }
-    body.mobile #hud{padding:8px; gap:8px;}
+    body.mobile #hud{
+      padding:8px 8px calc(10px + env(safe-area-inset-bottom,0)) 8px;
+      gap:8px;
+    }
     body.mobile .topRow{flex-direction:column; align-items:stretch;}
     body.mobile .hudCard{min-width:unset; width:100%;}
-    body.mobile #bars .barCard{width:100%;}
-    body.mobile #hint{font-size:13px; bottom:10px;}
+    body.mobile #statusCard,
+    body.mobile #loadoutCard,
+    body.mobile #bars .barCard{width:100%; max-width:unset;}
+    body.mobile .hudTitle{font-size:11px;}
+    body.mobile .hudStats{grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 10px;}
+    body.mobile .kv{font-size:13px;}
+    body.mobile #hint{
+      font-size:12px;
+      bottom:calc(8px + env(safe-area-inset-bottom,0));
+      left:8px; right:8px;
+      text-align:center;
+      white-space:normal;
+    }
   </style>
 </head>
 <body>
