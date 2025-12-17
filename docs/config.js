@@ -8,6 +8,9 @@ export const COLORS = {
   rail: "#9af5ff",
   aura: "rgba(70, 255, 143, 0.24)",
   auraStroke: "rgba(70, 255, 143, 0.60)",
+  lake: "#0b1b3d",
+  forest: "#2c7b34",
+  rock: "#8a8d94",
   gem: "#ffd94a",
   gold: "#ffd94a",
   crit: "#ffeb3b",
@@ -37,6 +40,8 @@ export const COLORS = {
   dmg: "rgba(215,246,255,.95)",
   heal: "#46ff8f",
   warn: "#ff3b66",
+  missile: "#ff9a3c",
+  missileStroke: "rgba(0,0,0,0.3)",
   text: "#d7f6ff",
 };
 
@@ -163,8 +168,8 @@ export const WEAPON_CONFIG = {
     radiusBase: 56,
     radiusPerLevel: 14,
     tick: 0.22,
-    dmgBase: 5,
-    dmgPerLevel: 3.4,
+    dmgBase: 6,
+    dmgPerLevel: 4,
     knockBase: 70,
     knockPerLevel: 10,
     powerDmgMult: 1.22,
@@ -207,7 +212,7 @@ export const WEAPON_CONFIG = {
     cdPerLevel: 0.6,
     cdMin: 1.5,
     dmgBase: 30,
-    dmgPerLevel: 18,
+    dmgPerLevel: 10,
     speedBase: 1160,
     speedPerLevel: 60,
     pierceBase: 3,
@@ -245,6 +250,27 @@ export const WEAPON_CONFIG = {
     crit: { base: 0.1, perLevel: 0.015, multBase: 1.6, multPerLevel: 0.05 },
     maxLevel: 6,
   },
+  missile: {
+    dmgBase: 15,
+    dmgPerLevel: 6,
+    cdBase: 2.6,
+    cdPerLevel: 0.18,
+    cdMin: 0.9,
+    speedBase: 320,
+    speedPerLevel: 10,
+    accel: 380,
+    maxSpeedMult: 1.4,
+    turnRateDeg: 160, // base turn; improves with level in code
+    life: 2.8,
+    countInterval: 2,
+    explosionRadiusBase: 46,
+    explosionRadiusPerLevel: 4,
+    rangeBase: 900,
+    rangePerLevel: 20,
+    crit: { base: 0.10, perLevel: 0.015, multBase: 1.6, multPerLevel: 0.05 },
+    projectile: { radius: 6 },
+    maxLevel: 8,
+  },
 };
 
 export const WEAPON_MASTERY = {
@@ -255,7 +281,7 @@ export const WEAPON_MASTERY = {
 
 export const MAX_WEAPONS = 4;
 
-export const DPS_LABELS = { magic:"Magic", aura:"Aura", rail:"Railgun", axe:"Axe", orb:"Orb" };
+export const DPS_LABELS = { magic:"Magic", aura:"Aura", rail:"Railgun", axe:"Axe", orb:"Orb", missile:"Missile" };
 
 export const WEAPON_RIDERS = {
   magic: { slow: { mult: 0.65, duration: 1.3 } },             // slows enemies on hit
@@ -285,6 +311,13 @@ export const RANGED_SHOT_CONFIG = {
   life: 2.25,
   hitPad: 3,
   color: "rgba(255,59,102,.95)",
+};
+
+export const OBSTACLE_CONFIG = {
+  lakes: { count: 540, sizeMin: 60, sizeMax: 140, blobs: 4 },
+  forests: { count: 2420, sizeMin: 20, sizeMax: 34, hp: 50 },
+  rocks: { count: 1560, sizeMin: 34, sizeMax: 62, hp: 420 },
+  spawnRadius: 26000,
 };
 
 export const LOOT_CONFIG = {
@@ -351,7 +384,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS_CONFIG.lootGems,
   },
   Y: { // late void boss
-    name:"Eclipse", r:22, hp:3800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:12,
+    name:"Eclipse", r:22, hp:3800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
     boss:true, knockResist:0.65,
     ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:780,
     telegraph: BOSS2_CONFIG.telegraph,

@@ -21,7 +21,8 @@
   ELITE_CONFIG,
   BOSS_CONFIG,
   BOSS2_CONFIG,
-  ENEMY_TYPES
+  ENEMY_TYPES,
+  OBSTACLE_CONFIG
 } from "./config.js";
 
 (() => {
@@ -210,6 +211,14 @@
     const rand = (a=1,b=0)=> (Math.random()*(a-b)+b);
     const randi = (a,b=0)=> (Math.random()*(a-b)+b) | 0;
     const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+    const clampPointToWorld = (x, y, margin=0) => {
+      const lim = Math.max(0, WORLD.halfSize - margin);
+      return { x: clamp(x, -lim, lim), y: clamp(y, -lim, lim) };
+    };
+    const clampEntityToWorld = (entity, margin=0) => {
+      const p = clampPointToWorld(entity.x, entity.y, margin);
+      entity.x = p.x; entity.y = p.y;
+    };
     const hypot = Math.hypot;
     const fmtFloat = (n, digits=2) => {
       const s = n.toFixed(digits).replace(/\.?0+$/,"");
@@ -335,7 +344,7 @@
     /* ============================
        World / State
        ============================ */
-    const WORLD = { spawnPad: 80, despawnPad: 240 };
+    const WORLD = { halfSize: 20000, spawnPad: 80, despawnPad: 240 };
     const STATE = { PLAYING:"playing", LEVELUP:"levelup", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
     let fpsAccum = 0, fpsCount = 0;
@@ -389,7 +398,19 @@
     }
 
     function resetPlayer() {
+      // place player at center but nudge out of obstacles if necessary
       player.x = 0; player.y = 0;
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const reach = o.r + player.r + 2;
+        const dx = player.x - o.x;
+        const dy = player.y - o.y;
+        if (dx*dx + dy*dy <= reach*reach){
+          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+          player.x = o.x + (dx / dist) * (reach + 8);
+          player.y = o.y + (dy / dist) * (reach + 8);
+        }
+      }
       player.hp = BASE_STATS.hp; player.maxHp = BASE_STATS.hp;
       player.speed = BASE_STATS.speed;
       player.pickup = BASE_STATS.pickup;
@@ -412,6 +433,7 @@
        ============================ */
     const enemies = [];
     const bullets = [];
+    const missiles = [];
     const rails = [];
     const axes = [];
     const orbs = [];
@@ -423,6 +445,7 @@
     const chests = [];
     const dmgTexts = [];
     const floatTexts = [];
+    const obstacles = [];
 
     const enemyPool = makePool(() => ({
       alive:false, type:"A",
@@ -444,10 +467,11 @@
       elite:false, knockResist:0, gemBonus:0,
     }), 260);
 
-    const bulletPool= makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3,   dmg:8,  life:0, critChance:0, critMult:1 }), 260);
-    const railPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:4.4, dmg:60, life:0, pierce:0, trail:[], critChance:0, critMult:1 }), 160);
-    const axePool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6,   dmg:18, life:0, rot:0, spin:0, critChance:0, critMult:1 }), 120);
-    const shotPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:COLORS.gem }), 240);
+    const bulletPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3,   dmg:8,  life:0, maxLife:0, critChance:0, critMult:1, color:null, isExplosion:false }), 260);
+    const missilePool = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6, dmg:0, life:0, speed:0, maxSpeed:0, accel:0, turnRate:0, explosion:0, critChance:0, critMult:1 }), 140);
+    const railPool    = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:4.4, dmg:60, life:0, pierce:0, trail:[], critChance:0, critMult:1 }), 160);
+    const axePool     = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6,   dmg:18, life:0, rot:0, spin:0, critChance:0, critMult:1 }), 120);
+    const shotPool    = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:COLORS.gem }), 240);
     const voidPool  = makePool(() => ({ alive:false, x:0,y:0, radius:0, life:0, maxLife:0, dps:0, tick:0.25, tickT:0, color:"#fff", type:"poison" }), 120);
     const orbPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:10, dmg:0, critChance:0, critMult:1, state:"fly", life:0, park:0, tick:0, pull:0, radius:0, explosion:0 }), 80);
 
@@ -466,6 +490,7 @@
       rail:  { unlocked:false, level:0, mastery:0, t:0 },
       axe:   { unlocked:false, level:0, mastery:0, t:0 },
       orb:   { unlocked:false, level:0, mastery:0, t:0 },
+      missile:{ unlocked:false, level:0, mastery:0, t:0 },
     };
 
     function resetWeapons(){
@@ -474,6 +499,7 @@
       weapons.rail.unlocked  = false; weapons.rail.level  = 0; weapons.rail.mastery  = 0; weapons.rail.t = 0;
       weapons.axe.unlocked   = false; weapons.axe.level   = 0; weapons.axe.mastery   = 0; weapons.axe.t = 0;
       weapons.orb.unlocked   = false; weapons.orb.level   = 0; weapons.orb.mastery   = 0; weapons.orb.t = 0;
+      weapons.missile.unlocked = false; weapons.missile.level = 0; weapons.missile.mastery = 0; weapons.missile.t = 0;
     }
 
     function weaponCount(){
@@ -483,6 +509,7 @@
       if (weapons.rail.unlocked) c++;
       if (weapons.axe.unlocked) c++;
       if (weapons.orb.unlocked) c++;
+      if (weapons.missile.unlocked) c++;
       return c;
     }
 
@@ -584,11 +611,34 @@
       const park = cfg.parkTimeBase + lv * cfg.parkTimePerLevel;
       return { dmg, cd, speed, radius, pull, range: cfg.range, tick: cfg.tick, park, explosion, critChance:critChanceTotal, critMult };
     }
+    function missileStats(){
+      const cfg = WEAPON_CONFIG.missile;
+      const lv = weapons.missile.level;
+      const mastery = weapons.missile.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
+      const powerMul = (buffs.power > 0) ? cfg.powerDmgMult || 1 : 1;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+      const cd = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel);
+      const speed = cfg.speedBase + lv * cfg.speedPerLevel;
+      const maxSpeed = speed * cfg.maxSpeedMult;
+      const accel = cfg.accel;
+      const turnRate = (cfg.turnRateDeg || 180) * (Math.PI / 180) * (1 + 0.04 * lv); // improved homing per level
+      const count = 1 + Math.floor((lv-1) / cfg.countInterval);
+      const explosion = cfg.explosionRadiusBase + lv * cfg.explosionRadiusPerLevel;
+      const life = cfg.life;
+      const range = cfg.rangeBase + lv * (cfg.rangePerLevel || 0);
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+      return { dmg, cd, speed, maxSpeed, accel, turnRate, count, explosion, life, range, critChance:critChanceTotal, critMult, radius: cfg.projectile.radius };
+    }
 
     /* ============================
        Upgrades
        ============================ */
-    const DPS_TRACKER = { magic:0, aura:0, rail:0, axe:0, orb:0 };
+    const DPS_TRACKER = { magic:0, aura:0, rail:0, axe:0, orb:0, missile:0 };
 
     const upgradeState = { speedLv:0, hpLv:0, pickupLv:0, critChanceLv:0, critMultLv:0 };
     function resetUpgradeState(){
@@ -598,7 +648,7 @@
       upgradeState.critChanceLv=0;
       upgradeState.critMultLv=0;
     }
-    function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; }
+    function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; DPS_TRACKER.missile=0; }
 
     function weaponTag(weapon, maxLv){
       if (!weapon.unlocked) return "Weapon - Unlock";
@@ -663,6 +713,17 @@
         }
       },
       {
+        id: "missile", title: "Homing Missiles",
+        desc: "Fire guided missiles that arc toward enemies and explode for splash damage. Mastery adds damage/crit scaling past max.",
+        tag: () => weaponTag(weapons.missile, WEAPON_CONFIG.missile.maxLevel),
+        can: () => (weapons.missile.unlocked) || weaponCount() < MAX_WEAPONS,
+        apply: () => {
+          if (!weapons.missile.unlocked){ weapons.missile.unlocked=true; weapons.missile.level=1; return; }
+          if (weapons.missile.level < WEAPON_CONFIG.missile.maxLevel) weapons.missile.level++;
+          else weapons.missile.mastery++;
+        }
+      },
+      {
         id: "speed", title: "Speed Up",
         desc: "Move faster to kite swarms and reach chests sooner.",
         tag: () => `Passive - Lv ${upgradeState.speedLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
@@ -706,7 +767,14 @@
 
     function pickUpgrades(n=XP_CONFIG.cardChoices){
       const available = [];
-      for (let i=0;i<UPGRADES.length;i++) if (UPGRADES[i].can()) available.push(UPGRADES[i]);
+      const capReached = weaponCount() >= MAX_WEAPONS;
+      for (let i=0;i<UPGRADES.length;i++){
+        const u = UPGRADES[i];
+        const isWeapon = (u.id === "magic" || u.id === "aura" || u.id === "rail" || u.id === "axe" || u.id === "orb" || u.id === "missile");
+        const isLocked = (u.id === "magic") ? false : (u.id === "aura" ? !weapons.aura.unlocked : u.id === "rail" ? !weapons.rail.unlocked : u.id === "axe" ? !weapons.axe.unlocked : u.id === "orb" ? !weapons.orb.unlocked : u.id === "missile" ? !weapons.missile.unlocked : false);
+        if (capReached && isWeapon && isLocked) continue; // hard cap enforcement
+        if (u.can()) available.push(u);
+      }
       if (!available.length) return [];
       const picks = [];
       const used = new Set();
@@ -716,7 +784,7 @@
           const u = available[i];
           if (used.has(u.id)) continue;
           let w = 1;
-          if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
+          if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked) || (u.id==="missile" && !weapons.missile.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
           if (u.id==="pickup") w *= UPGRADE_CONFIG.weightPickup;
           const s = Math.random() * w;
           if (s > bestScore){ bestScore = s; best = u; }
@@ -737,6 +805,7 @@
       if (weapons.rail.unlocked) parts.push(`Railgun Lv ${weapons.rail.level}${mTag(weapons.rail)}`);
       if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}${mTag(weapons.axe)}`);
       if (weapons.orb.unlocked) parts.push(`Singularity Orb Lv ${weapons.orb.level}${mTag(weapons.orb)}`);
+      if (weapons.missile.unlocked) parts.push(`Homing Missiles Lv ${weapons.missile.level}${mTag(weapons.missile)}`);
       if (upgradeState.speedLv) parts.push(`Speed +${upgradeState.speedLv}`);
       if (upgradeState.hpLv) parts.push(`Max HP +${upgradeState.hpLv}`);
       if (upgradeState.pickupLv) parts.push(`Pickup +${upgradeState.pickupLv}`);
@@ -757,6 +826,7 @@
       append("rail", weapons.rail.unlocked);
       append("axe", weapons.axe.unlocked);
       append("orb", weapons.orb.unlocked);
+      append("missile", weapons.missile.unlocked);
       return entries.length ? entries.join(" | ") : "No weapon damage";
     }
 
@@ -788,7 +858,9 @@
         if (s.pierce) parts.push(`Pierce ${Math.round(s.pierce)}`);
         if (s.tick) parts.push(`Tick ${fmtFloat(s.tick, 2)}s`);
         if (key === "aura" && s.radius) parts.push(`Radius ${Math.round(s.radius)}`);
+        const dps = fmtFloat((DPS_TRACKER[key] || 0) / Math.max(player.time, 0.1), 1);
         parts.push(`Crit ${Math.round((s.critChance || 0) * 100)}% x${fmtFloat(s.critMult || 1, 2)}`);
+        parts.push(`DPS ${dps}`);
         rows.push(`<div class="kv"><span>${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}</span><span>${parts.join(" | ")}</span></div>`);
       };
       addWeapon("Magic", "magic", magicStats);
@@ -796,6 +868,7 @@
       addWeapon("Railgun", "rail", railStats);
       addWeapon("Axe", "axe", axeStats);
       addWeapon("Orb", "orb", orbStats);
+      addWeapon("Missiles", "missile", missileStats);
       ui.menuWeaponStats.innerHTML = rows.length ? rows.join("") : `<div class="kv"><span>Weapons</span><span>None unlocked</span></div>`;
     }
 
@@ -815,18 +888,39 @@
       bossRef: null,
     };
 
-    function pickSpawnPos(camX, camY){
-      const pad = WORLD.spawnPad;
-      const side = randi(4);
+    function isBlockedByObstacle(x, y, r=0, pad=0){
+      const rad = r + pad;
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const reach = o.r + rad;
+        const dx = o.x - x, dy = o.y - y;
+        if (dx*dx + dy*dy <= reach*reach) return true;
+      }
+      return false;
+    }
+
+    function pickSpawnPos(camX, camY, opts={}){
+      const padExtra = opts.allowOutside ? WORLD.spawnPad + 200 : 0;
+      const pad = WORLD.spawnPad + padExtra;
       const minX = camX - pad, maxX = camX + W + pad;
       const minY = camY - pad, maxY = camY + H + pad;
+      const tries = opts.tries || 14;
+      const radius = opts.radius || 12;
+      let last = { x: minX, y: minY };
 
-      let x, y;
-      if (side === 0) { x = rand(maxX, minX); y = minY; }
-      else if (side === 1) { x = maxX; y = rand(maxY, minY); }
-      else if (side === 2) { x = rand(maxX, minX); y = maxY; }
-      else { x = minX; y = rand(maxY, minY); }
-      return { x, y };
+      for (let t=0;t<tries;t++){
+        const side = randi(4);
+        let x, y;
+        if (side === 0) { x = rand(maxX, minX); y = minY; }
+        else if (side === 1) { x = maxX; y = rand(maxY, minY); }
+        else if (side === 2) { x = rand(maxX, minX); y = maxY; }
+        else { x = minX; y = rand(maxY, minY); }
+
+        const candidate = opts.allowOutside ? { x, y } : clampPointToWorld(x, y, radius);
+        last = candidate;
+        if (!opts.avoidObstacles || !isBlockedByObstacle(candidate.x, candidate.y, radius, 6)) return candidate;
+      }
+      return last;
     }
 
     function spawnEnemy(typeKey, camX, camY, hpMult, spdMult, dmgMult, elite=false, pos=null){
@@ -904,8 +998,9 @@
         spawn.bossRef = e;
       }
 
-      const p = pos || pickSpawnPos(camX, camY);
+      const p = pos || pickSpawnPos(camX, camY, { allowOutside: e.boss, radius: e.r, avoidObstacles: true });
       e.x = p.x; e.y = p.y;
+      if (!e.boss) clampEntityToWorld(e, e.r);
 
       enemies.push(e);
     }
@@ -960,7 +1055,7 @@
 
       if (!spawn.bossSpawned && t >= BOSS_CONFIG.spawnTime){
         spawn.bossSpawned = true;
-        const pos = pickSpawnPos(camX, camY);
+        const pos = pickSpawnPos(camX, camY, { allowOutside:true, radius: ENEMY_TYPES.X.r, avoidObstacles:true });
         addTelegraph({
           x: pos.x, y: pos.y,
           radius: BOSS_CONFIG.telegraph.radius,
@@ -975,7 +1070,7 @@
       }
       if (!spawn.boss2Spawned && t >= BOSS2_CONFIG.spawnTime){
         spawn.boss2Spawned = true;
-        const pos = pickSpawnPos(camX, camY);
+        const pos = pickSpawnPos(camX, camY, { allowOutside:true, radius: ENEMY_TYPES.Y.r, avoidObstacles:true });
         addTelegraph({
           x: pos.x, y: pos.y,
           radius: BOSS2_CONFIG.telegraph.radius,
@@ -1009,7 +1104,7 @@
 
       if (spawn.eliteT <= 0 && enemies.length < spawn.maxEnemies){
         spawn.eliteT = ELITE_CONFIG.interval;
-        const pos = pickSpawnPos(camX, camY);
+        const pos = pickSpawnPos(camX, camY, { allowOutside:false, radius: 14, avoidObstacles:true });
         addTelegraph({
           x: pos.x, y: pos.y,
           radius: ELITE_CONFIG.telegraphRadius,
@@ -1112,6 +1207,202 @@
       activeMax: CHEST_CONFIG.activeMax
     };
 
+    /* ============================
+       Obstacles (lakes, forests, rocks)
+       ============================ */
+    const OBSTACLE_TYPE = { LAKE:"lake", FOREST:"forest", ROCK:"rock" };
+    function spawnObstacles(){
+      obstacles.length = 0;
+      const radius = Math.max(200, Math.min(OBSTACLE_CONFIG.spawnRadius, WORLD.halfSize + 400));
+      const addCircle = (type, x, y, r, hp=0) => obstacles.push({ type, x, y, r, hp, maxHp:hp });
+      const groups = [];
+      const groupPad = 80;
+      const placeGroup = (groupR) => {
+        const lim = radius - groupR;
+        if (lim <= 0) return null;
+        for (let t=0;t<40;t++){
+          const x = rand(lim, -lim);
+          const y = rand(lim, -lim);
+          let ok = true;
+          for (let g=0; g<groups.length; g++){
+            const dx = x - groups[g].x;
+            const dy = y - groups[g].y;
+            const reach = groupR + groups[g].r + groupPad;
+            if (dx*dx + dy*dy < reach*reach){
+              ok = false;
+              break;
+            }
+          }
+          if (ok){
+            groups.push({ x, y, r: groupR });
+            return { x, y };
+          }
+        }
+        return null;
+      };
+
+      // Lakes: few big oval blobs
+      for (let i=0;i<OBSTACLE_CONFIG.lakes.count;i++){
+        const angle = rand(TAU, 0);
+        const dirx = Math.cos(angle), diry = Math.sin(angle);
+        const major = rand(OBSTACLE_CONFIG.lakes.sizeMax * 2.2, OBSTACLE_CONFIG.lakes.sizeMax * 1.2);
+        const minor = rand(OBSTACLE_CONFIG.lakes.sizeMin * 1.3, OBSTACLE_CONFIG.lakes.sizeMin * 0.8);
+        const bulge = rand(0.32, 0.12);
+        const segments = OBSTACLE_CONFIG.lakes.blobs || 3;
+        const segs = [];
+        let maxReach = 0;
+        for (let s=0;s<segments;s++){
+          const t = segments === 1 ? 0 : (s/(segments-1) - 0.5);
+          const jitter = rand(minor * 0.4, -minor * 0.4);
+          const ox = dirx * major * t + -diry * jitter * 0.2;
+          const oy = diry * major * t + dirx * jitter * 0.2;
+          const blend = Math.abs(t);
+          const baseR = (major * 0.35) + (minor * 0.8 - major * 0.35) * blend;
+          const wobble = 1 + rand(bulge, -bulge);
+          const r = Math.max(minor * 0.4, baseR * wobble);
+          segs.push({ ox, oy, r });
+          const reach = Math.hypot(ox, oy) + r;
+          if (reach > maxReach) maxReach = reach;
+        }
+        const center = placeGroup(maxReach);
+        if (!center) continue;
+        for (let s=0;s<segs.length;s++){
+          addCircle(OBSTACLE_TYPE.LAKE, center.x + segs[s].ox, center.y + segs[s].oy, segs[s].r, 0);
+        }
+      }
+
+      // Forests: small clusters of scattered trees around a base
+      for (let i=0;i<OBSTACLE_CONFIG.forests.count;i++){
+        const trees = randi(8, 4);
+        const segs = [];
+        let maxReach = 0;
+        for (let t=0;t<trees;t++){
+          const ang = rand(TAU, 0);
+          const dist = rand(58, 12);
+          const r = rand(OBSTACLE_CONFIG.forests.sizeMax, OBSTACLE_CONFIG.forests.sizeMin);
+          const ox = Math.cos(ang) * dist;
+          const oy = Math.sin(ang) * dist;
+          segs.push({ ox, oy, r });
+          const reach = Math.hypot(ox, oy) + r;
+          if (reach > maxReach) maxReach = reach;
+        }
+        const center = placeGroup(maxReach);
+        if (!center) continue;
+        for (let t=0;t<segs.length;t++){
+          addCircle(OBSTACLE_TYPE.FOREST, center.x + segs[t].ox, center.y + segs[t].oy, segs[t].r, OBSTACLE_CONFIG.forests.hp);
+        }
+      }
+
+      // Rocks: mix of long ridges and clustered piles
+      for (let i=0;i<OBSTACLE_CONFIG.rocks.count;i++){
+        if (Math.random() < 0.55){
+          const angle = rand(TAU, 0);
+          const dirx = Math.cos(angle), diry = Math.sin(angle);
+          const nodes = randi(8, 5);
+          const step = rand(90, 60);
+          const segs = [];
+          let maxReach = 0;
+          for (let n=0;n<nodes;n++){
+            const offset = (n - (nodes-1)/2) * step;
+            const jitter = rand(20, -20);
+            const ox = dirx * offset + -diry * jitter;
+            const oy = diry * offset + dirx * jitter;
+            const r = rand(OBSTACLE_CONFIG.rocks.sizeMax, OBSTACLE_CONFIG.rocks.sizeMin);
+            segs.push({ ox, oy, r });
+            const reach = Math.hypot(ox, oy) + r;
+            if (reach > maxReach) maxReach = reach;
+          }
+          const center = placeGroup(maxReach);
+          if (!center) continue;
+          for (let n=0;n<segs.length;n++){
+            addCircle(OBSTACLE_TYPE.ROCK, center.x + segs[n].ox, center.y + segs[n].oy, segs[n].r, OBSTACLE_CONFIG.rocks.hp);
+          }
+        } else {
+          const nodes = randi(7, 4);
+          const segs = [];
+          let maxReach = 0;
+          for (let n=0;n<nodes;n++){
+            const ang = rand(TAU, 0);
+            const dist = rand(70, 18);
+            const r = rand(OBSTACLE_CONFIG.rocks.sizeMax, OBSTACLE_CONFIG.rocks.sizeMin);
+            const ox = Math.cos(ang) * dist;
+            const oy = Math.sin(ang) * dist;
+            segs.push({ ox, oy, r });
+            const reach = Math.hypot(ox, oy) + r;
+            if (reach > maxReach) maxReach = reach;
+          }
+          const center = placeGroup(maxReach);
+          if (!center) continue;
+          for (let n=0;n<segs.length;n++){
+            addCircle(OBSTACLE_TYPE.ROCK, center.x + segs[n].ox, center.y + segs[n].oy, segs[n].r, OBSTACLE_CONFIG.rocks.hp);
+          }
+        }
+      }
+    }
+
+    function damageObstacle(idx, dmg, isExplosion=false){
+      const o = obstacles[idx];
+      if (!o) return;
+      if (o.type === OBSTACLE_TYPE.LAKE) return;
+      if (o.type === OBSTACLE_TYPE.ROCK && !isExplosion) return;
+      o.hp = Math.max(0, o.hp - dmg);
+      if (o.hp <= 0){
+        if (o.type === OBSTACLE_TYPE.FOREST){
+          addParticles(o.x, o.y, COLORS.forest, 10, 280);
+        } else if (o.type === OBSTACLE_TYPE.ROCK){
+          addParticles(o.x, o.y, COLORS.rock, 10, 240);
+        }
+        obstacles[idx] = obstacles[obstacles.length-1];
+        obstacles.pop();
+      }
+    }
+
+    function damageObstaclesInRadius(x,y,r,dmg,isExplosion=false){
+      for (let i=obstacles.length-1;i>=0;i--){
+        const o = obstacles[i];
+        const dx = o.x - x;
+        const dy = o.y - y;
+        const reach = o.r + r;
+        if (dx*dx + dy*dy <= reach*reach){
+          damageObstacle(i, dmg, isExplosion);
+        }
+      }
+    }
+
+    function resolveObstacles(entity, radius){
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const dx = entity.x - o.x;
+        const dy = entity.y - o.y;
+        const dist2 = dx*dx + dy*dy;
+        const minD = radius + o.r;
+        if (dist2 < minD*minD){
+          const dist = Math.sqrt(dist2) || 1;
+          const push = (minD - dist) + 0.1;
+          entity.x += (dx / dist) * push;
+          entity.y += (dy / dist) * push;
+        }
+      }
+    }
+
+    function obstacleAvoidance(x,y,r){
+      let ax = 0, ay = 0;
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const dx = x - o.x;
+        const dy = y - o.y;
+        const dist2 = dx*dx + dy*dy;
+        const minD = r + o.r + 30;
+        if (dist2 < minD*minD){
+          const dist = Math.sqrt(dist2) || 1;
+          const strength = (minD - dist) / minD;
+          ax += (dx / dist) * strength;
+          ay += (dy / dist) * strength;
+        }
+      }
+      return { ax, ay };
+    }
+
     function queueChestBomb(x,y){
       const radius = CHEST_CONFIG.bomb.radius;
       const dmg = CHEST_CONFIG.bomb.dmgBase + player.level * CHEST_CONFIG.bomb.dmgPerLevel;
@@ -1207,12 +1498,15 @@
         const x = player.x + rand(W*CHEST_CONFIG.spawnOffset, -W*CHEST_CONFIG.spawnOffset);
         const y = player.y + rand(H*CHEST_CONFIG.spawnOffset, -H*CHEST_CONFIG.spawnOffset);
         const dx = x - player.x, dy = y - player.y;
-        if (dx*dx + dy*dy > CHEST_CONFIG.spawnMinDist * CHEST_CONFIG.spawnMinDist){
+        if (dx*dx + dy*dy > CHEST_CONFIG.spawnMinDist * CHEST_CONFIG.spawnMinDist && !isBlockedByObstacle(x, y, c.r || 0, CHEST_CONFIG.radiusPadding || 8)){
           c.x = x;
           c.y = y;
           break;
         }
       }
+      const limited = clampPointToWorld(c.x || player.x, c.y || player.y, c.r || 0);
+      c.x = limited.x;
+      c.y = limited.y;
       chests.push(c);
     }
 
@@ -1308,7 +1602,7 @@
       gems.push(g);
     }
 
-    function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText=true, crit=false, source=null){
+    function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText=true, crit=false, source=null, applyRiders=true){
       if (dmg > 0){
         const inflicted = Math.min(dmg, Math.max(0, e.hp));
         e.hp -= dmg;
@@ -1325,7 +1619,7 @@
         e.kx += pushX * effPush;
         e.ky += pushY * effPush;
       }
-      if (e.hp > 0 && source){
+      if (applyRiders && e.hp > 0 && source){
         if (source === "magic"){
           const cfg = WEAPON_RIDERS.magic.slow;
           e.slowT = Math.max(e.slowT, cfg.duration);
@@ -1392,8 +1686,11 @@
         b.r = WEAPON_CONFIG.magic.projectile.radius;
         b.dmg = s.dmg;
         b.life = WEAPON_CONFIG.magic.projectile.life;
+        b.maxLife = b.life;
         b.critChance = s.critChance;
         b.critMult = s.critMult;
+        b.isExplosion = false;
+        b.color = null;
 
         const t = (count === 1) ? 0 : (i/(count-1) - 0.5);
         const ang = baseAng + t * spread;
@@ -1494,6 +1791,33 @@
       orbs.push(o);
     }
 
+    function fireMissile(){
+      const s = missileStats();
+      const spread = 0.18;
+      sound.play("shoot");
+      for (let i=0;i<s.count;i++){
+        const baseAng = rand(TAU, 0); // launch randomly; homing picks nearest in flight
+        const t = (s.count === 1) ? 0 : (i/(s.count-1) - 0.5);
+        const ang = baseAng + t * spread;
+        const m = missilePool.get();
+        m.alive = true;
+        m.x = player.x; m.y = player.y;
+        m.r = WEAPON_CONFIG.missile.projectile.radius;
+        m.dmg = s.dmg;
+        m.life = s.life;
+        m.speed = s.speed * 0.6;
+        m.maxSpeed = s.maxSpeed;
+        m.accel = s.accel;
+        m.turnRate = s.turnRate;
+        m.explosion = s.explosion;
+        m.critChance = s.critChance;
+        m.critMult = s.critMult;
+        m.vx = Math.cos(ang) * m.speed;
+        m.vy = Math.sin(ang) * m.speed;
+        missiles.push(m);
+      }
+    }
+
     function updateWeapons(dt){
       if (weapons.magic.unlocked){
         weapons.magic.t -= dt;
@@ -1522,6 +1846,15 @@
               damageEnemy(e, hit.dmg, nx, ny, s.knock, true, hit.crit, "aura");
             }
           }
+          for (let i=obstacles.length-1;i>=0;i--){
+            const o = obstacles[i];
+            const dx = o.x - player.x;
+            const dy = o.y - player.y;
+            const reach = r + o.r;
+            if (dx*dx + dy*dy <= reach*reach){
+              damageObstacle(i, s.dmg, false);
+            }
+          }
         }
       }
 
@@ -1546,6 +1879,14 @@
         if (weapons.orb.t <= 0){
           weapons.orb.t += orbStats().cd;
           fireOrb();
+        }
+      }
+
+      if (weapons.missile.unlocked){
+        weapons.missile.t -= dt;
+        if (weapons.missile.t <= 0){
+          weapons.missile.t += missileStats().cd;
+          fireMissile();
         }
       }
     }
@@ -1649,9 +1990,11 @@
     function restart(){
       for (let i=enemies.length-1;i>=0;i--) enemyPool.put(enemies.pop());
       for (let i=bullets.length-1;i>=0;i--) bulletPool.put(bullets.pop());
+      for (let i=missiles.length-1;i>=0;i--) missilePool.put(missiles.pop());
       for (let i=rails.length-1;i>=0;i--) railPool.put(rails.pop());
       for (let i=axes.length-1;i>=0;i--) axePool.put(axes.pop());
       for (let i=orbs.length-1;i>=0;i--) orbPool.put(orbs.pop());
+      obstacles.length = 0;
       for (let i=enemyShots.length-1;i>=0;i--) shotPool.put(enemyShots.pop());
       for (let i=voidZones.length-1;i>=0;i--) voidPool.put(voidZones.pop());
       for (let i=gems.length-1;i>=0;i--) gemPool.put(gems.pop());
@@ -1669,6 +2012,7 @@
       spawn.bossAlive = false;
       spawn.bossRef = null;
       chestSpawn.t = CHEST_CONFIG.timerStart;
+      spawnObstacles();
 
       resetPlayer();
       resetWeapons();
@@ -1736,6 +2080,8 @@
       const moveSpeed = player.speed * (buffs.haste > 0 ? BUFF_EFFECTS.hasteMoveMult : 1.0);
       player.x += mx * moveSpeed * dt;
       player.y += my * moveSpeed * dt;
+      resolveObstacles(player, player.r);
+      clampEntityToWorld(player, player.r);
 
       if (player.iFrame > 0) player.iFrame -= dt;
     }
@@ -1846,13 +2192,23 @@
         if (e.burnT > 0){
           const dmg = e.burnDps * dt;
           e.burnT -= dt;
-          if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, "rail");
+          if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, "rail", false);
+          e.burnFx = (e.burnFx || 0) - dt;
+          if (e.burnFx <= 0){
+            addParticles(e.x, e.y, COLORS.enemyF, 6, 160);
+            e.burnFx = 0.12 + rand(0.12, 0.04);
+          }
           if (!e.alive) continue;
         }
         if (e.bleedT > 0){
           const dmg = e.bleedDps * dt;
           e.bleedT -= dt;
-          if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, "axe");
+          if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, "axe", false);
+          e.bleedFx = (e.bleedFx || 0) - dt;
+          if (e.bleedFx <= 0){
+            addParticles(e.x, e.y, COLORS.warn, 6, 140);
+            e.bleedFx = 0.14 + rand(0.14, 0.05);
+          }
           if (!e.alive) continue;
         }
         if (e.slowT > 0) e.slowT -= dt;
@@ -1867,11 +2223,19 @@
         const dx = player.x - e.x;
         const dy = player.y - e.y;
         const d = hypot(dx,dy) || 1;
-        const nx = dx / d, ny = dy / d;
+        let nx = dx / d, ny = dy / d;
+        const avoid = obstacleAvoidance(e.x, e.y, e.r);
+        nx += avoid.ax;
+        ny += avoid.ay;
+        const nlen = hypot(nx, ny) || 1;
+        nx /= nlen; ny /= nlen;
 
         const statusSpeedMul = (e.slowT > 0) ? e.slowMul : 1.0;
         if (e.ranged){
           const prefer = (e.spitter ? (e.spitRange || e.shotRange) : e.shotRange) || ENEMY_BEHAVIOR.rangedPreferredRange;
+          const bossChase = (e.boss && d > prefer * ENEMY_BEHAVIOR.preferredFar)
+            ? (1 + clamp((d - prefer * ENEMY_BEHAVIOR.preferredFar) / (prefer * 1.2), 0, 1.5))
+            : 1;
 
           if (d < prefer * ENEMY_BEHAVIOR.preferredClose){
             const flee = e.speed * ENEMY_BEHAVIOR.fleeMult;
@@ -1879,8 +2243,8 @@
             e.y += (-ny) * (flee * slowMul * statusSpeedMul) * dt;
           } else if (d > prefer * ENEMY_BEHAVIOR.preferredFar){
             const creep = e.speed * ENEMY_BEHAVIOR.creepMult;
-            e.x += (nx) * (creep * slowMul * statusSpeedMul) * dt;
-            e.y += (ny) * (creep * slowMul * statusSpeedMul) * dt;
+            e.x += (nx) * (creep * bossChase * slowMul * statusSpeedMul) * dt;
+            e.y += (ny) * (creep * bossChase * slowMul * statusSpeedMul) * dt;
           } else {
             const strafe = e.speed * ENEMY_BEHAVIOR.strafeMult;
             const px = -ny, py = nx;
@@ -1999,13 +2363,23 @@
             }
           }
         } else {
-          e.x += nx * (e.speed * slowMul) * dt;
-          e.y += ny * (e.speed * slowMul) * dt;
+          const bossChase = e.boss ? (1 + clamp((d - 320) / 900, 0, 1.5)) : 1;
+          e.x += nx * (e.speed * slowMul * bossChase) * dt;
+          e.y += ny * (e.speed * slowMul * bossChase) * dt;
         }
 
         // contact damage
+        resolveObstacles(e, e.r);
+        if (!e.boss) clampEntityToWorld(e, e.r);
+
+        const cdx = player.x - e.x;
+        const cdy = player.y - e.y;
+        const cd = hypot(cdx, cdy) || 1;
+        const cnx = cdx / cd;
+        const cny = cdy / cd;
+
         const rr = player.r + e.r;
-        if (d < rr){
+        if (cd < rr){
           if (godMode){
             // ignore melee damage
           } else if (buffs.shield <= 0 && player.iFrame <= 0){
@@ -2018,11 +2392,11 @@
             spawnDmgText(player.x, player.y - player.r - 12, hurt, COLORS.warnHit);
             addParticles(player.x, player.y, COLORS.warnHitDim, 6, 340);
 
-            player.x += nx * PLAYER_CONFIG.hitPush;
-            player.y += ny * PLAYER_CONFIG.hitPush;
+            player.x += cnx * PLAYER_CONFIG.hitPush;
+            player.y += cny * PLAYER_CONFIG.hitPush;
           } else {
-            e.kx -= nx * PLAYER_CONFIG.shieldPushback * dt;
-            e.ky -= ny * PLAYER_CONFIG.shieldPushback * dt;
+            e.kx -= cnx * PLAYER_CONFIG.shieldPushback * dt;
+            e.ky -= cny * PLAYER_CONFIG.shieldPushback * dt;
           }
         }
       }
@@ -2037,6 +2411,39 @@
         b.life -= dt;
         b.x += b.vx * dt;
         b.y += b.vy * dt;
+
+        if (b.isExplosion){
+          b.maxLife = b.maxLife || b.life;
+          if (b.life <= 0){
+            b.alive = false;
+          }
+          if (!b.alive){
+            bullets[i] = bullets[bullets.length-1];
+            bullets.pop();
+            bulletPool.put(b);
+          }
+          continue;
+        }
+
+        // obstacle collision
+        let blocked = false;
+        for (let j=0;j<obstacles.length;j++){
+          const o = obstacles[j];
+          if (o.type === OBSTACLE_TYPE.LAKE) continue;
+          const dx = o.x - b.x;
+          const dy = o.y - b.y;
+          const rr = o.r + b.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            if (o.type === OBSTACLE_TYPE.FOREST){
+              damageObstacle(j, b.dmg, false);
+            }
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked){
+          b.alive = false;
+        }
 
         for (let j=0;j<enemies.length;j++){
           const e = enemies[j];
@@ -2064,6 +2471,108 @@
       }
     }
 
+    function updateMissiles(dt){
+      const s = missileStats();
+      for (let i=missiles.length-1;i>=0;i--){
+        const m = missiles[i];
+        if (!m.alive){ missiles[i] = missiles[missiles.length-1]; missiles.pop(); missilePool.put(m); continue; }
+
+        m.life -= dt;
+
+        // steering
+        const target = findNearestEnemy(m.x, m.y, s.range);
+        let vx = m.vx, vy = m.vy;
+        let speed = Math.max(1e-3, Math.hypot(vx, vy));
+        let ang = Math.atan2(vy, vx);
+        if (target){
+          const dx = target.x - m.x;
+          const dy = target.y - m.y;
+          const desired = Math.atan2(dy, dx);
+          let delta = ((desired - ang + TAU*1.5) % TAU) - Math.PI;
+          const maxTurn = m.turnRate * dt;
+          if (delta > maxTurn) delta = maxTurn;
+          else if (delta < -maxTurn) delta = -maxTurn;
+          ang += delta;
+          speed = Math.min(m.maxSpeed, speed + m.accel * dt);
+          m.vx = Math.cos(ang) * speed;
+          m.vy = Math.sin(ang) * speed;
+        } else {
+          speed = Math.min(m.maxSpeed, speed + m.accel * dt * 0.3);
+          m.vx = Math.cos(ang) * speed;
+          m.vy = Math.sin(ang) * speed;
+        }
+
+        m.x += m.vx * dt;
+        m.y += m.vy * dt;
+
+        let hit = false;
+        for (let j=0;j<obstacles.length;j++){
+          const o = obstacles[j];
+          if (o.type === OBSTACLE_TYPE.LAKE) continue;
+          const dx = o.x - m.x;
+          const dy = o.y - m.y;
+          const rr = o.r + m.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            if (o.type === OBSTACLE_TYPE.FOREST){
+              damageObstacle(j, m.dmg, false);
+            }
+            hit = true;
+            break;
+          }
+        }
+        for (let j=0;j<enemies.length;j++){
+          const e = enemies[j];
+          if (!e.alive) continue;
+          const dx = e.x - m.x;
+          const dy = e.y - m.y;
+          const rr = e.r + m.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            hit = true;
+            break;
+          }
+        }
+
+        if (hit || m.life <= 0){
+          const crit = calcCrit(m.dmg, m.critChance, m.critMult);
+          const r = m.explosion;
+          const r2 = r * r;
+          damageObstaclesInRadius(m.x, m.y, r, crit.dmg, true);
+          for (let j=0;j<enemies.length;j++){
+            const e = enemies[j];
+            if (!e.alive) continue;
+            const dx = e.x - m.x;
+            const dy = e.y - m.y;
+            const d2 = dx*dx + dy*dy;
+          if (d2 <= r2){
+            damageEnemy(e, crit.dmg, 0, 0, 0, true, crit.crit, "missile");
+          }
+          }
+          addParticles(m.x, m.y, COLORS.missile, 14, 480);
+          // quick explosion ring
+          const exp = bulletPool.get();
+          exp.alive = true;
+          exp.x = m.x; exp.y = m.y;
+          exp.vx = 0; exp.vy = 0;
+          exp.r = r;
+          exp.life = 0.3;
+          exp.maxLife = 0.3;
+          exp.dmg = 0;
+          exp.critChance = 0;
+          exp.critMult = 1;
+          exp.color = COLORS.missile;
+          exp.isExplosion = true;
+          bullets.push(exp);
+          m.alive = false;
+        }
+
+        if (!m.alive || m.life <= 0){
+          missiles[i] = missiles[missiles.length-1];
+          missiles.pop();
+          missilePool.put(m);
+        }
+      }
+    }
+
     function updateRailShots(dt){
       const s = railStats();
       const trailLife = WEAPON_CONFIG.rail.projectile.trailLife;
@@ -2075,6 +2584,24 @@
         r.life -= dt;
         r.x += r.vx * dt;
         r.y += r.vy * dt;
+
+        // obstacles stop rails
+        let blocked = false;
+        for (let j=0;j<obstacles.length;j++){
+          const o = obstacles[j];
+          if (o.type === OBSTACLE_TYPE.LAKE) continue;
+          const dx = o.x - r.x;
+          const dy = o.y - r.y;
+          const rr = o.r + r.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            if (o.type === OBSTACLE_TYPE.FOREST){
+              damageObstacle(j, r.dmg, false);
+            }
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked){ r.alive = false; continue; }
 
         // fade existing trail nodes
         for (let t=r.trail.length-1;t>=0;t--){
@@ -2123,6 +2650,24 @@
         a.y += a.vy * dt;
         a.rot += a.spin * dt;
 
+        // obstacle collision
+        let axeBlocked = false;
+        for (let j=0;j<obstacles.length;j++){
+          const o = obstacles[j];
+          if (o.type === OBSTACLE_TYPE.LAKE) continue;
+          const dx = o.x - a.x;
+          const dy = o.y - a.y;
+          const rr = o.r + a.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            if (o.type === OBSTACLE_TYPE.FOREST){
+              damageObstacle(j, s.dmg, false);
+            }
+            axeBlocked = true;
+            break;
+          }
+        }
+        if (axeBlocked){ axes[i] = axes[axes.length-1]; axes.pop(); axePool.put(a); continue; }
+
         for (let j=0;j<enemies.length;j++){
           const e = enemies[j];
           if (!e.alive) continue;
@@ -2158,6 +2703,25 @@
           o.life -= dt;
           o.x += o.vx * dt;
           o.y += o.vy * dt;
+          // collide with rocks/trees (ignore lakes)
+          let blocked = false;
+          for (let j=0;j<obstacles.length;j++){
+            const ob = obstacles[j];
+            if (ob.type === OBSTACLE_TYPE.LAKE) continue;
+            const dx = o.x - ob.x;
+            const dy = o.y - ob.y;
+            const rr = o.r + ob.r;
+            if (dx*dx + dy*dy <= rr*rr){
+              const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+              o.x = ob.x + (dx / dist) * (rr + 1);
+              o.y = ob.y + (dy / dist) * (rr + 1);
+              o.state = "park";
+              o.tick = 0;
+              blocked = true;
+              break;
+            }
+          }
+          if (blocked) continue;
           // pull while flying
           const r2 = o.radius * o.radius;
           for (let j=0;j<enemies.length;j++){
@@ -2200,6 +2764,7 @@
                 damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
               }
             }
+            damageObstaclesInRadius(o.x, o.y, o.radius, o.dmg, false);
           }
 
           if (o.park <= 0){
@@ -2214,6 +2779,7 @@
                 damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
               }
             }
+            damageObstaclesInRadius(o.x, o.y, o.radius, o.explosion, true);
             addParticles(o.x, o.y, COLORS.bullet, 48, 720);
             o.alive = false;
           }
@@ -2332,10 +2898,12 @@
       const maxX = camX + W + WORLD.despawnPad;
       const minY = camY - WORLD.despawnPad;
       const maxY = camY + H + WORLD.despawnPad;
+      const worldLim = WORLD.halfSize + WORLD.despawnPad;
 
       for (let i=enemies.length-1;i>=0;i--){
         const e = enemies[i];
-        if (!e.alive || e.x < minX || e.x > maxX || e.y < minY || e.y > maxY){
+        const outWorld = (e.x < -worldLim || e.x > worldLim || e.y < -worldLim || e.y > worldLim);
+        if (!e.alive || e.x < minX || e.x > maxX || e.y < minY || e.y > maxY || outWorld){
           if (e.boss) continue; // never despawn the boss offscreen
           enemies[i] = enemies[enemies.length-1];
           enemies.pop();
@@ -2486,6 +3054,62 @@
 
       drawGrid(camX, camY);
 
+      // Map bounds glow
+      ctx.save();
+      const bLeft = -WORLD.halfSize;
+      const bTop = -WORLD.halfSize;
+      const bSize = WORLD.halfSize * 2;
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = COLORS.auraRingShield;
+      ctx.lineWidth = 6;
+      ctx.shadowColor = COLORS.auraRingShield;
+      ctx.shadowBlur = 24;
+      ctx.strokeRect(bLeft, bTop, bSize, bSize);
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 4;
+      ctx.shadowBlur = 12;
+      ctx.strokeRect(bLeft + 10, bTop + 10, bSize - 20, bSize - 20);
+      ctx.restore();
+
+      const visMinX = camX - WORLD.spawnPad, visMaxX = camX + W + WORLD.spawnPad;
+      const visMinY = camY - WORLD.spawnPad, visMaxY = camY + H + WORLD.spawnPad;
+
+      // Obstacles
+      ctx.save();
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const r = o.r;
+        if (o.x + r < visMinX || o.x - r > visMaxX || o.y + r < visMinY || o.y - r > visMaxY) continue;
+        if (o.type === OBSTACLE_TYPE.LAKE){
+          ctx.globalAlpha = 0.98;
+          ctx.shadowColor = "transparent";
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = COLORS.lake;
+          ctx.beginPath();
+          ctx.arc(o.x, o.y, r, 0, TAU);
+          ctx.fill();
+        } else if (o.type === OBSTACLE_TYPE.FOREST){
+          const hpT = o.maxHp > 0 ? clamp(o.hp / o.maxHp, 0.15, 1) : 1;
+          ctx.globalAlpha = 0.25 + 0.75 * hpT;
+          ctx.shadowColor = "transparent";
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = COLORS.forest;
+          ctx.beginPath();
+          ctx.arc(o.x, o.y, r, 0, TAU);
+          ctx.fill();
+        } else {
+          const hpT = o.maxHp > 0 ? clamp(o.hp / o.maxHp, 0.15, 1) : 1;
+          ctx.globalAlpha = 0.25 + 0.75 * hpT;
+          ctx.shadowColor = "transparent";
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = COLORS.rock;
+          ctx.beginPath();
+          ctx.arc(o.x, o.y, r, 0, TAU);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+
 
       // cull void zones
       for (let i=0;i<voidZones.length;i++){
@@ -2526,25 +3150,7 @@
         neonCircle(g.x, g.y, g.r, COLORS.gem, 14);
       }
 
-      for (let i=0;i<particles.length;i++){
-        const p = particles[i];
-        if (p.x < camX - WORLD.spawnPad || p.x > camX + W + WORLD.spawnPad || p.y < camY - WORLD.spawnPad || p.y > camY + H + WORLD.spawnPad) continue;
-        const a = clamp(p.life / p.maxLife, 0, 1);
-        ctx.save();
-        ctx.globalAlpha = a;
-        ctx.shadowColor = p.color;
-        ctx.shadowBlur = 14;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, TAU);
-        ctx.fill();
-        ctx.restore();
-      }
-
       // Enemies: batch by style to reduce save/restore churn
-      const visMinX = camX - WORLD.spawnPad, visMaxX = camX + W + WORLD.spawnPad;
-      const visMinY = camY - WORLD.spawnPad, visMaxY = camY + H + WORLD.spawnPad;
-
       ctx.save();
       ctx.shadowBlur = 16;
       ctx.lineWidth = 1;
@@ -2682,7 +3288,41 @@
 
       for (let i=0;i<bullets.length;i++){
         const b = bullets[i];
+        if (b.isExplosion){
+          const a = clamp((b.life) / (b.maxLife || 0.0001), 0, 1);
+          ctx.save();
+          ctx.globalAlpha = a;
+          ctx.shadowColor = b.color || COLORS.bullet;
+          ctx.shadowBlur = 20;
+          ctx.strokeStyle = b.color || COLORS.bullet;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.r, 0, TAU);
+          ctx.stroke();
+          ctx.restore();
+          continue;
+        }
         neonCircle(b.x, b.y, b.r, COLORS.bullet, 18);
+      }
+
+      for (let i=0;i<missiles.length;i++){
+        const m = missiles[i];
+        const ang = Math.atan2(m.vy, m.vx);
+        const len = m.r * 3;
+        const w = m.r;
+        ctx.save();
+        ctx.translate(m.x, m.y);
+        ctx.rotate(ang);
+        ctx.shadowColor = COLORS.missile;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = COLORS.missile;
+        ctx.strokeStyle = COLORS.missileStroke;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.roundRect(-len*0.5, -w*0.6, len, w*1.2, w*0.6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
       }
 
       for (let i=0;i<axes.length;i++){
@@ -2727,6 +3367,21 @@
         ctx.strokeStyle = UI_COLORS.auraStroke;
         ctx.lineWidth = 2;
         ctx.stroke();
+        ctx.restore();
+      }
+
+      for (let i=0;i<particles.length;i++){
+        const p = particles[i];
+        if (p.x < camX - WORLD.spawnPad || p.x > camX + W + WORLD.spawnPad || p.y < camY - WORLD.spawnPad || p.y > camY + H + WORLD.spawnPad) continue;
+        const a = clamp(p.life / p.maxLife, 0, 1);
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, TAU);
+        ctx.fill();
         ctx.restore();
       }
 
@@ -2839,6 +3494,7 @@
       if (weapons.rail.unlocked) weaponPills.push(pill("Rail", weapons.rail));
       if (weapons.axe.unlocked) weaponPills.push(pill("Axe", weapons.axe));
       if (weapons.orb.unlocked) weaponPills.push(pill("Orb", weapons.orb));
+      if (weapons.missile.unlocked) weaponPills.push(pill("Missiles", weapons.missile));
       const loadoutHtml = (weaponPills.length ? weaponPills : ["None"]).map(w => `<span class="pill">${w}</span>`).join(" ");
       ui.loadout.innerHTML = loadoutHtml;
       if (ui.mWeapons) ui.mWeapons.innerHTML = loadoutHtml;
@@ -2891,6 +3547,7 @@
       updateVoidZones(dt);
       updateEnemyShots(dt);
       updateBullets(dt);
+      updateMissiles(dt);
       updateRailShots(dt);
       updateAxes(dt);
       updateOrbs(dt);
@@ -2928,6 +3585,7 @@
        ============================ */
     function boot(){
       restart();
+      spawnObstacles();
       for (let i=0;i<30;i++) addParticles(rand(200,-200), rand(120,-120), COLORS.player, 1, 220);
       requestAnimationFrame(frame);
     }
