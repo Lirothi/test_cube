@@ -345,13 +345,13 @@
       position:fixed;
       bottom:calc(14px + env(safe-area-inset-bottom,0));
       right:14px;
-      width:46px; height:46px;
+      width:58px; height:46px;
       border-radius:14px;
       border:1px solid rgba(120,255,255,.28);
       background:rgba(10,12,18,.78);
       color:var(--text);
       box-shadow:var(--shadow), var(--glow);
-      font-size:22px;
+      font-size:16px;
       display:none;
       z-index:10;
       pointer-events:auto;
@@ -444,7 +444,6 @@
           <span id="mUiLevel">Lv 1</span>
           <span id="mUiHp">120/120</span>
           <span id="mUiKills">K 0</span>
-          <span id="mFpsWrap"><span id="mFps">0 fps</span></span>
         </div>
         <div class="mBar">
           <div class="mBarLabel">XP <span class="mVal"><span id="mUiXp">0</span> / <span id="mUiXpNeed">0</span></span></div>
@@ -464,6 +463,7 @@
           <div class="mBarLabel">Weapons</div>
           <div class="pillRow" id="mWeapons"></div>
         </div>
+        <div id="mFpsWrap"><span id="mFps">0 fps</span></div>
       </div>
     </div>
   </div>
@@ -556,7 +556,6 @@
       </div>
     </div>
 
-  <div id="hint">Move: WASD/Arrows • Chests: touch to open • Auto-attacks • (Click/tap the canvas to focus keys)</div>
 
   <script type="module" src="./game.js"></script>
 </body>

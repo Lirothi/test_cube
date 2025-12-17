@@ -20,6 +20,7 @@
   LOOP_CONFIG,
   ELITE_CONFIG,
   BOSS_CONFIG,
+  BOSS2_CONFIG,
   ENEMY_TYPES
 } from "./config.js";
 
@@ -122,9 +123,9 @@
        ============================ */
     const TAU = Math.PI * 2;
     const isMobile = /Mobi|Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent) || (navigator.maxTouchPoints || 0) > 0;
-    ui.hint.textContent = isMobile
-      ? "Move: drag to steer | Tap chests to open | Auto-attacks | Tap screen for focus"
-      : "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
+    if (!isMobile && ui.hint){
+      ui.hint.textContent = "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
+    }
     if (isMobile) document.body.classList.add("mobile");
     let godMode = false;
     const UI_COLORS = {
@@ -434,7 +435,9 @@
       shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0, shotT:0,
       shotSeq:0,
       spitter:false, spitCd:0, spitRange:0, spitRadius:0, spitDuration:0, spitDps:0, spitColor:"#fff", spitTelegraph:0, spitType:"", spitT:0,
-      boss:false, novaCd:0, novaT:0, novaShots:0, novaShotSpeed:0, novaShotDmg:0, novaRadius:0, novaTelegraph:0, novaSeq:0,
+      boss:false, novaCd:0, novaT:0, novaShots:0, novaShotSpeed:0, novaShotDmg:0, novaRadius:0, novaTelegraph:0, novaSeq:0, voidSeq:0,
+      voidCd:0, voidT:0, voidCount:0, voidRadius:0, voidDuration:0, voidDps:0, voidTick:0.25, voidColor:"#fff", voidTelegraph:0,
+      barrageCd:0, barrageT:0, barrageShots:0, barrageWaves:0, barrageWaveDelay:0, barrageShotSpeed:0, barrageShotDmg:0,
       slowT:0, slowMul:1,
       burnT:0, burnDps:0,
       bleedT:0, bleedDps:0,
@@ -807,6 +810,7 @@
       squadT: SPAWN_CONFIG.squadInterval,
       eliteT: ELITE_CONFIG.interval,
       bossSpawned: false,
+      boss2Spawned: false,
       bossAlive: false,
       bossRef: null,
     };
@@ -851,6 +855,7 @@
       e.shotRange = info.shotRange || 0;
       e.shotT = e.ranged ? rand(e.shotCd * RANGED_SHOT_CONFIG.startDelayMax, e.shotCd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
       e.shotSeq = 0;
+      e.voidSeq = 0;
       e.novaSeq = 0;
       e.spitter = !!info.spit;
       e.spitCd = info.spit ? info.spit.cd : 0;
@@ -871,12 +876,29 @@
       e.novaRadius = info.nova ? info.nova.radius : 0;
       e.novaTelegraph = info.nova ? info.nova.telegraph : TELEGRAPH_CONFIG.enemyTime;
       e.novaT = e.boss ? rand(e.novaCd * RANGED_SHOT_CONFIG.startDelayMax, e.novaCd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+      e.voidCd = info.voidAttack ? info.voidAttack.cd : 0;
+      e.voidT = info.voidAttack ? rand(info.voidAttack.cd * RANGED_SHOT_CONFIG.startDelayMax, info.voidAttack.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+      e.voidCount = info.voidAttack ? info.voidAttack.count : 0;
+      e.voidRadius = info.voidAttack ? info.voidAttack.radius : 0;
+      e.voidDuration = info.voidAttack ? info.voidAttack.duration : 0;
+      e.voidDps = info.voidAttack ? info.voidAttack.dps * dmgMult : 0;
+      e.voidTick = info.voidAttack ? info.voidAttack.tick : 0.35;
+      e.voidColor = info.voidAttack ? (info.voidAttack.color || COLORS.voidPoison) : COLORS.voidPoison;
+      e.voidTelegraph = info.voidAttack ? (info.voidAttack.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+      e.barrageCd = info.barrage ? info.barrage.cd : 0;
+      e.barrageT = info.barrage ? rand(info.barrage.cd * RANGED_SHOT_CONFIG.startDelayMax, info.barrage.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+      e.barrageShots = info.barrage ? info.barrage.shots : 0;
+      e.barrageWaves = info.barrage ? info.barrage.waves : 0;
+      e.barrageWaveDelay = info.barrage ? info.barrage.waveDelay : 0;
+      e.barrageShotSpeed = info.barrage ? info.barrage.speed : 0;
+      e.barrageShotDmg = info.barrage ? info.barrage.dmg * dmgMult : 0;
       e.slowT = 0; e.slowMul = 1;
       e.burnT = 0; e.burnDps = 0;
       e.bleedT = 0; e.bleedDps = 0;
       e.elite = elite;
       e.knockResist = (info.knockResist || 0) + (elite ? ELITE_CONFIG.knockResist : 0);
-      e.gemBonus = (elite ? ELITE_CONFIG.extraGems : 0) + (e.boss ? BOSS_CONFIG.lootGems : 0);
+      const bossLoot = info.lootGems != null ? info.lootGems : (e.boss ? BOSS_CONFIG.lootGems : 0);
+      e.gemBonus = (elite ? ELITE_CONFIG.extraGems : 0) + (e.boss ? bossLoot : 0);
       if (e.boss){
         spawn.bossAlive = true;
         spawn.bossRef = e;
@@ -947,6 +969,21 @@
           fire: () => {
             spawn.bossAlive = true;
             spawnEnemy("X", camX, camY, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+            sound.play("boss");
+          }
+        });
+      }
+      if (!spawn.boss2Spawned && t >= BOSS2_CONFIG.spawnTime){
+        spawn.boss2Spawned = true;
+        const pos = pickSpawnPos(camX, camY);
+        addTelegraph({
+          x: pos.x, y: pos.y,
+          radius: BOSS2_CONFIG.telegraph.radius,
+          color: BOSS2_CONFIG.telegraph.color,
+          time: BOSS2_CONFIG.telegraph.time,
+          fire: () => {
+            spawn.bossAlive = true;
+            spawnEnemy("Y", camX, camY, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
             sound.play("boss");
           }
         });
@@ -1040,9 +1077,9 @@
           }
         }
 
-        spawnEnemy(typeKey, camX, camY, hpMult, spdMult, dmgMult);
-      }
+      spawnEnemy(typeKey, camX, camY, hpMult, spdMult, dmgMult);
     }
+  }
 
     /* ============================
        Telegraphs (warnings)
@@ -1628,6 +1665,7 @@
       spawn.squadT = SPAWN_CONFIG.squadInterval;
       spawn.eliteT = ELITE_CONFIG.interval;
       spawn.bossSpawned = false;
+      spawn.boss2Spawned = false;
       spawn.bossAlive = false;
       spawn.bossRef = null;
       chestSpawn.t = CHEST_CONFIG.timerStart;
@@ -1886,26 +1924,78 @@
           }
 
           if (e.boss){
-            e.novaT -= dt;
-            if (e.novaT <= 0){
-              const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
-              e.novaT += (e.novaCd || 6) * slowFireMul;
-              const marker = ++e.novaSeq;
-              addTelegraph({
-                x: e.x, y: e.y, radius: e.novaRadius, color: BOSS_CONFIG.telegraph.color, time: e.novaTelegraph,
-                follow: (tg) => {
-                  if (!e.alive) return;
-                  tg.x = e.x;
-                  tg.y = e.y;
-                },
-                fire: () => {
-                  if (!e.alive || e.novaSeq !== marker) return;
-                  for (let k=0;k<e.novaShots;k++){
-                    const ang = (TAU * k) / e.novaShots;
-                    spawnEnemyShot(e.x, e.y, Math.cos(ang), Math.sin(ang), e.novaShotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.novaShotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+            // Boss X nova
+            if (e.novaCd > 0){
+              e.novaT -= dt;
+              if (e.novaT <= 0){
+                const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
+                e.novaT += (e.novaCd || 6) * slowFireMul;
+                const marker = ++e.novaSeq;
+                addTelegraph({
+                  x: e.x, y: e.y, radius: e.novaRadius, color: BOSS_CONFIG.telegraph.color, time: e.novaTelegraph,
+                  follow: (tg) => {
+                    if (!e.alive) return;
+                    tg.x = e.x;
+                    tg.y = e.y;
+                  },
+                  fire: () => {
+                    if (!e.alive || e.novaSeq !== marker) return;
+                    for (let k=0;k<e.novaShots;k++){
+                      const ang = (TAU * k) / e.novaShots;
+                      spawnEnemyShot(e.x, e.y, Math.cos(ang), Math.sin(ang), e.novaShotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.novaShotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+                    }
+                  }
+                });
+              }
+            }
+
+            // Boss Y unique attacks
+            if (e.voidCd > 0){
+              e.voidT -= dt;
+              if (e.voidT <= 0){
+                const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
+                e.voidT += (e.voidCd || 5) * slowFireMul;
+                const marker = ++e.voidSeq;
+                const count = Math.max(1, e.voidCount || 1);
+                for (let k=0;k<count;k++){
+                  const ang = rand(TAU, 0);
+                  const dist = rand(140, 60);
+                  const tx = player.x + Math.cos(ang) * dist;
+                  const ty = player.y + Math.sin(ang) * dist;
+                  addTelegraph({
+                    x: tx, y: ty, radius: e.voidRadius, color: e.voidColor, time: e.voidTelegraph,
+                    fire: () => {
+                      if (e.alive && e.voidSeq === marker) spawnVoidZone(tx, ty, e.voidRadius, e.voidDuration, e.voidDps, e.voidColor, "void", e.voidTick);
+                    }
+                  });
+                }
+              }
+            }
+
+            if (e.barrageCd > 0){
+              e.barrageT -= dt;
+              if (e.barrageT <= 0){
+                const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
+                e.barrageT += (e.barrageCd || 4) * slowFireMul;
+                const baseAng = rand(TAU, 0);
+                const waves = Math.max(1, e.barrageWaves || 1);
+                const shots = Math.max(4, e.barrageShots || 8);
+                const waveDelay = e.barrageWaveDelay || 0;
+                for (let w=0; w<waves; w++){
+                  const fireWave = () => {
+                    if (!e.alive) return;
+                    for (let k=0;k<shots;k++){
+                      const ang = baseAng + (TAU * k / shots) + w * 0.15;
+                      spawnEnemyShot(e.x, e.y, Math.cos(ang), Math.sin(ang), e.barrageShotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.barrageShotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+                    }
+                  };
+                  if (waveDelay > 0 && w > 0){
+                    setTimeout(fireWave, waveDelay * 1000 * w);
+                  } else {
+                    fireWave();
                   }
                 }
-              });
+              }
             }
           }
         } else {

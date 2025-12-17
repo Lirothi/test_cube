@@ -320,6 +320,14 @@ export const BOSS_CONFIG = {
   lootGems: 16,
 };
 
+export const BOSS2_CONFIG = {
+  spawnTime: 480,
+  telegraph: { radius: 140, time: 1.5, color: "#63c7ff" },
+  voidAttack: { cd: 5, count: 3, radius: 120, duration: 6, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 0.85 },
+  barrage: { cd: 3.8, shots: 12, waves: 2, waveDelay: 0.18, speed: 540, dmg: 12 },
+  lootGems: 18,
+};
+
 // Base stats (HP scaling is handled in spawnController)
 export const ENEMY_TYPES = {
   A: { name:"Basic",  r:10, hp:22, speed:70,  dmg:6.0,  color:COLORS.enemyA, xp:1, gem:1 },
@@ -339,7 +347,17 @@ export const ENEMY_TYPES = {
     name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
     boss:true, knockResist:0.55,
     ranged:true, shotCd:1.6, shotDmg:9, shotSpeed:420, shotRange:720,
-    nova: BOSS_CONFIG.nova
+    nova: BOSS_CONFIG.nova,
+    lootGems: BOSS_CONFIG.lootGems,
+  },
+  Y: { // late void boss
+    name:"Eclipse", r:22, hp:3800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:12,
+    boss:true, knockResist:0.65,
+    ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:780,
+    telegraph: BOSS2_CONFIG.telegraph,
+    voidAttack: BOSS2_CONFIG.voidAttack,
+    barrage: BOSS2_CONFIG.barrage,
+    lootGems: BOSS2_CONFIG.lootGems,
   },
   S: { name:"Bulwark", r:14, hp:96, speed:58, dmg:9.5, color:COLORS.enemyS, xp:3, gem:2, knockResist:0.35 },
   R: { // ranged kiter (tries to keep distance and shoot)
