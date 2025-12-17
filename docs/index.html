@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Neon Survivors (Rebalanced + Ranged)</title>
+  <style>
+    :root{
+      --bg:#05060a;
+      --panel:rgba(10,12,18,.78);
+      --stroke:rgba(120,255,255,.18);
+      --text:#d7f6ff;
+      --muted:#86cfe0;
+      --accent:#25f0ff;
+      --accent2:#b160ff;
+      --danger:#ff3b66;
+      --ok:#46ff8f;
+      --gold:#ffd94a;
+      --shadow:0 12px 42px rgba(0,0,0,.55);
+      --glow:0 0 18px rgba(37,240,255,.28), 0 0 34px rgba(177,96,255,.16);
+      --radius:18px;
+      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+
+    html,body{height:100%; margin:0; background:var(--bg); overflow:hidden; font-family:var(--font); color:var(--text);}
+    canvas{display:block; width:100vw; height:100vh; outline:none;}
+
+    #hud{
+      position:fixed; inset:0; pointer-events:none;
+      display:flex; flex-direction:column; gap:10px;
+      padding:12px;
+    }
+    .topRow{display:flex; gap:10px; align-items:flex-start; justify-content:space-between;}
+    .hudCard{
+      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.48));
+      border:1px solid var(--stroke);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow), var(--glow);
+      padding:10px 12px;
+      backdrop-filter: blur(10px);
+      min-width: 280px;
+    }
+    #statusCard, #loadoutCard{
+      width:min(320px, 48vw);
+      max-width:320px;
+      align-self:flex-start;
+    }
+    .hudTitle{
+      font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+      color:var(--muted); margin-bottom:6px;
+    }
+    .hudStats{
+      display:grid; grid-template-columns: repeat(2, minmax(120px,1fr));
+      gap:6px 14px; font-size:14px;
+    }
+    .kv{display:flex; justify-content:space-between; gap:10px;}
+    .kv span:first-child{color:rgba(215,246,255,.72)}
+    .kv span:last-child{color:var(--text); font-variant-numeric: tabular-nums;}
+
+    .buffs{
+      margin-top:10px;
+      border-top:1px solid rgba(120,255,255,.12);
+      padding-top:8px;
+      color:rgba(215,246,255,.70);
+      font-size:12.5px;
+      line-height:1.35;
+    }
+    .buffs b{color:rgba(215,246,255,.92)}
+
+    #bars{display:flex; gap:10px; align-items:center; justify-content:flex-end; flex:1;}
+    .barCard{
+      width:min(420px, 58vw);
+      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.48));
+      border:1px solid var(--stroke);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow), var(--glow);
+      padding:10px 12px;
+      backdrop-filter: blur(10px);
+    }
+    .barRow{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;}
+    .barLabel{font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);}
+    .barValue{font-size:12px; color:rgba(215,246,255,.9); font-variant-numeric: tabular-nums;}
+    .barOuter{
+      width:100%; height:8px; border-radius:999px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.10);
+      overflow:hidden;
+    }
+    .barInner{
+      height:100%; width:50%;
+      background:linear-gradient(90deg, rgba(37,240,255,.95), rgba(177,96,255,.92));
+      box-shadow:0 0 10px rgba(37,240,255,.45), 0 0 18px rgba(177,96,255,.28);
+    }
+
+    .overlay{
+      position:fixed; inset:0;
+      display:none;
+      align-items:center; justify-content:center;
+      background: radial-gradient(1200px 800px at 50% 40%, rgba(37,240,255,.10), transparent 60%),
+                  rgba(0,0,0,.62);
+      backdrop-filter: blur(10px);
+      z-index:10;
+    }
+    .overlay.on{display:flex;}
+    .panel{
+      width:min(980px, 92vw);
+      border-radius:24px;
+      border:1px solid rgba(120,255,255,.22);
+      background:linear-gradient(180deg, rgba(10,12,18,.92), rgba(10,12,18,.78));
+      box-shadow:var(--shadow), 0 0 60px rgba(37,240,255,.12), 0 0 90px rgba(177,96,255,.10);
+      padding:18px;
+    }
+    .panelHeader{
+      display:flex; justify-content:space-between; align-items:flex-end; gap:12px;
+      margin-bottom:12px;
+    }
+    .panelHeader h2{margin:0; font-size:20px; letter-spacing:.02em;}
+    .panelHeader .sub{color:rgba(215,246,255,.68); font-size:13px;}
+    .cards{
+      display:grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap:12px;
+    }
+    .card{
+      border-radius:18px;
+      border:1px solid rgba(120,255,255,.18);
+      background:linear-gradient(180deg, rgba(10,12,18,.80), rgba(10,12,18,.54));
+      padding:14px;
+      cursor:pointer;
+      transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+      position:relative;
+      overflow:hidden;
+      pointer-events:auto;
+    }
+    .card:before{
+      content:"";
+      position:absolute; inset:-2px;
+      background: radial-gradient(420px 220px at 25% 15%, rgba(37,240,255,.20), transparent 55%),
+                  radial-gradient(420px 220px at 75% 85%, rgba(177,96,255,.14), transparent 55%);
+      opacity:.8;
+      pointer-events:none;
+    }
+    .card:hover{
+      transform: translateY(-2px);
+      border-color: rgba(37,240,255,.45);
+      box-shadow: 0 0 22px rgba(37,240,255,.14), 0 0 28px rgba(177,96,255,.10);
+    }
+    .card h3{margin:0 0 6px 0; position:relative;}
+    .card p{margin:0; color:rgba(215,246,255,.70); font-size:13px; line-height:1.35; position:relative;}
+    .pill{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:4px 8px;
+      border-radius:999px;
+      border:1px solid rgba(120,255,255,.18);
+      background:rgba(255,255,255,.06);
+      color:rgba(215,246,255,.8);
+      font-size:12px;
+      margin-top:10px;
+      position:relative;
+    }
+    .pillRow{
+      display:flex; flex-wrap:wrap; gap:8px;
+      align-items:flex-start;
+      font-size:12px;
+      color:rgba(215,246,255,.78);
+    }
+    .pillRow .pill{ margin-top:0; }
+
+    .btnRow{display:flex; justify-content:flex-end; gap:10px; margin-top:14px;}
+    button{
+      pointer-events:auto;
+      border:1px solid rgba(120,255,255,.22);
+      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.50));
+      color:var(--text);
+      border-radius:14px;
+      padding:10px 14px;
+      cursor:pointer;
+      box-shadow:0 8px 26px rgba(0,0,0,.35), 0 0 18px rgba(37,240,255,.10);
+      transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+      font-weight:700;
+      letter-spacing:.02em;
+    }
+    button:hover{transform:translateY(-1px); border-color: rgba(37,240,255,.45); box-shadow:0 12px 34px rgba(0,0,0,.42), 0 0 22px rgba(37,240,255,.16);}
+    button:active{transform:translateY(0px);}
+
+    #hint{
+      position:fixed; left:12px; bottom:12px;
+      color:rgba(215,246,255,.55);
+      font-size:12px; letter-spacing:.02em;
+      user-select:none;
+      text-shadow:0 0 12px rgba(37,240,255,.10);
+      pointer-events:none;
+    }
+
+    @media (max-width: 860px){
+      .cards{grid-template-columns:1fr; }
+      #bars .barCard{width:min(520px, 96vw);}
+      .hudCard{min-width:unset;}
+      .topRow{flex-direction:column; align-items:stretch;}
+      #bars{justify-content:stretch;}
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c" tabindex="0" aria-label="Neon Survivors canvas"></canvas>
+
+  <div id="hud">
+    <div class="topRow">
+      <div class="hudCard" id="statusCard">
+        <div class="hudTitle">Status</div>
+        <div class="hudStats">
+          <div class="kv"><span>Time</span><span id="uiTime">00:00</span></div>
+          <div class="kv"><span>Level</span><span id="uiLevel">1</span></div>
+          <div class="kv"><span>HP</span><span id="uiHp">0 / 0</span></div>
+          <div class="kv"><span>Kills</span><span id="uiKills">0</span></div>
+        </div>
+        <div class="buffs" id="uiBuffs"><b>Buffs:</b> —</div>
+      </div>
+
+      <div id="bars">
+        <div class="barCard" style="padding:8px 10px;">
+          <div class="barRow">
+            <div class="barLabel">XP</div>
+            <div class="barValue"><span id="uiXp">0</span> / <span id="uiXpNeed">0</span></div>
+          </div>
+          <div class="barOuter" style="height:8px;"><div id="xpFill" class="barInner" style="height:100%;"></div></div>
+
+          <div class="barRow" style="margin-top:10px; margin-bottom:8px;">
+            <div class="barLabel">Health</div>
+            <div class="barValue"><span id="uiHpPct">100%</span></div>
+          </div>
+          <div class="barOuter" style="height:8px;"><div id="hpFill" class="barInner" style="height:100%; background:linear-gradient(90deg, rgba(70,255,143,.95), rgba(255,217,74,.92)); box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 16px rgba(255,217,74,.22);"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hudCard" id="loadoutCard">
+      <div class="hudTitle">Loadout</div>
+      <div id="uiLoadout" class="pillRow"></div>
+      <div class="hudTitle" style="margin-top:10px;">Bonuses</div>
+      <div id="uiBonuses" class="pillRow"></div>
+    </div>
+  </div>
+
+  <div id="levelup" class="overlay">
+    <div class="panel">
+      <div class="panelHeader">
+        <div>
+          <h2>Level Up</h2>
+          <div class="sub">Choose 1 upgrade. Game is paused.</div>
+        </div>
+        <div class="sub" id="uiBuild"></div>
+      </div>
+      <div class="cards" id="upgradeCards"></div>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay">
+    <div class="panel">
+      <div class="panelHeader">
+        <div>
+          <h2 style="color: rgba(255,59,102,.95); text-shadow:0 0 18px rgba(255,59,102,.18);">Game Over</h2>
+          <div class="sub" id="uiSummary">You survived 00:00.</div>
+        </div>
+      </div>
+
+      <div class="hudStats" style="grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:8px;">
+        <div class="hudCard" style="box-shadow:none; min-width:unset;">
+          <div class="hudTitle">Run Stats</div>
+          <div class="hudStats" style="grid-template-columns:1fr;">
+            <div class="kv"><span>Time Survived</span><span id="uiGoTime">00:00</span></div>
+            <div class="kv"><span>Final Level</span><span id="uiGoLvl">1</span></div>
+            <div class="kv"><span>Total Kills</span><span id="uiGoKills">0</span></div>
+          </div>
+        </div>
+        <div class="hudCard" style="box-shadow:none; min-width:unset;">
+          <div class="hudTitle">Upgrades</div>
+          <div style="font-size:13px; color:rgba(215,246,255,.70);" id="uiGoUpgrades">—</div>
+        </div>
+        <div class="hudCard" style="box-shadow:none; min-width:unset;">
+          <div class="hudTitle">Weapon DPS</div>
+          <div style="font-size:13px; color:rgba(215,246,255,.70);" id="uiGoDps">-</div>
+        </div>
+        <div class="hudCard" style="box-shadow:none; min-width:unset;">
+          <div class="hudTitle">Tip</div>
+          <div style="font-size:13px; color:rgba(215,246,255,.70); line-height:1.35;">
+            Ranged enemies kite you—use chests (Shockwave/Freeze) to break spacing.
+          </div>
+        </div>
+      </div>
+
+      <div class="btnRow">
+        <button id="btnRestart">Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="menu" class="overlay">
+    <div class="panel">
+      <div class="panelHeader">
+        <div>
+          <h2>Paused</h2>
+          <div class="sub">Press ESC to resume or choose an option.</div>
+        </div>
+        <div class="sub" id="uiMenuBuild"></div>
+      </div>
+      <div class="btnRow" style="justify-content:center;">
+        <button id="btnResume">Continue</button>
+        <button id="btnMenuRestart">Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="hint">Move: WASD/Arrows • Chests: touch to open • Auto-attacks • (Click/tap the canvas to focus keys)</div>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>
+
