@@ -200,30 +200,95 @@
       .topRow{flex-direction:column; align-items:stretch;}
       #bars{justify-content:stretch;}
     }
-    body.mobile #hud{
-      padding:8px 8px calc(10px + env(safe-area-inset-bottom,0)) 8px;
-      gap:8px;
+
+    /* Mobile-first HUD */
+    #mobileHud{
+      position:fixed; top:calc(8px + env(safe-area-inset-top,0)); left:8px; right:8px;
+      display:none;
+      flex-direction:column; gap:6px;
+      pointer-events:none;
+      z-index:9;
     }
-    body.mobile .topRow{flex-direction:column; align-items:stretch;}
-    body.mobile .hudCard{min-width:unset; width:100%;}
-    body.mobile #statusCard,
-    body.mobile #loadoutCard,
-    body.mobile #bars .barCard{width:100%; max-width:unset;}
-    body.mobile .hudTitle{font-size:11px;}
-    body.mobile .hudStats{grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 10px;}
-    body.mobile .kv{font-size:13px;}
+    #mobileHud .mStats{
+      display:flex; gap:8px; flex-wrap:wrap;
+      background:rgba(10,12,18,.68);
+      border:1px solid rgba(120,255,255,.18);
+      border-radius:12px;
+      padding:6px 8px;
+      box-shadow:var(--shadow), var(--glow);
+      font-size:13px;
+      letter-spacing:.01em;
+    }
+    #mobileHud .mBar{
+      display:flex; flex-direction:column; gap:4px;
+      background:rgba(10,12,18,.68);
+      border:1px solid rgba(120,255,255,.18);
+      border-radius:12px;
+      padding:6px 8px;
+      box-shadow:var(--shadow), var(--glow);
+    }
+    #mobileHud .mBarLabel{
+      display:flex; justify-content:space-between; align-items:center;
+      font-size:12px; color:var(--muted);
+    }
+    #mobileHud .mBarLabel .mVal{color:var(--text);}
+    #mobileHud .mBarOuter{
+      width:100%; height:8px; border-radius:999px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.08);
+      overflow:hidden;
+    }
+    #mobileHud .mBarInner{
+      height:100%; width:50%;
+      box-shadow:0 0 10px rgba(37,240,255,.35);
+    }
+    #mobileHud .mBarInner.xp{
+      background:linear-gradient(90deg, rgba(37,240,255,.95), rgba(177,96,255,.92));
+    }
+    #mobileHud .mBarInner.hp{
+      background:linear-gradient(90deg, rgba(70,255,143,.95), rgba(255,217,74,.92));
+      box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 14px rgba(255,217,74,.25);
+    }
+
+    body.mobile #hud{display:none;}
+    body.mobile #mobileHud{display:flex;}
     body.mobile #hint{
       font-size:12px;
-      bottom:calc(8px + env(safe-area-inset-bottom,0));
+      bottom:calc(10px + env(safe-area-inset-bottom,0));
       left:8px; right:8px;
       text-align:center;
       white-space:normal;
+    }
+
+    /* Virtual stick visuals */
+    #stick{
+      position:fixed; width:120px; height:120px;
+      bottom:calc(18px + env(safe-area-inset-bottom,0)); left:12px;
+      pointer-events:none;
+      display:none;
+      z-index:9;
+    }
+    #stick.on{display:block;}
+    #stickOuter{
+      position:absolute; inset:0;
+      border-radius:50%;
+      border:2px solid rgba(37,240,255,.45);
+      background:radial-gradient(closest-side, rgba(37,240,255,.18), rgba(177,96,255,.08));
+      box-shadow:0 0 22px rgba(37,240,255,.22);
+      opacity:0.85;
+    }
+    #stickInner{
+      position:absolute; width:44px; height:44px;
+      left:38px; top:38px;
+      border-radius:50%;
+      background:rgba(37,240,255,.65);
+      box-shadow:0 0 18px rgba(37,240,255,.45);
+      transform:translate(0,0);
     }
   </style>
 </head>
 <body>
   <canvas id="c" tabindex="0" aria-label="Neon Survivors canvas"></canvas>
-
   <div id="hud">
     <div class="topRow">
       <div class="hudCard" id="statusCard">
@@ -260,6 +325,28 @@
       <div class="hudTitle" style="margin-top:10px;">Bonuses</div>
       <div id="uiBonuses" class="pillRow"></div>
     </div>
+  </div>
+
+  <div id="mobileHud" aria-hidden="true">
+    <div class="mStats">
+      <span id="mUiTime">00:00</span>
+      <span id="mUiLevel">Lv 1</span>
+      <span id="mUiHp">120/120</span>
+      <span id="mUiKills">K 0</span>
+    </div>
+    <div class="mBar">
+      <div class="mBarLabel">XP <span class="mVal"><span id="mUiXp">0</span> / <span id="mUiXpNeed">0</span></span></div>
+      <div class="mBarOuter"><div id="mXpFill" class="mBarInner xp"></div></div>
+    </div>
+    <div class="mBar">
+      <div class="mBarLabel">HP <span class="mVal" id="mUiHpPct">100%</span></div>
+      <div class="mBarOuter"><div id="mHpFill" class="mBarInner hp"></div></div>
+    </div>
+  </div>
+
+  <div id="stick">
+    <div id="stickOuter"></div>
+    <div id="stickInner"></div>
   </div>
 
   <div id="levelup" class="overlay">

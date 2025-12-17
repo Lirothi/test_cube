@@ -82,6 +82,15 @@ import {
       hint: document.getElementById("hint"),
       loadout: document.getElementById("uiLoadout"),
       bonuses: document.getElementById("uiBonuses"),
+      mTime: document.getElementById("mUiTime"),
+      mLevel: document.getElementById("mUiLevel"),
+      mKills: document.getElementById("mUiKills"),
+      mHp: document.getElementById("mUiHp"),
+      mHpPct: document.getElementById("mUiHpPct"),
+      mHpFill: document.getElementById("mHpFill"),
+      mXp: document.getElementById("mUiXp"),
+      mXpNeed: document.getElementById("mUiXpNeed"),
+      mXpFill: document.getElementById("mXpFill"),
     };
     ui.uiBuild.textContent = BUILD;
     ui.menuBuild.textContent = BUILD;
@@ -144,6 +153,13 @@ import {
     if (isMobile){
       let touchId = null;
       let startX = 0, startY = 0;
+      const stick = document.getElementById("stick");
+      const stickInner = document.getElementById("stickInner");
+      const stickOuter = document.getElementById("stickOuter");
+      const resetStick = () => {
+        if (stickInner) stickInner.style.transform = "translate(0px,0px)";
+        if (stick) stick.classList.remove("on");
+      };
       const DEAD = 12;
       const updateTouchDir = (x,y) => {
         const dx = x - startX;
@@ -155,14 +171,25 @@ import {
         if (Math.abs(dy) > DEAD){
           if (dy > 0) input.down = true; else input.up = true;
         }
+        if (stickInner){
+          const clampLen = 48;
+          const len = Math.min(clampLen, Math.hypot(dx, dy));
+          const ang = Math.atan2(dy, dx);
+          stickInner.style.transform = `translate(${Math.cos(ang)*len}px, ${Math.sin(ang)*len}px)`;
+        }
       };
-      const endTouch = () => { touchId = null; clearDirectionalInput(); };
+      const endTouch = () => { touchId = null; clearDirectionalInput(); resetStick(); };
       canvas.addEventListener("touchstart", (e) => {
         if (touchId !== null) return;
         const t = e.changedTouches[0];
         touchId = t.identifier;
         startX = t.clientX;
         startY = t.clientY;
+        if (stick){
+          stick.classList.add("on");
+          stick.style.left = `${startX - 60}px`;
+          stick.style.top = `${startY - 60}px`;
+        }
         updateTouchDir(startX, startY);
       }, { passive:true });
       canvas.addEventListener("touchmove", (e) => {
@@ -2327,17 +2354,32 @@ import {
       ui.time.textContent = fmtTime(player.time);
       ui.level.textContent = String(player.level);
       ui.kills.textContent = String(player.kills);
+      if (ui.mTime){
+        ui.mTime.textContent = fmtTime(player.time);
+        ui.mLevel.textContent = `Lv ${player.level}`;
+        ui.mKills.textContent = `K ${player.kills}`;
+      }
 
       const hp = clamp(player.hp, 0, player.maxHp);
       ui.hp.textContent = `${Math.ceil(hp)} / ${Math.ceil(player.maxHp)}`;
       const hpT = player.maxHp > 0 ? clamp(hp / player.maxHp, 0, 1) : 0;
       ui.hpPct.textContent = `${Math.round(hpT * 100)}%`;
       ui.hpFill.style.width = `${(hpT*100).toFixed(2)}%`;
+      if (ui.mHp){
+        ui.mHp.textContent = `${Math.ceil(hp)}/${Math.ceil(player.maxHp)}`;
+        ui.mHpPct.textContent = `${Math.round(hpT * 100)}%`;
+        ui.mHpFill.style.width = `${(hpT*100).toFixed(2)}%`;
+      }
 
       ui.xp.textContent = fmtFloat(player.xp);
       ui.xpNeed.textContent = fmtFloat(player.xpNeed);
       const xpT = player.xpNeed > 0 ? clamp(player.xp / player.xpNeed, 0, 1) : 0;
       ui.xpFill.style.width = `${(xpT*100).toFixed(2)}%`;
+      if (ui.mXp){
+        ui.mXp.textContent = fmtFloat(player.xp);
+        ui.mXpNeed.textContent = fmtFloat(player.xpNeed);
+        ui.mXpFill.style.width = `${(xpT*100).toFixed(2)}%`;
+      }
 
       // Loadout & bonuses
       const weaponPills = [];
