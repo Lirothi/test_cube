@@ -16,13 +16,24 @@ export const COLORS = {
   enemyB: "#ff6eff",
   enemyC: "#7a6bff",
   enemyBoss: "#ff9df2",
-  bossTelegraph: "#ffe26a",
+  bossTelegraph: "#ff3b66",
   enemyP: "#40a357ff",
   enemyF: "#ff9347",
   enemyS: "#3a2acfff",
   enemyR: "#25f0ff",
-  voidPoison: "rgba(115,255,148,0.38)",
-  voidFire: "rgba(255,147,71,0.38)",
+  voidPoison: "rgba(115, 255, 148, 0.49)",
+  voidFire: "rgba(252, 118, 23, 0.53)",
+  warnHit: "rgba(255,59,102,.95)",
+  warnHitDim: "rgba(255,59,102,.75)",
+  warnShield: "rgba(127,231,255,.85)",
+  shieldBlock: "rgba(127,231,255,.85)",
+  voidAura: "rgba(70, 255, 143, 0.24)",
+  voidAuraStroke: "rgba(70, 255, 143, 0.60)",
+  playerGlow: "rgba(255,255,255,.8)",
+  playerCore: "rgba(255,255,255,.16)",
+  auraRingShield: "rgba(127,231,255,.75)",
+  magnetRing: "rgba(255,217,74,.28)",
+  overlayDim: "rgba(0,0,0,.25)",
   dmg: "rgba(215,246,255,.95)",
   heal: "#46ff8f",
   warn: "#ff3b66",
@@ -213,8 +224,8 @@ export const WEAPON_CONFIG = {
     maxLevel: 6,
   },
   orb: {
-    dmgBase: 16,
-    dmgPerLevel: 8,
+    dmgBase: 8,
+    dmgPerLevel: 6,
     cdBase: 3.6,
     cdPerLevel: 0.26,
     cdMin: 1.7,
@@ -228,12 +239,18 @@ export const WEAPON_CONFIG = {
     tick: 0.45,
     parkTimeBase: 2.2,
     parkTimePerLevel: 0.25,
-    explosionMult: 2.0,
+    explosionMult: 1.5,
     powerDmgMult: 1.25,
     powerCdMult: 0.9,
     crit: { base: 0.1, perLevel: 0.015, multBase: 1.6, multPerLevel: 0.05 },
     maxLevel: 6,
   },
+};
+
+export const WEAPON_MASTERY = {
+  dmgMult: 0.07,       // +7% damage per mastery level
+  critChance: 0.01,    // +1% crit chance per mastery level
+  critMult: 0.08,      // +0.08 crit multiplier per mastery level
 };
 
 export const MAX_WEAPONS = 4;
@@ -299,7 +316,7 @@ export const ELITE_CONFIG = {
 export const BOSS_CONFIG = {
   spawnTime: 180,
   telegraph: { radius: 120, time: 1.4, color: COLORS.bossTelegraph },
-  nova: { cd: 4, shots: 20, shotSpeed: 520, shotDmg: 12, radius: 140, telegraph: 1.05 },
+  nova: { cd: 4, shots: 18, shotSpeed: 520, shotDmg: 12, radius: 140, telegraph: 1.05 },
   lootGems: 16,
 };
 
@@ -309,14 +326,14 @@ export const ENEMY_TYPES = {
   B: { name:"Fast",   r: 8, hp:16, speed:105, dmg:4.6,  color:COLORS.enemyB, xp:1, gem:1 },
   C: { name:"Tank",   r:16, hp:74, speed:50,  dmg:8.0,  color:COLORS.enemyC, xp:3, gem:2 },
   P: { // poison spitter
-    name:"Toxic", r:10, hp:28, speed:62, dmg:6.5, color:COLORS.enemyP, xp:2, gem:1,
+    name:"Toxic", r:10, hp:28, speed:62, dmg:6.5, color:COLORS.enemyP, xp:2, gem:2,
     ranged:true,
-    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, tick:0.35, telegraph:0.5, color:COLORS.voidPoison, type:"poison" }
+    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, tick:0.35, telegraph:0.75, color:COLORS.voidPoison, type:"poison" }
   },
   F: { // fire spitter
-    name:"Scorcher", r:11, hp:32, speed:60, dmg:7.5, color:COLORS.enemyF, xp:2, gem:1,
+    name:"Scorcher", r:11, hp:32, speed:60, dmg:7.5, color:COLORS.enemyF, xp:2, gem:2,
     ranged:true,
-    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.55, color:COLORS.voidFire, type:"fire" }
+    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
   },
   X: { // mini-boss
     name:"Overseer", r:20, hp:2000, speed:75, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,

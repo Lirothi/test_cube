@@ -101,6 +101,36 @@
       background:linear-gradient(90deg, rgba(37,240,255,.95), rgba(177,96,255,.92));
       box-shadow:0 0 10px rgba(37,240,255,.45), 0 0 18px rgba(177,96,255,.28);
     }
+    #bossBarWrap{
+      position:absolute;
+      top:calc(12px + env(safe-area-inset-top,0));
+      left:50%;
+      transform:translateX(-50%);
+      display:none;
+      justify-content:center;
+      pointer-events:none;
+      width:100%;
+      z-index:2;
+    }
+    #bossBarWrap.on{display:flex;}
+    #bossBarCard{
+      display:none;
+      width:min(560px, 80vw);
+      border-color:rgba(255,87,115,.32);
+      box-shadow:var(--shadow), 0 0 22px rgba(255,87,115,.16), 0 0 30px rgba(255,158,51,.12);
+      pointer-events:none;
+    }
+    #bossBarCard.on{display:block;}
+    #bossBarCard .barLabel{letter-spacing:.18em;}
+    #bossBarCard .barInner.boss{
+      background:linear-gradient(90deg, rgba(255,87,115,.95), rgba(255,158,51,.92));
+      box-shadow:0 0 12px rgba(255,87,115,.45), 0 0 18px rgba(255,158,51,.28);
+    }
+    #bossBarCard .barValue.sub{
+      margin-top:6px;
+      color:rgba(215,246,255,.82);
+      font-variant-numeric: tabular-nums;
+    }
 
     .overlay{
       position:fixed; inset:0;
@@ -258,6 +288,14 @@
       background:linear-gradient(90deg, rgba(70,255,143,.95), rgba(255,217,74,.92));
       box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 14px rgba(255,217,74,.25);
     }
+    #mBossBar{
+      display:none;
+    }
+    #mBossBar.on{display:flex;}
+    #mobileHud .mBarInner.boss{
+      background:linear-gradient(90deg, rgba(255,87,115,.95), rgba(255,158,51,.90));
+      box-shadow:0 0 12px rgba(255,87,115,.45), 0 0 16px rgba(255,158,51,.26);
+    }
 
     #fps{
       display:inline-flex; align-items:center; justify-content:center;
@@ -317,6 +355,16 @@
 <body>
   <canvas id="c" tabindex="0" aria-label="Neon Survivors canvas"></canvas>
   <div id="hud">
+    <div id="bossBarWrap">
+      <div class="barCard" id="bossBarCard" aria-live="polite">
+        <div class="barRow">
+          <div class="barLabel" id="bossName">Boss</div>
+          <div class="barValue"><span id="bossHpPct">100%</span></div>
+        </div>
+        <div class="barOuter"><div id="bossHpFill" class="barInner boss"></div></div>
+        <div class="barValue sub"><span id="bossHp">0 / 0</span></div>
+      </div>
+    </div>
     <div class="topRow">
       <div class="hudCard" id="statusCard">
         <div class="hudTitle">Status</div>
@@ -369,6 +417,10 @@
     <div class="mBar">
       <div class="mBarLabel">HP <span class="mVal" id="mUiHpPct">100%</span></div>
       <div class="mBarOuter"><div id="mHpFill" class="mBarInner hp"></div></div>
+    </div>
+    <div class="mBar" id="mBossBar" aria-live="polite">
+      <div class="mBarLabel"><span id="mBossName">Boss</span> <span class="mVal" id="mBossPct">100%</span></div>
+      <div class="mBarOuter"><div id="mBossFill" class="mBarInner boss"></div></div>
     </div>
   </div>
 
@@ -439,10 +491,21 @@
         </div>
         <div class="sub" id="uiMenuBuild"></div>
         </div>
+        <div class="hudStats" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 14px 0;">
+          <div class="hudCard" style="box-shadow:none; min-width:unset;">
+            <div class="hudTitle">Player Stats</div>
+            <div class="hudStats" id="menuPlayerStats" style="grid-template-columns:1fr; gap:6px;"></div>
+          </div>
+          <div class="hudCard" style="box-shadow:none; min-width:unset;">
+            <div class="hudTitle">Weapons</div>
+            <div class="hudStats" id="menuWeaponStats" style="grid-template-columns:1fr; gap:6px;"></div>
+          </div>
+        </div>
         <div class="btnRow" style="justify-content:center;">
           <button id="btnResume">Continue</button>
           <button id="btnMenuRestart">Restart</button>
           <button id="btnGod">God Mode: Off</button>
+          <button id="btnMute">Sound: On</button>
         </div>
       </div>
     </div>

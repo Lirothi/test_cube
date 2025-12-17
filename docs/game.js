@@ -1,4 +1,4 @@
-import {
+﻿import {
   BUILD,
   COLORS,
   PLAYER_CONFIG,
@@ -10,6 +10,7 @@ import {
   TELEGRAPH_CONFIG,
   CHEST_CONFIG,
   WEAPON_CONFIG,
+  WEAPON_MASTERY,
   MAX_WEAPONS,
   DPS_LABELS,
   WEAPON_RIDERS,
@@ -50,7 +51,7 @@ import {
 
     // Ensure keyboard focus (fixes WASD not working)
     function focusCanvas(){ try { canvas.focus({ preventScroll:true }); } catch {} }
-    canvas.addEventListener("pointerdown", focusCanvas, { passive:true });
+    canvas.addEventListener("pointerdown", (e) => { sound.unlock(); focusCanvas(e); }, { passive:true });
     addEventListener("load", focusCanvas, { passive:true });
 
     /* ============================
@@ -66,6 +67,12 @@ import {
       xpNeed: document.getElementById("uiXpNeed"),
       xpFill: document.getElementById("xpFill"),
       hpFill: document.getElementById("hpFill"),
+      bossWrap: document.getElementById("bossBarWrap"),
+      bossCard: document.getElementById("bossBarCard"),
+      bossName: document.getElementById("bossName"),
+      bossHp: document.getElementById("bossHp"),
+      bossHpPct: document.getElementById("bossHpPct"),
+      bossHpFill: document.getElementById("bossHpFill"),
       buffs: document.getElementById("uiBuffs"),
       levelup: document.getElementById("levelup"),
       upgradeCards: document.getElementById("upgradeCards"),
@@ -80,9 +87,12 @@ import {
       btnRestart: document.getElementById("btnRestart"),
       menu: document.getElementById("menu"),
       menuBuild: document.getElementById("uiMenuBuild"),
+      menuPlayerStats: document.getElementById("menuPlayerStats"),
+      menuWeaponStats: document.getElementById("menuWeaponStats"),
       btnResume: document.getElementById("btnResume"),
       btnMenuRestart: document.getElementById("btnMenuRestart"),
       btnGod: document.getElementById("btnGod"),
+      btnMute: document.getElementById("btnMute"),
       hint: document.getElementById("hint"),
       loadout: document.getElementById("uiLoadout"),
       bonuses: document.getElementById("uiBonuses"),
@@ -95,6 +105,10 @@ import {
       mXp: document.getElementById("mUiXp"),
       mXpNeed: document.getElementById("mUiXpNeed"),
       mXpFill: document.getElementById("mXpFill"),
+      mBossBar: document.getElementById("mBossBar"),
+      mBossName: document.getElementById("mBossName"),
+      mBossPct: document.getElementById("mBossPct"),
+      mBossFill: document.getElementById("mBossFill"),
       fps: document.getElementById("fps"),
     };
     ui.uiBuild.textContent = BUILD;
@@ -110,10 +124,85 @@ import {
       : "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
     if (isMobile) document.body.classList.add("mobile");
     let godMode = false;
+    const UI_COLORS = {
+      strokeDim: "rgba(255,255,255,.10)",
+      textStroke: "rgba(0,0,0,.35)",
+      chestFill: "rgba(70,255,143,0.18)",
+      auraFill: COLORS.voidAura,
+      auraStroke: COLORS.voidAuraStroke,
+      playerGlow: COLORS.playerGlow,
+      playerCore: COLORS.playerCore,
+      shieldRing: COLORS.auraRingShield,
+      magnetRing: COLORS.magnetRing,
+      overlayDim: COLORS.overlayDim,
+      orbRing: "rgba(177,96,255,.35)",
+      hpBarBg: "rgba(255,255,255,.12)",
+      hpBarShadow: "rgba(37,240,255,.6)",
+      hpBarFill: "rgba(255, 37, 37, 0.75)",
+      axeShadow: "rgba(177,96,255,.9)",
+      axeBody: "rgba(177,96,255,.95)",
+      axeEdge: "rgba(37,240,255,.95)",
+      railTrailBase: "rgba(154,245,255,", // used with alpha injected
+    };
+
+    const sound = {
+      ctx: null,
+      unlocked: false,
+      enabled: true,
+      master: null,
+      bank: {
+        shoot: { freq: 720, type: "square", dur: 0.06, vol: 0.05 },
+        rail:  { freq: 220, type: "sawtooth", dur: 0.18, vol: 0.08, glide: 140 },
+        axe:   { freq: 320, type: "triangle", dur: 0.12, vol: 0.06 },
+        pickup:{ freq: 960, type: "square", dur: 0.05, vol: 0.04 },
+        level: { freq: 560, type: "triangle", dur: 0.25, vol: 0.06, glide: 140 },
+        hurt:  { freq: 160, type: "sawtooth", dur: 0.12, vol: 0.08 },
+        boss:  { freq: 90,  type: "square", dur: 0.4,  vol: 0.10, glide: -60 },
+      },
+      unlock(){
+        if (this.unlocked) return;
+        try {
+          this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
+          this.ctx.resume();
+          if (!this.master){
+            this.master = this.ctx.createGain();
+            this.master.gain.value = 0.35;
+            this.master.connect(this.ctx.destination);
+          }
+          this.unlocked = true;
+        } catch {}
+      },
+      play(name){
+        if (!this.enabled) return;
+        if (!this.unlocked) this.unlock();
+        const cfg = this.bank[name];
+        if (!cfg || !this.ctx || !this.master) return;
+        const ctx = this.ctx;
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = cfg.type || "sine";
+        osc.frequency.value = cfg.freq || 440;
+        if (cfg.glide){
+          osc.frequency.linearRampToValueAtTime(Math.max(20, (cfg.freq || 440) + cfg.glide), now + Math.max(0.01, cfg.dur || 0.1));
+        }
+        const vol = cfg.vol || 0.05;
+        gain.gain.setValueAtTime(vol, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + (cfg.dur || 0.1));
+        osc.connect(gain);
+        gain.connect(this.master);
+        osc.start(now);
+        osc.stop(now + (cfg.dur || 0.1));
+      }
+    };
     function updateGodButton(){
       if (ui.btnGod) ui.btnGod.textContent = `God Mode: ${godMode ? "On" : "Off"}`;
     }
+    function updateMuteButton(){
+      if (ui.btnMute) ui.btnMute.textContent = `Sound: ${sound.enabled ? "On" : "Off"}`;
+    }
     updateGodButton();
+    updateMuteButton();
     const rand = (a=1,b=0)=> (Math.random()*(a-b)+b);
     const randi = (a,b=0)=> (Math.random()*(a-b)+b) | 0;
     const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
@@ -158,6 +247,7 @@ import {
       const m = CODE_MAP.get(e.code);
       if (m) { input[m] = false; e.preventDefault(); }
     }, { passive:false });
+    addEventListener("keydown", () => sound.unlock(), { passive:true });
 
     // Touch drag controls for mobile (simple virtual stick)
     if (isMobile){
@@ -340,7 +430,7 @@ import {
       shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0, shotT:0,
       shotSeq:0,
       spitter:false, spitCd:0, spitRange:0, spitRadius:0, spitDuration:0, spitDps:0, spitColor:"#fff", spitTelegraph:0, spitType:"", spitT:0,
-      boss:false, novaCd:0, novaT:0, novaShots:0, novaShotSpeed:0, novaShotDmg:0, novaRadius:0, novaTelegraph:0,
+      boss:false, novaCd:0, novaT:0, novaShots:0, novaShotSpeed:0, novaShotDmg:0, novaRadius:0, novaTelegraph:0, novaSeq:0,
       slowT:0, slowMul:1,
       burnT:0, burnDps:0,
       bleedT:0, bleedDps:0,
@@ -350,12 +440,12 @@ import {
     const bulletPool= makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3,   dmg:8,  life:0, critChance:0, critMult:1 }), 260);
     const railPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:4.4, dmg:60, life:0, pierce:0, trail:[], critChance:0, critMult:1 }), 160);
     const axePool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6,   dmg:18, life:0, rot:0, spin:0, critChance:0, critMult:1 }), 120);
-    const shotPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:"rgba(255,217,74,.95)" }), 240);
+    const shotPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:COLORS.gem }), 240);
     const voidPool  = makePool(() => ({ alive:false, x:0,y:0, radius:0, life:0, maxLife:0, dps:0, tick:0.25, tickT:0, color:"#fff", type:"poison" }), 120);
     const orbPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:10, dmg:0, critChance:0, critMult:1, state:"fly", life:0, park:0, tick:0, pull:0, radius:0, explosion:0 }), 80);
 
     const gemPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, v:1, r:5 }), 260);
-    const partPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, r:2, color:"#fff" }), 520);
+    const partPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, r:2, color:COLORS.gem }), 520);
     const chestPool = makePool(() => ({ alive:false, x:0,y:0, r:12, pulse:0 }), 24);
     const dmgPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, text:"", color:"#fff", size:14 }), 240);
     const textPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, text:"", color:"#fff", size:14 }), 120);
@@ -364,19 +454,19 @@ import {
        Weapons
        ============================ */
     const weapons = {
-      magic: { unlocked:true, level:1, t:0 },
-      aura:  { unlocked:false, level:0, tick:0 },
-      rail:  { unlocked:false, level:0, t:0 },
-      axe:   { unlocked:false, level:0, t:0 },
-      orb:   { unlocked:false, level:0, t:0 },
+      magic: { unlocked:true, level:1, mastery:0, t:0 },
+      aura:  { unlocked:false, level:0, mastery:0, tick:0 },
+      rail:  { unlocked:false, level:0, mastery:0, t:0 },
+      axe:   { unlocked:false, level:0, mastery:0, t:0 },
+      orb:   { unlocked:false, level:0, mastery:0, t:0 },
     };
 
     function resetWeapons(){
-      weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.t = 0;
-      weapons.aura.unlocked  = false; weapons.aura.level  = 0; weapons.aura.tick = 0;
-      weapons.rail.unlocked  = false; weapons.rail.level  = 0; weapons.rail.t = 0;
-      weapons.axe.unlocked   = false; weapons.axe.level   = 0; weapons.axe.t = 0;
-      weapons.orb.unlocked   = false; weapons.orb.level   = 0; weapons.orb.t = 0;
+      weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0;
+      weapons.aura.unlocked  = false; weapons.aura.level  = 0; weapons.aura.mastery  = 0; weapons.aura.tick = 0;
+      weapons.rail.unlocked  = false; weapons.rail.level  = 0; weapons.rail.mastery  = 0; weapons.rail.t = 0;
+      weapons.axe.unlocked   = false; weapons.axe.level   = 0; weapons.axe.mastery   = 0; weapons.axe.t = 0;
+      weapons.orb.unlocked   = true; weapons.orb.level   = 1; weapons.orb.mastery   = 0; weapons.orb.t = 0;
     }
 
     function weaponCount(){
@@ -392,76 +482,96 @@ import {
     function magicStats(){
       const cfg = WEAPON_CONFIG.magic;
       const lv = weapons.magic.level;
+      const mastery = weapons.magic.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
       const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
       const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
-      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
       const cd = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
       const speed = cfg.speedBase + lv * cfg.speedPerLevel;
       const count = 1 + Math.floor((lv-1) / cfg.countInterval);
       const range = cfg.range;
       const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
-      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel);
-      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
       const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
       return { dmg, cd, speed, count, range, knock, critChance:critChanceTotal, critMult };
     }
     function auraStats(){
       const cfg = WEAPON_CONFIG.aura;
       const lv = weapons.aura.level;
+      const mastery = weapons.aura.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
       const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
       const radius = cfg.radiusBase + lv * cfg.radiusPerLevel;
       const tick = cfg.tick;
-      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
       const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
-      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel);
-      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
       const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
       return { radius, tick, dmg, knock, critChance:critChanceTotal, critMult };
     }
     function axeStats(){
       const cfg = WEAPON_CONFIG.axe;
       const lv = weapons.axe.level;
+      const mastery = weapons.axe.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
       const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
       const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
       const cd = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
-      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
       const speed = cfg.speedBase + lv * cfg.speedPerLevel;
       const count = 1 + Math.floor((lv-1) / cfg.countInterval);
       const gravity = cfg.gravity;
       const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
-      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel);
-      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
       const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
       return { cd, dmg, speed, count, gravity, knock, critChance:critChanceTotal, critMult };
     }
     function railStats(){
       const cfg = WEAPON_CONFIG.rail;
       const lv = weapons.rail.level;
+      const mastery = weapons.rail.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
       const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
       const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
       const cd = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
-      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
       const speed = cfg.speedBase + lv * cfg.speedPerLevel;
       const pierce = cfg.pierceBase + Math.floor((lv+1) / cfg.pierceLevelDivisor) + (buffs.power > 0 ? cfg.powerPierceBonus : 0);
       const range = cfg.rangeBase + lv * cfg.rangePerLevel;
       const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
-      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel);
-      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
       const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
       return { cd, dmg, speed, pierce, range, knock, critChance:critChanceTotal, critMult };
     }
     function orbStats(){
       const cfg = WEAPON_CONFIG.orb;
       const lv = weapons.orb.level;
+      const mastery = weapons.orb.mastery || 0;
+      const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+      const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+      const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
       const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
       const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
-      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul;
+      const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
       const cd = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
       const speed = cfg.speedBase + lv * cfg.speedPerLevel;
       const radius = cfg.pullRadiusBase + lv * cfg.pullRadiusPerLevel;
       const pull = cfg.pullBase + lv * cfg.pullPerLevel;
-      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel);
-      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
+      const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+      const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
       const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
       const explosion = dmg * cfg.explosionMult;
       const park = cfg.parkTimeBase + lv * cfg.parkTimePerLevel;
@@ -483,53 +593,79 @@ import {
     }
     function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; }
 
-    const UPGRADES = [
+    function weaponTag(weapon, maxLv){
+      if (!weapon.unlocked) return "Weapon - Unlock";
+      const base = `Weapon - Lv ${weapon.level}/${maxLv}`;
+      return weapon.mastery > 0 ? `${base} (M${weapon.mastery})` : base;
+    }
+
+            const UPGRADES = [
       {
         id: "magic", title: "Magic Bullet",
-        desc: "Shoots the nearest enemy automatically. More level = more bullets & knockback.",
-        tag: () => `Weapon • Lv ${weapons.magic.level}/${WEAPON_CONFIG.magic.maxLevel}`,
-        can: () => weapons.magic.level < WEAPON_CONFIG.magic.maxLevel,
-        apply: () => { weapons.magic.unlocked = true; weapons.magic.level = Math.min(WEAPON_CONFIG.magic.maxLevel, weapons.magic.level + 1); }
+        desc: "Shoots the nearest enemy automatically. Max level unlocks mastery ranks that boost damage and crits.",
+        tag: () => weaponTag(weapons.magic, WEAPON_CONFIG.magic.maxLevel),
+        can: () => true,
+        apply: () => {
+          weapons.magic.unlocked = true;
+          if (weapons.magic.level < WEAPON_CONFIG.magic.maxLevel) weapons.magic.level++;
+          else weapons.magic.mastery++;
+        }
       },
       {
         id: "aura", title: "Holy Aura",
-        desc: "A luminous field around you that damages and pushes enemies back.",
-        tag: () => `Weapon • ${weapons.aura.unlocked ? `Lv ${weapons.aura.level}/${WEAPON_CONFIG.aura.maxLevel}` : "Unlock"}`,
-        can: () => ((weapons.aura.unlocked) || weaponCount() < MAX_WEAPONS) && weapons.aura.level < WEAPON_CONFIG.aura.maxLevel,
-        apply: () => { if (!weapons.aura.unlocked){ weapons.aura.unlocked=true; weapons.aura.level=1; } else weapons.aura.level=Math.min(WEAPON_CONFIG.aura.maxLevel,weapons.aura.level+1); }
+        desc: "A luminous field around you that damages and pushes enemies back. Extra ranks past max add damage and crit scaling.",
+        tag: () => weaponTag(weapons.aura, WEAPON_CONFIG.aura.maxLevel),
+        can: () => (weapons.aura.unlocked) || weaponCount() < MAX_WEAPONS,
+        apply: () => {
+          if (!weapons.aura.unlocked){ weapons.aura.unlocked=true; weapons.aura.level=1; return; }
+          if (weapons.aura.level < WEAPON_CONFIG.aura.maxLevel) weapons.aura.level++;
+          else weapons.aura.mastery++;
+        }
       },
       {
         id: "rail", title: "Railgun",
-        desc: "Charges a piercing rail shot that crosses the map with huge damage.",
-        tag: () => `Weapon • ${weapons.rail.unlocked ? `Lv ${weapons.rail.level}/${WEAPON_CONFIG.rail.maxLevel}` : "Unlock"}`,
-        can: () => ((weapons.rail.unlocked) || weaponCount() < MAX_WEAPONS) && weapons.rail.level < WEAPON_CONFIG.rail.maxLevel,
-        apply: () => { if (!weapons.rail.unlocked){ weapons.rail.unlocked=true; weapons.rail.level=1; } else weapons.rail.level=Math.min(WEAPON_CONFIG.rail.maxLevel,weapons.rail.level+1); }
+        desc: "Charges a piercing rail shot that crosses the map with huge damage. Mastery after max level boosts damage/crit.",
+        tag: () => weaponTag(weapons.rail, WEAPON_CONFIG.rail.maxLevel),
+        can: () => (weapons.rail.unlocked) || weaponCount() < MAX_WEAPONS,
+        apply: () => {
+          if (!weapons.rail.unlocked){ weapons.rail.unlocked=true; weapons.rail.level=1; return; }
+          if (weapons.rail.level < WEAPON_CONFIG.rail.maxLevel) weapons.rail.level++;
+          else weapons.rail.mastery++;
+        }
       },
       {
         id: "axe", title: "Axe Throw",
-        desc: "Throws axes in a neon arc. Strong burst + heavy knockback.",
-        tag: () => `Weapon • ${weapons.axe.unlocked ? `Lv ${weapons.axe.level}/${WEAPON_CONFIG.axe.maxLevel}` : "Unlock"}`,
-        can: () => ((weapons.axe.unlocked) || weaponCount() < MAX_WEAPONS) && weapons.axe.level < WEAPON_CONFIG.axe.maxLevel,
-        apply: () => { if (!weapons.axe.unlocked){ weapons.axe.unlocked=true; weapons.axe.level=1; } else weapons.axe.level=Math.min(WEAPON_CONFIG.axe.maxLevel,weapons.axe.level+1); }
+        desc: "Throws axes in a neon arc. Strong burst + heavy knockback. Mastery adds damage/crit scaling past max.",
+        tag: () => weaponTag(weapons.axe, WEAPON_CONFIG.axe.maxLevel),
+        can: () => (weapons.axe.unlocked) || weaponCount() < MAX_WEAPONS,
+        apply: () => {
+          if (!weapons.axe.unlocked){ weapons.axe.unlocked=true; weapons.axe.level=1; return; }
+          if (weapons.axe.level < WEAPON_CONFIG.axe.maxLevel) weapons.axe.level++;
+          else weapons.axe.mastery++;
+        }
       },
       {
         id: "orb", title: "Singularity Orb",
-        desc: "Launch an orb that parks, pulls enemies inward, pulses damage, then explodes.",
-        tag: () => `Weapon • ${weapons.orb.unlocked ? `Lv ${weapons.orb.level}/${WEAPON_CONFIG.orb.maxLevel}` : "Unlock"}`,
-        can: () => ((weapons.orb.unlocked) || weaponCount() < MAX_WEAPONS) && weapons.orb.level < WEAPON_CONFIG.orb.maxLevel,
-        apply: () => { if (!weapons.orb.unlocked){ weapons.orb.unlocked=true; weapons.orb.level=1; } else weapons.orb.level=Math.min(WEAPON_CONFIG.orb.maxLevel,weapons.orb.level+1); }
+        desc: "Launch an orb that parks, pulls enemies inward, pulses damage, then explodes. Mastery boosts damage/crit after max.",
+        tag: () => weaponTag(weapons.orb, WEAPON_CONFIG.orb.maxLevel),
+        can: () => (weapons.orb.unlocked) || weaponCount() < MAX_WEAPONS,
+        apply: () => {
+          if (!weapons.orb.unlocked){ weapons.orb.unlocked=true; weapons.orb.level=1; return; }
+          if (weapons.orb.level < WEAPON_CONFIG.orb.maxLevel) weapons.orb.level++;
+          else weapons.orb.mastery++;
+        }
       },
       {
         id: "speed", title: "Speed Up",
         desc: "Move faster to kite swarms and reach chests sooner.",
-        tag: () => `Passive • Lv ${upgradeState.speedLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
+        tag: () => `Passive - Lv ${upgradeState.speedLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
         can: () => upgradeState.speedLv < UPGRADE_CONFIG.passiveMaxLevel,
         apply: () => { upgradeState.speedLv++; player.speed *= UPGRADE_CONFIG.speedMult; }
       },
       {
         id: "hp", title: "Max HP Up",
         desc: "Increase maximum HP and heal a bit immediately.",
-        tag: () => `Passive • Lv ${upgradeState.hpLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
+        tag: () => `Passive - Lv ${upgradeState.hpLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
         can: () => upgradeState.hpLv < UPGRADE_CONFIG.passiveMaxLevel,
         apply: () => {
           upgradeState.hpLv++;
@@ -541,21 +677,21 @@ import {
       {
         id: "pickup", title: "Pickup Range",
         desc: "Collect XP gems from farther away and pull them in faster.",
-        tag: () => `Passive • Lv ${upgradeState.pickupLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
+        tag: () => `Passive - Lv ${upgradeState.pickupLv}/${UPGRADE_CONFIG.passiveMaxLevel}`,
         can: () => upgradeState.pickupLv < UPGRADE_CONFIG.passiveMaxLevel,
         apply: () => { upgradeState.pickupLv++; player.pickup += UPGRADE_CONFIG.pickupGain; }
       },
       {
         id: "critChance", title: "Critical Chance",
         desc: "Increase critical strike chance for all weapons.",
-        tag: () => `Passive • Lv ${upgradeState.critChanceLv}/${CRIT_UPGRADES.maxLevels}`,
+        tag: () => `Passive - Lv ${upgradeState.critChanceLv}/${CRIT_UPGRADES.maxLevels}`,
         can: () => upgradeState.critChanceLv < CRIT_UPGRADES.maxLevels,
         apply: () => { upgradeState.critChanceLv = Math.min(CRIT_UPGRADES.maxLevels, upgradeState.critChanceLv + 1); }
       },
       {
         id: "critMult", title: "Critical Damage",
         desc: "Increase critical damage multiplier for all weapons.",
-        tag: () => `Passive • Lv ${upgradeState.critMultLv}/${CRIT_UPGRADES.maxLevels}`,
+        tag: () => `Passive - Lv ${upgradeState.critMultLv}/${CRIT_UPGRADES.maxLevels}`,
         can: () => upgradeState.critMultLv < CRIT_UPGRADES.maxLevels,
         apply: () => { upgradeState.critMultLv = Math.min(CRIT_UPGRADES.maxLevels, upgradeState.critMultLv + 1); }
       },
@@ -588,15 +724,16 @@ import {
 
     function listUpgradeSummary(){
       const parts = [];
-      parts.push(`Magic Bullet Lv ${weapons.magic.level}`);
-      if (weapons.aura.unlocked) parts.push(`Holy Aura Lv ${weapons.aura.level}`);
-      if (weapons.rail.unlocked) parts.push(`Railgun Lv ${weapons.rail.level}`);
-      if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}`);
-      if (weapons.orb.unlocked) parts.push(`Singularity Orb Lv ${weapons.orb.level}`);
+      const mTag = (w) => w.mastery ? ` (M${w.mastery})` : "";
+      parts.push(`Magic Bullet Lv ${weapons.magic.level}${mTag(weapons.magic)}`);
+      if (weapons.aura.unlocked) parts.push(`Holy Aura Lv ${weapons.aura.level}${mTag(weapons.aura)}`);
+      if (weapons.rail.unlocked) parts.push(`Railgun Lv ${weapons.rail.level}${mTag(weapons.rail)}`);
+      if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}${mTag(weapons.axe)}`);
+      if (weapons.orb.unlocked) parts.push(`Singularity Orb Lv ${weapons.orb.level}${mTag(weapons.orb)}`);
       if (upgradeState.speedLv) parts.push(`Speed +${upgradeState.speedLv}`);
       if (upgradeState.hpLv) parts.push(`Max HP +${upgradeState.hpLv}`);
       if (upgradeState.pickupLv) parts.push(`Pickup +${upgradeState.pickupLv}`);
-      return parts.join(" • ");
+      return parts.join(" | ");
     }
 
     function formatDpsSummary(){
@@ -616,6 +753,45 @@ import {
       return entries.length ? entries.join(" | ") : "No weapon damage";
     }
 
+    function updateMenuStats(){
+      if (!ui.menuPlayerStats || !ui.menuWeaponStats) return;
+      const hp = `${Math.ceil(player.hp)} / ${Math.ceil(player.maxHp)}`;
+      const speedPct = Math.round((player.speed / BASE_STATS.speed) * 100);
+      const pickupPct = Math.round((player.pickup / BASE_STATS.pickup) * 100);
+      const critBonusChance = Math.round(upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel * 100);
+      const critBonusMult = fmtFloat(1 + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel, 2);
+      ui.menuPlayerStats.innerHTML = [
+        `<div class="kv"><span>Level</span><span>Lv ${player.level}</span></div>`,
+        `<div class="kv"><span>HP</span><span>${hp}</span></div>`,
+        `<div class="kv"><span>Move Speed</span><span>${Math.round(player.speed)} (${speedPct}% base)</span></div>`,
+        `<div class="kv"><span>Pickup</span><span>${Math.round(player.pickup)} (${pickupPct}% base)</span></div>`,
+        `<div class="kv"><span>Crit Bonus</span><span>+${critBonusChance}% / x${critBonusMult}</span></div>`,
+        `<div class="kv"><span>Kills</span><span>${player.kills}</span></div>`,
+      ].join("");
+
+      const rows = [];
+      const addWeapon = (label, key, fn) => {
+        const w = weapons[key];
+        if (!w.unlocked) return;
+        const s = fn();
+        const parts = [];
+        if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
+        if (s.count) parts.push(`Count ${s.count}`);
+        if (s.cd) parts.push(`CD ${fmtFloat(s.cd, 2)}s`);
+        if (s.pierce) parts.push(`Pierce ${Math.round(s.pierce)}`);
+        if (s.tick) parts.push(`Tick ${fmtFloat(s.tick, 2)}s`);
+        if (key === "aura" && s.radius) parts.push(`Radius ${Math.round(s.radius)}`);
+        parts.push(`Crit ${Math.round((s.critChance || 0) * 100)}% x${fmtFloat(s.critMult || 1, 2)}`);
+        rows.push(`<div class="kv"><span>${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}</span><span>${parts.join(" | ")}</span></div>`);
+      };
+      addWeapon("Magic", "magic", magicStats);
+      addWeapon("Aura", "aura", auraStats);
+      addWeapon("Railgun", "rail", railStats);
+      addWeapon("Axe", "axe", axeStats);
+      addWeapon("Orb", "orb", orbStats);
+      ui.menuWeaponStats.innerHTML = rows.length ? rows.join("") : `<div class="kv"><span>Weapons</span><span>None unlocked</span></div>`;
+    }
+
     /* ============================
        Spawning (rebalanced)
        ============================ */
@@ -628,6 +804,7 @@ import {
       eliteT: ELITE_CONFIG.interval,
       bossSpawned: false,
       bossAlive: false,
+      bossRef: null,
     };
 
     function pickSpawnPos(camX, camY){
@@ -670,6 +847,7 @@ import {
       e.shotRange = info.shotRange || 0;
       e.shotT = e.ranged ? rand(e.shotCd * RANGED_SHOT_CONFIG.startDelayMax, e.shotCd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
       e.shotSeq = 0;
+      e.novaSeq = 0;
       e.spitter = !!info.spit;
       e.spitCd = info.spit ? info.spit.cd : 0;
       e.spitRange = info.spit ? info.spit.range : e.shotRange;
@@ -695,11 +873,28 @@ import {
       e.elite = elite;
       e.knockResist = (info.knockResist || 0) + (elite ? ELITE_CONFIG.knockResist : 0);
       e.gemBonus = (elite ? ELITE_CONFIG.extraGems : 0) + (e.boss ? BOSS_CONFIG.lootGems : 0);
+      if (e.boss){
+        spawn.bossAlive = true;
+        spawn.bossRef = e;
+      }
 
       const p = pos || pickSpawnPos(camX, camY);
       e.x = p.x; e.y = p.y;
 
       enemies.push(e);
+    }
+
+    function getActiveBoss(){
+      if (spawn.bossRef && spawn.bossRef.alive) return spawn.bossRef;
+      for (let i=0;i<enemies.length;i++){
+        const e = enemies[i];
+        if (e.alive && e.boss){
+          spawn.bossRef = e;
+          return e;
+        }
+      }
+      spawn.bossRef = null;
+      return null;
     }
 
     function spawnMixedSquad(t, camX, camY, hpMult, spdMult, dmgMult){
@@ -748,6 +943,7 @@ import {
           fire: () => {
             spawn.bossAlive = true;
             spawnEnemy("X", camX, camY, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+            sound.play("boss");
           }
         });
       }
@@ -847,13 +1043,14 @@ import {
     /* ============================
        Telegraphs (warnings)
        ============================ */
-    function addTelegraph({ x, y, dx=0, dy=0, radius=TELEGRAPH_CONFIG.radius, color=COLORS.warn, time=TELEGRAPH_CONFIG.time, fire=null }){
-      telegraphs.push({ x, y, dx, dy, radius, color, t:time, max:time, fire });
+    function addTelegraph({ x, y, dx=0, dy=0, radius=TELEGRAPH_CONFIG.radius, color=COLORS.warn, time=TELEGRAPH_CONFIG.time, fire=null, label=null, width=3, follow=null }){
+      telegraphs.push({ x, y, dx, dy, radius, color, t:time, max:time, fire, label, width, follow });
     }
 
     function updateTelegraphs(dt){
       for (let i=telegraphs.length-1;i>=0;i--){
         const tg = telegraphs[i];
+        if (tg.follow) tg.follow(tg, dt);
         tg.t -= dt;
         if (tg.t <= 0){
           const fn = tg.fire;
@@ -1024,7 +1221,7 @@ import {
         p.maxLife = rand(0.42, 0.18);
         p.life = p.maxLife;
         p.r = rand(3.2, 1.2);
-        p.color = color;
+        p.color = color || COLORS.gem;
         particles.push(p);
       }
     }
@@ -1111,7 +1308,10 @@ import {
         for (let i=0;i<info.gem + extra;i++){
           dropGem(e.x + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), e.y + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), info.xp);
         }
-        if (e.boss) spawn.bossAlive = false;
+        if (e.boss){
+          spawn.bossAlive = false;
+          spawn.bossRef = null;
+        }
         e.alive = false;
       }
     }
@@ -1136,6 +1336,7 @@ import {
       const s = magicStats();
       const target = findNearestEnemy(player.x, player.y, s.range);
       if (!target) return;
+      sound.play("shoot");
 
       const dx = target.x - player.x;
       const dy = target.y - player.y;
@@ -1166,6 +1367,7 @@ import {
       const s = railStats();
       const target = findNearestEnemy(player.x, player.y, s.range);
       if (!target) return;
+      sound.play("rail");
 
       const dx = target.x - player.x;
       const dy = target.y - player.y;
@@ -1195,6 +1397,7 @@ import {
       const throwCfg = WEAPON_CONFIG.axe.throw;
       const target = findNearestEnemy(player.x, player.y, throwCfg.range);
       if (!target) return;
+      sound.play("axe");
 
       const count = s.count;
       for (let i=0;i<count;i++){
@@ -1225,6 +1428,7 @@ import {
       const s = orbStats();
       const target = findNearestEnemy(player.x, player.y, s.range);
       if (!target) return;
+      sound.play("shoot");
 
       const dx = target.x - player.x;
       const dy = target.y - player.y;
@@ -1332,6 +1536,7 @@ import {
       renderUpgradeCards(currentCards);
       ui.levelup.classList.add("on");
       ui.levelup.style.pointerEvents = "auto";
+      sound.play("level");
     }
     function closeLevelUp(){
       ui.levelup.classList.remove("on");
@@ -1364,6 +1569,7 @@ import {
     function openMenu(){
       if (state !== STATE.PLAYING) return;
       state = STATE.MENU;
+      updateMenuStats();
       ui.menu.classList.add("on");
       ui.menu.style.pointerEvents = "auto";
     }
@@ -1419,6 +1625,7 @@ import {
       spawn.eliteT = ELITE_CONFIG.interval;
       spawn.bossSpawned = false;
       spawn.bossAlive = false;
+      spawn.bossRef = null;
       chestSpawn.t = CHEST_CONFIG.timerStart;
 
       resetPlayer();
@@ -1452,6 +1659,13 @@ import {
         } else {
           buffs.shield = 0;
         }
+      }, { passive:true });
+    }
+    if (ui.btnMute){
+      ui.btnMute.addEventListener("click", () => {
+        sound.enabled = !sound.enabled;
+        updateMuteButton();
+        if (sound.enabled) sound.unlock();
       }, { passive:true });
     }
 
@@ -1529,11 +1743,11 @@ import {
           if (buffs.shield <= 0 && player.iFrame <= 0){
             player.hp -= s.dmg;
             player.iFrame = PLAYER_CONFIG.shotIFrame;
-            spawnDmgText(player.x, player.y - player.r - 12, s.dmg, "rgba(255,59,102,.95)");
-            addParticles(player.x, player.y, "rgba(255,59,102,.95)", 8, 360);
-          } else {
-            addParticles(s.x, s.y, "rgba(127,231,255,.85)", 4, 260);
-          }
+          spawnDmgText(player.x, player.y - player.r - 12, s.dmg, COLORS.warnHit);
+          addParticles(player.x, player.y, COLORS.warnHitDim, 8, 360);
+        } else {
+          addParticles(s.x, s.y, COLORS.shieldBlock, 4, 260);
+        }
         }
 
         if (s.life <= 0) s.alive = false;
@@ -1564,7 +1778,7 @@ import {
               z.tickT += z.tick;
               const dmg = z.dps * z.tick;
               player.hp -= dmg;
-              spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.dmg, 14);
+              spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit, 14);
             }
           } else {
             z.tickT = z.tick;
@@ -1652,12 +1866,16 @@ import {
             if (e.shotT <= 0 && d < (e.shotRange || ENEMY_BEHAVIOR.rangedPreferredRange)){
               const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
               e.shotT += (e.shotCd || RANGED_SHOT_CONFIG.defaultCd) * slowFireMul;
-              const sx = e.x, sy = e.y;
               const marker = ++e.shotSeq;
               addTelegraph({
-                x: sx, y: sy, dx: nx, dy: ny, radius: RANGED_SHOT_CONFIG.telegraphRadius, color: COLORS.warn, time: RANGED_SHOT_CONFIG.telegraphTime,
+                x: e.x, y: e.y, dx: nx, dy: ny, radius: RANGED_SHOT_CONFIG.telegraphRadius, color: COLORS.warn, time: RANGED_SHOT_CONFIG.telegraphTime,
+                follow: (tg) => {
+                  if (!e.alive) return;
+                  tg.x = e.x;
+                  tg.y = e.y;
+                },
                 fire: () => {
-                  if (e.alive && e.shotSeq === marker) spawnEnemyShot(sx, sy, nx, ny, e.shotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.shotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+                  if (e.alive && e.shotSeq === marker) spawnEnemyShot(e.x, e.y, nx, ny, e.shotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.shotDmg || RANGED_SHOT_CONFIG.defaultDmg);
                 }
               });
             }
@@ -1668,11 +1886,16 @@ import {
             if (e.novaT <= 0){
               const slowFireMul = (buffs.slow > 0) ? BUFF_EFFECTS.slowFireMult : 1.0;
               e.novaT += (e.novaCd || 6) * slowFireMul;
-              const marker = ++e.shotSeq;
+              const marker = ++e.novaSeq;
               addTelegraph({
                 x: e.x, y: e.y, radius: e.novaRadius, color: BOSS_CONFIG.telegraph.color, time: e.novaTelegraph,
+                follow: (tg) => {
+                  if (!e.alive) return;
+                  tg.x = e.x;
+                  tg.y = e.y;
+                },
                 fire: () => {
-                  if (!e.alive || e.shotSeq !== marker) return;
+                  if (!e.alive || e.novaSeq !== marker) return;
                   for (let k=0;k<e.novaShots;k++){
                     const ang = (TAU * k) / e.novaShots;
                     spawnEnemyShot(e.x, e.y, Math.cos(ang), Math.sin(ang), e.novaShotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.novaShotDmg || RANGED_SHOT_CONFIG.defaultDmg);
@@ -1695,10 +1918,11 @@ import {
             const hurt = e.dmg;
             player.hp -= hurt;
             player.iFrame = PLAYER_CONFIG.meleeIFrame;
+            sound.play("hurt");
 
             // floating damage numbers for melee hits too
-            spawnDmgText(player.x, player.y - player.r - 12, hurt, "rgba(255,59,102,95)");
-            addParticles(player.x, player.y, "rgba(255,59,102,95)", 6, 340);
+            spawnDmgText(player.x, player.y - player.r - 12, hurt, COLORS.warnHit);
+            addParticles(player.x, player.y, COLORS.warnHitDim, 6, 340);
 
             player.x += nx * PLAYER_CONFIG.hitPush;
             player.y += ny * PLAYER_CONFIG.hitPush;
@@ -1896,7 +2120,7 @@ import {
                 damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
               }
             }
-            addParticles(o.x, o.y, COLORS.bullet, 16, 520);
+            addParticles(o.x, o.y, COLORS.bullet, 48, 720);
             o.alive = false;
           }
         }
@@ -1943,6 +2167,7 @@ import {
           g.alive = false;
           addXP(g.v);
           addParticles(g.x, g.y, COLORS.gem, 2, 220);
+          sound.play("pickup");
         }
 
         if (!g.alive){
@@ -2055,7 +2280,7 @@ import {
       ctx.arc(x,y,r,0,TAU);
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.strokeStyle = UI_COLORS.strokeDim;
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.restore();
@@ -2081,7 +2306,7 @@ import {
       ctx.fillStyle = fill;
       ctx.fillRect(x,y,w,h);
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.strokeStyle = UI_COLORS.strokeDim;
       ctx.lineWidth = 1;
       ctx.strokeRect(x,y,w,h);
       ctx.restore();
@@ -2098,7 +2323,7 @@ import {
       ctx.fillStyle = color;
       ctx.fillText(text, x, y);
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(0,0,0,.35)";
+      ctx.strokeStyle = UI_COLORS.textStroke;
       ctx.lineWidth = 3;
       ctx.strokeText(text, x, y);
       ctx.restore();
@@ -2116,7 +2341,7 @@ import {
       ctx.lineWidth = 2;
       ctx.shadowColor = COLORS.chest;
       ctx.strokeStyle = COLORS.chest;
-      ctx.fillStyle = "rgba(70,255,143,0.18)";
+      ctx.fillStyle = UI_COLORS.chestFill;
       ctx.shadowBlur = 14;
 
       for (let i=0;i<chests.length;i++){
@@ -2159,7 +2384,7 @@ import {
       const camX = player.x - W*0.5;
       const camY = player.y - H*0.5;
 
-      ctx.fillStyle = COLORS.bg;
+        ctx.fillStyle = COLORS.bg;
       ctx.fillRect(0,0,W,H);
 
       ctx.save();
@@ -2167,31 +2392,6 @@ import {
 
       drawGrid(camX, camY);
 
-      // draw telegraphs (no culling—they are sparse and usually on-screen)
-      // draw telegraphs (no culling—they are sparse and usually on-screen)
-      for (let i=0;i<telegraphs.length;i++){
-        const tg = telegraphs[i];
-        const a = clamp(tg.t / tg.max, 0, 1);
-        const r = tg.radius * (0.9 + 0.15 * Math.sin(performance.now() * 0.008 + i));
-        ctx.save();
-        ctx.globalAlpha = 0.25 + 0.55 * (1 - a);
-        ctx.shadowColor = tg.color;
-        ctx.shadowBlur = 20;
-        ctx.strokeStyle = tg.color;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(tg.x, tg.y, r, 0, TAU);
-        ctx.stroke();
-        if (tg.dx || tg.dy){
-          const ang = Math.atan2(tg.dy, tg.dx);
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(tg.x, tg.y);
-          ctx.lineTo(tg.x + Math.cos(ang) * tg.radius * 0.9, tg.y + Math.sin(ang) * tg.radius * 0.9);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
 
       // cull void zones
       for (let i=0;i<voidZones.length;i++){
@@ -2222,8 +2422,8 @@ import {
         if (c.x < camX - WORLD.spawnPad || c.x > camX + W + WORLD.spawnPad || c.y < camY - WORLD.spawnPad || c.y > camY + H + WORLD.spawnPad) continue;
         const pulse = (Math.sin(c.pulse) * 0.15 + 0.85);
         const rr = c.r * (1.0 + 0.05 * Math.sin(c.pulse * 1.7));
-        neonRect(c.x - rr, c.y - rr, rr*2, rr*2, "rgba(70,255,143,.90)", 20);
-        neonRing(c.x, c.y, rr*1.45, "rgba(255,217,74,.55)", 22, 2, pulse);
+        neonRect(c.x - rr, c.y - rr, rr*2, rr*2, COLORS.chest, 20);
+        neonRing(c.x, c.y, rr*1.45, COLORS.gold, 22, 2, pulse);
       }
 
       for (let i=0;i<gems.length;i++){
@@ -2254,7 +2454,7 @@ import {
       ctx.save();
       ctx.shadowBlur = 16;
       ctx.lineWidth = 1;
-      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.strokeStyle = UI_COLORS.strokeDim;
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
         if (!e.alive) continue;
@@ -2284,7 +2484,7 @@ import {
 
       // Enemy HP bars (background then fill)
       ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,.12)";
+      ctx.fillStyle = UI_COLORS.hpBarBg;
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
         if (!e.alive) continue;
@@ -2298,9 +2498,9 @@ import {
         const by = e.y - e.r - 10;
         ctx.fillRect(bx, by, barW, barH);
       }
-      ctx.shadowColor = "rgba(37,240,255,.6)";
+      ctx.shadowColor = UI_COLORS.hpBarShadow;
       ctx.shadowBlur = 8;
-      ctx.fillStyle = "rgba(37,240,255,.75)";
+      ctx.fillStyle = UI_COLORS.hpBarFill;
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
         if (!e.alive) continue;
@@ -2316,6 +2516,40 @@ import {
       }
       ctx.restore();
 
+      // draw telegraphs (no culling—they are sparse and usually on-screen)
+      for (let i=0;i<telegraphs.length;i++){
+        const tg = telegraphs[i];
+        const a = clamp(tg.t / tg.max, 0, 1);
+        const r = tg.radius * (0.9 + 0.15 * Math.sin(performance.now() * 0.008 + i));
+        ctx.save();
+        ctx.globalAlpha = 0.25 + 0.55 * (1 - a);
+        ctx.shadowColor = tg.color;
+        ctx.shadowBlur = 20;
+        ctx.strokeStyle = tg.color;
+        ctx.lineWidth = tg.width || 3;
+        ctx.beginPath();
+        ctx.arc(tg.x, tg.y, r, 0, TAU);
+        ctx.stroke();
+        if (tg.dx || tg.dy){
+          const ang = Math.atan2(tg.dy, tg.dx);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(tg.x, tg.y);
+          ctx.lineTo(tg.x + Math.cos(ang) * tg.radius * 0.9, tg.y + Math.sin(ang) * tg.radius * 0.9);
+          ctx.stroke();
+        }
+        if (tg.label){
+          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = tg.color;
+          ctx.font = "700 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(tg.label, tg.x, tg.y);
+        }
+        ctx.restore();
+      }
+
       // Ranged enemy projectiles
       for (let i=0;i<enemyShots.length;i++){
         const s = enemyShots[i];
@@ -2329,14 +2563,14 @@ import {
         // trailing streak behind the rail shot
         if (r.trail && r.trail.length > 1){
           ctx.lineCap = "round";
-          for (let j=1;j<r.trail.length;j++){
-            const a = clamp(r.trail[j].life / trailLife, 0, 1);
-            const w = (r.r * 2.2) * a + 2;
-            ctx.strokeStyle = `rgba(154,245,255,${0.14 + 0.32 * a})`;
-            ctx.shadowColor = COLORS.rail;
-            ctx.shadowBlur = 18 * a;
-            ctx.lineWidth = w;
-            ctx.beginPath();
+      for (let j=1;j<r.trail.length;j++){
+        const a = clamp(r.trail[j].life / trailLife, 0, 1);
+        const w = (r.r * 2.2) * a + 2;
+        ctx.strokeStyle = `${UI_COLORS.railTrailBase}${0.14 + 0.32 * a})`;
+        ctx.shadowColor = COLORS.rail;
+        ctx.shadowBlur = 18 * a;
+        ctx.lineWidth = w;
+        ctx.beginPath();
             ctx.moveTo(r.trail[j-1].x, r.trail[j-1].y);
             ctx.lineTo(r.trail[j].x, r.trail[j].y);
             ctx.stroke();
@@ -2362,14 +2596,14 @@ import {
         ctx.save();
         ctx.translate(a.x, a.y);
         ctx.rotate(a.rot);
-        ctx.shadowColor = "rgba(177,96,255,.9)";
+        ctx.shadowColor = UI_COLORS.axeShadow;
         ctx.shadowBlur = 18;
-        ctx.fillStyle = "rgba(177,96,255,.95)";
+        ctx.fillStyle = UI_COLORS.axeBody;
         ctx.fillRect(-10, -3, 20, 6);
-        ctx.fillStyle = "rgba(37,240,255,.95)";
+        ctx.fillStyle = UI_COLORS.axeEdge;
         ctx.fillRect(-2, -12, 4, 24);
         ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(255,255,255,.12)";
+        ctx.strokeStyle = UI_COLORS.hpBarBg;
         ctx.strokeRect(-10, -3, 20, 6);
         ctx.restore();
       }
@@ -2379,9 +2613,9 @@ import {
         const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.006 + i);
         const r = o.state === "fly" ? o.r : o.radius * 0.4;
         neonCircle(o.x, o.y, r, COLORS.bullet, 18);
-        neonRing(o.x, o.y, o.radius, "rgba(177,96,255,.35)", 24, 2, 0.35 * pulse);
+        neonRing(o.x, o.y, o.radius, UI_COLORS.orbRing, 24, 2, 0.35 * pulse);
         if (o.state === "park"){
-          neonRing(o.x, o.y, o.radius, "rgba(177,96,255,.35)", 24, 2, 0.6 * pulse);
+          neonRing(o.x, o.y, o.radius, UI_COLORS.orbRing, 24, 2, 0.6 * pulse);
         }
       }
 
@@ -2389,14 +2623,14 @@ import {
         const s = auraStats();
         ctx.save();
         ctx.globalAlpha = 0.92;
-        ctx.shadowColor = "#46ff8f";
+        ctx.shadowColor = COLORS.chest;
         ctx.shadowBlur = 26;
-        ctx.fillStyle = "rgba(70, 255, 143, 0.24)";
+        ctx.fillStyle = UI_COLORS.auraFill;
         ctx.beginPath();
         ctx.arc(player.x, player.y, s.radius, 0, TAU);
         ctx.fill();
         ctx.shadowBlur = 16;
-        ctx.strokeStyle = "rgba(70, 255, 143, 0.60)";
+        ctx.strokeStyle = UI_COLORS.auraStroke;
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.restore();
@@ -2406,9 +2640,9 @@ import {
       ctx.save();
       ctx.globalAlpha = flicker;
       neonCircle(player.x, player.y, player.r, COLORS.player, 22);
-      ctx.shadowColor = "rgba(255,255,255,.8)";
+      ctx.shadowColor = UI_COLORS.playerGlow;
       ctx.shadowBlur = 10;
-      ctx.fillStyle = "rgba(255,255,255,.16)";
+      ctx.fillStyle = UI_COLORS.playerCore;
       ctx.beginPath();
       ctx.arc(player.x, player.y, 5.5, 0, TAU);
       ctx.fill();
@@ -2416,10 +2650,10 @@ import {
 
       if (buffs.shield > 0){
         const a = 0.55 + 0.25 * Math.sin(performance.now()*0.004);
-        neonRing(player.x, player.y, player.r + 10, "rgba(127,231,255,.75)", 26, 2.5, a);
+        neonRing(player.x, player.y, player.r + 10, UI_COLORS.shieldRing, 26, 2.5, a);
       }
       if (buffs.magnet > 0){
-        neonRing(player.x, player.y, player.r + 18, "rgba(255,217,74,.28)", 22, 2, 0.55);
+        neonRing(player.x, player.y, player.r + 18, UI_COLORS.magnetRing, 22, 2, 0.55);
       }
 
       for (let i=0;i<dmgTexts.length;i++){
@@ -2439,7 +2673,7 @@ import {
 
       if (state === STATE.LEVELUP){
         ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,.25)";
+        ctx.fillStyle = UI_COLORS.overlayDim;
         ctx.fillRect(0,0,W,H);
         ctx.restore();
       }
@@ -2465,6 +2699,30 @@ import {
         ui.mHpFill.style.width = `${(hpT*100).toFixed(2)}%`;
       }
 
+      const boss = getActiveBoss();
+      const bossHp = boss ? clamp(boss.hp, 0, boss.maxHp) : 0;
+      const bossHpT = boss && boss.maxHp > 0 ? clamp(bossHp / boss.maxHp, 0, 1) : 0;
+      const bossName = boss ? (ENEMY_TYPES[boss.type]?.name || "Boss") : "";
+      const bossOn = !!boss;
+      if (ui.bossWrap) ui.bossWrap.classList.toggle("on", bossOn);
+      if (ui.bossCard){
+        ui.bossCard.classList.toggle("on", bossOn);
+        if (bossOn){
+          ui.bossName.textContent = bossName;
+          ui.bossHp.textContent = `${Math.ceil(bossHp)} / ${Math.ceil(boss.maxHp)}`;
+          ui.bossHpPct.textContent = `${Math.round(bossHpT * 100)}%`;
+          ui.bossHpFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
+        }
+      }
+      if (ui.mBossBar){
+        ui.mBossBar.classList.toggle("on", bossOn);
+        if (bossOn){
+          ui.mBossName.textContent = bossName || "Boss";
+          ui.mBossPct.textContent = `${Math.round(bossHpT * 100)}%`;
+          ui.mBossFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
+        }
+      }
+
       ui.xp.textContent = fmtFloat(player.xp);
       ui.xpNeed.textContent = fmtFloat(player.xpNeed);
       const xpT = player.xpNeed > 0 ? clamp(player.xp / player.xpNeed, 0, 1) : 0;
@@ -2477,11 +2735,12 @@ import {
 
       // Loadout & bonuses
       const weaponPills = [];
-      weaponPills.push(`Magic Lv ${weapons.magic.level}`);
-      if (weapons.aura.unlocked) weaponPills.push(`Aura Lv ${weapons.aura.level}`);
-      if (weapons.rail.unlocked) weaponPills.push(`Rail Lv ${weapons.rail.level}`);
-      if (weapons.axe.unlocked) weaponPills.push(`Axe Lv ${weapons.axe.level}`);
-      if (weapons.orb.unlocked) weaponPills.push(`Orb Lv ${weapons.orb.level}`);
+      const pill = (label, w) => `${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}`;
+      weaponPills.push(pill("Magic", weapons.magic));
+      if (weapons.aura.unlocked) weaponPills.push(pill("Aura", weapons.aura));
+      if (weapons.rail.unlocked) weaponPills.push(pill("Rail", weapons.rail));
+      if (weapons.axe.unlocked) weaponPills.push(pill("Axe", weapons.axe));
+      if (weapons.orb.unlocked) weaponPills.push(pill("Orb", weapons.orb));
       ui.loadout.innerHTML = (weaponPills.length ? weaponPills : ["None"]).map(w => `<span class="pill">${w}</span>`).join(" ");
 
       const fmtBonus = (label, mult, current) => {
