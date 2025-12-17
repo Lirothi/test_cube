@@ -199,6 +199,11 @@
       .topRow{flex-direction:column; align-items:stretch;}
       #bars{justify-content:stretch;}
     }
+    body.mobile #hud{padding:8px; gap:8px;}
+    body.mobile .topRow{flex-direction:column; align-items:stretch;}
+    body.mobile .hudCard{min-width:unset; width:100%;}
+    body.mobile #bars .barCard{width:100%;}
+    body.mobile #hint{font-size:13px; bottom:10px;}
   </style>
 </head>
 <body>
@@ -316,4 +321,3 @@
   <script type="module" src="./game.js"></script>
 </body>
 </html>
-

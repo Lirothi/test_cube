@@ -85,12 +85,16 @@ import {
     };
     ui.uiBuild.textContent = BUILD;
     ui.menuBuild.textContent = BUILD;
-    ui.hint.textContent = "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
 
     /* ============================
        Helpers
        ============================ */
     const TAU = Math.PI * 2;
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent) || (navigator.maxTouchPoints || 0) > 0;
+    ui.hint.textContent = isMobile
+      ? "Move: drag to steer | Tap chests to open | Auto-attacks | Tap screen for focus"
+      : "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
+    if (isMobile) document.body.classList.add("mobile");
     const rand = (a=1,b=0)=> (Math.random()*(a-b)+b);
     const randi = (a,b=0)=> (Math.random()*(a-b)+b) | 0;
     const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
@@ -108,6 +112,7 @@ import {
        Input (robust: uses e.code)
        ============================ */
     const input = { up:false, down:false, left:false, right:false };
+    const clearDirectionalInput = () => { input.up = input.down = input.left = input.right = false; };
     const CODE_MAP = new Map([
       ["KeyW", "up"], ["ArrowUp", "up"],
       ["KeyS", "down"], ["ArrowDown", "down"],
@@ -134,6 +139,55 @@ import {
       const m = CODE_MAP.get(e.code);
       if (m) { input[m] = false; e.preventDefault(); }
     }, { passive:false });
+
+    // Touch drag controls for mobile (simple virtual stick)
+    if (isMobile){
+      let touchId = null;
+      let startX = 0, startY = 0;
+      const DEAD = 12;
+      const updateTouchDir = (x,y) => {
+        const dx = x - startX;
+        const dy = y - startY;
+        clearDirectionalInput();
+        if (Math.abs(dx) > DEAD){
+          if (dx > 0) input.right = true; else input.left = true;
+        }
+        if (Math.abs(dy) > DEAD){
+          if (dy > 0) input.down = true; else input.up = true;
+        }
+      };
+      const endTouch = () => { touchId = null; clearDirectionalInput(); };
+      canvas.addEventListener("touchstart", (e) => {
+        if (touchId !== null) return;
+        const t = e.changedTouches[0];
+        touchId = t.identifier;
+        startX = t.clientX;
+        startY = t.clientY;
+        updateTouchDir(startX, startY);
+      }, { passive:true });
+      canvas.addEventListener("touchmove", (e) => {
+        if (touchId === null) return;
+        for (let i=0;i<e.changedTouches.length;i++){
+          const t = e.changedTouches[i];
+          if (t.identifier === touchId){
+            updateTouchDir(t.clientX, t.clientY);
+            e.preventDefault();
+            break;
+          }
+        }
+      }, { passive:false });
+      const touchEndHandler = (e) => {
+        if (touchId === null) return;
+        for (let i=0;i<e.changedTouches.length;i++){
+          if (e.changedTouches[i].identifier === touchId){
+            endTouch();
+            break;
+          }
+        }
+      };
+      canvas.addEventListener("touchend", touchEndHandler, { passive:true });
+      canvas.addEventListener("touchcancel", touchEndHandler, { passive:true });
+    }
 
     /* ============================
        Pools
@@ -1328,6 +1382,7 @@ import {
       ui.levelup.style.pointerEvents = "none";
       ui.menu.classList.remove("on");
       ui.menu.style.pointerEvents = "none";
+      clearDirectionalInput();
 
       state = STATE.PLAYING;
       last = performance.now();
