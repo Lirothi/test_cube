@@ -109,6 +109,7 @@
       mBossName: document.getElementById("mBossName"),
       mBossPct: document.getElementById("mBossPct"),
       mBossFill: document.getElementById("mBossFill"),
+      mWeapons: document.getElementById("mWeapons"),
       fps: document.getElementById("fps"),
     };
     ui.uiBuild.textContent = BUILD;
@@ -2720,6 +2721,10 @@
           ui.mBossName.textContent = bossName || "Boss";
           ui.mBossPct.textContent = `${Math.round(bossHpT * 100)}%`;
           ui.mBossFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
+        } else {
+          ui.mBossName.textContent = "Boss";
+          ui.mBossPct.textContent = "0%";
+          ui.mBossFill.style.width = "0%";
         }
       }
 
@@ -2741,7 +2746,9 @@
       if (weapons.rail.unlocked) weaponPills.push(pill("Rail", weapons.rail));
       if (weapons.axe.unlocked) weaponPills.push(pill("Axe", weapons.axe));
       if (weapons.orb.unlocked) weaponPills.push(pill("Orb", weapons.orb));
-      ui.loadout.innerHTML = (weaponPills.length ? weaponPills : ["None"]).map(w => `<span class="pill">${w}</span>`).join(" ");
+      const loadoutHtml = (weaponPills.length ? weaponPills : ["None"]).map(w => `<span class="pill">${w}</span>`).join(" ");
+      ui.loadout.innerHTML = loadoutHtml;
+      if (ui.mWeapons) ui.mWeapons.innerHTML = loadoutHtml;
 
       const fmtBonus = (label, mult, current) => {
         const pct = Math.round((mult - 1) * 100);
