@@ -93,12 +93,14 @@
       btnMenuRestart: document.getElementById("btnMenuRestart"),
       btnGod: document.getElementById("btnGod"),
       btnMute: document.getElementById("btnMute"),
+      btnMobileMenu: document.getElementById("btnMobileMenu"),
       hint: document.getElementById("hint"),
       loadout: document.getElementById("uiLoadout"),
       bonuses: document.getElementById("uiBonuses"),
       mTime: document.getElementById("mUiTime"),
       mLevel: document.getElementById("mUiLevel"),
       mKills: document.getElementById("mUiKills"),
+      mFps: document.getElementById("mFps"),
       mHp: document.getElementById("mUiHp"),
       mHpPct: document.getElementById("mUiHpPct"),
       mHpFill: document.getElementById("mHpFill"),
@@ -343,6 +345,7 @@
       if (fpsCount >= 10){
         const fps = fpsAccum / fpsCount;
         ui.fps.textContent = `${Math.round(fps)} fps`;
+        if (ui.mFps) ui.mFps.textContent = `${Math.round(fps)} fps`;
         fpsAccum = 0;
         fpsCount = 0;
       }
@@ -2844,6 +2847,13 @@
     ui.levelup.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
     ui.gameover.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
     ui.menu.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
+    if (ui.btnMobileMenu){
+      ui.btnMobileMenu.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (state === STATE.PLAYING) openMenu();
+        else if (state === STATE.MENU) closeMenu();
+      }, { passive:true });
+    }
 
   })();
   

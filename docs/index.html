@@ -21,6 +21,20 @@
       --radius:18px;
       --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
+    body.mobile #mFpsWrap{display:inline-flex;}
+    #mFpsWrap{
+      display:none;
+      align-items:center;
+      gap:6px;
+      margin-left:auto;
+      background:rgba(10,12,18,.72);
+      border:1px solid rgba(120,255,255,.18);
+      border-radius:10px;
+      padding:4px 6px;
+      box-shadow:var(--shadow), var(--glow);
+      font-size:12px;
+      color:var(--text);
+    }
 
     html,body{height:100%; margin:0; background:var(--bg); overflow:hidden; font-family:var(--font); color:var(--text);}
     body{padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0);}
@@ -327,6 +341,22 @@
       text-align:center;
       white-space:normal;
     }
+    #btnMobileMenu{
+      position:fixed;
+      bottom:calc(14px + env(safe-area-inset-bottom,0));
+      right:14px;
+      width:46px; height:46px;
+      border-radius:14px;
+      border:1px solid rgba(120,255,255,.28);
+      background:rgba(10,12,18,.78);
+      color:var(--text);
+      box-shadow:var(--shadow), var(--glow);
+      font-size:22px;
+      display:none;
+      z-index:10;
+      pointer-events:auto;
+    }
+    body.mobile #btnMobileMenu{display:flex; align-items:center; justify-content:center;}
 
     /* Virtual stick visuals */
     #stick{
@@ -414,6 +444,7 @@
           <span id="mUiLevel">Lv 1</span>
           <span id="mUiHp">120/120</span>
           <span id="mUiKills">K 0</span>
+          <span id="mFpsWrap"><span id="mFps">0 fps</span></span>
         </div>
         <div class="mBar">
           <div class="mBarLabel">XP <span class="mVal"><span id="mUiXp">0</span> / <span id="mUiXpNeed">0</span></span></div>
@@ -436,6 +467,8 @@
       </div>
     </div>
   </div>
+
+  <button id="btnMobileMenu" aria-label="Menu">Menu</button>
 
   <div id="stick">
     <div id="stickOuter"></div>

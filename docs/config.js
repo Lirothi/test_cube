@@ -336,7 +336,7 @@ export const ENEMY_TYPES = {
     spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
   },
   X: { // mini-boss
-    name:"Overseer", r:20, hp:2000, speed:75, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
+    name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
     boss:true, knockResist:0.55,
     ranged:true, shotCd:1.6, shotDmg:9, shotSpeed:420, shotRange:720,
     nova: BOSS_CONFIG.nova
