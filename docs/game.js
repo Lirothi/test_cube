@@ -467,7 +467,7 @@
       weapons.aura.unlocked  = false; weapons.aura.level  = 0; weapons.aura.mastery  = 0; weapons.aura.tick = 0;
       weapons.rail.unlocked  = false; weapons.rail.level  = 0; weapons.rail.mastery  = 0; weapons.rail.t = 0;
       weapons.axe.unlocked   = false; weapons.axe.level   = 0; weapons.axe.mastery   = 0; weapons.axe.t = 0;
-      weapons.orb.unlocked   = true; weapons.orb.level   = 1; weapons.orb.mastery   = 0; weapons.orb.t = 0;
+      weapons.orb.unlocked   = false; weapons.orb.level   = 0; weapons.orb.mastery   = 0; weapons.orb.t = 0;
     }
 
     function weaponCount(){
@@ -2741,7 +2741,7 @@
       // Loadout & bonuses
       const weaponPills = [];
       const pill = (label, w) => `${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}`;
-      weaponPills.push(pill("Magic", weapons.magic));
+      if (weapons.magic.unlocked) weaponPills.push(pill("Magic", weapons.magic));
       if (weapons.aura.unlocked) weaponPills.push(pill("Aura", weapons.aura));
       if (weapons.rail.unlocked) weaponPills.push(pill("Rail", weapons.rail));
       if (weapons.axe.unlocked) weaponPills.push(pill("Axe", weapons.axe));
