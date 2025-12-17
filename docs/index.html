@@ -68,7 +68,16 @@
     }
     .buffs b{color:rgba(215,246,255,.92)}
 
-    #bars{display:flex; gap:10px; align-items:center; justify-content:flex-end; flex:1;}
+    #bars{
+      position:relative;
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+      justify-content:flex-end;
+      flex:1;
+      flex-wrap:wrap;
+      padding-left:80px;
+    }
     .barCard{
       width:min(420px, 58vw);
       background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.48));
@@ -250,6 +259,24 @@
       box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 14px rgba(255,217,74,.25);
     }
 
+    #fps{
+      display:inline-flex; align-items:center; justify-content:center;
+      padding:4px 8px;
+      background:rgba(10,12,18,.72);
+      border:1px solid rgba(120,255,255,.22);
+      border-radius:10px;
+      color:var(--text);
+      font-size:12px;
+      box-shadow:var(--shadow), var(--glow);
+      pointer-events:none;
+      min-width:54px;
+      text-align:center;
+    }
+    body.mobile #fps{
+      font-size:11px;
+      padding:4px 6px;
+    }
+
     body.mobile #hud{display:none;}
     body.mobile #mobileHud{display:flex;}
     body.mobile #hint{
@@ -303,7 +330,8 @@
       </div>
 
       <div id="bars">
-        <div class="barCard" style="padding:8px 10px;">
+        <div id="fps">0 fps</div>
+        <div class="barCard" style="padding:8px 10px; position:relative;">
           <div class="barRow">
             <div class="barLabel">XP</div>
             <div class="barValue"><span id="uiXp">0</span> / <span id="uiXpNeed">0</span></div>
@@ -410,13 +438,14 @@
           <div class="sub">Press ESC to resume or choose an option.</div>
         </div>
         <div class="sub" id="uiMenuBuild"></div>
-      </div>
-      <div class="btnRow" style="justify-content:center;">
-        <button id="btnResume">Continue</button>
-        <button id="btnMenuRestart">Restart</button>
+        </div>
+        <div class="btnRow" style="justify-content:center;">
+          <button id="btnResume">Continue</button>
+          <button id="btnMenuRestart">Restart</button>
+          <button id="btnGod">God Mode: Off</button>
+        </div>
       </div>
     </div>
-  </div>
 
   <div id="hint">Move: WASD/Arrows • Chests: touch to open • Auto-attacks • (Click/tap the canvas to focus keys)</div>
 

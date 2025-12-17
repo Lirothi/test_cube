@@ -1,4 +1,4 @@
-export const BUILD = "Neon Survivors v1.3 (melee fix + ranged nerf + stronger magnet)";
+export const BUILD = "Neon Survivors v0.99";
 
 export const COLORS = {
   bg: "#05060a",
@@ -311,12 +311,12 @@ export const ENEMY_TYPES = {
   P: { // poison spitter
     name:"Toxic", r:10, hp:28, speed:62, dmg:6.5, color:COLORS.enemyP, xp:2, gem:1,
     ranged:true,
-    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, telegraph:0.5, color:COLORS.voidPoison, type:"poison" }
+    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, tick:0.35, telegraph:0.5, color:COLORS.voidPoison, type:"poison" }
   },
   F: { // fire spitter
     name:"Scorcher", r:11, hp:32, speed:60, dmg:7.5, color:COLORS.enemyF, xp:2, gem:1,
     ranged:true,
-    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, telegraph:0.55, color:COLORS.voidFire, type:"fire" }
+    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.55, color:COLORS.voidFire, type:"fire" }
   },
   X: { // mini-boss
     name:"Overseer", r:20, hp:2000, speed:75, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,

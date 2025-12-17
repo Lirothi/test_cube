@@ -32,8 +32,11 @@ import {
     const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 
     let W = 0, H = 0, DPR = 1;
+    const BIG_SCREEN_PIXELS = 2000000; // ~2K and above screens; cap DPR to ease GPU load
     function resize() {
-      DPR = Math.min(2, window.devicePixelRatio || 1);
+      const area = innerWidth * innerHeight;
+      const maxDpr = area > BIG_SCREEN_PIXELS ? 1 : 2;
+      DPR = Math.min(maxDpr, window.devicePixelRatio || 1);
       W = Math.floor(innerWidth);
       H = Math.floor(innerHeight);
       canvas.width = Math.floor(W * DPR);
@@ -79,6 +82,7 @@ import {
       menuBuild: document.getElementById("uiMenuBuild"),
       btnResume: document.getElementById("btnResume"),
       btnMenuRestart: document.getElementById("btnMenuRestart"),
+      btnGod: document.getElementById("btnGod"),
       hint: document.getElementById("hint"),
       loadout: document.getElementById("uiLoadout"),
       bonuses: document.getElementById("uiBonuses"),
@@ -91,6 +95,7 @@ import {
       mXp: document.getElementById("mUiXp"),
       mXpNeed: document.getElementById("mUiXpNeed"),
       mXpFill: document.getElementById("mXpFill"),
+      fps: document.getElementById("fps"),
     };
     ui.uiBuild.textContent = BUILD;
     ui.menuBuild.textContent = BUILD;
@@ -104,6 +109,11 @@ import {
       ? "Move: drag to steer | Tap chests to open | Auto-attacks | Tap screen for focus"
       : "Move: WASD/Arrows | Chests: touch to open | Auto-attacks | ESC: Menu (Click/tap the canvas to focus keys)";
     if (isMobile) document.body.classList.add("mobile");
+    let godMode = false;
+    function updateGodButton(){
+      if (ui.btnGod) ui.btnGod.textContent = `God Mode: ${godMode ? "On" : "Off"}`;
+    }
+    updateGodButton();
     const rand = (a=1,b=0)=> (Math.random()*(a-b)+b);
     const randi = (a,b=0)=> (Math.random()*(a-b)+b) | 0;
     const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
@@ -234,6 +244,18 @@ import {
     const WORLD = { spawnPad: 80, despawnPad: 240 };
     const STATE = { PLAYING:"playing", LEVELUP:"levelup", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
+    let fpsAccum = 0, fpsCount = 0;
+    function updateFps(dt){
+      if (!ui.fps) return;
+      fpsAccum += (dt > 0 ? (1/dt) : 0);
+      fpsCount++;
+      if (fpsCount >= 10){
+        const fps = fpsAccum / fpsCount;
+        ui.fps.textContent = `${Math.round(fps)} fps`;
+        fpsAccum = 0;
+        fpsCount = 0;
+      }
+    }
 
     /* ============================
        Player + Buffs
@@ -329,7 +351,7 @@ import {
     const railPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:4.4, dmg:60, life:0, pierce:0, trail:[], critChance:0, critMult:1 }), 160);
     const axePool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:6,   dmg:18, life:0, rot:0, spin:0, critChance:0, critMult:1 }), 120);
     const shotPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:3.6, dmg:8,  life:0, color:"rgba(255,217,74,.95)" }), 240);
-    const voidPool  = makePool(() => ({ alive:false, x:0,y:0, radius:0, life:0, maxLife:0, dps:0, color:"#fff", type:"poison" }), 120);
+    const voidPool  = makePool(() => ({ alive:false, x:0,y:0, radius:0, life:0, maxLife:0, dps:0, tick:0.25, tickT:0, color:"#fff", type:"poison" }), 120);
     const orbPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:10, dmg:0, critChance:0, critMult:1, state:"fly", life:0, park:0, tick:0, pull:0, radius:0, explosion:0 }), 80);
 
     const gemPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, v:1, r:5 }), 260);
@@ -654,6 +676,7 @@ import {
       e.spitRadius = info.spit ? info.spit.radius : 0;
       e.spitDuration = info.spit ? info.spit.duration : 0;
       e.spitDps = (info.spit ? info.spit.dps : 0) * dmgMult;
+      e.spitTick = info.spit ? (info.spit.tick || 0.25) : 0.25;
       e.spitColor = info.spit ? info.spit.color : COLORS.warn;
       e.spitTelegraph = info.spit ? (info.spit.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
       e.spitType = info.spit ? (info.spit.type || "poison") : "";
@@ -1419,6 +1442,18 @@ import {
     ui.btnRestart.addEventListener("click", restart, { passive:true });
     ui.btnResume.addEventListener("click", closeMenu, { passive:true });
     ui.btnMenuRestart.addEventListener("click", restart, { passive:true });
+    if (ui.btnGod){
+      ui.btnGod.addEventListener("click", () => {
+        godMode = !godMode;
+        updateGodButton();
+        if (godMode){
+          player.hp = player.maxHp;
+          buffs.shield = 9999;
+        } else {
+          buffs.shield = 0;
+        }
+      }, { passive:true });
+    }
 
     /* ============================
        Buffs / Player / Enemies / Projectiles
@@ -1462,7 +1497,7 @@ import {
       enemyShots.push(s);
     }
 
-    function spawnVoidZone(x,y,radius,duration,dps,color,type){
+    function spawnVoidZone(x,y,radius,duration,dps,color,type,tick=0.25){
       const z = voidPool.get();
       z.alive = true;
       z.x = x; z.y = y;
@@ -1470,6 +1505,8 @@ import {
       z.maxLife = duration;
       z.life = duration;
       z.dps = dps;
+      z.tick = tick;
+      z.tickT = tick;
       z.color = color;
       z.type = type || "poison";
       voidZones.push(z);
@@ -1521,8 +1558,16 @@ import {
           const dx = player.x - z.x;
           const dy = player.y - z.y;
           const rr = player.r + z.radius;
-          if (dx*dx + dy*dy <= rr*rr && buffs.shield <= 0){
-            player.hp -= z.dps * dt;
+          if (dx*dx + dy*dy <= rr*rr && buffs.shield <= 0 && !godMode){
+            z.tickT -= dt;
+            while (z.tickT <= 0){
+              z.tickT += z.tick;
+              const dmg = z.dps * z.tick;
+              player.hp -= dmg;
+              spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.dmg, 14);
+            }
+          } else {
+            z.tickT = z.tick;
           }
         }
 
@@ -1598,7 +1643,7 @@ import {
               addTelegraph({
                 x: tx, y: ty, radius: e.spitRadius, color: e.spitColor, time: e.spitTelegraph,
                 fire: () => {
-                  if (e.alive && e.shotSeq === marker) spawnVoidZone(tx, ty, e.spitRadius, e.spitDuration, e.spitDps, e.spitColor, e.spitType);
+                  if (e.alive && e.shotSeq === marker) spawnVoidZone(tx, ty, e.spitRadius, e.spitDuration, e.spitDps, e.spitColor, e.spitType, e.spitTick);
                 }
               });
             }
@@ -1644,7 +1689,9 @@ import {
         // contact damage
         const rr = player.r + e.r;
         if (d < rr){
-          if (buffs.shield <= 0 && player.iFrame <= 0){
+          if (godMode){
+            // ignore melee damage
+          } else if (buffs.shield <= 0 && player.iFrame <= 0){
             const hurt = e.dmg;
             player.hp -= hurt;
             player.iFrame = PLAYER_CONFIG.meleeIFrame;
@@ -1970,6 +2017,7 @@ import {
       for (let i=enemies.length-1;i>=0;i--){
         const e = enemies[i];
         if (!e.alive || e.x < minX || e.x > maxX || e.y < minY || e.y > maxY){
+          if (e.boss) continue; // never despawn the boss offscreen
           enemies[i] = enemies[enemies.length-1];
           enemies.pop();
           if (e.alive) e.alive = false;
@@ -2119,6 +2167,8 @@ import {
 
       drawGrid(camX, camY);
 
+      // draw telegraphs (no culling—they are sparse and usually on-screen)
+      // draw telegraphs (no culling—they are sparse and usually on-screen)
       for (let i=0;i<telegraphs.length;i++){
         const tg = telegraphs[i];
         const a = clamp(tg.t / tg.max, 0, 1);
@@ -2143,8 +2193,10 @@ import {
         ctx.restore();
       }
 
+      // cull void zones
       for (let i=0;i<voidZones.length;i++){
         const z = voidZones[i];
+        if (z.x < camX - WORLD.spawnPad || z.x > camX + W + WORLD.spawnPad || z.y < camY - WORLD.spawnPad || z.y > camY + H + WORLD.spawnPad) continue;
         const a = clamp(z.life / z.maxLife, 0, 1);
         const pulse = 0.9 + 0.1 * Math.sin(performance.now() * 0.006 + i);
         ctx.save();
@@ -2167,6 +2219,7 @@ import {
 
       for (let i=0;i<chests.length;i++){
         const c = chests[i];
+        if (c.x < camX - WORLD.spawnPad || c.x > camX + W + WORLD.spawnPad || c.y < camY - WORLD.spawnPad || c.y > camY + H + WORLD.spawnPad) continue;
         const pulse = (Math.sin(c.pulse) * 0.15 + 0.85);
         const rr = c.r * (1.0 + 0.05 * Math.sin(c.pulse * 1.7));
         neonRect(c.x - rr, c.y - rr, rr*2, rr*2, "rgba(70,255,143,.90)", 20);
@@ -2175,11 +2228,13 @@ import {
 
       for (let i=0;i<gems.length;i++){
         const g = gems[i];
+        if (g.x < camX - WORLD.spawnPad || g.x > camX + W + WORLD.spawnPad || g.y < camY - WORLD.spawnPad || g.y > camY + H + WORLD.spawnPad) continue;
         neonCircle(g.x, g.y, g.r, COLORS.gem, 14);
       }
 
       for (let i=0;i<particles.length;i++){
         const p = particles[i];
+        if (p.x < camX - WORLD.spawnPad || p.x > camX + W + WORLD.spawnPad || p.y < camY - WORLD.spawnPad || p.y > camY + H + WORLD.spawnPad) continue;
         const a = clamp(p.life / p.maxLife, 0, 1);
         ctx.save();
         ctx.globalAlpha = a;
@@ -2192,35 +2247,74 @@ import {
         ctx.restore();
       }
 
+      // Enemies: batch by style to reduce save/restore churn
+      const visMinX = camX - WORLD.spawnPad, visMaxX = camX + W + WORLD.spawnPad;
+      const visMinY = camY - WORLD.spawnPad, visMaxY = camY + H + WORLD.spawnPad;
+
+      ctx.save();
+      ctx.shadowBlur = 16;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,.10)";
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
+        if (!e.alive) continue;
+        if (e.x < visMinX || e.x > visMaxX || e.y < visMinY || e.y > visMaxY) continue;
         const size = e.r * 2;
-        neonRect(e.x - e.r, e.y - e.r, size, size, e.color, 16);
-        if (e.elite){
-          ctx.save();
-          ctx.shadowColor = ELITE_CONFIG.markerColor;
-          ctx.shadowBlur = 18;
-          ctx.strokeStyle = ELITE_CONFIG.markerColor;
-          ctx.lineWidth = 2.6;
-          ctx.strokeRect(e.x - e.r - 6, e.y - e.r - 6, size + 12, size + 12);
-          ctx.restore();
-        }
-        const hpT = clamp(e.hp / e.maxHp, 0, 1);
-        if (hpT < 0.999){
-          const barW = size + 8;
-          const barH = 4;
-          const bx = e.x - barW * 0.5;
-          const by = e.y - e.r - 10;
-          ctx.save();
-          ctx.fillStyle = "rgba(255,255,255,.12)";
-          ctx.fillRect(bx, by, barW, barH);
-          ctx.shadowColor = "rgba(37,240,255,.6)";
-          ctx.shadowBlur = 8;
-          ctx.fillStyle = "rgba(37,240,255,.75)";
-          ctx.fillRect(bx, by, barW * hpT, barH);
-          ctx.restore();
-        }
+        ctx.shadowColor = e.color;
+        ctx.fillStyle = e.color;
+        ctx.fillRect(e.x - e.r, e.y - e.r, size, size);
+        ctx.strokeRect(e.x - e.r, e.y - e.r, size, size);
       }
+      ctx.restore();
+
+      // Elite outline pass
+      ctx.save();
+      ctx.shadowColor = ELITE_CONFIG.markerColor;
+      ctx.shadowBlur = 18;
+      ctx.strokeStyle = ELITE_CONFIG.markerColor;
+      ctx.lineWidth = 2.6;
+      for (let i=0;i<enemies.length;i++){
+        const e = enemies[i];
+        if (!e.alive || !e.elite) continue;
+        if (e.x < visMinX || e.x > visMaxX || e.y < visMinY || e.y > visMaxY) continue;
+        const size = e.r * 2;
+        ctx.strokeRect(e.x - e.r - 6, e.y - e.r - 6, size + 12, size + 12);
+      }
+      ctx.restore();
+
+      // Enemy HP bars (background then fill)
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,.12)";
+      for (let i=0;i<enemies.length;i++){
+        const e = enemies[i];
+        if (!e.alive) continue;
+        if (e.x < visMinX || e.x > visMaxX || e.y < visMinY || e.y > visMaxY) continue;
+        const hpT = clamp(e.hp / e.maxHp, 0, 1);
+        if (hpT >= 0.999) continue;
+        const size = e.r * 2;
+        const barW = size + 8;
+        const barH = 4;
+        const bx = e.x - barW * 0.5;
+        const by = e.y - e.r - 10;
+        ctx.fillRect(bx, by, barW, barH);
+      }
+      ctx.shadowColor = "rgba(37,240,255,.6)";
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = "rgba(37,240,255,.75)";
+      for (let i=0;i<enemies.length;i++){
+        const e = enemies[i];
+        if (!e.alive) continue;
+        if (e.x < visMinX || e.x > visMaxX || e.y < visMinY || e.y > visMaxY) continue;
+        const hpT = clamp(e.hp / e.maxHp, 0, 1);
+        if (hpT >= 0.999) continue;
+        const size = e.r * 2;
+        const barW = size + 8;
+        const barH = 4;
+        const bx = e.x - barW * 0.5;
+        const by = e.y - e.r - 10;
+        ctx.fillRect(bx, by, barW * hpT, barH);
+      }
+      ctx.restore();
 
       // Ranged enemy projectiles
       for (let i=0;i<enemyShots.length;i++){
@@ -2458,6 +2552,7 @@ import {
       last = now;
 
       if (state === STATE.PLAYING){
+        updateFps(dt);
         update(dt);
       } else {
         if (particles.length) updateParticles(dt);
