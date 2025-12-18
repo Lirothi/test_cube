@@ -345,6 +345,7 @@
        World / State
        ============================ */
     const WORLD = { halfSize: 20000, spawnPad: 80, despawnPad: 240 };
+    const ACTIVE_OBSTACLE_PAD = 1200;
     const STATE = { PLAYING:"playing", LEVELUP:"levelup", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
     let fpsAccum = 0, fpsCount = 0;
@@ -448,6 +449,7 @@
     const dmgTexts = [];
     const floatTexts = [];
     const obstacles = [];
+    const activeObstacles = [];
 
     const enemyPool = makePool(() => ({
       alive:false, type:"A",
@@ -477,7 +479,7 @@
     const voidPool  = makePool(() => ({ alive:false, x:0,y:0, radius:0, life:0, maxLife:0, dps:0, tick:0.25, tickT:0, color:"#fff", type:"poison" }), 120);
     const orbPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, r:10, dmg:0, critChance:0, critMult:1, state:"fly", life:0, park:0, tick:0, pull:0, radius:0, explosion:0 }), 80);
 
-    const gemPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, v:1, r:5 }), 260);
+    const gemPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, v:1, r:5, life:0, maxLife:0 }), 260);
     const partPool  = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, r:2, color:COLORS.gem }), 520);
     const chestPool = makePool(() => ({ alive:false, x:0,y:0, r:12, pulse:0 }), 24);
     const dmgPool   = makePool(() => ({ alive:false, x:0,y:0, vx:0,vy:0, life:0, maxLife:0, text:"", color:"#fff", size:14 }), 240);
@@ -892,8 +894,9 @@
 
     function isBlockedByObstacle(x, y, r=0, pad=0){
       const rad = r + pad;
-      for (let i=0;i<obstacles.length;i++){
-        const o = obstacles[i];
+      for (let i=0;i<activeObstacles.length;i++){
+        const o = obstacles[activeObstacles[i]];
+        if (!o) continue;
         const reach = o.r + rad;
         const dx = o.x - x, dy = o.y - y;
         if (dx*dx + dy*dy <= reach*reach) return true;
@@ -1342,6 +1345,20 @@
       }
     }
 
+    function updateActiveObstacles(camX, camY){
+      activeObstacles.length = 0;
+      const minX = camX - ACTIVE_OBSTACLE_PAD;
+      const maxX = camX + W + ACTIVE_OBSTACLE_PAD;
+      const minY = camY - ACTIVE_OBSTACLE_PAD;
+      const maxY = camY + H + ACTIVE_OBSTACLE_PAD;
+      for (let i=0;i<obstacles.length;i++){
+        const o = obstacles[i];
+        const r = o.r;
+        if (o.x + r < minX || o.x - r > maxX || o.y + r < minY || o.y - r > maxY) continue;
+        activeObstacles.push(i);
+      }
+    }
+
     function damageObstacle(idx, dmg, isExplosion=false){
       const o = obstacles[idx];
       if (!o) return;
@@ -1360,20 +1377,23 @@
     }
 
     function damageObstaclesInRadius(x,y,r,dmg,isExplosion=false){
-      for (let i=obstacles.length-1;i>=0;i--){
-        const o = obstacles[i];
+      for (let i=0;i<activeObstacles.length;i++){
+        const idx = activeObstacles[i];
+        const o = obstacles[idx];
+        if (!o) continue;
         const dx = o.x - x;
         const dy = o.y - y;
         const reach = o.r + r;
         if (dx*dx + dy*dy <= reach*reach){
-          damageObstacle(i, dmg, isExplosion);
+          damageObstacle(idx, dmg, isExplosion);
         }
       }
     }
 
     function resolveObstacles(entity, radius){
-      for (let i=0;i<obstacles.length;i++){
-        const o = obstacles[i];
+      for (let i=0;i<activeObstacles.length;i++){
+        const o = obstacles[activeObstacles[i]];
+        if (!o) continue;
         const dx = entity.x - o.x;
         const dy = entity.y - o.y;
         const dist2 = dx*dx + dy*dy;
@@ -1389,8 +1409,9 @@
 
     function obstacleAvoidance(x,y,r){
       let ax = 0, ay = 0;
-      for (let i=0;i<obstacles.length;i++){
-        const o = obstacles[i];
+      for (let i=0;i<activeObstacles.length;i++){
+        const o = obstacles[activeObstacles[i]];
+        if (!o) continue;
         const dx = x - o.x;
         const dy = y - o.y;
         const dist2 = dx*dx + dy*dy;
@@ -1601,6 +1622,8 @@
       g.vy = Math.sin(a) * s;
       g.v = value;
       g.r = LOOT_CONFIG.gemRadiusBase + value * LOOT_CONFIG.gemRadiusScale;
+      g.maxLife = 30;
+      g.life = g.maxLife;
       gems.push(g);
     }
 
@@ -1848,13 +1871,15 @@
               damageEnemy(e, hit.dmg, nx, ny, s.knock, true, hit.crit, "aura");
             }
           }
-          for (let i=obstacles.length-1;i>=0;i--){
-            const o = obstacles[i];
+          for (let i=0;i<activeObstacles.length;i++){
+            const idx = activeObstacles[i];
+            const o = obstacles[idx];
+            if (!o) continue;
             const dx = o.x - player.x;
             const dy = o.y - player.y;
             const reach = r + o.r;
             if (dx*dx + dy*dy <= reach*reach){
-              damageObstacle(i, s.dmg, false);
+              damageObstacle(idx, s.dmg, false);
             }
           }
         }
@@ -2128,15 +2153,17 @@
 
         // obstacle collision (ignore lakes)
         let blocked = false;
-        for (let j=0;j<obstacles.length;j++){
-          const o = obstacles[j];
+        for (let j=0;j<activeObstacles.length;j++){
+          const idx = activeObstacles[j];
+          const o = obstacles[idx];
+          if (!o) continue;
           if (o.type === OBSTACLE_TYPE.LAKE) continue;
           const dx = o.x - s.x;
           const dy = o.y - s.y;
           const rr = o.r + s.r;
           if (dx*dx + dy*dy <= rr*rr){
             if (o.type === OBSTACLE_TYPE.FOREST){
-              damageObstacle(j, s.dmg, false);
+              damageObstacle(idx, s.dmg, false);
             }
             blocked = true;
             break;
@@ -2448,15 +2475,17 @@
 
         // obstacle collision
         let blocked = false;
-        for (let j=0;j<obstacles.length;j++){
-          const o = obstacles[j];
+        for (let j=0;j<activeObstacles.length;j++){
+          const idx = activeObstacles[j];
+          const o = obstacles[idx];
+          if (!o) continue;
           if (o.type === OBSTACLE_TYPE.LAKE) continue;
           const dx = o.x - b.x;
           const dy = o.y - b.y;
           const rr = o.r + b.r;
           if (dx*dx + dy*dy <= rr*rr){
             if (o.type === OBSTACLE_TYPE.FOREST){
-              damageObstacle(j, b.dmg, false);
+              damageObstacle(idx, b.dmg, false);
             }
             blocked = true;
             break;
@@ -2527,15 +2556,17 @@
         m.y += m.vy * dt;
 
         let hit = false;
-        for (let j=0;j<obstacles.length;j++){
-          const o = obstacles[j];
+        for (let j=0;j<activeObstacles.length;j++){
+          const idx = activeObstacles[j];
+          const o = obstacles[idx];
+          if (!o) continue;
           if (o.type === OBSTACLE_TYPE.LAKE) continue;
           const dx = o.x - m.x;
           const dy = o.y - m.y;
           const rr = o.r + m.r;
           if (dx*dx + dy*dy <= rr*rr){
             if (o.type === OBSTACLE_TYPE.FOREST){
-              damageObstacle(j, m.dmg, false);
+              damageObstacle(idx, m.dmg, false);
             }
             hit = true;
             break;
@@ -2608,15 +2639,17 @@
 
         // obstacles stop rails
         let blocked = false;
-        for (let j=0;j<obstacles.length;j++){
-          const o = obstacles[j];
+        for (let j=0;j<activeObstacles.length;j++){
+          const idx = activeObstacles[j];
+          const o = obstacles[idx];
+          if (!o) continue;
           if (o.type === OBSTACLE_TYPE.LAKE) continue;
           const dx = o.x - r.x;
           const dy = o.y - r.y;
           const rr = o.r + r.r;
           if (dx*dx + dy*dy <= rr*rr){
             if (o.type === OBSTACLE_TYPE.FOREST){
-              damageObstacle(j, r.dmg, false);
+              damageObstacle(idx, r.dmg, false);
             }
             blocked = true;
             break;
@@ -2673,15 +2706,17 @@
 
         // obstacle collision
         let axeBlocked = false;
-        for (let j=0;j<obstacles.length;j++){
-          const o = obstacles[j];
+        for (let j=0;j<activeObstacles.length;j++){
+          const idx = activeObstacles[j];
+          const o = obstacles[idx];
+          if (!o) continue;
           if (o.type === OBSTACLE_TYPE.LAKE) continue;
           const dx = o.x - a.x;
           const dy = o.y - a.y;
           const rr = o.r + a.r;
           if (dx*dx + dy*dy <= rr*rr){
             if (o.type === OBSTACLE_TYPE.FOREST){
-              damageObstacle(j, s.dmg, false);
+              damageObstacle(idx, s.dmg, false);
             }
             axeBlocked = true;
             break;
@@ -2726,8 +2761,9 @@
           o.y += o.vy * dt;
           // collide with rocks/trees (ignore lakes)
           let blocked = false;
-          for (let j=0;j<obstacles.length;j++){
-            const ob = obstacles[j];
+          for (let j=0;j<activeObstacles.length;j++){
+            const ob = obstacles[activeObstacles[j]];
+            if (!ob) continue;
             if (ob.type === OBSTACLE_TYPE.LAKE) continue;
             const dx = o.x - ob.x;
             const dy = o.y - ob.y;
@@ -2823,6 +2859,11 @@
       for (let i=gems.length-1;i>=0;i--){
         const g = gems[i];
         if (!g.alive){ gems[i] = gems[gems.length-1]; gems.pop(); gemPool.put(g); continue; }
+
+        g.life -= dt;
+        if (g.life <= 0){
+          g.alive = false;
+        }
 
         g.vx *= Math.pow(LOOT_CONFIG.frictionBase, dt);
         g.vy *= Math.pow(LOOT_CONFIG.frictionBase, dt);
@@ -3066,6 +3107,7 @@
     function render(){
       const camX = player.x - W*0.5;
       const camY = player.y - H*0.5;
+      updateActiveObstacles(camX, camY);
 
         ctx.fillStyle = COLORS.bg;
       ctx.fillRect(0,0,W,H);
