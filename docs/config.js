@@ -1,49 +1,7 @@
-export const BUILD = "Neon Survivors v0.99";
+import { COLORS } from "./colors.js";
 
-export const COLORS = {
-  bg: "#05060a",
-  grid: "rgba(40, 240, 255, 0.06)",
-  player: "#25f0ff",
-  bullet: "#b160ff",
-  rail: "#9af5ff",
-  aura: "rgba(70, 255, 143, 0.24)",
-  auraStroke: "rgba(70, 255, 143, 0.60)",
-  lake: "#0b1b3d",
-  forest: "#2c7b34",
-  rock: "#8a8d94",
-  gem: "#ffd94a",
-  gold: "#ffd94a",
-  crit: "#ffeb3b",
-  chest: "#46ff8f",
-  enemyA: "#ff3b66",
-  enemyB: "#ff6eff",
-  enemyC: "#7a6bff",
-  enemyBoss: "#ff9df2",
-  bossTelegraph: "#ff3b66",
-  enemyP: "#40a357ff",
-  enemyF: "#ff9347",
-  enemyS: "#3a2acfff",
-  enemyR: "#25f0ff",
-  voidPoison: "rgba(115, 255, 148, 0.49)",
-  voidFire: "rgba(252, 118, 23, 0.53)",
-  warnHit: "rgba(255,59,102,.95)",
-  warnHitDim: "rgba(255,59,102,.75)",
-  warnShield: "rgba(127,231,255,.85)",
-  shieldBlock: "rgba(127,231,255,.85)",
-  voidAura: "rgba(70, 255, 143, 0.24)",
-  voidAuraStroke: "rgba(70, 255, 143, 0.60)",
-  playerGlow: "rgba(255,255,255,.8)",
-  playerCore: "rgba(255,255,255,.16)",
-  auraRingShield: "rgba(127,231,255,.75)",
-  magnetRing: "rgba(255,217,74,.28)",
-  overlayDim: "rgba(0,0,0,.25)",
-  dmg: "rgba(215,246,255,.95)",
-  heal: "#46ff8f",
-  warn: "#ff3b66",
-  missile: "#ff9a3c",
-  missileStroke: "rgba(0,0,0,0.3)",
-  text: "#d7f6ff",
-};
+export const BUILD = "Neon Survivors v0.99";
+export { COLORS };
 
 export const PLAYER_CONFIG = {
   radius: 12,
@@ -78,6 +36,9 @@ export const UPGRADE_CONFIG = {
   hpPerLevelGain: 5,
   hpHealPct: 0.60,
   pickupGain: 30,
+  armorGain: 2,
+  cdReduction: 0.06,
+  xpMultGain: 0.06,
   weightNewWeapon: 2.8,
   weightPickup: 1.35,
   passiveMaxLevel: 5,
@@ -91,14 +52,14 @@ export const CRIT_UPGRADES = {
 
 export const SPAWN_CONFIG = {
   baseRate: 0.55,
-  timeScale: 0.018,
+  timeScale: 0.009,
   maxEnemies: 165,
   squadInterval: 8,
   squadStart: 20,
   squadIntervalDrop: 0.01,
   squadIntervalMin: 6.5,
   squadIntervalMax: 14,
-  scaling: { hp: 0.004, speed: 0.001, dmg: 0.003 },
+  scaling: { hp: 0.000, speed: 0.000, dmg: 0.000 },
   ranged: { capBase: 10, capScaleTime: 140, chance: 0.05 },
   voids: { capBase: 6, capScaleTime: 130, chance: 0.06, fireBias: 0.55 },
   rolls: {
@@ -118,6 +79,24 @@ export const SPAWN_CONFIG = {
   mixedStatMult: { hp: 1.08, speed: 1.02, dmg: 1.06 },
   squadReserve: 4,
 };
+
+export const ENEMY_TIERS = [
+  { time: 0,   label: "Tier 1",  hpMult: 1.0,  dmgMult: 1.0,  speedMult: 1.0,  spawnRateMult: 1.0,  maxEnemies: 140, rangedChanceMult: 1.0,  voidChanceMult: 1.0,  xpMult: 1.0 },
+  { time: 120, label: "Tier 2",  hpMult: 1.1,  dmgMult: 1.06, speedMult: 1.02, spawnRateMult: 1.08, maxEnemies: 150, rangedChanceMult: 1.04, voidChanceMult: 1.04, xpMult: 1.05 },
+  { time: 240, label: "Tier 3",  hpMult: 1.2,  dmgMult: 1.12, speedMult: 1.04, spawnRateMult: 1.16, maxEnemies: 160, rangedChanceMult: 1.08, voidChanceMult: 1.08, xpMult: 1.1 },
+  { time: 360, label: "Tier 4",  hpMult: 1.32, dmgMult: 1.2,  speedMult: 1.06, spawnRateMult: 1.25, maxEnemies: 170, rangedChanceMult: 1.12, voidChanceMult: 1.12, xpMult: 1.15 },
+  { time: 480, label: "Tier 5",  hpMult: 1.45, dmgMult: 1.28, speedMult: 1.08, spawnRateMult: 1.34, maxEnemies: 180, rangedChanceMult: 1.16, voidChanceMult: 1.16, xpMult: 1.2 },
+  { time: 600, label: "Tier 6",  hpMult: 1.6,  dmgMult: 1.36, speedMult: 1.1,  spawnRateMult: 1.44, maxEnemies: 190, rangedChanceMult: 1.2,  voidChanceMult: 1.2,  xpMult: 1.25 },
+  { time: 720, label: "Tier 7",  hpMult: 1.76, dmgMult: 1.45, speedMult: 1.12, spawnRateMult: 1.55, maxEnemies: 200, rangedChanceMult: 1.24, voidChanceMult: 1.24, xpMult: 1.3 },
+  { time: 840, label: "Tier 8",  hpMult: 1.94, dmgMult: 1.55, speedMult: 1.14, spawnRateMult: 1.66, maxEnemies: 210, rangedChanceMult: 1.28, voidChanceMult: 1.28, xpMult: 1.35 },
+  { time: 960, label: "Tier 9",  hpMult: 2.14, dmgMult: 1.66, speedMult: 1.16, spawnRateMult: 1.78, maxEnemies: 220, rangedChanceMult: 1.32, voidChanceMult: 1.32, xpMult: 1.4 },
+  { time: 1080, label: "Tier 10", hpMult: 2.36, dmgMult: 1.78, speedMult: 1.18, spawnRateMult: 1.9,  maxEnemies: 230, rangedChanceMult: 1.36, voidChanceMult: 1.36, xpMult: 1.45 },
+  { time: 1200, label: "Tier 11", hpMult: 2.6,  dmgMult: 1.9,  speedMult: 1.2,  spawnRateMult: 2.02, maxEnemies: 240, rangedChanceMult: 1.4,  voidChanceMult: 1.4,  xpMult: 1.5 },
+  { time: 1320, label: "Tier 12", hpMult: 2.86, dmgMult: 2.03, speedMult: 1.22, spawnRateMult: 2.15, maxEnemies: 250, rangedChanceMult: 1.44, voidChanceMult: 1.44, xpMult: 1.56 },
+  { time: 1440, label: "Tier 13", hpMult: 3.14, dmgMult: 2.16, speedMult: 1.24, spawnRateMult: 2.28, maxEnemies: 260, rangedChanceMult: 1.48, voidChanceMult: 1.48, xpMult: 1.62 },
+  { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.26, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.68 },
+  { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.28, spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.75 },
+];
 
 export const TELEGRAPH_CONFIG = {
   radius: 40,
@@ -140,8 +119,8 @@ export const CHEST_CONFIG = {
   pulseSpeed: 2.8,
   healBias: { hpPct: 0.35, chance: 0.55 },
   openParticles: { count: 22, spread: 420 },
-  bomb: { radius: 340, dmgBase: 35, dmgPerLevel: 3, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
-  shockwave: { baseKnock: 820, dmgBase: 15, dmgPerLevel: 2, damageRadius: 240, knockPush: 260 },
+  bomb: { radius: 340, dmgBase: 45, dmgPerLevel: 3, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
+  shockwave: { baseKnock: 920, dmgBase: 15, dmgPerLevel: 2, damageRadius: 240, knockPush: 360 },
   bonuses: { healPct: 0.45, magnet: 15, shield: 10, freeze: 10, xp: 12, power: 8, haste: 10 },
 };
 
@@ -317,6 +296,9 @@ export const OBSTACLE_CONFIG = {
   lakes: { count: 540, sizeMin: 60, sizeMax: 140, blobs: 4 },
   forests: { count: 2420, sizeMin: 20, sizeMax: 34, hp: 50 },
   rocks: { count: 1560, sizeMin: 34, sizeMax: 62, hp: 420 },
+  //lakes: { count: 0, sizeMin: 60, sizeMax: 140, blobs: 4 },
+  //forests: { count: 0, sizeMin: 20, sizeMax: 34, hp: 50 },
+  //rocks: { count: 0, sizeMin: 34, sizeMax: 62, hp: 420 },
   spawnRadius: 26000,
 };
 
@@ -361,6 +343,22 @@ export const BOSS2_CONFIG = {
   lootGems: 18,
 };
 
+export const BOSS3_CONFIG = {
+  spawnTime: 660,
+  telegraph: { radius: 150, time: 1.5, color: "#ff7b3b" },
+  slam: { cd: 4.5, radius: 150, dmg: 20, telegraph: 0.9, color: "#ff9a3c" },
+  rockfall: { cd: 6, count: 4, radius: 90, dmg: 15, telegraph: 0.9, offsetMin: 60, offsetMax: 200, color: "#ffb46b" },
+  lootGems: 20,
+};
+
+export const BOSS4_CONFIG = {
+  spawnTime: 900,
+  telegraph: { radius: 170, time: 1.6, color: "#7cf6ff" },
+  prismBurst: { cd: 5.5, rays: 7, speed: 640, dmg: 13, telegraph: 0.8 },
+  minefield: { cd: 7, count: 5, radius: 85, dmg: 22, telegraph: 1.0, offsetMin: 80, offsetMax: 220, color: "#7cf6ff" },
+  lootGems: 24,
+};
+
 // Base stats (HP scaling is handled in spawnController)
 export const ENEMY_TYPES = {
   A: { name:"Basic",  r:10, hp:22, speed:70,  dmg:6.0,  color:COLORS.enemyA, xp:1, gem:1 },
@@ -377,20 +375,38 @@ export const ENEMY_TYPES = {
     spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
   },
   X: { // mini-boss
-    name:"Overseer", r:20, hp:1500, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
+    name:"Overseer", r:20, hp:2500, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
     boss:true, knockResist:0.55,
     ranged:true, shotCd:1.6, shotDmg:9, shotSpeed:420, shotRange:720,
     nova: BOSS_CONFIG.nova,
     lootGems: BOSS_CONFIG.lootGems,
   },
   Y: { // late void boss
-    name:"Eclipse", r:22, hp:3800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
-    boss:true, knockResist:0.65,
+    name:"Eclipse", r:22, hp:4800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
+    boss:true, knockResist:0.85,
     ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:780,
     telegraph: BOSS2_CONFIG.telegraph,
     voidAttack: BOSS2_CONFIG.voidAttack,
     barrage: BOSS2_CONFIG.barrage,
     lootGems: BOSS2_CONFIG.lootGems,
+  },
+  Z: { // melee juggernaut
+    name:"Titan", r:24, hp:5200, speed:62, dmg:18, color:"#ff7b3b", xp:12, gem:16,
+    boss:true, knockResist:0.7,
+    ranged:false, shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0,
+    slam: BOSS3_CONFIG.slam,
+    rockfall: BOSS3_CONFIG.rockfall,
+    telegraph: BOSS3_CONFIG.telegraph,
+    lootGems: BOSS3_CONFIG.lootGems,
+  },
+  W: { // ranged sentinel
+    name:"Archon", r:22, hp:6200, speed:60, dmg:16, color:"#7cf6ff", xp:14, gem:18,
+    boss:true, knockResist:0.75,
+    ranged:true, shotCd:1.45, shotDmg:11, shotSpeed:520, shotRange:820,
+    telegraph: BOSS4_CONFIG.telegraph,
+    prismBurst: BOSS4_CONFIG.prismBurst,
+    minefield: BOSS4_CONFIG.minefield,
+    lootGems: BOSS4_CONFIG.lootGems,
   },
   S: { name:"Bulwark", r:14, hp:96, speed:58, dmg:9.5, color:COLORS.enemyS, xp:3, gem:2, knockResist:0.35 },
   R: { // ranged kiter (tries to keep distance and shoot)
