@@ -348,6 +348,8 @@
     const STATE = { PLAYING:"playing", LEVELUP:"levelup", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
     let fpsAccum = 0, fpsCount = 0;
+    const START_NOTICE_TIME = 8.0;
+    let startNoticeT = 0;
     function updateFps(dt){
       if (!ui.fps) return;
       fpsAccum += (dt > 0 ? (1/dt) : 0);
@@ -2018,6 +2020,7 @@
       resetWeapons();
       resetUpgradeState();
       resetDps();
+      startNoticeT = START_NOTICE_TIME;
 
       ui.gameover.classList.remove("on");
       ui.gameover.style.pointerEvents = "none";
@@ -2122,6 +2125,24 @@
         s.life -= dt;
         s.x += s.vx * dt;
         s.y += s.vy * dt;
+
+        // obstacle collision (ignore lakes)
+        let blocked = false;
+        for (let j=0;j<obstacles.length;j++){
+          const o = obstacles[j];
+          if (o.type === OBSTACLE_TYPE.LAKE) continue;
+          const dx = o.x - s.x;
+          const dy = o.y - s.y;
+          const rr = o.r + s.r;
+          if (dx*dx + dy*dy <= rr*rr){
+            if (o.type === OBSTACLE_TYPE.FOREST){
+              damageObstacle(j, s.dmg, false);
+            }
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) s.alive = false;
 
         const dx = player.x - s.x;
         const dy = player.y - s.y;
@@ -3418,6 +3439,20 @@
 
       ctx.restore();
 
+      if (startNoticeT > 0){
+        const a = clamp(startNoticeT / START_NOTICE_TIME, 0, 1);
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.font = `700 ${isMobile ? 16 : 20}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = COLORS.text;
+        ctx.shadowColor = COLORS.player;
+        ctx.shadowBlur = 16 * a;
+        ctx.fillText(`Remember you are limited to ${MAX_WEAPONS} weapons`, W * 0.5, H * 0.4);
+        ctx.restore();
+      }
+
       drawChestIndicators(camX, camY);
 
       if (state === STATE.LEVELUP){
@@ -3531,6 +3566,7 @@
 
     function update(dt){
       player.time += dt;
+      if (startNoticeT > 0) startNoticeT = Math.max(0, startNoticeT - dt);
 
       updateBuffs(dt);
       updatePlayer(dt);
