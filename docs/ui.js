@@ -3,7 +3,8 @@ import { fmtFloat } from "./math.js";
 import { sound } from "./audio.js";
 import { DPS_TRACKER, upgradeState, listUpgradeSummary, formatDpsSummary } from "./upgrade.js";
 import { weapons, magicStats, auraStats, railStats, axeStats, orbStats, missileStats } from "./weapons.js";
-import { player, BASE_STATS } from "./state.js";
+import { player, BASE_STATS, dmgTexts, floatTexts } from "./state.js";
+import { dmgPool, textPool } from "./pools.js";
 
 export const ui = {
   time: document.getElementById("uiTime"),
@@ -22,7 +23,10 @@ export const ui = {
   bossHpPct: document.getElementById("bossHpPct"),
   bossHpFill: document.getElementById("bossHpFill"),
   buffs: document.getElementById("uiBuffs"),
+  quest: document.getElementById("uiQuest"),
   levelup: document.getElementById("levelup"),
+  levelupTitle: document.getElementById("levelupTitle"),
+  levelupSub: document.getElementById("levelupSub"),
   upgradeCards: document.getElementById("upgradeCards"),
   uiBuild: document.getElementById("uiBuild"),
   gameover: document.getElementById("gameover"),
@@ -44,6 +48,7 @@ export const ui = {
   btnMobileMenu: document.getElementById("btnMobileMenu"),
   hint: document.getElementById("hint"),
   loadout: document.getElementById("uiLoadout"),
+  trinkets: document.getElementById("uiTrinkets"),
   bonuses: document.getElementById("uiBonuses"),
   mTime: document.getElementById("mUiTime"),
   mLevel: document.getElementById("mUiLevel"),
@@ -127,6 +132,40 @@ export function updateMenuStats() {
   ui.menuWeaponStats.innerHTML = rows.length ? rows.join("") : `<div class="kv"><span>Weapons</span><span>None unlocked</span></div>`;
 }
 
+export function updateTexts(dt) {
+  for (let i = dmgTexts.length - 1; i >= 0; i--) {
+    const d = dmgTexts[i];
+    if (!d.alive) { dmgTexts[i] = dmgTexts[dmgTexts.length - 1]; dmgTexts.pop(); dmgPool.put(d); continue; }
+    d.life -= dt;
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.vx *= Math.pow(0.12, dt);
+    d.vy *= Math.pow(0.10, dt);
+    if (d.life <= 0) d.alive = false;
+    if (!d.alive) {
+      dmgTexts[i] = dmgTexts[dmgTexts.length - 1];
+      dmgTexts.pop();
+      dmgPool.put(d);
+    }
+  }
+
+  for (let i = floatTexts.length - 1; i >= 0; i--) {
+    const t = floatTexts[i];
+    if (!t.alive) { floatTexts[i] = floatTexts[floatTexts.length - 1]; floatTexts.pop(); textPool.put(t); continue; }
+    t.life -= dt;
+    t.x += t.vx * dt;
+    t.y += t.vy * dt;
+    t.vx *= Math.pow(0.12, dt);
+    t.vy *= Math.pow(0.10, dt);
+    if (t.life <= 0) t.alive = false;
+    if (!t.alive) {
+      floatTexts[i] = floatTexts[floatTexts.length - 1];
+      floatTexts.pop();
+      textPool.put(t);
+    }
+  }
+}
+
 export function renderUpgradeCards(cards, onPick) {
   ui.upgradeCards.innerHTML = "";
   for (const u of cards) {
@@ -142,6 +181,11 @@ export function renderUpgradeCards(cards, onPick) {
     }, { passive: true });
     ui.upgradeCards.appendChild(el);
   }
+}
+
+export function setLevelUpHeader(title, subtitle) {
+  if (ui.levelupTitle) ui.levelupTitle.textContent = title;
+  if (ui.levelupSub) ui.levelupSub.textContent = subtitle;
 }
 
 export function openMenuUI() {

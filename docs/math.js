@@ -6,7 +6,7 @@ export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 export const hypot = Math.hypot;
 
 export const fmtFloat = (n, digits = 2) => {
-  if (Math.abs(n - Math.round(n)) < 1e-6) return String(Math.round(n));
   const s = n.toFixed(digits);
-  return s === "-0" ? "0" : s;
+  if (Number(s) === 0) return (0).toFixed(digits);
+  return s;
 };

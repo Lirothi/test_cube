@@ -1,4 +1,4 @@
-import { player, buffs, BASE_STATS, obstacles, input, clampEntityToWorld } from "./state.js";
+import { player, buffs, BASE_STATS, obstacles, input, clampEntityToWorld, trinketBonuses } from "./state.js";
 import { XP_CONFIG, UPGRADE_CONFIG, BUFF_EFFECTS } from "./config.js";
 import { hypot } from "./math.js";
 import { resolveObstacles } from "./obstacles.js";
@@ -85,7 +85,8 @@ export function addXP(amount) {
   const { openLevelUp } = requireRuntime();
   const buffMul = buffs.xp > 0 ? XP_CONFIG.buffMultiplier : 1.0;
   const upgradeMul = 1 + upgradeState.xpLv * UPGRADE_CONFIG.xpMultGain;
-  player.xp += amount * buffMul * upgradeMul;
+  const trinketMul = trinketBonuses.xpMult || 1;
+  player.xp += amount * buffMul * upgradeMul * trinketMul;
   while (player.xp >= player.xpNeed){
     player.xp -= player.xpNeed;
     player.level++;

@@ -119,9 +119,45 @@ export const CHEST_CONFIG = {
   pulseSpeed: 2.8,
   healBias: { hpPct: 0.35, chance: 0.55 },
   openParticles: { count: 22, spread: 420 },
-  bomb: { radius: 340, dmgBase: 45, dmgPerLevel: 3, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
+  bomb: { radius: 340, dmgBase: 45, dmgPerLevel: 4, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
   shockwave: { baseKnock: 920, dmgBase: 15, dmgPerLevel: 2, damageRadius: 240, knockPush: 360 },
   bonuses: { healPct: 0.45, magnet: 15, shield: 10, freeze: 10, xp: 12, power: 8, haste: 10 },
+};
+
+export const TRINKET_CONFIG = {
+  slots: 4,
+  choices: 2,
+  chest: { timerStart: 80, timerMin: 130, timerMax: 200, activeMax: 1 },
+};
+
+export const AUGMENT_CONFIG = {
+  choices: 2,
+  chest: { timerStart: 60, timerMin: 105, timerMax: 145, activeMax: 1 },
+  elitePack: { countMin: 5, countMax: 7, radiusMin: 80, radiusMax: 180 },
+  magic: {
+    slow: { mult: 0.65, duration: 1.3 },
+    prism: { every: 4, dmgMult: 0.6, angle: 0.32 },
+  },
+  rail: {
+    burn: { dpsPct: 0.50, duration: 2.2 },
+    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 1.1 },
+  },
+  axe: {
+    bleed: { dpsPct: 0.35, duration: 3.0 },
+    boomerang: { dmgMult: 0.6, returnLifeMult: 0.7 },
+  },
+  aura: {
+    pulse: { cd: 2.5, dmgMult: 1.8, knockMult: 2.2 },
+    leechPct: 0.005,
+  },
+  orb: {
+    eventHorizon: { park: 0.7, pullMult: 1.3 },
+    darkBurst: { dmgMult: 1.2, radiusMult: 1.3, park: -0.4, pullMult: 0.6 },
+  },
+  missile: {
+    swarm: { extra: 1, dmgMult: 0.8 },
+    concussive: { slowMult: 0.55, slowDuration: 0.7, knock: 260 },
+  },
 };
 
 export const WEAPON_CONFIG = {
@@ -262,11 +298,7 @@ export const MAX_WEAPONS = 4;
 
 export const DPS_LABELS = { magic:"Magic", aura:"Aura", rail:"Railgun", axe:"Axe", orb:"Orb", missile:"Missile" };
 
-export const WEAPON_RIDERS = {
-  magic: { slow: { mult: 0.65, duration: 1.3 } },             // slows enemies on hit
-  rail:  { burn: { dpsPct: 0.50, duration: 2.2 } },            // burns enemies for % of hit dmg per second
-  axe:   { bleed:{ dpsPct: 0.35, duration: 3.0 } },            // bleeds enemies for % of hit dmg per second
-};
+export const WEAPON_RIDERS = {};
 
 export const ENEMY_BEHAVIOR = {
   knockbackDecayBase: 0.02,
@@ -319,11 +351,12 @@ export const LOOP_CONFIG = {
 export const ELITE_CONFIG = {
   interval: 15,
   hpMult: 10,
+  speedMult: 1.15,
   dmgMult: 2,
   knockResist: 0.45,
   extraGems: 4,
   telegraphColor: "#ffd94a",
-  telegraphRadius: 38,
+  telegraphRadius: 45,
   telegraphTime: 0.7,
   markerColor: "#ffd94a",
 };
@@ -336,26 +369,28 @@ export const BOSS_CONFIG = {
 };
 
 export const BOSS2_CONFIG = {
-  spawnTime: 480,
+  spawnTime: 360,
+  //spawnTime: 2,
   telegraph: { radius: 140, time: 1.5, color: "#63c7ff" },
-  voidAttack: { cd: 5, count: 3, radius: 120, duration: 6, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 0.85 },
+  voidAttack: { cd: 5, count: 3, radius: 120, duration: 3, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 0.85 },
   barrage: { cd: 3.8, shots: 12, waves: 2, waveDelay: 0.18, speed: 540, dmg: 12 },
   lootGems: 18,
 };
 
 export const BOSS3_CONFIG = {
-  spawnTime: 660,
+  spawnTime: 540,
+  //spawnTime: 5,
   telegraph: { radius: 150, time: 1.5, color: "#ff7b3b" },
-  slam: { cd: 4.5, radius: 150, dmg: 20, telegraph: 0.9, color: "#ff9a3c" },
-  rockfall: { cd: 6, count: 4, radius: 90, dmg: 15, telegraph: 0.9, offsetMin: 60, offsetMax: 200, color: "#ffb46b" },
+  slam: { cd: 4.5, radius: 150, dmg: 20, telegraph: 1.2, color: "#ff9a3c" },
+  rockfall: { cd: 6, count: 4, radius: 90, dmg: 15, telegraph: 1.2, offsetMin: 60, offsetMax: 200, color: "#ffb46b" },
   lootGems: 20,
 };
 
 export const BOSS4_CONFIG = {
-  spawnTime: 900,
+  spawnTime: 720,
   telegraph: { radius: 170, time: 1.6, color: "#7cf6ff" },
-  prismBurst: { cd: 5.5, rays: 7, speed: 640, dmg: 13, telegraph: 0.8 },
-  minefield: { cd: 7, count: 5, radius: 85, dmg: 22, telegraph: 1.0, offsetMin: 80, offsetMax: 220, color: "#7cf6ff" },
+  homingMissiles: { cd: 4.5, count: 4, speed: 320, dmg: 21, life: 3.2, turnRateDeg: 100, telegraphRadius: 80, telegraphTime: 0.8 },
+  minefield: { cd: 4, count: 5, radius: 85, dmg: 22, telegraph: 1.0, offsetMin: 80, offsetMax: 220, color: "#7cf6ff" },
   lootGems: 24,
 };
 
@@ -375,16 +410,16 @@ export const ENEMY_TYPES = {
     spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
   },
   X: { // mini-boss
-    name:"Overseer", r:20, hp:2500, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
+    name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
     boss:true, knockResist:0.55,
     ranged:true, shotCd:1.6, shotDmg:9, shotSpeed:420, shotRange:720,
     nova: BOSS_CONFIG.nova,
     lootGems: BOSS_CONFIG.lootGems,
   },
   Y: { // late void boss
-    name:"Eclipse", r:22, hp:4800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
+    name:"Eclipse", r:22, hp:3800, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
     boss:true, knockResist:0.85,
-    ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:780,
+    ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:720,
     telegraph: BOSS2_CONFIG.telegraph,
     voidAttack: BOSS2_CONFIG.voidAttack,
     barrage: BOSS2_CONFIG.barrage,
@@ -400,11 +435,11 @@ export const ENEMY_TYPES = {
     lootGems: BOSS3_CONFIG.lootGems,
   },
   W: { // ranged sentinel
-    name:"Archon", r:22, hp:6200, speed:60, dmg:16, color:"#7cf6ff", xp:14, gem:18,
-    boss:true, knockResist:0.75,
-    ranged:true, shotCd:1.45, shotDmg:11, shotSpeed:520, shotRange:820,
+    name:"Archon", r:22, hp:7200, speed:75, dmg:16, color:"#7cf6ff", xp:14, gem:18,
+    boss:true, knockResist:0.85,
+    ranged:true, shotCd:1.25, shotDmg:24, shotSpeed:520, shotRange:720,
     telegraph: BOSS4_CONFIG.telegraph,
-    prismBurst: BOSS4_CONFIG.prismBurst,
+    homingMissiles: BOSS4_CONFIG.homingMissiles,
     minefield: BOSS4_CONFIG.minefield,
     lootGems: BOSS4_CONFIG.lootGems,
   },

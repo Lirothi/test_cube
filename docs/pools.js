@@ -108,8 +108,10 @@ export const enemyPool = makePool(
     slowMul: 1,
     burnT: 0,
     burnDps: 0,
+    burnSource: null,
     bleedT: 0,
     bleedDps: 0,
+    bleedSource: null,
     elite: false,
     knockResist: 0,
     gemBonus: 0,
@@ -186,6 +188,7 @@ export const axePool = makePool(
     spin: 0,
     critChance: 0,
     critMult: 1,
+    returning: false,
   }),
   120
 );
@@ -196,6 +199,9 @@ export const shotPool = makePool(
     y: 0,
     vx: 0,
     vy: 0,
+    speed: 0,
+    turnRate: 0,
+    homing: false,
     r: 3.6,
     dmg: 8,
     life: 0,
@@ -237,6 +243,7 @@ export const orbPool = makePool(
     pull: 0,
     radius: 0,
     explosion: 0,
+    explosionRadius: 0,
   }),
   80
 );
@@ -276,6 +283,7 @@ export const chestPool = makePool(
     y: 0,
     r: 12,
     pulse: 0,
+    kind: "bonus",
   }),
   24
 );

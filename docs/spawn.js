@@ -37,8 +37,8 @@ export function getEnemyTier(t) {
 
 export function isBlockedByObstacle(x, y, r = 0, pad = 0) {
   const rad = r + pad;
-  for (let i = 0; i < activeObstacles.length; i++) {
-    const o = obstacles[activeObstacles[i]];
+  for (let i = 0; i < obstacles.length; i++) {
+    const o = obstacles[i];
     if (!o) continue;
     const reach = o.r + rad;
     const dx = o.x - x, dy = o.y - y;
@@ -110,6 +110,40 @@ function spawnMixedSquad(t, camX, camY, W, H, hpMult, spdMult, dmgMult){
       spdMult * SPAWN_CONFIG.mixedStatMult.speed,
       dmgMult * SPAWN_CONFIG.mixedStatMult.dmg
     );
+  }
+}
+
+function pickEliteType(t) {
+  const pool = ["A", "B"];
+  if (t > SPAWN_CONFIG.thresholds.ranged) pool.push("R");
+  if (t > SPAWN_CONFIG.thresholds.tank) pool.push("C");
+  if (t > SPAWN_CONFIG.thresholds.brute) pool.push("S");
+  if (t > SPAWN_CONFIG.thresholds.void) { pool.push("P"); pool.push("F"); }
+  return pool[randi(pool.length)];
+}
+
+export function spawnElitePackAt(x, y, count, radiusMin = 80, radiusMax = 180) {
+  const t = player.time;
+  const tier = getEnemyTier(t);
+  const hpMult = (1 + t * SPAWN_CONFIG.scaling.hp) * tier.hpMult;
+  const spdMult = (1 + t * SPAWN_CONFIG.scaling.speed) * tier.speedMult;
+  const dmgMult = (1 + t * SPAWN_CONFIG.scaling.dmg) * tier.dmgMult;
+
+  for (let i = 0; i < count; i++) {
+    const typeKey = pickEliteType(t);
+    let pos = clampPointToWorld(x, y, ENEMY_TYPES[typeKey].r);
+    for (let tries = 0; tries < 8; tries++) {
+      const ang = rand(Math.PI * 2, 0);
+      const dist = rand(radiusMax, radiusMin);
+      const px = x + Math.cos(ang) * dist;
+      const py = y + Math.sin(ang) * dist;
+      const candidate = clampPointToWorld(px, py, ENEMY_TYPES[typeKey].r);
+      if (!isBlockedByObstacle(candidate.x, candidate.y, ENEMY_TYPES[typeKey].r, 6)) {
+        pos = candidate;
+        break;
+      }
+    }
+    spawnEnemy(typeKey, 0, 0, 0, 0, hpMult, spdMult, dmgMult, true, pos);
   }
 }
 
@@ -211,7 +245,7 @@ export function spawnController(dt, camX, camY, W, H){
       color: ELITE_CONFIG.telegraphColor,
       time: ELITE_CONFIG.telegraphTime,
       fire: () => {
-        const eliteType = (t > SPAWN_CONFIG.thresholds.tank && Math.random() > 0.5) ? "C" : "B";
+        const eliteType = pickEliteType(t);
         spawnEnemy(eliteType, camX, camY, W, H, hpMult, spdMult, dmgMult, true, pos);
       }
     });
@@ -285,7 +319,7 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.maxHp = info.hp * hpMult * (elite ? ELITE_CONFIG.hpMult : 1);
   e.hp = e.maxHp;
 
-  e.speed = info.speed * spdMult;
+  e.speed = info.speed * spdMult * (elite ? ELITE_CONFIG.speedMult : 1);
 
   // contact dmg scales with time
   e.dmg = info.dmg * dmgMult * (elite ? ELITE_CONFIG.dmgMult : 1);
@@ -304,7 +338,7 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.voidSeq = 0;
   e.novaSeq = 0;
   e.rockSeq = 0;
-  e.raySeq = 0;
+  e.homingSeq = 0;
   e.mineSeq = 0;
   e.spitter = !!info.spit;
   e.spitCd = info.spit ? info.spit.cd : 0;
@@ -357,12 +391,15 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.rockOffsetMin = info.rockfall ? info.rockfall.offsetMin : 0;
   e.rockOffsetMax = info.rockfall ? info.rockfall.offsetMax : 0;
   e.rockColor = info.rockfall ? (info.rockfall.color || COLORS.rock) : COLORS.rock;
-  e.rayCd = info.prismBurst ? info.prismBurst.cd : 0;
-  e.rayT = info.prismBurst ? rand(info.prismBurst.cd * RANGED_SHOT_CONFIG.startDelayMax, info.prismBurst.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
-  e.rayCount = info.prismBurst ? info.prismBurst.rays : 0;
-  e.raySpeed = info.prismBurst ? info.prismBurst.speed : 0;
-  e.rayDmg = info.prismBurst ? info.prismBurst.dmg * dmgMult : 0;
-  e.rayTelegraph = info.prismBurst ? (info.prismBurst.telegraph || 0.7) : 0.7;
+  e.homingCd = info.homingMissiles ? info.homingMissiles.cd : 0;
+  e.homingT = info.homingMissiles ? rand(info.homingMissiles.cd * RANGED_SHOT_CONFIG.startDelayMax, info.homingMissiles.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+  e.homingCount = info.homingMissiles ? info.homingMissiles.count : 0;
+  e.homingSpeed = info.homingMissiles ? info.homingMissiles.speed : 0;
+  e.homingDmg = info.homingMissiles ? info.homingMissiles.dmg * dmgMult : 0;
+  e.homingLife = info.homingMissiles ? info.homingMissiles.life : 0;
+  e.homingTurnRate = info.homingMissiles ? (info.homingMissiles.turnRateDeg || 0) * Math.PI / 180 : 0;
+  e.homingTelegraphRadius = info.homingMissiles ? info.homingMissiles.telegraphRadius : 0;
+  e.homingTelegraphTime = info.homingMissiles ? info.homingMissiles.telegraphTime : 0;
   e.mineCd = info.minefield ? info.minefield.cd : 0;
   e.mineT = info.minefield ? rand(info.minefield.cd * RANGED_SHOT_CONFIG.startDelayMax, info.minefield.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
   e.mineCount = info.minefield ? info.minefield.count : 0;
@@ -373,8 +410,9 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.mineOffsetMax = info.minefield ? info.minefield.offsetMax : 0;
   e.mineColor = info.minefield ? (info.minefield.color || COLORS.voidFire) : COLORS.voidFire;
   e.slowT = 0; e.slowMul = 1;
-  e.burnT = 0; e.burnDps = 0;
-  e.bleedT = 0; e.bleedDps = 0;
+  e.burnT = 0; e.burnDps = 0; e.burnSource = null;
+  e.bleedT = 0; e.bleedDps = 0; e.bleedSource = null;
+  e.stuckT = 0;
   e.elite = elite;
   e.knockResist = (info.knockResist || 0) + (elite ? ELITE_CONFIG.knockResist : 0);
   const bossLoot = info.lootGems != null ? info.lootGems : (e.boss ? BOSS_CONFIG.lootGems : 0);

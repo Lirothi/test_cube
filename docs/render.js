@@ -1,6 +1,7 @@
 import { COLORS, CHEST_CONFIG, WEAPON_CONFIG, ELITE_CONFIG, MAX_WEAPONS, ENEMY_TYPES } from "./config.js";
 import { clamp, TAU, fmtFloat } from "./math.js";
 import { weapons, auraStats } from "./weapons.js";
+import { getQuestHudText } from "./quests.js";
 import {
   WORLD,
   player,
@@ -21,12 +22,17 @@ import {
   dmgTexts,
   floatTexts,
   buffs,
+  quest,
+  questItems,
 } from "./state.js";
 
 const UI_COLORS = {
   strokeDim: "rgba(255,255,255,.10)",
   textStroke: "rgba(0,0,0,.35)",
   chestFill: "rgba(70,255,143,0.18)",
+  trinketFill: "rgba(124,255,217,0.18)",
+  augFill: "rgba(141,123,255,0.18)",
+  questFill: "rgba(255,184,74,0.18)",
   auraFill: COLORS.voidAura,
   auraStroke: COLORS.voidAuraStroke,
   playerGlow: COLORS.playerGlow,
@@ -80,12 +86,12 @@ const getGemSprite = (r) => {
   const key = `${r}`;
   let sprite = gemSpriteCache.get(key);
   if (sprite) return sprite;
-  const pad = 10;
+  const pad = 12;
   const size = Math.ceil(r * 2);
   const c = makeOffscreenCanvas(size + pad * 2, size + pad * 2);
   const g = c.getContext("2d");
   g.shadowColor = COLORS.gem;
-  g.shadowBlur = 14;
+  g.shadowBlur = 10;
   g.fillStyle = COLORS.gem;
   g.beginPath();
   g.arc(pad + r, pad + r, r, 0, TAU);
@@ -117,8 +123,9 @@ function drawGrid(ctx, W, H, camX, camY) {
   ctx.restore();
 }
 
-function neonCircle(ctx, x,y,r,fill,glow=16){
+function neonCircle(ctx, x,y,r,fill,glow=16,alpha=1){
   ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.shadowColor = fill;
   ctx.shadowBlur = glow;
   ctx.fillStyle = fill;
@@ -158,6 +165,28 @@ function neonRect(ctx, x,y,w,h,fill,glow=16){
   ctx.restore();
 }
 
+function drawEnemyShot(ctx, s) {
+  if (s.homing) {
+    const ang = Math.atan2(s.vy, s.vx);
+    const w = s.r * 3.2;
+    const h = s.r * 1.2;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(ang);
+    ctx.shadowColor = s.color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = s.color;
+    ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = UI_COLORS.strokeDim;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-w * 0.5, -h * 0.5, w, h);
+    ctx.restore();
+    return;
+  }
+  neonCircle(ctx, s.x, s.y, s.r, s.color, 18);
+}
+
 function drawTextWorld(ctx, x,y,text,color,size,alpha){
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -185,14 +214,15 @@ function drawChestIndicators(ctx, W, H, camX, camY){
 
   ctx.save();
   ctx.lineWidth = 2;
-  ctx.shadowColor = COLORS.chest;
-  ctx.strokeStyle = COLORS.chest;
-  ctx.fillStyle = UI_COLORS.chestFill;
   ctx.shadowBlur = 14;
 
   for (let i=0;i<chests.length;i++){
     const c = chests[i];
     if (!c.alive) continue;
+    const chestColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.chest);
+    ctx.shadowColor = chestColor;
+    ctx.strokeStyle = chestColor;
+    ctx.fillStyle = c.kind === "trinket" ? UI_COLORS.trinketFill : (c.kind === "aug" ? UI_COLORS.augFill : UI_COLORS.chestFill);
     const sx = c.x - camX, sy = c.y - camY;
     if (sx >= -c.r && sx <= W + c.r && sy >= -c.r && sy <= H + c.r) continue;
 
@@ -224,6 +254,62 @@ function drawChestIndicators(ctx, W, H, camX, camY){
   }
 
   ctx.restore();
+}
+
+function drawOffscreenIndicator(ctx, W, H, camX, camY, x, y, color, fill, sizeScale = 1) {
+  const cx = W * 0.5, cy = H * 0.5;
+  const margin = CHEST_CONFIG.indicatorMargin;
+  const minX = margin, maxX = W - margin;
+  const minY = margin, maxY = H - margin;
+  const size = CHEST_CONFIG.indicatorSize * sizeScale;
+  const sx = x - camX, sy = y - camY;
+  if (sx >= -size && sx <= W + size && sy >= -size && sy <= H + size) return;
+
+  const dx = sx - cx, dy = sy - cy;
+  if (dx === 0 && dy === 0) return;
+
+  let tx = Infinity, ty = Infinity;
+  if (dx > 0) tx = (maxX - cx) / dx; else if (dx < 0) tx = (minX - cx) / dx;
+  if (dy > 0) ty = (maxY - cy) / dy; else if (dy < 0) ty = (minY - cy) / dy;
+  let t = Math.min(tx, ty);
+  if (!isFinite(t) || t <= 0) t = 1;
+
+  const px = cx + dx * t;
+  const py = cy + dy * t;
+  const ang = Math.atan2(dy, dx);
+
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(ang);
+  ctx.lineWidth = 2;
+  ctx.shadowBlur = 14;
+  ctx.shadowColor = color;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = fill || color;
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size * 0.9, size * 0.7);
+  ctx.lineTo(-size * 0.9, -size * 0.7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawQuestIndicators(ctx, W, H, camX, camY) {
+  const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.008);
+  if (quest.giverActive && (!quest.active || quest.completed)) {
+    const qColor = quest.completed ? COLORS.gold : COLORS.quest;
+    drawOffscreenIndicator(ctx, W, H, camX, camY, quest.giverX, quest.giverY, qColor, UI_COLORS.questFill, 1.2 * pulse);
+  }
+  if (!quest.active || quest.completed) return;
+  if (quest.type !== "scavenge" && quest.type !== "drop") return;
+  for (let i = 0; i < questItems.length; i++) {
+    const it = questItems[i];
+    if (!it.alive) continue;
+    const color = it.type === "drop" ? COLORS.gold : COLORS.quest;
+    drawOffscreenIndicator(ctx, W, H, camX, camY, it.x, it.y, color, UI_COLORS.questFill, 0.9 * pulse);
+  }
 }
 
 export function renderFrame({
@@ -332,10 +418,75 @@ export function renderFrame({
   for (let i=0;i<chests.length;i++){
     const c = chests[i];
     if (c.x < camX - WORLD.spawnPad || c.x > camX + W + WORLD.spawnPad || c.y < camY - WORLD.spawnPad || c.y > camY + H + WORLD.spawnPad) continue;
+    const chestColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.chest);
+    const ringColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.gold);
     const pulse = (Math.sin(c.pulse) * 0.15 + 0.85);
     const rr = c.r * (1.0 + 0.05 * Math.sin(c.pulse * 1.7));
-    neonRect(ctx, c.x - rr, c.y - rr, rr*2, rr*2, COLORS.chest, 20);
-    neonRing(ctx, c.x, c.y, rr*1.45, COLORS.gold, 22, 2, pulse);
+    neonRect(ctx, c.x - rr, c.y - rr, rr*2, rr*2, chestColor, 20);
+    neonRing(ctx, c.x, c.y, rr*1.45, ringColor, 22, 2, pulse);
+  }
+
+  if (quest.giverActive) {
+    const qPulse = 0.7 + 0.3 * Math.sin(performance.now() * 0.006);
+    const qColor = quest.completed ? COLORS.gold : COLORS.quest;
+    const qr = quest.giverR * (1.0 + 0.08 * qPulse);
+    const exBob = Math.sin(performance.now() * 0.006) * 3;
+
+    ctx.save();
+    ctx.shadowColor = qColor;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = UI_COLORS.questFill;
+    ctx.beginPath();
+    ctx.arc(quest.giverX, quest.giverY, qr, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = UI_COLORS.strokeDim;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(quest.giverX, quest.giverY);
+    ctx.shadowColor = qColor;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = qColor;
+    ctx.strokeStyle = UI_COLORS.strokeDim;
+    ctx.lineWidth = 1;
+    const tri = qr * 0.75;
+    ctx.beginPath();
+    ctx.moveTo(0, -tri);
+    ctx.lineTo(tri * 0.85, tri * 0.7);
+    ctx.lineTo(-tri * 0.85, tri * 0.7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+    ctx.restore();
+
+    neonRing(ctx, quest.giverX, quest.giverY, qr * 1.5, qColor, 24, 2, 0.8 * qPulse);
+
+    if (!quest.active || quest.completed) {
+      const mark = quest.completed ? "?" : "!";
+      ctx.save();
+      ctx.font = "700 20px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.shadowColor = qColor;
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = qColor;
+      ctx.fillText(mark, quest.giverX, quest.giverY - qr * 1.9 + exBob);
+      ctx.restore();
+    }
+  }
+
+  for (let i=0;i<questItems.length;i++){
+    const it = questItems[i];
+    if (!it.alive) continue;
+    if (it.x < camX - WORLD.spawnPad || it.x > camX + W + WORLD.spawnPad || it.y < camY - WORLD.spawnPad || it.y > camY + H + WORLD.spawnPad) continue;
+    const color = it.type === "drop" ? COLORS.gold : COLORS.quest;
+    const size = it.r;
+    neonRect(ctx, it.x - size, it.y - size, size * 2, size * 2, color, 16);
+    neonRing(ctx, it.x, it.y, size * 1.3, color, 18, 2, 0.7);
   }
 
   for (let i=0;i<gems.length;i++){
@@ -369,8 +520,8 @@ export function renderFrame({
     const e = enemies[i];
     if (!e.alive || !e.elite) continue;
     if (e.x < visMinX || e.x > visMaxX || e.y < visMinY || e.y > visMaxY) continue;
-    const size = e.r * 2;
-    ctx.strokeRect(e.x - e.r - 6, e.y - e.r - 6, size + 12, size + 12);
+    const size = e.r * 1.1;
+    ctx.strokeRect(e.x - e.r, e.y - e.r, size * 2, size * 2);
   }
   ctx.restore();
 
@@ -445,7 +596,7 @@ export function renderFrame({
   // Ranged enemy projectiles
   for (let i=0;i<enemyShots.length;i++){
     const s = enemyShots[i];
-    neonCircle(ctx, s.x, s.y, s.r, s.color, 18);
+    drawEnemyShot(ctx, s);
   }
 
   // Rails
@@ -543,7 +694,7 @@ export function renderFrame({
     const o = orbs[i];
     const pulse = 0.75 + 0.25 * Math.sin(performance.now() * 0.006 + i);
     const r = o.state === "fly" ? o.r : o.radius * 0.4;
-    neonCircle(ctx, o.x, o.y, r, COLORS.bullet, 18);
+    neonCircle(ctx, o.x, o.y, r, COLORS.bullet, 18, 0.8);
     neonRing(ctx, o.x, o.y, o.radius, UI_COLORS.orbRing, 24, 2, 0.35 * pulse);
     if (o.state === "park"){
       neonRing(ctx, o.x, o.y, o.radius, UI_COLORS.orbRing, 24, 2, 0.6 * pulse);
@@ -566,6 +717,14 @@ export function renderFrame({
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
+
+    if (weapons.aura.pulseFx > 0) {
+      const maxFx = weapons.aura.pulseFxMax || 0.25;
+      const t = clamp(weapons.aura.pulseFx / maxFx, 0, 1);
+      const progress = 1 - t;
+      const pulseR = s.radius * (0.3 + 0.7 * progress);
+      neonRing(ctx, player.x, player.y, pulseR, UI_COLORS.auraStroke, 28, 3, 0.8 * t);
+    }
   }
 
   // Particles
@@ -633,8 +792,9 @@ export function renderFrame({
   }
 
   drawChestIndicators(ctx, W, H, camX, camY);
+  drawQuestIndicators(ctx, W, H, camX, camY);
 
-  if (state === STATE.LEVELUP){
+  if (state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG){
     ctx.save();
     ctx.fillStyle = UI_COLORS.overlayDim;
     ctx.fillRect(0,0,W,H);
@@ -689,13 +849,27 @@ export function renderFrame({
     }
   }
 
-  ui.xp.textContent = fmtFloat(player.xp);
-  ui.xpNeed.textContent = fmtFloat(player.xpNeed);
+  ui.xp.textContent = fmtFloat(player.xp, 1);
+  ui.xpNeed.textContent = fmtFloat(player.xpNeed, 1);
   const xpT = player.xpNeed > 0 ? clamp(player.xp / player.xpNeed, 0, 1) : 0;
   ui.xpFill.style.width = `${(xpT*100).toFixed(2)}%`;
   if (ui.mXp){
-    ui.mXp.textContent = fmtFloat(player.xp);
-    ui.mXpNeed.textContent = fmtFloat(player.xpNeed);
+    ui.mXp.textContent = fmtFloat(player.xp, 1);
+    ui.mXpNeed.textContent = fmtFloat(player.xpNeed, 1);
     ui.mXpFill.style.width = `${(xpT*100).toFixed(2)}%`;
+  }
+
+  if (ui.buffs){
+    const buffParts = [];
+    if (buffs.shield > 0) buffParts.push(`Shield ${fmtFloat(buffs.shield, 1)}s`);
+    if (buffs.magnet > 0) buffParts.push(`Magnet ${fmtFloat(buffs.magnet, 1)}s`);
+    if (buffs.slow > 0) buffParts.push(`Freeze ${fmtFloat(buffs.slow, 1)}s`);
+    if (buffs.power > 0) buffParts.push(`Overcharge ${fmtFloat(buffs.power, 1)}s`);
+    if (buffs.haste > 0) buffParts.push(`Haste ${fmtFloat(buffs.haste, 1)}s`);
+    if (buffs.xp > 0) buffParts.push(`XP Boost ${fmtFloat(buffs.xp, 1)}s`);
+    ui.buffs.innerHTML = `<b>Buffs:</b> ${buffParts.length ? buffParts.join(" | ") : "-"}`;
+  }
+  if (ui.quest){
+    ui.quest.innerHTML = `<b>Quest:</b> ${getQuestHudText()}`;
   }
 }

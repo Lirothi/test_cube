@@ -175,6 +175,18 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap:12px;
     }
+    #levelup.trinket .panel{
+      width:min(720px, 92vw);
+    }
+    #levelup.trinket .cards{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    #levelup.aug .panel{
+      width:min(720px, 92vw);
+    }
+    #levelup.aug .cards{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     .card{
       border-radius:18px;
       border:1px solid rgba(120,255,255,.18);
@@ -407,7 +419,8 @@
           <div class="kv"><span>HP</span><span id="uiHp">0 / 0</span></div>
           <div class="kv"><span>Kills</span><span id="uiKills">0</span></div>
         </div>
-        <div class="buffs" id="uiBuffs"><b>Buffs:</b> —</div>
+        <div class="buffs" id="uiBuffs"><b>Buffs:</b> -</div>
+        <div class="buffs" id="uiQuest"><b>Quest:</b> -</div>
       </div>
 
       <div id="bars">
@@ -431,6 +444,8 @@
     <div class="hudCard" id="loadoutCard">
       <div class="hudTitle">Loadout</div>
       <div id="uiLoadout" class="pillRow"></div>
+      <div class="hudTitle" style="margin-top:10px;">Trinkets</div>
+      <div id="uiTrinkets" class="pillRow"></div>
       <div class="hudTitle" style="margin-top:10px;">Bonuses</div>
       <div id="uiBonuses" class="pillRow"></div>
     </div>
@@ -479,8 +494,8 @@
     <div class="panel">
       <div class="panelHeader">
         <div>
-          <h2>Level Up</h2>
-          <div class="sub">Choose 1 upgrade. Game is paused.</div>
+          <h2 id="levelupTitle">Level Up</h2>
+          <div class="sub" id="levelupSub">Choose 1 upgrade. Game is paused.</div>
         </div>
         <div class="sub" id="uiBuild"></div>
       </div>

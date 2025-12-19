@@ -5,8 +5,11 @@ import {
   BUFF_EFFECTS,
   LOOT_CONFIG,
   LOOP_CONFIG,
+  UPGRADE_CONFIG,
+  CRIT_UPGRADES,
+  WEAPON_CONFIG,
 } from "./config.js";
-import { rand, hypot } from "./math.js";
+import { rand, randi, hypot, fmtFloat } from "./math.js";
 import { sound } from "./audio.js";
 import { setupInput, clearDirectionalInput } from "./input.js";
 import { resetPlayer, updatePlayer, addXP, setPlayerRuntime } from "./player.js";
@@ -19,6 +22,8 @@ import {
   updateGodButton,
   updateMuteButton,
   updateMenuStats,
+  updateTexts,
+  setLevelUpHeader,
   renderUpgradeCards,
   fmtTime,
   updateGameOverSummary,
@@ -31,8 +36,9 @@ import {
   wireUiEvents,
 } from "./ui.js";
 import { updateChests, resetChests, setChestRuntime } from "./chests.js";
-import { spawnShockwave, damageEnemy, updateEnemyShots, updateVoidZones, updateEnemies } from "./enemies.js";
+import { damageEnemy, updateEnemyShots, updateVoidZones, updateEnemies, cleanupDeadEnemies, setEnemyRuntime } from "./enemies.js";
 import { addParticles, updateParticles, resetParticles } from "./particles.js";
+import { resetQuests, updateQuests, setQuestRuntime, onEnemyKilled } from "./quests.js";
 import {
   upgradeState,
   resetUpgradeState,
@@ -51,8 +57,11 @@ import {
   missileStats,
   setWeaponContext,
   setWeaponRuntime,
+  spawnShockwave,
   updateWeapons,
 } from "./weapons.js";
+import { pickTrinkets, addTrinket, resetTrinkets, trinketSlotsFull, formatTrinketPills } from "./trinkets.js";
+import { getAugmentsForWeapon, getAugmentById } from "./augments.js";
 import {
   spawnObstacles,
   updateActiveObstacles,
@@ -61,10 +70,11 @@ import {
   setObstacleRuntime,
 } from "./obstacles.js";
 import {
-  WORLD,
   BASE_STATS,
   player,
   buffs,
+  trinketBonuses,
+  updateBuffs,
   input,
   enemies,
   bullets,
@@ -82,7 +92,6 @@ import {
   floatTexts,
   obstacles,
   activeObstacles,
-  spawn,
   clampPointToWorld,
   clampEntityToWorld,
 } from "./state.js";
@@ -100,6 +109,7 @@ import {
   dmgPool,
   textPool,
 } from "./pools.js";
+import { popFloatText } from "./float_text.js";
 
 (() => {
     "use strict";
@@ -140,7 +150,7 @@ import {
     updateMuteButton();
 
     const ACTIVE_OBSTACLE_PAD = 1200;
-    const STATE = { PLAYING:"playing", LEVELUP:"levelup", GAMEOVER:"gameover", MENU:"menu" };
+    const STATE = { PLAYING:"playing", LEVELUP:"levelup", TRINKET:"trinket", AUG:"aug", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
     let fpsAccum = 0, fpsCount = 0;
     const START_NOTICE_TIME = 8.0;
@@ -157,6 +167,72 @@ import {
         fpsCount = 0;
       }
     }
+    const WEAPON_LABELS = [
+      { key: "magic", label: "Magic" },
+      { key: "aura", label: "Aura" },
+      { key: "rail", label: "Railgun" },
+      { key: "axe", label: "Axe" },
+      { key: "orb", label: "Orb" },
+      { key: "missile", label: "Missiles" },
+    ];
+
+    function formatWeaponPills(){
+      const pills = [];
+      for (const { key, label } of WEAPON_LABELS){
+        const w = weapons[key];
+        if (!w || !w.unlocked) continue;
+        const mastery = w.mastery ? ` M${w.mastery}` : "";
+        const aug = w.aug ? (getAugmentById(w.aug)?.title || "Aug") : "";
+        const augText = aug ? ` Aug: ${aug}` : "";
+        pills.push(`<span class="pill">${label} Lv ${w.level}${mastery}${augText}</span>`);
+      }
+      return pills.length ? pills.join("") : `<span class="pill">None</span>`;
+    }
+
+    function formatBonusPills(){
+      const pills = [];
+      const add = (text) => pills.push(`<span class="pill">${text}</span>`);
+
+      const speedPct = Math.round(((player.speed / BASE_STATS.speed) - 1) * 100);
+      if (speedPct) add(`Speed ${speedPct > 0 ? "+" : ""}${speedPct}%`);
+
+      const hpBonus = Math.round(player.maxHp - BASE_STATS.hp);
+      if (hpBonus) add(`Max HP +${hpBonus}`);
+
+      const armorBonus = Math.round(player.armor || 0);
+      if (armorBonus) add(`Armor +${armorBonus}`);
+
+      const pickupBonus = Math.round(player.pickup - BASE_STATS.pickup);
+      if (pickupBonus) add(`Pickup +${pickupBonus}`);
+
+      const dmgPct = Math.round(((trinketBonuses.dmgMult || 1) - 1) * 100);
+      if (dmgPct) add(`Damage +${dmgPct}%`);
+
+      const xpMult = (1 + upgradeState.xpLv * UPGRADE_CONFIG.xpMultGain) * (trinketBonuses.xpMult || 1);
+      const xpPct = Math.round((xpMult - 1) * 100);
+      if (xpPct) add(`XP +${xpPct}%`);
+
+      const cdMult = Math.max(0, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction) * (trinketBonuses.cdMult || 1);
+      const cdPct = Math.round((1 - cdMult) * 100);
+      if (cdPct) add(`CD ${cdPct > 0 ? "-" : "+"}${Math.abs(cdPct)}%`);
+
+      const critChance = (upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel) + (trinketBonuses.critChance || 0);
+      if (critChance) add(`Crit +${Math.round(critChance * 100)}%`);
+
+      const critMult = (upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel) + (trinketBonuses.critMult || 0);
+      if (critMult) add(`Crit Dmg +${fmtFloat(critMult, 2)}x`);
+
+      return pills.length ? pills.join("") : `<span class="pill">No bonuses</span>`;
+    }
+
+    function updateLoadoutUi(){
+      if (ui.loadout) ui.loadout.innerHTML = formatWeaponPills();
+      if (ui.trinkets) ui.trinkets.innerHTML = formatTrinketPills();
+      if (ui.bonuses) ui.bonuses.innerHTML = formatBonusPills();
+      if (ui.mWeapons) ui.mWeapons.innerHTML = formatWeaponPills();
+    }
+
+    const AUG_FLOAT_LIFE = 2;
 
     /* ============================
        Input setup
@@ -192,10 +268,14 @@ import {
     function openLevelUp(){
       if (state !== STATE.PLAYING) return;
       state = STATE.LEVELUP;
+      if (ui.levelup) ui.levelup.classList.remove("trinket");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
+      setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
       currentCards = pickUpgrades(XP_CONFIG.cardChoices);
       renderUpgradeCards(currentCards, (u) => {
         if (state !== STATE.LEVELUP) return;
         u.apply();
+        updateLoadoutUi();
         closeLevelUp();
       });
       openLevelUpUI();
@@ -203,11 +283,91 @@ import {
     }
     function closeLevelUp(){
       closeLevelUpUI();
+      if (ui.levelup) ui.levelup.classList.remove("trinket");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
+      state = STATE.PLAYING;
+      focusCanvas();
+    }
+
+    function openTrinket(){
+      if (state !== STATE.PLAYING) return false;
+      if (trinketSlotsFull()) return false;
+      const picks = pickTrinkets();
+      if (!picks.length) return false;
+      state = STATE.TRINKET;
+      if (ui.levelup) ui.levelup.classList.add("trinket");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
+      setLevelUpHeader("Trinket Found", "Choose 1 trinket. Game is paused.");
+      renderUpgradeCards(picks, (t) => {
+        if (state !== STATE.TRINKET) return;
+        addTrinket(t.id);
+        updateLoadoutUi();
+        closeTrinket();
+      });
+      openLevelUpUI();
+      sound.play("level");
+      return true;
+    }
+
+    function closeTrinket(){
+      closeLevelUpUI();
+      setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
+      if (ui.levelup) ui.levelup.classList.remove("trinket");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
+      state = STATE.PLAYING;
+      focusCanvas();
+    }
+
+    function openAug(){
+      if (state !== STATE.PLAYING) return false;
+      const options = WEAPON_LABELS.filter(({ key }) => weapons[key]?.unlocked && !weapons[key]?.aug);
+      if (!options.length) {
+        const unlocked = WEAPON_LABELS.filter(({ key }) => weapons[key]?.unlocked);
+        if (!unlocked.length) return false;
+        const pick = unlocked[randi(unlocked.length)];
+        const w = weapons[pick.key];
+        const maxLevel = WEAPON_CONFIG[pick.key]?.maxLevel || w.level;
+        if (w.level < maxLevel) {
+          w.level++;
+          popFloatText(player.x, player.y - 18, `${pick.label} +1`, COLORS.aug, 18, AUG_FLOAT_LIFE);
+        } else {
+          w.mastery++;
+          popFloatText(player.x, player.y - 18, `${pick.label} Mastery +1`, COLORS.aug, 18, AUG_FLOAT_LIFE);
+        }
+        updateLoadoutUi();
+        return true;
+      }
+      const pick = options[randi(options.length)];
+      const choices = getAugmentsForWeapon(pick.key);
+      if (!choices.length) return false;
+      state = STATE.AUG;
+      if (ui.levelup) {
+        ui.levelup.classList.add("aug");
+        ui.levelup.classList.remove("trinket");
+      }
+      setLevelUpHeader(`${pick.label} Augmentation`, "Choose 1 augmentation. Game is paused.");
+      renderUpgradeCards(choices, (aug) => {
+        if (state !== STATE.AUG) return;
+        weapons[pick.key].aug = aug.id;
+        updateLoadoutUi();
+        closeAug();
+      });
+      openLevelUpUI();
+      sound.play("level");
+      return true;
+    }
+
+    function closeAug(){
+      closeLevelUpUI();
+      setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
       state = STATE.PLAYING;
       focusCanvas();
     }
     setPlayerRuntime({ openLevelUp });
-    setChestRuntime({ addXP });
+    setChestRuntime({ addXP, openTrinket, openAug });
+    setEnemyRuntime({ openAug, onEnemyKilled });
+    setQuestRuntime({ addXP, openAug, openTrinket, addParticles });
 
     /* ============================
        Main Menu / Pause
@@ -257,8 +417,10 @@ import {
       spawnObstacles();
 
       resetPlayer();
+      resetQuests();
       resetWeapons();
       resetUpgradeState();
+      resetTrinkets();
       resetDps();
       startNoticeT = START_NOTICE_TIME;
 
@@ -270,6 +432,7 @@ import {
       state = STATE.PLAYING;
       last = performance.now();
       focusCanvas();
+      updateLoadoutUi();
     }
 
     wireUiEvents({
@@ -300,16 +463,6 @@ import {
     /* ============================
        Buffs / Player / Enemies / Projectiles
        ============================ */
-    function updateBuffs(dt){
-      buffs.magnet = Math.max(0, buffs.magnet - dt);
-      buffs.shield = Math.max(0, buffs.shield - dt);
-      buffs.slow = Math.max(0, buffs.slow - dt);
-      buffs.power = Math.max(0, buffs.power - dt);
-      buffs.haste = Math.max(0, buffs.haste - dt);
-      buffs.xp = Math.max(0, buffs.xp - dt);
-    }
-
-
     function updateGems(dt){
       const magnetMul = (buffs.magnet > 0) ? BUFF_EFFECTS.magnetRadiusMult : 1.0; // 3x radius while active
       const pickup = player.pickup * magnetMul;
@@ -360,61 +513,6 @@ import {
       }
     }
 
-    function updateTexts(dt){
-      for (let i=dmgTexts.length-1;i>=0;i--){
-        const d = dmgTexts[i];
-        if (!d.alive){ dmgTexts[i] = dmgTexts[dmgTexts.length-1]; dmgTexts.pop(); dmgPool.put(d); continue; }
-        d.life -= dt;
-        d.x += d.vx * dt;
-        d.y += d.vy * dt;
-        d.vx *= Math.pow(0.12, dt);
-        d.vy *= Math.pow(0.10, dt);
-        if (d.life <= 0) d.alive = false;
-        if (!d.alive){
-          dmgTexts[i] = dmgTexts[dmgTexts.length-1];
-          dmgTexts.pop();
-          dmgPool.put(d);
-        }
-      }
-
-      for (let i=floatTexts.length-1;i>=0;i--){
-        const t = floatTexts[i];
-        if (!t.alive){ floatTexts[i] = floatTexts[floatTexts.length-1]; floatTexts.pop(); textPool.put(t); continue; }
-        t.life -= dt;
-        t.x += t.vx * dt;
-        t.y += t.vy * dt;
-        t.vx *= Math.pow(0.12, dt);
-        t.vy *= Math.pow(0.10, dt);
-        if (t.life <= 0) t.alive = false;
-        if (!t.alive){
-          floatTexts[i] = floatTexts[floatTexts.length-1];
-          floatTexts.pop();
-          textPool.put(t);
-        }
-      }
-    }
-
-    function cleanupDeadEnemies(camX, camY){
-      const minX = camX - WORLD.despawnPad;
-      const maxX = camX + W + WORLD.despawnPad;
-      const minY = camY - WORLD.despawnPad;
-      const maxY = camY + H + WORLD.despawnPad;
-      const worldLim = WORLD.halfSize + WORLD.despawnPad;
-
-      for (let i=enemies.length-1;i>=0;i--){
-        const e = enemies[i];
-        const outWorld = (e.x < -worldLim || e.x > worldLim || e.y < -worldLim || e.y > worldLim);
-        if (!e.alive || e.x < minX || e.x > maxX || e.y < minY || e.y > maxY || outWorld){
-          if (e.boss) continue; // never despawn the boss offscreen
-          enemies[i] = enemies[enemies.length-1];
-          enemies.pop();
-          if (e.alive) e.alive = false;
-          if (e.boss) spawn.bossAlive = false;
-          enemyPool.put(e);
-        }
-      }
-    }
-
     /* ============================
        Rendering
        ============================ */
@@ -457,10 +555,11 @@ import {
 
       spawnController(dt, camX, camY, W, H);
       updateChests(dt, camX, camY, W, H);
+      updateQuests(dt);
       updateActiveObstacles(camX, camY, W, H, ACTIVE_OBSTACLE_PAD);
 
       updateWeapons(dt);
-      updateEnemies(dt, godMode);
+      updateEnemies(dt, godMode, W, H);
       updateTelegraphs(dt);
       updateVoidZones(dt, godMode);
       updateEnemyShots(dt);
@@ -468,7 +567,7 @@ import {
       updateParticles(dt);
       updateTexts(dt);
 
-      cleanupDeadEnemies(camX, camY);
+      cleanupDeadEnemies(camX, camY, W, H);
 
       if (player.hp <= 0){
         player.hp = 0;
@@ -518,5 +617,3 @@ import {
 
   })();
   
-
-

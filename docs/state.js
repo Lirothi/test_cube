@@ -31,6 +31,45 @@ export const buffs = {
   xp: 0,
 };
 
+export const trinkets = [];
+export const trinketBonuses = {
+  dmgMult: 1,
+  cdMult: 1,
+  xpMult: 1,
+  critChance: 0,
+  critMult: 0,
+};
+
+export const quest = {
+  active: false,
+  completed: false,
+  type: "",
+  target: 0,
+  progress: 0,
+  timer: 0,
+  duration: 0,
+  dropChance: 0,
+  giverX: 0,
+  giverY: 0,
+  giverR: 16,
+  giverActive: false,
+  spawnT: 0,
+  touchCd: 0,
+  cooldown: 0,
+  lastHp: BASE_STATS.hp,
+};
+
+export const questItems = [];
+
+export function updateBuffs(dt) {
+  buffs.magnet = Math.max(0, buffs.magnet - dt);
+  buffs.shield = Math.max(0, buffs.shield - dt);
+  buffs.slow = Math.max(0, buffs.slow - dt);
+  buffs.power = Math.max(0, buffs.power - dt);
+  buffs.haste = Math.max(0, buffs.haste - dt);
+  buffs.xp = Math.max(0, buffs.xp - dt);
+}
+
 export const input = { up: false, down: false, left: false, right: false };
 
 export const enemies = [];

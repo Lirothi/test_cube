@@ -1,4 +1,4 @@
-import { WEAPON_CONFIG, WEAPON_MASTERY, UPGRADE_CONFIG, CRIT_UPGRADES } from "./config.js";
+import { WEAPON_CONFIG, WEAPON_MASTERY, UPGRADE_CONFIG, CRIT_UPGRADES, AUGMENT_CONFIG } from "./config.js";
 import { COLORS } from "./colors.js";
 import { clamp, rand, TAU, hypot } from "./math.js";
 import { sound } from "./audio.js";
@@ -12,6 +12,7 @@ import {
   axes,
   orbs,
   missiles,
+  trinketBonuses,
 } from "./state.js";
 import {
   bulletPool,
@@ -22,12 +23,12 @@ import {
 } from "./pools.js";
 
 export const weapons = {
-  magic: { unlocked: true, level: 1, mastery: 0, t: 0 },
-  aura: { unlocked: false, level: 0, mastery: 0, tick: 0 },
-  rail: { unlocked: false, level: 0, mastery: 0, t: 0 },
-  axe: { unlocked: false, level: 0, mastery: 0, t: 0 },
-  orb: { unlocked: false, level: 0, mastery: 0, t: 0 },
-  missile: { unlocked: false, level: 0, mastery: 0, t: 0 },
+  magic: { unlocked: true, level: 1, mastery: 0, t: 0, aug: null, augSeq: 0 },
+  aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25 },
+  rail: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
+  axe: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
+  orb: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
+  missile: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
 };
 
 let ctxBuffs = null;
@@ -57,18 +58,61 @@ function requireRuntime() {
   return runtime;
 }
 
+export function spawnShockwave(x, y, radius, color = COLORS.warn) {
+  const exp = bulletPool.get();
+  exp.alive = true;
+  exp.x = x; exp.y = y;
+  exp.vx = 0; exp.vy = 0;
+  exp.r = radius;
+  exp.life = 0.2;
+  exp.maxLife = exp.life;
+  exp.dmg = 0;
+  exp.critChance = 0;
+  exp.critMult = 1;
+  exp.color = color;
+  exp.isExplosion = true;
+  bullets.push(exp);
+}
+
 function calcCrit(dmg, chance, mult){
   const crit = Math.random() < chance;
   return { dmg: crit ? dmg * mult : dmg, crit };
 }
 
+function applySlow(e, mult, duration){
+  e.slowT = Math.max(e.slowT || 0, duration);
+  const next = Math.min(e.slowMul || 1, mult);
+  e.slowMul = next;
+}
+
+function applyBurn(e, dmg, cfg, source){
+  e.burnT = Math.max(e.burnT || 0, cfg.duration);
+  e.burnDps = Math.max(e.burnDps || 0, dmg * cfg.dpsPct);
+  if (source) e.burnSource = source;
+}
+
+function applyBleed(e, dmg, cfg, source){
+  e.bleedT = Math.max(e.bleedT || 0, cfg.duration);
+  e.bleedDps = Math.max(e.bleedDps || 0, dmg * cfg.dpsPct);
+  if (source) e.bleedSource = source;
+}
+
+function getTrinketMods() {
+  return {
+    dmg: trinketBonuses.dmgMult || 1,
+    cd: trinketBonuses.cdMult || 1,
+    critChance: trinketBonuses.critChance || 0,
+    critMult: trinketBonuses.critMult || 0,
+  };
+}
+
 export function resetWeapons() {
-  weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0;
-  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0;
-  weapons.rail.unlocked = false; weapons.rail.level = 0; weapons.rail.mastery = 0; weapons.rail.t = 0;
-  weapons.axe.unlocked = false; weapons.axe.level = 0; weapons.axe.mastery = 0; weapons.axe.t = 0;
-  weapons.orb.unlocked = false; weapons.orb.level = 0; weapons.orb.mastery = 0; weapons.orb.t = 0;
-  weapons.missile.unlocked = false; weapons.missile.level = 0; weapons.missile.mastery = 0; weapons.missile.t = 0;
+  weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0; weapons.magic.aug = null; weapons.magic.augSeq = 0;
+  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25;
+  weapons.rail.unlocked = false; weapons.rail.level = 0; weapons.rail.mastery = 0; weapons.rail.t = 0; weapons.rail.aug = null;
+  weapons.axe.unlocked = false; weapons.axe.level = 0; weapons.axe.mastery = 0; weapons.axe.t = 0; weapons.axe.aug = null;
+  weapons.orb.unlocked = false; weapons.orb.level = 0; weapons.orb.mastery = 0; weapons.orb.t = 0; weapons.orb.aug = null;
+  weapons.missile.unlocked = false; weapons.missile.level = 0; weapons.missile.mastery = 0; weapons.missile.t = 0; weapons.missile.aug = null;
 }
 
 export function weaponCount() {
@@ -84,6 +128,7 @@ export function weaponCount() {
 
 export function magicStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.magic;
   const lv = weapons.magic.level;
   const mastery = weapons.magic.mastery || 0;
@@ -92,22 +137,23 @@ export function magicStats() {
   const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce);
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
   const count = 1 + Math.floor((lv - 1) / cfg.countInterval);
   const range = cfg.range;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
   return { dmg, cd, speed, count, range, knock, critChance: critChanceTotal, critMult };
 }
 
 export function auraStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.aura;
   const lv = weapons.aura.level;
   const mastery = weapons.aura.mastery || 0;
@@ -117,16 +163,17 @@ export function auraStats() {
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
   const radius = cfg.radiusBase + lv * cfg.radiusPerLevel;
   const tick = cfg.tick;
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
   return { radius, tick, dmg, knock, critChance: critChanceTotal, critMult };
 }
 
 export function axeStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.axe;
   const lv = weapons.axe.level;
   const mastery = weapons.axe.mastery || 0;
@@ -137,20 +184,21 @@ export function axeStats() {
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce);
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  let cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
+  let dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
   const count = 1 + Math.floor((lv - 1) / cfg.countInterval);
   const gravity = cfg.gravity;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
   return { cd, dmg, speed, count, gravity, knock, critChance: critChanceTotal, critMult };
 }
 
 export function railStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.rail;
   const lv = weapons.rail.level;
   const mastery = weapons.rail.mastery || 0;
@@ -161,20 +209,26 @@ export function railStats() {
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce);
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
-  const pierce = cfg.pierceBase + Math.floor((lv + 1) / cfg.pierceLevelDivisor) + (buffs.power > 0 ? cfg.powerPierceBonus : 0);
+  let pierce = cfg.pierceBase + Math.floor((lv + 1) / cfg.pierceLevelDivisor) + (buffs.power > 0 ? cfg.powerPierceBonus : 0);
   const range = cfg.rangeBase + lv * cfg.rangePerLevel;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
+  if (weapons.rail.aug === "rail_overpen") {
+    dmg *= AUGMENT_CONFIG.rail.overpen.dmgMult;
+    cd *= AUGMENT_CONFIG.rail.overpen.cdMult;
+    pierce += AUGMENT_CONFIG.rail.overpen.pierce;
+  }
   return { cd, dmg, speed, pierce, range, knock, critChance: critChanceTotal, critMult };
 }
 
 export function orbStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.orb;
   const lv = weapons.orb.level;
   const mastery = weapons.orb.mastery || 0;
@@ -183,23 +237,35 @@ export function orbStats() {
   const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce);
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
   const radius = cfg.pullRadiusBase + lv * cfg.pullRadiusPerLevel;
-  const pull = cfg.pullBase + lv * cfg.pullPerLevel;
+  let pull = cfg.pullBase + lv * cfg.pullPerLevel;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
-  const explosion = dmg * cfg.explosionMult;
-  const park = cfg.parkTimeBase + lv * cfg.parkTimePerLevel;
-  return { dmg, cd, speed, radius, pull, range: cfg.range, tick: cfg.tick, park, explosion, critChance: critChanceTotal, critMult };
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
+  let explosion = dmg * cfg.explosionMult;
+  let explosionRadius = radius;
+  let park = cfg.parkTimeBase + lv * cfg.parkTimePerLevel;
+  if (weapons.orb.aug === "orb_event_horizon") {
+    park += AUGMENT_CONFIG.orb.eventHorizon.park;
+    pull *= AUGMENT_CONFIG.orb.eventHorizon.pullMult;
+  } else if (weapons.orb.aug === "orb_dark_burst") {
+    park += AUGMENT_CONFIG.orb.darkBurst.park;
+    pull *= AUGMENT_CONFIG.orb.darkBurst.pullMult;
+    explosion *= AUGMENT_CONFIG.orb.darkBurst.dmgMult;
+    explosionRadius = radius * AUGMENT_CONFIG.orb.darkBurst.radiusMult;
+  }
+  park = Math.max(0.4, park);
+  return { dmg, cd, speed, radius, pull, range: cfg.range, tick: cfg.tick, park, explosion, explosionRadius, critChance: critChanceTotal, critMult };
 }
 
 export function missileStats() {
   const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
   const cfg = WEAPON_CONFIG.missile;
   const lv = weapons.missile.level;
   const mastery = weapons.missile.mastery || 0;
@@ -207,21 +273,25 @@ export function missileStats() {
   const masteryCrit = mastery * WEAPON_MASTERY.critChance;
   const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult || 1 : 1;
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult;
+  let dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel);
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce);
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
   const maxSpeed = speed * cfg.maxSpeedMult;
   const accel = cfg.accel;
   const turnRate = (cfg.turnRateDeg || 180) * (Math.PI / 180) * (1 + 0.04 * lv); // improved homing per level
-  const count = 1 + Math.floor((lv - 1) / cfg.countInterval);
+  let count = 1 + Math.floor((lv - 1) / cfg.countInterval);
   const explosion = cfg.explosionRadiusBase + lv * cfg.explosionRadiusPerLevel;
   const life = cfg.life;
   const range = cfg.rangeBase + lv * (cfg.rangePerLevel || 0);
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
-  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel;
-  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel, 0, 1);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
+  if (weapons.missile.aug === "missile_swarm") {
+    count += AUGMENT_CONFIG.missile.swarm.extra;
+    dmg *= AUGMENT_CONFIG.missile.swarm.dmgMult;
+  }
   return { dmg, cd, speed, maxSpeed, accel, turnRate, count, explosion, life, range, critChance: critChanceTotal, critMult, radius: cfg.projectile.radius };
 }
 
@@ -250,26 +320,38 @@ function fireMagicBullet(){
   const baseAng = Math.atan2(dy, dx);
   const count = s.count;
   const spread = WEAPON_CONFIG.magic.projectile.spread;
+  const prism = weapons.magic.aug === "magic_prism";
 
-  for (let i=0;i<count;i++){
+  const spawnBullet = (ang, dmgMult = 1) => {
     const b = bulletPool.get();
     b.alive = true;
     b.x = player.x; b.y = player.y;
     b.r = WEAPON_CONFIG.magic.projectile.radius;
-    b.dmg = s.dmg;
+    b.dmg = s.dmg * dmgMult;
     b.life = WEAPON_CONFIG.magic.projectile.life;
     b.maxLife = b.life;
     b.critChance = s.critChance;
     b.critMult = s.critMult;
     b.isExplosion = false;
     b.color = null;
-
-    const t = (count === 1) ? 0 : (i/(count-1) - 0.5);
-    const ang = baseAng + t * spread;
-
     b.vx = Math.cos(ang) * s.speed;
     b.vy = Math.sin(ang) * s.speed;
     bullets.push(b);
+  };
+
+  for (let i=0;i<count;i++){
+    const t = (count === 1) ? 0 : (i/(count-1) - 0.5);
+    const ang = baseAng + t * spread;
+    spawnBullet(ang, 1);
+  }
+
+  if (prism) {
+    weapons.magic.augSeq = (weapons.magic.augSeq || 0) + 1;
+    if (weapons.magic.augSeq % AUGMENT_CONFIG.magic.prism.every === 0) {
+      const extraAng = AUGMENT_CONFIG.magic.prism.angle;
+      spawnBullet(baseAng + extraAng, AUGMENT_CONFIG.magic.prism.dmgMult);
+      spawnBullet(baseAng - extraAng, AUGMENT_CONFIG.magic.prism.dmgMult);
+    }
   }
 }
 
@@ -321,6 +403,7 @@ function throwAxe(){
     a.critChance = s.critChance;
     a.critMult = s.critMult;
     a.life = throwCfg.life;
+    a.returning = false;
     a.rot = rand(TAU, 0);
     a.spin = rand(throwCfg.spinMax, throwCfg.spinMin) * (Math.random() < throwCfg.spinInvertChance ? -1 : 1);
 
@@ -359,6 +442,7 @@ function fireOrb(){
   o.radius = s.radius;
   o.dmg = s.dmg;
   o.explosion = s.explosion;
+  o.explosionRadius = s.explosionRadius || s.radius;
   o.critChance = s.critChance;
   o.critMult = s.critMult;
   orbs.push(o);
@@ -404,10 +488,15 @@ export function updateWeapons(dt){
 
   if (weapons.aura.unlocked){
     const s = auraStats();
+    const aug = weapons.aura.aug;
+    if (weapons.aura.pulseFx > 0) {
+      weapons.aura.pulseFx = Math.max(0, weapons.aura.pulseFx - dt);
+    }
     weapons.aura.tick -= dt;
     if (weapons.aura.tick <= 0){
       weapons.aura.tick += s.tick;
       const r = s.radius, r2 = r*r;
+      let hitCount = 0;
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
         if (!e.alive) continue;
@@ -419,6 +508,7 @@ export function updateWeapons(dt){
           const nx = dx / d, ny = dy / d;
           const hit = calcCrit(s.dmg, s.critChance, s.critMult);
           damageEnemy(e, hit.dmg, nx, ny, s.knock, true, hit.crit, "aura");
+          hitCount++;
         }
       }
       for (let i=0;i<activeObstacles.length;i++){
@@ -432,6 +522,38 @@ export function updateWeapons(dt){
           damageObstacle(idx, s.dmg, false);
         }
       }
+
+      if (aug === "aura_leech" && hitCount > 0) {
+        const heal = player.maxHp * AUGMENT_CONFIG.aura.leechPct;
+        player.hp = Math.min(player.maxHp, player.hp + heal);
+      }
+    }
+
+    if (aug === "aura_pulse") {
+      weapons.aura.pulse -= dt;
+      if (weapons.aura.pulse <= 0) {
+        weapons.aura.pulse = AUGMENT_CONFIG.aura.pulse.cd;
+        weapons.aura.pulseFx = weapons.aura.pulseFxMax || 0.25;
+        const r = s.radius;
+        const r2 = r * r;
+        const pulseDmg = s.dmg * AUGMENT_CONFIG.aura.pulse.dmgMult;
+        const pulseKnock = s.knock * AUGMENT_CONFIG.aura.pulse.knockMult;
+        for (let i=0;i<enemies.length;i++){
+          const e = enemies[i];
+          if (!e.alive) continue;
+          const dx = e.x - player.x;
+          const dy = e.y - player.y;
+          const d2 = dx*dx + dy*dy;
+          if (d2 <= (r2 + e.r*e.r)){
+            const d = Math.sqrt(d2) || 1;
+            const nx = dx / d, ny = dy / d;
+            const hit = calcCrit(pulseDmg, s.critChance, s.critMult);
+            damageEnemy(e, hit.dmg, nx, ny, pulseKnock, true, hit.crit, "aura");
+          }
+        }
+      }
+    } else {
+      weapons.aura.pulse = 0;
     }
   }
 
@@ -477,6 +599,7 @@ export function updateWeapons(dt){
 export function updateBullets(dt){
   const { damageEnemy, damageObstacle } = requireRuntime();
   const knock = magicStats().knock;
+  const magicAug = weapons.magic.aug;
   for (let i=bullets.length-1;i>=0;i--){
     const b = bullets[i];
     if (!b.alive){ bullets[i] = bullets[bullets.length-1]; bullets.pop(); bulletPool.put(b); continue; }
@@ -531,6 +654,9 @@ export function updateBullets(dt){
         const px = b.vx / d, py = b.vy / d;
         const hit = calcCrit(b.dmg, b.critChance, b.critMult);
         damageEnemy(e, hit.dmg, px, py, knock, true, hit.crit, "magic");
+        if (magicAug === "magic_cryo") {
+          applySlow(e, AUGMENT_CONFIG.magic.slow.mult, AUGMENT_CONFIG.magic.slow.duration);
+        }
         b.alive = false;
         break;
       }
@@ -549,6 +675,7 @@ export function updateBullets(dt){
 export function updateMissiles(dt){
   const { damageEnemy, damageObstacle, damageObstaclesInRadius, addParticles, spawnShockwave } = requireRuntime();
   const s = missileStats();
+  const missileAug = weapons.missile.aug;
   for (let i=missiles.length-1;i>=0;i--){
     const m = missiles[i];
     if (!m.alive){ missiles[i] = missiles[missiles.length-1]; missiles.pop(); missilePool.put(m); continue; }
@@ -623,6 +750,14 @@ export function updateMissiles(dt){
         const d2 = dx*dx + dy*dy;
         if (d2 <= r2){
           damageEnemy(e, crit.dmg, 0, 0, 0, true, crit.crit, "missile");
+          if (missileAug === "missile_concussive") {
+            applySlow(e, AUGMENT_CONFIG.missile.concussive.slowMult, AUGMENT_CONFIG.missile.concussive.slowDuration);
+            const d = Math.sqrt(d2) || 1;
+            const nx = dx / d, ny = dy / d;
+            const knock = AUGMENT_CONFIG.missile.concussive.knock;
+            e.kx += nx * knock;
+            e.ky += ny * knock;
+          }
         }
       }
       addParticles(m.x, m.y, COLORS.missile, 14, 480);
@@ -641,6 +776,7 @@ export function updateMissiles(dt){
 export function updateRailShots(dt){
   const { damageEnemy, damageObstacle } = requireRuntime();
   const s = railStats();
+  const railAug = weapons.rail.aug;
   const trailLife = WEAPON_CONFIG.rail.projectile.trailLife;
   const trailMax = WEAPON_CONFIG.rail.projectile.trailMax;
   for (let i=rails.length-1;i>=0;i--){
@@ -691,6 +827,9 @@ export function updateRailShots(dt){
         const px = r.vx / d, py = r.vy / d;
         const hit = calcCrit(r.dmg, r.critChance, r.critMult);
         damageEnemy(e, hit.dmg, px, py, s.knock, true, hit.crit, "rail");
+        if (railAug === "rail_fire") {
+          applyBurn(e, hit.dmg, AUGMENT_CONFIG.rail.burn, "rail");
+        }
         r.pierce--;
         if (r.pierce <= 0){ r.alive = false; break; }
       }
@@ -709,12 +848,22 @@ export function updateRailShots(dt){
 export function updateAxes(dt){
   const { damageEnemy, damageObstacle } = requireRuntime();
   const s = axeStats();
+  const axeAug = weapons.axe.aug;
   for (let i=axes.length-1;i>=0;i--){
     const a = axes[i];
     if (!a.alive){ axes[i] = axes[axes.length-1]; axes.pop(); axePool.put(a); continue; }
 
     a.life -= dt;
-    a.vy += s.gravity * dt;
+    if (a.returning) {
+      const dx = player.x - a.x;
+      const dy = player.y - a.y;
+      const d = hypot(dx, dy) || 1;
+      const speed = s.speed;
+      a.vx = (dx / d) * speed;
+      a.vy = (dy / d) * speed;
+    } else {
+      a.vy += s.gravity * dt;
+    }
     a.x += a.vx * dt;
     a.y += a.vy * dt;
     a.rot += a.spin * dt;
@@ -750,7 +899,17 @@ export function updateAxes(dt){
         const px = a.vx / d, py = a.vy / d;
         const hit = calcCrit(a.dmg, a.critChance, a.critMult);
         damageEnemy(e, hit.dmg, px, py, s.knock, true, hit.crit, "axe");
-        a.life -= WEAPON_CONFIG.axe.throw.hitLifeLoss;
+        if (axeAug === "axe_bleed") {
+          applyBleed(e, hit.dmg, AUGMENT_CONFIG.axe.bleed, "axe");
+        }
+        if (axeAug === "axe_boomerang" && !a.returning) {
+          a.returning = true;
+          a.dmg *= AUGMENT_CONFIG.axe.boomerang.dmgMult;
+          const returnLife = WEAPON_CONFIG.axe.throw.life * AUGMENT_CONFIG.axe.boomerang.returnLifeMult;
+          a.life = Math.max(a.life, returnLife);
+        } else {
+          a.life -= WEAPON_CONFIG.axe.throw.hitLifeLoss;
+        }
         if (a.life <= 0){ a.alive = false; break; }
       }
     }
@@ -841,7 +1000,8 @@ export function updateOrbs(dt){
       }
 
       if (o.park <= 0){
-        const r2 = o.radius * o.radius;
+        const expRadius = o.explosionRadius || o.radius;
+        const r2 = expRadius * expRadius;
         for (let j=0;j<enemies.length;j++){
           const e = enemies[j];
           if (!e.alive) continue;
@@ -852,8 +1012,9 @@ export function updateOrbs(dt){
             damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
           }
         }
-        damageObstaclesInRadius(o.x, o.y, o.radius, o.explosion, true);
+        damageObstaclesInRadius(o.x, o.y, expRadius, o.explosion, true);
         addParticles(o.x, o.y, COLORS.bullet, 48, 720);
+        spawnShockwave(o.x, o.y, expRadius, COLORS.bullet);
         o.alive = false;
       }
     }

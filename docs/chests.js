@@ -1,23 +1,26 @@
-import { CHEST_CONFIG, COLORS } from "./config.js";
+import { CHEST_CONFIG, TRINKET_CONFIG, AUGMENT_CONFIG, COLORS } from "./config.js";
 import { rand, randi, hypot, TAU } from "./math.js";
 import { addTelegraph } from "./telegraph.js";
-import { isBlockedByObstacle } from "./spawn.js";
+import { isBlockedByObstacle, spawnElitePackAt } from "./spawn.js";
 import { addParticles } from "./particles.js";
 import { damageEnemy } from "./enemies.js";
+import { trinketSlotsFull } from "./trinkets.js";
+import { popFloatText } from "./float_text.js";
 import {
   player,
   buffs,
   chests,
   enemies,
   clampPointToWorld,
-  floatTexts,
 } from "./state.js";
-import { chestPool, textPool } from "./pools.js";
+import { chestPool } from "./pools.js";
 
-let runtime = { addXP: null };
+let runtime = { addXP: null, openTrinket: null, openAug: null };
 
-export function setChestRuntime({ addXP }) {
+export function setChestRuntime({ addXP, openTrinket, openAug }) {
   runtime.addXP = addXP;
+  runtime.openTrinket = openTrinket;
+  runtime.openAug = openAug;
 }
 
 function requireRuntime() {
@@ -32,19 +35,21 @@ const chestSpawn = {
   activeMax: CHEST_CONFIG.activeMax,
 };
 
-function popFloatText(x, y, text, color = "#d7f6ff", size = 16) {
-  const t = textPool.get();
-  t.alive = true;
-  t.x = x; t.y = y;
-  t.vx = rand(16, -16);
-  t.vy = -rand(54, 34);
-  t.maxLife = 0.90;
-  t.life = t.maxLife;
-  t.text = text;
-  t.color = color;
-  t.size = size;
-  floatTexts.push(t);
-}
+const trinketSpawn = {
+  t: TRINKET_CONFIG.chest.timerStart,
+  min: TRINKET_CONFIG.chest.timerMin,
+  max: TRINKET_CONFIG.chest.timerMax,
+  activeMax: TRINKET_CONFIG.chest.activeMax,
+};
+
+const augSpawn = {
+  t: AUGMENT_CONFIG.chest.timerStart,
+  min: AUGMENT_CONFIG.chest.timerMin,
+  max: AUGMENT_CONFIG.chest.timerMax,
+  activeMax: AUGMENT_CONFIG.chest.activeMax,
+};
+
+const FLOAT_LIFE = 0.9;
 
 function queueChestBomb(x, y) {
   requireRuntime(); // ensure runtime present
@@ -79,7 +84,7 @@ const CHEST_BONUSES = [
       requireRuntime();
       const amt = player.maxHp * CHEST_CONFIG.bonuses.healPct;
       player.hp = Math.min(player.maxHp, player.hp + amt);
-      popFloatText(player.x, player.y - 14, `+${Math.ceil(amt)} HP`, COLORS.heal, 16);
+      popFloatText(player.x, player.y - 14, `+${Math.ceil(amt)} HP`, COLORS.heal, 16, FLOAT_LIFE);
     }
   },
   {
@@ -89,7 +94,7 @@ const CHEST_BONUSES = [
     apply: () => {
       const { addXP } = requireRuntime();
       addXP(player.xpNeed);
-      popFloatText(player.x, player.y - 14, "LEVEL UP!", COLORS.gold, 16);
+      popFloatText(player.x, player.y - 14, "LEVEL UP!", COLORS.gold, 16, FLOAT_LIFE);
     }
   },
   {
@@ -99,7 +104,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.magnet = Math.max(buffs.magnet, CHEST_CONFIG.bonuses.magnet);
-      popFloatText(player.x, player.y - 14, "MAGNET!", COLORS.gem, 16);
+      popFloatText(player.x, player.y - 14, "MAGNET!", COLORS.gem, 16, FLOAT_LIFE);
     }
   },
   {
@@ -121,7 +126,7 @@ const CHEST_BONUSES = [
         if (d < CHEST_CONFIG.shockwave.damageRadius) damageEnemy(e, dmg, nx, ny, CHEST_CONFIG.shockwave.knockPush, false);
       }
       addParticles(player.x, player.y, COLORS.player, 42, 520);
-      popFloatText(player.x, player.y - 14, "SHOCKWAVE!", COLORS.player, 16);
+      popFloatText(player.x, player.y - 14, "SHOCKWAVE!", COLORS.player, 16, FLOAT_LIFE);
     }
   },
   {
@@ -131,7 +136,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.shield = Math.max(buffs.shield, CHEST_CONFIG.bonuses.shield);
-      popFloatText(player.x, player.y - 14, "SHIELD!", "#7fe7ff", 16);
+      popFloatText(player.x, player.y - 14, "SHIELD!", "#7fe7ff", 16, FLOAT_LIFE);
     }
   },
   {
@@ -141,7 +146,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.slow = Math.max(buffs.slow, CHEST_CONFIG.bonuses.freeze);
-      popFloatText(player.x, player.y - 14, "FREEZE!", "#b160ff", 16);
+      popFloatText(player.x, player.y - 14, "FREEZE!", "#b160ff", 16, FLOAT_LIFE);
     }
   },
   {
@@ -151,7 +156,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.xp = Math.max(buffs.xp, CHEST_CONFIG.bonuses.xp);
-      popFloatText(player.x, player.y - 14, "XP BOOST!", COLORS.gold, 16);
+      popFloatText(player.x, player.y - 14, "XP BOOST!", COLORS.gold, 16, FLOAT_LIFE);
     }
   },
   {
@@ -161,7 +166,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.power = Math.max(buffs.power, CHEST_CONFIG.bonuses.power);
-      popFloatText(player.x, player.y - 14, "OVERCHARGE!", "#ff9dfc", 16);
+      popFloatText(player.x, player.y - 14, "OVERCHARGE!", "#ff9dfc", 16, FLOAT_LIFE);
     }
   },
   {
@@ -171,7 +176,7 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       buffs.haste = Math.max(buffs.haste, CHEST_CONFIG.bonuses.haste);
-      popFloatText(player.x, player.y - 14, "SPEED UP!", COLORS.player, 16);
+      popFloatText(player.x, player.y - 14, "SPEED UP!", COLORS.player, 16, FLOAT_LIFE);
     }
   },
   {
@@ -181,17 +186,26 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       queueChestBomb(player.x, player.y);
-      popFloatText(player.x, player.y - 14, "BOMB!", COLORS.warn, 16);
+      popFloatText(player.x, player.y - 14, "BOMB!", COLORS.warn, 16, FLOAT_LIFE);
     }
   },
 ];
 
-function spawnChest(camX, camY, W, H) {
-  if (chests.length >= chestSpawn.activeMax) return;
+function countChests(kind) {
+  let count = 0;
+  for (let i = 0; i < chests.length; i++) {
+    if (chests[i].alive && chests[i].kind === kind) count++;
+  }
+  return count;
+}
+
+function spawnChest(camX, camY, W, H, kind, activeMax) {
+  if (countChests(kind) >= activeMax) return null;
 
   const c = chestPool.get();
   c.alive = true;
   c.pulse = rand(TAU, 0);
+  c.kind = kind;
 
   for (let tries = 0; tries < CHEST_CONFIG.spawnTries; tries++) {
     const x = player.x + rand(W * CHEST_CONFIG.spawnOffset, -W * CHEST_CONFIG.spawnOffset);
@@ -207,13 +221,32 @@ function spawnChest(camX, camY, W, H) {
   c.x = limited.x;
   c.y = limited.y;
   chests.push(c);
+  return c;
 }
 
 export function updateChests(dt, camX, camY, W, H) {
   chestSpawn.t -= dt;
   if (chestSpawn.t <= 0) {
     chestSpawn.t = rand(chestSpawn.max, chestSpawn.min);
-    spawnChest(camX, camY, W, H);
+    spawnChest(camX, camY, W, H, "bonus", chestSpawn.activeMax);
+  }
+
+  if (!trinketSlotsFull()) {
+    trinketSpawn.t -= dt;
+    if (trinketSpawn.t <= 0) {
+      trinketSpawn.t = rand(trinketSpawn.max, trinketSpawn.min);
+      spawnChest(camX, camY, W, H, "trinket", trinketSpawn.activeMax);
+    }
+  }
+
+  augSpawn.t -= dt;
+  if (augSpawn.t <= 0) {
+    augSpawn.t = rand(augSpawn.max, augSpawn.min);
+    const chest = spawnChest(camX, camY, W, H, "aug", augSpawn.activeMax);
+    if (chest) {
+      const packCount = randi(AUGMENT_CONFIG.elitePack.countMax + 1, AUGMENT_CONFIG.elitePack.countMin);
+      spawnElitePackAt(chest.x, chest.y, packCount, AUGMENT_CONFIG.elitePack.radiusMin, AUGMENT_CONFIG.elitePack.radiusMax);
+    }
   }
 
   for (let i = chests.length - 1; i >= 0; i--) {
@@ -225,11 +258,39 @@ export function updateChests(dt, camX, camY, W, H) {
     const rr = c.r + player.r + CHEST_CONFIG.radiusPadding;
     if (dx * dx + dy * dy <= rr * rr) {
       c.alive = false;
-      let bonus = CHEST_BONUSES[randi(CHEST_BONUSES.length)];
-      if (player.hp / player.maxHp < CHEST_CONFIG.healBias.hpPct && Math.random() < CHEST_CONFIG.healBias.chance) bonus = CHEST_BONUSES[0];
-      addParticles(c.x, c.y, COLORS.chest, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
-      popFloatText(c.x, c.y - 10, bonus.label, bonus.color, 18);
-      bonus.apply();
+      if (c.kind === "trinket") {
+        if (trinketSlotsFull()) {
+          const { addXP } = requireRuntime();
+          const lvl = Math.max(1, player.level || 1);
+          const mult = Math.min(1.6, 0.6 + lvl * 0.02);
+          const bonus = Math.max(1, Math.round(player.xpNeed * mult));
+          addXP(bonus);
+          addParticles(c.x, c.y, COLORS.gold, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+          popFloatText(c.x, c.y - 10, `+${bonus} XP`, COLORS.gold, 18, FLOAT_LIFE);
+        } else {
+          if (runtime.openTrinket) runtime.openTrinket();
+          addParticles(c.x, c.y, COLORS.trinket, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+          popFloatText(c.x, c.y - 10, "TRINKET", COLORS.trinket, 18, FLOAT_LIFE);
+        }
+      } else if (c.kind === "aug") {
+        const opened = runtime.openAug ? runtime.openAug() : false;
+        if (opened) {
+          addParticles(c.x, c.y, COLORS.aug, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+          popFloatText(c.x, c.y - 10, "AUGMENT", COLORS.aug, 18, FLOAT_LIFE);
+        } else {
+          let bonus = CHEST_BONUSES[randi(CHEST_BONUSES.length)];
+          if (player.hp / player.maxHp < CHEST_CONFIG.healBias.hpPct && Math.random() < CHEST_CONFIG.healBias.chance) bonus = CHEST_BONUSES[0];
+          addParticles(c.x, c.y, COLORS.chest, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+          popFloatText(c.x, c.y - 10, bonus.label, bonus.color, 18, FLOAT_LIFE);
+          bonus.apply();
+        }
+      } else {
+        let bonus = CHEST_BONUSES[randi(CHEST_BONUSES.length)];
+        if (player.hp / player.maxHp < CHEST_CONFIG.healBias.hpPct && Math.random() < CHEST_CONFIG.healBias.chance) bonus = CHEST_BONUSES[0];
+        addParticles(c.x, c.y, COLORS.chest, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+        popFloatText(c.x, c.y - 10, bonus.label, bonus.color, 18, FLOAT_LIFE);
+        bonus.apply();
+      }
     }
 
     if (!c.alive) {
@@ -242,4 +303,6 @@ export function updateChests(dt, camX, camY, W, H) {
 
 export function resetChests() {
   chestSpawn.t = CHEST_CONFIG.timerStart;
+  trinketSpawn.t = TRINKET_CONFIG.chest.timerStart;
+  augSpawn.t = AUGMENT_CONFIG.chest.timerStart;
 }
