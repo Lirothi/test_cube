@@ -15,8 +15,8 @@ const QUEST_GIVER_MAX_DIST = 2200;
 const QUEST_ITEM_MIN_DIST = 900;
 const QUEST_ITEM_MAX_DIST = 2400;
 const QUEST_NOTICE_LIFE = 3.0;
-const QUEST_KILL_LVL_SCALE = 0.05;
-const QUEST_SCAVENGE_LVL_SCALE = 0.15;
+const QUEST_KILL_LVL_SCALE = 0.15;
+const QUEST_SCAVENGE_LVL_SCALE = 0.08;
 const QUEST_DROP_LVL_SCALE = 0.25;
 
 let runtime = { addXP: null, openAug: null, openTrinket: null, addParticles: null };
@@ -60,7 +60,7 @@ function activateQuestGiver() {
 }
 
 function spawnQuestItem(x, y, type = "scavenge") {
-  const item = { alive: true, x, y, r: 9, type };
+  const item = { alive: true, x, y, r: 12, type };
   questItems.push(item);
 }
 
@@ -143,7 +143,7 @@ function assignQuest() {
   if (type === "kill") {
     quest.target = Math.floor(randi(40, 25) * (1 + lvl * QUEST_KILL_LVL_SCALE));
   } else if (type === "scavenge") {
-    quest.target = randi(7, 4) + Math.floor(lvl * QUEST_SCAVENGE_LVL_SCALE);
+    quest.target = randi(5, 3) + Math.floor(lvl * QUEST_SCAVENGE_LVL_SCALE);
     spawnQuestItems(quest.target, QUEST_ITEM_MIN_DIST, QUEST_ITEM_MAX_DIST, "scavenge");
   } else if (type === "drop") {
     quest.target = randi(8, 4) + Math.floor(lvl * QUEST_DROP_LVL_SCALE);

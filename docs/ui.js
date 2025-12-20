@@ -18,6 +18,7 @@ export const ui = {
   hpFill: document.getElementById("hpFill"),
   bossWrap: document.getElementById("bossBarWrap"),
   bossCard: document.getElementById("bossBarCard"),
+  bossBars: document.getElementById("bossBars"),
   bossName: document.getElementById("bossName"),
   bossHp: document.getElementById("bossHp"),
   bossHpPct: document.getElementById("bossHpPct"),
@@ -98,6 +99,10 @@ export function updateMenuStats() {
     `<div class="kv"><span>Level</span><span>Lv ${player.level}</span></div>`,
     `<div class="kv"><span>HP</span><span>${hp}</span></div>`,
     `<div class="kv"><span>Armor</span><span>${Math.round(player.armor)}</span></div>`,
+    `<div class="kv"><span>All Res</span><span>${Math.round((player.resists?.all || 0) * 100)}%</span></div>`,
+    `<div class="kv"><span>Fire Res</span><span>${Math.round((player.resists?.fire || 0) * 100)}%</span></div>`,
+    `<div class="kv"><span>Poison Res</span><span>${Math.round((player.resists?.poison || 0) * 100)}%</span></div>`,
+    `<div class="kv"><span>Void Res</span><span>${Math.round((player.resists?.void || 0) * 100)}%</span></div>`,
     `<div class="kv"><span>Move Speed</span><span>${Math.round(player.speed)} (${speedPct}% base)</span></div>`,
     `<div class="kv"><span>Pickup</span><span>${Math.round(player.pickup)} (${pickupPct}% base)</span></div>`,
     `<div class="kv"><span>Cooldown Reduction</span><span>-${cdBonusPct}%</span></div>`,
@@ -123,12 +128,12 @@ export function updateMenuStats() {
     parts.push(`DPS ${dps}`);
     rows.push(`<div class="kv"><span>${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}</span><span>${parts.join(" | ")}</span></div>`);
   };
-  addWeapon("Magic", "magic", magicStats);
-  addWeapon("Aura", "aura", auraStats);
+  addWeapon("Magic Bullet", "magic", magicStats);
+  addWeapon("Holy Aura", "aura", auraStats);
   addWeapon("Railgun", "rail", railStats);
-  addWeapon("Axe", "axe", axeStats);
-  addWeapon("Orb", "orb", orbStats);
-  addWeapon("Missiles", "missile", missileStats);
+  addWeapon("Axe Throw", "axe", axeStats);
+  addWeapon("Singularity Orb", "orb", orbStats);
+  addWeapon("Homing Missiles", "missile", missileStats);
   ui.menuWeaponStats.innerHTML = rows.length ? rows.join("") : `<div class="kv"><span>Weapons</span><span>None unlocked</span></div>`;
 }
 

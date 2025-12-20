@@ -14,6 +14,7 @@ export const player = {
   speed: BASE_STATS.speed,
   pickup: BASE_STATS.pickup,
   armor: 0,
+  resists: { all: 0, fire: 0, poison: 0, void: 0 },
   iFrame: 0,
   level: 1,
   xp: 0,
@@ -100,6 +101,10 @@ export const spawn = {
   boss2Spawned: false,
   boss3Spawned: false,
   boss4Spawned: false,
+  boss5Spawned: false,
+  parallaxDefeated: false,
+  bossPairT: 0,
+  bossPairInterval: 180,
   bossAlive: false,
   bossRef: null,
 };

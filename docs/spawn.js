@@ -9,6 +9,7 @@ import {
   BOSS2_CONFIG,
   BOSS3_CONFIG,
   BOSS4_CONFIG,
+  BOSS5_CONFIG,
 } from "./config.js";
 import { COLORS } from "./colors.js";
 import { clamp, rand, randi } from "./math.js";
@@ -84,6 +85,45 @@ export function getActiveBoss(){
   return null;
 }
 
+function getBossTelegraph(typeKey){
+  if (typeKey === "X") return BOSS_CONFIG.telegraph;
+  if (typeKey === "Y") return BOSS2_CONFIG.telegraph;
+  if (typeKey === "Z") return BOSS3_CONFIG.telegraph;
+  if (typeKey === "W") return BOSS4_CONFIG.telegraph;
+  if (typeKey === "Q") return BOSS5_CONFIG.telegraph;
+  return BOSS_CONFIG.telegraph;
+}
+
+function spawnBossWithTelegraph(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult) {
+  const info = ENEMY_TYPES[typeKey];
+  if (!info) return;
+  const pos = pickSpawnPos(camX, camY, W, H, { allowOutside:true, radius: info.r, avoidObstacles:true });
+  const tele = getBossTelegraph(typeKey);
+  addTelegraph({
+    x: pos.x, y: pos.y,
+    radius: tele.radius,
+    color: tele.color,
+    time: tele.time,
+    fire: () => {
+      spawn.bossAlive = true;
+      spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, false, pos);
+      sound.play("boss");
+    }
+  });
+}
+
+function spawnBossPair(camX, camY, W, H, hpMult, spdMult, dmgMult){
+  const pool = ["X", "Y", "Z", "W"];
+  if (pool.length === 0) return;
+  const first = pool[randi(pool.length)];
+  let second = pool[randi(pool.length)];
+  if (pool.length > 1) {
+    while (second === first) second = pool[randi(pool.length)];
+  }
+  spawnBossWithTelegraph(first, camX, camY, W, H, hpMult, spdMult, dmgMult);
+  spawnBossWithTelegraph(second, camX, camY, W, H, hpMult, spdMult, dmgMult);
+}
+
 function spawnMixedSquad(t, camX, camY, W, H, hpMult, spdMult, dmgMult){
   // Spawn a small mixed pack to keep composition varied.
   if (enemies.length >= spawn.maxEnemies - SPAWN_CONFIG.squadReserve) return;
@@ -92,7 +132,7 @@ function spawnMixedSquad(t, camX, camY, W, H, hpMult, spdMult, dmgMult){
   if (t > SPAWN_CONFIG.mixedPoolTimes.ranged) pool.push("R");
   if (t > SPAWN_CONFIG.mixedPoolTimes.tank) pool.push("C");
   if (t > SPAWN_CONFIG.mixedPoolTimes.brute) pool.push("S");
-  if (t > SPAWN_CONFIG.mixedPoolTimes.void){ pool.push("P"); pool.push("F"); }
+  if (t > SPAWN_CONFIG.mixedPoolTimes.void){ pool.push("P"); pool.push("F"); pool.push("V"); }
   const count = clamp(
     SPAWN_CONFIG.mixedCount.base + Math.floor(t / SPAWN_CONFIG.mixedCount.scaleTime),
     SPAWN_CONFIG.mixedCount.base,
@@ -118,8 +158,13 @@ function pickEliteType(t) {
   if (t > SPAWN_CONFIG.thresholds.ranged) pool.push("R");
   if (t > SPAWN_CONFIG.thresholds.tank) pool.push("C");
   if (t > SPAWN_CONFIG.thresholds.brute) pool.push("S");
-  if (t > SPAWN_CONFIG.thresholds.void) { pool.push("P"); pool.push("F"); }
+  if (t > SPAWN_CONFIG.thresholds.void) { pool.push("P"); pool.push("F"); pool.push("V"); }
   return pool[randi(pool.length)];
+}
+
+function pickVoidType() {
+  if (Math.random() < (SPAWN_CONFIG.voids.voidBias || 0)) return "V";
+  return (Math.random() < SPAWN_CONFIG.voids.fireBias) ? "F" : "P";
 }
 
 export function spawnElitePackAt(x, y, count, radiusMin = 80, radiusMax = 180) {
@@ -217,6 +262,31 @@ export function spawnController(dt, camX, camY, W, H){
       }
     });
   }
+  if (!spawn.boss5Spawned && t >= BOSS5_CONFIG.spawnTime){
+    spawn.boss5Spawned = true;
+    const pos = pickSpawnPos(camX, camY, W, H, { allowOutside:true, radius: ENEMY_TYPES.Q.r, avoidObstacles:true });
+    addTelegraph({
+      x: pos.x, y: pos.y,
+      radius: BOSS5_CONFIG.telegraph.radius,
+      color: BOSS5_CONFIG.telegraph.color,
+      time: BOSS5_CONFIG.telegraph.time,
+      fire: () => {
+        spawn.bossAlive = true;
+        spawnEnemy("Q", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        sound.play("boss");
+      }
+    });
+  }
+  if (spawn.parallaxDefeated) {
+    spawn.bossPairT -= dt;
+    if (spawn.bossPairT <= 0) {
+      spawn.bossPairT += (spawn.bossPairInterval || 180);
+      const bossHpMult = 1 + t * SPAWN_CONFIG.scaling.hp;
+      const bossSpdMult = 1 + t * SPAWN_CONFIG.scaling.speed;
+      const bossDmgMult = 1 + t * SPAWN_CONFIG.scaling.dmg;
+      spawnBossPair(camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult);
+    }
+  }
 
   if (enemies.length >= spawn.maxEnemies) return;
 
@@ -258,7 +328,7 @@ export function spawnController(dt, camX, camY, W, H){
     const e = enemies[i];
     if (!e.alive) continue;
     if (e.type === "R") rangedCount++;
-    else if (e.type === "P" || e.type === "F") voidCount++;
+    else if (e.type === "P" || e.type === "F" || e.type === "V") voidCount++;
   }
   const rangedCap = SPAWN_CONFIG.ranged.capBase + Math.floor(t / SPAWN_CONFIG.ranged.capScaleTime); // slowly grows over time
   const rangedChance = SPAWN_CONFIG.ranged.chance * tier.rangedChanceMult; // chance per spawn (after fast roll)
@@ -285,11 +355,11 @@ export function spawnController(dt, camX, camY, W, H){
     if (t > SPAWN_CONFIG.thresholds.brute && typeKey === "C" && Math.random() < SPAWN_CONFIG.rolls.brute) typeKey = "S";
 
     if (t > SPAWN_CONFIG.thresholds.void && roll > SPAWN_CONFIG.rolls.void && voidCount < voidCap && Math.random() < voidChance){
-      typeKey = Math.random() < SPAWN_CONFIG.voids.fireBias ? "F" : "P";
+      typeKey = pickVoidType();
       voidCount++;
     }
 
-    if (t > SPAWN_CONFIG.thresholds.lateMix && roll > SPAWN_CONFIG.rolls.lateMix && typeKey !== "P" && typeKey !== "F"){
+    if (t > SPAWN_CONFIG.thresholds.lateMix && roll > SPAWN_CONFIG.rolls.lateMix && typeKey !== "P" && typeKey !== "F" && typeKey !== "V"){
       const r2 = Math.random();
       if (r2 < SPAWN_CONFIG.rolls.lateTank){
         typeKey = "C";
@@ -297,7 +367,7 @@ export function spawnController(dt, camX, camY, W, H){
         typeKey = "R";
         rangedCount++;
       } else if (r2 < SPAWN_CONFIG.rolls.lateVoid && voidCount < voidCap){
-        typeKey = Math.random() < SPAWN_CONFIG.voids.fireBias ? "F" : "P";
+        typeKey = pickVoidType();
         voidCount++;
       } else if (r2 < SPAWN_CONFIG.rolls.lateBrute){
         typeKey = "S";
@@ -409,6 +479,45 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.mineOffsetMin = info.minefield ? info.minefield.offsetMin : 0;
   e.mineOffsetMax = info.minefield ? info.minefield.offsetMax : 0;
   e.mineColor = info.minefield ? (info.minefield.color || COLORS.voidFire) : COLORS.voidFire;
+
+  // blink setup
+  e.blinkCd = info.blink ? info.blink.cd : 0;
+  e.blinkRadius = info.blink ? info.blink.radius : 0;
+  e.blinkDmg = info.blink ? info.blink.dmg : 0;
+  e.blinkTelegraph = info.blink ? (info.blink.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+  e.blinkRangeMin = info.blink ? (info.blink.rangeMin || 0) : 0;
+  e.blinkRangeMax = info.blink ? (info.blink.rangeMax || 0) : 0;
+  e.blinkColor = info.blink ? (info.blink.color || COLORS.warn) : COLORS.warn;
+  e.blinkT = info.blink ? rand(info.blink.cd * RANGED_SHOT_CONFIG.startDelayMax, info.blink.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+  e.blinkSeq = 0;
+
+  // rift setup
+  e.riftCd = info.rift ? info.rift.cd : 0;
+  e.riftCount = info.rift ? info.rift.count : 0;
+  e.riftRadius = info.rift ? info.rift.radius : 0;
+  e.riftDuration = info.rift ? info.rift.duration : 0;
+  e.riftDps = info.rift ? info.rift.dps * dmgMult : 0;
+  e.riftTick = info.rift ? (info.rift.tick || 0.35) : 0.35;
+  e.riftPull = info.rift ? (info.rift.pull || 0) : 0;
+  e.riftColor = info.rift ? (info.rift.color || COLORS.voidPoison) : COLORS.voidPoison;
+  e.riftTelegraph = info.rift ? (info.rift.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+  e.riftOffsetMin = info.rift ? (info.rift.offsetMin || 0) : 0;
+  e.riftOffsetMax = info.rift ? (info.rift.offsetMax || 0) : 0;
+  e.riftT = info.rift ? rand(info.rift.cd * RANGED_SHOT_CONFIG.startDelayMax, info.rift.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+  e.riftSeq = 0;
+
+  // split setup
+  e.splitCd = info.split ? info.split.cd : 0;
+  e.splitSpeed = info.split ? info.split.speed : 0;
+  e.splitDmg = info.split ? info.split.dmg * dmgMult : 0;
+  e.splitLife = info.split ? info.split.life : 0;
+  e.splitAfter = info.split ? info.split.splitAfter : 0;
+  e.splitCount = info.split ? info.split.splitCount : 0;
+  e.splitSpread = info.split ? info.split.splitSpread : 0;
+  e.splitTelegraph = info.split ? (info.split.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+  e.splitColor = info.split ? (info.split.color || COLORS.warn) : COLORS.warn;
+  e.splitT = info.split ? rand(info.split.cd * RANGED_SHOT_CONFIG.startDelayMax, info.split.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+  e.splitSeq = 0;
   e.slowT = 0; e.slowMul = 1;
   e.burnT = 0; e.burnDps = 0; e.burnSource = null;
   e.bleedT = 0; e.bleedDps = 0; e.bleedSource = null;
@@ -440,6 +549,10 @@ export function resetSpawnState(){
   spawn.boss2Spawned = false;
   spawn.boss3Spawned = false;
   spawn.boss4Spawned = false;
+  spawn.boss5Spawned = false;
+  spawn.parallaxDefeated = false;
+  spawn.bossPairT = 0;
+  spawn.bossPairInterval = 180;
   spawn.bossAlive = false;
   spawn.bossRef = null;
 }

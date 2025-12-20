@@ -1,4 +1,4 @@
-import {
+﻿import {
   COLORS,
   PLAYER_CONFIG,
   XP_CONFIG,
@@ -168,12 +168,12 @@ import { popFloatText } from "./float_text.js";
       }
     }
     const WEAPON_LABELS = [
-      { key: "magic", label: "Magic" },
-      { key: "aura", label: "Aura" },
+      { key: "magic", label: "Magic Bullet" },
+      { key: "aura", label: "Holy Aura" },
       { key: "rail", label: "Railgun" },
-      { key: "axe", label: "Axe" },
-      { key: "orb", label: "Orb" },
-      { key: "missile", label: "Missiles" },
+      { key: "axe", label: "Axe Throw" },
+      { key: "orb", label: "Singularity Orb" },
+      { key: "missile", label: "Homing Missiles" },
     ];
 
     function formatWeaponPills(){
@@ -201,6 +201,16 @@ import { popFloatText } from "./float_text.js";
 
       const armorBonus = Math.round(player.armor || 0);
       if (armorBonus) add(`Armor +${armorBonus}`);
+
+      const resists = player.resists || {};
+      const allResPct = Math.round((resists.all || 0) * 100);
+      if (allResPct) add(`All Res +${allResPct}%`);
+      const fireResPct = Math.round((resists.fire || 0) * 100);
+      if (fireResPct) add(`Fire Res +${fireResPct}%`);
+      const poisonResPct = Math.round((resists.poison || 0) * 100);
+      if (poisonResPct) add(`Poison Res +${poisonResPct}%`);
+      const voidResPct = Math.round((resists.void || 0) * 100);
+      if (voidResPct) add(`Void Res +${voidResPct}%`);
 
       const pickupBonus = Math.round(player.pickup - BASE_STATS.pickup);
       if (pickupBonus) add(`Pickup +${pickupBonus}`);
@@ -232,7 +242,7 @@ import { popFloatText } from "./float_text.js";
       if (ui.mWeapons) ui.mWeapons.innerHTML = formatWeaponPills();
     }
 
-    const AUG_FLOAT_LIFE = 2;
+    const AUG_FLOAT_LIFE = 3;
 
     /* ============================
        Input setup
@@ -294,12 +304,22 @@ import { popFloatText } from "./float_text.js";
       if (trinketSlotsFull()) return false;
       const picks = pickTrinkets();
       if (!picks.length) return false;
+      picks.push({
+        id: "skip_trinket",
+        title: "Skip",
+        desc: "Leave this trinket behind.",
+        tag: () => "No effect",
+      });
       state = STATE.TRINKET;
       if (ui.levelup) ui.levelup.classList.add("trinket");
       if (ui.levelup) ui.levelup.classList.remove("aug");
       setLevelUpHeader("Trinket Found", "Choose 1 trinket. Game is paused.");
       renderUpgradeCards(picks, (t) => {
         if (state !== STATE.TRINKET) return;
+        if (t.id === "skip_trinket") {
+          closeTrinket();
+          return;
+        }
         addTrinket(t.id);
         updateLoadoutUi();
         closeTrinket();
@@ -329,10 +349,10 @@ import { popFloatText } from "./float_text.js";
         const maxLevel = WEAPON_CONFIG[pick.key]?.maxLevel || w.level;
         if (w.level < maxLevel) {
           w.level++;
-          popFloatText(player.x, player.y - 18, `${pick.label} +1`, COLORS.aug, 18, AUG_FLOAT_LIFE);
+          popFloatText(player.x, player.y - 18, `${pick.label} +1`, COLORS.aug, 20, AUG_FLOAT_LIFE);
         } else {
           w.mastery++;
-          popFloatText(player.x, player.y - 18, `${pick.label} Mastery +1`, COLORS.aug, 18, AUG_FLOAT_LIFE);
+          popFloatText(player.x, player.y - 18, `${pick.label} Mastery +1`, COLORS.aug, 20, AUG_FLOAT_LIFE);
         }
         updateLoadoutUi();
         return true;

@@ -179,7 +179,7 @@ const CHEST_BONUSES = [
       popFloatText(player.x, player.y - 14, "SPEED UP!", COLORS.player, 16, FLOAT_LIFE);
     }
   },
-  {
+  /*{
     id: "bomb",
     label: "BOMB",
     color: COLORS.warn,
@@ -188,7 +188,7 @@ const CHEST_BONUSES = [
       queueChestBomb(player.x, player.y);
       popFloatText(player.x, player.y - 14, "BOMB!", COLORS.warn, 16, FLOAT_LIFE);
     }
-  },
+  },*/
 ];
 
 function countChests(kind) {
@@ -276,7 +276,7 @@ export function updateChests(dt, camX, camY, W, H) {
         const opened = runtime.openAug ? runtime.openAug() : false;
         if (opened) {
           addParticles(c.x, c.y, COLORS.aug, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
-          popFloatText(c.x, c.y - 10, "AUGMENT", COLORS.aug, 18, FLOAT_LIFE);
+          //popFloatText(c.x, c.y - 10, "AUGMENT", COLORS.aug, 18, FLOAT_LIFE);
         } else {
           let bonus = CHEST_BONUSES[randi(CHEST_BONUSES.length)];
           if (player.hp / player.maxHp < CHEST_CONFIG.healBias.hpPct && Math.random() < CHEST_CONFIG.healBias.chance) bonus = CHEST_BONUSES[0];

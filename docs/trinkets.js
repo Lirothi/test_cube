@@ -11,23 +11,51 @@ const TRINKETS = [
   {
     id: "flux_boots",
     title: "Flux Boots",
-    desc: "Move speed +12%.",
-    tag: () => "+12% Speed",
-    apply: () => { player.speed *= 1.12; }
+    desc: "Move speed +15%.",
+    tag: () => "+15% Speed",
+    apply: () => { player.speed *= 1.15; }
   },
   {
     id: "ironheart_core",
     title: "Ironheart Core",
-    desc: "Max HP +30.",
-    tag: () => "+30 Max HP",
-    apply: () => { applyMaxHp(30); }
+    desc: "Max HP +40.",
+    tag: () => "+40 Max HP",
+    apply: () => { applyMaxHp(40); }
   },
   {
     id: "aegis_plate",
     title: "Aegis Plate",
-    desc: "Armor +2.",
-    tag: () => "+2 Armor",
-    apply: () => { player.armor += 2; }
+    desc: "Armor +3.",
+    tag: () => "+3 Armor",
+    apply: () => { player.armor += 3; }
+  },
+  {
+    id: "elemental_ward",
+    title: "Elemental Ward",
+    desc: "All elemental resistances +12%.",
+    tag: () => "+6% All Res",
+    apply: () => { player.resists.all += 0.12; }
+  },
+  {
+    id: "thermal_shield",
+    title: "Thermal Shield",
+    desc: "Fire resistance +24%.",
+    tag: () => "+12% Fire Res",
+    apply: () => { player.resists.fire += 0.24; }
+  },
+  {
+    id: "toxin_filter",
+    title: "Toxin Filter",
+    desc: "Poison resistance +24%.",
+    tag: () => "+12% Poison Res",
+    apply: () => { player.resists.poison += 0.24; }
+  },
+  {
+    id: "void_lattice",
+    title: "Void Lattice",
+    desc: "Void resistance +24%.",
+    tag: () => "+12% Void Res",
+    apply: () => { player.resists.void += 0.24; }
   },
   {
     id: "vacuum_coil",
@@ -74,9 +102,9 @@ const TRINKETS = [
   {
     id: "guardian_crest",
     title: "Guardian Crest",
-    desc: "Max HP +18 and Armor +1.",
-    tag: () => "+18 HP, +1 Armor",
-    apply: () => { applyMaxHp(18); player.armor += 1; }
+    desc: "Max HP +25 and Armor +2.",
+    tag: () => "+25 HP, +2 Armor",
+    apply: () => { applyMaxHp(25); player.armor += 2; }
   },
 ];
 

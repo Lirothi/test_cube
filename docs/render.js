@@ -787,7 +787,9 @@ export function renderFrame({
     ctx.fillStyle = COLORS.text;
     ctx.shadowColor = COLORS.player;
     ctx.shadowBlur = 16 * a;
+    const lineGap = isMobile ? 20 : 26;
     ctx.fillText(`Remember you are limited to ${MAX_WEAPONS} weapons`, W * 0.5, H * 0.4);
+    ctx.fillText("Bonus chests more likely to heal at low HP.", W * 0.5, H * 0.4 + lineGap);
     ctx.restore();
   }
 
@@ -822,24 +824,50 @@ export function renderFrame({
     ui.mHpFill.style.width = `${(hpT*100).toFixed(2)}%`;
   }
 
-  const bossHp = boss ? clamp(boss.hp, 0, boss.maxHp) : 0;
-  const bossHpT = boss && boss.maxHp > 0 ? clamp(bossHp / boss.maxHp, 0, 1) : 0;
-  const bossName = boss ? (ENEMY_TYPES[boss.type]?.name || "Boss") : "";
-  const bossOn = !!boss;
+  const bosses = [];
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (e.alive && e.boss) bosses.push(e);
+  }
+  const primaryBoss = bosses[0] || boss || null;
+  const bossHp = primaryBoss ? clamp(primaryBoss.hp, 0, primaryBoss.maxHp) : 0;
+  const bossHpT = primaryBoss && primaryBoss.maxHp > 0 ? clamp(bossHp / primaryBoss.maxHp, 0, 1) : 0;
+  const bossName = primaryBoss ? (ENEMY_TYPES[primaryBoss.type]?.name || "Boss") : "";
+  const bossOn = bosses.length > 0;
   if (ui.bossWrap) ui.bossWrap.classList.toggle("on", bossOn);
   if (ui.bossCard){
     ui.bossCard.classList.toggle("on", bossOn);
     if (bossOn){
-      ui.bossName.textContent = bossName;
-      ui.bossHp.textContent = `${Math.ceil(bossHp)} / ${Math.ceil(boss.maxHp)}`;
-      ui.bossHpPct.textContent = `${Math.round(bossHpT * 100)}%`;
-      ui.bossHpFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
+      if (ui.bossBars){
+        ui.bossBars.innerHTML = bosses.map((b) => {
+          const hp = clamp(b.hp, 0, b.maxHp);
+          const hpT = b.maxHp > 0 ? clamp(hp / b.maxHp, 0, 1) : 0;
+          const name = ENEMY_TYPES[b.type]?.name || "Boss";
+          return `
+            <div class="bossRow">
+              <div class="barRow">
+                <div class="barLabel">${name}</div>
+                <div class="barValue"><span>${Math.round(hpT * 100)}%</span></div>
+              </div>
+              <div class="barOuter"><div class="barInner boss" style="width:${(hpT*100).toFixed(2)}%"></div></div>
+              <div class="barValue sub"><span>${Math.ceil(hp)} / ${Math.ceil(b.maxHp)}</span></div>
+            </div>
+          `;
+        }).join("");
+      }
+      if (ui.bossName) ui.bossName.textContent = bossName;
+      if (ui.bossHp) ui.bossHp.textContent = `${Math.ceil(bossHp)} / ${Math.ceil(primaryBoss.maxHp)}`;
+      if (ui.bossHpPct) ui.bossHpPct.textContent = `${Math.round(bossHpT * 100)}%`;
+      if (ui.bossHpFill) ui.bossHpFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
+    } else if (ui.bossBars) {
+      ui.bossBars.innerHTML = "";
     }
   }
   if (ui.mBossBar){
     ui.mBossBar.classList.toggle("on", bossOn);
     if (bossOn){
-      ui.mBossName.textContent = bossName || "Boss";
+      const label = bosses.length > 1 ? `Bosses (${bosses.length})` : (bossName || "Boss");
+      ui.mBossName.textContent = label;
       ui.mBossPct.textContent = `${Math.round(bossHpT * 100)}%`;
       ui.mBossFill.style.width = `${(bossHpT*100).toFixed(2)}%`;
     } else {

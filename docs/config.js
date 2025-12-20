@@ -15,10 +15,18 @@ export const PLAYER_CONFIG = {
 export const XP_CONFIG = {
   baseNeed: 7,
   perLevel: 6,
-  curvePower: 1.15,
+  curvePower: 1.17,
   curveScale: 1.0,
+  lateStart: 45,
+  latePower: 1.3,
+  lateScale: 1.1,
   buffMultiplier: 1.7,
   cardChoices: 3,
+};
+
+export const DOT_CONFIG = {
+  burnTick: 0.2,
+  bleedTick: 0.2,
 };
 
 export const BUFF_EFFECTS = {
@@ -37,6 +45,10 @@ export const UPGRADE_CONFIG = {
   hpHealPct: 0.60,
   pickupGain: 30,
   armorGain: 2,
+  resAllGain: 0.03,
+  resFireGain: 0.05,
+  resPoisonGain: 0.05,
+  resVoidGain: 0.05,
   cdReduction: 0.06,
   xpMultGain: 0.06,
   weightNewWeapon: 2.8,
@@ -59,9 +71,9 @@ export const SPAWN_CONFIG = {
   squadIntervalDrop: 0.01,
   squadIntervalMin: 6.5,
   squadIntervalMax: 14,
-  scaling: { hp: 0.000, speed: 0.000, dmg: 0.000 },
+  scaling: { hp: 0.0005, speed: 0.0005, dmg: 0.0005 },
   ranged: { capBase: 10, capScaleTime: 140, chance: 0.05 },
-  voids: { capBase: 6, capScaleTime: 130, chance: 0.06, fireBias: 0.55 },
+  voids: { capBase: 6, capScaleTime: 130, chance: 0.06, fireBias: 0.55, voidBias: 0.2 },
   rolls: {
     fast: 0.18,
     tank: 0.86,
@@ -119,13 +131,13 @@ export const CHEST_CONFIG = {
   pulseSpeed: 2.8,
   healBias: { hpPct: 0.35, chance: 0.55 },
   openParticles: { count: 22, spread: 420 },
-  bomb: { radius: 340, dmgBase: 45, dmgPerLevel: 4, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
-  shockwave: { baseKnock: 920, dmgBase: 15, dmgPerLevel: 2, damageRadius: 240, knockPush: 360 },
+  //bomb: { radius: 340, dmgBase: 45, dmgPerLevel: 4, telegraphTime: 0.65, particles: 58, particleSpread: 600 },
+  shockwave: { baseKnock: 920, dmgBase: 45, dmgPerLevel: 4, damageRadius: 340, knockPush: 360 },
   bonuses: { healPct: 0.45, magnet: 15, shield: 10, freeze: 10, xp: 12, power: 8, haste: 10 },
 };
 
 export const TRINKET_CONFIG = {
-  slots: 4,
+  slots: 5,
   choices: 2,
   chest: { timerStart: 80, timerMin: 130, timerMax: 200, activeMax: 1 },
 };
@@ -140,7 +152,7 @@ export const AUGMENT_CONFIG = {
   },
   rail: {
     burn: { dpsPct: 0.50, duration: 2.2 },
-    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 1.1 },
+    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 0.95 },
   },
   axe: {
     bleed: { dpsPct: 0.35, duration: 3.0 },
@@ -151,12 +163,12 @@ export const AUGMENT_CONFIG = {
     leechPct: 0.005,
   },
   orb: {
-    eventHorizon: { park: 0.7, pullMult: 1.3 },
+    eventHorizon: { park: 0.7, pullMult: 1.3, tickDmgMult: 1.3 },
     darkBurst: { dmgMult: 1.2, radiusMult: 1.3, park: -0.4, pullMult: 0.6 },
   },
   missile: {
     swarm: { extra: 1, dmgMult: 0.8 },
-    concussive: { slowMult: 0.55, slowDuration: 0.7, knock: 260 },
+    concussive: { slowMult: 0.55, slowDuration: 0.7, knock: 260, burn: { dpsPct: 0.30, duration: 2.0 } },
   },
 };
 
@@ -223,7 +235,7 @@ export const WEAPON_CONFIG = {
     },
   },
   rail: {
-    cdBase: 4.4,
+    cdBase: 4.0,
     cdPerLevel: 0.6,
     cdMin: 1.5,
     dmgBase: 30,
@@ -289,14 +301,21 @@ export const WEAPON_CONFIG = {
 };
 
 export const WEAPON_MASTERY = {
-  dmgMult: 0.07,       // +7% damage per mastery level
+  dmgMult: 0.05,       // +5% damage per mastery level
   critChance: 0.01,    // +1% crit chance per mastery level
-  critMult: 0.08,      // +0.08 crit multiplier per mastery level
+  critMult: 0.05,      // +0.05 crit multiplier per mastery level
 };
 
 export const MAX_WEAPONS = 4;
 
-export const DPS_LABELS = { magic:"Magic", aura:"Aura", rail:"Railgun", axe:"Axe", orb:"Orb", missile:"Missile" };
+export const DPS_LABELS = {
+  magic: "Magic Bullet",
+  aura: "Holy Aura",
+  rail: "Railgun",
+  axe: "Axe Throw",
+  orb: "Singularity Orb",
+  missile: "Homing Missiles",
+};
 
 export const WEAPON_RIDERS = {};
 
@@ -308,6 +327,8 @@ export const ENEMY_BEHAVIOR = {
   fleeMult: 0.95,
   creepMult: 0.45,
   strafeMult: 0.35,
+  spitAimOffsetMin: 0.25,
+  spitAimOffsetMax: 0.45,
 };
 
 export const RANGED_SHOT_CONFIG = {
@@ -318,7 +339,7 @@ export const RANGED_SHOT_CONFIG = {
   telegraphTime: 0.32,
   defaultSpeed: 360,
   defaultDmg: 8,
-  radius: 3.7,
+  radius: 4,
   life: 2.25,
   hitPad: 3,
   color: "rgba(255,59,102,.95)",
@@ -349,7 +370,7 @@ export const LOOP_CONFIG = {
 };
 
 export const ELITE_CONFIG = {
-  interval: 15,
+  interval: 10,
   hpMult: 10,
   speedMult: 1.15,
   dmgMult: 2,
@@ -394,6 +415,16 @@ export const BOSS4_CONFIG = {
   lootGems: 24,
 };
 
+export const BOSS5_CONFIG = {
+  spawnTime: 900,
+  //spawnTime: 2,
+  telegraph: { radius: 190, time: 1.7, color: "#b67bff" },
+  blink: { cd: 4.6, radius: 140, dmg: 26, telegraph: 0.9, rangeMin: 120, rangeMax: 260, color: "#b67bff" },
+  rift: { cd: 5.4, count: 4, radius: 110, duration: 3.6, dps: 15, tick: 0.35, pull: 260, telegraph: 0.85, offsetMin: 80, offsetMax: 210, color: COLORS.voidDark },
+  split: { cd: 2.4, speed: 260, dmg: 18, life: 2.4, splitAfter: 0.9, splitCount: 5, splitSpread: 0.32, telegraph: 0.7, color: "#b67bff" },
+  lootGems: 28,
+};
+
 // Base stats (HP scaling is handled in spawnController)
 export const ENEMY_TYPES = {
   A: { name:"Basic",  r:10, hp:22, speed:70,  dmg:6.0,  color:COLORS.enemyA, xp:1, gem:1 },
@@ -408,6 +439,11 @@ export const ENEMY_TYPES = {
     name:"Scorcher", r:11, hp:32, speed:60, dmg:7.5, color:COLORS.enemyF, xp:2, gem:2,
     ranged:true,
     spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
+  },
+  V: { // void spitter
+    name:"Voidcaller", r:10, hp:30, speed:58, dmg:6.8, color:COLORS.enemyV, xp:2, gem:2,
+    ranged:true,
+    spit:{ cd:4.1, range:560, radius:72, duration:4.6, dps:10.5, tick:0.35, telegraph:0.75, color:COLORS.voidDark, type:"void" }
   },
   X: { // mini-boss
     name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
@@ -426,7 +462,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS2_CONFIG.lootGems,
   },
   Z: { // melee juggernaut
-    name:"Titan", r:24, hp:5200, speed:62, dmg:18, color:"#ff7b3b", xp:12, gem:16,
+    name:"Titan", r:24, hp:7200, speed:62, dmg:18, color:"#ff7b3b", xp:12, gem:16,
     boss:true, knockResist:0.7,
     ranged:false, shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0,
     slam: BOSS3_CONFIG.slam,
@@ -435,13 +471,22 @@ export const ENEMY_TYPES = {
     lootGems: BOSS3_CONFIG.lootGems,
   },
   W: { // ranged sentinel
-    name:"Archon", r:22, hp:7200, speed:75, dmg:16, color:"#7cf6ff", xp:14, gem:18,
+    name:"Archon", r:22, hp:12200, speed:75, dmg:16, color:"#7cf6ff", xp:14, gem:18,
     boss:true, knockResist:0.85,
     ranged:true, shotCd:1.25, shotDmg:24, shotSpeed:520, shotRange:720,
     telegraph: BOSS4_CONFIG.telegraph,
     homingMissiles: BOSS4_CONFIG.homingMissiles,
     minefield: BOSS4_CONFIG.minefield,
     lootGems: BOSS4_CONFIG.lootGems,
+  },
+  Q: { // phase boss
+    name:"Parallax", r:24, hp:16500, speed:70, dmg:18, color:COLORS.enemyQ, xp:16, gem:20,
+    boss:true, knockResist:0.9,
+    telegraph: BOSS5_CONFIG.telegraph,
+    blink: BOSS5_CONFIG.blink,
+    rift: BOSS5_CONFIG.rift,
+    split: BOSS5_CONFIG.split,
+    lootGems: BOSS5_CONFIG.lootGems,
   },
   S: { name:"Bulwark", r:14, hp:96, speed:58, dmg:9.5, color:COLORS.enemyS, xp:3, gem:2, knockResist:0.35 },
   R: { // ranged kiter (tries to keep distance and shoot)

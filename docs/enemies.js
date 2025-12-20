@@ -8,16 +8,18 @@ import {
   BOSS_CONFIG,
   BOSS4_CONFIG,
   ENEMY_TYPES,
+  DOT_CONFIG,
 } from "./config.js";
 import { TAU, rand, randi, clamp, hypot } from "./math.js";
 import { sound } from "./audio.js";
-import { applyArmorDamage } from "./player.js";
+import { applyArmorDamage, applyElementalDamage } from "./player.js";
 import { getEnemyTier } from "./spawn.js";
 import { addTelegraph } from "./telegraph.js";
 import { obstacleAvoidance, damageObstacle, resolveObstacles, OBSTACLE_TYPE } from "./obstacles.js";
 import { addParticles } from "./particles.js";
 import { spawnShockwave } from "./weapons.js";
 import {
+  clampPointToWorld,
   clampEntityToWorld,
   WORLD,
   player,
@@ -117,13 +119,17 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
     if (e.boss) {
       spawn.bossAlive = false;
       spawn.bossRef = null;
+      if (e.type === "Q") {
+        spawn.parallaxDefeated = true;
+        spawn.bossPairT = spawn.bossPairInterval || 180;
+      }
       if (runtime.openAug) runtime.openAug();
     }
     e.alive = false;
   }
 }
 
-function spawnEnemyShot(x, y, nx, ny, speed, dmg) {
+function spawnEnemyShot(x, y, nx, ny, speed, dmg, color = RANGED_SHOT_CONFIG.color) {
   const s = shotPool.get();
   s.alive = true;
   s.x = x; s.y = y;
@@ -135,7 +141,12 @@ function spawnEnemyShot(x, y, nx, ny, speed, dmg) {
   s.r = RANGED_SHOT_CONFIG.radius;
   s.dmg = dmg;
   s.life = RANGED_SHOT_CONFIG.life;
-  s.color = RANGED_SHOT_CONFIG.color; // red projectile
+  s.color = color;
+  s.splitT = 0;
+  s.splitCount = 0;
+  s.splitSpread = 0;
+  s.splitSpeed = 0;
+  s.splitDmg = 0;
   enemyShots.push(s);
 }
 
@@ -153,10 +164,36 @@ function spawnHomingShot(x, y, tx, ty, speed, dmg, turnRate, life, color, angleO
   s.dmg = dmg;
   s.life = life;
   s.color = color || RANGED_SHOT_CONFIG.color;
+  s.splitT = 0;
+  s.splitCount = 0;
+  s.splitSpread = 0;
+  s.splitSpeed = 0;
+  s.splitDmg = 0;
   enemyShots.push(s);
 }
 
-function spawnVoidZone(x, y, radius, duration, dps, color, type, tick = 0.25) {
+function spawnSplitShot(x, y, nx, ny, speed, dmg, life, splitAfter, splitCount, splitSpread, splitSpeed, splitDmg, color) {
+  const s = shotPool.get();
+  s.alive = true;
+  s.x = x; s.y = y;
+  s.vx = nx * speed;
+  s.vy = ny * speed;
+  s.speed = speed;
+  s.turnRate = 0;
+  s.homing = false;
+  s.r = RANGED_SHOT_CONFIG.radius;
+  s.dmg = dmg;
+  s.life = life;
+  s.color = color || RANGED_SHOT_CONFIG.color;
+  s.splitT = splitAfter || 0;
+  s.splitCount = splitCount || 0;
+  s.splitSpread = splitSpread || 0;
+  s.splitSpeed = splitSpeed || speed;
+  s.splitDmg = splitDmg || dmg;
+  enemyShots.push(s);
+}
+
+function spawnVoidZone(x, y, radius, duration, dps, color, type, tick = 0.25, pull = 0) {
   const z = voidPool.get();
   z.alive = true;
   z.x = x; z.y = y;
@@ -168,6 +205,7 @@ function spawnVoidZone(x, y, radius, duration, dps, color, type, tick = 0.25) {
   z.tickT = tick;
   z.color = color;
   z.type = type || "poison";
+  z.pull = pull || 0;
   voidZones.push(z);
 }
 
@@ -192,6 +230,31 @@ function updateEnemyShots(dt) {
         s.vy = Math.sin(curAng + turn) * speed;
         s.speed = speed;
       }
+    }
+
+    if (s.splitT > 0) {
+      s.splitT -= dt;
+      if (s.splitT <= 0) {
+        const count = s.splitCount || 0;
+        if (count > 0) {
+          const baseAng = Math.atan2(s.vy, s.vx);
+          const step = (count > 1) ? (s.splitSpread || 0) : 0;
+          const start = -step * (count - 1) * 0.5;
+          const speed = s.splitSpeed || s.speed || Math.hypot(s.vx, s.vy);
+          const dmg = s.splitDmg || s.dmg;
+          for (let k = 0; k < count; k++) {
+            const ang = baseAng + start + step * k;
+            spawnEnemyShot(s.x, s.y, Math.cos(ang), Math.sin(ang), speed, dmg, s.color);
+          }
+        }
+        s.alive = false;
+      }
+    }
+    if (!s.alive) {
+      enemyShots[i] = enemyShots[enemyShots.length - 1];
+      enemyShots.pop();
+      shotPool.put(s);
+      continue;
     }
 
     s.life -= dt;
@@ -245,6 +308,7 @@ function updateEnemyShots(dt) {
 }
 
 function updateVoidZones(dt, godMode) {
+  let pulled = false;
   for (let i = voidZones.length - 1; i >= 0; i--) {
     const z = voidZones[i];
     if (!z.alive) { voidZones[i] = voidZones[voidZones.length - 1]; voidZones.pop(); voidPool.put(z); continue; }
@@ -256,11 +320,20 @@ function updateVoidZones(dt, godMode) {
       const dx = player.x - z.x;
       const dy = player.y - z.y;
       const rr = player.r + z.radius;
-      if (dx * dx + dy * dy <= rr * rr && buffs.shield <= 0 && !godMode) {
+      const inside = dx * dx + dy * dy <= rr * rr;
+      if (inside && z.pull > 0 && !godMode) {
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = -dx / d;
+        const ny = -dy / d;
+        player.x += nx * z.pull * dt;
+        player.y += ny * z.pull * dt;
+        pulled = true;
+      }
+      if (inside && buffs.shield <= 0 && !godMode) {
         z.tickT -= dt;
         while (z.tickT <= 0) {
           z.tickT += z.tick;
-          const dmg = z.dps * z.tick;
+          const dmg = applyElementalDamage(z.dps * z.tick, z.type);
           player.hp -= dmg;
           spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit, 14);
         }
@@ -275,6 +348,10 @@ function updateVoidZones(dt, godMode) {
       voidPool.put(z);
     }
   }
+  if (pulled) {
+    resolveObstacles(player, player.r);
+    clampEntityToWorld(player, player.r);
+  }
 }
 
 function getSlowFireMul() {
@@ -283,25 +360,30 @@ function getSlowFireMul() {
 
 function updateRiderTimers(e, dt, burnSource = null, bleedSource = null) {
   if (e.burnT > 0) {
-    const dmg = e.burnDps * dt;
     e.burnT -= dt;
-    if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, burnSource, false);
-    e.burnFx = (e.burnFx || 0) - dt;
-    if (e.burnFx <= 0) {
+    if (e.burnTickT == null) e.burnTickT = DOT_CONFIG.burnTick;
+    e.burnTickT -= dt;
+    while (e.burnTickT <= 0 && e.burnT > 0) {
+      e.burnTickT += DOT_CONFIG.burnTick;
+      const dmg = e.burnDps * DOT_CONFIG.burnTick;
+      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, burnSource, false);
       addParticles(e.x, e.y, COLORS.enemyF, 6, 160);
-      e.burnFx = 0.12 + rand(0.12, 0.04);
     }
+    if (e.burnT <= 0) e.burnTickT = DOT_CONFIG.burnTick;
+      
     if (!e.alive) return false;
   }
   if (e.bleedT > 0) {
-    const dmg = e.bleedDps * dt;
     e.bleedT -= dt;
-    if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, false, false, bleedSource, false);
-    e.bleedFx = (e.bleedFx || 0) - dt;
-    if (e.bleedFx <= 0) {
+    if (e.bleedTickT == null) e.bleedTickT = DOT_CONFIG.bleedTick;
+    e.bleedTickT -= dt;
+    while (e.bleedTickT <= 0 && e.bleedT > 0) {
+      e.bleedTickT += DOT_CONFIG.bleedTick;
+      const dmg = e.bleedDps * DOT_CONFIG.bleedTick;
+      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, bleedSource, false);
       addParticles(e.x, e.y, COLORS.warn, 6, 140);
-      e.bleedFx = 0.14 + rand(0.14, 0.05);
     }
+    if (e.bleedT <= 0) e.bleedTickT = DOT_CONFIG.bleedTick;
     if (!e.alive) return false;
   }
   if (e.slowT > 0) e.slowT -= dt;
@@ -423,10 +505,13 @@ function updateRangedMovement(e, i, dt, slowMul, statusSpeedMul, d, nx, ny, ax, 
 function updateRangedAttacks(e, dt, d, nx, ny) {
   if (e.spitter) {
     e.spitT -= dt;
-    if (e.spitT <= 0 && d < (e.spitRange || ENEMY_BEHAVIOR.rangedPreferredRange)) {
+    if (e.spitT <= 0 && d < (e.spitRange || ENEMY_BEHAVIOR.rangedPreferredRange) * ENEMY_BEHAVIOR.preferredFar) {
       const slowFireMul = getSlowFireMul();
       e.spitT += (e.spitCd || RANGED_SHOT_CONFIG.defaultCd) * slowFireMul;
-      const tx = player.x, ty = player.y;
+      const ang = rand(TAU, 0);
+      const off = (e.spitRadius || 0) * rand(ENEMY_BEHAVIOR.spitAimOffsetMax, ENEMY_BEHAVIOR.spitAimOffsetMin);
+      const tx = player.x + Math.cos(ang) * off;
+      const ty = player.y + Math.sin(ang) * off;
       const marker = ++e.shotSeq;
       addTelegraph({
         x: tx, y: ty, radius: e.spitRadius, color: e.spitColor, time: e.spitTelegraph,
@@ -437,7 +522,7 @@ function updateRangedAttacks(e, dt, d, nx, ny) {
     }
   } else {
     e.shotT -= dt;
-    if (e.shotT <= 0 && d < (e.shotRange || ENEMY_BEHAVIOR.rangedPreferredRange)) {
+    if (e.shotT <= 0 && d < (e.shotRange || ENEMY_BEHAVIOR.rangedPreferredRange) * ENEMY_BEHAVIOR.preferredFar) {
       const slowFireMul = getSlowFireMul();
       e.shotT += (e.shotCd || RANGED_SHOT_CONFIG.defaultCd) * slowFireMul;
       const marker = ++e.shotSeq;
@@ -689,6 +774,119 @@ function updateBossMine(e, dt, godMode) {
   }
 }
 
+function updateBossBlink(e, dt, godMode) {
+  if (!(e.blinkCd > 0)) return;
+  e.blinkT -= dt;
+  if (e.blinkT <= 0) {
+    const slowFireMul = getSlowFireMul();
+    e.blinkT += (e.blinkCd || 6) * slowFireMul;
+    const marker = ++e.blinkSeq;
+    const ang = rand(TAU, 0);
+    const minDist = e.blinkRangeMin || 120;
+    const maxDist = e.blinkRangeMax || 260;
+    const dist = rand(maxDist, minDist);
+    const target = clampPointToWorld(
+      player.x + Math.cos(ang) * dist,
+      player.y + Math.sin(ang) * dist,
+      e.r
+    );
+    addTelegraph({
+      x: target.x, y: target.y, radius: e.blinkRadius || 120, color: e.blinkColor || COLORS.warn, time: e.blinkTelegraph || 0.9,
+      fire: () => {
+        if (!e.alive || e.blinkSeq !== marker) return;
+        e.x = target.x;
+        e.y = target.y;
+        resolveObstacles(e, e.r);
+        const r = e.blinkRadius || 120;
+        const dx = player.x - target.x;
+        const dy = player.y - target.y;
+        if (dx * dx + dy * dy <= (player.r + r) * (player.r + r)) {
+          if (!godMode && buffs.shield <= 0) {
+            const dmg = applyArmorDamage(e.blinkDmg || 20);
+            player.hp -= dmg;
+            player.iFrame = PLAYER_CONFIG.meleeIFrame;
+            spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
+          }
+        }
+        addParticles(target.x, target.y, e.blinkColor || COLORS.warn, 16, 360);
+        spawnShockwave(target.x, target.y, r, e.blinkColor || COLORS.warn);
+      }
+    });
+  }
+}
+
+function updateBossRift(e, dt) {
+  if (!(e.riftCd > 0)) return;
+  e.riftT -= dt;
+  if (e.riftT <= 0) {
+    const slowFireMul = getSlowFireMul();
+    e.riftT += (e.riftCd || 6) * slowFireMul;
+    const marker = ++e.riftSeq;
+    const count = Math.max(1, e.riftCount || 1);
+    for (let k = 0; k < count; k++) {
+      const ang = rand(TAU, 0);
+      const dist = rand(e.riftOffsetMax || 200, e.riftOffsetMin || 80);
+      const tx = player.x + Math.cos(ang) * dist;
+      const ty = player.y + Math.sin(ang) * dist;
+      addTelegraph({
+        x: tx, y: ty, radius: e.riftRadius || 100, color: e.riftColor || COLORS.voidDark, time: e.riftTelegraph || 0.8,
+        fire: () => {
+          if (!e.alive || e.riftSeq !== marker) return;
+          spawnVoidZone(
+            tx,
+            ty,
+            e.riftRadius || 100,
+            e.riftDuration || 3,
+            e.riftDps || 0,
+            e.riftColor || COLORS.voidDark,
+            "void",
+            e.riftTick || 0.35,
+            e.riftPull || 0
+          );
+        }
+      });
+    }
+  }
+}
+
+function updateBossSplit(e, dt) {
+  if (!(e.splitCd > 0)) return;
+  e.splitT -= dt;
+  if (e.splitT <= 0) {
+    const slowFireMul = getSlowFireMul();
+    e.splitT += (e.splitCd || 5) * slowFireMul;
+    const marker = ++e.splitSeq;
+    addTelegraph({
+      x: e.x, y: e.y, radius: RANGED_SHOT_CONFIG.telegraphRadius, color: e.splitColor || COLORS.warn, time: e.splitTelegraph || RANGED_SHOT_CONFIG.telegraphTime,
+      follow: (tg) => { if (e.alive) { tg.x = e.x; tg.y = e.y; } },
+      fire: () => {
+        if (!e.alive || e.splitSeq !== marker) return;
+        const dx = player.x - e.x;
+        const dy = player.y - e.y;
+        const d = hypot(dx, dy) || 1;
+        const nx = dx / d, ny = dy / d;
+        const speed = e.splitSpeed || RANGED_SHOT_CONFIG.defaultSpeed;
+        const dmg = e.splitDmg || RANGED_SHOT_CONFIG.defaultDmg;
+        spawnSplitShot(
+          e.x,
+          e.y,
+          nx,
+          ny,
+          speed,
+          dmg,
+          e.splitLife || RANGED_SHOT_CONFIG.life,
+          e.splitAfter || 0.8,
+          e.splitCount || 3,
+          e.splitSpread || 0.3,
+          speed,
+          dmg,
+          e.splitColor || RANGED_SHOT_CONFIG.color
+        );
+      }
+    });
+  }
+}
+
 function updateBossAttacks(e, dt, godMode) {
   updateBossNova(e, dt);
   updateBossVoid(e, dt);
@@ -697,6 +895,9 @@ function updateBossAttacks(e, dt, godMode) {
   updateBossRock(e, dt, godMode);
   updateBossHomingMissiles(e, dt);
   updateBossMine(e, dt, godMode);
+  updateBossBlink(e, dt, godMode);
+  updateBossRift(e, dt);
+  updateBossSplit(e, dt);
 }
 
 function handleContactDamage(e, dt, godMode) {

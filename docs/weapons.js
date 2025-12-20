@@ -209,8 +209,8 @@ export function railStats() {
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
-  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
+  let cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
+  let dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const speed = cfg.speedBase + lv * cfg.speedPerLevel;
   let pierce = cfg.pierceBase + Math.floor((lv + 1) / cfg.pierceLevelDivisor) + (buffs.power > 0 ? cfg.powerPierceBonus : 0);
   const range = cfg.rangeBase + lv * cfg.rangePerLevel;
@@ -237,7 +237,8 @@ export function orbStats() {
   const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
   const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
-  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
+  const baseDmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
+  let tickDmg = baseDmg;
   const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
   const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
   const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
@@ -247,12 +248,13 @@ export function orbStats() {
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
   const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
   const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
-  let explosion = dmg * cfg.explosionMult;
+  let explosion = baseDmg * cfg.explosionMult;
   let explosionRadius = radius;
   let park = cfg.parkTimeBase + lv * cfg.parkTimePerLevel;
   if (weapons.orb.aug === "orb_event_horizon") {
     park += AUGMENT_CONFIG.orb.eventHorizon.park;
     pull *= AUGMENT_CONFIG.orb.eventHorizon.pullMult;
+    tickDmg *= AUGMENT_CONFIG.orb.eventHorizon.tickDmgMult;
   } else if (weapons.orb.aug === "orb_dark_burst") {
     park += AUGMENT_CONFIG.orb.darkBurst.park;
     pull *= AUGMENT_CONFIG.orb.darkBurst.pullMult;
@@ -260,7 +262,7 @@ export function orbStats() {
     explosionRadius = radius * AUGMENT_CONFIG.orb.darkBurst.radiusMult;
   }
   park = Math.max(0.4, park);
-  return { dmg, cd, speed, radius, pull, range: cfg.range, tick: cfg.tick, park, explosion, explosionRadius, critChance: critChanceTotal, critMult };
+  return { dmg: tickDmg, cd, speed, radius, pull, range: cfg.range, tick: cfg.tick, park, explosion, explosionRadius, critChance: critChanceTotal, critMult };
 }
 
 export function missileStats() {
@@ -757,6 +759,7 @@ export function updateMissiles(dt){
             const knock = AUGMENT_CONFIG.missile.concussive.knock;
             e.kx += nx * knock;
             e.ky += ny * knock;
+            applyBurn(e, crit.dmg, AUGMENT_CONFIG.missile.concussive.burn, "missile");
           }
         }
       }
