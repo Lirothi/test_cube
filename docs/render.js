@@ -1,4 +1,4 @@
-import { COLORS, CHEST_CONFIG, WEAPON_CONFIG, ELITE_CONFIG, MAX_WEAPONS, ENEMY_TYPES } from "./config.js";
+import { COLORS, CHEST_CONFIG, WEAPON_CONFIG, ELITE_CONFIG, MAX_WEAPONS, ENEMY_TYPES, TRINKET_CONFIG } from "./config.js";
 import { clamp, TAU, fmtFloat } from "./math.js";
 import { weapons, auraStats } from "./weapons.js";
 import { getQuestHudText } from "./quests.js";
@@ -483,7 +483,7 @@ export function renderFrame({
     const it = questItems[i];
     if (!it.alive) continue;
     if (it.x < camX - WORLD.spawnPad || it.x > camX + W + WORLD.spawnPad || it.y < camY - WORLD.spawnPad || it.y > camY + H + WORLD.spawnPad) continue;
-    const color = it.type === "drop" ? COLORS.gold : COLORS.quest;
+    const color = COLORS.quest;
     const size = it.r;
     neonRect(ctx, it.x - size, it.y - size, size * 2, size * 2, color, 16);
     neonRing(ctx, it.x, it.y, size * 1.3, color, 18, 2, 0.7);
@@ -788,7 +788,7 @@ export function renderFrame({
     ctx.shadowColor = COLORS.player;
     ctx.shadowBlur = 16 * a;
     const lineGap = isMobile ? 20 : 26;
-    ctx.fillText(`Remember you are limited to ${MAX_WEAPONS} weapons`, W * 0.5, H * 0.4);
+    ctx.fillText(`Remember you are limited to ${MAX_WEAPONS} weapons and to ${TRINKET_CONFIG.slots} trinkets`, W * 0.5, H * 0.4);
     ctx.fillText("Bonus chests more likely to heal at low HP.", W * 0.5, H * 0.4 + lineGap);
     ctx.restore();
   }
