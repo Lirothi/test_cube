@@ -65,7 +65,7 @@ const TRINKETS = [
     apply: () => { player.resists.void += 0.24; }
   },
   {
-    id: "vacuum_coil",
+    id: "vacuum_coil",  
     title: "Vacuum Coil",
     desc: "Pickup range +40.",
     tag: () => "+40 Pickup",
@@ -95,9 +95,9 @@ const TRINKETS = [
   {
     id: "serrated_fang",
     title: "Serrated Fang",
-    desc: "Critical damage +0.25x.",
-    tag: () => "+0.25 Crit",
-    apply: () => { trinketBonuses.critMult += 0.25; }
+    desc: "Critical damage +0.35x.",
+    tag: () => "+0.35 Crit",
+    apply: () => { trinketBonuses.critMult += 0.35; }
   },
   {
     id: "reactor_spark",

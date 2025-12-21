@@ -15,7 +15,7 @@ export const PLAYER_CONFIG = {
 export const XP_CONFIG = {
   baseNeed: 7,
   perLevel: 6,
-  curvePower: 1.17,
+  curvePower: 1.10,
   curveScale: 1.0,
   lateStart: 45,
   latePower: 1.3,
@@ -30,7 +30,7 @@ export const DOT_CONFIG = {
 };
 
 export const BUFF_EFFECTS = {
-  slowMoveMult: 0.58,
+  slowMoveMult: 0.333,
   slowFireMult: 1.25,
   magnetRadiusMult: 5.0,
   magnetPullBase: 1500,
@@ -53,7 +53,7 @@ export const UPGRADE_CONFIG = {
   xpMultGain: 0.08,
   weightNewWeapon: 2.8,
   weightPickup: 1.35,
-  weightRes: 0.6,
+  weightRes: 0.8,
   passiveMaxLevel: 5,
 };
 
@@ -236,7 +236,7 @@ export const WEAPON_CONFIG = {
     },
   },
   rail: {
-    cdBase: 4.0,
+    cdBase: 3.8,
     cdPerLevel: 0.6,
     cdMin: 1.5,
     dmgBase: 30,
@@ -403,7 +403,7 @@ export const BOSS3_CONFIG = {
   spawnTime: 540,
   //spawnTime: 5,
   telegraph: { radius: 150, time: 1.5, color: "#ff7b3b" },
-  slam: { cd: 4.5, radius: 150, dmg: 20, telegraph: 1.2, color: "#ff9a3c" },
+  slam: { cd: 2.5, radius: 150, dmg: 22, telegraph: 0.8, color: "#ff9a3c" },
   rockfall: { cd: 6, count: 4, radius: 90, dmg: 15, telegraph: 1.2, offsetMin: 60, offsetMax: 200, color: "#ffb46b" },
   lootGems: 20,
 };
