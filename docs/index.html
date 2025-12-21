@@ -233,6 +233,16 @@
       margin-bottom:8px;
     }
     .devRow:last-child{margin-bottom:0;}
+    .devStat{
+      display:inline-flex;
+      align-items:center;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(120,255,255,.16);
+      background:rgba(10,12,18,.55);
+      font-size:12px;
+      color:rgba(215,246,255,.85);
+    }
     .devPanel select{
       width:100%;
       border:1px solid rgba(120,255,255,.22);
@@ -241,6 +251,26 @@
       border-radius:12px;
       padding:8px 10px;
       font-size:13px;
+    }
+    .devField{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      border:1px solid rgba(120,255,255,.16);
+      background:rgba(10,12,18,.55);
+      border-radius:12px;
+      padding:6px 8px;
+      font-size:12px;
+      color:rgba(215,246,255,.8);
+    }
+    .devField input{
+      width:72px;
+      border:none;
+      outline:none;
+      background:transparent;
+      color:var(--text);
+      font-size:12px;
+      text-align:right;
     }
     #levelup.trinket .panel{
       width:min(720px, 92vw);
@@ -603,6 +633,17 @@
             <div class="devRow">
               <button id="devAddLevel">+1 Level</button>
               <button id="devClearEnemies">Clear Enemies</button>
+            </div>
+          </div>
+          <div class="devCard">
+            <h4>Spawn Scaling</h4>
+            <div class="devRow">
+              <div class="devField">HP %/100s <input id="devScaleHpInput" type="number" min="0" step="0.1" /></div>
+              <div class="devField">Speed %/100s <input id="devScaleSpeedInput" type="number" min="0" step="0.1" /></div>
+              <div class="devField">Dmg %/100s <input id="devScaleDmgInput" type="number" min="0" step="0.1" /></div>
+            </div>
+            <div class="devRow">
+              <button id="devScaleApply">Apply</button>
             </div>
           </div>
         </div>

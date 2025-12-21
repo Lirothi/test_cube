@@ -5,6 +5,7 @@
   BUFF_EFFECTS,
   LOOT_CONFIG,
   LOOP_CONFIG,
+  SPAWN_CONFIG,
   UPGRADE_CONFIG,
   CRIT_UPGRADES,
   WEAPON_CONFIG,
@@ -451,9 +452,19 @@ import { popFloatText } from "./float_text.js";
       if (current) ui.devTrinketSelect.value = current;
     }
 
+    function refreshDevScaling(){
+      const hpPct = SPAWN_CONFIG.scaling.hp * 10000;
+      const spdPct = SPAWN_CONFIG.scaling.speed * 10000;
+      const dmgPct = SPAWN_CONFIG.scaling.dmg * 10000;
+      if (ui.devScaleHpInput && document.activeElement !== ui.devScaleHpInput) ui.devScaleHpInput.value = fmtFloat(hpPct, 1);
+      if (ui.devScaleSpeedInput && document.activeElement !== ui.devScaleSpeedInput) ui.devScaleSpeedInput.value = fmtFloat(spdPct, 1);
+      if (ui.devScaleDmgInput && document.activeElement !== ui.devScaleDmgInput) ui.devScaleDmgInput.value = fmtFloat(dmgPct, 1);
+    }
+
     function refreshDevOptions(){
       refreshDevWeaponOptions();
       refreshDevTrinketOptions();
+      refreshDevScaling();
     }
 
     function devUnlockWeapon(key){
@@ -548,6 +559,22 @@ import { popFloatText } from "./float_text.js";
       setDevStatus("Enemies cleared");
     }
 
+    function devApplyScaling(){
+      const hpPct = Math.max(0, parseFloat(ui.devScaleHpInput?.value || ""));
+      const spdPct = Math.max(0, parseFloat(ui.devScaleSpeedInput?.value || ""));
+      const dmgPct = Math.max(0, parseFloat(ui.devScaleDmgInput?.value || ""));
+      if (!Number.isFinite(hpPct) || !Number.isFinite(spdPct) || !Number.isFinite(dmgPct)) {
+        setDevStatus("Scaling values invalid");
+        refreshDevScaling();
+        return;
+      }
+      SPAWN_CONFIG.scaling.hp = hpPct / 10000;
+      SPAWN_CONFIG.scaling.speed = spdPct / 10000;
+      SPAWN_CONFIG.scaling.dmg = dmgPct / 10000;
+      refreshDevScaling();
+      setDevStatus("Scaling updated");
+    }
+
     function wireDevMenu(){
       if (!ui.devPanel) return;
       refreshDevOptions();
@@ -575,6 +602,7 @@ import { popFloatText } from "./float_text.js";
       if (ui.devShield) ui.devShield.addEventListener("click", devShield, { passive:true });
       if (ui.devAddLevel) ui.devAddLevel.addEventListener("click", devAddLevel, { passive:true });
       if (ui.devClearEnemies) ui.devClearEnemies.addEventListener("click", devClearEnemies, { passive:true });
+      if (ui.devScaleApply) ui.devScaleApply.addEventListener("click", devApplyScaling, { passive:true });
     }
 
     addEventListener("keydown", (e) => {
