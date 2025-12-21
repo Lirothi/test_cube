@@ -422,8 +422,9 @@ export function renderFrame({
     const ringColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.gold);
     const pulse = (Math.sin(c.pulse) * 0.15 + 0.85);
     const rr = c.r * (1.0 + 0.05 * Math.sin(c.pulse * 1.7));
-    neonRect(ctx, c.x - rr, c.y - rr, rr*2, rr*2, chestColor, 20);
-    neonRing(ctx, c.x, c.y, rr*1.45, ringColor, 22, 2, pulse);
+    neonRect(ctx, c.x - rr, c.y - rr, rr*2, rr*2, chestColor, 28);
+    neonRing(ctx, c.x, c.y, rr*1.45, ringColor, 32, 2, pulse);
+    neonRing(ctx, c.x, c.y, rr*2.0, ringColor, 22, 1.5, 0.45 * pulse);
   }
 
   if (quest.giverActive) {

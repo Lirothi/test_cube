@@ -53,6 +53,7 @@ export const UPGRADE_CONFIG = {
   xpMultGain: 0.08,
   weightNewWeapon: 2.8,
   weightPickup: 1.35,
+  weightRes: 0.6,
   passiveMaxLevel: 5,
 };
 

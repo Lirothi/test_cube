@@ -283,6 +283,7 @@ export function pickUpgrades(n=XP_CONFIG.cardChoices){
       let w = 1;
       if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked) || (u.id==="missile" && !weapons.missile.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
       if (u.id==="pickup") w *= UPGRADE_CONFIG.weightPickup;
+      if (u.id==="resAll" || u.id==="resFire" || u.id==="resPoison" || u.id==="resVoid") w *= UPGRADE_CONFIG.weightRes;
       const s = Math.random() * w;
       if (s > bestScore){ bestScore = s; best = u; }
     }

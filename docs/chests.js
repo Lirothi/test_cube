@@ -32,6 +32,7 @@ const chestSpawn = {
   t: CHEST_CONFIG.timerStart,
   min: CHEST_CONFIG.timerMin,
   max: CHEST_CONFIG.timerMax,
+  interval: (CHEST_CONFIG.timerMin + CHEST_CONFIG.timerMax) * 0.5,
   activeMax: CHEST_CONFIG.activeMax,
 };
 
@@ -227,7 +228,7 @@ function spawnChest(camX, camY, W, H, kind, activeMax) {
 export function updateChests(dt, camX, camY, W, H) {
   chestSpawn.t -= dt;
   if (chestSpawn.t <= 0) {
-    chestSpawn.t = rand(chestSpawn.max, chestSpawn.min);
+    chestSpawn.t = chestSpawn.interval;
     spawnChest(camX, camY, W, H, "bonus", chestSpawn.activeMax);
   }
 
