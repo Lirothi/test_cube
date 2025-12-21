@@ -39,6 +39,8 @@ export const trinketBonuses = {
   xpMult: 1,
   critChance: 0,
   critMult: 0,
+  reviveCharges: 0,
+  secondChanceOffered: false,
 };
 
 export const quest = {

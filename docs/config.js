@@ -50,7 +50,7 @@ export const UPGRADE_CONFIG = {
   resPoisonGain: 0.05,
   resVoidGain: 0.05,
   cdReduction: 0.06,
-  xpMultGain: 0.06,
+  xpMultGain: 0.08,
   weightNewWeapon: 2.8,
   weightPickup: 1.35,
   passiveMaxLevel: 5,
@@ -393,7 +393,7 @@ export const BOSS2_CONFIG = {
   spawnTime: 360,
   //spawnTime: 2,
   telegraph: { radius: 140, time: 1.5, color: "#63c7ff" },
-  voidAttack: { cd: 5, count: 3, radius: 120, duration: 3, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 0.85 },
+  voidAttack: { cd: 5, count: 3, radius: 120, duration: 3, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 1.0 },
   barrage: { cd: 3.8, shots: 12, waves: 2, waveDelay: 0.18, speed: 540, dmg: 12 },
   lootGems: 18,
 };

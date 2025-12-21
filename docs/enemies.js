@@ -516,7 +516,7 @@ function updateRangedAttacks(e, dt, d, nx, ny) {
       addTelegraph({
         x: tx, y: ty, radius: e.spitRadius, color: e.spitColor, time: e.spitTelegraph,
         fire: () => {
-          if (e.alive && e.shotSeq === marker) spawnVoidZone(tx, ty, e.spitRadius, e.spitDuration, e.spitDps, e.spitColor, e.spitType, e.spitTick);
+          spawnVoidZone(tx, ty, e.spitRadius, e.spitDuration, e.spitDps, e.spitColor, e.spitType, e.spitTick);
         }
       });
     }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
-  <title>Neon Survivors (Rebalanced + Ranged)</title>
+  <title>Neon Survivors</title>
   <style>
     :root{
       --bg:#05060a;
@@ -176,6 +176,71 @@
       display:grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap:12px;
+    }
+    .devPanel{
+      display:none;
+      margin-top:14px;
+      padding:12px;
+      border-radius:16px;
+      border:1px dashed rgba(120,255,255,.22);
+      background:linear-gradient(180deg, rgba(10,12,18,.78), rgba(10,12,18,.60));
+      box-shadow:var(--shadow);
+    }
+    .devPanel.on{display:block;}
+    .devHeader{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:12px;
+      margin-bottom:10px;
+    }
+    .devTitle{
+      font-size:12px;
+      letter-spacing:.14em;
+      text-transform:uppercase;
+      color:var(--muted);
+      margin-bottom:4px;
+    }
+    .devHint{
+      color:rgba(215,246,255,.6);
+      font-size:12px;
+    }
+    .devStatus{
+      font-size:12px;
+      color:rgba(215,246,255,.8);
+      text-align:right;
+    }
+    .devGrid{
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap:10px;
+    }
+    .devCard{
+      border-radius:14px;
+      border:1px solid rgba(120,255,255,.16);
+      background:rgba(10,12,18,.62);
+      padding:10px;
+    }
+    .devCard h4{
+      margin:0 0 8px 0;
+      font-size:14px;
+      color:var(--text);
+    }
+    .devRow{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      margin-bottom:8px;
+    }
+    .devRow:last-child{margin-bottom:0;}
+    .devPanel select{
+      width:100%;
+      border:1px solid rgba(120,255,255,.22);
+      background:rgba(10,12,18,.7);
+      color:var(--text);
+      border-radius:12px;
+      padding:8px 10px;
+      font-size:13px;
     }
     #levelup.trinket .panel{
       width:min(720px, 92vw);
@@ -488,7 +553,7 @@
   </div>
 
   <div id="levelup" class="overlay">
-    <div class="panel">
+    <div class="panel" id="levelupPanel">
       <div class="panelHeader">
         <div>
           <h2 id="levelupTitle">Level Up</h2>
@@ -497,6 +562,51 @@
         <div class="sub" id="uiBuild"></div>
       </div>
       <div class="cards" id="upgradeCards"></div>
+      <div class="devPanel" id="devPanel" aria-hidden="true">
+        <div class="devHeader">
+          <div>
+            <div class="devTitle">Dev Menu</div>
+            <div class="devHint">Ctrl+D toggles. Available on level up and pause menus.</div>
+          </div>
+          <div class="devStatus" id="devStatus"></div>
+        </div>
+        <div class="devGrid">
+          <div class="devCard">
+            <h4>Weapons</h4>
+            <div class="devRow">
+              <select id="devWeaponSelect"></select>
+            </div>
+            <div class="devRow">
+              <button id="devWeaponAdd">Unlock</button>
+              <button id="devWeaponUp">Upgrade +1</button>
+              <button id="devWeaponMax">Max</button>
+            </div>
+            <div class="devRow">
+              <button id="devWeaponMastery">Mastery +1</button>
+            </div>
+          </div>
+          <div class="devCard">
+            <h4>Trinkets</h4>
+            <div class="devRow">
+              <select id="devTrinketSelect"></select>
+            </div>
+            <div class="devRow">
+              <button id="devTrinketAdd">Add Trinket</button>
+            </div>
+          </div>
+          <div class="devCard">
+            <h4>Run</h4>
+            <div class="devRow">
+              <button id="devHeal">Heal Full</button>
+              <button id="devShield">Shield 10s</button>
+            </div>
+            <div class="devRow">
+              <button id="devAddLevel">+1 Level</button>
+              <button id="devClearEnemies">Clear Enemies</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -541,7 +651,7 @@
   </div>
 
   <div id="menu" class="overlay">
-    <div class="panel">
+    <div class="panel" id="menuPanel">
       <div class="panelHeader">
         <div>
           <h2>Paused</h2>

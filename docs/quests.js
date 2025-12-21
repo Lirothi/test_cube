@@ -177,9 +177,9 @@ function spawnRewardGems(x, y, count = 8, value = 2) {
 
 function grantExpReward() {
   const lvl = Math.max(1, player.level || 1);
-  const count = 8 + Math.floor(lvl * 0.35);
-  const value = 2 + Math.floor(lvl * 0.15);
-  spawnRewardGems(quest.giverX, quest.giverY, count, value);
+  const count = 8 + Math.floor(lvl * 0.65);
+  const value = 2 + Math.floor(lvl * 0.35);
+  spawnRewardGems(quest.giverX, quest.giverY, count * 2, value);
   if (runtime.addParticles) runtime.addParticles(quest.giverX, quest.giverY, COLORS.gold, 18, 420);
 }
 

@@ -30,6 +30,13 @@ const TRINKETS = [
     apply: () => { player.armor += 3; }
   },
   {
+    id: "second_chance",
+    title: "Second Chance",
+    desc: "Revive once upon death.",
+    tag: () => "Revive once",
+    apply: () => { trinketBonuses.reviveCharges = Math.max(trinketBonuses.reviveCharges, 1); }
+  },
+  {
     id: "elemental_ward",
     title: "Elemental Ward",
     desc: "All elemental resistances +12%.",
@@ -117,6 +124,8 @@ export function resetTrinkets() {
   trinketBonuses.xpMult = 1;
   trinketBonuses.critChance = 0;
   trinketBonuses.critMult = 0;
+  trinketBonuses.reviveCharges = 0;
+  trinketBonuses.secondChanceOffered = false;
 }
 
 export function trinketSlotsFull() {
@@ -138,7 +147,10 @@ export function addTrinket(id) {
 }
 
 export function pickTrinkets(count = TRINKET_CONFIG.choices) {
-  const available = TRINKETS.filter((t) => !hasTrinket(t.id));
+  const available = TRINKETS.filter((t) => {
+    if (t.id === "second_chance" && trinketBonuses.secondChanceOffered) return false;
+    return !hasTrinket(t.id);
+  });
   if (!available.length) return [];
   const picks = [];
   const used = new Set();
@@ -150,6 +162,7 @@ export function pickTrinkets(count = TRINKET_CONFIG.choices) {
     used.add(t.id);
     picks.push(t);
   }
+  if (picks.some((t) => t.id === "second_chance")) trinketBonuses.secondChanceOffered = true;
   return picks;
 }
 

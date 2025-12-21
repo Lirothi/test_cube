@@ -12,7 +12,7 @@
 import { rand, randi, hypot, fmtFloat } from "./math.js";
 import { sound } from "./audio.js";
 import { setupInput, clearDirectionalInput } from "./input.js";
-import { resetPlayer, updatePlayer, addXP, setPlayerRuntime } from "./player.js";
+import { resetPlayer, updatePlayer, addXP, setPlayerRuntime, xpNeedForLevel } from "./player.js";
 import { spawnController, getActiveBoss, resetSpawnState } from "./spawn.js";
 import { updateTelegraphs } from "./telegraph.js";
 import { renderFrame } from "./render.js";
@@ -60,7 +60,7 @@ import {
   spawnShockwave,
   updateWeapons,
 } from "./weapons.js";
-import { pickTrinkets, addTrinket, resetTrinkets, trinketSlotsFull, formatTrinketPills } from "./trinkets.js";
+import { pickTrinkets, addTrinket, resetTrinkets, trinketSlotsFull, formatTrinketPills, TRINKETS } from "./trinkets.js";
 import { getAugmentsForWeapon, getAugmentById } from "./augments.js";
 import {
   spawnObstacles,
@@ -73,6 +73,7 @@ import {
   BASE_STATS,
   player,
   buffs,
+  trinkets,
   trinketBonuses,
   updateBuffs,
   input,
@@ -152,6 +153,7 @@ import { popFloatText } from "./float_text.js";
     const ACTIVE_OBSTACLE_PAD = 1200;
     const STATE = { PLAYING:"playing", LEVELUP:"levelup", TRINKET:"trinket", AUG:"aug", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
+    let devMenuOpen = false;
     let fpsAccum = 0, fpsCount = 0;
     const START_NOTICE_TIME = 8.0;
     let startNoticeT = 0;
@@ -175,6 +177,8 @@ import { popFloatText } from "./float_text.js";
       { key: "orb", label: "Singularity Orb" },
       { key: "missile", label: "Homing Missiles" },
     ];
+    const WEAPON_LABEL_MAP = new Map(WEAPON_LABELS.map((item) => [item.key, item.label]));
+    const TRINKET_LABEL_MAP = new Map(TRINKETS.map((item) => [item.id, item.title]));
 
     function formatWeaponPills(){
       const pills = [];
@@ -293,6 +297,7 @@ import { popFloatText } from "./float_text.js";
     }
     function closeLevelUp(){
       closeLevelUpUI();
+      setDevMenuVisible(false);
       if (ui.levelup) ui.levelup.classList.remove("trinket");
       if (ui.levelup) ui.levelup.classList.remove("aug");
       state = STATE.PLAYING;
@@ -331,6 +336,7 @@ import { popFloatText } from "./float_text.js";
 
     function closeTrinket(){
       closeLevelUpUI();
+      setDevMenuVisible(false);
       setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
       if (ui.levelup) ui.levelup.classList.remove("trinket");
       if (ui.levelup) ui.levelup.classList.remove("aug");
@@ -379,11 +385,207 @@ import { popFloatText } from "./float_text.js";
 
     function closeAug(){
       closeLevelUpUI();
+      setDevMenuVisible(false);
       setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
       if (ui.levelup) ui.levelup.classList.remove("aug");
       state = STATE.PLAYING;
       focusCanvas();
     }
+
+    /* ============================
+       Dev Menu
+       ============================ */
+    function isDevMenuAllowed(){
+      return state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG || state === STATE.MENU;
+    }
+
+    function getDevPanelHost(){
+      if (state === STATE.MENU) return ui.menuPanel;
+      return ui.levelupPanel;
+    }
+
+    function setDevMenuVisible(next){
+      devMenuOpen = !!next;
+      if (!ui.devPanel) return;
+      const host = getDevPanelHost();
+      if (host && ui.devPanel.parentElement !== host) {
+        host.appendChild(ui.devPanel);
+      }
+      ui.devPanel.classList.toggle("on", devMenuOpen);
+      ui.devPanel.setAttribute("aria-hidden", devMenuOpen ? "false" : "true");
+      if (devMenuOpen) refreshDevOptions();
+    }
+
+    function toggleDevMenu(){
+      if (!isDevMenuAllowed()) return;
+      setDevMenuVisible(!devMenuOpen);
+    }
+
+    function setDevStatus(text){
+      if (ui.devStatus) ui.devStatus.textContent = text;
+    }
+
+    function getWeaponLabel(key){
+      return WEAPON_LABEL_MAP.get(key) || key;
+    }
+
+    function refreshDevWeaponOptions(){
+      if (!ui.devWeaponSelect) return;
+      const current = ui.devWeaponSelect.value;
+      ui.devWeaponSelect.innerHTML = WEAPON_LABELS.map(({ key, label }) => {
+        const w = weapons[key];
+        const status = w.unlocked ? `Lv ${w.level}` : "Locked";
+        const mastery = w.mastery ? ` M${w.mastery}` : "";
+        return `<option value="${key}">${label} (${status}${mastery})</option>`;
+      }).join("");
+      if (current) ui.devWeaponSelect.value = current;
+    }
+
+    function refreshDevTrinketOptions(){
+      if (!ui.devTrinketSelect) return;
+      const current = ui.devTrinketSelect.value;
+      ui.devTrinketSelect.innerHTML = TRINKETS.map((t) => {
+        const owned = trinkets.includes(t.id);
+        return `<option value="${t.id}">${t.title}${owned ? " (Owned)" : ""}</option>`;
+      }).join("");
+      if (current) ui.devTrinketSelect.value = current;
+    }
+
+    function refreshDevOptions(){
+      refreshDevWeaponOptions();
+      refreshDevTrinketOptions();
+    }
+
+    function devUnlockWeapon(key){
+      const w = weapons[key];
+      if (!w) return;
+      if (!w.unlocked) {
+        w.unlocked = true;
+        w.level = Math.max(1, w.level);
+      } else if (w.level < 1) {
+        w.level = 1;
+      }
+      updateLoadoutUi();
+      refreshDevWeaponOptions();
+      setDevStatus(`${getWeaponLabel(key)} unlocked`);
+    }
+
+    function devUpgradeWeapon(key){
+      const w = weapons[key];
+      if (!w) return;
+      if (!w.unlocked) {
+        w.unlocked = true;
+        w.level = 1;
+        updateLoadoutUi();
+        refreshDevWeaponOptions();
+        setDevStatus(`${getWeaponLabel(key)} unlocked`);
+        return;
+      }
+      const maxLevel = WEAPON_CONFIG[key]?.maxLevel || w.level;
+      if (w.level < maxLevel) {
+        w.level++;
+        setDevStatus(`${getWeaponLabel(key)} Lv ${w.level}`);
+      } else {
+        w.mastery = (w.mastery || 0) + 1;
+        setDevStatus(`${getWeaponLabel(key)} Mastery ${w.mastery}`);
+      }
+      updateLoadoutUi();
+      refreshDevWeaponOptions();
+    }
+
+    function devMaxWeapon(key){
+      const w = weapons[key];
+      if (!w) return;
+      const maxLevel = WEAPON_CONFIG[key]?.maxLevel || w.level;
+      w.unlocked = true;
+      w.level = Math.max(w.level, maxLevel);
+      updateLoadoutUi();
+      refreshDevWeaponOptions();
+      setDevStatus(`${getWeaponLabel(key)} maxed`);
+    }
+
+    function devMasteryWeapon(key){
+      const w = weapons[key];
+      if (!w) return;
+      w.unlocked = true;
+      w.level = Math.max(1, w.level);
+      w.mastery = (w.mastery || 0) + 1;
+      updateLoadoutUi();
+      refreshDevWeaponOptions();
+      setDevStatus(`${getWeaponLabel(key)} Mastery ${w.mastery}`);
+    }
+
+    function devAddTrinket(id){
+      const title = TRINKET_LABEL_MAP.get(id) || id;
+      const added = addTrinket(id);
+      updateLoadoutUi();
+      refreshDevTrinketOptions();
+      setDevStatus(added ? `Added ${title}` : `Could not add ${title}`);
+    }
+
+    function devHeal(){
+      player.hp = player.maxHp;
+      setDevStatus("HP full");
+    }
+
+    function devShield(){
+      buffs.shield = Math.max(buffs.shield, 10);
+      setDevStatus("Shield 10s");
+    }
+
+    function devAddLevel(){
+      player.level++;
+      player.xp = 0;
+      player.xpNeed = xpNeedForLevel(player.level);
+      setDevStatus(`Level ${player.level}`);
+    }
+
+    function devClearEnemies(){
+      for (let i=enemies.length-1;i>=0;i--) enemyPool.put(enemies.pop());
+      for (let i=enemyShots.length-1;i>=0;i--) shotPool.put(enemyShots.pop());
+      for (let i=voidZones.length-1;i>=0;i--) voidPool.put(voidZones.pop());
+      telegraphs.length = 0;
+      setDevStatus("Enemies cleared");
+    }
+
+    function wireDevMenu(){
+      if (!ui.devPanel) return;
+      refreshDevOptions();
+      if (ui.devWeaponAdd) ui.devWeaponAdd.addEventListener("click", () => {
+        const key = ui.devWeaponSelect?.value;
+        if (key) devUnlockWeapon(key);
+      }, { passive:true });
+      if (ui.devWeaponUp) ui.devWeaponUp.addEventListener("click", () => {
+        const key = ui.devWeaponSelect?.value;
+        if (key) devUpgradeWeapon(key);
+      }, { passive:true });
+      if (ui.devWeaponMax) ui.devWeaponMax.addEventListener("click", () => {
+        const key = ui.devWeaponSelect?.value;
+        if (key) devMaxWeapon(key);
+      }, { passive:true });
+      if (ui.devWeaponMastery) ui.devWeaponMastery.addEventListener("click", () => {
+        const key = ui.devWeaponSelect?.value;
+        if (key) devMasteryWeapon(key);
+      }, { passive:true });
+      if (ui.devTrinketAdd) ui.devTrinketAdd.addEventListener("click", () => {
+        const id = ui.devTrinketSelect?.value;
+        if (id) devAddTrinket(id);
+      }, { passive:true });
+      if (ui.devHeal) ui.devHeal.addEventListener("click", devHeal, { passive:true });
+      if (ui.devShield) ui.devShield.addEventListener("click", devShield, { passive:true });
+      if (ui.devAddLevel) ui.devAddLevel.addEventListener("click", devAddLevel, { passive:true });
+      if (ui.devClearEnemies) ui.devClearEnemies.addEventListener("click", devClearEnemies, { passive:true });
+    }
+
+    addEventListener("keydown", (e) => {
+      if (e.repeat) return;
+      if (!e.ctrlKey) return;
+      if (typeof e.key !== "string") return;
+      if (e.key.toLowerCase() !== "d") return;
+      if (!isDevMenuAllowed()) return;
+      e.preventDefault();
+      toggleDevMenu();
+    });
     setPlayerRuntime({ openLevelUp });
     setChestRuntime({ addXP, openTrinket, openAug });
     setEnemyRuntime({ openAug, onEnemyKilled });
@@ -401,6 +603,7 @@ import { popFloatText } from "./float_text.js";
 
     function closeMenu(){
       if (state !== STATE.MENU) return;
+      setDevMenuVisible(false);
       closeMenuUI();
       state = STATE.PLAYING;
       focusCanvas();
@@ -446,6 +649,7 @@ import { popFloatText } from "./float_text.js";
 
       closeGameOverUI();
       closeLevelUpUI();
+      setDevMenuVisible(false);
       closeMenuUI();
       clearDirectionalInput();
 
@@ -479,6 +683,7 @@ import { popFloatText } from "./float_text.js";
         else if (state === STATE.MENU) closeMenu();
       }
     });
+    wireDevMenu();
 
     /* ============================
        Buffs / Player / Enemies / Projectiles
@@ -590,8 +795,17 @@ import { popFloatText } from "./float_text.js";
       cleanupDeadEnemies(camX, camY, W, H);
 
       if (player.hp <= 0){
-        player.hp = 0;
-        openGameOver();
+        if (trinketBonuses.reviveCharges > 0){
+          trinketBonuses.reviveCharges--;
+          const reviveHp = Math.max(1, Math.ceil(player.maxHp * 0.45));
+          player.hp = reviveHp;
+          player.iFrame = Math.max(player.iFrame, 1.0);
+          buffs.shield = Math.max(buffs.shield, 1.2);
+          popFloatText(player.x, player.y - player.r - 18, "Second Chance!", COLORS.heal, 18, 1.6, 16, 40, 90);
+        } else {
+          player.hp = 0;
+          openGameOver();
+        }
       }
     }
 
@@ -627,13 +841,5 @@ import { popFloatText } from "./float_text.js";
     ui.levelup.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
     ui.gameover.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
     ui.menu.addEventListener("click", (e)=> e.stopPropagation(), { passive:true });
-    if (ui.btnMobileMenu){
-      ui.btnMobileMenu.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (state === STATE.PLAYING) openMenu();
-        else if (state === STATE.MENU) closeMenu();
-      }, { passive:true });
-    }
-
   })();
   
