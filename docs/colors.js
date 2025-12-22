@@ -47,4 +47,10 @@ export const COLORS = {
   missile: "#ff9a3c",
   missileStroke: "rgba(0,0,0,0.3)",
   text: "#d7f6ff",
+  companionIgorek: "#7fe7ff",
+  companionLumen: "#7cffd9",
+  companionVolt: "#ffd94a",
+  companionByte: "#b160ff",
+  companionAegis: "#46ff8f",
+  companionCage: "#3b3f47",
 };

@@ -38,6 +38,7 @@ import {
 } from "./ui.js";
 import { updateChests, resetChests, setChestRuntime } from "./chests.js";
 import { damageEnemy, updateEnemyShots, updateVoidZones, updateEnemies, cleanupDeadEnemies, setEnemyRuntime } from "./enemies.js";
+import { resetCompanions, updateCompanions, formatCompanionPills, addCompanion, companionSlotsFull, COMPANIONS } from "./companions.js";
 import { addParticles, updateParticles, resetParticles } from "./particles.js";
 import { resetQuests, updateQuests, setQuestRuntime, onEnemyKilled } from "./quests.js";
 import {
@@ -88,6 +89,7 @@ import {
   telegraphs,
   voidZones,
   gems,
+  companions,
   particles,
   chests,
   dmgTexts,
@@ -152,7 +154,7 @@ import { popFloatText } from "./float_text.js";
     updateMuteButton();
 
     const ACTIVE_OBSTACLE_PAD = 1200;
-    const STATE = { PLAYING:"playing", LEVELUP:"levelup", TRINKET:"trinket", AUG:"aug", GAMEOVER:"gameover", MENU:"menu" };
+    const STATE = { PLAYING:"playing", LEVELUP:"levelup", TRINKET:"trinket", AUG:"aug", COMPANION:"companion", GAMEOVER:"gameover", MENU:"menu" };
     let state = STATE.PLAYING;
     let devMenuOpen = false;
     let fpsAccum = 0, fpsCount = 0;
@@ -243,6 +245,7 @@ import { popFloatText } from "./float_text.js";
     function updateLoadoutUi(){
       if (ui.loadout) ui.loadout.innerHTML = formatWeaponPills();
       if (ui.trinkets) ui.trinkets.innerHTML = formatTrinketPills();
+      if (ui.companions) ui.companions.innerHTML = formatCompanionPills();
       if (ui.bonuses) ui.bonuses.innerHTML = formatBonusPills();
       if (ui.mWeapons) ui.mWeapons.innerHTML = formatWeaponPills();
     }
@@ -345,6 +348,47 @@ import { popFloatText } from "./float_text.js";
       focusCanvas();
     }
 
+    function openCompanion(){
+      if (state !== STATE.PLAYING) return false;
+      if (companionSlotsFull()) return false;
+      const choices = COMPANIONS.map((c) => {
+        const owned = companions.some((p) => p.id === c.id);
+        return {
+          id: c.id,
+          title: c.name,
+          desc: owned ? `${c.desc} Already recruited.` : c.desc,
+          tag: () => owned ? `${c.tag()} | Owned` : c.tag(),
+          disabled: owned,
+        };
+      });
+      state = STATE.COMPANION;
+      if (ui.levelup) {
+        ui.levelup.classList.remove("trinket");
+        ui.levelup.classList.remove("aug");
+      }
+      setLevelUpHeader("Companion Cage", "Choose 1 companion. Game is paused.");
+      renderUpgradeCards(choices, (c) => {
+        if (state !== STATE.COMPANION) return;
+        if (c.disabled) return;
+        addCompanion(c.id);
+        updateLoadoutUi();
+        closeCompanion();
+      });
+      openLevelUpUI();
+      sound.play("level");
+      return true;
+    }
+
+    function closeCompanion(){
+      closeLevelUpUI();
+      setDevMenuVisible(false);
+      setLevelUpHeader("Level Up", "Choose 1 upgrade. Game is paused.");
+      if (ui.levelup) ui.levelup.classList.remove("trinket");
+      if (ui.levelup) ui.levelup.classList.remove("aug");
+      state = STATE.PLAYING;
+      focusCanvas();
+    }
+
     function openAug(){
       if (state !== STATE.PLAYING) return false;
       const options = WEAPON_LABELS.filter(({ key }) => weapons[key]?.unlocked && !weapons[key]?.aug);
@@ -397,7 +441,7 @@ import { popFloatText } from "./float_text.js";
        Dev Menu
        ============================ */
     function isDevMenuAllowed(){
-      return state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG || state === STATE.MENU;
+      return state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG || state === STATE.COMPANION || state === STATE.MENU;
     }
 
     function getDevPanelHost(){
@@ -615,7 +659,7 @@ import { popFloatText } from "./float_text.js";
       toggleDevMenu();
     });
     setPlayerRuntime({ openLevelUp });
-    setChestRuntime({ addXP, openTrinket, openAug });
+    setChestRuntime({ addXP, openTrinket, openAug, openCompanion });
     setEnemyRuntime({ openAug, onEnemyKilled });
     setQuestRuntime({ addXP, openAug, openTrinket, addParticles });
 
@@ -672,6 +716,7 @@ import { popFloatText } from "./float_text.js";
       resetWeapons();
       resetUpgradeState();
       resetTrinkets();
+      resetCompanions();
       resetDps();
       startNoticeT = START_NOTICE_TIME;
 
@@ -721,6 +766,7 @@ import { popFloatText } from "./float_text.js";
       const pickup = player.pickup * magnetMul;
       const pickupMult = player.pickup / BASE_STATS.pickup;
       const pr2 = pickup * pickup;
+      const compCount = companions.length;
 
       for (let i=gems.length-1;i>=0;i--){
         const g = gems[i];
@@ -737,6 +783,7 @@ import { popFloatText } from "./float_text.js";
         const dx = player.x - g.x;
         const dy = player.y - g.y;
         const d2 = dx*dx + dy*dy;
+        let collected = false;
 
         if (d2 < pr2){
           const d = Math.sqrt(d2) || 1;
@@ -747,11 +794,31 @@ import { popFloatText } from "./float_text.js";
           g.vy += ny * pull * dt;
         }
 
+        for (let j = 0; j < compCount; j++){
+          const c = companions[j];
+          const cdx = c.x - g.x;
+          const cdy = c.y - g.y;
+          const cd2 = cdx * cdx + cdy * cdy;
+          const cPickup = c.pickup || 0;
+          if (!collected && cPickup > 0 && cd2 < cPickup * cPickup){
+            const d = Math.sqrt(cd2) || 1;
+            const nx = cdx / d, ny = cdy / d;
+            const pull = (1 - d / cPickup) * (c.pull || 0);
+            g.vx += nx * pull * dt;
+            g.vy += ny * pull * dt;
+          }
+          const rr = (c.r + g.r + LOOT_CONFIG.pickupPadding);
+          if (cd2 <= rr * rr){
+            collected = true;
+            break;
+          }
+        }
+
         g.x += g.vx * dt;
         g.y += g.vy * dt;
 
         const rr = player.r + g.r + LOOT_CONFIG.pickupPadding;
-        if (d2 <= rr*rr){
+        if (d2 <= rr*rr || collected){
           g.alive = false;
           addXP(g.v);
           addParticles(g.x, g.y, COLORS.gem, 2, 220);
@@ -802,6 +869,7 @@ import { popFloatText } from "./float_text.js";
 
       updateBuffs(dt);
       updatePlayer(dt);
+      updateCompanions(dt);
 
       const camX = player.x - W*0.5;
       const camY = player.y - H*0.5;

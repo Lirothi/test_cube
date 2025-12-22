@@ -1,10 +1,11 @@
-import { CHEST_CONFIG, TRINKET_CONFIG, AUGMENT_CONFIG, COLORS } from "./config.js";
+import { CHEST_CONFIG, TRINKET_CONFIG, AUGMENT_CONFIG, COMPANION_CONFIG, COLORS } from "./config.js";
 import { rand, randi, hypot, TAU } from "./math.js";
 import { addTelegraph } from "./telegraph.js";
 import { isBlockedByObstacle, spawnElitePackAt } from "./spawn.js";
 import { addParticles } from "./particles.js";
 import { damageEnemy } from "./enemies.js";
 import { trinketSlotsFull } from "./trinkets.js";
+import { companionSlotsFull } from "./companions.js";
 import { popFloatText } from "./float_text.js";
 import {
   player,
@@ -15,12 +16,13 @@ import {
 } from "./state.js";
 import { chestPool } from "./pools.js";
 
-let runtime = { addXP: null, openTrinket: null, openAug: null };
+let runtime = { addXP: null, openTrinket: null, openAug: null, openCompanion: null };
 
-export function setChestRuntime({ addXP, openTrinket, openAug }) {
+export function setChestRuntime({ addXP, openTrinket, openAug, openCompanion }) {
   runtime.addXP = addXP;
   runtime.openTrinket = openTrinket;
   runtime.openAug = openAug;
+  runtime.openCompanion = openCompanion;
 }
 
 function requireRuntime() {
@@ -48,6 +50,14 @@ const augSpawn = {
   min: AUGMENT_CONFIG.chest.timerMin,
   max: AUGMENT_CONFIG.chest.timerMax,
   activeMax: AUGMENT_CONFIG.chest.activeMax,
+};
+
+const companionSpawn = {
+  t: COMPANION_CONFIG.chest.timerStart,
+  min: COMPANION_CONFIG.chest.timerMin,
+  max: COMPANION_CONFIG.chest.timerMax,
+  interval: (COMPANION_CONFIG.chest.timerMin + COMPANION_CONFIG.chest.timerMax) * 0.5,
+  activeMax: COMPANION_CONFIG.chest.activeMax,
 };
 
 const FLOAT_LIFE = 0.9;
@@ -240,6 +250,14 @@ export function updateChests(dt, camX, camY, W, H) {
     }
   }
 
+  if (!companionSlotsFull()) {
+    companionSpawn.t -= dt;
+    if (companionSpawn.t <= 0) {
+      companionSpawn.t = companionSpawn.interval;
+      spawnChest(camX, camY, W, H, "companion", companionSpawn.activeMax);
+    }
+  }
+
   augSpawn.t -= dt;
   if (augSpawn.t <= 0) {
     augSpawn.t = rand(augSpawn.max, augSpawn.min);
@@ -272,6 +290,22 @@ export function updateChests(dt, camX, camY, W, H) {
           if (runtime.openTrinket) runtime.openTrinket();
           addParticles(c.x, c.y, COLORS.trinket, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
           popFloatText(c.x, c.y - 10, "TRINKET", COLORS.trinket, 18, FLOAT_LIFE);
+        }
+      } else if (c.kind === "companion") {
+        if (companionSlotsFull()) {
+          const { addXP } = requireRuntime();
+          const lvl = Math.max(1, player.level || 1);
+          const mult = Math.min(1.6, 0.5 + lvl * 0.02);
+          const bonus = Math.max(1, Math.round(player.xpNeed * mult));
+          addXP(bonus);
+          addParticles(c.x, c.y, COLORS.gold, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+          popFloatText(c.x, c.y - 10, `+${bonus} XP`, COLORS.gold, 18, FLOAT_LIFE);
+        } else {
+          const opened = runtime.openCompanion ? runtime.openCompanion() : false;
+          if (opened) {
+            addParticles(c.x, c.y, COLORS.companionCage, CHEST_CONFIG.openParticles.count, CHEST_CONFIG.openParticles.spread);
+            popFloatText(c.x, c.y - 10, "COMPANION", COLORS.companionCage, 18, FLOAT_LIFE);
+          }
         }
       } else if (c.kind === "aug") {
         const opened = runtime.openAug ? runtime.openAug() : false;
@@ -306,4 +340,5 @@ export function resetChests() {
   chestSpawn.t = CHEST_CONFIG.timerStart;
   trinketSpawn.t = TRINKET_CONFIG.chest.timerStart;
   augSpawn.t = AUGMENT_CONFIG.chest.timerStart;
+  companionSpawn.t = COMPANION_CONFIG.chest.timerStart;
 }

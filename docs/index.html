@@ -308,6 +308,14 @@
       border-color: rgba(37,240,255,.45);
       box-shadow: 0 0 22px rgba(37,240,255,.14), 0 0 28px rgba(177,96,255,.10);
     }
+    .card.disabled{
+      opacity:0.55;
+      cursor:default;
+      pointer-events:none;
+      transform:none;
+      border-color: rgba(120,255,255,.18);
+      box-shadow:none;
+    }
     .card h3{margin:0 0 6px 0; position:relative;}
     .card p{margin:0; color:rgba(215,246,255,.70); font-size:13px; line-height:1.35; position:relative;}
     .pill{
@@ -538,6 +546,8 @@
       <div id="uiLoadout" class="pillRow"></div>
       <div class="hudTitle" style="margin-top:10px;">Trinkets</div>
       <div id="uiTrinkets" class="pillRow"></div>
+      <div class="hudTitle" style="margin-top:10px;">Companions</div>
+      <div id="uiCompanions" class="pillRow"></div>
       <div class="hudTitle" style="margin-top:10px;">Bonuses</div>
       <div id="uiBonuses" class="pillRow"></div>
     </div>

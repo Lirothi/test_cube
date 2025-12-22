@@ -85,6 +85,7 @@ export const enemyShots = [];
 export const telegraphs = [];
 export const voidZones = [];
 export const gems = [];
+export const companions = [];
 export const particles = [];
 export const chests = [];
 export const dmgTexts = [];

@@ -5,6 +5,7 @@ import {
   MAX_WEAPONS,
   DPS_LABELS,
   WEAPON_CONFIG,
+  WEAPON_MASTERY,
 } from "./config.js";
 import { fmtFloat, randi } from "./math.js";
 import { weapons, weaponCount } from "./weapons.js";
@@ -61,10 +62,12 @@ function weaponTag(weapon, maxLv, stats, extraParts = []){
   return parts.join(" | ");
 }
 
+const MASTERY_INFO = `Mastery (after max): +${Math.round(WEAPON_MASTERY.dmgMult * 100)}% dmg, +${Math.round(WEAPON_MASTERY.critChance * 100)}% crit, +${fmtFloat(WEAPON_MASTERY.critMult, 2)}x crit dmg per rank.`;
+
 const UPGRADES = [
   {
     id: "magic", title: "Magic Bullet",
-    desc: "Shoots the nearest enemy automatically. Max level unlocks mastery ranks that boost damage and crits.",
+    desc: `Shoots the nearest enemy automatically. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.magic, WEAPON_CONFIG.magic.maxLevel),
     can: () => true,
     apply: () => {
@@ -75,7 +78,7 @@ const UPGRADES = [
   },
   {
     id: "aura", title: "Holy Aura",
-    desc: "A luminous field around you that damages and pushes enemies back. Extra ranks past max add damage and crit scaling.",
+    desc: `A luminous field around you that damages and pushes enemies back. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.aura, WEAPON_CONFIG.aura.maxLevel),
     can: () => (weapons.aura.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -86,7 +89,7 @@ const UPGRADES = [
   },
   {
     id: "rail", title: "Railgun",
-    desc: "Charges a piercing rail shot that crosses the map with huge damage. Mastery after max level boosts damage/crit.",
+    desc: `Charges a piercing rail shot that crosses the map with huge damage. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.rail, WEAPON_CONFIG.rail.maxLevel),
     can: () => (weapons.rail.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -97,7 +100,7 @@ const UPGRADES = [
   },
   {
     id: "axe", title: "Axe Throw",
-    desc: "Throws axes in a neon arc. Strong burst + heavy knockback. Mastery adds damage/crit scaling past max.",
+    desc: `Throws axes in a neon arc. Strong burst + heavy knockback. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.axe, WEAPON_CONFIG.axe.maxLevel),
     can: () => (weapons.axe.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -108,7 +111,7 @@ const UPGRADES = [
   },
   {
     id: "orb", title: "Singularity Orb",
-    desc: "Launch an orb that parks, pulls enemies inward, pulses damage, then explodes. Mastery boosts damage/crit after max.",
+    desc: `Launch an orb that parks, pulls enemies inward, pulses damage, then explodes. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.orb, WEAPON_CONFIG.orb.maxLevel),
     can: () => (weapons.orb.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -119,7 +122,7 @@ const UPGRADES = [
   },
   {
     id: "missile", title: "Homing Missiles",
-    desc: "Fire guided missiles that arc toward enemies and explode for splash damage. Mastery adds damage/crit scaling past max.",
+    desc: `Fire guided missiles that arc toward enemies and explode for splash damage. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
     tag: () => weaponTag(weapons.missile, WEAPON_CONFIG.missile.maxLevel),
     can: () => (weapons.missile.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {

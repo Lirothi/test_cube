@@ -1,10 +1,12 @@
 import { BUILD, CRIT_UPGRADES, UPGRADE_CONFIG } from "./config.js";
 import { fmtFloat } from "./math.js";
 import { sound } from "./audio.js";
-import { DPS_TRACKER, upgradeState, listUpgradeSummary, formatDpsSummary } from "./upgrade.js";
+import { DPS_TRACKER, upgradeState, formatDpsSummary } from "./upgrade.js";
 import { weapons, magicStats, auraStats, railStats, axeStats, orbStats, missileStats } from "./weapons.js";
-import { player, BASE_STATS, dmgTexts, floatTexts } from "./state.js";
+import { player, BASE_STATS, dmgTexts, floatTexts, trinkets, trinketBonuses, companions } from "./state.js";
 import { dmgPool, textPool } from "./pools.js";
+import { getAugmentById } from "./augments.js";
+import { TRINKETS } from "./trinkets.js";
 
 export const ui = {
   time: document.getElementById("uiTime"),
@@ -69,6 +71,7 @@ export const ui = {
   hint: document.getElementById("hint"),
   loadout: document.getElementById("uiLoadout"),
   trinkets: document.getElementById("uiTrinkets"),
+  companions: document.getElementById("uiCompanions"),
   bonuses: document.getElementById("uiBonuses"),
   mTime: document.getElementById("mUiTime"),
   mLevel: document.getElementById("mUiLevel"),
@@ -156,6 +159,84 @@ export function updateMenuStats() {
   ui.menuWeaponStats.innerHTML = rows.length ? rows.join("") : `<div class="kv"><span>Weapons</span><span>None unlocked</span></div>`;
 }
 
+const WEAPON_LABELS = [
+  { key: "magic", label: "Magic Bullet" },
+  { key: "aura", label: "Holy Aura" },
+  { key: "rail", label: "Railgun" },
+  { key: "axe", label: "Axe Throw" },
+  { key: "orb", label: "Singularity Orb" },
+  { key: "missile", label: "Homing Missiles" },
+];
+const TRINKET_LABELS = new Map(TRINKETS.map((t) => [t.id, t.title]));
+
+function formatBuildSummary() {
+  const lines = [];
+
+  const weaponParts = [];
+  for (const { key, label } of WEAPON_LABELS) {
+    const w = weapons[key];
+    if (!w.unlocked) continue;
+    const mastery = w.mastery ? ` (M${w.mastery})` : "";
+    const augTitle = w.aug ? (getAugmentById(w.aug)?.title || "Aug") : "";
+    const augText = augTitle ? ` [Aug: ${augTitle}]` : "";
+    weaponParts.push(`${label} Lv ${w.level}${mastery}${augText}`);
+  }
+  lines.push(`<div><b>Weapons</b>: ${weaponParts.length ? weaponParts.join(" | ") : "None"}</div>`);
+
+  const trinketParts = trinkets.map((id) => TRINKET_LABELS.get(id) || id);
+  lines.push(`<div><b>Trinkets</b>: ${trinketParts.length ? trinketParts.join(" | ") : "None"}</div>`);
+
+  const companionParts = companions.map((c) => c.name || c.id);
+  lines.push(`<div><b>Companions</b>: ${companionParts.length ? companionParts.join(" | ") : "None"}</div>`);
+
+  const passiveParts = [];
+  if (upgradeState.speedLv) passiveParts.push(`Speed Lv ${upgradeState.speedLv}`);
+  if (upgradeState.hpLv) passiveParts.push(`Max HP Lv ${upgradeState.hpLv}`);
+  if (upgradeState.armorLv) passiveParts.push(`Armor Lv ${upgradeState.armorLv}`);
+  if (upgradeState.pickupLv) passiveParts.push(`Pickup Lv ${upgradeState.pickupLv}`);
+  if (upgradeState.xpLv) passiveParts.push(`XP Lv ${upgradeState.xpLv}`);
+  if (upgradeState.cdLv) passiveParts.push(`CDR Lv ${upgradeState.cdLv}`);
+  if (upgradeState.critChanceLv) passiveParts.push(`Crit Chance Lv ${upgradeState.critChanceLv}`);
+  if (upgradeState.critMultLv) passiveParts.push(`Crit Dmg Lv ${upgradeState.critMultLv}`);
+  if (upgradeState.resAllLv) passiveParts.push(`All Res Lv ${upgradeState.resAllLv}`);
+  if (upgradeState.resFireLv) passiveParts.push(`Fire Res Lv ${upgradeState.resFireLv}`);
+  if (upgradeState.resPoisonLv) passiveParts.push(`Poison Res Lv ${upgradeState.resPoisonLv}`);
+  if (upgradeState.resVoidLv) passiveParts.push(`Void Res Lv ${upgradeState.resVoidLv}`);
+  lines.push(`<div><b>Upgrades</b>: ${passiveParts.length ? passiveParts.join(" | ") : "None"}</div>`);
+
+  const speedPct = Math.round((player.speed / BASE_STATS.speed) * 100);
+  const pickupPct = Math.round((player.pickup / BASE_STATS.pickup) * 100);
+  const res = player.resists || {};
+  const statParts = [
+    `Max HP ${Math.ceil(player.maxHp)}`,
+    `Armor ${Math.round(player.armor)}`,
+    `Speed ${Math.round(player.speed)} (${speedPct}% base)`,
+    `Pickup ${Math.round(player.pickup)} (${pickupPct}% base)`,
+    `Res All ${Math.round((res.all || 0) * 100)}%`,
+    `Fire ${Math.round((res.fire || 0) * 100)}%`,
+    `Poison ${Math.round((res.poison || 0) * 100)}%`,
+    `Void ${Math.round((res.void || 0) * 100)}%`,
+  ];
+  lines.push(`<div><b>Stats</b>: ${statParts.join(" | ")}</div>`);
+
+  const dmgPct = Math.round(((trinketBonuses.dmgMult || 1) - 1) * 100);
+  const xpMult = (1 + upgradeState.xpLv * UPGRADE_CONFIG.xpMultGain) * (trinketBonuses.xpMult || 1);
+  const xpPct = Math.round((xpMult - 1) * 100);
+  const cdMult = Math.max(0, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction) * (trinketBonuses.cdMult || 1);
+  const cdPct = Math.round((1 - cdMult) * 100);
+  const critChance = (upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel) + (trinketBonuses.critChance || 0);
+  const critMult = 1 + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + (trinketBonuses.critMult || 0);
+  const bonusParts = [
+    `DMG ${dmgPct >= 0 ? "+" : ""}${dmgPct}%`,
+    `XP ${xpPct >= 0 ? "+" : ""}${xpPct}%`,
+    `CDR ${cdPct >= 0 ? "-" : "+"}${Math.abs(cdPct)}%`,
+    `Crit ${Math.round(critChance * 100)}% x${fmtFloat(critMult, 2)}`,
+  ];
+  lines.push(`<div><b>Bonuses</b>: ${bonusParts.join(" | ")}</div>`);
+
+  return lines.join("");
+}
+
 export function updateTexts(dt) {
   for (let i = dmgTexts.length - 1; i >= 0; i--) {
     const d = dmgTexts[i];
@@ -194,15 +275,19 @@ export function renderUpgradeCards(cards, onPick) {
   ui.upgradeCards.innerHTML = "";
   for (const u of cards) {
     const el = document.createElement("div");
-    el.className = "card";
+    const disabled = !!u.disabled;
+    el.className = disabled ? "card disabled" : "card";
+    if (disabled) el.setAttribute("aria-disabled", "true");
     el.innerHTML = `
       <h3>${u.title}</h3>
       <p>${u.desc}</p>
       <div class="pill">${u.tag()}</div>
     `;
-    el.addEventListener("click", () => {
-      if (typeof onPick === "function") onPick(u);
-    }, { passive: true });
+    if (!disabled) {
+      el.addEventListener("click", () => {
+        if (typeof onPick === "function") onPick(u);
+      }, { passive: true });
+    }
     ui.upgradeCards.appendChild(el);
   }
 }
@@ -278,7 +363,7 @@ export function updateGameOverSummary() {
   if (ui.goTime) ui.goTime.textContent = t;
   if (ui.goLvl) ui.goLvl.textContent = String(player.level);
   if (ui.goKills) ui.goKills.textContent = String(player.kills);
-  if (ui.goUpgrades) ui.goUpgrades.textContent = listUpgradeSummary();
+  if (ui.goUpgrades) ui.goUpgrades.innerHTML = formatBuildSummary();
   if (ui.goDps) ui.goDps.textContent = formatDpsSummary();
   return t;
 }

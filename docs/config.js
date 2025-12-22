@@ -143,6 +143,11 @@ export const TRINKET_CONFIG = {
   chest: { timerStart: 80, timerMin: 130, timerMax: 200, activeMax: 1 },
 };
 
+export const COMPANION_CONFIG = {
+  slots: 2,
+  chest: { timerStart: 10, timerMin: 160, timerMax: 240, activeMax: 1 },
+};
+
 export const AUGMENT_CONFIG = {
   choices: 2,
   chest: { timerStart: 60, timerMin: 105, timerMax: 145, activeMax: 1 },
@@ -153,7 +158,7 @@ export const AUGMENT_CONFIG = {
   },
   rail: {
     burn: { dpsPct: 0.50, duration: 2.2 },
-    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 0.95 },
+    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 1.05 },
   },
   axe: {
     bleed: { dpsPct: 0.35, duration: 3.0 },

@@ -24,6 +24,7 @@ import {
   buffs,
   quest,
   questItems,
+  companions,
 } from "./state.js";
 
 const UI_COLORS = {
@@ -32,6 +33,7 @@ const UI_COLORS = {
   chestFill: "rgba(70,255,143,0.18)",
   trinketFill: "rgba(124,255,217,0.18)",
   augFill: "rgba(141,123,255,0.18)",
+  companionFill: "rgba(154,255,106,0.18)",
   questFill: "rgba(255,184,74,0.18)",
   auraFill: COLORS.voidAura,
   auraStroke: COLORS.voidAuraStroke,
@@ -219,10 +221,18 @@ function drawChestIndicators(ctx, W, H, camX, camY){
   for (let i=0;i<chests.length;i++){
     const c = chests[i];
     if (!c.alive) continue;
-    const chestColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.chest);
+    const chestColor = c.kind === "trinket"
+      ? COLORS.trinket
+      : (c.kind === "aug"
+        ? COLORS.aug
+        : (c.kind === "companion" ? COLORS.companionCage : COLORS.chest));
     ctx.shadowColor = chestColor;
     ctx.strokeStyle = chestColor;
-    ctx.fillStyle = c.kind === "trinket" ? UI_COLORS.trinketFill : (c.kind === "aug" ? UI_COLORS.augFill : UI_COLORS.chestFill);
+    ctx.fillStyle = c.kind === "trinket"
+      ? UI_COLORS.trinketFill
+      : (c.kind === "aug"
+        ? UI_COLORS.augFill
+        : (c.kind === "companion" ? UI_COLORS.companionFill : UI_COLORS.chestFill));
     const sx = c.x - camX, sy = c.y - camY;
     if (sx >= -c.r && sx <= W + c.r && sy >= -c.r && sy <= H + c.r) continue;
 
@@ -238,7 +248,8 @@ function drawChestIndicators(ctx, W, H, camX, camY){
     const px = cx + dx * t;
     const py = cy + dy * t;
     const ang = Math.atan2(dy, dx);
-    const s = size * pulse;
+    const scale = c.kind === "companion" ? 1.35 : 1;
+    const s = size * pulse * scale;
 
     ctx.save();
     ctx.translate(px, py);
@@ -418,13 +429,41 @@ export function renderFrame({
   for (let i=0;i<chests.length;i++){
     const c = chests[i];
     if (c.x < camX - WORLD.spawnPad || c.x > camX + W + WORLD.spawnPad || c.y < camY - WORLD.spawnPad || c.y > camY + H + WORLD.spawnPad) continue;
-    const chestColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.chest);
-    const ringColor = c.kind === "trinket" ? COLORS.trinket : (c.kind === "aug" ? COLORS.aug : COLORS.gold);
+    const chestColor = c.kind === "trinket"
+      ? COLORS.trinket
+      : (c.kind === "aug"
+        ? COLORS.aug
+        : (c.kind === "companion" ? COLORS.companionCage : COLORS.chest));
+    const ringColor = c.kind === "trinket"
+      ? COLORS.trinket
+      : (c.kind === "aug"
+        ? COLORS.aug
+        : (c.kind === "companion" ? COLORS.companionCage : COLORS.gold));
     const pulse = (Math.sin(c.pulse) * 0.15 + 0.85);
     const rr = c.r * (1.0 + 0.05 * Math.sin(c.pulse * 1.7));
     neonRect(ctx, c.x - rr, c.y - rr, rr*2, rr*2, chestColor, 28);
     neonRing(ctx, c.x, c.y, rr*1.45, ringColor, 32, 2, pulse);
     neonRing(ctx, c.x, c.y, rr*2.0, ringColor, 22, 1.5, 0.45 * pulse);
+    if (c.kind === "companion") {
+      const bar = rr * 0.7;
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.strokeStyle = ringColor;
+      ctx.shadowColor = ringColor;
+      ctx.shadowBlur = 18;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-bar, -bar);
+      ctx.lineTo(-bar, bar);
+      ctx.moveTo(bar, -bar);
+      ctx.lineTo(bar, bar);
+      ctx.moveTo(-bar, 0);
+      ctx.lineTo(bar, 0);
+      ctx.moveTo(0, -bar);
+      ctx.lineTo(0, bar);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   if (quest.giverActive) {
@@ -765,6 +804,13 @@ export function renderFrame({
     neonRing(ctx, player.x, player.y, player.r + 18, UI_COLORS.magnetRing, 22, 2, 0.55);
   }
 
+  for (let i=0;i<companions.length;i++){
+    const c = companions[i];
+    const pulse = 0.7 + 0.3 * Math.sin(performance.now() * 0.006 + i);
+    neonCircle(ctx, c.x, c.y, c.r, c.color, 18, 0.9);
+    neonRing(ctx, c.x, c.y, c.r + 6, c.color, 18, 1.5, 0.5 * pulse);
+  }
+
   for (let i=0;i<dmgTexts.length;i++){
     const d = dmgTexts[i];
     const a = clamp(d.life / d.maxLife, 0, 1);
@@ -797,7 +843,7 @@ export function renderFrame({
   drawChestIndicators(ctx, W, H, camX, camY);
   drawQuestIndicators(ctx, W, H, camX, camY);
 
-  if (state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG){
+  if (state === STATE.LEVELUP || state === STATE.TRINKET || state === STATE.AUG || state === STATE.COMPANION){
     ctx.save();
     ctx.fillStyle = UI_COLORS.overlayDim;
     ctx.fillRect(0,0,W,H);
