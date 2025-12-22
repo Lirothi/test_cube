@@ -373,7 +373,10 @@
 
     /* Mobile-first HUD */
     #mobileHud{
-      position:fixed; top:calc(8px + env(safe-area-inset-top,0)); left:8px; right:8px;
+      position:fixed;
+      top:calc(8px + env(safe-area-inset-top,0));
+      left:calc(8px + env(safe-area-inset-left,0));
+      right:calc(8px + env(safe-area-inset-right,0));
       display:none;
       flex-direction:row; flex-wrap:wrap; gap:8px;
       pointer-events:none;
@@ -430,6 +433,24 @@
       background:linear-gradient(90deg, rgba(255,87,115,.95), rgba(255,158,51,.90));
       box-shadow:0 0 12px rgba(255,87,115,.45), 0 0 16px rgba(255,158,51,.26);
     }
+    #mobileHud .mMeta{
+      display:flex; flex-direction:column; gap:4px;
+      background:rgba(10,12,18,.68);
+      border:1px solid rgba(120,255,255,.18);
+      border-radius:12px;
+      padding:6px 8px;
+      box-shadow:var(--shadow), var(--glow);
+      font-size:11.5px;
+      color:rgba(215,246,255,.78);
+      line-height:1.25;
+    }
+    #mobileHud .mMetaLine{
+      display:-webkit-box;
+      -webkit-line-clamp:1;
+      -webkit-box-orient:vertical;
+      overflow:hidden;
+      word-break:break-word;
+    }
 
     #fps{
       display:inline-flex; align-items:center; justify-content:center;
@@ -461,7 +482,7 @@
     #btnMobileMenu{
       position:fixed;
       bottom:calc(14px + env(safe-area-inset-bottom,0));
-      right:14px;
+      right:calc(14px + env(safe-area-inset-right,0));
       width:58px; height:46px;
       border-radius:14px;
       border:1px solid rgba(120,255,255,.28);
@@ -478,7 +499,8 @@
     /* Virtual stick visuals */
     #stick{
       position:fixed; width:120px; height:120px;
-      bottom:calc(18px + env(safe-area-inset-bottom,0)); left:12px;
+      bottom:calc(18px + env(safe-area-inset-bottom,0));
+      left:calc(12px + env(safe-area-inset-left,0));
       pointer-events:none;
       display:none;
       z-index:9;
@@ -579,6 +601,11 @@
         <div class="mBar" id="mWeaponsCard">
           <div class="mBarLabel">Weapons</div>
           <div class="pillRow" id="mWeapons"></div>
+        </div>
+        <div class="mMeta" id="mMetaCard">
+          <div class="mMetaLine" id="mMeta">Trinkets 0 | Companions 0</div>
+          <div class="mMetaLine" id="mBuffs">Buffs: -</div>
+          <div class="mMetaLine" id="mQuest">Quest: -</div>
         </div>
         <div id="mFpsWrap"><span id="mFps">0 fps</span></div>
       </div>

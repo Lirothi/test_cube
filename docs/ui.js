@@ -88,6 +88,9 @@ export const ui = {
   mBossPct: document.getElementById("mBossPct"),
   mBossFill: document.getElementById("mBossFill"),
   mWeapons: document.getElementById("mWeapons"),
+  mMeta: document.getElementById("mMeta"),
+  mBuffs: document.getElementById("mBuffs"),
+  mQuest: document.getElementById("mQuest"),
   fps: document.getElementById("fps"),
 };
 

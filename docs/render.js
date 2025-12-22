@@ -25,6 +25,7 @@ import {
   quest,
   questItems,
   companions,
+  trinkets,
 } from "./state.js";
 
 const UI_COLORS = {
@@ -942,9 +943,20 @@ export function renderFrame({
     if (buffs.power > 0) buffParts.push(`Overcharge ${fmtFloat(buffs.power, 1)}s`);
     if (buffs.haste > 0) buffParts.push(`Haste ${fmtFloat(buffs.haste, 1)}s`);
     if (buffs.xp > 0) buffParts.push(`XP Boost ${fmtFloat(buffs.xp, 1)}s`);
-    ui.buffs.innerHTML = `<b>Buffs:</b> ${buffParts.length ? buffParts.join(" | ") : "-"}`;
+    const buffText = buffParts.length ? buffParts.join(" | ") : "-";
+    ui.buffs.innerHTML = `<b>Buffs:</b> ${buffText}`;
+    if (ui.mBuffs) ui.mBuffs.textContent = `Buffs: ${buffText}`;
+  } else if (ui.mBuffs) {
+    ui.mBuffs.textContent = "Buffs: -";
   }
   if (ui.quest){
-    ui.quest.innerHTML = `<b>Quest:</b> ${getQuestHudText()}`;
+    const questText = getQuestHudText();
+    ui.quest.innerHTML = `<b>Quest:</b> ${questText}`;
+    if (ui.mQuest) ui.mQuest.textContent = `Quest: ${questText}`;
+  } else if (ui.mQuest) {
+    ui.mQuest.textContent = "Quest: -";
+  }
+  if (ui.mMeta){
+    ui.mMeta.textContent = `Trinkets ${trinkets.length} | Companions ${companions.length}`;
   }
 }
