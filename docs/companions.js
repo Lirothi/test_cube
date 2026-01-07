@@ -147,25 +147,57 @@ export function addCompanion(id) {
 }
 
 export function updateCompanions(dt) {
+  const claimedGems = new Set();
+  const liveGems = gems.filter((g) => g.alive);
   for (let i = 0; i < companions.length; i++) {
     const c = companions[i];
+    const toPlayer = Math.hypot(player.x - c.x, player.y - c.y);
+    const leash = Math.max(c.seekRadius || 0, 180) + c.orbitRadius * 1.4;
+    const forceReturn = toPlayer > leash;
     let target = null;
     let bestD2 = Infinity;
     const seek = c.seekRadius || 0;
-    if (seek > 0 && gems.length) {
+    if (!forceReturn && seek > 0 && liveGems.length) {
       const seek2 = seek * seek;
-      for (let g = 0; g < gems.length; g++) {
-        const gem = gems[g];
-        if (!gem.alive) continue;
-        const dx = gem.x - c.x;
-        const dy = gem.y - c.y;
+      const current = c.targetGem;
+      if (current && current.alive && !claimedGems.has(current)) {
+        const dx = current.x - c.x;
+        const dy = current.y - c.y;
         const d2 = dx * dx + dy * dy;
-        if (d2 <= seek2 && d2 < bestD2) {
+        if (d2 <= seek2) {
           bestD2 = d2;
-          target = gem;
+          target = current;
+        }
+      }
+      if (!target) {
+        for (let g = 0; g < liveGems.length; g++) {
+          const gem = liveGems[g];
+          if (claimedGems.has(gem)) continue;
+          const dx = gem.x - c.x;
+          const dy = gem.y - c.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= seek2 && d2 < bestD2) {
+            bestD2 = d2;
+            target = gem;
+          }
+        }
+      }
+      if (!target) {
+        bestD2 = Infinity;
+        for (let g = 0; g < liveGems.length; g++) {
+          const gem = liveGems[g];
+          const dx = gem.x - c.x;
+          const dy = gem.y - c.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= seek2 && d2 < bestD2) {
+            bestD2 = d2;
+            target = gem;
+          }
         }
       }
     }
+    c.targetGem = target || null;
+    if (target) claimedGems.add(target);
 
     c.angle += c.orbitSpeed * dt;
     const bob = Math.sin(c.angle * 1.7 + i) * 3;
@@ -174,7 +206,8 @@ export function updateCompanions(dt) {
     const targetX = target ? target.x : orbitX;
     const targetY = target ? target.y : orbitY;
     const baseSpeed = Math.max(0, player.speed || 0) * 1.1;
-    const speed = target ? baseSpeed : baseSpeed * 0.85;
+    const returnSpeed = (c.returnSpeed && c.returnSpeed > 0) ? c.returnSpeed : baseSpeed * 1.8;
+    const speed = forceReturn ? returnSpeed : (target ? baseSpeed : baseSpeed * 0.85);
 
     const dx = targetX - c.x;
     const dy = targetY - c.y;

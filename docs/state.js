@@ -30,6 +30,7 @@ export const buffs = {
   power: 0,
   haste: 0,
   xp: 0,
+  reviveFlash: 0,
 };
 
 export const trinkets = [];
@@ -71,6 +72,7 @@ export function updateBuffs(dt) {
   buffs.power = Math.max(0, buffs.power - dt);
   buffs.haste = Math.max(0, buffs.haste - dt);
   buffs.xp = Math.max(0, buffs.xp - dt);
+  buffs.reviveFlash = Math.max(0, buffs.reviveFlash - dt);
 }
 
 export const input = { up: false, down: false, left: false, right: false };

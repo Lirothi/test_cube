@@ -48,6 +48,11 @@ const BOSS_STUCK_DECAY = 2.0;
 const BOSS_STUCK_AVOID_SCALE = 1.6;
 const BOSS_STUCK_AVOID_MAX = 2.0;
 let runtime = { openAug: null, onEnemyKilled: null };
+const MAGE_ORB_ELEMENTS = [
+  { type: "fire", color: COLORS.aoeFire },
+  { type: "poison", color: COLORS.aoePoison },
+  { type: "void", color: COLORS.aoeVoid },
+];
 
 export function setEnemyRuntime({ openAug, onEnemyKilled }) {
   runtime.openAug = openAug;
@@ -142,6 +147,9 @@ function spawnEnemyShot(x, y, nx, ny, speed, dmg, color = RANGED_SHOT_CONFIG.col
   s.dmg = dmg;
   s.life = RANGED_SHOT_CONFIG.life;
   s.color = color;
+  s.elementType = "";
+  s.explodes = false;
+  s.explosionRadius = 0;
   s.splitT = 0;
   s.splitCount = 0;
   s.splitSpread = 0;
@@ -164,6 +172,9 @@ function spawnHomingShot(x, y, tx, ty, speed, dmg, turnRate, life, color, angleO
   s.dmg = dmg;
   s.life = life;
   s.color = color || RANGED_SHOT_CONFIG.color;
+  s.elementType = "";
+  s.explodes = false;
+  s.explosionRadius = 0;
   s.splitT = 0;
   s.splitCount = 0;
   s.splitSpread = 0;
@@ -185,11 +196,39 @@ function spawnSplitShot(x, y, nx, ny, speed, dmg, life, splitAfter, splitCount, 
   s.dmg = dmg;
   s.life = life;
   s.color = color || RANGED_SHOT_CONFIG.color;
+  s.elementType = "";
+  s.explodes = false;
+  s.explosionRadius = 0;
   s.splitT = splitAfter || 0;
   s.splitCount = splitCount || 0;
   s.splitSpread = splitSpread || 0;
   s.splitSpeed = splitSpeed || speed;
   s.splitDmg = splitDmg || dmg;
+  enemyShots.push(s);
+}
+
+function spawnMageOrb(x, y, nx, ny, speed, dmg, life, radius, explosionRadius) {
+  const element = MAGE_ORB_ELEMENTS[randi(MAGE_ORB_ELEMENTS.length)];
+  const s = shotPool.get();
+  s.alive = true;
+  s.x = x; s.y = y;
+  s.vx = nx * speed;
+  s.vy = ny * speed;
+  s.speed = speed;
+  s.turnRate = 0;
+  s.homing = false;
+  s.r = radius;
+  s.dmg = dmg;
+  s.life = life;
+  s.color = element.color;
+  s.elementType = element.type;
+  s.explodes = true;
+  s.explosionRadius = explosionRadius;
+  s.splitT = 0;
+  s.splitCount = 0;
+  s.splitSpread = 0;
+  s.splitSpeed = 0;
+  s.splitDmg = 0;
   enemyShots.push(s);
 }
 
@@ -279,31 +318,69 @@ function updateEnemyShots(dt) {
         break;
       }
     }
-    if (blocked) s.alive = false;
+    if (blocked) {
+      if (s.explodes) explodeEnemyShot(s);
+      s.alive = false;
+    }
+    if (!s.alive) {
+      enemyShots[i] = enemyShots[enemyShots.length - 1];
+      enemyShots.pop();
+      shotPool.put(s);
+      continue;
+    }
 
     const dx = player.x - s.x;
     const dy = player.y - s.y;
     const rr = player.r + s.r + RANGED_SHOT_CONFIG.hitPad;
     if (dx * dx + dy * dy <= rr * rr) {
-      s.alive = false;
-      if (buffs.shield <= 0 && player.iFrame <= 0) {
-        const dmg = applyArmorDamage(s.dmg);
-        player.hp -= dmg;
-        player.iFrame = PLAYER_CONFIG.shotIFrame;
-        spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
-        addParticles(player.x, player.y, COLORS.warnHitDim, 8, 360);
+      if (s.explodes) {
+        explodeEnemyShot(s);
       } else {
-        addParticles(s.x, s.y, COLORS.shieldBlock, 4, 260);
+        applyShotDamage(s.dmg, s.elementType);
       }
+      s.alive = false;
     }
 
-    if (s.life <= 0) s.alive = false;
+    if (!s.alive) {
+      enemyShots[i] = enemyShots[enemyShots.length - 1];
+      enemyShots.pop();
+      shotPool.put(s);
+      continue;
+    }
+
+    if (s.life <= 0) {
+      if (s.explodes) explodeEnemyShot(s);
+      s.alive = false;
+    }
 
     if (!s.alive) {
       enemyShots[i] = enemyShots[enemyShots.length - 1];
       enemyShots.pop();
       shotPool.put(s);
     }
+  }
+}
+
+function applyShotDamage(dmg, elementType = "") {
+  if (buffs.shield <= 0 && player.iFrame <= 0) {
+    const final = elementType ? applyElementalDamage(dmg, elementType) : applyArmorDamage(dmg);
+    player.hp -= final;
+    player.iFrame = PLAYER_CONFIG.shotIFrame;
+    spawnDmgText(player.x, player.y - player.r - 12, final, COLORS.warnHit);
+    addParticles(player.x, player.y, COLORS.warnHitDim, 8, 360);
+  } else {
+    addParticles(player.x, player.y, COLORS.shieldBlock, 4, 260);
+  }
+}
+
+function explodeEnemyShot(s) {
+  const r = s.explosionRadius || 0;
+  if (r > 0) spawnShockwave(s.x, s.y, r, s.color);
+  const dx = player.x - s.x;
+  const dy = player.y - s.y;
+  const rr = r + player.r;
+  if (dx * dx + dy * dy <= rr * rr) {
+    applyShotDamage(s.dmg, s.elementType);
   }
 }
 
@@ -534,7 +611,22 @@ function updateRangedAttacks(e, dt, d, nx, ny) {
           tg.y = e.y;
         },
         fire: () => {
-          if (e.alive && e.shotSeq === marker) spawnEnemyShot(e.x, e.y, nx, ny, e.shotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.shotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+          if (!e.alive || e.shotSeq !== marker) return;
+          if (e.shotType === "mage_orb") {
+            spawnMageOrb(
+              e.x,
+              e.y,
+              nx,
+              ny,
+              e.shotSpeed || RANGED_SHOT_CONFIG.defaultSpeed,
+              e.shotDmg || RANGED_SHOT_CONFIG.defaultDmg,
+              e.shotLife || RANGED_SHOT_CONFIG.life,
+              e.shotRadius || RANGED_SHOT_CONFIG.radius,
+              e.shotExplosionRadius || RANGED_SHOT_CONFIG.radius * 6
+            );
+          } else {
+            spawnEnemyShot(e.x, e.y, nx, ny, e.shotSpeed || RANGED_SHOT_CONFIG.defaultSpeed, e.shotDmg || RANGED_SHOT_CONFIG.defaultDmg);
+          }
         }
       });
     }
@@ -590,23 +682,25 @@ function updateBossNova(e, dt) {
   }
 }
 
-function updateBossVoid(e, dt) {
-  if (!(e.voidCd > 0)) return;
-  e.voidT -= dt;
-  if (e.voidT <= 0) {
+function updateBossAoe(e, dt) {
+  if (!(e.aoeCd > 0)) return;
+  e.aoeT -= dt;
+  if (e.aoeT <= 0) {
     const slowFireMul = getSlowFireMul();
-    e.voidT += (e.voidCd || 5) * slowFireMul;
-    const marker = ++e.voidSeq;
-    const count = Math.max(1, e.voidCount || 1);
+    e.aoeT += (e.aoeCd || 5) * slowFireMul;
+    const marker = ++e.aoeSeq;
+    const count = Math.max(1, e.aoeCount || 1);
     for (let k = 0; k < count; k++) {
       const ang = rand(TAU, 0);
       const dist = rand(140, 60);
       const tx = player.x + Math.cos(ang) * dist;
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
-        x: tx, y: ty, radius: e.voidRadius, color: e.voidColor, time: e.voidTelegraph,
+        x: tx, y: ty, radius: e.aoeRadius, color: e.aoeColor, time: e.aoeTelegraph,
         fire: () => {
-          if (e.alive && e.voidSeq === marker) spawnVoidZone(tx, ty, e.voidRadius, e.voidDuration, e.voidDps, e.voidColor, "void", e.voidTick);
+          if (e.alive && e.aoeSeq === marker) {
+            spawnVoidZone(tx, ty, e.aoeRadius, e.aoeDuration, e.aoeDps, e.aoeColor, e.aoeType, e.aoeTick);
+          }
         }
       });
     }
@@ -754,7 +848,7 @@ function updateBossMine(e, dt, godMode) {
       const tx = player.x + Math.cos(ang) * dist;
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
-        x: tx, y: ty, radius: e.mineRadius || 85, color: e.mineColor || COLORS.voidFire, time: e.mineTelegraph || 1.0,
+        x: tx, y: ty, radius: e.mineRadius || 85, color: e.mineColor || COLORS.aoeFire, time: e.mineTelegraph || 1.0,
         fire: () => {
           if (!e.alive || e.mineSeq !== marker) return;
           const r = e.mineRadius || 85;
@@ -766,8 +860,8 @@ function updateBossMine(e, dt, godMode) {
             player.iFrame = PLAYER_CONFIG.shotIFrame;
             spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
           }
-          addParticles(tx, ty, e.mineColor || COLORS.voidFire, 16, 360);
-          spawnShockwave(tx, ty, r, e.mineColor || COLORS.voidFire);
+          addParticles(tx, ty, e.mineColor || COLORS.aoeFire, 16, 360);
+          spawnShockwave(tx, ty, r, e.mineColor || COLORS.aoeFire);
         }
       });
     }
@@ -829,7 +923,7 @@ function updateBossRift(e, dt) {
       const tx = player.x + Math.cos(ang) * dist;
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
-        x: tx, y: ty, radius: e.riftRadius || 100, color: e.riftColor || COLORS.voidDark, time: e.riftTelegraph || 0.8,
+        x: tx, y: ty, radius: e.riftRadius || 100, color: e.riftColor || COLORS.aoeVoid, time: e.riftTelegraph || 0.8,
         fire: () => {
           if (!e.alive || e.riftSeq !== marker) return;
           spawnVoidZone(
@@ -838,7 +932,7 @@ function updateBossRift(e, dt) {
             e.riftRadius || 100,
             e.riftDuration || 3,
             e.riftDps || 0,
-            e.riftColor || COLORS.voidDark,
+            e.riftColor || COLORS.aoeVoid,
             "void",
             e.riftTick || 0.35,
             e.riftPull || 0
@@ -889,7 +983,7 @@ function updateBossSplit(e, dt) {
 
 function updateBossAttacks(e, dt, godMode) {
   updateBossNova(e, dt);
-  updateBossVoid(e, dt);
+  updateBossAoe(e, dt);
   updateBossBarrage(e, dt);
   updateBossSlam(e, dt, godMode);
   updateBossRock(e, dt, godMode);

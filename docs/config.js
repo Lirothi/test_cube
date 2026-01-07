@@ -15,11 +15,11 @@ export const PLAYER_CONFIG = {
 export const XP_CONFIG = {
   baseNeed: 7,
   perLevel: 6,
-  curvePower: 1.10,
-  curveScale: 1.0,
+  curvePower: 1.12,
+  curveScale: 1.05,
   lateStart: 45,
-  latePower: 1.3,
-  lateScale: 1.1,
+  latePower: 1.35,
+  lateScale: 1.2,
   buffMultiplier: 1.7,
   cardChoices: 3,
 };
@@ -73,8 +73,8 @@ export const SPAWN_CONFIG = {
   squadIntervalMin: 6.5,
   squadIntervalMax: 14,
   scaling: { hp: 0.0005, speed: 0.0005, dmg: 0.0005 },
-  ranged: { capBase: 10, capScaleTime: 140, chance: 0.05 },
-  voids: { capBase: 6, capScaleTime: 130, chance: 0.06, fireBias: 0.55, voidBias: 0.2 },
+  ranged: { capBase: 12, capScaleTime: 140, chance: 0.08, mageChance: 0.4 },
+  voids: { capBase: 7, capScaleTime: 130, chance: 0.07, fireBias: 0.55, voidBias: 0.33 },
   rolls: {
     fast: 0.18,
     tank: 0.86,
@@ -101,14 +101,17 @@ export const ENEMY_TIERS = [
   { time: 480, label: "Tier 5",  hpMult: 1.45, dmgMult: 1.28, speedMult: 1.08, spawnRateMult: 1.34, maxEnemies: 180, rangedChanceMult: 1.16, voidChanceMult: 1.16, xpMult: 1.2 },
   { time: 600, label: "Tier 6",  hpMult: 1.6,  dmgMult: 1.36, speedMult: 1.1,  spawnRateMult: 1.44, maxEnemies: 190, rangedChanceMult: 1.2,  voidChanceMult: 1.2,  xpMult: 1.25 },
   { time: 720, label: "Tier 7",  hpMult: 1.76, dmgMult: 1.45, speedMult: 1.12, spawnRateMult: 1.55, maxEnemies: 200, rangedChanceMult: 1.24, voidChanceMult: 1.24, xpMult: 1.3 },
-  { time: 840, label: "Tier 8",  hpMult: 1.94, dmgMult: 1.55, speedMult: 1.14, spawnRateMult: 1.66, maxEnemies: 210, rangedChanceMult: 1.28, voidChanceMult: 1.28, xpMult: 1.35 },
-  { time: 960, label: "Tier 9",  hpMult: 2.14, dmgMult: 1.66, speedMult: 1.16, spawnRateMult: 1.78, maxEnemies: 220, rangedChanceMult: 1.32, voidChanceMult: 1.32, xpMult: 1.4 },
-  { time: 1080, label: "Tier 10", hpMult: 2.36, dmgMult: 1.78, speedMult: 1.18, spawnRateMult: 1.9,  maxEnemies: 230, rangedChanceMult: 1.36, voidChanceMult: 1.36, xpMult: 1.45 },
-  { time: 1200, label: "Tier 11", hpMult: 2.6,  dmgMult: 1.9,  speedMult: 1.2,  spawnRateMult: 2.02, maxEnemies: 240, rangedChanceMult: 1.4,  voidChanceMult: 1.4,  xpMult: 1.5 },
-  { time: 1320, label: "Tier 12", hpMult: 2.86, dmgMult: 2.03, speedMult: 1.22, spawnRateMult: 2.15, maxEnemies: 250, rangedChanceMult: 1.44, voidChanceMult: 1.44, xpMult: 1.56 },
-  { time: 1440, label: "Tier 13", hpMult: 3.14, dmgMult: 2.16, speedMult: 1.24, spawnRateMult: 2.28, maxEnemies: 260, rangedChanceMult: 1.48, voidChanceMult: 1.48, xpMult: 1.62 },
-  { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.26, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.68 },
-  { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.28, spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.75 },
+  { time: 840, label: "Tier 8",  hpMult: 1.94, dmgMult: 1.55, speedMult: 1.14, spawnRateMult: 1.66, maxEnemies: 210, rangedChanceMult: 1.28, voidChanceMult: 1.28, xpMult: 1.32 },
+  { time: 960, label: "Tier 9",  hpMult: 2.14, dmgMult: 1.66, speedMult: 1.16, spawnRateMult: 1.78, maxEnemies: 220, rangedChanceMult: 1.32, voidChanceMult: 1.32, xpMult: 1.34 },
+  { time: 1080, label: "Tier 10", hpMult: 2.36, dmgMult: 1.78, speedMult: 1.18, spawnRateMult: 1.9,  maxEnemies: 230, rangedChanceMult: 1.36, voidChanceMult: 1.36, xpMult: 1.36 },
+  { time: 1200, label: "Tier 11", hpMult: 2.6,  dmgMult: 1.9,  speedMult: 1.2,  spawnRateMult: 2.02, maxEnemies: 240, rangedChanceMult: 1.4,  voidChanceMult: 1.4,  xpMult: 1.38 },
+  { time: 1320, label: "Tier 12", hpMult: 2.86, dmgMult: 2.03, speedMult: 1.22, spawnRateMult: 2.15, maxEnemies: 250, rangedChanceMult: 1.44, voidChanceMult: 1.44, xpMult: 1.4 },
+  { time: 1440, label: "Tier 13", hpMult: 3.14, dmgMult: 2.16, speedMult: 1.24, spawnRateMult: 2.28, maxEnemies: 260, rangedChanceMult: 1.48, voidChanceMult: 1.48, xpMult: 1.42 },
+  { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.26, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.44 },
+  { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.28, spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.48 },
+  { time: 1800, label: "Tier 16", hpMult: 4.18, dmgMult: 2.61, speedMult: 1.3,  spawnRateMult: 2.7,  maxEnemies: 290, rangedChanceMult: 1.6,  voidChanceMult: 1.6,  xpMult: 1.5 },
+  { time: 1920, label: "Tier 17", hpMult: 4.59, dmgMult: 2.78, speedMult: 1.32, spawnRateMult: 2.85, maxEnemies: 300, rangedChanceMult: 1.64, voidChanceMult: 1.64, xpMult: 1.55 },
+  { time: 2040, label: "Tier 18", hpMult: 5.03, dmgMult: 2.96, speedMult: 1.34, spawnRateMult: 3.0,  maxEnemies: 310, rangedChanceMult: 1.68, voidChanceMult: 1.68, xpMult: 1.6 },
 ];
 
 export const TELEGRAPH_CONFIG = {
@@ -158,10 +161,10 @@ export const AUGMENT_CONFIG = {
   },
   rail: {
     burn: { dpsPct: 0.50, duration: 2.2 },
-    overpen: { pierce: 2, dmgMult: 1.18, cdMult: 1.05 },
+    overpen: { pierce: 2, dmgMult: 1.25, cdMult: 1.05 },
   },
   axe: {
-    bleed: { dpsPct: 0.35, duration: 3.0 },
+    bleed: { dpsPct: 0.4, duration: 3.0 },
     boomerang: { dmgMult: 0.6, returnLifeMult: 0.7 },
   },
   aura: {
@@ -213,8 +216,8 @@ export const WEAPON_CONFIG = {
     cdBase: 1.40,
     cdPerLevel: 0.14,
     cdMin: 0.50,
-    dmgBase: 18,
-    dmgPerLevel: 8,
+    dmgBase: 20,
+    dmgPerLevel: 10,
     speedBase: 440,
     speedPerLevel: 20,
     countInterval: 2,
@@ -244,8 +247,8 @@ export const WEAPON_CONFIG = {
     cdBase: 3.8,
     cdPerLevel: 0.6,
     cdMin: 1.5,
-    dmgBase: 30,
-    dmgPerLevel: 10,
+    dmgBase: 40,
+    dmgPerLevel: 13,
     speedBase: 1160,
     speedPerLevel: 60,
     pierceBase: 3,
@@ -262,8 +265,8 @@ export const WEAPON_CONFIG = {
     maxLevel: 6,
   },
   orb: {
-    dmgBase: 8,
-    dmgPerLevel: 6,
+    dmgBase: 7,
+    dmgPerLevel: 5,
     cdBase: 3.6,
     cdPerLevel: 0.26,
     cdMin: 1.7,
@@ -399,7 +402,7 @@ export const BOSS2_CONFIG = {
   spawnTime: 360,
   //spawnTime: 2,
   telegraph: { radius: 140, time: 1.5, color: "#63c7ff" },
-  voidAttack: { cd: 5, count: 3, radius: 120, duration: 3, dps: 16, tick: 0.35, color: COLORS.voidPoison, telegraph: 1.0 },
+  aoeAttack: { cd: 5, count: 3, radius: 120, duration: 3, dps: 16, tick: 0.35, color: COLORS.aoeVoid, telegraph: 1.0, type: "void" },
   barrage: { cd: 3.8, shots: 12, waves: 2, waveDelay: 0.18, speed: 540, dmg: 12 },
   lootGems: 18,
 };
@@ -426,7 +429,7 @@ export const BOSS5_CONFIG = {
   //spawnTime: 2,
   telegraph: { radius: 190, time: 1.7, color: "#b67bff" },
   blink: { cd: 4.6, radius: 140, dmg: 26, telegraph: 0.9, rangeMin: 120, rangeMax: 260, color: "#b67bff" },
-  rift: { cd: 5.4, count: 4, radius: 110, duration: 3.6, dps: 15, tick: 0.35, pull: 260, telegraph: 0.85, offsetMin: 80, offsetMax: 210, color: COLORS.voidDark },
+  rift: { cd: 5.4, count: 4, radius: 110, duration: 3.6, dps: 15, tick: 0.35, pull: 260, telegraph: 0.85, offsetMin: 80, offsetMax: 210, color: COLORS.aoeVoid },
   split: { cd: 2.4, speed: 260, dmg: 18, life: 2.4, splitAfter: 0.9, splitCount: 5, splitSpread: 0.32, telegraph: 0.7, color: "#b67bff" },
   lootGems: 28,
 };
@@ -439,17 +442,17 @@ export const ENEMY_TYPES = {
   P: { // poison spitter
     name:"Toxic", r:10, hp:28, speed:62, dmg:6.5, color:COLORS.enemyP, xp:2, gem:2,
     ranged:true,
-    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, tick:0.35, telegraph:0.75, color:COLORS.voidPoison, type:"poison" }
+    spit:{ cd:3.6, range:520, radius:68, duration:4.8, dps:9.0, tick:0.35, telegraph:0.75, color:COLORS.aoePoison, type:"poison" }
   },
   F: { // fire spitter
     name:"Scorcher", r:11, hp:32, speed:60, dmg:7.5, color:COLORS.enemyF, xp:2, gem:2,
     ranged:true,
-    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.voidFire, type:"fire" }
+    spit:{ cd:4.2, range:540, radius:74, duration:4.6, dps:11.5, tick:0.3, telegraph:0.75, color:COLORS.aoeFire, type:"fire" }
   },
   V: { // void spitter
     name:"Voidcaller", r:10, hp:30, speed:58, dmg:6.8, color:COLORS.enemyV, xp:2, gem:2,
     ranged:true,
-    spit:{ cd:4.1, range:560, radius:72, duration:4.6, dps:10.5, tick:0.35, telegraph:0.75, color:COLORS.voidDark, type:"void" }
+    spit:{ cd:4.1, range:560, radius:72, duration:4.6, dps:10.5, tick:0.35, telegraph:0.75, color:COLORS.aoeVoid, type:"void" }
   },
   X: { // mini-boss
     name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
@@ -463,7 +466,7 @@ export const ENEMY_TYPES = {
     boss:true, knockResist:0.85,
     ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:720,
     telegraph: BOSS2_CONFIG.telegraph,
-    voidAttack: BOSS2_CONFIG.voidAttack,
+    aoeAttack: BOSS2_CONFIG.aoeAttack,
     barrage: BOSS2_CONFIG.barrage,
     lootGems: BOSS2_CONFIG.lootGems,
   },
@@ -498,5 +501,11 @@ export const ENEMY_TYPES = {
   R: { // ranged kiter (tries to keep distance and shoot)
     name:"Ranged", r:9, hp:16, speed:60, dmg:3.2, color:COLORS.enemyR, xp:2, gem:1,
     ranged:true, shotCd:2.35, shotDmg:6.0, shotSpeed:340, shotRange:520
+  },
+  M: { // elemental orb mage
+    name:"Mage", r:10, hp:24, speed:58, dmg:5.5, color:COLORS.enemyM, xp:2, gem:1,
+    ranged:true,
+    shotType:"mage_orb", shotCd:2.8, shotDmg:7.5, shotSpeed:310, shotRange:600,
+    shotRadius:6.5, shotLife:2.3, shotExplosionRadius:62,
   },
 };

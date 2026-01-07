@@ -801,6 +801,12 @@ export function renderFrame({
     const a = 0.55 + 0.25 * Math.sin(performance.now()*0.004);
     neonRing(ctx, player.x, player.y, player.r + 10, UI_COLORS.shieldRing, 26, 2.5, a);
   }
+  if (buffs.reviveFlash > 0) {
+    const t = clamp(buffs.reviveFlash / 1.6, 0, 1);
+    const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.012);
+    const ringR = player.r + 60 + (1 - t) * 120;
+    neonRing(ctx, player.x, player.y, ringR, COLORS.heal, 36, 3.2, 0.7 * t * pulse);
+  }
   if (buffs.magnet > 0){
     neonRing(ctx, player.x, player.y, player.r + 18, UI_COLORS.magnetRing, 22, 2, 0.55);
   }
@@ -824,6 +830,24 @@ export function renderFrame({
   }
 
   ctx.restore();
+
+  if (buffs.reviveFlash > 0) {
+    const t = clamp(buffs.reviveFlash / 1.6, 0, 1);
+    const px = player.x - camX;
+    const py = player.y - camY;
+    ctx.save();
+    ctx.globalAlpha = 0.22 * t;
+    ctx.fillStyle = COLORS.heal;
+    ctx.fillRect(0, 0, W, H);
+    const maxR = Math.max(W, H) * 0.9;
+    const grad = ctx.createRadialGradient(px, py, 0, px, py, maxR);
+    grad.addColorStop(0, `rgba(70,255,143,${0.55 * t})`);
+    grad.addColorStop(1, "rgba(70,255,143,0)");
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
   if (startNoticeT > 0){
     const a = clamp(startNoticeT / START_NOTICE_TIME, 0, 1);

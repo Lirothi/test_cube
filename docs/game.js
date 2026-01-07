@@ -896,8 +896,12 @@ import { popFloatText } from "./float_text.js";
           const reviveHp = Math.max(1, Math.ceil(player.maxHp * 0.45));
           player.hp = reviveHp;
           player.iFrame = Math.max(player.iFrame, 1.0);
-          buffs.shield = Math.max(buffs.shield, 1.2);
-          popFloatText(player.x, player.y - player.r - 18, "Second Chance!", COLORS.heal, 18, 1.6, 16, 40, 90);
+          buffs.shield = Math.max(buffs.shield, 1.6);
+          buffs.reviveFlash = Math.max(buffs.reviveFlash, 1.6);
+          spawnShockwave(player.x, player.y, 220, COLORS.heal);
+          addParticles(player.x, player.y, COLORS.heal, 90, 900);
+          popFloatText(player.x, player.y - player.r - 26, "SECOND CHANCE!", COLORS.heal, 30, 2.2, 22, 60, 120);
+          sound.play("boss");
         } else {
           player.hp = 0;
           openGameOver();

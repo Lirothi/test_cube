@@ -12,6 +12,7 @@ import {
   buffs,
   chests,
   enemies,
+  companions,
   clampPointToWorld,
 } from "./state.js";
 import { chestPool } from "./pools.js";
@@ -250,7 +251,8 @@ export function updateChests(dt, camX, camY, W, H) {
     }
   }
 
-  if (!companionSlotsFull()) {
+  const allowSecondCompanion = companions.length === 0 || player.level >= 20;
+  if (!companionSlotsFull() && allowSecondCompanion) {
     companionSpawn.t -= dt;
     if (companionSpawn.t <= 0) {
       companionSpawn.t = companionSpawn.interval;

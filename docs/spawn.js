@@ -129,7 +129,7 @@ function spawnMixedSquad(t, camX, camY, W, H, hpMult, spdMult, dmgMult){
   if (enemies.length >= spawn.maxEnemies - SPAWN_CONFIG.squadReserve) return;
   const pool = ["A", "B"];
   if (t > SPAWN_CONFIG.mixedPoolTimes.extraFast) pool.push("B");
-  if (t > SPAWN_CONFIG.mixedPoolTimes.ranged) pool.push("R");
+  if (t > SPAWN_CONFIG.mixedPoolTimes.ranged) { pool.push("R"); pool.push("M"); }
   if (t > SPAWN_CONFIG.mixedPoolTimes.tank) pool.push("C");
   if (t > SPAWN_CONFIG.mixedPoolTimes.brute) pool.push("S");
   if (t > SPAWN_CONFIG.mixedPoolTimes.void){ pool.push("P"); pool.push("F"); pool.push("V"); }
@@ -155,7 +155,7 @@ function spawnMixedSquad(t, camX, camY, W, H, hpMult, spdMult, dmgMult){
 
 function pickEliteType(t) {
   const pool = ["A", "B"];
-  if (t > SPAWN_CONFIG.thresholds.ranged) pool.push("R");
+  if (t > SPAWN_CONFIG.thresholds.ranged) { pool.push("R"); pool.push("M"); }
   if (t > SPAWN_CONFIG.thresholds.tank) pool.push("C");
   if (t > SPAWN_CONFIG.thresholds.brute) pool.push("S");
   if (t > SPAWN_CONFIG.thresholds.void) { pool.push("P"); pool.push("F"); pool.push("V"); }
@@ -327,7 +327,7 @@ export function spawnController(dt, camX, camY, W, H){
   for (let i=0;i<enemies.length;i++){
     const e = enemies[i];
     if (!e.alive) continue;
-    if (e.type === "R") rangedCount++;
+    if (e.type === "R" || e.type === "M") rangedCount++;
     else if (e.type === "P" || e.type === "F" || e.type === "V") voidCount++;
   }
   const rangedCap = SPAWN_CONFIG.ranged.capBase + Math.floor(t / SPAWN_CONFIG.ranged.capScaleTime); // slowly grows over time
@@ -346,7 +346,7 @@ export function spawnController(dt, camX, camY, W, H){
 
     // small chance to spawn a ranged kiter (capped)
     if (t > SPAWN_CONFIG.thresholds.ranged && roll >= SPAWN_CONFIG.rolls.fast && roll < (SPAWN_CONFIG.rolls.fast + rangedChance) && rangedCount < rangedCap){
-      typeKey = "R";
+      typeKey = (Math.random() < SPAWN_CONFIG.ranged.mageChance) ? "M" : "R";
       rangedCount++;
     }
 
@@ -364,7 +364,7 @@ export function spawnController(dt, camX, camY, W, H){
       if (r2 < SPAWN_CONFIG.rolls.lateTank){
         typeKey = "C";
       } else if (r2 < SPAWN_CONFIG.rolls.lateRanged && rangedCount < rangedCap){
-        typeKey = "R";
+        typeKey = (Math.random() < SPAWN_CONFIG.ranged.mageChance) ? "M" : "R";
         rangedCount++;
       } else if (r2 < SPAWN_CONFIG.rolls.lateVoid && voidCount < voidCap){
         typeKey = pickVoidType();
@@ -403,9 +403,13 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.shotDmg = (info.shotDmg || 0) * dmgMult; // projectile dmg scales with time too
   e.shotSpeed = info.shotSpeed || 0;
   e.shotRange = info.shotRange || 0;
+  e.shotType = info.shotType || "";
+  e.shotRadius = info.shotRadius || RANGED_SHOT_CONFIG.radius;
+  e.shotLife = info.shotLife || RANGED_SHOT_CONFIG.life;
+  e.shotExplosionRadius = info.shotExplosionRadius || 0;
   e.shotT = e.ranged ? rand(e.shotCd * RANGED_SHOT_CONFIG.startDelayMax, e.shotCd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
   e.shotSeq = 0;
-  e.voidSeq = 0;
+  e.aoeSeq = 0;
   e.novaSeq = 0;
   e.rockSeq = 0;
   e.homingSeq = 0;
@@ -429,15 +433,16 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.novaRadius = info.nova ? info.nova.radius : 0;
   e.novaTelegraph = info.nova ? info.nova.telegraph : TELEGRAPH_CONFIG.enemyTime;
   e.novaT = e.boss ? rand(e.novaCd * RANGED_SHOT_CONFIG.startDelayMax, e.novaCd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
-  e.voidCd = info.voidAttack ? info.voidAttack.cd : 0;
-  e.voidT = info.voidAttack ? rand(info.voidAttack.cd * RANGED_SHOT_CONFIG.startDelayMax, info.voidAttack.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
-  e.voidCount = info.voidAttack ? info.voidAttack.count : 0;
-  e.voidRadius = info.voidAttack ? info.voidAttack.radius : 0;
-  e.voidDuration = info.voidAttack ? info.voidAttack.duration : 0;
-  e.voidDps = info.voidAttack ? info.voidAttack.dps * dmgMult : 0;
-  e.voidTick = info.voidAttack ? (info.voidAttack.tick || 0.35) : 0.35;
-  e.voidColor = info.voidAttack ? (info.voidAttack.color || COLORS.voidPoison) : COLORS.voidPoison;
-  e.voidTelegraph = info.voidAttack ? (info.voidAttack.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+  e.aoeCd = info.aoeAttack ? info.aoeAttack.cd : 0;
+  e.aoeT = info.aoeAttack ? rand(info.aoeAttack.cd * RANGED_SHOT_CONFIG.startDelayMax, info.aoeAttack.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
+  e.aoeCount = info.aoeAttack ? info.aoeAttack.count : 0;
+  e.aoeRadius = info.aoeAttack ? info.aoeAttack.radius : 0;
+  e.aoeDuration = info.aoeAttack ? info.aoeAttack.duration : 0;
+  e.aoeDps = info.aoeAttack ? info.aoeAttack.dps * dmgMult : 0;
+  e.aoeTick = info.aoeAttack ? (info.aoeAttack.tick || 0.35) : 0.35;
+  e.aoeColor = info.aoeAttack ? (info.aoeAttack.color || COLORS.aoePoison) : COLORS.aoePoison;
+  e.aoeTelegraph = info.aoeAttack ? (info.aoeAttack.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
+  e.aoeType = info.aoeAttack ? (info.aoeAttack.type || "void") : "void";
   e.barrageCd = info.barrage ? info.barrage.cd : 0;
   e.barrageT = info.barrage ? rand(info.barrage.cd * RANGED_SHOT_CONFIG.startDelayMax, info.barrage.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
   e.barrageShots = info.barrage ? info.barrage.shots : 0;
@@ -478,7 +483,7 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.mineTelegraph = info.minefield ? info.minefield.telegraph : 0.9;
   e.mineOffsetMin = info.minefield ? info.minefield.offsetMin : 0;
   e.mineOffsetMax = info.minefield ? info.minefield.offsetMax : 0;
-  e.mineColor = info.minefield ? (info.minefield.color || COLORS.voidFire) : COLORS.voidFire;
+  e.mineColor = info.minefield ? (info.minefield.color || COLORS.aoeFire) : COLORS.aoeFire;
 
   // blink setup
   e.blinkCd = info.blink ? info.blink.cd : 0;
@@ -499,7 +504,7 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.riftDps = info.rift ? info.rift.dps * dmgMult : 0;
   e.riftTick = info.rift ? (info.rift.tick || 0.35) : 0.35;
   e.riftPull = info.rift ? (info.rift.pull || 0) : 0;
-  e.riftColor = info.rift ? (info.rift.color || COLORS.voidPoison) : COLORS.voidPoison;
+  e.riftColor = info.rift ? (info.rift.color || COLORS.aoePoison) : COLORS.aoePoison;
   e.riftTelegraph = info.rift ? (info.rift.telegraph || TELEGRAPH_CONFIG.enemyTime) : TELEGRAPH_CONFIG.enemyTime;
   e.riftOffsetMin = info.rift ? (info.rift.offsetMin || 0) : 0;
   e.riftOffsetMax = info.rift ? (info.rift.offsetMax || 0) : 0;
