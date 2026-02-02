@@ -12,6 +12,7 @@ import {
   axes,
   orbs,
   missiles,
+  arcs,
   trinketBonuses,
 } from "./state.js";
 import {
@@ -20,10 +21,12 @@ import {
   axePool,
   orbPool,
   missilePool,
+  arcPool,
 } from "./pools.js";
 
 export const weapons = {
   magic: { unlocked: true, level: 1, mastery: 0, t: 0, aug: null, augSeq: 0 },
+  arc: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null, augSeq: 0 },
   aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25 },
   rail: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   axe: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
@@ -108,6 +111,7 @@ function getTrinketMods() {
 
 export function resetWeapons() {
   weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0; weapons.magic.aug = null; weapons.magic.augSeq = 0;
+  weapons.arc.unlocked = false; weapons.arc.level = 0; weapons.arc.mastery = 0; weapons.arc.t = 0; weapons.arc.aug = null; weapons.arc.augSeq = 0;
   weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25;
   weapons.rail.unlocked = false; weapons.rail.level = 0; weapons.rail.mastery = 0; weapons.rail.t = 0; weapons.rail.aug = null;
   weapons.axe.unlocked = false; weapons.axe.level = 0; weapons.axe.mastery = 0; weapons.axe.t = 0; weapons.axe.aug = null;
@@ -118,6 +122,7 @@ export function resetWeapons() {
 export function weaponCount() {
   let c = 0;
   if (weapons.magic.unlocked) c++;
+  if (weapons.arc.unlocked) c++;
   if (weapons.aura.unlocked) c++;
   if (weapons.rail.unlocked) c++;
   if (weapons.axe.unlocked) c++;
@@ -151,6 +156,31 @@ export function magicStats() {
   return { dmg, cd, speed, count, range, knock, critChance: critChanceTotal, critMult };
 }
 
+export function arcStats() {
+  const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
+  const cfg = WEAPON_CONFIG.arc;
+  const lv = weapons.arc.level;
+  const mastery = weapons.arc.mastery || 0;
+  const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+  const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+  const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
+  const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
+  const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
+  const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
+  const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
+  const range = cfg.rangeBase + lv * cfg.rangePerLevel;
+  const chains = cfg.chainBase + Math.floor((lv - 1) / cfg.chainInterval);
+  const chainRange = cfg.chainRangeBase + lv * cfg.chainRangePerLevel;
+  const falloff = cfg.falloff;
+  const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
+  return { dmg, cd, range, chains, chainRange, falloff, critChance: critChanceTotal, critMult };
+}
+
 export function auraStats() {
   const { buffs, upgradeState } = requireContext();
   const trinket = getTrinketMods();
@@ -162,7 +192,9 @@ export function auraStats() {
   const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
   const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
   const radius = cfg.radiusBase + lv * cfg.radiusPerLevel;
-  const tick = cfg.tick;
+  const tickBase = cfg.tick;
+  const tickStep = cfg.tickPerLevel || 0;
+  const tick = Math.max(cfg.tickMin || 0, tickBase + (lv - 1) * tickStep);
   const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
@@ -310,6 +342,52 @@ export function findNearestEnemy(px, py, maxDist) {
   return best;
 }
 
+function findNearestEnemyExcluding(px, py, maxDist, exclude) {
+  let best = null;
+  let bestD = maxDist * maxDist;
+  for (let i=0;i<enemies.length;i++){
+    const e = enemies[i];
+    if (!e.alive || exclude.has(e)) continue;
+    const dx = e.x - px, dy = e.y - py;
+    const d2 = dx*dx + dy*dy;
+    if (d2 < bestD){ bestD = d2; best = e; }
+  }
+  return best;
+}
+
+function buildArcPoints(path, jitter = 12, segments = 2) {
+  const points = [];
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i];
+    const b = path[i + 1];
+    if (i === 0) points.push({ x: a.x, y: a.y });
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    for (let s = 1; s <= segments; s++) {
+      const t = s / (segments + 1);
+      const off = rand(jitter, -jitter);
+      points.push({ x: a.x + dx * t + nx * off, y: a.y + dy * t + ny * off });
+    }
+    points.push({ x: b.x, y: b.y });
+  }
+  return points;
+}
+
+function spawnArcFx(path, intensity = 1) {
+  if (path.length < 2) return;
+  const arc = arcPool.get();
+  arc.alive = true;
+  arc.points = buildArcPoints(path, 12, 2);
+  arc.life = 0.18;
+  arc.maxLife = arc.life;
+  arc.color = COLORS.arc;
+  arc.intensity = intensity;
+  arcs.push(arc);
+}
+
 function fireMagicBullet(){
   const { damageEnemy } = requireRuntime();
   const s = magicStats();
@@ -353,6 +431,68 @@ function fireMagicBullet(){
       const extraAng = AUGMENT_CONFIG.magic.prism.angle;
       spawnBullet(baseAng + extraAng, AUGMENT_CONFIG.magic.prism.dmgMult);
       spawnBullet(baseAng - extraAng, AUGMENT_CONFIG.magic.prism.dmgMult);
+    }
+  }
+}
+
+function fireArcLance(){
+  const { damageEnemy, damageObstaclesInRadius, addParticles, spawnShockwave } = requireRuntime();
+  const s = arcStats();
+  const first = findNearestEnemy(player.x, player.y, s.range);
+  if (!first) return;
+  sound.play("shoot");
+
+  let chainCount = Math.max(1, s.chains);
+  let falloff = s.falloff;
+  let intensity = 1;
+  if (weapons.arc.aug === "arc_capacitor") {
+    weapons.arc.augSeq = (weapons.arc.augSeq || 0) + 1;
+    if (weapons.arc.augSeq % AUGMENT_CONFIG.arc.capacitor.every === 0) {
+      chainCount += AUGMENT_CONFIG.arc.capacitor.extraChains;
+      falloff = 1;
+      intensity = 1.25;
+    }
+  }
+
+  const hit = new Set();
+  const path = [{ x: player.x, y: player.y }];
+  let current = first;
+  let dmg = s.dmg;
+  let last = null;
+  const slowCfg = WEAPON_CONFIG.arc.slow;
+
+  for (let i = 0; i < chainCount && current; i++) {
+    hit.add(current);
+    path.push({ x: current.x, y: current.y });
+    const crit = calcCrit(dmg, s.critChance, s.critMult);
+    damageEnemy(current, crit.dmg, 0, 0, 0, true, crit.crit, "arc");
+    if (slowCfg) applySlow(current, slowCfg.mult, slowCfg.duration);
+    if (addParticles) addParticles(current.x, current.y, COLORS.arc, 6, 220);
+    last = current;
+    dmg *= falloff;
+    current = findNearestEnemyExcluding(current.x, current.y, s.chainRange, hit);
+  }
+
+  spawnArcFx(path, intensity);
+
+  if (weapons.arc.aug === "arc_grounded" && last) {
+    const radius = AUGMENT_CONFIG.arc.grounded.radius;
+    if (radius > 0) {
+      const shockDmg = s.dmg * AUGMENT_CONFIG.arc.grounded.dmgMult;
+      const r2 = radius * radius;
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (!e.alive || hit.has(e)) continue;
+        const dx = e.x - last.x;
+        const dy = e.y - last.y;
+        if (dx * dx + dy * dy <= r2) {
+          const crit = calcCrit(shockDmg, s.critChance, s.critMult);
+          damageEnemy(e, crit.dmg, 0, 0, 0, true, crit.crit, "arc");
+        }
+      }
+      damageObstaclesInRadius(last.x, last.y, radius, shockDmg, true);
+      if (spawnShockwave) spawnShockwave(last.x, last.y, radius, COLORS.arc);
+      if (addParticles) addParticles(last.x, last.y, COLORS.arc, 16, 420);
     }
   }
 }
@@ -488,6 +628,14 @@ export function updateWeapons(dt){
     }
   }
 
+  if (weapons.arc.unlocked){
+    weapons.arc.t -= dt;
+    if (weapons.arc.t <= 0){
+      weapons.arc.t += arcStats().cd;
+      fireArcLance();
+    }
+  }
+
   if (weapons.aura.unlocked){
     const s = auraStats();
     const aug = weapons.aura.aug;
@@ -596,6 +744,7 @@ export function updateWeapons(dt){
   updateRailShots(dt);
   updateAxes(dt);
   updateOrbs(dt);
+  updateArcs(dt);
 }
 
 export function updateBullets(dt){
@@ -1026,6 +1175,21 @@ export function updateOrbs(dt){
       orbs[i] = orbs[orbs.length-1];
       orbs.pop();
       orbPool.put(o);
+    }
+  }
+}
+
+export function updateArcs(dt){
+  for (let i = arcs.length - 1; i >= 0; i--) {
+    const a = arcs[i];
+    if (!a.alive) { a.points.length = 0; arcs[i] = arcs[arcs.length - 1]; arcs.pop(); arcPool.put(a); continue; }
+    a.life -= dt;
+    if (a.life <= 0) a.alive = false;
+    if (!a.alive) {
+      a.points.length = 0;
+      arcs[i] = arcs[arcs.length - 1];
+      arcs.pop();
+      arcPool.put(a);
     }
   }
 }

@@ -85,6 +85,7 @@ import {
   rails,
   axes,
   orbs,
+  arcs,
   enemyShots,
   telegraphs,
   voidZones,
@@ -108,6 +109,7 @@ import {
   shotPool,
   voidPool,
   orbPool,
+  arcPool,
   gemPool,
   chestPool,
   dmgPool,
@@ -174,6 +176,7 @@ import { popFloatText } from "./float_text.js";
     }
     const WEAPON_LABELS = [
       { key: "magic", label: "Magic Bullet" },
+      { key: "arc", label: "Arc Lance" },
       { key: "aura", label: "Holy Aura" },
       { key: "rail", label: "Railgun" },
       { key: "axe", label: "Axe Throw" },
@@ -697,6 +700,7 @@ import { popFloatText } from "./float_text.js";
       for (let i=rails.length-1;i>=0;i--) railPool.put(rails.pop());
       for (let i=axes.length-1;i>=0;i--) axePool.put(axes.pop());
       for (let i=orbs.length-1;i>=0;i--) orbPool.put(orbs.pop());
+      for (let i=arcs.length-1;i>=0;i--) arcPool.put(arcs.pop());
       obstacles.length = 0;
       for (let i=enemyShots.length-1;i>=0;i--) shotPool.put(enemyShots.pop());
       for (let i=voidZones.length-1;i>=0;i--) voidPool.put(voidZones.pop());

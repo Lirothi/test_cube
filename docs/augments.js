@@ -85,6 +85,20 @@ const AUGMENTS = {
       tag: () => `Slow ${Math.round((1 - AUGMENT_CONFIG.missile.concussive.slowMult) * 100)}% ${AUGMENT_CONFIG.missile.concussive.slowDuration.toFixed(1)}s / Knock ${Math.round(AUGMENT_CONFIG.missile.concussive.knock)} / Burn ${Math.round(AUGMENT_CONFIG.missile.concussive.burn.dpsPct * 100)}% ${AUGMENT_CONFIG.missile.concussive.burn.duration.toFixed(1)}s`,
     },
   ],
+  arc: [
+    {
+      id: "arc_capacitor",
+      title: "Capacitor Coil",
+      desc: `Every ${AUGMENT_CONFIG.arc.capacitor.every}th cast overcharges for extra chains and no falloff.`,
+      tag: () => `Every ${AUGMENT_CONFIG.arc.capacitor.every}th / +${AUGMENT_CONFIG.arc.capacitor.extraChains} Chains / No falloff`,
+    },
+    {
+      id: "arc_grounded",
+      title: "Grounded Strike",
+      desc: "Final target discharges a shockwave.",
+      tag: () => `Shockwave ${Math.round(AUGMENT_CONFIG.arc.grounded.radius)} / DMG ${Math.round(AUGMENT_CONFIG.arc.grounded.dmgMult * 100)}%`,
+    },
+  ],
 };
 
 const AUGMENT_LOOKUP = new Map();

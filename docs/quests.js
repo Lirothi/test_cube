@@ -16,8 +16,8 @@ const QUEST_ITEM_MIN_DIST = 900;
 const QUEST_ITEM_MAX_DIST = 2400;
 const QUEST_NOTICE_LIFE = 3.0;
 const QUEST_KILL_LVL_SCALE = 0.15;
-const QUEST_SCAVENGE_LVL_SCALE = 0.08;
-const QUEST_DROP_LVL_SCALE = 0.25;
+const QUEST_SCAVENGE_LVL_SCALE = 0.06;
+const QUEST_DROP_LVL_SCALE = 0.15;
 
 let runtime = { addXP: null, openAug: null, openTrinket: null, addParticles: null };
 

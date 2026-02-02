@@ -2,7 +2,7 @@ import { BUILD, CRIT_UPGRADES, UPGRADE_CONFIG } from "./config.js";
 import { fmtFloat } from "./math.js";
 import { sound } from "./audio.js";
 import { DPS_TRACKER, upgradeState, formatDpsSummary } from "./upgrade.js";
-import { weapons, magicStats, auraStats, railStats, axeStats, orbStats, missileStats } from "./weapons.js";
+import { weapons, magicStats, arcStats, auraStats, railStats, axeStats, orbStats, missileStats } from "./weapons.js";
 import { player, BASE_STATS, dmgTexts, floatTexts, trinkets, trinketBonuses, companions } from "./state.js";
 import { dmgPool, textPool } from "./pools.js";
 import { getAugmentById } from "./augments.js";
@@ -144,9 +144,11 @@ export function updateMenuStats() {
     const parts = [];
     if (s.dmg) parts.push(`DMG ${Math.round(s.dmg)}`);
     if (s.count) parts.push(`Count ${s.count}`);
+    if (s.chains) parts.push(`Chains ${s.chains}`);
     if (s.cd) parts.push(`CD ${fmtFloat(s.cd, 2)}s`);
     if (s.pierce) parts.push(`Pierce ${Math.round(s.pierce)}`);
     if (s.tick) parts.push(`Tick ${fmtFloat(s.tick, 2)}s`);
+    if (s.chainRange) parts.push(`Chain ${Math.round(s.chainRange)}`);
     if (key === "aura" && s.radius) parts.push(`Radius ${Math.round(s.radius)}`);
     const dps = fmtFloat((DPS_TRACKER[key] || 0) / Math.max(player.time, 0.1), 1);
     parts.push(`Crit ${Math.round((s.critChance || 0) * 100)}% x${fmtFloat(s.critMult || 1, 2)}`);
@@ -154,6 +156,7 @@ export function updateMenuStats() {
     rows.push(`<div class="kv"><span>${label} Lv ${w.level}${w.mastery ? ` (M${w.mastery})` : ""}</span><span>${parts.join(" | ")}</span></div>`);
   };
   addWeapon("Magic Bullet", "magic", magicStats);
+  addWeapon("Arc Lance", "arc", arcStats);
   addWeapon("Holy Aura", "aura", auraStats);
   addWeapon("Railgun", "rail", railStats);
   addWeapon("Axe Throw", "axe", axeStats);
@@ -164,6 +167,7 @@ export function updateMenuStats() {
 
 const WEAPON_LABELS = [
   { key: "magic", label: "Magic Bullet" },
+  { key: "arc", label: "Arc Lance" },
   { key: "aura", label: "Holy Aura" },
   { key: "rail", label: "Railgun" },
   { key: "axe", label: "Axe Throw" },

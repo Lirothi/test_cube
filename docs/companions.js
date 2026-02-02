@@ -32,8 +32,8 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 210,
     desc: "All-resistance boost. Chases XP gems.",
-    tag: () => "+2% All Res | Gems 135",
-    buffs: { resAll: 0.02 },
+    tag: () => "+3% All Res | Gems 135",
+    buffs: { resAll: 0.03 },
   },
   {
     id: "volt_pup",
@@ -80,8 +80,8 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 190,
     desc: "Light armor + res boost. Chases gems.",
-    tag: () => "+1 Armor, +1% Res | Gems 130",
-    buffs: { armor: 1, resAll: 0.01 },
+    tag: () => "+1 Armor, +2% Res | Gems 130",
+    buffs: { armor: 1, resAll: 0.02 },
   },
 ];
 
@@ -133,6 +133,7 @@ function makeCompanionInstance(c) {
     angle,
     x,
     y,
+    forceReturnT: 0,
   };
 }
 
@@ -147,13 +148,16 @@ export function addCompanion(id) {
 }
 
 export function updateCompanions(dt) {
+  const returnHold = 0.6;
   const claimedGems = new Set();
   const liveGems = gems.filter((g) => g.alive);
   for (let i = 0; i < companions.length; i++) {
     const c = companions[i];
     const toPlayer = Math.hypot(player.x - c.x, player.y - c.y);
     const leash = Math.max(c.seekRadius || 0, 180) + c.orbitRadius * 1.4;
-    const forceReturn = toPlayer > leash;
+    if (toPlayer > leash) c.forceReturnT = Math.max(c.forceReturnT || 0, returnHold);
+    if (c.forceReturnT > 0) c.forceReturnT = Math.max(0, c.forceReturnT - dt);
+    const forceReturn = c.forceReturnT > 0;
     let target = null;
     let bestD2 = Infinity;
     const seek = c.seekRadius || 0;
@@ -203,8 +207,8 @@ export function updateCompanions(dt) {
     const bob = Math.sin(c.angle * 1.7 + i) * 3;
     const orbitX = player.x + Math.cos(c.angle) * c.orbitRadius;
     const orbitY = player.y + Math.sin(c.angle) * c.orbitRadius + bob;
-    const targetX = target ? target.x : orbitX;
-    const targetY = target ? target.y : orbitY;
+    const targetX = forceReturn ? player.x : (target ? target.x : orbitX);
+    const targetY = forceReturn ? player.y : (target ? target.y : orbitY);
     const baseSpeed = Math.max(0, player.speed || 0) * 1.1;
     const returnSpeed = (c.returnSpeed && c.returnSpeed > 0) ? c.returnSpeed : baseSpeed * 1.8;
     const speed = forceReturn ? returnSpeed : (target ? baseSpeed : baseSpeed * 0.85);

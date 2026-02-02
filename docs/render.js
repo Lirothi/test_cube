@@ -17,6 +17,7 @@ import {
   missiles,
   axes,
   orbs,
+  arcs,
   telegraphs,
   particles,
   dmgTexts,
@@ -55,6 +56,7 @@ const UI_COLORS = {
 
 const enemySpriteCache = new Map();
 const gemSpriteCache = new Map();
+const questSpriteCache = new Map();
 
 function makeOffscreenCanvas(w, h) {
   if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
@@ -107,6 +109,23 @@ const getGemSprite = (r) => {
   g.stroke();
   sprite = { canvas: c, pad, r };
   gemSpriteCache.set(key, sprite);
+  return sprite;
+};
+
+const getQuestSprite = (r, color) => {
+  const key = `${r}|${color}`;
+  let sprite = questSpriteCache.get(key);
+  if (sprite) return sprite;
+  const pad = Math.ceil(18 + r * 0.25);
+  const size = Math.ceil(r * 2);
+  const c = makeOffscreenCanvas(size + pad * 2, size + pad * 2);
+  const g = c.getContext("2d");
+  const x = pad;
+  const y = pad;
+  neonRect(g, x, y, size, size, color, 16);
+  neonRing(g, x + r, y + r, r * 1.3, color, 18, 2, 0.7);
+  sprite = { canvas: c, pad, r, size };
+  questSpriteCache.set(key, sprite);
   return sprite;
 };
 
@@ -525,9 +544,8 @@ export function renderFrame({
     if (!it.alive) continue;
     if (it.x < camX - WORLD.spawnPad || it.x > camX + W + WORLD.spawnPad || it.y < camY - WORLD.spawnPad || it.y > camY + H + WORLD.spawnPad) continue;
     const color = COLORS.quest;
-    const size = it.r;
-    neonRect(ctx, it.x - size, it.y - size, size * 2, size * 2, color, 16);
-    neonRing(ctx, it.x, it.y, size * 1.3, color, 18, 2, 0.7);
+    const sprite = getQuestSprite(it.r, color);
+    ctx.drawImage(sprite.canvas, it.x - sprite.r - sprite.pad, it.y - sprite.r - sprite.pad);
   }
 
   for (let i=0;i<gems.length;i++){
@@ -638,6 +656,35 @@ export function renderFrame({
   for (let i=0;i<enemyShots.length;i++){
     const s = enemyShots[i];
     drawEnemyShot(ctx, s);
+  }
+
+  // Arc Lances
+  for (let i=0;i<arcs.length;i++){
+    const a = arcs[i];
+    if (!a.points || a.points.length < 2) continue;
+    const alpha = clamp(a.life / (a.maxLife || 0.0001), 0, 1);
+    const intensity = a.intensity || 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = a.color || COLORS.arc;
+    ctx.shadowBlur = 22 * intensity;
+    ctx.strokeStyle = a.color || COLORS.arc;
+    ctx.lineWidth = 3.6 * intensity;
+    ctx.beginPath();
+    ctx.moveTo(a.points[0].x, a.points[0].y);
+    for (let j=1;j<a.points.length;j++) ctx.lineTo(a.points[j].x, a.points[j].y);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.strokeStyle = COLORS.player;
+    ctx.lineWidth = 1.6 * intensity;
+    ctx.beginPath();
+    ctx.moveTo(a.points[0].x, a.points[0].y);
+    for (let j=1;j<a.points.length;j++) ctx.lineTo(a.points[j].x, a.points[j].y);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Rails

@@ -11,7 +11,7 @@ import { fmtFloat, randi } from "./math.js";
 import { weapons, weaponCount } from "./weapons.js";
 import { BASE_STATS, player } from "./state.js";
 
-export const DPS_TRACKER = { magic:0, aura:0, rail:0, axe:0, orb:0, missile:0 };
+export const DPS_TRACKER = { magic:0, arc:0, aura:0, rail:0, axe:0, orb:0, missile:0 };
 
 export const upgradeState = { speedLv:0, hpLv:0, pickupLv:0, armorLv:0, resAllLv:0, resFireLv:0, resPoisonLv:0, resVoidLv:0, cdLv:0, xpLv:0, critChanceLv:0, critMultLv:0 };
 export function resetUpgradeState(){
@@ -28,7 +28,7 @@ export function resetUpgradeState(){
   upgradeState.critChanceLv=0;
   upgradeState.critMultLv=0;
 }
-export function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; DPS_TRACKER.missile=0; }
+export function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.arc=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; DPS_TRACKER.missile=0; }
 
 function weaponTag(weapon, maxLv, stats, extraParts = []){
   if (!weapon.unlocked) return "Weapon - Unlock";
@@ -40,8 +40,10 @@ function weaponTag(weapon, maxLv, stats, extraParts = []){
     if (stats.dmg) parts.push(`DMG ${Math.round(stats.dmg)}`);
     if (stats.cd) parts.push(`CD ${fmtFloat(stats.cd, 2)}s`);
     if (stats.count) parts.push(`Count ${stats.count}`);
+    if (stats.chains) parts.push(`Chains ${stats.chains}`);
     if (stats.speed) parts.push(`SPD ${Math.round(stats.speed)}`);
     if (stats.range) parts.push(`Range ${Math.round(stats.range)}`);
+    if (stats.chainRange) parts.push(`Chain ${Math.round(stats.chainRange)}`);
     if (stats.radius) parts.push(`Radius ${Math.round(stats.radius)}`);
     if (stats.tick) parts.push(`Tick ${fmtFloat(stats.tick, 2)}s`);
     if (stats.pull) parts.push(`Pull ${Math.round(stats.pull)}`);
@@ -49,6 +51,7 @@ function weaponTag(weapon, maxLv, stats, extraParts = []){
     if (stats.explosion) parts.push(`Explode ${Math.round(stats.explosion)}`);
     if (stats.explosionRadius) parts.push(`Blast ${Math.round(stats.explosionRadius)}`);
     if (stats.pierce) parts.push(`Pierce ${Math.round(stats.pierce)}`);
+    if (stats.falloff != null) parts.push(`Falloff ${Math.round(stats.falloff * 100)}%`);
     if (stats.knock) parts.push(`Knock ${Math.round(stats.knock)}`);
     if (stats.gravity) parts.push(`Grav ${Math.round(stats.gravity)}`);
     if (stats.maxSpeed) parts.push(`MaxSPD ${Math.round(stats.maxSpeed)}`);
@@ -74,6 +77,17 @@ const UPGRADES = [
       weapons.magic.unlocked = true;
       if (weapons.magic.level < WEAPON_CONFIG.magic.maxLevel) weapons.magic.level++;
       else weapons.magic.mastery++;
+    }
+  },
+  {
+    id: "arc", title: "Arc Lance",
+    desc: `A lightning strike that chains between enemies. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    tag: () => weaponTag(weapons.arc, WEAPON_CONFIG.arc.maxLevel),
+    can: () => (weapons.arc.unlocked) || weaponCount() < MAX_WEAPONS,
+    apply: () => {
+      if (!weapons.arc.unlocked){ weapons.arc.unlocked=true; weapons.arc.level=1; return; }
+      if (weapons.arc.level < WEAPON_CONFIG.arc.maxLevel) weapons.arc.level++;
+      else weapons.arc.mastery++;
     }
   },
   {
@@ -270,8 +284,8 @@ export function pickUpgrades(n=XP_CONFIG.cardChoices){
   const capReached = weaponCount() >= MAX_WEAPONS;
   for (let i=0;i<UPGRADES.length;i++){
     const u = UPGRADES[i];
-    const isWeapon = (u.id === "magic" || u.id === "aura" || u.id === "rail" || u.id === "axe" || u.id === "orb" || u.id === "missile");
-    const isLocked = (u.id === "magic") ? false : (u.id === "aura" ? !weapons.aura.unlocked : u.id === "rail" ? !weapons.rail.unlocked : u.id === "axe" ? !weapons.axe.unlocked : u.id === "orb" ? !weapons.orb.unlocked : u.id === "missile" ? !weapons.missile.unlocked : false);
+    const isWeapon = (u.id === "magic" || u.id === "arc" || u.id === "aura" || u.id === "rail" || u.id === "axe" || u.id === "orb" || u.id === "missile");
+    const isLocked = (u.id === "magic") ? false : (u.id === "arc" ? !weapons.arc.unlocked : u.id === "aura" ? !weapons.aura.unlocked : u.id === "rail" ? !weapons.rail.unlocked : u.id === "axe" ? !weapons.axe.unlocked : u.id === "orb" ? !weapons.orb.unlocked : u.id === "missile" ? !weapons.missile.unlocked : false);
     if (capReached && isWeapon && isLocked) continue; // hard cap enforcement
     if (u.can()) available.push(u);
   }
@@ -284,7 +298,7 @@ export function pickUpgrades(n=XP_CONFIG.cardChoices){
       const u = available[i];
       if (used.has(u.id)) continue;
       let w = 1;
-      if ((u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked) || (u.id==="missile" && !weapons.missile.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
+      if ((u.id==="arc" && !weapons.arc.unlocked) || (u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked) || (u.id==="missile" && !weapons.missile.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
       if (u.id==="pickup") w *= UPGRADE_CONFIG.weightPickup;
       if (u.id==="resAll" || u.id==="resFire" || u.id==="resPoison" || u.id==="resVoid") w *= UPGRADE_CONFIG.weightRes;
       const s = Math.random() * w;
@@ -302,6 +316,7 @@ export function listUpgradeSummary(){
   const parts = [];
   const mTag = (w) => w.mastery ? ` (M${w.mastery})` : "";
   parts.push(`Magic Bullet Lv ${weapons.magic.level}${mTag(weapons.magic)}`);
+  if (weapons.arc.unlocked) parts.push(`Arc Lance Lv ${weapons.arc.level}${mTag(weapons.arc)}`);
   if (weapons.aura.unlocked) parts.push(`Holy Aura Lv ${weapons.aura.level}${mTag(weapons.aura)}`);
   if (weapons.rail.unlocked) parts.push(`Railgun Lv ${weapons.rail.level}${mTag(weapons.rail)}`);
   if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}${mTag(weapons.axe)}`);
@@ -330,6 +345,7 @@ export function formatDpsSummary(){
     entries.push(`${DPS_LABELS[key]}: ${Math.round(dps)} DPS (${Math.round(dmg)} dmg)`);
   };
   append("magic", weapons.magic.unlocked);
+  append("arc", weapons.arc.unlocked);
   append("aura", weapons.aura.unlocked);
   append("rail", weapons.rail.unlocked);
   append("axe", weapons.axe.unlocked);

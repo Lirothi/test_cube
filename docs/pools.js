@@ -290,6 +290,17 @@ export const orbPool = makePool(
   }),
   80
 );
+export const arcPool = makePool(
+  () => ({
+    alive: false,
+    points: [],
+    life: 0,
+    maxLife: 0,
+    color: null,
+    intensity: 1,
+  }),
+  80
+);
 
 export const gemPool = makePool(
   () => ({

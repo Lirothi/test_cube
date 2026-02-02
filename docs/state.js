@@ -83,6 +83,7 @@ export const missiles = [];
 export const rails = [];
 export const axes = [];
 export const orbs = [];
+export const arcs = [];
 export const enemyShots = [];
 export const telegraphs = [];
 export const voidZones = [];

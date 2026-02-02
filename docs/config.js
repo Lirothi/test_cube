@@ -110,8 +110,8 @@ export const ENEMY_TIERS = [
   { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.26, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.44 },
   { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.28, spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.48 },
   { time: 1800, label: "Tier 16", hpMult: 4.18, dmgMult: 2.61, speedMult: 1.3,  spawnRateMult: 2.7,  maxEnemies: 290, rangedChanceMult: 1.6,  voidChanceMult: 1.6,  xpMult: 1.5 },
-  { time: 1920, label: "Tier 17", hpMult: 4.59, dmgMult: 2.78, speedMult: 1.32, spawnRateMult: 2.85, maxEnemies: 300, rangedChanceMult: 1.64, voidChanceMult: 1.64, xpMult: 1.55 },
-  { time: 2040, label: "Tier 18", hpMult: 5.03, dmgMult: 2.96, speedMult: 1.34, spawnRateMult: 3.0,  maxEnemies: 310, rangedChanceMult: 1.68, voidChanceMult: 1.68, xpMult: 1.6 },
+  { time: 1920, label: "Tier 17", hpMult: 4.59, dmgMult: 2.78, speedMult: 1.32, spawnRateMult: 2.85, maxEnemies: 300, rangedChanceMult: 1.64, voidChanceMult: 1.64, xpMult: 1.52 },
+  { time: 2040, label: "Tier 18", hpMult: 5.03, dmgMult: 2.96, speedMult: 1.34, spawnRateMult: 3.0,  maxEnemies: 310, rangedChanceMult: 1.68, voidChanceMult: 1.68, xpMult: 1.54 },
 ];
 
 export const TELEGRAPH_CONFIG = {
@@ -160,8 +160,8 @@ export const AUGMENT_CONFIG = {
     prism: { every: 4, dmgMult: 0.6, angle: 0.32 },
   },
   rail: {
-    burn: { dpsPct: 0.50, duration: 2.2 },
-    overpen: { pierce: 2, dmgMult: 1.25, cdMult: 1.05 },
+    burn: { dpsPct: 0.55, duration: 2.2 },
+    overpen: { pierce: 2, dmgMult: 1.20, cdMult: 1.1 },
   },
   axe: {
     bleed: { dpsPct: 0.4, duration: 3.0 },
@@ -178,6 +178,10 @@ export const AUGMENT_CONFIG = {
   missile: {
     swarm: { extra: 1, dmgMult: 0.8 },
     concussive: { slowMult: 0.55, slowDuration: 0.7, knock: 260, burn: { dpsPct: 0.30, duration: 2.0 } },
+  },
+  arc: {
+    capacitor: { every: 4, extraChains: 2 },
+    grounded: { radius: 90, dmgMult: 0.45 },
   },
 };
 
@@ -200,10 +204,31 @@ export const WEAPON_CONFIG = {
     projectile: { radius: 3.3, life: 1.25, spread: 0.12 },
     maxLevel: 8,
   },
+  arc: {
+    dmgBase: 16,
+    dmgPerLevel: 5,
+    cdBase: 1.6,
+    cdPerLevel: 0.12,
+    cdMin: 0.5,
+    rangeBase: 520,
+    rangePerLevel: 20,
+    chainBase: 3,
+    chainInterval: 3,
+    chainRangeBase: 120,
+    chainRangePerLevel: 10,
+    falloff: 0.8,
+    powerDmgMult: 1.25,
+    powerCdMult: 0.85,
+    slow: { mult: 0.75, duration: 0.5 },
+    crit: { base: 0.12, perLevel: 0.012, multBase: 1.7, multPerLevel: 0.05 },
+    maxLevel: 7,
+  },
   aura: {
     radiusBase: 56,
     radiusPerLevel: 14,
     tick: 0.22,
+    tickPerLevel: -0.008,
+    tickMin: 0.14,
     dmgBase: 6,
     dmgPerLevel: 4,
     knockBase: 70,
@@ -245,10 +270,10 @@ export const WEAPON_CONFIG = {
   },
   rail: {
     cdBase: 3.8,
-    cdPerLevel: 0.6,
-    cdMin: 1.5,
+    cdPerLevel: 0.5,
+    cdMin: 1.2,
     dmgBase: 40,
-    dmgPerLevel: 13,
+    dmgPerLevel: 12,
     speedBase: 1160,
     speedPerLevel: 60,
     pierceBase: 3,
@@ -261,7 +286,7 @@ export const WEAPON_CONFIG = {
     powerDmgMult: 1.25,
     powerCdMult: 0.82,
     crit: { base: 0.18, perLevel: 0.02, multBase: 2, multPerLevel: 0.08 },
-    projectile: { radius: 5.0, trailLife: 0.34, trailMax: 12 },
+    projectile: { radius: 6.0, trailLife: 0.34, trailMax: 12 },
     maxLevel: 6,
   },
   orb: {
@@ -319,6 +344,7 @@ export const MAX_WEAPONS = 4;
 
 export const DPS_LABELS = {
   magic: "Magic Bullet",
+  arc: "Arc Lance",
   aura: "Holy Aura",
   rail: "Railgun",
   axe: "Axe Throw",
@@ -429,7 +455,7 @@ export const BOSS5_CONFIG = {
   //spawnTime: 2,
   telegraph: { radius: 190, time: 1.7, color: "#b67bff" },
   blink: { cd: 4.6, radius: 140, dmg: 26, telegraph: 0.9, rangeMin: 120, rangeMax: 260, color: "#b67bff" },
-  rift: { cd: 5.4, count: 4, radius: 110, duration: 3.6, dps: 15, tick: 0.35, pull: 260, telegraph: 0.85, offsetMin: 80, offsetMax: 210, color: COLORS.aoeVoid },
+  rift: { cd: 5.4, count: 4, radius: 110, duration: 3.0, dps: 12, tick: 0.35, pull: 100, telegraph: 0.85, offsetMin: 110, offsetMax: 210, color: COLORS.aoeVoid },
   split: { cd: 2.4, speed: 260, dmg: 18, life: 2.4, splitAfter: 0.9, splitCount: 5, splitSpread: 0.32, telegraph: 0.7, color: "#b67bff" },
   lootGems: 28,
 };
@@ -457,7 +483,7 @@ export const ENEMY_TYPES = {
   X: { // mini-boss
     name:"Overseer", r:20, hp:2000, speed:55, dmg:12, color:COLORS.enemyBoss, xp:8, gem:10,
     boss:true, knockResist:0.55,
-    ranged:true, shotCd:1.6, shotDmg:9, shotSpeed:420, shotRange:720,
+    ranged:true, shotCd:1.5, shotDmg:10, shotSpeed:420, shotRange:720,
     nova: BOSS_CONFIG.nova,
     lootGems: BOSS_CONFIG.lootGems,
   },
@@ -471,7 +497,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS2_CONFIG.lootGems,
   },
   Z: { // melee juggernaut
-    name:"Titan", r:24, hp:7200, speed:62, dmg:18, color:"#ff7b3b", xp:12, gem:16,
+    name:"Titan", r:24, hp:7200, speed:65, dmg:18, color:"#ff7b3b", xp:12, gem:16,
     boss:true, knockResist:0.7,
     ranged:false, shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0,
     slam: BOSS3_CONFIG.slam,
