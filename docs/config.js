@@ -95,24 +95,24 @@ export const SPAWN_CONFIG = {
 };
 
 export const ENEMY_TIERS = [
-  { time: 0,   label: "Tier 1",  hpMult: 1.0,  dmgMult: 1.0,  speedMult: 1.0,  spawnRateMult: 1.0,  maxEnemies: 140, rangedChanceMult: 1.0,  voidChanceMult: 1.0,  xpMult: 1.0 },
-  { time: 120, label: "Tier 2",  hpMult: 1.1,  dmgMult: 1.06, speedMult: 1.02, spawnRateMult: 1.08, maxEnemies: 150, rangedChanceMult: 1.04, voidChanceMult: 1.04, xpMult: 1.05 },
-  { time: 240, label: "Tier 3",  hpMult: 1.2,  dmgMult: 1.12, speedMult: 1.04, spawnRateMult: 1.16, maxEnemies: 160, rangedChanceMult: 1.08, voidChanceMult: 1.08, xpMult: 1.1 },
-  { time: 360, label: "Tier 4",  hpMult: 1.32, dmgMult: 1.2,  speedMult: 1.06, spawnRateMult: 1.25, maxEnemies: 170, rangedChanceMult: 1.12, voidChanceMult: 1.12, xpMult: 1.15 },
-  { time: 480, label: "Tier 5",  hpMult: 1.45, dmgMult: 1.28, speedMult: 1.08, spawnRateMult: 1.34, maxEnemies: 180, rangedChanceMult: 1.16, voidChanceMult: 1.16, xpMult: 1.2 },
-  { time: 600, label: "Tier 6",  hpMult: 1.6,  dmgMult: 1.36, speedMult: 1.1,  spawnRateMult: 1.44, maxEnemies: 190, rangedChanceMult: 1.2,  voidChanceMult: 1.2,  xpMult: 1.25 },
-  { time: 720, label: "Tier 7",  hpMult: 1.76, dmgMult: 1.45, speedMult: 1.12, spawnRateMult: 1.55, maxEnemies: 200, rangedChanceMult: 1.24, voidChanceMult: 1.24, xpMult: 1.3 },
-  { time: 840, label: "Tier 8",  hpMult: 1.94, dmgMult: 1.55, speedMult: 1.14, spawnRateMult: 1.66, maxEnemies: 210, rangedChanceMult: 1.28, voidChanceMult: 1.28, xpMult: 1.32 },
-  { time: 960, label: "Tier 9",  hpMult: 2.14, dmgMult: 1.66, speedMult: 1.16, spawnRateMult: 1.78, maxEnemies: 220, rangedChanceMult: 1.32, voidChanceMult: 1.32, xpMult: 1.34 },
-  { time: 1080, label: "Tier 10", hpMult: 2.36, dmgMult: 1.78, speedMult: 1.18, spawnRateMult: 1.9,  maxEnemies: 230, rangedChanceMult: 1.36, voidChanceMult: 1.36, xpMult: 1.36 },
-  { time: 1200, label: "Tier 11", hpMult: 2.6,  dmgMult: 1.9,  speedMult: 1.2,  spawnRateMult: 2.02, maxEnemies: 240, rangedChanceMult: 1.4,  voidChanceMult: 1.4,  xpMult: 1.38 },
-  { time: 1320, label: "Tier 12", hpMult: 2.86, dmgMult: 2.03, speedMult: 1.22, spawnRateMult: 2.15, maxEnemies: 250, rangedChanceMult: 1.44, voidChanceMult: 1.44, xpMult: 1.4 },
-  { time: 1440, label: "Tier 13", hpMult: 3.14, dmgMult: 2.16, speedMult: 1.24, spawnRateMult: 2.28, maxEnemies: 260, rangedChanceMult: 1.48, voidChanceMult: 1.48, xpMult: 1.42 },
-  { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.26, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.44 },
-  { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.28, spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.48 },
-  { time: 1800, label: "Tier 16", hpMult: 4.18, dmgMult: 2.61, speedMult: 1.3,  spawnRateMult: 2.7,  maxEnemies: 290, rangedChanceMult: 1.6,  voidChanceMult: 1.6,  xpMult: 1.5 },
-  { time: 1920, label: "Tier 17", hpMult: 4.59, dmgMult: 2.78, speedMult: 1.32, spawnRateMult: 2.85, maxEnemies: 300, rangedChanceMult: 1.64, voidChanceMult: 1.64, xpMult: 1.52 },
-  { time: 2040, label: "Tier 18", hpMult: 5.03, dmgMult: 2.96, speedMult: 1.34, spawnRateMult: 3.0,  maxEnemies: 310, rangedChanceMult: 1.68, voidChanceMult: 1.68, xpMult: 1.54 },
+  { time: 0,   label: "Tier 1",  hpMult: 1.0,  dmgMult: 1.0,  speedMult: 1.0,   spawnRateMult: 1.0,  maxEnemies: 140, rangedChanceMult: 1.0,  voidChanceMult: 1.0,  xpMult: 1.0 },
+  { time: 120, label: "Tier 2",  hpMult: 1.1,  dmgMult: 1.06, speedMult: 1.015, spawnRateMult: 1.08, maxEnemies: 150, rangedChanceMult: 1.04, voidChanceMult: 1.04, xpMult: 1.05 },
+  { time: 240, label: "Tier 3",  hpMult: 1.2,  dmgMult: 1.12, speedMult: 1.03,  spawnRateMult: 1.16, maxEnemies: 160, rangedChanceMult: 1.08, voidChanceMult: 1.08, xpMult: 1.1 },
+  { time: 360, label: "Tier 4",  hpMult: 1.32, dmgMult: 1.2,  speedMult: 1.045, spawnRateMult: 1.25, maxEnemies: 170, rangedChanceMult: 1.12, voidChanceMult: 1.12, xpMult: 1.15 },
+  { time: 480, label: "Tier 5",  hpMult: 1.45, dmgMult: 1.28, speedMult: 1.06,  spawnRateMult: 1.34, maxEnemies: 180, rangedChanceMult: 1.16, voidChanceMult: 1.16, xpMult: 1.2 },
+  { time: 600, label: "Tier 6",  hpMult: 1.6,  dmgMult: 1.36, speedMult: 1.075, spawnRateMult: 1.44, maxEnemies: 190, rangedChanceMult: 1.2,  voidChanceMult: 1.2,  xpMult: 1.25 },
+  { time: 720, label: "Tier 7",  hpMult: 1.76, dmgMult: 1.45, speedMult: 1.09,  spawnRateMult: 1.55, maxEnemies: 200, rangedChanceMult: 1.24, voidChanceMult: 1.24, xpMult: 1.3 },
+  { time: 840, label: "Tier 8",  hpMult: 1.94, dmgMult: 1.55, speedMult: 1.105, spawnRateMult: 1.66, maxEnemies: 210, rangedChanceMult: 1.28, voidChanceMult: 1.28, xpMult: 1.32 },
+  { time: 960, label: "Tier 9",  hpMult: 2.14, dmgMult: 1.66, speedMult: 1.12,  spawnRateMult: 1.78, maxEnemies: 220, rangedChanceMult: 1.32, voidChanceMult: 1.32, xpMult: 1.34 },
+  { time: 1080, label: "Tier 10", hpMult: 2.36, dmgMult: 1.78, speedMult: 1.135, spawnRateMult: 1.9,  maxEnemies: 230, rangedChanceMult: 1.36, voidChanceMult: 1.36, xpMult: 1.36 },
+  { time: 1200, label: "Tier 11", hpMult: 2.6,  dmgMult: 1.9,  speedMult: 1.15,  spawnRateMult: 2.02, maxEnemies: 240, rangedChanceMult: 1.4,  voidChanceMult: 1.4,  xpMult: 1.38 },
+  { time: 1320, label: "Tier 12", hpMult: 2.86, dmgMult: 2.03, speedMult: 1.165, spawnRateMult: 2.15, maxEnemies: 250, rangedChanceMult: 1.44, voidChanceMult: 1.44, xpMult: 1.4 },
+  { time: 1440, label: "Tier 13", hpMult: 3.14, dmgMult: 2.16, speedMult: 1.18,  spawnRateMult: 2.28, maxEnemies: 260, rangedChanceMult: 1.48, voidChanceMult: 1.48, xpMult: 1.42 },
+  { time: 1560, label: "Tier 14", hpMult: 3.45, dmgMult: 2.3,  speedMult: 1.195, spawnRateMult: 2.42, maxEnemies: 270, rangedChanceMult: 1.52, voidChanceMult: 1.52, xpMult: 1.44 },
+  { time: 1680, label: "Tier 15", hpMult: 3.8,  dmgMult: 2.45, speedMult: 1.21,  spawnRateMult: 2.56, maxEnemies: 280, rangedChanceMult: 1.56, voidChanceMult: 1.56, xpMult: 1.48 },
+  { time: 1800, label: "Tier 16", hpMult: 4.18, dmgMult: 2.61, speedMult: 1.225, spawnRateMult: 2.7,  maxEnemies: 290, rangedChanceMult: 1.6,  voidChanceMult: 1.6,  xpMult: 1.5 },
+  { time: 1920, label: "Tier 17", hpMult: 4.59, dmgMult: 2.78, speedMult: 1.24,  spawnRateMult: 2.85, maxEnemies: 300, rangedChanceMult: 1.64, voidChanceMult: 1.64, xpMult: 1.52 },
+  { time: 2040, label: "Tier 18", hpMult: 5.03, dmgMult: 2.96, speedMult: 1.255, spawnRateMult: 3.0,  maxEnemies: 310, rangedChanceMult: 1.68, voidChanceMult: 1.68, xpMult: 1.54 },
 ];
 
 export const TELEGRAPH_CONFIG = {
@@ -489,7 +489,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS_CONFIG.lootGems,
   },
   Y: { // late void boss
-    name:"Eclipse", r:22, hp:3000, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
+    name:"Eclipse", r:22, hp:3500, speed:58, dmg:14, color:"#9df2ff", xp:10, gem:14,
     boss:true, knockResist:0.85,
     ranged:true, shotCd:1.35, shotDmg:10, shotSpeed:480, shotRange:720,
     telegraph: BOSS2_CONFIG.telegraph,
@@ -498,7 +498,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS2_CONFIG.lootGems,
   },
   Z: { // melee juggernaut
-    name:"Titan", r:24, hp:4000, speed:65, dmg:18, color:"#ff7b3b", xp:12, gem:16,
+    name:"Titan", r:24, hp:4700, speed:65, dmg:18, color:"#ff7b3b", xp:12, gem:16,
     boss:true, knockResist:0.7,
     ranged:false, shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0,
     slam: BOSS3_CONFIG.slam,
@@ -507,7 +507,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS3_CONFIG.lootGems,
   },
   W: { // ranged sentinel
-    name:"Archon", r:22, hp:5000, speed:75, dmg:16, color:"#7cf6ff", xp:14, gem:18,
+    name:"Archon", r:22, hp:6000, speed:75, dmg:16, color:"#7cf6ff", xp:14, gem:18,
     boss:true, knockResist:0.85,
     ranged:true, shotCd:1.25, shotDmg:24, shotSpeed:520, shotRange:720,
     telegraph: BOSS4_CONFIG.telegraph,
@@ -516,7 +516,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS4_CONFIG.lootGems,
   },
   Q: { // phase boss
-    name:"Parallax", r:24, hp:6000, speed:70, dmg:18, color:COLORS.enemyQ, xp:16, gem:20,
+    name:"Parallax", r:24, hp:7500, speed:70, dmg:18, color:COLORS.enemyQ, xp:16, gem:20,
     boss:true, knockResist:0.9,
     telegraph: BOSS5_CONFIG.telegraph,
     blink: BOSS5_CONFIG.blink,
