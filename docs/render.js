@@ -768,13 +768,16 @@ export function renderFrame({
     ctx.rotate(a.rot);
     ctx.shadowColor = UI_COLORS.axeShadow;
     ctx.shadowBlur = 18;
+    // simple L-shape: handle + head
     ctx.fillStyle = UI_COLORS.axeBody;
-    ctx.fillRect(-10, -3, 20, 6);
+    ctx.fillRect(-2, -12, 4, 24); // handle
     ctx.fillStyle = UI_COLORS.axeEdge;
-    ctx.fillRect(-2, -12, 4, 24);
+    ctx.fillRect(2, -12, 12, 6);  // head
     ctx.shadowBlur = 0;
     ctx.strokeStyle = UI_COLORS.hpBarBg;
-    ctx.strokeRect(-10, -3, 20, 6);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-2, -12, 4, 24);
+    ctx.strokeRect(2, -12, 12, 6);
     ctx.restore();
   }
 

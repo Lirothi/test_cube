@@ -201,6 +201,9 @@ export function spawnController(dt, camX, camY, W, H){
   const rate = (spawn.baseRate + t * spawn.timeScale) * tier.spawnRateMult;
   spawn.acc += dt * rate;
   spawn.maxEnemies = tier.maxEnemies;
+  const bossHpMult = (1 + t * SPAWN_CONFIG.scaling.hp) * tier.hpMult;
+  const bossSpdMult = (1 + t * SPAWN_CONFIG.scaling.speed) * tier.speedMult;
+  const bossDmgMult = (1 + t * SPAWN_CONFIG.scaling.dmg) * tier.dmgMult;
 
   if (!spawn.bossSpawned && t >= BOSS_CONFIG.spawnTime){
     spawn.bossSpawned = true;
@@ -212,7 +215,7 @@ export function spawnController(dt, camX, camY, W, H){
       time: BOSS_CONFIG.telegraph.time,
       fire: () => {
         spawn.bossAlive = true;
-        spawnEnemy("X", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        spawnEnemy("X", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
         sound.play("boss");
       }
     });
@@ -227,7 +230,7 @@ export function spawnController(dt, camX, camY, W, H){
       time: BOSS2_CONFIG.telegraph.time,
       fire: () => {
         spawn.bossAlive = true;
-        spawnEnemy("Y", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        spawnEnemy("Y", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
         sound.play("boss");
       }
     });
@@ -242,7 +245,7 @@ export function spawnController(dt, camX, camY, W, H){
       time: BOSS3_CONFIG.telegraph.time,
       fire: () => {
         spawn.bossAlive = true;
-        spawnEnemy("Z", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        spawnEnemy("Z", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
         sound.play("boss");
       }
     });
@@ -257,7 +260,7 @@ export function spawnController(dt, camX, camY, W, H){
       time: BOSS4_CONFIG.telegraph.time,
       fire: () => {
         spawn.bossAlive = true;
-        spawnEnemy("W", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        spawnEnemy("W", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
         sound.play("boss");
       }
     });
@@ -272,7 +275,7 @@ export function spawnController(dt, camX, camY, W, H){
       time: BOSS5_CONFIG.telegraph.time,
       fire: () => {
         spawn.bossAlive = true;
-        spawnEnemy("Q", camX, camY, W, H, 1 + t * SPAWN_CONFIG.scaling.hp, 1 + t * SPAWN_CONFIG.scaling.speed, 1 + t * SPAWN_CONFIG.scaling.dmg, false, pos);
+        spawnEnemy("Q", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
         sound.play("boss");
       }
     });
@@ -281,9 +284,6 @@ export function spawnController(dt, camX, camY, W, H){
     spawn.bossPairT -= dt;
     if (spawn.bossPairT <= 0) {
       spawn.bossPairT += (spawn.bossPairInterval || 180);
-      const bossHpMult = 1 + t * SPAWN_CONFIG.scaling.hp;
-      const bossSpdMult = 1 + t * SPAWN_CONFIG.scaling.speed;
-      const bossDmgMult = 1 + t * SPAWN_CONFIG.scaling.dmg;
       spawnBossPair(camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult);
     }
   }

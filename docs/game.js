@@ -596,6 +596,18 @@ import { popFloatText } from "./float_text.js";
       player.xp = 0;
       player.xpNeed = xpNeedForLevel(player.level);
       setDevStatus(`Level ${player.level}`);
+      if (state === STATE.MENU) {
+        closeMenu();
+      } else if (state !== STATE.PLAYING) {
+        closeLevelUpUI();
+        setDevMenuVisible(false);
+        if (ui.levelup) {
+          ui.levelup.classList.remove("trinket");
+          ui.levelup.classList.remove("aug");
+        }
+        state = STATE.PLAYING;
+      }
+      openLevelUp();
     }
 
     function devClearEnemies(){

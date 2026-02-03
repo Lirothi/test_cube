@@ -282,8 +282,6 @@ const UPGRADES = [
 export function pickUpgrades(n=XP_CONFIG.cardChoices){
   const available = [];
   const capReached = weaponCount() >= MAX_WEAPONS;
-  const masteryActive = (weapons.magic.mastery > 0) || (weapons.arc.mastery > 0) || (weapons.aura.mastery > 0) ||
-    (weapons.rail.mastery > 0) || (weapons.axe.mastery > 0) || (weapons.orb.mastery > 0) || (weapons.missile.mastery > 0);
   for (let i=0;i<UPGRADES.length;i++){
     const u = UPGRADES[i];
     const isWeapon = (u.id === "magic" || u.id === "arc" || u.id === "aura" || u.id === "rail" || u.id === "axe" || u.id === "orb" || u.id === "missile");
@@ -299,9 +297,16 @@ export function pickUpgrades(n=XP_CONFIG.cardChoices){
     for (let i=0;i<available.length;i++){
       const u = available[i];
       if (used.has(u.id)) continue;
+      const isWeapon = (u.id === "magic" || u.id === "arc" || u.id === "aura" || u.id === "rail" || u.id === "axe" || u.id === "orb" || u.id === "missile");
       let w = 1;
       if ((u.id==="arc" && !weapons.arc.unlocked) || (u.id==="aura" && !weapons.aura.unlocked) || (u.id==="axe" && !weapons.axe.unlocked) || (u.id==="rail" && !weapons.rail.unlocked) || (u.id==="orb" && !weapons.orb.unlocked) || (u.id==="missile" && !weapons.missile.unlocked)) w = UPGRADE_CONFIG.weightNewWeapon;
-      if (masteryActive && isWeapon) w *= UPGRADE_CONFIG.weightWeaponAfterMastery;
+      if (isWeapon) {
+        const weapon = weapons[u.id];
+        const maxLevel = WEAPON_CONFIG[u.id]?.maxLevel || 0;
+        if (weapon?.unlocked && weapon.level >= maxLevel) {
+          w *= UPGRADE_CONFIG.weightWeaponAfterMastery;
+        }
+      }
       if (u.id==="pickup") w *= UPGRADE_CONFIG.weightPickup;
       if (u.id==="resAll" || u.id==="resFire" || u.id==="resPoison" || u.id==="resVoid") w *= UPGRADE_CONFIG.weightRes;
       const s = Math.random() * w;
