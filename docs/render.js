@@ -48,6 +48,7 @@ const UI_COLORS = {
   hpBarBg: "rgba(255,255,255,.12)",
   hpBarShadow: "rgba(37,240,255,.6)",
   hpBarFill: "rgba(255, 37, 37, 0.75)",
+  hpBarPlayerFill: "rgba(255, 37, 37, 0.5)",
   axeShadow: "rgba(177,96,255,.9)",
   axeBody: "rgba(177,96,255,.95)",
   axeEdge: "rgba(37,240,255,.95)",
@@ -857,6 +858,26 @@ export function renderFrame({
   if (buffs.magnet > 0){
     neonRing(ctx, player.x, player.y, player.r + 18, UI_COLORS.magnetRing, 22, 2, 0.55);
   }
+
+  // Player HP bar (always visible)
+  const playerHp = clamp(player.hp, 0, player.maxHp);
+  const playerHpT = player.maxHp > 0 ? clamp(playerHp / player.maxHp, 0, 1) : 0;
+  const playerBarW = player.r * 2 + 18;
+  const playerBarH = 5;
+  const playerBarX = player.x - playerBarW * 0.5;
+  const playerBarY = player.y - player.r - 18;
+  ctx.save();
+  ctx.fillStyle = UI_COLORS.hpBarBg;
+  ctx.fillRect(playerBarX, playerBarY, playerBarW, playerBarH);
+  ctx.shadowColor = UI_COLORS.hpBarShadow;
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = UI_COLORS.hpBarPlayerFill;
+  ctx.fillRect(playerBarX, playerBarY, playerBarW * playerHpT, playerBarH);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = UI_COLORS.strokeDim;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(playerBarX, playerBarY, playerBarW, playerBarH);
+  ctx.restore();
 
   for (let i=0;i<companions.length;i++){
     const c = companions[i];

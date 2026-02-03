@@ -52,6 +52,7 @@ export const UPGRADE_CONFIG = {
   cdReduction: 0.06,
   xpMultGain: 0.08,
   weightNewWeapon: 2.8,
+  weightWeaponAfterMastery: 0.6,
   weightPickup: 1.35,
   weightRes: 0.8,
   passiveMaxLevel: 5,
