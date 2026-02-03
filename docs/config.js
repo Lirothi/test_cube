@@ -1,6 +1,6 @@
 import { COLORS } from "./colors.js";
 
-export const BUILD = "Neon Survivors v0.99";
+export const BUILD = "Neon Survivors v0.991";
 export { COLORS };
 
 export const PLAYER_CONFIG = {
