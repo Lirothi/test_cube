@@ -16,7 +16,7 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 230,
     desc: "Small speed boost. Chases nearby XP gems.",
-    tag: () => "+5% Speed | Gems 144",
+    tag: () => "+5% Speed",
     buffs: { speedMult: 1.05 },
   },
   {
@@ -32,7 +32,7 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 210,
     desc: "All-resistance boost. Chases XP gems.",
-    tag: () => "+3% All Res | Gems 135",
+    tag: () => "+3% All Res",
     buffs: { resAll: 0.03 },
   },
   {
@@ -48,7 +48,7 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 200,
     desc: "Small crit chance boost. Chases gems.",
-    tag: () => "+3% Crit | Gems 130",
+    tag: () => "+3% Crit",
     buffs: { critChance: 0.03 },
   },
   {
@@ -64,7 +64,7 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 220,
     desc: "Slight XP gain boost. Chases gems.",
-    tag: () => "+5% XP | Gems 140",
+    tag: () => "+5% XP",
     buffs: { xpMult: 1.05 },
   },
   {
@@ -80,7 +80,7 @@ const COMPANION_DATA = [
     returnSpeed: 0,
     seekRadius: 190,
     desc: "Light armor + res boost. Chases gems.",
-    tag: () => "+1 Armor, +2% Res | Gems 130",
+    tag: () => "+1 Armor, +2% Res",
     buffs: { armor: 1, resAll: 0.02 },
   },
 ];

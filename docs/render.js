@@ -37,8 +37,8 @@ const UI_COLORS = {
   augFill: "rgba(141,123,255,0.18)",
   companionFill: "rgba(154,255,106,0.18)",
   questFill: "rgba(255,184,74,0.18)",
-  auraFill: COLORS.voidAura,
-  auraStroke: COLORS.voidAuraStroke,
+  auraFill: COLORS.playerAura,
+  auraStroke: COLORS.playerAuraStroke,
   playerGlow: COLORS.playerGlow,
   playerCore: COLORS.playerCore,
   shieldRing: COLORS.auraRingShield,
@@ -335,6 +335,10 @@ function drawQuestIndicators(ctx, W, H, camX, camY) {
     drawOffscreenIndicator(ctx, W, H, camX, camY, quest.giverX, quest.giverY, qColor, UI_COLORS.questFill, 1.2 * pulse);
   }
   if (!quest.active || quest.completed) return;
+  if (quest.type === "perfect_sweep") {
+    drawOffscreenIndicator(ctx, W, H, camX, camY, quest.zoneX, quest.zoneY, COLORS.warn, UI_COLORS.questFill, 1.0 * pulse);
+    return;
+  }
   if (quest.type !== "scavenge" && quest.type !== "drop") return;
   for (let i = 0; i < questItems.length; i++) {
     const it = questItems[i];
@@ -538,6 +542,13 @@ export function renderFrame({
       ctx.fillText(mark, quest.giverX, quest.giverY - qr * 1.9 + exBob);
       ctx.restore();
     }
+  }
+
+  if (quest.active && !quest.completed && quest.type === "perfect_sweep") {
+    const sweepPulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.01);
+    const zr = Math.max(40, quest.zoneR || 180);
+    neonRing(ctx, quest.zoneX, quest.zoneY, zr, COLORS.warn, 24, 2.4, 0.55 * sweepPulse);
+    neonRing(ctx, quest.zoneX, quest.zoneY, zr * 0.74, COLORS.quest, 14, 1.8, 0.25 * sweepPulse);
   }
 
   for (let i=0;i<questItems.length;i++){
@@ -809,6 +820,14 @@ export function renderFrame({
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
+
+    if (weapons.aura.tickWaveFx > 0) {
+      const maxFx = weapons.aura.tickWaveFxMax || 0.12;
+      const t = clamp(weapons.aura.tickWaveFx / maxFx, 0, 1);
+      const progress = 1 - t;
+      const waveR = Math.max(2, s.radius * progress);
+      neonRing(ctx, player.x, player.y, waveR, UI_COLORS.auraStroke, 24, 2.6, 0.5 * t);
+    }
 
     if (weapons.aura.pulseFx > 0) {
       const maxFx = weapons.aura.pulseFxMax || 0.25;

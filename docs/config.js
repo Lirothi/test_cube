@@ -230,6 +230,7 @@ export const WEAPON_CONFIG = {
     tick: 0.22,
     tickPerLevel: -0.008,
     tickMin: 0.14,
+    cdrTickScale: 0.15,
     dmgBase: 6,
     dmgPerLevel: 4,
     knockBase: 70,
@@ -498,7 +499,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS2_CONFIG.lootGems,
   },
   Z: { // melee juggernaut
-    name:"Titan", r:24, hp:4700, speed:65, dmg:18, color:"#ff7b3b", xp:12, gem:16,
+    name:"Titan", r:24, hp:4700, speed:75, dmg:18, color:"#ff7b3b", xp:12, gem:16,
     boss:true, knockResist:0.7,
     ranged:false, shotCd:0, shotDmg:0, shotSpeed:0, shotRange:0,
     slam: BOSS3_CONFIG.slam,
@@ -516,7 +517,7 @@ export const ENEMY_TYPES = {
     lootGems: BOSS4_CONFIG.lootGems,
   },
   Q: { // phase boss
-    name:"Parallax", r:24, hp:7500, speed:70, dmg:18, color:COLORS.enemyQ, xp:16, gem:20,
+    name:"Parallax", r:24, hp:8500, speed:70, dmg:18, color:COLORS.enemyQ, xp:16, gem:20,
     boss:true, knockResist:0.9,
     telegraph: BOSS5_CONFIG.telegraph,
     blink: BOSS5_CONFIG.blink,

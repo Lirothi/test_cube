@@ -40,7 +40,7 @@ import { updateChests, resetChests, setChestRuntime } from "./chests.js";
 import { damageEnemy, updateEnemyShots, updateVoidZones, updateEnemies, cleanupDeadEnemies, setEnemyRuntime } from "./enemies.js";
 import { resetCompanions, updateCompanions, formatCompanionPills, addCompanion, companionSlotsFull, COMPANIONS } from "./companions.js";
 import { addParticles, updateParticles, resetParticles } from "./particles.js";
-import { resetQuests, updateQuests, setQuestRuntime, onEnemyKilled } from "./quests.js";
+import { resetQuests, updateQuests, setQuestRuntime, onEnemyKilled, onEnemyDamaged, onGemCollected, onChestOpened } from "./quests.js";
 import {
   upgradeState,
   resetUpgradeState,
@@ -674,8 +674,8 @@ import { popFloatText } from "./float_text.js";
       toggleDevMenu();
     });
     setPlayerRuntime({ openLevelUp });
-    setChestRuntime({ addXP, openTrinket, openAug, openCompanion });
-    setEnemyRuntime({ openAug, onEnemyKilled });
+    setChestRuntime({ addXP, openTrinket, openAug, openCompanion, onChestOpened });
+    setEnemyRuntime({ openAug, onEnemyKilled, onEnemyDamaged });
     setQuestRuntime({ addXP, openAug, openTrinket, addParticles });
 
     /* ============================
@@ -837,6 +837,7 @@ import { popFloatText } from "./float_text.js";
         if (d2 <= rr*rr || collected){
           g.alive = false;
           addXP(g.v);
+          onGemCollected(g.v);
           addParticles(g.x, g.y, COLORS.gem, 2, 220);
           sound.play("pickup");
         }

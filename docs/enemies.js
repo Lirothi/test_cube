@@ -47,16 +47,17 @@ const BOSS_STUCK_DIST2 = 9;
 const BOSS_STUCK_DECAY = 2.0;
 const BOSS_STUCK_AVOID_SCALE = 1.6;
 const BOSS_STUCK_AVOID_MAX = 2.0;
-let runtime = { openAug: null, onEnemyKilled: null };
+let runtime = { openAug: null, onEnemyKilled: null, onEnemyDamaged: null };
 const MAGE_ORB_ELEMENTS = [
   { type: "fire", color: COLORS.aoeFire },
   { type: "poison", color: COLORS.aoePoison },
   { type: "void", color: COLORS.aoeVoid },
 ];
 
-export function setEnemyRuntime({ openAug, onEnemyKilled }) {
+export function setEnemyRuntime({ openAug, onEnemyKilled, onEnemyDamaged }) {
   runtime.openAug = openAug;
   runtime.onEnemyKilled = onEnemyKilled;
+  runtime.onEnemyDamaged = onEnemyDamaged;
 }
 
 function spawnDmgText(x, y, amount, color = COLORS.dmg, size = 14) {
@@ -88,11 +89,17 @@ function dropGem(x, y, value = 1) {
   gems.push(g);
 }
 
-function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit = false, source = null, applyRiders = true) {
+function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit = false, source = null, applyRiders = true, damageKind = "direct") {
+  let inflicted = 0;
   if (dmg > 0) {
-    const inflicted = Math.min(dmg, Math.max(0, e.hp));
+    inflicted = Math.min(dmg, Math.max(0, e.hp));
     e.hp -= dmg;
     if (source) DPS_TRACKER[source] = (DPS_TRACKER[source] || 0) + inflicted;
+    if (inflicted > 0) {
+      e._lastHitSource = source || "";
+      e._lastHitCrit = !!crit;
+      e._lastHitKind = damageKind || "direct";
+    }
     if (showText) {
       const color = crit ? COLORS.crit : COLORS.dmg;
       const size = crit ? 18 : 14;
@@ -104,6 +111,16 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
     const effPush = pushStrength * (1 - resist);
     e.kx += pushX * effPush;
     e.ky += pushY * effPush;
+  }
+  if (runtime.onEnemyDamaged && (inflicted > 0 || pushStrength > 0)) {
+    runtime.onEnemyDamaged(e, {
+      amount: inflicted,
+      crit: !!crit,
+      source: source || "",
+      damageKind: damageKind || "direct",
+      knock: pushStrength > 0,
+      pushStrength: Math.max(0, pushStrength || 0),
+    });
   }
   if (applyRiders && e.hp > 0 && source) {
     // aug riders are applied in weapon logic
@@ -120,7 +137,7 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
     for (let i = 0; i < info.gem + extra; i++) {
       dropGem(e.x + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), e.y + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), xpValue);
     }
-    if (runtime.onEnemyKilled) runtime.onEnemyKilled(e);
+    if (runtime.onEnemyKilled) runtime.onEnemyKilled(e, { source: e._lastHitSource || "", crit: !!e._lastHitCrit, damageKind: e._lastHitKind || "direct" });
     if (e.boss) {
       spawn.bossAlive = false;
       spawn.bossRef = null;
@@ -443,7 +460,7 @@ function updateRiderTimers(e, dt, burnSource = null, bleedSource = null) {
     while (e.burnTickT <= 0 && e.burnT > 0) {
       e.burnTickT += DOT_CONFIG.burnTick;
       const dmg = e.burnDps * DOT_CONFIG.burnTick;
-      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, burnSource, false);
+      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, burnSource, false, "burn");
       addParticles(e.x, e.y, COLORS.enemyF, 6, 160);
     }
     if (e.burnT <= 0) e.burnTickT = DOT_CONFIG.burnTick;
@@ -457,7 +474,7 @@ function updateRiderTimers(e, dt, burnSource = null, bleedSource = null) {
     while (e.bleedTickT <= 0 && e.bleedT > 0) {
       e.bleedTickT += DOT_CONFIG.bleedTick;
       const dmg = e.bleedDps * DOT_CONFIG.bleedTick;
-      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, bleedSource, false);
+      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, bleedSource, false, "bleed");
       addParticles(e.x, e.y, COLORS.warn, 6, 140);
     }
     if (e.bleedT <= 0) e.bleedTickT = DOT_CONFIG.bleedTick;

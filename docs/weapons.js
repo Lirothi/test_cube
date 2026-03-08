@@ -27,7 +27,7 @@ import {
 export const weapons = {
   magic: { unlocked: true, level: 1, mastery: 0, t: 0, aug: null, augSeq: 0 },
   arc: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null, augSeq: 0 },
-  aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25 },
+  aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25, tickWaveFx: 0, tickWaveFxMax: 0.12 },
   rail: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   axe: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   orb: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
@@ -112,7 +112,7 @@ function getTrinketMods() {
 export function resetWeapons() {
   weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0; weapons.magic.aug = null; weapons.magic.augSeq = 0;
   weapons.arc.unlocked = false; weapons.arc.level = 0; weapons.arc.mastery = 0; weapons.arc.t = 0; weapons.arc.aug = null; weapons.arc.augSeq = 0;
-  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25;
+  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25; weapons.aura.tickWaveFx = 0; weapons.aura.tickWaveFxMax = 0.12;
   weapons.rail.unlocked = false; weapons.rail.level = 0; weapons.rail.mastery = 0; weapons.rail.t = 0; weapons.rail.aug = null;
   weapons.axe.unlocked = false; weapons.axe.level = 0; weapons.axe.mastery = 0; weapons.axe.t = 0; weapons.axe.aug = null;
   weapons.orb.unlocked = false; weapons.orb.level = 0; weapons.orb.mastery = 0; weapons.orb.t = 0; weapons.orb.aug = null;
@@ -194,7 +194,10 @@ export function auraStats() {
   const radius = cfg.radiusBase + lv * cfg.radiusPerLevel;
   const tickBase = cfg.tick;
   const tickStep = cfg.tickPerLevel || 0;
-  const tick = Math.max(cfg.tickMin || 0, tickBase + (lv - 1) * tickStep);
+  const cdr = Math.max(0, upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
+  const cdrTickScale = cfg.cdrTickScale || 0;
+  const tickCdrMult = Math.max(0.5, 1 - cdr * cdrTickScale);
+  const tick = Math.max(cfg.tickMin || 0, (tickBase + (lv - 1) * tickStep) * tickCdrMult);
   const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
   const knock = (cfg.knockBase + lv * cfg.knockPerLevel) * powerMul;
   const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
@@ -642,11 +645,15 @@ export function updateWeapons(dt){
     if (weapons.aura.pulseFx > 0) {
       weapons.aura.pulseFx = Math.max(0, weapons.aura.pulseFx - dt);
     }
+    if (weapons.aura.tickWaveFx > 0) {
+      weapons.aura.tickWaveFx = Math.max(0, weapons.aura.tickWaveFx - dt);
+    }
     weapons.aura.tick -= dt;
     if (weapons.aura.tick <= 0){
       weapons.aura.tick += s.tick;
       const r = s.radius, r2 = r*r;
       let hitCount = 0;
+      let obstacleHit = false;
       for (let i=0;i<enemies.length;i++){
         const e = enemies[i];
         if (!e.alive) continue;
@@ -670,8 +677,11 @@ export function updateWeapons(dt){
         const reach = r + o.r;
         if (dx*dx + dy*dy <= reach*reach){
           damageObstacle(idx, s.dmg, false);
+          obstacleHit = true;
         }
       }
+      
+      weapons.aura.tickWaveFx = weapons.aura.tickWaveFxMax || 0.12;
 
       if (aug === "aura_leech" && hitCount > 0) {
         const heal = player.maxHp * AUGMENT_CONFIG.aura.leechPct;

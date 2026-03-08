@@ -17,13 +17,14 @@ import {
 } from "./state.js";
 import { chestPool } from "./pools.js";
 
-let runtime = { addXP: null, openTrinket: null, openAug: null, openCompanion: null };
+let runtime = { addXP: null, openTrinket: null, openAug: null, openCompanion: null, onChestOpened: null };
 
-export function setChestRuntime({ addXP, openTrinket, openAug, openCompanion }) {
+export function setChestRuntime({ addXP, openTrinket, openAug, openCompanion, onChestOpened }) {
   runtime.addXP = addXP;
   runtime.openTrinket = openTrinket;
   runtime.openAug = openAug;
   runtime.openCompanion = openCompanion;
+  runtime.onChestOpened = onChestOpened;
 }
 
 function requireRuntime() {
@@ -279,6 +280,7 @@ export function updateChests(dt, camX, camY, W, H) {
     const rr = c.r + player.r + CHEST_CONFIG.radiusPadding;
     if (dx * dx + dy * dy <= rr * rr) {
       c.alive = false;
+      if (runtime.onChestOpened) runtime.onChestOpened(c.kind);
       if (c.kind === "trinket") {
         if (trinketSlotsFull()) {
           const { addXP } = requireRuntime();
