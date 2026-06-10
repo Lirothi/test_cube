@@ -233,7 +233,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
-                appController_.BuildHud(renderer, scene);
+                appController_.BuildHud(renderer, scene, input);
                 scene.Render(&renderer);
             }
 

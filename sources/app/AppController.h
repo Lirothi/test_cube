@@ -13,10 +13,13 @@ class AppController
 {
 public:
     void Tick(InputManager& input, Renderer& renderer, Scene& scene);
-    void BuildHud(Renderer& renderer, const Scene& scene) const;
+    void BuildHud(Renderer& renderer, const Scene& scene, const InputManager& input) const;
 
     const SceneRenderSettings& Settings() const { return settings_; }
 
 private:
+    void BuildBindingsOverlay(Renderer& renderer, const InputManager& input) const;
+
     SceneRenderSettings settings_{};
+    bool showBindings_ = false;
 };

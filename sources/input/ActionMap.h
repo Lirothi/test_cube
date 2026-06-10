@@ -8,6 +8,12 @@ class InputManager;
 
 class ActionMap {
 public:
+    // Human-readable binding, captured verbatim from the JSON for UI overlays.
+    struct BindingDesc {
+        std::string action;
+        std::string keys; // e.g. "F3", "Ctrl+1", "LShift/RShift", "W/Up - S/Down"
+    };
+
     // Load a JSON schema. Returns false if reading/parsing failed.
     bool LoadFromJsonFile(const std::wstring& path);
 
@@ -16,6 +22,9 @@ public:
     bool  WasActionPressed(const std::string& name, const InputManager& input) const;
     bool  WasActionReleased(const std::string& name, const InputManager& input) const;
     float GetAxis(const std::string& name, const InputManager& input) const;
+
+    // Bindings in file order, for the on-screen controls overlay.
+    const std::vector<BindingDesc>& GetBindingDescs() const { return bindingDescs_; }
 
 private:
     struct Digital {
@@ -46,4 +55,5 @@ private:
 
 private:
     robin_hood::unordered_map<std::string, Action> actions_;
+    std::vector<BindingDesc> bindingDescs_;
 };

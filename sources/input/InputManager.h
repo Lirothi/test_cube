@@ -22,6 +22,9 @@ public:
     bool  WasActionReleased(const std::string& name) const;
     float GetActionAxis(const std::string& name) const;
 
+    // Bindings in file order, for the on-screen controls overlay.
+    const std::vector<ActionMap::BindingDesc>& GetBindingDescs() const { return actions_.GetBindingDescs(); }
+
     // Keyboard
     bool IsKeyDown(int vk) const {
         return keyDown_[vk] != 0;

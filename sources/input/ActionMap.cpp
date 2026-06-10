@@ -78,6 +78,7 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
     }
 
     actions_.clear();
+    bindingDescs_.clear();
 
     if (j.contains("actions") && j["actions"].is_array()) {
         for (auto& a : j["actions"]) {
@@ -165,6 +166,79 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
                 }
                 if (ax.mouseAxis != 0) {
                     act.axes.push_back(ax);
+                }
+            }
+
+            // Capture a human-readable description for the controls overlay,
+            // using the original key names from the JSON.
+            {
+                const auto mouseButtonLabel = [](const std::string& s) -> std::string {
+                    const std::string lower = ToLower(s);
+                    if (lower == "left") { return "LMB"; }
+                    if (lower == "right") { return "RMB"; }
+                    if (lower == "middle") { return "MMB"; }
+                    return s;
+                };
+
+                std::string keysDesc;
+                const auto appendPart = [&keysDesc](const std::string& part) {
+                    if (part.empty()) { return; }
+                    if (!keysDesc.empty()) { keysDesc += ", "; }
+                    keysDesc += part;
+                };
+
+                if (a.contains("keys") && a["keys"].is_array()) {
+                    const bool allKeys = a.contains("allKeys") && a["allKeys"].is_boolean() && a["allKeys"].get<bool>();
+                    const char* sep = allKeys ? "+" : "/";
+                    std::string joined;
+                    for (auto& s : a["keys"]) {
+                        if (s.is_string()) {
+                            if (!joined.empty()) { joined += sep; }
+                            joined += s.get<std::string>();
+                        }
+                    }
+                    appendPart(joined);
+                }
+                if (a.contains("mouseButton") && a["mouseButton"].is_string()) {
+                    appendPart(mouseButtonLabel(a["mouseButton"].get<std::string>()));
+                }
+                if (a.contains("mouseButtons") && a["mouseButtons"].is_array()) {
+                    std::string joined;
+                    for (auto& s : a["mouseButtons"]) {
+                        if (s.is_string()) {
+                            if (!joined.empty()) { joined += "/"; }
+                            joined += mouseButtonLabel(s.get<std::string>());
+                        }
+                    }
+                    appendPart(joined);
+                }
+                if (a.contains("positive") || a.contains("negative")) {
+                    const auto joinKeys = [](const json& arr) {
+                        std::string joined;
+                        if (arr.is_array()) {
+                            for (auto& s : arr) {
+                                if (s.is_string()) {
+                                    if (!joined.empty()) { joined += "/"; }
+                                    joined += s.get<std::string>();
+                                }
+                            }
+                        }
+                        return joined;
+                    };
+                    const std::string pos = a.contains("positive") ? joinKeys(a["positive"]) : std::string{};
+                    const std::string neg = a.contains("negative") ? joinKeys(a["negative"]) : std::string{};
+                    if (!pos.empty() && !neg.empty()) {
+                        appendPart(pos + " - " + neg);
+                    } else {
+                        appendPart(pos.empty() ? neg : pos);
+                    }
+                }
+                if (a.contains("mouseAxis") && a["mouseAxis"].is_string()) {
+                    appendPart("Mouse " + a["mouseAxis"].get<std::string>());
+                }
+
+                if (!keysDesc.empty()) {
+                    bindingDescs_.push_back({ name, std::move(keysDesc) });
                 }
             }
 

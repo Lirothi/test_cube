@@ -176,6 +176,9 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
 void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8) {
     AddText(id, px, color, UTF8toW(utf8), false);
 }
+void TextManager::AddText(RegionId id, float px, const float4& color, std::string_view utf8, bool enableShadow) {
+    AddText(id, px, color, UTF8toW(utf8), enableShadow);
+}
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
