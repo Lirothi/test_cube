@@ -189,6 +189,7 @@
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
     <ClCompile Include="sources/rendering/core/DlssHandler.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp" />
@@ -257,6 +258,7 @@
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
     <ClInclude Include="sources/rendering/core/RenderPass.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
+    <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h" />

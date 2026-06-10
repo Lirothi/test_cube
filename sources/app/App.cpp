@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "app/levels/DemoLevel.h"
+#include "rendering/core/UploadBatch.h"
 
 static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 
@@ -106,11 +107,9 @@ void App::InitScene()
     assert(systems_);
 
     auto& renderer = systems_->renderer;
-    auto& scene = systems_->scene;
     auto& input = systems_->input;
     auto& levelManager = systems_->levelManager;
 
-    std::vector<ComPtr<ID3D12Resource>> pendingUploads;
     if (!input.LoadActions(L"input/bindings.json"))
     {
         assert(false && "No bindings.json found!");
@@ -121,21 +120,20 @@ void App::InitScene()
     renderer.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
     renderer.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
 
-    // Create the upload command list ahead of time
-    ComPtr<ID3D12CommandAllocator> uploadAlloc;
-    ComPtr<ID3D12GraphicsCommandList> uploadCmdList;
-    renderer.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&uploadAlloc));
-    renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAlloc.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList));
+    UploadBatch uploadBatch;
+    const bool batchBegun = uploadBatch.Begin(&renderer);
+    assert(batchBegun && "Failed to begin upload batch");
+    (void)batchBegun;
 
-    renderer.InitTextSystem(uploadCmdList.Get(), &pendingUploads, L"fonts");
+    renderer.InitTextSystem(uploadBatch.CommandList(), uploadBatch.KeepAlive(), L"fonts");
     if (auto* debugDraw = renderer.GetDebugDrawSystem())
     {
-        debugDraw->Initialize(&renderer, uploadCmdList.Get(), &pendingUploads);
+        debugDraw->Initialize(&renderer, uploadBatch.CommandList(), uploadBatch.KeepAlive());
     }
 
     LevelLoadContext loadCtx{};
-    loadCtx.uploadCmdList = uploadCmdList.Get();
-    loadCtx.uploadKeepAlive = &pendingUploads;
+    loadCtx.uploadCmdList = uploadBatch.CommandList();
+    loadCtx.uploadKeepAlive = uploadBatch.KeepAlive();
 
     if (!levelManager.HasLevel(DemoLevel::kName))
     {
@@ -145,11 +143,7 @@ void App::InitScene()
     const bool levelLoaded = levelManager.LoadLevel(DemoLevel::kName, loadCtx);
     assert(levelLoaded && "Failed to load initial level");
 
-    uploadCmdList->Close();
-    ID3D12CommandList* cmdLists[] = { uploadCmdList.Get() };
-    renderer.GetCommandQueue()->ExecuteCommandLists(1, cmdLists);
-    // Wait for the upload to finish (fence event)
-    renderer.WaitForPreviousFrame();
+    uploadBatch.SubmitAndWait(&renderer);
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
@@ -213,23 +207,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
                 if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
                 {
-                    ComPtr<ID3D12CommandAllocator> levelAlloc;
-                    ComPtr<ID3D12GraphicsCommandList> levelCmdList;
-                    renderer.GetDevice()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&levelAlloc));
-                    renderer.GetDevice()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, levelAlloc.Get(), nullptr, IID_PPV_ARGS(&levelCmdList));
-
-                    std::vector<ComPtr<ID3D12Resource>> levelUploads;
-
-                    LevelLoadContext levelCtx{};
-                    levelCtx.uploadCmdList = levelCmdList.Get();
-                    levelCtx.uploadKeepAlive = &levelUploads;
-
-                    if (levelManager.LoadLevel(*pendingLevel, levelCtx))
+                    UploadBatch levelBatch;
+                    if (levelBatch.Begin(&renderer))
                     {
-                        levelCmdList->Close();
-                        ID3D12CommandList* levelCmds[] = { levelCmdList.Get() };
-                        renderer.GetCommandQueue()->ExecuteCommandLists(1, levelCmds);
-                        renderer.WaitForPreviousFrame();
+                        LevelLoadContext levelCtx{};
+                        levelCtx.uploadCmdList = levelBatch.CommandList();
+                        levelCtx.uploadKeepAlive = levelBatch.KeepAlive();
+
+                        if (levelManager.LoadLevel(*pendingLevel, levelCtx))
+                        {
+                            levelBatch.SubmitAndWait(&renderer);
+                        }
                     }
                 }
 
