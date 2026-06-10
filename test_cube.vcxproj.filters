@@ -275,6 +275,9 @@
     <ClInclude Include="sources/app/scene/Scene.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/scene/SceneFrameData.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>

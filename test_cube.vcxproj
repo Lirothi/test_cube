@@ -218,6 +218,7 @@
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />
+    <ClInclude Include="sources/app/scene/SceneFrameData.h" />
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />

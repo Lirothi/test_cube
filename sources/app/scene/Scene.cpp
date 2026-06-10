@@ -39,37 +39,37 @@ static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
 const mat4& Scene::GetCascadeView(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedLightView_[index];
+    return frameData_.cascades.lightView[index];
 }
 
 const mat4& Scene::GetCascadeProj(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedLightProj_[index];
+    return frameData_.cascades.lightProj[index];
 }
 
 float2 Scene::GetCascadeScale(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedScale_[index];
+    return frameData_.cascades.atlasScale[index];
 }
 
 float2 Scene::GetCascadeBias(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedBias_[index];
+    return frameData_.cascades.atlasBias[index];
 }
 
 float Scene::GetCascadeNormalBias(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedNormalBiasWS_[index];
+    return frameData_.cascades.normalBiasWS[index];
 }
 
 float Scene::GetCascadeDepthBias(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return cachedDepthBiasNDC_[index];
+    return frameData_.cascades.depthBiasNDC[index];
 }
 
 namespace
@@ -141,10 +141,11 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
     const float zNear = camera.GetZNear();
     const float zFar = camera.GetZFar();
+    SceneFrameData::CascadeData& cascades = frameData_.cascades;
     const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
     for (size_t i = 0; i < splits.size(); ++i)
     {
-        cachedSplitsVS_[i] = splits[i];
+        cascades.splitsVS[i] = splits[i];
     }
 
     const auto& deferred = renderer->GetDeferredForFrame();
@@ -177,8 +178,8 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
     {
-        const float sliceNear = cachedSplitsVS_[idx];
-        const float sliceFar = cachedSplitsVS_[idx + 1];
+        const float sliceNear = cascades.splitsVS[idx];
+        const float sliceFar = cascades.splitsVS[idx + 1];
 
         std::array<float3, 8> cornersWS{};
         BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
@@ -241,15 +242,15 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
         const float normalBiasInTexels = cascadeConfig_.normalBiasInTexels;
         const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
-        cachedNormalBiasWS_[idx] = normalBiasInTexels * unitsPerTexel;
-        cachedDepthBiasNDC_[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
+        cascades.normalBiasWS[idx] = normalBiasInTexels * unitsPerTexel;
+        cascades.depthBiasNDC[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
 
         const float2 scale = float2(static_cast<float>(tileRes) / static_cast<float>(deferred.shadowRes));
         const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
-        cachedScale_[idx] = scale;
-        cachedBias_[idx] = bias;
-        cachedLightView_[idx] = lightView;
-        cachedLightProj_[idx] = lightProj;
+        cascades.atlasScale[idx] = scale;
+        cascades.atlasBias[idx] = bias;
+        cascades.lightView[idx] = lightView;
+        cascades.lightProj[idx] = lightProj;
 
         SceneView& cascadeView = cascadeViews_[idx];
         cascadeView.view = lightView;
@@ -418,6 +419,18 @@ void Scene::PrepareViews(Renderer* renderer)
     camera_.SetZNearFar(zNear, zFar);
     camera_.CalcMatrices(renderer);
     renderer->UpdateDlssCameraData(camera_);
+
+    // Publish this frame's pass inputs. Pass bodies read frameData_, not Scene members.
+    frameData_.camera = &camera_;
+    frameData_.mainView = &camera_.GetView();
+    frameData_.cascadeViews = &cascadeViews_;
+    frameData_.spotShadowViews = &spotShadowViews_;
+    frameData_.lightManager = &lightManager_;
+    frameData_.skybox = skyBox_.get();
+    frameData_.ssrTechnique = ssrTechnique_;
+    frameData_.doFxaa = doFxaa_;
+    frameData_.debugTexMode = debugTexMode_;
+    frameData_.showProfiler = showProfiler_;
 
     SceneView& mainView = camera_.GetView();
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
@@ -612,49 +625,49 @@ void Scene::Render(Renderer* renderer) {
     auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShoreDepth },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
-            Pass_CSM(renderer, ctx, cascadeViews_);
+            Pass_CSM(renderer, ctx, *frameData_.cascadeViews);
         });
 
     auto pSpotShadow = rg.AddPass(RenderPass::Main_SpotShadows, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
-            Pass_SpotShadows(renderer, ctx, spotShadowViews_);
+            Pass_SpotShadows(renderer, ctx, *frameData_.spotShadowViews);
         });
 
     auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
-            Pass_GBuffer(renderer, ctx, camera_, camera_.GetView());
+            Pass_GBuffer(renderer, ctx, *frameData_.camera, *frameData_.mainView);
         });
 
     auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
-            Pass_Lighting(renderer, ctx, camera_);
+            Pass_Lighting(renderer, ctx, *frameData_.camera);
         });
 
     auto pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
-            Pass_SpotLights(renderer, ctx, camera_);
+            Pass_SpotLights(renderer, ctx, *frameData_.camera);
         });
 
     auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
-            Pass_PointLights(renderer, ctx, camera_);
+            Pass_PointLights(renderer, ctx, *frameData_.camera);
         });
 
     auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSkybox);
-            Pass_Skybox(renderer, ctx, camera_);
+            Pass_Skybox(renderer, ctx, *frameData_.camera);
         });
 
     auto pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSSR);
-            Pass_SSR(renderer, ctx, camera_);
+            Pass_SSR(renderer, ctx, *frameData_.camera);
         });
 
     auto pBlur = rg.AddPass(RenderPass::Main_SSRBlur, { pSSR },
@@ -663,19 +676,19 @@ void Scene::Render(Renderer* renderer) {
     auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCompose);
-            Pass_Compose(renderer, ctx, camera_);
+            Pass_Compose(renderer, ctx, *frameData_.camera);
         });
 
     auto pTransp = rg.AddPass(RenderPass::Main_Transparent, { pCompose },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
-            Pass_Transparent(renderer, ctx, camera_, camera_.GetView());
+            Pass_Transparent(renderer, ctx, *frameData_.camera, *frameData_.mainView);
         });
 
     auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pTransp },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
-            Pass_DebugDraw(renderer, ctx, camera_);
+            Pass_DebugDraw(renderer, ctx, *frameData_.camera);
         });
 
     // Ensure tonemapping runs after the debug draw pass so the resolved backbuffer
@@ -1067,7 +1080,7 @@ void Scene::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
         return;
     }
 
-    const size_t availableLights = lightManager_.GetSpotLightCount();
+    const size_t availableLights = frameData_.lightManager->GetSpotLightCount();
     const size_t viewCount = std::min(spotViews.size(), availableLights);
     if (viewCount == 0)
     {
@@ -1239,16 +1252,17 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         constants.camDir = camDir;
         constants.invView = invView;
         constants.invProj = invProj;
+        const SceneFrameData::CascadeData& cascades = frameData_.cascades;
         for (size_t i = 0; i < constants.lightViewProj.size(); ++i)
         {
-            constants.lightViewProj[i] = cachedLightView_[i] * cachedLightProj_[i];
-            constants.cascadeScaleBias[i] = float4(cachedScale_[i].x, cachedScale_[i].y, cachedBias_[i].x, cachedBias_[i].y);
+            constants.lightViewProj[i] = cascades.lightView[i] * cascades.lightProj[i];
+            constants.cascadeScaleBias[i] = float4(cascades.atlasScale[i].x, cascades.atlasScale[i].y, cascades.atlasBias[i].x, cascades.atlasBias[i].y);
         }
-        constants.cascadeSplits = float4(cachedSplitsVS_[0], cachedSplitsVS_[1], cachedSplitsVS_[2], cachedSplitsVS_[3]);
+        constants.cascadeSplits = float4(cascades.splitsVS[0], cascades.splitsVS[1], cascades.splitsVS[2], cascades.splitsVS[3]);
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
         constants.shadowAtlasSize = float2(shadowRes, shadowRes);
-        constants.shadowBiasNDC = float4(cachedDepthBiasNDC_[0], cachedDepthBiasNDC_[1], cachedDepthBiasNDC_[2], cachedDepthBiasNDC_[3]);
-        constants.normalBiasWS = float4(cachedNormalBiasWS_[0], cachedNormalBiasWS_[1], cachedNormalBiasWS_[2], cachedNormalBiasWS_[3]);
+        constants.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
+        constants.normalBiasWS = float4(cascades.normalBiasWS[0], cascades.normalBiasWS[1], cascades.normalBiasWS[2], cascades.normalBiasWS[3]);
         const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
@@ -1289,15 +1303,16 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    const size_t spotLightCount = lightManager_.GetSpotLightCount();
+    LightManager& lightManager = *frameData_.lightManager;
+    const size_t spotLightCount = lightManager.GetSpotLightCount();
     if (spotLightCount == 0)
     {
         return;
     }
 
-    lightManager_.EnsureSpotLightBuffer(renderer, spotLightCount);
-    auto* spotLightBufferCPU = lightManager_.GetSpotLightBufferCPU();
-    const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager_.GetSpotLightSrv();
+    lightManager.EnsureSpotLightBuffer(renderer, spotLightCount);
+    auto* spotLightBufferCPU = lightManager.GetSpotLightBufferCPU();
+    const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager.GetSpotLightSrv();
     if (!spotLightBufferCPU || spotLightSrvHandle.ptr == 0)
     {
         return;
@@ -1319,7 +1334,7 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.depth.Get(), srvState);
         renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        const auto& spotLights = lightManager_.SpotLights();
+        const auto& spotLights = lightManager.SpotLights();
         for (size_t i = 0; i < spotLightCount; ++i)
         {
             const auto& light = spotLights[i];
@@ -1394,12 +1409,13 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    auto& pointLights = lightManager_.PointLights();
+    LightManager& lightManager = *frameData_.lightManager;
+    auto& pointLights = lightManager.PointLights();
     if (pointLights.empty()) { return; }
 
-    lightManager_.EnsurePointLightBuffer(renderer, pointLights.size());
-    auto* pointLightBufferCPU = lightManager_.GetPointLightBufferCPU();
-    const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager_.GetPointLightSrv();
+    lightManager.EnsurePointLightBuffer(renderer, pointLights.size());
+    auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU();
+    const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv();
     if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -1481,7 +1497,7 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
 void Scene::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    if (!skyBox_) { return; }
+    if (!frameData_.skybox) { return; }
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
     {
@@ -1495,7 +1511,7 @@ void Scene::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
         // RTVs = Light + Velocity, DSV = GBuffer Depth (read-only), no clears
         renderer->BindLightTargetWithVelocity(t.cl, Renderer::ClearMode::None, true);
 
-        skyBox_->Render(renderer, t.cl, camera);
+        frameData_.skybox->Render(renderer, t.cl, camera);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1544,7 +1560,7 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invScreenSize = float2(
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
-        constants.technique = static_cast<uint32_t>(ssrTechnique_);
+        constants.technique = static_cast<uint32_t>(frameData_.ssrTechnique);
 
         resources_.WriteSsrConstants(constants, (uint8_t*)cb.cpu);
 
@@ -1666,7 +1682,8 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 
         auto composeMaterial = resources_.GetComposeMaterial();
         const UINT cbSize = resources_.GetComposeCBSizeBytes();
-        if (!composeMaterial || cbSize == 0)
+        Skybox* skybox = frameData_.skybox;
+        if (!composeMaterial || cbSize == 0 || !skybox)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1677,7 +1694,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         ComposePassConstants constants{};
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
-        constants.skyboxIntensity = skyBox_ ? skyBox_->GetExposure() : 1.0f;
+        constants.skyboxIntensity = skybox->GetExposure();
         constants.camPos = camera.GetPosition();
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
@@ -1690,7 +1707,7 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             D.gbSRV[0],
             D.gbSRV[1],
             D.depthSRV,
-            skyBox_->GetTex()->GetSRVCPU(),
+            skybox->GetTex()->GetSRVCPU(),
             D.ssrSRV
         };
 
@@ -1865,7 +1882,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         bool ranFxaa = false;
         auto fxaaMaterial = resources_.GetFxaaMaterial();
         const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
-        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && doFxaa_)
+        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && frameData_.doFxaa)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -1925,7 +1942,7 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
 void Scene::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    if (!debugTexMode_)
+    if (!frameData_.debugTexMode)
     {
         return;
     }
@@ -1968,7 +1985,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
             renderer->RecordBindDefaultsNoClear(t.cl);
-            if (showProfiler_)
+            if (frameData_.showProfiler)
             {
                 Profiler::Get().EmitOverlay(tm, /*x=*/16, /*y=*/64, /*maxLines=*/20);
             }
@@ -1982,6 +1999,7 @@ void Scene::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
 void Scene::Clear()
 {
     resources_ = SceneResourceBootstrapper{};
+    frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
     objects_.clear();
     camera_.GetView().queue.Clear();

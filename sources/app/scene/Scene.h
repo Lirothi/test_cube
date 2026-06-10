@@ -18,6 +18,7 @@
 #include "app/scene/SceneRenderConfig.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneView.h"
+#include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneResourceBootstrapper.h"
 
 class Renderer;
@@ -47,7 +48,7 @@ public:
     float2 GetCascadeBias(size_t index) const;
     float GetCascadeNormalBias(size_t index) const;
     float GetCascadeDepthBias(size_t index) const;
-    const float* GetCascadeSplitsVS() const { return cachedSplitsVS_; }
+    const float* GetCascadeSplitsVS() const { return frameData_.cascades.splitsVS; }
     CascadeShadowConfig& CascadeConfig() { return cascadeConfig_; }
     const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
 
@@ -66,8 +67,10 @@ public:
     void CycleSsrTechnique();
     SsrTechnique GetSsrTechnique() const { return ssrTechnique_; }
 
+    const SceneFrameData& FrameData() const { return frameData_; }
+
 private:
-    static constexpr int kCascades = 4;
+    static constexpr int kCascades = SceneFrameData::kCascades;
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize);
@@ -114,14 +117,9 @@ private:
     SceneResourceBootstrapper resources_{};
     CascadeShadowConfig cascadeConfig_{};
 
-    // Cache for the lighting pass
-    mat4  cachedLightView_[kCascades];
-    mat4  cachedLightProj_[kCascades];
-    float2 cachedScale_[kCascades];  // atlas scale
-    float2 cachedBias_[kCascades];   // atlas bias
-    float  cachedSplitsVS_[kCascades + 1] = {}; // near..far in view space
-    float  cachedNormalBiasWS_[kCascades] = {};
-    float  cachedDepthBiasNDC_[kCascades] = {};
+    // Per-frame pass inputs, filled by PrepareViews (cascade caches, view/light
+    // pointers, render settings). Pass bodies read from this.
+    SceneFrameData frameData_{};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     std::array<SceneView, kCascades> cascadeViews_{};
