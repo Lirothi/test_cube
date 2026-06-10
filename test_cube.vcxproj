@@ -155,6 +155,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="sources/app/App.cpp" />
+    <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/app/levels/DemoLevel.cpp" />
@@ -162,6 +163,7 @@
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/scene/Scene.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp" />
     <ClCompile Include="sources/app/scene/SceneResourceBootstrapper.cpp" />
     <ClCompile Include="sources/app/Systems.cpp" />
@@ -212,6 +214,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
+    <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/app/levels/DemoLevel.h" />
@@ -220,6 +223,7 @@
     <ClInclude Include="sources/app/scene/Scene.h" />
     <ClInclude Include="sources/app/scene/SceneFrameData.h" />
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
+    <ClInclude Include="sources/app/scene/SceneRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
     <ClInclude Include="sources/app/Systems.h" />

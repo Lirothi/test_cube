@@ -87,6 +87,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="sources/app/AppController.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -109,6 +112,9 @@
       <Filter>sources\app\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp">
@@ -254,6 +260,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sources/app/AppController.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>
     </ClInclude>
@@ -279,6 +288,9 @@
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/SceneRenderer.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h">

@@ -206,6 +206,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
                 renderer.Tick(deltaTime);
+                appController_.Tick(input, renderer, scene);
                 scene.Tick(deltaTime);
 
                 levelManager.Tick(deltaTime);
@@ -232,6 +233,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
+                appController_.BuildHud(renderer, scene);
                 scene.Render(&renderer);
             }
 

@@ -151,13 +151,6 @@ struct SpotLightPassConstants
     float2 invShadowSize{};
 };
 
-enum class SsrTechnique : uint32_t
-{
-    Lettier = 0,
-    LogMarch = 1,
-    Count
-};
-
 struct SsrPassConstants
 {
     mat4 view{};

@@ -2,14 +2,34 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
 #include "rendering/lighting/LightManager.h"
 
 class Camera;
+class DirectionalLight;
+class RenderableObjectBase;
 class Skybox;
-enum class SsrTechnique : uint32_t;
+
+enum class SsrTechnique : uint32_t
+{
+    Lettier = 0,
+    LogMarch = 1,
+    Count
+};
+
+// Debug/render toggles owned by the app layer (AppController maps input actions
+// to these) and snapshotted into SceneFrameData each frame.
+struct SceneRenderSettings
+{
+    SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
+    bool doFxaa = false;
+    bool debugTexMode = false;
+    bool showProfiler = false;
+};
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per
 // frame; pass bodies read from it instead of reaching back into Scene members.
@@ -36,11 +56,10 @@ struct SceneFrameData
     std::array<SceneView, LightManager::kMaxSpotLights>* spotShadowViews = nullptr;
     LightManager* lightManager = nullptr;
     Skybox* skybox = nullptr;
+    const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;
+    const DirectionalLight* dirLight = nullptr;
 
     CascadeData cascades{};
 
-    SsrTechnique ssrTechnique{};
-    bool doFxaa = false;
-    bool debugTexMode = false;
-    bool showProfiler = false;
+    SceneRenderSettings settings{};
 };

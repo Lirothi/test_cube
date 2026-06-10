@@ -1,15 +1,12 @@
 #pragma once
 
 #include <array>
-#include <functional>
 #include <memory>
 #include <vector>
 #include <wrl/client.h>
 #include <cstdint>
 
 #include "rendering/renderables/RenderableObject.h"
-#include "rendering/core/RenderGraph.h"
-#include "rendering/core/RenderPass.h"
 #include "app/camera/Camera.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
@@ -19,20 +16,12 @@
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneView.h"
 #include "app/scene/SceneFrameData.h"
-#include "app/scene/SceneResourceBootstrapper.h"
+#include "app/scene/SceneRenderer.h"
 
 class Renderer;
 
 class Scene {
 public:
-
-    static constexpr size_t kMainRenderGraphPassCount = static_cast<size_t>(RenderPass::Main_Count);
-    static constexpr size_t kEpilogueRenderGraphPassCount = static_cast<size_t>(RenderPass::Epilogue_Count)
-        - static_cast<size_t>(RenderPass::Epilogue_Overlay);
-    static constexpr size_t kGBufferRenderGraphPassCount = static_cast<size_t>(RenderPass::GBuffer_Count)
-        - static_cast<size_t>(RenderPass::GBuffer_Driver);
-    static constexpr size_t kTransparentRenderGraphPassCount = static_cast<size_t>(RenderPass::Transparent_Count)
-        - static_cast<size_t>(RenderPass::Transparent_Driver);
 
     Camera& CameraRef() { return camera_; }
     const Camera& CameraRef() const { return camera_; }
@@ -63,62 +52,25 @@ public:
     void SetDirectionalLight(DirectionalLight light);
     void SetSkybox(std::unique_ptr<Skybox> skybox);
 
-    void SetSsrTechnique(SsrTechnique technique);
-    void CycleSsrTechnique();
-    SsrTechnique GetSsrTechnique() const { return ssrTechnique_; }
+    // Render/debug toggles are owned by the app layer (AppController) and pushed
+    // here each frame; PrepareViews snapshots them into SceneFrameData.
+    void SetRenderSettings(const SceneRenderSettings& settings) { renderSettings_ = settings; }
+    const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
     const SceneFrameData& FrameData() const { return frameData_; }
 
 private:
     static constexpr int kCascades = SceneFrameData::kCascades;
 
-    void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize);
-    void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
-
-    void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
-    using BucketArray = std::array<SceneRenderQueue::ObjectBucket, 4>;
-
     void UpdateCascades(const Camera& camera, Renderer* renderer);
-
-    void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, kCascades>& cascadeViews);
-    void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView);
-    void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxSpotLights>& views);
-    void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_Skybox(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_ShoreDepth(Renderer* r, RenderGraphPassContext ctx,
-        const SceneView* view);
-    void Pass_SSR(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView);
-    void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
-    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx);
 
     void PrepareViews(Renderer* renderer);
 
-    SceneResourceBootstrapper resources_{};
+    SceneRenderer sceneRenderer_{};
     CascadeShadowConfig cascadeConfig_{};
 
     // Per-frame pass inputs, filled by PrepareViews (cascade caches, view/light
-    // pointers, render settings). Pass bodies read from this.
+    // pointers, render settings). SceneRenderer's pass bodies read from this.
     SceneFrameData frameData_{};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
@@ -127,14 +79,9 @@ private:
     LightManager lightManager_{};
     Camera camera_;
 
-    bool debugTexMode_ = false;
-    bool showProfiler_ = false;
-    bool doFxaa_ = false;
+    SceneRenderSettings renderSettings_{};
 
     DirectionalLight dirLight_;
 
     std::unique_ptr<Skybox> skyBox_;
-
-    SsrTechnique ssrTechnique_ = SsrTechnique::LogMarch;
-
 };

@@ -13,6 +13,7 @@
 #include "core/Helpers.h"
 #include "app/camera/Camera.h"
 #include "app/Systems.h"
+#include "app/AppController.h"
 #include "core/task/TaskSystem.h"
 
 class App {
@@ -21,6 +22,7 @@ public:
 
 private:
     std::unique_ptr<Systems::AppSystems> systems_;
+    AppController appController_;
     bool isRunning_ = true;
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
