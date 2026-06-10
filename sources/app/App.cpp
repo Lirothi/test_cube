@@ -131,9 +131,7 @@ void App::InitScene()
         debugDraw->Initialize(&renderer, uploadBatch.CommandList(), uploadBatch.KeepAlive());
     }
 
-    LevelLoadContext loadCtx{};
-    loadCtx.uploadCmdList = uploadBatch.CommandList();
-    loadCtx.uploadKeepAlive = uploadBatch.KeepAlive();
+    LevelLoadContext loadCtx{ uploadBatch };
 
     if (!levelManager.HasLevel(DemoLevel::kName))
     {
@@ -210,9 +208,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     UploadBatch levelBatch;
                     if (levelBatch.Begin(&renderer))
                     {
-                        LevelLoadContext levelCtx{};
-                        levelCtx.uploadCmdList = levelBatch.CommandList();
-                        levelCtx.uploadKeepAlive = levelBatch.KeepAlive();
+                        LevelLoadContext levelCtx{ levelBatch };
 
                         if (levelManager.LoadLevel(*pendingLevel, levelCtx))
                         {

@@ -4,6 +4,7 @@
 
 #include "app/scene/Scene.h"
 #include "app/Systems.h"
+#include "rendering/core/UploadBatch.h"
 
 void LevelManager::RegisterLevel(std::unique_ptr<Level> level)
 {
@@ -30,9 +31,9 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx)
         return false;
     }
 
-    if (ctx.uploadCmdList == nullptr)
+    if (!ctx.uploads.IsOpen())
     {
-        assert(false && "Level loading requires a valid upload command list");
+        assert(false && "Level loading requires an open upload batch");
         return false;
     }
 
@@ -44,7 +45,7 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx)
         activeLevel_->Unload(ctx);
     }
 
-    scene.InitializeCommonResources(&renderer, ctx.uploadCmdList, ctx.uploadKeepAlive);
+    scene.InitializeCommonResources(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
 
     activeLevel_ = it->second.get();
     activeLevelName_ = it->first;
@@ -52,7 +53,7 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx)
 
     activeLevel_->Load(ctx);
 
-    scene.FinalizeLevelLoad(&renderer, ctx.uploadCmdList, ctx.uploadKeepAlive);
+    scene.FinalizeLevelLoad(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
 
     return true;
 }

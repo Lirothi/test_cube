@@ -13,6 +13,7 @@
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/SpotLight.h"
+#include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/GpuInstancedModels.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
@@ -65,7 +66,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     lightManager.Reset();
 
     auto skybox = std::make_unique<Skybox>(L"textures/skybox.dds");
-    skybox->Init(&renderer, ctx.uploadCmdList, ctx.uploadKeepAlive);
+    skybox->Init(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
     //skybox->SetExposure(0.2f);
     scene.SetSkybox(std::move(skybox));
 

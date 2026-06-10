@@ -95,7 +95,7 @@ Acceptance: Level.h no longer includes `<d3d12.h>`; App.cpp creates no command l
 call sites disappear with the pass extraction).
 
 3.1 Fix the `Systems::Get()` mutex (see landmines) first — independent, zero-risk.
-32  `AppContext { Renderer&, Scene&, InputManager&, LevelManager&, OceanSimulation* }`
+3.2  `AppContext { Renderer&, Scene&, InputManager&, LevelManager&, OceanSimulation* }`
     passed to LevelManager/Level/DemoLevel/Camera. Keep `Systems::` as adapter for
     rendering/ocean/text modules until step 5.
 3.3 `Camera::UpdateFromInput` receives `InputManager&` explicitly.

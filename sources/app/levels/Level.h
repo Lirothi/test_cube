@@ -1,16 +1,14 @@
 #pragma once
 
-#include <string>
 #include <string_view>
-#include <vector>
 
-#include <d3d12.h>
-#include <wrl/client.h>
+class UploadBatch;
 
 struct LevelLoadContext
 {
-    ID3D12GraphicsCommandList* uploadCmdList = nullptr;
-    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive = nullptr;
+    // Open upload batch for the duration of the load; the caller submits and
+    // waits after the level finishes loading.
+    UploadBatch& uploads;
 };
 
 class Level
@@ -23,4 +21,3 @@ public:
     virtual void Unload(const LevelLoadContext& ctx);
     virtual void Tick(float deltaTime) { (void)deltaTime; }
 };
-
