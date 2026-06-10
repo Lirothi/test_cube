@@ -6,6 +6,7 @@
 
 using namespace DirectX;
 
+class InputManager;
 class Renderer;
 
 class Camera {
@@ -22,7 +23,7 @@ public:
         view_.zFar = 10000.0f;
     }
 
-    void UpdateFromInput(float dt);
+    void UpdateFromInput(InputManager& input, float dt);
 
     // Camera movement helpers
     void MoveForward(float d)   { MoveRelative(0, 0, d); }

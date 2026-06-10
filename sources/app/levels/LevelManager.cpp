@@ -3,7 +3,6 @@
 #include <cassert>
 
 #include "app/scene/Scene.h"
-#include "app/Systems.h"
 #include "rendering/core/UploadBatch.h"
 
 void LevelManager::RegisterLevel(std::unique_ptr<Level> level)
@@ -37,8 +36,8 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx)
         return false;
     }
 
-    auto& renderer = Systems::GetRenderer();
-    auto& scene = Systems::GetScene();
+    auto& renderer = ctx.renderer;
+    auto& scene = ctx.scene;
 
     if (activeLevel_)
     {

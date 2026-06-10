@@ -12,7 +12,7 @@ class Scene;
 class AppController
 {
 public:
-    void Tick(InputManager& input, Renderer& renderer, Scene& scene);
+    void Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene, const InputManager& input) const;
 
     const SceneRenderSettings& Settings() const { return settings_; }

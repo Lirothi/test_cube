@@ -1,10 +1,8 @@
 #include "app/camera/Camera.h"
-#include "app/Systems.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
 
-void Camera::UpdateFromInput(float dt) {
-    auto& input = Systems::GetInput();
+void Camera::UpdateFromInput(InputManager& input, float dt) {
     // Toggle camera rotation via the action
     const bool lookHeld = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
     if (lookHeld) {

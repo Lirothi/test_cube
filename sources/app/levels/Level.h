@@ -2,13 +2,19 @@
 
 #include <string_view>
 
+class Renderer;
+class Scene;
 class UploadBatch;
 
+// Everything a level needs to load/unload, passed explicitly instead of being
+// fetched through Systems::Get*().
 struct LevelLoadContext
 {
     // Open upload batch for the duration of the load; the caller submits and
     // waits after the level finishes loading.
     UploadBatch& uploads;
+    Renderer& renderer;
+    Scene& scene;
 };
 
 class Level

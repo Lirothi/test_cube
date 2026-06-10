@@ -107,6 +107,7 @@ void App::InitScene()
     assert(systems_);
 
     auto& renderer = systems_->renderer;
+    auto& scene = systems_->scene;
     auto& input = systems_->input;
     auto& levelManager = systems_->levelManager;
 
@@ -131,7 +132,7 @@ void App::InitScene()
         debugDraw->Initialize(&renderer, uploadBatch.CommandList(), uploadBatch.KeepAlive());
     }
 
-    LevelLoadContext loadCtx{ uploadBatch };
+    LevelLoadContext loadCtx{ uploadBatch, renderer, scene };
 
     if (!levelManager.HasLevel(DemoLevel::kName))
     {
@@ -198,7 +199,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
                 renderer.Tick(deltaTime);
-                appController_.Tick(input, renderer, scene);
+                appController_.Tick(input, renderer, scene, deltaTime);
                 scene.Tick(deltaTime);
 
                 levelManager.Tick(deltaTime);
@@ -208,7 +209,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     UploadBatch levelBatch;
                     if (levelBatch.Begin(&renderer))
                     {
-                        LevelLoadContext levelCtx{ levelBatch };
+                        LevelLoadContext levelCtx{ levelBatch, renderer, scene };
 
                         if (levelManager.LoadLevel(*pendingLevel, levelCtx))
                         {

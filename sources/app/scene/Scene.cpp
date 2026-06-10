@@ -245,8 +245,6 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
-    camera_.UpdateFromInput(deltaTime);
-
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
     TaskSystem::ParallelFor(objects_.size(),

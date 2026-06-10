@@ -6,23 +6,22 @@
 namespace Systems {
 
 namespace {
+    // Set once in App::Run before any worker threads start and cleared after they
+    // stop, so plain reads are safe — Get() is called from task threads every frame
+    // and must not take a lock.
     AppSystems* gSystems = nullptr;
-    std::mutex gSystemsMutex;
 }
 
 void Init(AppSystems* systems) {
-    std::lock_guard<std::mutex> lock(gSystemsMutex);
     assert(gSystems == nullptr && "Systems already initialized");
     gSystems = systems;
 }
 
 void Shutdown() {
-    std::lock_guard<std::mutex> lock(gSystemsMutex);
     gSystems = nullptr;
 }
 
 AppSystems& Get() {
-    std::lock_guard<std::mutex> lock(gSystemsMutex);
     assert(gSystems != nullptr && "Systems not initialized");
     return *gSystems;
 }

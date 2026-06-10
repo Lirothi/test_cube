@@ -10,7 +10,7 @@
 #include "text/TextManager.h"
 #include "core/math/Math.h"
 
-void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene)
+void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime)
 {
     if (input.WasActionPressed("ToggleBindings"))
     {
@@ -77,6 +77,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene)
     }
 
     scene.SetRenderSettings(settings_);
+
+    // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
+    scene.CameraRef().UpdateFromInput(input, deltaTime);
 }
 
 void AppController::BuildHud(Renderer& renderer, const Scene& scene, const InputManager& input) const

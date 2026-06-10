@@ -6,7 +6,6 @@
 
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
-#include "app/Systems.h"
 #include "core/math/Math.h"
 #include "rendering/debug/DebugGrid.h"
 #include "rendering/RenderLayers.h"
@@ -59,8 +58,8 @@ private:
 
 void DemoLevel::Load(const LevelLoadContext& ctx)
 {
-    auto& renderer = Systems::GetRenderer();
-    auto& scene = Systems::GetScene();
+    auto& renderer = ctx.renderer;
+    auto& scene = ctx.scene;
     auto& lightManager = scene.GetLightManager();
 
     lightManager.Reset();
