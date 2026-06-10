@@ -13,6 +13,7 @@
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h"
+#include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
@@ -1238,7 +1239,6 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         LightingPassConstants constants{};
         const mat4& view = camera.GetViewMatrix();
         const mat4& invView = camera.GetInvViewMatrix();
@@ -1268,34 +1268,14 @@ void Scene::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
 
-        resources_.WriteLightingConstants(constants, (uint8_t*)cb.cpu);
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
-            D.gbSRV[0],
-            D.gbSRV[1],
-            D.gbSRV[2],
-            D.gbSRV[3],
-            D.depthSRV,
-            D.shadowSRV
-        };
-        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
-
-        lighting->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
-        if (groupsX > 0 && groupsY > 0)
-        {
-            t.cl->Dispatch(groupsX, groupsY, 1);
-        }
-        renderer->UAVBarrier(t.cl, D.light.Get());
+        RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV },
+            { D.lightUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.light.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1358,7 +1338,6 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         SpotLightPassConstants constants{};
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
@@ -1372,35 +1351,14 @@ void Scene::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invShadowSize = float2(invRes, invRes);
         constants.lightCount = static_cast<uint32_t>(spotLightCount);
 
-        resources_.WriteSpotLightConstants(constants, (uint8_t*)cb.cpu);
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
-            D.gbSRV[0],
-            D.gbSRV[1],
-            D.gbSRV[2],
-            D.gbSRV[3],
-            D.depthSRV,
-            D.spotShadowSRV,
-            spotLightSrvHandle
-        };
-        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
-
-        spotMaterial->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
-        if (groupsX > 0 && groupsY > 0)
-        {
-            t.cl->Dispatch(groupsX, groupsY, 1);
-        }
-        renderer->UAVBarrier(t.cl, D.light.Get());
+        RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSpotLightConstants(constants, dest); },
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle },
+            { D.lightUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.light.Get());
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1450,7 +1408,6 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         PointLightPassConstants constants{};
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
@@ -1461,34 +1418,14 @@ void Scene::Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         constants.lightCount = static_cast<uint32_t>(pointLights.size());
 
-        resources_.WritePointLightConstants(constants, (uint8_t*)cb.cpu);
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu;
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6> srvs = {
-            D.gbSRV[0],
-            D.gbSRV[1],
-            D.gbSRV[2],
-            D.gbSRV[3],
-            D.depthSRV,
-            pointLightSrvHandle
-        };
-        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.lightUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
-
-        pointMaterial->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
-        if (groupsX > 0 && groupsY > 0)
-        {
-            t.cl->Dispatch(groupsX, groupsY, 1);
-        }
-        renderer->UAVBarrier(t.cl, D.light.Get());
+        RecordComputeDispatch(renderer, t.cl, pointMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WritePointLightConstants(constants, dest); },
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle },
+            { D.lightUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.light.Get());
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1540,7 +1477,6 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         SsrPassConstants constants{};
         const mat4& view = camera.GetViewMatrix();
         const mat4& proj = camera.GetProjMatrix();
@@ -1562,25 +1498,14 @@ void Scene::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
         constants.technique = static_cast<uint32_t>(frameData_.ssrTechnique);
 
-        resources_.WriteSsrConstants(constants, (uint8_t*)cb.cpu);
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu;
-        rc.table[0] = renderer->StageSrvUavTable({ D.lightSRV, D.gbSRV[1], D.depthSRV }).gpu; // t0 Light, t1 GB1, t2 Depth
-        rc.table[1] = renderer->StageSrvUavTable({ D.ssrUAV }).gpu; // u0 output
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
-
-        ssrMaterial->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT ssrWidth = renderer->GetSsrTextureWidth();
-        const UINT ssrHeight = renderer->GetSsrTextureHeight();
-        const UINT groupsX = (ssrWidth + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (ssrHeight + kGroupSize - 1u) / kGroupSize;
-        t.cl->Dispatch(groupsX, groupsY, 1);
-        renderer->UAVBarrier(t.cl, D.ssr.Get());
+        RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
+            { D.lightSRV, D.gbSRV[1], D.depthSRV }, // t0 Light, t1 GB1, t2 Depth
+            { D.ssrUAV },                           // u0 output
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
+            D.ssr.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1593,11 +1518,8 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSRBlur);
         const auto& D = renderer->GetDeferredForFrame();
-        constexpr UINT kGroupSize = 8;
         const UINT ssrWidth = renderer->GetSsrTextureWidth();
         const UINT ssrHeight = renderer->GetSsrTextureHeight();
-        const UINT groupsX = (ssrWidth + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (ssrHeight + kGroupSize - 1u) / kGroupSize;
 
         // Horizontal pass
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1611,45 +1533,30 @@ void Scene::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx)
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
         const float invSsrWidth = ssrWidth > 0 ? (1.0f / static_cast<float>(ssrWidth)) : 0.0f;
         BlurPassConstants blurConstants{};
         blurConstants.direction = float2(invSsrWidth, 0.0f);
         blurConstants.radius = 1.0f;
-        resources_.WriteBlurConstants(blurConstants, (uint8_t*)cb.cpu);
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        rc.cbv[0] = cb.gpu;
-        rc.table[0] = renderer->StageSrvUavTable({ D.ssrSRV }).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.ssrBlurUAV }).gpu;
-        const auto samplerDescsX = std::array{ *SamplerManager::LinearClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsX);
-
-        blurMaterial->Bind(t.cl, rc);
-        t.cl->Dispatch(groupsX, groupsY, 1);
-        renderer->UAVBarrier(t.cl, D.ssrBlur.Get());
+        RecordComputeDispatch(renderer, t.cl, blurMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteBlurConstants(blurConstants, dest); },
+            { D.ssrSRV }, { D.ssrBlurUAV }, samplerTable,
+            ssrWidth, ssrHeight,
+            D.ssrBlur.Get());
 
         // Vertical pass
         renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         const float invSsrHeight = ssrHeight > 0 ? (1.0f / static_cast<float>(ssrHeight)) : 0.0f;
         blurConstants.direction = float2(0.0f, invSsrHeight);
-        resources_.WriteBlurConstants(blurConstants, (uint8_t*)cb.cpu);
-
-        rc.ClearFast();
-        rc.cbv[0] = cb.gpu;
-        rc.table[0] = renderer->StageSrvUavTable({ D.ssrBlurSRV }).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.ssrUAV }).gpu;
-        const auto samplerDescsY = std::array{ *SamplerManager::LinearClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescsY);
-
-        blurMaterial->Bind(t.cl, rc);
-        t.cl->Dispatch(groupsX, groupsY, 1);
-        renderer->UAVBarrier(t.cl, D.ssr.Get());
+        RecordComputeDispatch(renderer, t.cl, blurMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteBlurConstants(blurConstants, dest); },
+            { D.ssrBlurSRV }, { D.ssrUAV }, samplerTable,
+            ssrWidth, ssrHeight,
+            D.ssr.Get());
     }
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1690,7 +1597,6 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
         ComposePassConstants constants{};
         constants.invView = camera.GetInvViewMatrix();
         constants.invProj = camera.GetInvProjMatrix();
@@ -1699,36 +1605,15 @@ void Scene::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 
-        resources_.WriteComposeConstants(constants, (uint8_t*)cb.cpu);
-
-        const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs = {
-            D.lightSRV,
-            D.gbSRV[2],
-            D.gbSRV[0],
-            D.gbSRV[1],
-            D.depthSRV,
-            skybox->GetTex()->GetSRVCPU(),
-            D.ssrSRV
-        };
-
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-        rc.cbv[0] = cb.gpu;
-        rc.table[0] = renderer->StageSrvUavTable(srvs).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.sceneUAV }).gpu;
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+        RecordComputeDispatch(renderer, t.cl, composeMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteComposeConstants(constants, dest); },
+            { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV, skybox->GetTex()->GetSRVCPU(), D.ssrSRV },
+            { D.sceneUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.scene.Get());
 
-        composeMaterial->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetRenderWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetRenderHeight() + kGroupSize - 1u) / kGroupSize;
-        if (groupsX > 0 && groupsY > 0)
-        {
-            t.cl->Dispatch(groupsX, groupsY, 1);
-        }
-
-        renderer->UAVBarrier(t.cl, D.scene.Get());
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
@@ -1852,15 +1737,6 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
         renderer->BindDescriptorHeaps(t.cl);
 
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& rc = h.ref();
-
-        D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
-        rc.table[0] = renderer->StageSrvUavTable({ tonemapSrc }).gpu;
-        rc.table[1] = renderer->StageSrvUavTable({ D.tonemapUAV }).gpu;
-        const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
-        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
-
         auto tonemapMaterial = resources_.GetTonemapMaterial();
         if (!tonemapMaterial)
         {
@@ -1868,25 +1744,21 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
             return;
         }
 
-        tonemapMaterial->Bind(t.cl, rc);
-        constexpr UINT kGroupSize = 8;
-        const UINT groupsX = (renderer->GetWidth() + kGroupSize - 1u) / kGroupSize;
-        const UINT groupsY = (renderer->GetHeight() + kGroupSize - 1u) / kGroupSize;
-        if (groupsX > 0 && groupsY > 0)
-        {
-            t.cl->Dispatch(groupsX, groupsY, 1);
-        }
-
-        renderer->UAVBarrier(t.cl, D.tonemap.Get());
+        const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
+        const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
+        RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(),
+            { tonemapSrc }, { D.tonemapUAV }, samplerTable,
+            renderer->GetWidth(), renderer->GetHeight(),
+            D.tonemap.Get());
 
         bool ranFxaa = false;
         auto fxaaMaterial = resources_.GetFxaaMaterial();
         const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
-        if (fxaaMaterial && fxaaCbSize > 0 && groupsX > 0 && groupsY > 0 && frameData_.doFxaa)
+        if (fxaaMaterial && fxaaCbSize > 0 && renderer->GetWidth() > 0 && renderer->GetHeight() > 0 && frameData_.doFxaa)
         {
             renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-            auto cb = renderer->GetFrameResource()->AllocDynamic(fxaaCbSize, Renderer::kConstantBufferAlignment);
             const float width = static_cast<float>(renderer->GetWidth());
             const float height = static_cast<float>(renderer->GetHeight());
             const float2 invResolution = float2(width > 0.0f ? 1.0f / width : 0.0f, height > 0.0f ? 1.0f / height : 0.0f);
@@ -1906,20 +1778,11 @@ void Scene::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
             fxaaConstants.edgeThreshold = edgeThreshold;
             fxaaConstants.edgeThresholdMin = edgeThresholdMin;
 
-            resources_.WriteFxaaConstants(fxaaConstants, (uint8_t*)cb.cpu);
-
-            auto fxaaCtx = renderer->GetRenderContextPool()->Acquire();
-            auto& fxaaRC = fxaaCtx.ref();
-            fxaaRC.cbv[0] = cb.gpu;
-            fxaaRC.table[0] = renderer->StageSrvUavTable({ D.tonemapSRV }).gpu;
-            fxaaRC.table[1] = renderer->StageSrvUavTable({ D.fxaaUAV }).gpu;
-            const auto fxaaSamplers = std::array{ *SamplerManager::LinearClamp() };
-            fxaaRC.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, fxaaSamplers);
-
-            fxaaMaterial->Bind(t.cl, fxaaRC);
-            t.cl->Dispatch(groupsX, groupsY, 1);
-
-            renderer->UAVBarrier(t.cl, D.fxaa.Get());
+            RecordComputeDispatch(renderer, t.cl, fxaaMaterial.get(), fxaaCbSize,
+                [&](uint8_t* dest) { resources_.WriteFxaaConstants(fxaaConstants, dest); },
+                { D.tonemapSRV }, { D.fxaaUAV }, samplerTable,
+                renderer->GetWidth(), renderer->GetHeight(),
+                D.fxaa.Get());
             ranFxaa = true;
         }
 

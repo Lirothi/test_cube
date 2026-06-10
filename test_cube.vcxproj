@@ -245,6 +245,7 @@
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
     <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
     <ClInclude Include="sources/ocean/OceanSpectrum.h" />
+    <ClInclude Include="sources/rendering/core/ComputeDispatch.h" />
     <ClInclude Include="sources/rendering/core/FrameResource.h" />
     <ClInclude Include="sources/rendering/core/RenderContext.h" />
     <ClInclude Include="sources/rendering/core/RenderContextPool.h" />

@@ -353,6 +353,9 @@
     <ClInclude Include="sources/ocean/OceanSpectrum.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/ComputeDispatch.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameResource.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
