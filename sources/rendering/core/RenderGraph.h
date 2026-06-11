@@ -13,10 +13,32 @@
 #include "core/containers/inl_vector.h"
 #include "rendering/core/RenderPass.h"
 
+// A resource state a pass declares it needs before it runs. Declarations are
+// registered as first-use states on the pass's main command list; the actual
+// transition barriers are injected between command lists at submit time by the
+// ResourceStateTracker machinery, exactly like manual Renderer::Transition calls.
+struct ResourceStateDecl {
+    ID3D12Resource* resource = nullptr;   // null entries are skipped
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+};
+using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 8>;
+
 struct RenderGraphPassContext {
     Renderer* renderer = nullptr;
     size_t      batchIndex = (size_t)-1;
     RenderPass  pass{};
+    const ResourceStateDeclList* declares = nullptr;
+
+    // Registers the pass's declared resource states on the given (just-opened)
+    // command list. Call once, right after BeginThreadCommandList, on the command
+    // list that must observe the declared states first.
+    void ApplyDeclaredStates(ID3D12GraphicsCommandList* cl) const
+    {
+        if (!renderer || !declares || !cl) { return; }
+        for (const ResourceStateDecl& decl : *declares) {
+            renderer->Transition(cl, decl.resource, decl.state);
+        }
+    }
 };
 
 template <std::size_t MaxPasses>
@@ -50,6 +72,7 @@ public:
         ExecFn exec;     // pass body
         DependencyList mtDeps;  // runtime dependencies (which passes must complete)
         SuccessorList successors;
+        ResourceStateDeclList declares; // resource states the pass needs on entry
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
@@ -58,7 +81,7 @@ public:
         ExecFn fn)
     {
         CPU_SCOPE(ProfilerScopes::kAddPass);
-        return AddPassInternal(name, prereqs, std::initializer_list<size_t>{}, std::move(fn));
+        return AddPassInternal(name, prereqs, std::initializer_list<size_t>{}, {}, std::move(fn));
     }
 
     size_t AddPass(RenderPass name,
@@ -66,7 +89,18 @@ public:
         ExecFn fn)
     {
         CPU_SCOPE(ProfilerScopes::kAddPass);
-        return AddPassInternal(name, prereqs, DependencyList{}, std::move(fn));
+        return AddPassInternal(name, prereqs, DependencyList{}, {}, std::move(fn));
+    }
+
+    // With resource declarations: the pass body calls ctx.ApplyDeclaredStates(cl)
+    // on its main command list instead of issuing manual Transition calls.
+    size_t AddPass(RenderPass name,
+        std::initializer_list<size_t> prereqs,
+        std::initializer_list<ResourceStateDecl> declares,
+        ExecFn fn)
+    {
+        CPU_SCOPE(ProfilerScopes::kAddPass);
+        return AddPassInternal(name, prereqs, std::initializer_list<size_t>{}, declares, std::move(fn));
     }
 
     // Overload with explicit mt-deps (more precise)
@@ -75,7 +109,16 @@ public:
         std::initializer_list<size_t> mtDeps,
         ExecFn fn)
     {
-        return AddPassInternal(name, prereqs, mtDeps, std::move(fn));
+        return AddPassInternal(name, prereqs, mtDeps, {}, std::move(fn));
+    }
+
+    size_t AddPassMT(RenderPass name,
+        std::initializer_list<size_t> prereqs,
+        std::initializer_list<size_t> mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        ExecFn fn)
+    {
+        return AddPassInternal(name, prereqs, mtDeps, declares, std::move(fn));
     }
 
     size_t AddPassMT(RenderPass name,
@@ -83,7 +126,7 @@ public:
         const DependencyList& mtDeps,
         ExecFn fn)
     {
-        return AddPassInternal(name, prereqs, mtDeps, std::move(fn));
+        return AddPassInternal(name, prereqs, mtDeps, {}, std::move(fn));
     }
 
     struct FlatNode { size_t pass; size_t batch; };
@@ -126,6 +169,7 @@ public:
                 ctx.renderer = renderer;
                 ctx.batchIndex = n.batch;
                 ctx.pass = passes_[passIdx].name;
+                ctx.declares = &passes_[passIdx].declares;
                 passes_[passIdx].exec(ctx);
             }, passes_[passIdx].mtDeps.size());
 
@@ -219,6 +263,7 @@ private:
                     ctx.renderer = renderer;
                     ctx.batchIndex = batch;
                     ctx.pass = p.name;
+                    ctx.declares = &p.declares;
                     p.exec(ctx);
                 }
                 else if (outFlat != nullptr) {
@@ -242,6 +287,7 @@ private:
     size_t AddPassInternal(RenderPass name,
         const RangePrereqs& prereqs,
         const RangeDeps& deps,
+        std::initializer_list<ResourceStateDecl> declares,
         ExecFn fn)
     {
         assert(passesNum_ < MaxPasses && "RenderGraph capacity exceeded");
@@ -255,8 +301,15 @@ private:
         assert(prereqCopyOk && depCopyOk && "RenderGraph dependency list capacity exceeded");
         (void)prereqCopyOk;
         (void)depCopyOk;
+
+        assert(declares.size() <= p.declares.capacity() && "RenderGraph declaration list capacity exceeded");
+        p.declares.clear_fast();
+        for (const ResourceStateDecl& decl : declares) {
+            if (p.declares.size() >= p.declares.capacity()) { break; }
+            p.declares.push_back(decl);
+        }
+
         p.exec = std::move(fn);
-        //passes_.push_back(std::move(p));
 
         for (size_t prereq : p.prereqs) {
             if (prereq < passesNum_) {
@@ -268,14 +321,10 @@ private:
 
         if (newIndex < pendingSuccessors_.size())
         {
-	        for (size_t dependent : pendingSuccessors_[newIndex]) {
-	        	p.successors.push_back(dependent);
-	        }
-        	pendingSuccessors_[newIndex].clear_fast();
-        }
-        else
-        {
-            assert(newIndex < pendingSuccessors_.size() && "RenderGraph capacity exceeded");
+            for (size_t dependent : pendingSuccessors_[newIndex]) {
+                p.successors.push_back(dependent);
+            }
+            pendingSuccessors_[newIndex].clear_fast();
         }
 
         return newIndex;

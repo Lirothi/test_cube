@@ -93,6 +93,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     renderer->BeginSubmitTimeline();
 
+    // The deferred targets are stable between BeginFrame and Present, so pass
+    // declarations capture the frame's resources directly. The declared states
+    // are registered as first-use states on each pass's main command list; the
+    // actual barriers are injected between command lists at submit time.
+    const auto& D = renderer->GetDeferredForFrame();
+    constexpr D3D12_RESOURCE_STATES kSrvAll =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
     MainRenderGraph rg;
     auto pClear = rg.AddPass(RenderPass::Main_PrologueClear, {},
@@ -113,11 +121,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         });
 
     auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShoreDepth },
+        { { D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
             Pass_CSM(renderer, ctx, *frame_->cascadeViews);
         });
 
+    // No declarations: the per-light command lists are recorded in parallel with
+    // no deterministic submit order inside the batch, so each list must register
+    // the atlas state itself (first-use in whichever list lands first).
     auto pSpotShadow = rg.AddPass(RenderPass::Main_SpotShadows, { pShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
@@ -131,44 +143,87 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         });
 
     auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
+        { { D.gb0.Get(), kSrvAll },
+          { D.gb1.Get(), kSrvAll },
+          { D.gb2.Get(), kSrvAll },
+          { D.gbVelocity.Get(), kSrvAll },
+          { D.depth.Get(), kSrvAll },
+          { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
             Pass_Lighting(renderer, ctx, *frame_->camera);
         });
 
     auto pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
+        { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.gb0.Get(), kSrvAll },
+          { D.gb1.Get(), kSrvAll },
+          { D.gb2.Get(), kSrvAll },
+          { D.gbVelocity.Get(), kSrvAll },
+          { D.depth.Get(), kSrvAll },
+          { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
             Pass_SpotLights(renderer, ctx, *frame_->camera);
         });
 
     auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights },
+        { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.gb0.Get(), kSrvAll },
+          { D.gb1.Get(), kSrvAll },
+          { D.gb2.Get(), kSrvAll },
+          { D.gbVelocity.Get(), kSrvAll },
+          { D.depth.Get(), kSrvAll } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
             Pass_PointLights(renderer, ctx, *frame_->camera);
         });
 
     auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
+        { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSkybox);
             Pass_Skybox(renderer, ctx, *frame_->camera);
         });
 
     auto pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
+        { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassSSR);
             Pass_SSR(renderer, ctx, *frame_->camera);
         });
 
+    // First-use states only; the blur ping-pongs SSR<->SSRBlur states between
+    // its two dispatches inside the pass body.
     auto pBlur = rg.AddPass(RenderPass::Main_SSRBlur, { pSSR },
+        { { D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassSSRBlur); Pass_SSR_Blur(renderer, ctx); });
 
+    // First-use states only; Compose transitions scene back to RENDER_TARGET
+    // for the transparent pass at the end of its body.
     auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur },
+        { { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCompose);
             Pass_Compose(renderer, ctx, *frame_->camera);
         });
 
+    // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST
+    // flips mid-list) before rebinding the targets — inherently ordered work that
+    // first-use declarations cannot express.
     auto pTransp = rg.AddPass(RenderPass::Main_Transparent, { pCompose },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
@@ -176,6 +231,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         });
 
     auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pTransp },
+        { { D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
             Pass_DebugDraw(renderer, ctx, *frame_->camera);
@@ -183,7 +240,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     // Ensure tonemapping runs after the debug draw pass so the resolved backbuffer
     // always includes any debug geometry submitted during rendering.
+    // Only the unconditional outputs are declared; the tonemap source (scene or
+    // DLSS output) and the backbuffer copy are handled inside the pass body.
     auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pDebugDraw },
+        { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
 
     rg.AddPass(RenderPass::Main_Debug, { pTone },
@@ -470,8 +531,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     SetCommandListName(d.cl, ctx.pass);
     {
         GPU_SCOPE(d.cl, ProfilerScopes::kPassCSM);
-        const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(d.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        ctx.ApplyDeclaredStates(d.cl);
         renderer->BindShadowTarget(d.cl, 0, /*clear=*/true);
     }
     renderer->EndThreadCommandList(d, ctx.batchIndex);
@@ -660,20 +720,21 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView)
 {
+    const auto& D = renderer->GetDeferredForFrame();
+
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
-    rgGB.AddPass(RenderPass::GBuffer_Driver, {}, [this, renderer](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_Driver, {},
+        { { D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+        [this, renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kGBufferDriver);
-
-            const auto& D = renderer->GetDeferredForFrame();
-            renderer->Transition(driver.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(driver.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(driver.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-
+            sub.ApplyDeclaredStates(driver.cl);
             renderer->BindGBuffer(driver.cl, Renderer::ClearMode::ColorDepth);
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
@@ -721,15 +782,7 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassLighting);
         const auto& D = renderer->GetDeferredForFrame();
-        const D3D12_RESOURCE_STATES srvState =
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        renderer->Transition(t.cl, D.gb0.Get(), srvState);
-        renderer->Transition(t.cl, D.gb1.Get(), srvState);
-        renderer->Transition(t.cl, D.gb2.Get(), srvState);
-        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
-        renderer->Transition(t.cl, D.depth.Get(), srvState);
-        renderer->Transition(t.cl, D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.ApplyDeclaredStates(t.cl);
 
         const DirectionalLight& dirLight = *frame_->dirLight;
         LightingPassConstants constants{};
@@ -796,16 +849,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotLights);
         const auto& D = renderer->GetDeferredForFrame();
-        const D3D12_RESOURCE_STATES srvState =
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(t.cl, D.gb0.Get(), srvState);
-        renderer->Transition(t.cl, D.gb1.Get(), srvState);
-        renderer->Transition(t.cl, D.gb2.Get(), srvState);
-        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
-        renderer->Transition(t.cl, D.depth.Get(), srvState);
-        renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.ApplyDeclaredStates(t.cl);
 
         const auto& spotLights = lightManager.SpotLights();
         for (size_t i = 0; i < spotLightCount; ++i)
@@ -875,14 +919,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPointLights);
 
         const auto& D = renderer->GetDeferredForFrame();
-        const D3D12_RESOURCE_STATES srvState =
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(t.cl, D.gb0.Get(), srvState);
-        renderer->Transition(t.cl, D.gb1.Get(), srvState);
-        renderer->Transition(t.cl, D.gb2.Get(), srvState);
-        renderer->Transition(t.cl, D.gbVelocity.Get(), srvState);
-        renderer->Transition(t.cl, D.depth.Get(), srvState);
+        ctx.ApplyDeclaredStates(t.cl);
 
         for (size_t i = 0; i < pointLights.size(); ++i)
         {
@@ -933,10 +970,7 @@ void SceneRenderer::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSkybox);
 
-        const auto& D = renderer->GetDeferredForFrame();
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+        ctx.ApplyDeclaredStates(t.cl);
 
         // RTVs = Light + Velocity, DSV = GBuffer Depth (read-only), no clears
         renderer->BindLightTargetWithVelocity(t.cl, Renderer::ClearMode::None, true);
@@ -956,11 +990,7 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSR);
         const auto& D = renderer->GetDeferredForFrame();
-
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.ApplyDeclaredStates(t.cl);
 
         auto ssrMaterial = resources_.GetSsrMaterial();
         const UINT cbSize = resources_.GetSsrCBSizeBytes();
@@ -1014,9 +1044,8 @@ void SceneRenderer::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx
         const UINT ssrWidth = renderer->GetSsrTextureWidth();
         const UINT ssrHeight = renderer->GetSsrTextureHeight();
 
-        // Horizontal pass
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // Horizontal pass (first-use states come from the pass declarations)
+        ctx.ApplyDeclaredStates(t.cl);
 
         auto blurMaterial = resources_.GetBlurMaterial();
         const UINT cbSize = resources_.GetBlurCBSizeBytes();
@@ -1062,14 +1091,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassCompose);
         const auto& D = renderer->GetDeferredForFrame();
-
-        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.ApplyDeclaredStates(t.cl);
 
         const float width = static_cast<float>(renderer->GetRenderWidth());
         const float height = static_cast<float>(renderer->GetRenderHeight());
@@ -1195,8 +1217,7 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebugDraw);
-        renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        ctx.ApplyDeclaredStates(t.cl);
         renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
 
         debugDraw->Render(renderer, t.cl, camera.GetViewMatrix(), camera.GetProjMatrix());
@@ -1212,6 +1233,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl);
         bool ranDlss = false;
         if (renderer->IsDlssActive())
         {
@@ -1225,8 +1247,6 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
-        renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(t.cl, D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         renderer->BindDescriptorHeaps(t.cl);
 
