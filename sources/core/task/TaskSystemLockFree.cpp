@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <thread>
 
@@ -143,12 +145,16 @@ void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
     nextFree_ = nullptr;
 }
 
-void TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
+bool TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
 {
     if (!dependent) {
-        return;
+        return true; // nothing to register
+    }
+    if (dependents_.size() >= dependents_.capacity()) {
+        return false; // outbound fan-out exceeds the inline capacity
     }
     dependents_.push_back(dependent);
+    return true;
 }
 
 void TaskSystem::TaskWithDeps::IncrementDependency()
@@ -643,7 +649,13 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
             continue;
         }
         handle->IncrementDependency();
-        dep->AddDependent(handle);
+        if (!dep->AddDependent(handle)) {
+            // Fan-out overflow is fatal in every build config: the alternatives
+            // are an out-of-bounds write (raw push) or a permanent hang of the
+            // dependent (silent drop — pendingDeps_ already counts this edge).
+            assert(false && "Task dependent fan-out exceeds dependents_ capacity");
+            std::abort();
+        }
         registered = true;
     }
 

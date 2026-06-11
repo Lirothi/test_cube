@@ -29,7 +29,11 @@ public:
         TaskWithDeps(TaskSystem& owner, TaskKind kind, std::size_t depCapacity);
         virtual ~TaskWithDeps() = default;
 
-        void AddDependent(TaskHandle dependent);
+        // Returns false when the fixed dependents_ capacity is exhausted. The
+        // caller must treat that as fatal: the dependent's pendingDeps_ is
+        // already counted, so silently dropping the edge would hang it forever,
+        // and a raw push would write out of bounds in Release.
+        [[nodiscard]] bool AddDependent(TaskHandle dependent);
         void IncrementDependency();
         void DependencySatisfied();
         void NotifyDependents();
