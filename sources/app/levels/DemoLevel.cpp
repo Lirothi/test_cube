@@ -305,9 +305,22 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
     scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
-    if (j.contains("camera") && j["camera"].contains("position"))
+    if (j.contains("camera"))
     {
-        scene.CameraRef().SetPosition(ToFloat3(j["camera"]["position"], float3(0.0f, 1.0f, -10.0f)));
+        const json& cam = j["camera"];
+        Camera& camera = scene.CameraRef();
+        if (cam.contains("position"))
+        {
+            camera.SetPosition(ToFloat3(cam["position"], float3(0.0f, 1.0f, -10.0f)));
+        }
+        if (cam.contains("hfovDeg"))
+        {
+            camera.SetHFov(DirectX::XMConvertToRadians(cam["hfovDeg"].get<float>()));
+        }
+        if (cam.contains("zNear") || cam.contains("zFar"))
+        {
+            camera.SetZNearFar(cam.value("zNear", camera.GetZNear()), cam.value("zFar", camera.GetZFar()));
+        }
     }
 }
 

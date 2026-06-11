@@ -283,14 +283,9 @@ void Scene::PrepareViews(Renderer* renderer)
         return;
     }
 
-    constexpr float kHFovRadians = XMConvertToRadians(90.0f);
-    const float zNear = 0.01f;
-    const float zFar = 10000.0f;
     const float3 cameraPosition = camera_.GetPosition();
     const float3 cameraDirection = camera_.GetDirection();
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    camera_.SetHFov(kHFovRadians);
-    camera_.SetZNearFar(zNear, zFar);
     camera_.CalcMatrices(renderer);
     renderer->UpdateDlssCameraData(camera_);
 
