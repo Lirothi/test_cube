@@ -18,6 +18,10 @@ Already DONE and verified:
   returns bool; `SetDependencies` aborts on overflow in all build configs.
 - ✅ Step 2: `Wait()` branches on `workerIndex_` — main thread helps then blocks on the
   futex; worker context never parks (help, 64x `_mm_pause`, yield, re-check loop).
+- ✅ Step 3: `availableTasks_` increments BEFORE the queue push (Schedule and Stop), so
+  the counter stays >= the item count and the unsigned wrap is gone.
+- ✅ Step 4: `activeTasks_` removed; `WaitForAll` predicate is `outstandingTasks_ == 0`.
+  (The inactive TBB backend keeps its own counter — out of scope.)
 
 ## How to use
 
@@ -79,7 +83,7 @@ Fix: branch on `workerIndex_` in `Wait()` —
   Windows `WaitOnAddress` with a ~100µs timeout, or a brief `std::this_thread::yield`
   — and re-check the queue }.
 
-## Step 3 — `availableTasks_` transient underflow
+## ✅ DONE — Step 3 — `availableTasks_` transient underflow
 
 A worker can pop a task before the producer's `fetch_add` lands (`Schedule` pushes,
 then increments), wrapping the `size_t` counter to huge values briefly. Self-corrects,
@@ -92,7 +96,7 @@ Fix options (equivalent strength, pick the cleaner diff):
 - consumer-side: treat the counter as permits — acquire (CAS down, only if > 0) before
   popping, with the producer incrementing after a successful push.
 
-## Step 4 (was 1) — remove the redundant `activeTasks_` counter
+## ✅ DONE — Step 4 (was 1) — remove the redundant `activeTasks_` counter
 
 A task is "outstanding" from `Submit` until `FinishTask`; the active window is strictly
 inside that, and each task decrements `activeTasks_` before `outstandingTasks_`. So the

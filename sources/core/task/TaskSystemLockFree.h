@@ -170,8 +170,9 @@ private:
     std::vector<std::thread> workers_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
+    // A task is outstanding from Submit until FinishTask; its execution window is
+    // strictly inside that, so this single counter covers the WaitForAll predicate.
     std::atomic<std::size_t> outstandingTasks_{0};
-    std::atomic<std::size_t> activeTasks_{0};
     mutable std::mutex waitMutex_;
     std::condition_variable waitCv_;
     std::mutex trackedFrameMutex_;

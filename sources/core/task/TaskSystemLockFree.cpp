@@ -426,7 +426,6 @@ void TaskSystem::RunTask(TaskWithDeps* task)
         return;
     }
 
-    activeTasks_.fetch_add(1, std::memory_order_acq_rel);
     try {
         task->Execute();
     } catch (...) {
@@ -443,7 +442,6 @@ void TaskSystem::RunTask(TaskWithDeps* task)
 
 void TaskSystem::FinishTask(TaskWithDeps* task)
 {
-    activeTasks_.fetch_sub(1, std::memory_order_acq_rel);
     if (outstandingTasks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         // Last outstanding task: wake WaitForAll. The lock closes the race where
         // a waiter checks the predicate, we decrement + notify, and only then the
@@ -471,10 +469,14 @@ void TaskSystem::Schedule(TaskWithDeps* task)
         return;
     }
 
+    // Count before publishing: a consumer can pop the task the instant push
+    // completes, and decrementing before our increment would wrap the unsigned
+    // counter. Counting first keeps it >= the real item count at all times; the
+    // worst case is a brief spurious worker wake during the increment->push gap.
+    availableTasks_.fetch_add(1, std::memory_order_release);
     while (!queue_->push(task)) {
         std::this_thread::yield();
     }
-    availableTasks_.fetch_add(1, std::memory_order_release);
     availableTasks_.notify_one();
 }
 
@@ -589,10 +591,10 @@ void TaskSystem::Stop()
 
     if (queue_) {
         for (std::size_t i = 0; i < workers_.size(); ++i) {
+            availableTasks_.fetch_add(1, std::memory_order_release);
             while (!queue_->push(nullptr)) {
                 std::this_thread::yield();
             }
-            availableTasks_.fetch_add(1, std::memory_order_release);
             availableTasks_.notify_one();
         }
     }
@@ -794,8 +796,7 @@ void TaskSystem::WaitForAll()
 {
     std::unique_lock<std::mutex> lock(waitMutex_);
     waitCv_.wait(lock, [&]() {
-        return outstandingTasks_.load(std::memory_order_acquire) == 0 &&
-               activeTasks_.load(std::memory_order_acquire) == 0;
+        return outstandingTasks_.load(std::memory_order_acquire) == 0;
     });
 }
 
