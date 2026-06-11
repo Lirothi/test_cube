@@ -12,6 +12,29 @@
 
 namespace {
 constexpr std::size_t kInvalidThreadIndex = std::numeric_limits<std::size_t>::max();
+
+// Tagged freelist heads: user-mode x64 pointers fit in 48 bits, leaving 16 bits
+// for a counter that is bumped on every pop. A node popped and pushed back
+// between another thread's head load and its CAS then carries a different tag,
+// so the stale CAS fails instead of corrupting the list (classic ABA).
+constexpr std::uintptr_t kTagShift = 48;
+constexpr std::uintptr_t kPtrMask = (std::uintptr_t(1) << kTagShift) - 1;
+
+template <typename T>
+T* TaggedPtr(std::uintptr_t value)
+{
+    return reinterpret_cast<T*>(value & kPtrMask);
+}
+
+std::uintptr_t MakeTagged(const void* ptr, std::uintptr_t tag)
+{
+    return (reinterpret_cast<std::uintptr_t>(ptr) & kPtrMask) | (tag << kTagShift);
+}
+
+std::uintptr_t TagOf(std::uintptr_t value)
+{
+    return value >> kTagShift;
+}
 }
 
 thread_local std::size_t TaskSystem::workerIndex_ = kInvalidThreadIndex;
@@ -103,20 +126,17 @@ TaskSystem::TaskWithDeps::TaskWithDeps(TaskSystem& owner, TaskKind kind, std::si
     : owner_(owner)
     , kind_(kind)
 {
-    //dependents_.reserve(depCapacity);
-    completionFuture_ = completionPromise_.get_future().share();
+    (void)depCapacity;
 }
 
 void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
 {
     pendingDeps_.store(0, std::memory_order_relaxed);
     if (dependents_.capacity() < depCapacity) {
-        //dependents_.reserve(depCapacity);
         assert(false && "dependents_.capacity() < depCapacity");
     }
     dependents_.clear();
-    //completionPromise_ = std::promise<void>(); // we set it in recycle
-    completionFuture_ = completionPromise_.get_future().share();
+    completed_.store(0, std::memory_order_relaxed);
     submitted_.store(false, std::memory_order_relaxed);
     scheduled_.store(false, std::memory_order_relaxed);
     refCount_.store(1, std::memory_order_relaxed);
@@ -252,18 +272,20 @@ void TaskSystem::RangeTaskSet::Execute()
 
 TaskSystem::LambdaTaskSet* TaskSystem::AcquireLambdaTask(Task& fn, std::size_t depCapacity)
 {
+    std::uintptr_t head = lambdaPool_.load(std::memory_order_acquire);
     while (true) {
-        LambdaTaskSet* head = lambdaPool_.load(std::memory_order_acquire);
-        if (!head) {
+        auto* node = TaggedPtr<LambdaTaskSet>(head);
+        if (!node) {
             break;
         }
-        auto* next = static_cast<LambdaTaskSet*>(head->nextFree_);
+        auto* next = static_cast<LambdaTaskSet*>(node->nextFree_);
+        const std::uintptr_t desired = MakeTagged(next, TagOf(head) + 1);
         if (lambdaPool_.compare_exchange_weak(head,
-                                             next,
+                                             desired,
                                              std::memory_order_acq_rel,
-                                             std::memory_order_relaxed)) {
-            head->Reset(std::move(fn), depCapacity);
-            return head;
+                                             std::memory_order_acquire)) {
+            node->Reset(std::move(fn), depCapacity);
+            return node;
         }
     }
     return new LambdaTaskSet(*this, std::move(fn), depCapacity);
@@ -274,18 +296,20 @@ TaskSystem::RangeTaskSet* TaskSystem::AcquireRangeTask(std::size_t jobCount,
                                                        std::size_t batchSize,
                                                        std::size_t depCapacity)
 {
+    std::uintptr_t head = rangePool_.load(std::memory_order_acquire);
     while (true) {
-        RangeTaskSet* head = rangePool_.load(std::memory_order_acquire);
-        if (!head) {
+        auto* node = TaggedPtr<RangeTaskSet>(head);
+        if (!node) {
             break;
         }
-        auto* next = static_cast<RangeTaskSet*>(head->nextFree_);
+        auto* next = static_cast<RangeTaskSet*>(node->nextFree_);
+        const std::uintptr_t desired = MakeTagged(next, TagOf(head) + 1);
         if (rangePool_.compare_exchange_weak(head,
-                                             next,
+                                             desired,
                                              std::memory_order_acq_rel,
-                                             std::memory_order_relaxed)) {
-            head->Reset(jobCount, std::move(fn), batchSize, depCapacity);
-            return head;
+                                             std::memory_order_acquire)) {
+            node->Reset(jobCount, std::move(fn), batchSize, depCapacity);
+            return node;
         }
     }
     return new RangeTaskSet(*this, jobCount, std::move(fn), batchSize, depCapacity);
@@ -302,8 +326,6 @@ void TaskSystem::RecycleTask(TaskWithDeps* task)
     task->submitted_.store(false, std::memory_order_relaxed);
     task->scheduled_.store(false, std::memory_order_relaxed);
     task->refCount_.store(0, std::memory_order_relaxed);
-    task->completionPromise_ = std::promise<void>();
-    task->completionFuture_ = std::shared_future<void>();
     task->nextFree_ = nullptr;
 
     switch (task->kind_) {
@@ -323,11 +345,13 @@ void TaskSystem::RecycleLambdaTask(LambdaTaskSet* task)
     }
 
     task->fn_ = Task();
-    LambdaTaskSet* head = lambdaPool_.load(std::memory_order_acquire);
+    std::uintptr_t head = lambdaPool_.load(std::memory_order_relaxed);
+    std::uintptr_t desired;
     do {
-        task->nextFree_ = head;
+        task->nextFree_ = TaggedPtr<LambdaTaskSet>(head);
+        desired = MakeTagged(task, TagOf(head));
     } while (!lambdaPool_.compare_exchange_weak(head,
-                                                task,
+                                                desired,
                                                 std::memory_order_release,
                                                 std::memory_order_relaxed));
 }
@@ -341,18 +365,20 @@ void TaskSystem::RecycleRangeTask(RangeTaskSet* task)
     task->fn_ = nullptr;
     task->jobCount_ = 0;
     task->batchSize_ = 1;
-    RangeTaskSet* head = rangePool_.load(std::memory_order_acquire);
+    std::uintptr_t head = rangePool_.load(std::memory_order_relaxed);
+    std::uintptr_t desired;
     do {
-        task->nextFree_ = head;
+        task->nextFree_ = TaggedPtr<RangeTaskSet>(head);
+        desired = MakeTagged(task, TagOf(head));
     } while (!rangePool_.compare_exchange_weak(head,
-                                               task,
+                                               desired,
                                                std::memory_order_release,
                                                std::memory_order_relaxed));
 }
 
 void TaskSystem::ClearLambdaPool()
 {
-    LambdaTaskSet* node = lambdaPool_.exchange(nullptr, std::memory_order_acquire);
+    auto* node = TaggedPtr<LambdaTaskSet>(lambdaPool_.exchange(0, std::memory_order_acquire));
     while (node) {
         auto* next = static_cast<LambdaTaskSet*>(node->nextFree_);
         delete node;
@@ -362,7 +388,7 @@ void TaskSystem::ClearLambdaPool()
 
 void TaskSystem::ClearRangePool()
 {
-    RangeTaskSet* node = rangePool_.exchange(nullptr, std::memory_order_acquire);
+    auto* node = TaggedPtr<RangeTaskSet>(rangePool_.exchange(0, std::memory_order_acquire));
     while (node) {
         auto* next = static_cast<RangeTaskSet*>(node->nextFree_);
         delete node;
@@ -396,13 +422,13 @@ void TaskSystem::RunTask(TaskWithDeps* task)
     activeTasks_.fetch_add(1, std::memory_order_acq_rel);
     try {
         task->Execute();
-        task->completionPromise_.set_value();
     } catch (...) {
-        try {
-            task->completionPromise_.set_exception(std::current_exception());
-        } catch (...) {
-        }
+        // Swallowed by design: the previous promise-based path stored the
+        // exception but no caller ever rethrew it (Wait never called get()).
     }
+
+    task->completed_.store(1, std::memory_order_release);
+    task->completed_.notify_all();
 
     task->NotifyDependents();
     FinishTask(task);
@@ -410,9 +436,14 @@ void TaskSystem::RunTask(TaskWithDeps* task)
 
 void TaskSystem::FinishTask(TaskWithDeps* task)
 {
-    outstandingTasks_.fetch_sub(1, std::memory_order_acq_rel);
     activeTasks_.fetch_sub(1, std::memory_order_acq_rel);
-    waitCv_.notify_all();
+    if (outstandingTasks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        // Last outstanding task: wake WaitForAll. The lock closes the race where
+        // a waiter checks the predicate, we decrement + notify, and only then the
+        // waiter goes to sleep — missing the notification forever.
+        std::lock_guard<std::mutex> lock(waitMutex_);
+        waitCv_.notify_all();
+    }
     ReleaseRef(task);
 }
 
@@ -685,22 +716,14 @@ void TaskSystem::Wait(TaskHandle handle)
         return;
     }
 
-    using namespace std::chrono_literals;
-    //handle->completionFuture_.wait_for(10us);
-
-    while (handle->completionFuture_.wait_for(0us) != std::future_status::ready) {
+    // Help drain the queue while the task is pending; once there is no inline
+    // work left, block on the completion flag (futex-backed, woken by RunTask's
+    // notify_all). Workers handle anything queued after we block.
+    while (handle->completed_.load(std::memory_order_acquire) == 0) {
         if (!RunInlineTask()) {
-            handle->completionFuture_.wait_for(10us);
-            //UINT32 count = 0;
-            //while (handle->completionFuture_.wait_for(0s) != std::future_status::ready || count <= 400)
-            //{
-            //    _mm_pause();
-            //    ++count;
-            //}
+            handle->completed_.wait(0, std::memory_order_acquire);
         }
     }
-
-    handle->completionFuture_.wait();
 }
 
 void TaskSystem::Release(TaskHandle& handle)

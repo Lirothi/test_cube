@@ -5,8 +5,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -42,8 +42,9 @@ public:
         std::atomic<std::size_t> pendingDeps_{0};
         //std::vector<TaskHandle> dependents_;
         tc::inl_vector<TaskHandle, 4> dependents_;
-        std::promise<void> completionPromise_;
-        std::shared_future<void> completionFuture_;
+        // Completion flag, waited on via C++20 atomic wait. Waiters must hold a
+        // reference to the handle so the task cannot be recycled under them.
+        std::atomic<std::uint32_t> completed_{0};
         std::atomic<bool> submitted_{false};
         std::atomic<bool> scheduled_{false};
         std::atomic<int> refCount_{1};
@@ -173,8 +174,11 @@ private:
     std::vector<TaskHandle> trackedFrameTasks_;
     std::atomic<std::size_t> workerCount_{0};
     std::atomic<std::size_t> availableTasks_{0};
-    std::atomic<LambdaTaskSet*> lambdaPool_{nullptr};
-    std::atomic<RangeTaskSet*> rangePool_{nullptr};
+    // Treiber-stack freelists. Heads are tagged pointers: low 48 bits = node,
+    // high 16 bits = pop counter, guarding against ABA (pop A / pop B / push A
+    // between another thread's load and CAS).
+    std::atomic<std::uintptr_t> lambdaPool_{0};
+    std::atomic<std::uintptr_t> rangePool_{0};
 
     static thread_local std::size_t workerIndex_;
 };
