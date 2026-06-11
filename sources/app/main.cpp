@@ -5,6 +5,9 @@
 #include "mimalloc-new-delete.h"
 #pragma warning(pop)
 #include "app/App.h"
+#include "core/task/TaskSystemStress.h"
+
+#include <cstring>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -72,6 +75,14 @@ int WINAPI WinMain(
     _In_ int nShowCmd
 )
 {
+    // "--tasksystem-stress" runs the task-system stress harness instead of the
+    // app; exit code is the number of failed checks. With "--stress-overflow"
+    // the process is expected to abort (dependents_ overflow death test).
+    if (lpCmdLine && std::strstr(lpCmdLine, "tasksystem-stress") != nullptr) {
+        const bool overflow = std::strstr(lpCmdLine, "stress-overflow") != nullptr;
+        return RunTaskSystemStress(overflow);
+    }
+
     EnableDpiAwareness();
     App app;
     app.Run(hInstance, nShowCmd);

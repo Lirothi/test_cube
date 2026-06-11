@@ -369,4 +369,4 @@ traces/
 !/models/**
 !/third_party/**
 !/sources/rendering/debug/
-!/sources/rendering/debug/**
+!/sources/rendering/debug/**tasksystem_stress.log

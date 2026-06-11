@@ -138,6 +138,9 @@
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp">
       <Filter>sources\core\task</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/task/TaskSystemStress.cpp">
+      <Filter>sources\core\task</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/task/TaskSystemLockFree.cpp">
       <Filter>sources\core\task</Filter>
     </ClCompile>
@@ -333,6 +336,9 @@
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystem.h">
+      <Filter>sources\core\task</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/task/TaskSystemStress.h">
       <Filter>sources\core\task</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h">

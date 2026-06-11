@@ -172,6 +172,7 @@
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp" />
     <ClCompile Include="sources/core/task/TaskSystemLockFree.cpp" />
+    <ClCompile Include="sources/core/task/TaskSystemStress.cpp" />
     <ClCompile Include="sources/core/task/TaskSystemTBB.cpp" />
     <ClCompile Include="sources/input/ActionMap.cpp" />
     <ClCompile Include="sources/input/InputManager.cpp" />
@@ -240,6 +241,7 @@
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
+    <ClInclude Include="sources/core/task/TaskSystemStress.h" />
     <ClInclude Include="sources/core/task/TaskSystemEnki.h" />
     <ClInclude Include="sources/core/task/TaskSystemTBB.h" />
     <ClInclude Include="sources/input/ActionMap.h" />

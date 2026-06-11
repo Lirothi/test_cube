@@ -27,14 +27,20 @@ Already DONE and verified:
   the dep-side assert is `!scheduled_`, not `!submitted_` — a dep with its own deps is
   legally auto-submitted by its own SetDependencies call before later tasks register
   on it; the race only exists once it can run.
+- ✅ Step 6: stress harness in `sources/core/task/TaskSystemStress.{h,cpp}`, run via
+  `test_cube.exe --tasksystem-stress` (exit code = failures, details in
+  `tasksystem_stress.log`; ~90s Debug / ~50s Release, 50 rounds x 10 scenarios).
+  Overflow death test via `--tasksystem-stress --stress-overflow` — the process is
+  EXPECTED to abort (exit 3); a 0/100 exit means the fail-fast regressed.
+  Baseline: 0 failures in Debug and Release; death test aborts in both.
 
 ## How to use
 
 Pick ONE step, implement, build (test_cube.sln, x64, Debug + Release), and verify with:
-run ~10s (the task system is exercised every frame by the render graph, culling, and
-object ticks), then close the window via WM_CLOSE and confirm exit code 0 — this
-exercises `Stop()`/`WaitForAll`. Repeat the close cycle 3x. Once Step 6's stress
-harness exists, run it for every change here instead of relying on smoke runs alone.
+(1) the stress harness — `test_cube.exe --tasksystem-stress` in Debug AND Release must
+exit 0, and `--tasksystem-stress --stress-overflow` must abort (exit 3); (2) a normal
+app run ~10s closed via WM_CLOSE with exit code 0 (exercises `Stop()`/`WaitForAll`
+from the real frame loop).
 
 Invariants to preserve:
 
@@ -120,7 +126,7 @@ its two RMWs per task in `RunTask`/`FinishTask`.
 - `ParallelForNoHelp` is byte-identical to `ParallelFor`. If deleting it, delete it
   from ALL backends (`TaskSystemEnki`, `TaskSystemTBB`, lock-free) in one change.
 
-## Step 6 (new) — stress harness
+## ✅ DONE — Step 6 (new) — stress harness
 
 Smoke runs validate "didn't obviously break", not concurrency-correctness; the races
 fixed so far live in interleavings a normal frame never produces. Add a small test
