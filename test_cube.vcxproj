@@ -233,6 +233,7 @@
     <ClInclude Include="sources/app/scene/SceneRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
+    <ClInclude Include="sources/app/scene/SceneView.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
     <ClInclude Include="sources/core/math/Frustum.h" />
@@ -294,6 +295,7 @@
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
+    <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />
     <ClInclude Include="sources/text/FontGenerator.h" />
     <ClInclude Include="sources/text/FontManager.h" />

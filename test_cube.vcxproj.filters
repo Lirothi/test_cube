@@ -320,6 +320,9 @@
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/scene/SceneView.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/Systems.h">
       <Filter>sources\app</Filter>
     </ClInclude>
@@ -493,6 +496,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h">
       <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/RenderLayers.h">
+      <Filter>sources\rendering</Filter>
     </ClInclude>
     <ClInclude Include="sources/text/FontAtlas.h">
       <Filter>sources\text</Filter>

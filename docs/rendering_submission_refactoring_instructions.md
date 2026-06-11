@@ -1,5 +1,12 @@
 # Renderer Submission and Resource-State Refactoring
 
+> PRECEDENCE: `docs/renderer_submission_instructions.md` is the operative plan.
+> Iterations 0-4 of THIS document are superseded by its steps 1-4 and must not be
+> executed from here. Iterations 5-9 (graph-compiled barrier plans, CommandContext,
+> tracker removal) remain valid as the spec for the PARKED opt-in program described
+> there, and require an explicit user decision to start. Rule 11 below applies only
+> within that parked program.
+
 This document is a step-by-step implementation plan for improving parallel
 D3D12 command-list recording, submission ordering, and resource-state handling.
 
