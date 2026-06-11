@@ -16,6 +16,8 @@ Already DONE and verified:
   CAS failure ordering is `acquire`.
 - ✅ Step 1: `dependents_` overflow fails fast — `AddDependent` is capacity-checked and
   returns bool; `SetDependencies` aborts on overflow in all build configs.
+- ✅ Step 2: `Wait()` branches on `workerIndex_` — main thread helps then blocks on the
+  futex; worker context never parks (help, 64x `_mm_pause`, yield, re-check loop).
 
 ## How to use
 
@@ -59,7 +61,7 @@ memory or hanging are both worse); or (b) a safe container with inline capacity 
 heap fallback for the overflow case. Current max fan-out in the render graph is ~2,
 so this is a latent footgun, not a live bug — but the graph grows.
 
-## Step 2 (new) — worker-context `Wait()` must not block indefinitely
+## ✅ DONE — Step 2 (new) — worker-context `Wait()` must not block indefinitely
 
 The atomic-wait rewrite made `Wait()` fully blocking once the queue looks empty. For
 the main thread that is correct. A WORKER blocked in `completed_.wait()` stops watching

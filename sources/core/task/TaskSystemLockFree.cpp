@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <immintrin.h>
 #include <limits>
 #include <thread>
 
@@ -728,13 +729,35 @@ void TaskSystem::Wait(TaskHandle handle)
         return;
     }
 
-    // Help drain the queue while the task is pending; once there is no inline
-    // work left, block on the completion flag (futex-backed, woken by RunTask's
-    // notify_all). Workers handle anything queued after we block.
-    while (handle->completed_.load(std::memory_order_acquire) == 0) {
-        if (!RunInlineTask()) {
-            handle->completed_.wait(0, std::memory_order_acquire);
+    if (workerIndex_ == kInvalidThreadIndex) {
+        // Non-worker (main thread): help drain the queue while the task is
+        // pending; once there is no inline work left, block on the completion
+        // flag (futex-backed, woken by RunTask's notify_all). Workers handle
+        // anything queued after we block.
+        while (handle->completed_.load(std::memory_order_acquire) == 0) {
+            if (!RunInlineTask()) {
+                handle->completed_.wait(0, std::memory_order_acquire);
+            }
         }
+        return;
+    }
+
+    // Worker context (e.g. CSM/spot-shadow passes calling DispatchWait from a
+    // render-graph task): never fully block. A worker parked on completed_ stops
+    // watching availableTasks_, so work pushed after its last failed pop would be
+    // invisible to it — with every worker parked that way, the queue would never
+    // drain. Keep helping; between attempts spin briefly, then yield.
+    while (handle->completed_.load(std::memory_order_acquire) == 0) {
+        if (RunInlineTask()) {
+            continue;
+        }
+        for (int i = 0; i < 64; ++i) {
+            if (handle->completed_.load(std::memory_order_acquire) != 0) {
+                return;
+            }
+            _mm_pause();
+        }
+        std::this_thread::yield();
     }
 }
 
