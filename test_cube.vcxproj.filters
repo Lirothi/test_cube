@@ -192,6 +192,21 @@
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/FrameScheduler.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/SwapchainManager.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/ResourceStateTracker.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -390,6 +405,21 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/UploadBatch.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/FrameScheduler.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/GraphicsDevice.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/SwapchainManager.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/ResourceStateTracker.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderTargetManager.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">

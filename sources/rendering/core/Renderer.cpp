@@ -15,9 +15,6 @@
 
 #pragma comment(lib, "dxguid.lib")
 
-thread_local uint32_t Renderer::tlLaneIndex_ = UINT32_MAX;
-thread_local Renderer::CLStateEntry* Renderer::tlCurrentEntry_ = nullptr;
-
 Renderer::Renderer()
     : dlssHandler_(std::make_unique<DlssHandler>(*this))
 {
@@ -26,12 +23,7 @@ Renderer::Renderer()
 Renderer::~Renderer() {
     // Report after everything has been reset
     ReportLiveObjects(); // when the debug build includes this helper
-
-    // Close the event at the very end
-    if (fenceEvent_ != nullptr) {
-        CloseHandle(fenceEvent_);
-        fenceEvent_ = nullptr;
-    }
+    // (the frame fence event is closed by FrameScheduler's destructor)
 }
 
 static void logFunctionCallback(sl::LogType type, const char* msg)
@@ -49,9 +41,9 @@ void Renderer::Shutdown()
     inShutdown = true;
 
     // Nothing to do if the device is missing
-    const bool hasDevice = (device_ != nullptr);
-    const bool hasQueue = (commandQueue_ != nullptr);
-    const bool hasFence = (fence_ != nullptr);
+    const bool hasDevice = (GetDevice() != nullptr);
+    const bool hasQueue = (GetCommandQueue() != nullptr);
+    const bool hasFence = frameScheduler_.HasFence();
 
     // 0) Fully wait for the GPU (and close all outstanding command lists)
     if (hasDevice && hasQueue && hasFence) {
@@ -80,49 +72,21 @@ void Renderer::Shutdown()
     DestroyDeferredTargets(); // properly resets resources and heaps, and clears knownStates_ :contentReference[oaicite:4]{index=4}
 
     // 3) Back buffers and RTV/DSV heaps
-    for (UINT i = 0; i < kFrameCount; ++i) {
-        renderTargets_[i].Reset();
-    }
-    depthBuffer_.Reset();
-    dsvHeap_.Reset();
-    rtvHeap_.Reset();
-    rtvDescriptorSize_ = 0;
-    dsvDescriptorSize_ = 0;
+    swapchain_.ReleaseBuffers();
 
     // 4) Safety measure: clear resource state tracking
-    {
-        std::lock_guard<std::mutex> lk(knownStatesMtx_);
-        knownStates_.clear();
-    }
+    stateTracker_.ClearAllKnownStates();
 
     // 5) SwapChain — exit fullscreen (if needed) and release it
-    if (swapChain_) {
-        BOOL fs = FALSE;
-        Microsoft::WRL::ComPtr<IDXGIOutput> out;
-        if (SUCCEEDED(swapChain_->GetFullscreenState(&fs, &out)) && fs) {
-            (void)swapChain_->SetFullscreenState(FALSE, nullptr);
-        }
-        swapChain_.Reset();
-    }
+    swapchain_.ReleaseSwapchain();
 
     // 6) Frame resources: reset pool usage and clear the upload ring
     // (the actual ComPtrs release when Renderer is destroyed, but this removes dependencies)
-    for (UINT i = 0; i < kFrameCount; ++i) {
-        frameResources_[i]->ResetCommandAllocators(device_.Get());
-        frameResources_[i]->ResetCommandListsUsage();
-        frameResources_[i]->ResetUpload(); // clears fallback chunks and resets per-frame pointers :contentReference[oaicite:5]{index=5}
-        frameResources_[i].reset();
-        frameFenceValues_[i] = 0;
-    }
-    nextFenceValue_ = 1;
+    frameScheduler_.ResetFrameState(GetDevice());
 
     // 7) Fence/Queue
-    if (fence_) {
-        fence_.Reset();
-    }
-    if (commandQueue_) {
-        commandQueue_.Reset();
-    }
+    frameScheduler_.ReleaseFence();
+    graphicsDevice_.ReleaseQueue();
 
     if (dlssHandler_)
     {
@@ -132,9 +96,7 @@ void Renderer::Shutdown()
     slShutdown();
 
     // 8) Release the device last
-    if (device_) {
-        device_.Reset();
-    }
+    graphicsDevice_.ReleaseDevice();
 
     inShutdown = false;
 }
@@ -182,19 +144,10 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     auto slRes = slInit(pref, sl::kSDKVersion);
 
-#ifdef _DEBUG
-    {
-        ComPtr<ID3D12Debug> dbg;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) {
-            dbg->EnableDebugLayer();
-        }
-    }
-#endif
+    // --- Device (debug layer enabled inside, in debug builds) ---
+    graphicsDevice_.InitDevice();
 
-    // --- Device ---
-    ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
-
-    slSetD3DDevice(device_.Get());
+    slSetD3DDevice(GetDevice());
 
     if (dlssHandler_)
     {
@@ -209,23 +162,10 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     //    int a = 0;
     //}
 
-#ifdef _DEBUG
-    {
-        ComPtr<ID3D12InfoQueue> info;
-        if (SUCCEEDED(device_.As(&info))) {
-            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
-            // Add filters for noisy messages if desired
-        }
-    }
-#endif
+    graphicsDevice_.SetupDebugBreaks();
 
     // --- Queue ---
-    D3D12_COMMAND_QUEUE_DESC qd{};
-    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    qd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-    ThrowIfFailed(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&commandQueue_)));
+    graphicsDevice_.InitQueue();
 
     // --- SwapChain + RTVs (kFrameCount) ---
     CreateSwapChainAndRTVs(width_, height_);
@@ -235,46 +175,23 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     CreateDeferredTargets(width_, height_);
 
     // --- Fence + event ---
-    if (!fence_) {
-        ThrowIfFailed(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_)));
-    }
-    if (!fenceEvent_) {
-        fenceEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (!fenceEvent_) {
-            ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-        }
-    }
+    frameScheduler_.InitFence(GetDevice());
 
     // --- Frame resources ---
-    for (UINT i = 0; i < kFrameCount; ++i) {
-        // per-frame shader-visible heaps
-        frameResources_[i] = std::make_unique<FrameResource>();
-        frameResources_[i]->GetDescAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
-        frameResources_[i]->GetSamplerAlloc().Init(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 256);
-        frameFenceValues_[i] = 0;
-        frameResources_[i]->InitUpload(device_.Get(), /*bytes*/ 4 * 1024 * 1024);
-    }
+    frameScheduler_.CreateFrameResources(GetDevice());
 
     AllocateDlssResourcesIfNeeded();
 
     RefreshCurrentFrameCaches();
 
-    samplerManager_.Init(device_.Get(), 512);
+    samplerManager_.Init(GetDevice(), 512);
 
     InitFence();
 }
 
 void Renderer::InitFence() {
     // Compatibility with your main.cpp — safe no-op if initialization already happened
-    if (!fence_) {
-        ThrowIfFailed(device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_)));
-    }
-    if (!fenceEvent_) {
-        fenceEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (!fenceEvent_) {
-            ThrowIfFailed(HRESULT_FROM_WIN32(GetLastError()));
-        }
-    }
+    frameScheduler_.InitFence(GetDevice());
 }
 
 void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
@@ -300,118 +217,31 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
 }
 
 void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
-    ComPtr<IDXGIFactory4> factory;
-    ThrowIfFailed(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)));
-
-    // Destroy the old swap chain and RTVs when reinitializing (if any)
+    // Forget tracked states of the old backbuffers before they are released
     for (UINT i = 0; i < kFrameCount; ++i) {
-        ClearResourceState(renderTargets_[i].Get());
-        renderTargets_[i].Reset();
+        ClearResourceState(swapchain_.Backbuffer(i));
     }
-    rtvHeap_.Reset();
-    swapChain_.Reset();
 
-    // Create the swap chain (kFrameCount)
-    DXGI_SWAP_CHAIN_DESC1 scd{};
-    scd.BufferCount = kFrameCount;
-    scd.Width = width;
-    scd.Height = height;
-    scd.Format = GetBackbufferResourceFormat();
-    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    scd.SampleDesc.Count = 1;
-    scd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    swapchain_.Create(GetDevice(), GetCommandQueue(), hWnd_, width, height,
+        GetBackbufferResourceFormat(), GetBackbufferFormat());
 
-    ComPtr<IDXGISwapChain1> swap1;
-    ThrowIfFailed(factory->CreateSwapChainForHwnd(
-        commandQueue_.Get(), hWnd_, &scd, nullptr, nullptr, &swap1));
-    ThrowIfFailed(swap1.As(&swapChain_));
+    currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();
 
-    currentFrameIndex_ = swapChain_->GetCurrentBackBufferIndex();
-
-    // RTV heap
-    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};
-    rtvDesc.NumDescriptors = kFrameCount;
-    rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    rtvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device_->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&rtvHeap_)));
-    rtvDescriptorSize_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-    // RTVs
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < kFrameCount; ++i) {
-        ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
-
-        D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
-        rtvFmt.Format = GetBackbufferFormat();        // <- key
-        rtvFmt.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-        rtvFmt.Texture2D.MipSlice   = 0;
-        rtvFmt.Texture2D.PlaneSlice = 0;
-
-        device_->CreateRenderTargetView(renderTargets_[i].Get(), &rtvFmt, rtv);
-        rtv.ptr += rtvDescriptorSize_;
-        SetResourceState(renderTargets_[i].Get(), D3D12_RESOURCE_STATE_PRESENT);
+        SetResourceState(swapchain_.Backbuffer(i), D3D12_RESOURCE_STATE_PRESENT);
     }
 }
 
 void Renderer::CreateDepthResources(UINT width, UINT height) {
-    dsvHeap_.Reset();
-    depthBuffer_.Reset();
-
-    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
-    dsvHeapDesc.NumDescriptors = 1;
-    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device_->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dsvHeap_)));
-    dsvDescriptorSize_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-
-    D3D12_RESOURCE_DESC depthDesc{};
-    depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    depthDesc.Width = width;
-    depthDesc.Height = height;
-    depthDesc.DepthOrArraySize = 1;
-    depthDesc.MipLevels = 1;
-    depthDesc.Format = kDepthBufferResourceFormat;
-    depthDesc.SampleDesc.Count = 1;
-    depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-    depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    D3D12_CLEAR_VALUE cv{};
-    cv.Format = kDepthBufferViewFormat;
-    cv.DepthStencil.Depth = 0.0f;
-    cv.DepthStencil.Stencil = 0;
-
-    ThrowIfFailed(device_->CreateCommittedResource(
-        &heap, D3D12_HEAP_FLAG_NONE, &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv,
-        IID_PPV_ARGS(&depthBuffer_)));
-
-    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-    dsv.Format = DXGI_FORMAT_D32_FLOAT;
-    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-    dsv.Flags = D3D12_DSV_FLAG_NONE;
-    device_->CreateDepthStencilView(depthBuffer_.Get(), &dsv, dsvHeap_->GetCPUDescriptorHandleForHeapStart());
+    swapchain_.CreateDepth(GetDevice(), width, height, kDepthBufferResourceFormat, kDepthBufferViewFormat);
 }
 
 void Renderer::WaitForFrame(UINT frameIndex) {
-    CPU_SCOPE(ProfilerScopes::kRendererWaitForFrame);
-    const UINT64 value = frameFenceValues_[frameIndex];
-    if (value == 0) {
-        return; // frame has not been signaled yet — nothing to wait for
-    }
-    if (fence_->GetCompletedValue() < value) {
-        ThrowIfFailed(fence_->SetEventOnCompletion(value, fenceEvent_));
-        WaitForSingleObject(fenceEvent_, INFINITE);
-    }
+    frameScheduler_.WaitForFrame(frameIndex);
 }
 
 void Renderer::SignalFrame(UINT frameIndex) {
-    const UINT64 v = nextFenceValue_++;
-    ThrowIfFailed(commandQueue_->Signal(fence_.Get(), v));
-    frameFenceValues_[frameIndex] = v;
+    frameScheduler_.SignalFrame(GetCommandQueue(), frameIndex);
 }
 
 void Renderer::RefreshCurrentFrameCaches() {
@@ -423,7 +253,7 @@ void Renderer::RefreshCurrentFrameCaches() {
         return;
     }
 
-    FrameResource* fr = frameResources_[currentFrameIndex_].get();
+    FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
     currentFrameResource_ = fr;
     if (!fr) {
         return;
@@ -454,7 +284,7 @@ void Renderer::BeginFrame() {
 
     // Reset per-frame pools
     if (fr) {
-        fr->ResetCommandAllocators(device_.Get());
+        fr->ResetCommandAllocators(GetDevice());
         fr->ResetCommandListsUsage();
         fr->GetDescAlloc().ResetPerFrame();
         fr->GetSamplerAlloc().ResetPerFrame();
@@ -471,23 +301,7 @@ void Renderer::EndFrame() {
 
 void Renderer::ReportLiveObjects()
 {
-#if defined(_DEBUG)
-    // 1) Detailed report from the device
-    if (device_) {
-        Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev;
-        if (SUCCEEDED(device_.As(&ddev))) {
-            ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL);
-        }
-    }
-    // 2) DXGI report (optional)
-    {
-        Microsoft::WRL::ComPtr<IDXGIDebug1> dxgiDbg;
-        if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDbg)))) {
-            dxgiDbg->ReportLiveObjects(DXGI_DEBUG_ALL,
-                (DXGI_DEBUG_RLO_FLAGS)(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
-        }
-    }
-#endif
+    graphicsDevice_.ReportLiveObjects();
 }
 
 void Renderer::Tick(float dt)
@@ -539,15 +353,15 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     ID3D12CommandAllocator* alloc = 0;
     FrameResource* fr = currentFrameResource_;
     if (!fr) {
-        fr = frameResources_[currentFrameIndex_].get();
+        fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
     }
     if (!fr) {
         return {};
     }
 
     //CPU_SCOPE(L"Renderer::BeginThreadCommandList.1");
-    alloc = fr->AcquireCommandAllocator(device_.Get(), type);
-    cl = fr->AcquireCommandList(device_.Get(), type, alloc, pso);
+    alloc = fr->AcquireCommandAllocator(GetDevice(), type);
+    cl = fr->AcquireCommandList(GetDevice(), type, alloc, pso);
 
     if ((type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE || type == D3D12_COMMAND_LIST_TYPE_BUNDLE) &&
         currentFrameDescriptorHeapCount_ > 0)
@@ -661,11 +475,11 @@ void Renderer::ExecuteTimelineAndPresent() {
             }
             else if (!pb.bundles.empty()) {
                 // Fallback: no driver available — create a temporary one
-                auto& fr = frameResources_[currentFrameIndex_];
+                FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
                 ID3D12CommandAllocator* alloc =
-                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                    fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
                 ID3D12GraphicsCommandList* cl =
-                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                    fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
                 RecordBindDefaultsNoClear(cl);
                 for (auto* b : pb.bundles) {
                     if (b != nullptr) {
@@ -687,11 +501,11 @@ void Renderer::ExecuteTimelineAndPresent() {
     fixedSubmitScratch_.reserve(submitListsScratch_.size() * 2 + 3);
 #if PROF_GPU_ENABLED
     {
-        auto& fr = frameResources_[currentFrameIndex_];
+        FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
         ID3D12CommandAllocator* alloc =
-            fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+            fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         ID3D12GraphicsCommandList* cl =
-            fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+            fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
         Profiler::Get().BeginGpuFrame(cl);
         ThrowIfFailed(cl->Close());
         fixedSubmitScratch_.push_back(cl);
@@ -702,43 +516,20 @@ void Renderer::ExecuteTimelineAndPresent() {
         CPU_SCOPE(ProfilerScopes::kService2);
 
         ID3D12GraphicsCommandList* previousCmd = nullptr;
-        const CLState* previousState = nullptr;
+        const ResourceStateTracker::CLState* previousState = nullptr;
 
         for (auto* cmd : submitListsScratch_) {
             auto* currentCmd = static_cast<ID3D12GraphicsCommandList*>(cmd);
-            const CLState* currentState = FindCLStateForCmd(cmd);
+            const ResourceStateTracker::CLState* currentState = stateTracker_.FindCLStateForCmd(cmd);
 
             barrierScratch_.clear();
 
-            if (previousState && !previousState->current.empty()) {
-                for (auto& kv : previousState->current) {
-                    knownStates_[kv.first] = kv.second;
-                }
+            if (previousState) {
+                stateTracker_.ApplyFinalStates(*previousState);
             }
 
-            if (currentState && !currentState->firstUse.empty()) {
-                barrierScratch_.reserve(currentState->firstUse.size());
-                for (auto& kv : currentState->firstUse) {
-                    ID3D12Resource* res = kv.first;
-                    const D3D12_RESOURCE_STATES want = kv.second;
-
-                    D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
-                    if (auto ig = knownStates_.find(res); ig != knownStates_.end()) {
-                        before = ig->second;
-                    }
-
-                    if (before != want) {
-                        D3D12_RESOURCE_BARRIER b{};
-                        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                        b.Transition.pResource = res;
-                        b.Transition.StateBefore = before;
-                        b.Transition.StateAfter = want;
-                        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-                        barrierScratch_.push_back(b);
-                    }
-
-                    knownStates_[res] = want;
-                }
+            if (currentState) {
+                stateTracker_.AppendAcquireBarriers(*currentState, barrierScratch_);
             }
 
             if (previousCmd != nullptr) {
@@ -749,11 +540,11 @@ void Renderer::ExecuteTimelineAndPresent() {
                 ThrowIfFailed(previousCmd->Close());
                 fixedSubmitScratch_.push_back(previousCmd);
             } else if (!barrierScratch_.empty()) {
-                auto& fr = frameResources_[currentFrameIndex_];
+                FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
                 ID3D12CommandAllocator* alloc =
-                    fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                    fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
                 ID3D12GraphicsCommandList* prologue =
-                    fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                    fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
                 prologue->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
                 ThrowIfFailed(prologue->Close());
                 fixedSubmitScratch_.push_back(prologue);
@@ -763,73 +554,60 @@ void Renderer::ExecuteTimelineAndPresent() {
             previousState = currentState;
         }
 
-        if (previousState && !previousState->current.empty()) {
-            for (auto& kv : previousState->current) {
-                knownStates_[kv.first] = kv.second;
-            }
+        if (previousState) {
+            stateTracker_.ApplyFinalStates(*previousState);
         }
 
         ID3D12GraphicsCommandList* epilogueCmd = previousCmd;
         if (epilogueCmd == nullptr) {
-            auto& fr = frameResources_[currentFrameIndex_];
+            FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
             ID3D12CommandAllocator* alloc =
-                fr->AcquireCommandAllocator(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+                fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
             epilogueCmd =
-                fr->AcquireCommandList(device_.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+                fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
         }
+
+        ID3D12Resource* backbuffer = swapchain_.Backbuffer(currentFrameIndex_);
 
         D3D12_RESOURCE_BARRIER presentBarrier{};
         presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        presentBarrier.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
+        presentBarrier.Transition.pResource = backbuffer;
         presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         epilogueCmd->ResourceBarrier(1, &presentBarrier);
-        SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_PRESENT);
+        SetResourceState(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
 #if PROF_GPU_ENABLED
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
         ThrowIfFailed(epilogueCmd->Close());
         fixedSubmitScratch_.push_back(epilogueCmd);
 
-        if (renderTargets_[currentFrameIndex_]) {
-            knownStates_[renderTargets_[currentFrameIndex_].Get()] = D3D12_RESOURCE_STATE_PRESENT;
-        }
+        stateTracker_.SetKnownStateDirect(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
     }
 
     {
         CPU_SCOPE(ProfilerScopes::kService3);
         if (!fixedSubmitScratch_.empty()) {
-            commandQueue_->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
+            GetCommandQueue()->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
         }
     }
 
-    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
-    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
-        clLanes_[i].entries.clear();
-        clLanes_[i].epoch++;
-    }
+    stateTracker_.ResetLanesForFrame();
 
     {
         CPU_SCOPE(ProfilerScopes::kService4);
-        ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+        swapchain_.Present();
     }
-    //ThrowIfFailed(swapChain_->Present(1, 0));
     SignalFrame(currentFrameIndex_);
-    currentFrameIndex_ = swapChain_->GetCurrentBackBufferIndex();
+    currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();
     RefreshCurrentFrameCaches();
 }
 
 void Renderer::WaitForPreviousFrame() {
     // Fully wait for the GPU (for resize/destructor)
-    // Signal and wait until the fence reaches the target value
-    const UINT64 v = nextFenceValue_++;
-    ThrowIfFailed(commandQueue_->Signal(fence_.Get(), v));
-    if (fence_->GetCompletedValue() < v) {
-        ThrowIfFailed(fence_->SetEventOnCompletion(v, fenceEvent_));
-        WaitForSingleObject(fenceEvent_, INFINITE);
-    }
+    frameScheduler_.WaitForGpuIdle(GetCommandQueue());
 }
 
 void Renderer::OnResize(UINT width, UINT height) {
@@ -852,18 +630,13 @@ void Renderer::OnResize(UINT width, UINT height) {
 
     // Release the old RTV/DSV objects
     for (UINT i = 0; i < kFrameCount; ++i) {
-        ClearResourceState(renderTargets_[i].Get());
-        renderTargets_[i].Reset();
+        ClearResourceState(swapchain_.Backbuffer(i));
     }
-    ClearResourceState(depthBuffer_.Get());
-    depthBuffer_.Reset();
-    dsvHeap_.Reset();
-    rtvHeap_.Reset();
+    ClearResourceState(swapchain_.DepthBuffer());
+    swapchain_.ReleaseBuffersForResize();
 
     // ResizeBuffers
-    DXGI_SWAP_CHAIN_DESC desc{};
-    ThrowIfFailed(swapChain_->GetDesc(&desc));
-    ThrowIfFailed(swapChain_->ResizeBuffers(kFrameCount, width_, height_, desc.BufferDesc.Format, desc.Flags));
+    swapchain_.ResizeBuffers(width_, height_);
 
     // Recreate RTV and DSV
     CreateSwapChainAndRTVs(width_, height_);
@@ -875,81 +648,16 @@ void Renderer::OnResize(UINT width, UINT height) {
 }
 
 void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
-    if (res == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lk(knownStatesMtx_);
-    knownStates_[res] = state;
-}
-
-D3D12_RESOURCE_STATES Renderer::GetGlobalKnownState(ID3D12Resource* res)
-{
-    std::lock_guard<std::mutex> lk(knownStatesMtx_);
-    auto it = knownStates_.find(res);
-    return (it == knownStates_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second;
+    stateTracker_.SetResourceState(res, state);
 }
 
 void Renderer::ClearResourceState(ID3D12Resource* res) {
-    if (res == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lk(knownStatesMtx_);
-    knownStates_.erase(res);
+    stateTracker_.ClearResourceState(res);
 }
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
-    if (!cl || !res) { return; }
     //CPU_SCOPE(ProfilerScopes::kRendererTransition);
-    ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
-
-    // Fast path — the active command list is stored in TLS
-    CLStateEntry* entry = tlCurrentEntry_;
-    const uint32_t lane = tlLaneIndex_;
-    if (entry == nullptr || lane == UINT32_MAX ||
-        entry->epoch != clLanes_[lane].epoch || entry->cmd != base) {
-        if (lane != UINT32_MAX) {
-            CLStateLane& ln = clLanes_[lane];
-            auto found = ln.entries.find(base);
-            if (found != ln.entries.end()) {
-                entry = &found->second;
-                entry->epoch = ln.epoch;
-                tlCurrentEntry_ = entry;
-            } else {
-                RegisterCurrentThreadCL(cl);
-                entry = tlCurrentEntry_;
-            }
-        } else {
-            // Command list not yet registered on this thread — register it on the fly
-            RegisterCurrentThreadCL(cl);
-            entry = tlCurrentEntry_;
-        }
-    }
-
-    if (!entry) {
-        return;
-    }
-    auto& st = entry->st;
-
-    auto itCur = st.current.find(res);
-    if (itCur == st.current.end()) {
-        // First use in this command list — no intra-CL barrier required
-        st.firstUse.emplace(res, after);
-        st.current.emplace(res, after);
-        return;
-    }
-
-    const D3D12_RESOURCE_STATES before = itCur->second;
-    if (before == after) { return; }
-
-    D3D12_RESOURCE_BARRIER b{};
-    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource = res;
-    b.Transition.StateBefore = before;
-    b.Transition.StateAfter = after;
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cl->ResourceBarrier(1, &b);
-
-    itCur->second = after;
+    stateTracker_.Transition(cl, res, after);
 }
 
 void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
@@ -966,17 +674,16 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     // Barrier: Present -> RenderTarget (for the current back buffer)
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource = renderTargets_[currentFrameIndex_].Get();
+    b.Transition.pResource = swapchain_.Backbuffer(currentFrameIndex_);
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
-    SetResourceState(renderTargets_[currentFrameIndex_].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    SetResourceState(swapchain_.Backbuffer(currentFrameIndex_), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // RTV/DSV
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    rtv.ptr += SIZE_T(currentFrameIndex_) * rtvDescriptorSize_;
-    D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapchain_.BackbufferRTV(currentFrameIndex_);
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = swapchain_.DepthDSV();
     cl->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
     // viewport/scissor
@@ -998,9 +705,8 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
 
 void Renderer::RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl) {
     // Only bind RTV/DSV + viewport/scissor (no barrier or clear)
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    rtv.ptr += SIZE_T(currentFrameIndex_) * rtvDescriptorSize_;
-    D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapchain_.BackbufferRTV(currentFrameIndex_);
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = swapchain_.DepthDSV();
     cl->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
     D3D12_VIEWPORT vp{};
@@ -1013,499 +719,47 @@ void Renderer::RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl) {
     cl->RSSetScissorRects(1, &sr);
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredRtvAt(UINT idx) const {
-    auto h = deferredRtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += SIZE_T(idx) * deferredRtvIncr_; return h;
-}
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvAt(UINT idx) const {
-    auto h = deferredDsvHeap_->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += SIZE_T(idx) * deferredDsvIncr_; return h;
-}
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSrvAt(UINT idx) const {
-    auto h = deferredSrvCpuHeap_->GetCPUDescriptorHandleForHeapStart();
-    h.ptr += SIZE_T(idx) * deferredSrvIncr_; return h;
-}
-
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const {
-    const UINT idx = frame * kDeferredRtvPerFrame + static_cast<UINT>(slot);
-    return DeferredRtvAt(idx);
-}
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const {
-    const UINT idx = frame * kDeferredSrvPerFrame + static_cast<UINT>(slot);
-    return DeferredSrvAt(idx);
-}
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const {
-    const UINT idx = frame * kDeferredDsvPerFrame + static_cast<UINT>(slot);
-    return DeferredDsvAt(idx);
-}
-D3D12_CPU_DESCRIPTOR_HANDLE Renderer::DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const {
-    const UINT base = frame * kDeferredDsvPerFrame + static_cast<UINT>(DeferredDsvSlot::Count);
-    return DeferredDsvAt(base + lightIndex);
-}
-
 void Renderer::CreateDeferredTargets(UINT width, UINT height)
 {
-    // Just in case: release old resources/heaps
-    DestroyDeferredTargets();
-
-    ID3D12Device* dev = device_.Get();
-    if (!dev) { return; }
-
-    // --- Descriptor increments ---
-    deferredRtvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-    deferredDsvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-    deferredSrvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    // --- CPU-only descriptor heaps for offscreen targets (RTV/DSV/SRV) ---
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc{};
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,Light,Scene,DLSS bias
-        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
-    }
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc{};
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-        desc.NumDescriptors = kFrameCount * kDeferredDsvPerFrame;  // Depth
-        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredDsvHeap_)));
-    }
-    {
-        D3D12_DESCRIPTOR_HEAP_DESC desc{};
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;  // GB0,GB1,GB2,Depth,DepthCopy,Light,LightUAV,Scene,SceneUAV,SceneOpaque,SSR,SSRBlur,Shadow,SpotShadow,SSRUAV,SSRBlurUAV,Tonemap,TonemapUAV,Fxaa,FxaaUAV
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
-        ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
-    }
-
-    // --- Common placement parameters (Default heap) ---
-    D3D12_HEAP_PROPERTIES heapProps{};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-    heapProps.CreationNodeMask = 1;
-    heapProps.VisibleNodeMask = 1;
-
     const UINT rtWidth = std::max(1u, renderWidth_);
     const UINT rtHeight = std::max(1u, renderHeight_);
-    const UINT displayWidthClamped = std::max(1u, width);
-    const UINT displayHeightClamped = std::max(1u, height);
-
-    UINT currentTargetWidth = rtWidth;
-    UINT currentTargetHeight = rtHeight;
-
-    auto MakeTex2DDesc = [&](DXGI_FORMAT fmt, D3D12_RESOURCE_FLAGS flags) {
-        D3D12_RESOURCE_DESC rd{};
-        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width = currentTargetWidth ? currentTargetWidth : 1;
-        rd.Height = currentTargetHeight ? currentTargetHeight : 1;
-        rd.DepthOrArraySize = 1;
-        rd.MipLevels = 1;
-        rd.Format = fmt;
-        rd.SampleDesc.Count = 1;
-        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        rd.Flags = flags;
-        return rd;
-        };
-
-    // ---- Shared factories ----
-    auto CreateRT = [&](DXGI_FORMAT fmt,
-        DeferredRtvSlot rtvSlot,
-        DeferredSrvSlot srvSlot,
-        DeferredSrvSlot uavSlot,
-        UINT f,
-        ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outRTV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        float4 clear = float4(0, 0, 0, 0))
-        {
-            D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-            if (uavSlot != DeferredSrvSlot::Count)
-            {
-                flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            }
-            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, flags);
-
-            D3D12_CLEAR_VALUE cv{}; cv.Format = fmt;
-            cv.Color[0] = clear.x; cv.Color[1] = clear.y; cv.Color[2] = clear.z; cv.Color[3] = clear.w;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&outRes)));
-
-            // RTV/SRV — ONLY for frame f
-            outRTV = DeferredRtvCPU(f, rtvSlot);
-            dev->CreateRenderTargetView(outRes.Get(), nullptr, outRTV);
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = fmt;
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-
-            outSRV = DeferredSrvCPU(f, srvSlot);
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
-
-            D3D12_CPU_DESCRIPTOR_HANDLE outUAV{};
-            if (uavSlot != DeferredSrvSlot::Count)
-            {
-                D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
-                ud.Format = fmt;
-                ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                outUAV = DeferredSrvCPU(f, uavSlot);
-                dev->CreateUnorderedAccessView(outRes.Get(), nullptr, &ud, outUAV);
-            }
-
-            // Store the handles in deferred_[f]
-            auto& D = deferred_[f];
-            switch (rtvSlot) {
-            case DeferredRtvSlot::GB0:        D.gbRTV[0] = outRTV; break;
-            case DeferredRtvSlot::GB1:        D.gbRTV[1] = outRTV; break;
-            case DeferredRtvSlot::GB2:        D.gbRTV[2] = outRTV; break;
-            case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
-            case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
-            case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
-            case DeferredRtvSlot::DlssBias:   D.dlssBiasRTV = outRTV; break;
-            default: break;
-            }
-            switch (srvSlot) {
-            case DeferredSrvSlot::GB0:        D.gbSRV[0] = outSRV; break;
-            case DeferredSrvSlot::GB1:        D.gbSRV[1] = outSRV; break;
-            case DeferredSrvSlot::GB2:        D.gbSRV[2] = outSRV; break;
-            case DeferredSrvSlot::GBVelocity: D.gbSRV[3] = outSRV; break;
-            case DeferredSrvSlot::Depth:      D.depthSRV = outSRV; break;
-            case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
-            case DeferredSrvSlot::Scene:      D.sceneSRV = outSRV; break;
-            case DeferredSrvSlot::DlssBias:   D.dlssBiasSRV = outSRV; break;
-            default: break;
-            }
-            if (uavSlot != DeferredSrvSlot::Count)
-            {
-                switch (uavSlot)
-                {
-                case DeferredSrvSlot::LightUAV: D.lightUAV = outUAV; break;
-                case DeferredSrvSlot::SceneUAV: D.sceneUAV = outUAV; break;
-                default: break;
-                }
-            }
-
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-        };
-
-    auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
-        DeferredSrvSlot srvSlot,
-        UINT f,
-        ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN)
-        {
-            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_NONE);
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&outRes)));
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = srvFormat == DXGI_FORMAT_UNKNOWN ? fmt : srvFormat;
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-
-            outSRV = DeferredSrvCPU(f, srvSlot);
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
-
-            auto& D = deferred_[f];
-            if (srvSlot == DeferredSrvSlot::SceneOpaque)
-            {
-                D.sceneOpaque = outRes;
-                D.sceneOpaqueSRV = outSRV;
-            }
-            else if (srvSlot == DeferredSrvSlot::DepthCopy)
-            {
-                D.depthCopy = outRes;
-                D.depthCopySRV = outSRV;
-            }
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        };
-
-    auto CreateSrvUavTexture = [&](DXGI_FORMAT fmt,
-        DeferredSrvSlot srvSlot,
-        DeferredSrvSlot uavSlot,
-        UINT f,
-        ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outUAV,
-        UINT overrideWidth,
-        UINT overrideHeight)
-        {
-            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (overrideWidth > 0) { rd.Width = overrideWidth; }
-            if (overrideHeight > 0) { rd.Height = overrideHeight; }
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&outRes)));
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = fmt;
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-
-            outSRV = DeferredSrvCPU(f, srvSlot);
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
-
-            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
-            ud.Format = fmt;
-            ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-
-            outUAV = DeferredSrvCPU(f, uavSlot);
-            dev->CreateUnorderedAccessView(outRes.Get(), nullptr, &ud, outUAV);
-
-            auto& D = deferred_[f];
-            if (srvSlot == DeferredSrvSlot::SSR)
-            {
-                D.ssrSRV = outSRV;
-                D.ssrUAV = outUAV;
-            }
-            else if (srvSlot == DeferredSrvSlot::SSRBlur)
-            {
-                D.ssrBlurSRV = outSRV;
-                D.ssrBlurUAV = outUAV;
-            }
-            else if (srvSlot == DeferredSrvSlot::Tonemap)
-            {
-                D.tonemapSRV = outSRV;
-                D.tonemapUAV = outUAV;
-            }
-            else if (srvSlot == DeferredSrvSlot::Fxaa)
-            {
-                D.fxaaSRV = outSRV;
-                D.fxaaUAV = outUAV;
-            }
-
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        };
 
     const auto ssrSize = ComputeSsrTextureSize(rtWidth, rtHeight);
     ssrTextureWidth_ = ssrSize.first > 0 ? ssrSize.first : 1;
     ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
 
-    auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
-        UINT f,
-        ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outDepthSRV)
-        {
-            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    RenderTargetManager::Formats formats{};
+    formats.gb0 = kGBuffer0Format;
+    formats.gb1 = kGBuffer1Format;
+    formats.gb2 = kGBuffer2Format;
+    formats.velocity = kGBufferVelocityFormat;
+    formats.depth = kDeferredDepthFormat;
+    formats.depthSrv = kDeferredDepthSrvFormat;
+    formats.light = kLightTargetFormat;
+    formats.sceneColor = kSceneColorFormat;
+    formats.dlssBias = kDlssBiasFormat;
+    formats.ssr = kSsrFormat;
+    formats.ssrBlur = kSsrBlurFormat;
+    formats.backbufferResource = kBackbufferResourceFormat;
 
-            D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = 0.0f; cv.DepthStencil.Stencil = 0;
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
+    RenderTargetManager::Sizes sizes{};
+    sizes.renderWidth = rtWidth;
+    sizes.renderHeight = rtHeight;
+    sizes.displayWidth = std::max(1u, width);
+    sizes.displayHeight = std::max(1u, height);
+    sizes.ssrWidth = ssrTextureWidth_;
+    sizes.ssrHeight = ssrTextureHeight_;
 
-            auto& D = deferred_[f];
-
-            // DSV
-            outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Depth);
-            D3D12_DEPTH_STENCIL_VIEW_DESC dv{};
-            dv.Format = dsvFmt;
-            dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dev->CreateDepthStencilView(outRes.Get(), &dv, outDSV);
-            D.dsv = outDSV;
-
-            // Create an SRV for depth as R32_FLOAT
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = GetDepthSrvFormat();
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-            outDepthSRV = DeferredSrvCPU(f, DeferredSrvSlot::Depth);
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outDepthSRV);
-            D.depthSRV = outDepthSRV;
-
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
-
-    auto CreateShadow = [&](UINT f,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        UINT resolution)
-        {
-            // Shadows use a typeless texture with DSV=D32F and SRV=R32F
-            D3D12_RESOURCE_DESC rd{};
-            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            rd.Width = resolution;
-            rd.Height = resolution;
-            rd.DepthOrArraySize = 1;
-            rd.MipLevels = 1;
-            rd.Format = DXGI_FORMAT_R16_TYPELESS;
-            rd.SampleDesc.Count = 1;
-            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            D3D12_CLEAR_VALUE cv{};
-            cv.Format = DXGI_FORMAT_D16_UNORM;
-            cv.DepthStencil.Depth = 1.0f;
-            cv.DepthStencil.Stencil = 0;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
-
-            // DSV — goes into its dedicated shadow slot
-            outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
-            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-            dsv.Format = DXGI_FORMAT_D16_UNORM;
-            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV);
-
-            // SRV — also stored in the shadow slot
-            outSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = DXGI_FORMAT_R16_UNORM;
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
-
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
-
-    auto CreateSpotShadow = [&](UINT frameIndex,
-        ComPtr<ID3D12Resource>& outRes,
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights>& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        UINT resolution)
-        {
-            if (resolution == 0) { resolution = 512; }
-
-            D3D12_CLEAR_VALUE clear{};
-            clear.Format = DXGI_FORMAT_D16_UNORM;
-            clear.DepthStencil.Depth = 1.0f;
-            clear.DepthStencil.Stencil = 0;
-
-            D3D12_RESOURCE_DESC desc{};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            desc.Alignment = 0;
-            desc.Width = resolution;
-            desc.Height = resolution;
-            desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxSpotLights);
-            desc.MipLevels = 1;
-            desc.Format = DXGI_FORMAT_R16_TYPELESS;
-            desc.SampleDesc.Count = 1;
-            desc.SampleDesc.Quality = 0;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
-
-            outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::SpotShadow);
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Texture2DArray.MipLevels = 1;
-            srvDesc.Texture2DArray.FirstArraySlice = 0;
-            srvDesc.Texture2DArray.ArraySize = LightManager::kMaxSpotLights;
-            srvDesc.Texture2DArray.MostDetailedMip = 0;
-            srvDesc.Texture2DArray.PlaneSlice = 0;
-            srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
-            dev->CreateShaderResourceView(outRes.Get(), &srvDesc, outSRV);
-
-            for (UINT i = 0; i < LightManager::kMaxSpotLights; ++i)
-            {
-                outDSV[i] = DeferredSpotShadowDsvCPU(frameIndex, i);
-                D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-                dsv.Format = DXGI_FORMAT_D16_UNORM;
-                dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-                dsv.Flags = D3D12_DSV_FLAG_NONE;
-                dsv.Texture2DArray.ArraySize = 1;
-                dsv.Texture2DArray.FirstArraySlice = i;
-                dsv.Texture2DArray.MipSlice = 0;
-                dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV[i]);
-            }
-
-            SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
-
-    for (UINT f = 0; f < kFrameCount; ++f)
-    {
-        auto& D = deferred_[f];
-
-        currentTargetWidth = rtWidth;
-        currentTargetHeight = rtHeight;
-        CreateRT(kGBuffer0Format, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
-        CreateRT(kGBuffer1Format, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
-        CreateRT(kGBuffer2Format, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
-        CreateRT(kGBufferVelocityFormat, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
-
-        CreateDepth(kDeferredDepthFormat, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
-        CreateSrvTexture(kDeferredDepthFormat, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, GetDepthSrvFormat());
-
-        D.shadowRes = 4096; // could be driven by config/parameter
-        CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
-
-        D.spotShadowRes = 512;
-        CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);
-
-        CreateRT(kLightTargetFormat, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
-        CreateRT(kSceneColorFormat, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateRT(kDlssBiasFormat, DeferredRtvSlot::DlssBias, DeferredSrvSlot::DlssBias, DeferredSrvSlot::Count, f, D.dlssBias, D.dlssBiasRTV, D.dlssBiasSRV, float4(0, 0, 0, 0));
-        CreateSrvTexture(kSceneColorFormat, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
-        CreateSrvUavTexture(kSsrFormat, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, ssrTextureWidth_, ssrTextureHeight_);
-        CreateSrvUavTexture(kSsrBlurFormat, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, ssrTextureWidth_, ssrTextureHeight_);
-        currentTargetWidth = displayWidthClamped;
-        currentTargetHeight = displayHeightClamped;
-        CreateSrvUavTexture(kSceneColorFormat, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
-        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
-        CreateSrvUavTexture(kBackbufferResourceFormat, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
-    }
+    rtManager_.Create(GetDevice(), formats, sizes, stateTracker_);
 }
 
 void Renderer::DestroyDeferredTargets() {
-    deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
-    std::vector<ID3D12Resource*> released;
-    released.reserve(kFrameCount * Renderer::DeferredTargets::kResourceCount);
-
-    auto collect = [&released](ComPtr<ID3D12Resource>& res) {
-        if (ID3D12Resource* ptr = res.Get()) {
-            released.push_back(ptr);
-            res.Reset();
-        }
-    };
-
-    for (UINT f = 0; f < kFrameCount; ++f) {
-        auto& D = deferred_[f];
-        collect(D.gb0);
-        collect(D.gb1);
-        collect(D.gb2);
-        collect(D.gbVelocity);
-        collect(D.depth);
-        collect(D.depthCopy);
-        collect(D.light);
-        collect(D.scene);
-        collect(D.dlssBias);
-        collect(D.sceneOpaque);
-        collect(D.tonemap);
-        collect(D.fxaa);
-        collect(D.ssr);
-        collect(D.ssrBlur);
-        collect(D.shadow);
-        collect(D.spotShadow);
-        collect(D.dlssOutput);
-    }
-
-    if (!released.empty()) {
-        std::lock_guard<std::mutex> lk(knownStatesMtx_);
-        for (auto* res : released) {
-            knownStates_.erase(res);
-        }
-    }
+    rtManager_.Destroy(stateTracker_);
 
     ssrTextureWidth_ = 1;
     ssrTextureHeight_ = 1;
 }
+
 
 std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const
 {
@@ -1530,7 +784,7 @@ std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT baseWidth, UINT baseH
 
 void Renderer::RecreateDeferredTargets()
 {
-    if (!device_ || width_ == 0 || height_ == 0)
+    if (!GetDevice() || width_ == 0 || height_ == 0)
     {
         return;
     }
@@ -1553,7 +807,7 @@ void Renderer::SetSsrTextureScale(Math::float2 scale)
 
     ssrTextureScale_ = sanitized;
 
-    if (deferredRtvHeap_)
+    if (rtManager_.IsCreated())
     {
         RecreateDeferredTargets();
     }
@@ -1608,7 +862,7 @@ void Renderer::SetRenderResolutionScale(float scale)
     else
     {
         UpdateRenderResolutionFromScale();
-        if (deferredRtvHeap_)
+        if (rtManager_.IsCreated())
         {
             RecreateDeferredTargets();
         }
@@ -1711,7 +965,7 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
     {
         AllocateDlssResourcesIfNeeded();
 
-        if (deferredRtvHeap_ &&
+        if (rtManager_.IsCreated() &&
             (renderWidth_ != previousRenderWidth || renderHeight_ != previousRenderHeight))
         {
             RecreateDeferredTargets();
@@ -1720,7 +974,7 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
 }
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3] };
     cl->OMSetRenderTargets(4, rtvs, FALSE, &D.dsv);
 
@@ -1741,7 +995,7 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 }
 
 void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     cl->OMSetRenderTargets(1, &D.lightRTV, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
@@ -1757,7 +1011,7 @@ void Renderer::BindLightTarget(ID3D12GraphicsCommandList* cl, ClearMode mode, bo
 }
 
 void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     cl->OMSetRenderTargets(1, &D.sceneRTV, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
@@ -1772,7 +1026,7 @@ void Renderer::BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, boo
 }
 
 void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.lightRTV, D.gbRTV[3] };
     cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
@@ -1790,7 +1044,7 @@ void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearM
 }
 
 void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.sceneRTV, D.gbRTV[3], D.dlssBiasRTV };
     cl->OMSetRenderTargets(3, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
@@ -1810,7 +1064,7 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
 
 void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth)
 {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
 
     // Single DSV for the entire atlas
     cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);
@@ -1838,7 +1092,7 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 
 void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth)
 {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     if (lightIndex >= LightManager::kMaxSpotLights)
     {
         lightIndex = LightManager::kMaxSpotLights - 1;
@@ -1859,17 +1113,17 @@ void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightInd
 }
 
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageGBufferSrvTable() {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.depthSRV });
     return tbl.gpu; // shader key t0
 }
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageComposeSrvTable() {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     auto tbl = StageSrvUavTable({ D.lightSRV, D.gbSRV[2] }); // Light, Emissive
     return tbl.gpu;
 }
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageTonemapSrvTable() {
-    auto& D = deferred_[currentFrameIndex_];
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
     D3D12_CPU_DESCRIPTOR_HANDLE src = D.sceneSRV;
     if (dlssHandler_ && dlssHandler_->ShouldUseUpscaledOutput() && D.dlssOutputSRV.ptr != 0)
     {
@@ -1881,7 +1135,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageTonemapSrvTable() {
 
 D3D12_CPU_DESCRIPTOR_HANDLE Renderer::GetTonemapSourceSrvCPU() const
 {
-    const auto& D = deferred_[currentFrameIndex_];
+    const auto& D = rtManager_.Deferred(currentFrameIndex_);
     if (dlssHandler_ && dlssHandler_->ShouldUseUpscaledOutput() && D.dlssOutputSRV.ptr != 0)
     {
         return D.dlssOutputSRV;
@@ -1889,37 +1143,3 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::GetTonemapSourceSrvCPU() const
     return D.sceneSRV;
 }
 
-void Renderer::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl) {
-    uint32_t lane = tlLaneIndex_;
-    if (lane == UINT32_MAX) {
-        lane = clLaneCount_.fetch_add(1, std::memory_order_relaxed);
-        if (lane >= kCLStateLanes) { lane = kCLStateLanes - 1; }
-        tlLaneIndex_ = lane;
-    }
-    CLStateLane& ln = clLanes_[lane];
-    if (ln.entries.size() == 0)
-    {
-        ln.entries.reserve(32);
-    }
-    CLStateEntry& e = ln.entries[static_cast<ID3D12CommandList*>(cl)];
-    e.cmd = static_cast<ID3D12CommandList*>(cl);
-    e.st.firstUse.clear(); e.st.firstUse.reserve(8);
-    e.st.current.clear(); e.st.current.reserve(16);
-    e.epoch = ln.epoch;
-    tlCurrentEntry_ = &e;
-}
-
-void Renderer::UnregisterCurrentThreadCL() {
-    tlCurrentEntry_ = nullptr;
-}
-
-const Renderer::CLState* Renderer::FindCLStateForCmd(ID3D12CommandList* cmd) const {
-    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
-    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
-        auto found = clLanes_[i].entries.find(cmd);
-        if (found != clLanes_[i].entries.end()) {
-            return &found->second.st;
-        }
-    }
-    return nullptr;
-}

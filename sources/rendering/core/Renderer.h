@@ -12,6 +12,11 @@
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
+#include "rendering/core/GraphicsDevice.h"
+#include "rendering/core/SwapchainManager.h"
+#include "rendering/core/FrameScheduler.h"
+#include "rendering/core/ResourceStateTracker.h"
+#include "rendering/core/RenderTargetManager.h"
 #include "third_party/robin_hood.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "materials/Material.h"
@@ -41,50 +46,7 @@ public:
         D3D12_COMMAND_LIST_TYPE type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     };
     enum class ClearMode { None, Color, ColorDepth };
-    struct DeferredTargets {
-        static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
-        // Resources
-        ComPtr<ID3D12Resource> gb0;   // Renderer::kGBuffer0Format (albedo+metal)
-        ComPtr<ID3D12Resource> gb1;   // Renderer::kGBuffer1Format (normalOcta+rough)
-        ComPtr<ID3D12Resource> gb2;   // Renderer::kGBuffer2Format (emissive)
-        ComPtr<ID3D12Resource> gbVelocity; // Renderer::kGBufferVelocityFormat (motion vectors)
-        ComPtr<ID3D12Resource> depth; // Renderer::kDeferredDepthFormat
-        ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
-        ComPtr<ID3D12Resource> light; // Renderer::kLightTargetFormat
-        ComPtr<ID3D12Resource> scene; // Renderer::kSceneColorFormat
-        ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
-        ComPtr<ID3D12Resource> dlssBias; // Renderer::kDlssBiasFormat
-        ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
-        ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
-        ComPtr<ID3D12Resource> ssr;     // Renderer::kSsrFormat (premultiplied)
-        ComPtr<ID3D12Resource> ssrBlur; // Renderer::kSsrBlurFormat
-        ComPtr<ID3D12Resource> shadow; // R32_TYPELESS (DSV=D32F, SRV=R32F)
-        ComPtr<ID3D12Resource> spotShadow; // R32_TYPELESS array for spot lights
-        ComPtr<ID3D12Resource> dlssOutput; // Renderer::kSceneColorFormat upscaled
-
-        // CPU descriptors
-        D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
-        D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
-        D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,GBVelocity
-        D3D12_CPU_DESCRIPTOR_HANDLE depthSRV{};  // Depth(R32F)
-        D3D12_CPU_DESCRIPTOR_HANDLE depthCopySRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE dlssBiasRTV{}, dlssBiasSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
-
-        UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
-        UINT spotShadowRes = 512;
-    };
+    using DeferredTargets = RenderTargetManager::DeferredTargets;
 
     Renderer();
     ~Renderer();
@@ -151,7 +113,7 @@ public:
     DXGI_FORMAT GetSsrFormat() const { return kSsrFormat; }
     DXGI_FORMAT GetSsrBlurFormat() const { return kSsrBlurFormat; }
 
-    const DeferredTargets& GetDeferredForFrame() const { return deferred_[currentFrameIndex_]; }
+    const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
     // Utility functions
     void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
@@ -170,8 +132,8 @@ public:
     void RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex);
 
     // Getters
-    ID3D12Device* GetDevice() const { return device_.Get(); }
-    ID3D12CommandQueue* GetCommandQueue() const { return commandQueue_.Get(); }
+    ID3D12Device* GetDevice() const { return graphicsDevice_.Device(); }
+    ID3D12CommandQueue* GetCommandQueue() const { return graphicsDevice_.Queue(); }
     HWND GetHWND() const { return hWnd_; }
     UINT GetWidth() const { return width_; }
     UINT GetHeight() const { return height_; }
@@ -180,12 +142,12 @@ public:
     float GetRenderResolutionScale() const { return renderResolutionScale_; }
     Math::float2 GetCameraJitter() const;
 
-    ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < kFrameCount ? renderTargets_[currentFrameIndex_].Get() : nullptr; }
+    ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < kFrameCount ? swapchain_.Backbuffer(currentFrameIndex_) : nullptr; }
 
     // Access the global descriptor allocator and current frame
-    DescriptorAllocator& GetDescAlloc() { return frameResources_[currentFrameIndex_]->GetDescAlloc(); }
-    DescriptorAllocator& GetSamplerAlloc() { return frameResources_[currentFrameIndex_]->GetSamplerAlloc(); }
-    FrameResource* GetFrameResource() { return frameResources_[currentFrameIndex_].get(); }
+    DescriptorAllocator& GetDescAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetDescAlloc(); }
+    DescriptorAllocator& GetSamplerAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetSamplerAlloc(); }
+    FrameResource* GetFrameResource() { return frameScheduler_.GetFrameResource(currentFrameIndex_); }
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
     uint64_t GetTotalFrameNumber() const { return totalFrameNumber_; }
@@ -244,7 +206,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE dst = block.cpu;
         for (It it = first; it != last; ++it) {
             const D3D12_CPU_DESCRIPTOR_HANDLE src = *it;
-            device_->CopyDescriptorsSimple(1, dst, src, heapType);
+            graphicsDevice_.Device()->CopyDescriptorsSimple(1, dst, src, heapType);
             dst.ptr += incr;
         }
         return block;
@@ -303,29 +265,10 @@ private:
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
 
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvAt(UINT idx) const;
 
 private:
     static constexpr UINT kFrameCount = 2;
-
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
-    enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
-
-    static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
-    static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
-    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxSpotLights;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
-
-    D3D12_RESOURCE_STATES GetGlobalKnownState(ID3D12Resource* res);
-    void RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl);
-    void UnregisterCurrentThreadCL();
+    static_assert(RenderTargetManager::kFrameCount == kFrameCount, "frame count mismatch");
 
     static constexpr size_t kMaxNumCLsInPass = 8;
     struct PassBatch_ {
@@ -339,14 +282,8 @@ private:
     std::vector<ID3D12CommandList*> fixedSubmitScratch_;
     std::vector<D3D12_RESOURCE_BARRIER> barrierScratch_;
 
-    // CPU heaps for offscreen resources
-    ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
-    ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV shared across frames
-    ComPtr<ID3D12DescriptorHeap> deferredSrvCpuHeap_;// SRV CPU-only
-    UINT deferredRtvIncr_ = 0, deferredDsvIncr_ = 0, deferredSrvIncr_ = 0;
-
-    // Per-frame sets
-    DeferredTargets deferred_[kFrameCount];
+    // Per-frame deferred render targets + their CPU descriptor heaps
+    RenderTargetManager rtManager_;
 
     // OS / dimensions
     HWND  hWnd_ = nullptr;
@@ -371,61 +308,21 @@ private:
     float    shaderWatchAccumSec_ = 0.0f;
     bool     materialsHotReloaded_ = false;
 
-    // D3D12 core
-    ComPtr<ID3D12Device>              device_;
-    ComPtr<ID3D12CommandQueue>        commandQueue_;
-    ComPtr<IDXGISwapChain3>           swapChain_;
+    // D3D12 core (device/queue), presentation surface, frame pacing
+    GraphicsDevice                    graphicsDevice_;
+    SwapchainManager                  swapchain_;
+    FrameScheduler                    frameScheduler_;
+    static_assert(SwapchainManager::kFrameCount == kFrameCount, "frame count mismatch");
+    static_assert(FrameScheduler::kFrameCount == kFrameCount, "frame count mismatch");
 
-    // RTV/DSV
-    ComPtr<ID3D12DescriptorHeap>      rtvHeap_;
-    ComPtr<ID3D12Resource>            renderTargets_[kFrameCount];
-    UINT                              rtvDescriptorSize_ = 0;
-
-    ComPtr<ID3D12DescriptorHeap>      dsvHeap_;
-    ComPtr<ID3D12Resource>            depthBuffer_;
-    UINT                              dsvDescriptorSize_ = 0;
-
-    // Synchronization
-    ComPtr<ID3D12Fence>               fence_;
-    HANDLE                            fenceEvent_ = nullptr;
-    UINT64                            nextFenceValue_ = 1;                  // global increment
-    UINT64                            frameFenceValues_[kFrameCount] = {};  // last signal value for each frame
-
-    // Frame resources (allocator + upload, etc.)
-    std::unique_ptr<FrameResource>    frameResources_[kFrameCount];
     UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
     FrameResource*                    currentFrameResource_ = nullptr;
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
     UINT                              currentFrameDescriptorHeapCount_ = 0;
 
-    std::mutex knownStatesMtx_;
-    robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> knownStates_;
-    struct CLState {
-        // First required resource state in this command list (not barriered inside the CL)
-        robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> firstUse;
-        // Current (latest) resource state within THIS command list (for transitions and final state)
-        robin_hood::unordered_flat_map<ID3D12Resource*, D3D12_RESOURCE_STATES> current;
-    };
-    struct CLStateEntry {
-        ID3D12CommandList* cmd = nullptr;
-        CLState st;
-        uint64_t epoch = 0;
-    };
-
-    static constexpr uint32_t kCLStateLanes = 64;
-    //struct CLStateLane { std::vector<CLStateEntry> entries; };
-    struct CLStateLane {
-        robin_hood::unordered_flat_map<ID3D12CommandList*, CLStateEntry> entries;
-        uint64_t epoch = 0;
-    };
-
-    std::atomic<uint32_t> clLaneCount_{ 0 };
-    CLStateLane           clLanes_[kCLStateLanes];
-
-    // TLS: which lane the thread uses and which CL is currently active
-    static thread_local uint32_t      tlLaneIndex_;
-    static thread_local CLStateEntry* tlCurrentEntry_;
+    // Resource-state tracking across parallel command-list recording
+    ResourceStateTracker stateTracker_;
 
     // Streamline / DLSS integration
     sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
@@ -434,7 +331,6 @@ private:
     void UpdateDlssSettings();
     void AllocateDlssResourcesIfNeeded();
 
-    const CLState* FindCLStateForCmd(ID3D12CommandList* cmd) const;
 
     SamplerManager samplerManager_;
     MaterialManager materialManager_;

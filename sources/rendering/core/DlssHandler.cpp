@@ -171,7 +171,7 @@ void DlssHandler::OnRenderResolutionScaleChanged()
     outputValid_ = false;
     RefreshRenderResolution();
 
-    if (renderer_.deferredRtvHeap_)
+    if (renderer_.rtManager_.IsCreated())
     {
         renderer_.RecreateDeferredTargets();
     }
@@ -312,7 +312,7 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
         return false;
     }
 
-    auto& deferred = renderer_.deferred_[renderer_.currentFrameIndex_];
+    auto& deferred = renderer_.rtManager_.Deferred(renderer_.currentFrameIndex_);
     if (!deferred.scene || !deferred.depth || !deferred.gbVelocity || !deferred.dlssBias || !deferred.dlssOutput)
     {
         return false;
@@ -454,7 +454,7 @@ void DlssHandler::HandleAllocationFailure()
     RefreshRenderResolution();
     ResetJitterSequence();
 
-    if (renderer_.deferredRtvHeap_)
+    if (renderer_.rtManager_.IsCreated())
     {
         renderer_.RecreateDeferredTargets();
     }

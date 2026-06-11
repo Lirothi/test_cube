@@ -1,0 +1,118 @@
+#pragma once
+
+#include <d3d12.h>
+#include <array>
+#include <wrl/client.h>
+
+#include "rendering/lighting/LightManager.h"
+#include "rendering/core/ResourceStateTracker.h"
+#include "core/math/Math.h"
+
+// Owns the per-frame deferred render targets (G-buffer, light/scene color,
+// shadow atlases, SSR/tonemap/FXAA/DLSS intermediates) and the CPU-only
+// RTV/DSV/SRV descriptor heaps that view them. Formats and sizes are supplied
+// by the caller (Renderer), which remains the single home for them.
+class RenderTargetManager
+{
+public:
+    static constexpr UINT kFrameCount = 2;
+
+    struct DeferredTargets {
+        static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
+        // Resources
+        Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
+        Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // normalOcta+rough
+        Microsoft::WRL::ComPtr<ID3D12Resource> gb2;   // emissive
+        Microsoft::WRL::ComPtr<ID3D12Resource> gbVelocity; // motion vectors
+        Microsoft::WRL::ComPtr<ID3D12Resource> depth;
+        Microsoft::WRL::ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
+        Microsoft::WRL::ComPtr<ID3D12Resource> light;
+        Microsoft::WRL::ComPtr<ID3D12Resource> scene;
+        Microsoft::WRL::ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
+        Microsoft::WRL::ComPtr<ID3D12Resource> dlssBias;
+        Microsoft::WRL::ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
+        Microsoft::WRL::ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
+        Microsoft::WRL::ComPtr<ID3D12Resource> ssr;     // premultiplied
+        Microsoft::WRL::ComPtr<ID3D12Resource> ssrBlur;
+        Microsoft::WRL::ComPtr<ID3D12Resource> shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
+        Microsoft::WRL::ComPtr<ID3D12Resource> spotShadow; // R16_TYPELESS array for spot lights
+        Microsoft::WRL::ComPtr<ID3D12Resource> dlssOutput; // scene color format, upscaled
+
+        // CPU descriptors
+        D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,GBVelocity
+        D3D12_CPU_DESCRIPTOR_HANDLE depthSRV{};  // Depth(R32F)
+        D3D12_CPU_DESCRIPTOR_HANDLE depthCopySRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssBiasRTV{}, dlssBiasSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
+
+        UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
+        UINT spotShadowRes = 512;
+    };
+
+    struct Formats {
+        DXGI_FORMAT gb0;
+        DXGI_FORMAT gb1;
+        DXGI_FORMAT gb2;
+        DXGI_FORMAT velocity;
+        DXGI_FORMAT depth;
+        DXGI_FORMAT depthSrv;
+        DXGI_FORMAT light;
+        DXGI_FORMAT sceneColor;
+        DXGI_FORMAT dlssBias;
+        DXGI_FORMAT ssr;
+        DXGI_FORMAT ssrBlur;
+        DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
+    };
+
+    struct Sizes {
+        UINT renderWidth = 1, renderHeight = 1;     // internal render resolution
+        UINT displayWidth = 1, displayHeight = 1;   // window resolution (tonemap/FXAA/DLSS out)
+        UINT ssrWidth = 1, ssrHeight = 1;
+    };
+
+    void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceStateTracker& tracker);
+    void Destroy(ResourceStateTracker& tracker);
+
+    bool IsCreated() const { return deferredRtvHeap_ != nullptr; }
+    DeferredTargets& Deferred(UINT frame) { return deferred_[frame]; }
+    const DeferredTargets& Deferred(UINT frame) const { return deferred_[frame]; }
+
+private:
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
+    enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
+
+    static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
+    static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
+    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxSpotLights;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvAt(UINT idx) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
+
+    // CPU heaps for offscreen resources
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV shared across frames
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredSrvCpuHeap_;// SRV CPU-only
+    UINT deferredRtvIncr_ = 0, deferredDsvIncr_ = 0, deferredSrvIncr_ = 0;
+
+    // Per-frame sets
+    DeferredTargets deferred_[kFrameCount];
+};
