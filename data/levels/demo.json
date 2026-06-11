@@ -1,0 +1,100 @@
+{
+  "camera": { "position": [0.0, 1.0, -10.0] },
+
+  "skybox": { "texture": "textures/skybox.dds" },
+
+  "directionalLight": {
+    "direction": [-1.5, -0.7, -0.5],
+    "color": [1.0, 0.9, 0.85],
+    "exposure": 1.0,
+    "ambient": 0.05
+  },
+
+  "spotLights": [
+    {
+      "position": [4.0, 4.0, -3.0],
+      "direction": [-1.0, -1.0, 0.0],
+      "range": 20.0,
+      "innerAngleDeg": 18.0,
+      "outerAngleDeg": 28.0,
+      "color": [1.0, 0.85, 0.6],
+      "intensity": 15.0,
+      "shadowNormalBias": 0.05,
+      "shadowDepthBias": 0.0001
+    },
+    {
+      "position": [-5.0, 5.0, -6.0],
+      "direction": [0.5, -1.0, 0.25],
+      "range": 25.0,
+      "innerAngleDeg": 20.0,
+      "outerAngleDeg": 32.0,
+      "color": [0.6, 0.8, 1.0],
+      "intensity": 18.0,
+      "shadowNormalBias": 0.05,
+      "shadowDepthBias": 0.0001
+    }
+  ],
+
+  "objects": [
+    { "type": "staticMesh", "model": "models/box.obj", "material": "damaged_plaster",
+      "position": [0.0, 0.5, -2.0], "rotateSpeedDeg": 10.0, "normalStrength": 1.0 },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "damaged_plaster",
+      "position": [0.0, 0.5, -4.0], "rotateSpeedDeg": 0.0 },
+
+    { "type": "staticMesh", "model": "models/teapot.obj", "material": "bronze",
+      "position": [-1.0, 0.5, -1.0], "rotateSpeedDeg": 10.0 },
+
+    { "type": "staticMesh", "model": "models/sphere.obj", "material": "bronze",
+      "position": [-3.0, 0.5, -1.0], "rotateSpeedDeg": 10.0 },
+
+    { "type": "staticMesh", "model": "models/corgi.obj", "material": "brick",
+      "position": [3.0, 0.5, -1.0], "rotateSpeedDeg": 10.0 },
+
+    { "type": "transparentMesh", "model": "models/box.obj",
+      "position": [-1.8, 0.4, -4.2], "scale": [0.6, 0.6, 0.6],
+      "tint": [0.78, 0.9, 1.0], "absorption": [0.16, 0.07, 0.03],
+      "thickness": 0.65, "reflectionStrength": 1.25, "refractionDistortion": 1.0,
+      "roughness": 0.05, "ior": 1.1, "normalMap": "textures/damaged_plaster_normal.dds" },
+
+    { "type": "transparentMesh", "model": "models/sphere.obj",
+      "position": [-1.8, 0.5, -2.2], "scale": [0.8, 0.8, 0.8],
+      "tint": [0.78, 0.9, 1.0], "absorption": [0.16, 0.07, 0.03],
+      "thickness": 0.65, "reflectionStrength": 4.25, "refractionDistortion": 1.0,
+      "roughness": 0.05, "ior": 1.1, "normalMap": "textures/damaged_plaster_normal.dds" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "sandstone_cracks",
+      "texOffsScale": [0.0, 0.0, 20.0, 20.0],
+      "position": [0.0, -0.8, 0.0], "scale": [40.0, 1.0, 40.0], "renderLayer": "Terrain" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "sandstone_cracks",
+      "texOffsScale": [0.0, 0.0, 20.0, 20.0],
+      "position": [0.0, -2.5, 39.0], "rotationDeg": [5.0, 0.0, 0.0],
+      "scale": [40.0, 1.0, 40.0], "renderLayer": "Terrain" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "sandstone_cracks",
+      "texOffsScale": [0.0, 0.0, 20.0, 20.0],
+      "position": [0.0, -2.5, -39.0], "rotationDeg": [-5.0, 0.0, 0.0],
+      "scale": [40.0, 1.0, 40.0], "renderLayer": "Terrain" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "sandstone_cracks",
+      "texOffsScale": [0.0, 0.0, 20.0, 20.0],
+      "position": [-39.0, -2.5, 0.0], "rotationDeg": [0.0, 0.0, 5.0],
+      "scale": [40.0, 1.0, 40.0], "renderLayer": "Terrain" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "sandstone_cracks",
+      "texOffsScale": [0.0, 0.0, 20.0, 20.0],
+      "position": [39.0, -2.5, 0.0], "rotationDeg": [0.0, 0.0, -5.0],
+      "scale": [40.0, 1.0, 40.0], "renderLayer": "Terrain" },
+
+    { "type": "staticMesh", "model": "models/box.obj", "material": "bronze",
+      "texOffsScale": [0.5, 0.0, 10.0, 10.0], "normalStrength": 0.01,
+      "position": [-5.0, -0.4, 0.0], "scale": [5.0, 1.0, 5.0], "renderLayer": "Terrain" },
+
+    { "type": "metalRoughGrid", "model": "models/sphere.obj", "material": "bronze",
+      "width": 10, "height": 5 },
+
+    { "type": "instancedModels", "model": "models/teapot.obj", "count": 100, "material": "bronze",
+      "shader": "shaders/gbuffer_inst.hlsl", "computeShader": "shaders/instance_anim.hlsl" }
+  ]
+}

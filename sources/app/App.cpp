@@ -116,10 +116,9 @@ void App::InitScene()
         assert(false && "No bindings.json found!");
     }
 
-    renderer.GetMaterialDataManager()->RegisterPreset("brick", { L"textures/brick_albedo.dds",  L"textures/brick_mr.dds",  L"textures/brick_normal.dds",  /*RG*/false, /*TBN*/true });
-    renderer.GetMaterialDataManager()->RegisterPreset("bronze", { L"textures/bronze_albedo.dds", L"textures/bronze_mr.dds", L"textures/bronze_normal.dds", /*RG*/false, /*TBN*/true });
-    renderer.GetMaterialDataManager()->RegisterPreset("damaged_plaster", { L"textures/damaged_plaster_albedo.dds", L"textures/damaged_plaster_mr.dds", L"textures/damaged_plaster_normal.dds", /*RG*/false, /*TBN*/true });
-    renderer.GetMaterialDataManager()->RegisterPreset("sandstone_cracks", { L"textures/sandstone_cracks_albedo.dds", L"textures/sandstone_cracks_mr.dds", L"textures/sandstone_cracks_normal.dds", /*RG*/false, /*TBN*/true });
+    const bool presetsLoaded = renderer.GetMaterialDataManager()->LoadPresetsFromJsonFile(L"data/materials.json");
+    assert(presetsLoaded && "No data/materials.json found!");
+    (void)presetsLoaded;
 
     UploadBatch uploadBatch;
     const bool batchBegun = uploadBatch.Begin(&renderer);

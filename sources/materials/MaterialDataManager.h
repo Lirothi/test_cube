@@ -25,6 +25,11 @@ public:
     // Register or replace a preset
     void RegisterPreset(const std::string& name, const MaterialPreset& preset);
 
+    // Register all presets from a JSON file ({"presets": {name: {albedo, mr,
+    // normal, normalIsRG, useTBN}}}). Returns false if the file is missing or
+    // malformed.
+    bool LoadPresetsFromJsonFile(const std::wstring& path);
+
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;
 

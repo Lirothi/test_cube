@@ -1,11 +1,50 @@
 #include "materials/MaterialDataManager.h"
 #include "rendering/core/Renderer.h"
 
+#include <fstream>
+#include <sstream>
+
+// nlohmann/json — single header
+#pragma warning(push)
+#pragma warning(disable: 26819)
+#include "third_party/json/json.hpp"
+#pragma warning(pop)
+
 using Microsoft::WRL::ComPtr;
 
 void MaterialDataManager::RegisterPreset(const std::string& name, const MaterialPreset& preset)
 {
     presets_[name] = preset;
+}
+
+bool MaterialDataManager::LoadPresetsFromJsonFile(const std::wstring& path)
+{
+    std::ifstream f(path);
+    if (!f) {
+        return false;
+    }
+    std::stringstream ss;
+    ss << f.rdbuf();
+    const nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
+    if (j.is_discarded() || !j.contains("presets") || !j["presets"].is_object()) {
+        return false;
+    }
+
+    const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+
+    for (const auto& [name, p] : j["presets"].items()) {
+        if (!p.is_object()) {
+            continue;
+        }
+        MaterialPreset preset;
+        preset.albedoPath = widen(p.value("albedo", std::string{}));
+        preset.mrPath     = widen(p.value("mr", std::string{}));
+        preset.normalPath = widen(p.value("normal", std::string{}));
+        preset.normalIsRG = p.value("normalIsRG", true);
+        preset.useTBN     = p.value("useTBN", true);
+        RegisterPreset(name, preset);
+    }
+    return true;
 }
 
 bool MaterialDataManager::HasPreset(const std::string& name) const
