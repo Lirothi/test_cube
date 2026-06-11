@@ -108,8 +108,10 @@ private:
     const std::size_t capacity_;
     const std::size_t mask_;
     std::vector<Cell> buffer_;
-    std::atomic<std::size_t> head_{0};
-    std::atomic<std::size_t> tail_{0};
+    // Consumers hammer head_, producers hammer tail_: keep them on separate
+    // cache lines, and off the read-mostly capacity_/mask_/buffer_ line.
+    alignas(64) std::atomic<std::size_t> head_{0};
+    alignas(64) std::atomic<std::size_t> tail_{0};
 };
 
 TaskSystem& TaskSystem::Get()

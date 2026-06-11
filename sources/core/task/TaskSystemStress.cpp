@@ -19,6 +19,25 @@ namespace {
 FILE* gLog = nullptr;
 int gFailures = 0;
 
+// Cumulative per-scenario wall time across all rounds, for benchmarking
+// contention changes (totals are less noisy than the overall run time, which
+// is dominated by Start/Stop thread spawning).
+double gChurnSeconds = 0.0;
+double gNestedSeconds = 0.0;
+double gFanOutSeconds = 0.0;
+double gStartStopSeconds = 0.0;
+
+struct ScopedSeconds {
+    explicit ScopedSeconds(double& target)
+        : target_(target), start_(std::chrono::steady_clock::now()) {}
+    ~ScopedSeconds()
+    {
+        target_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+    }
+    double& target_;
+    std::chrono::steady_clock::time_point start_;
+};
+
 void Log(const char* fmt, ...)
 {
     if (!gLog) {
@@ -44,6 +63,7 @@ void Check(bool ok, const char* what)
 // tasks, range tasks, and Wait() on non-worker threads.
 void ScenarioConcurrentChurn(unsigned workerCount, unsigned externalThreads, int iterations)
 {
+    ScopedSeconds timing(gChurnSeconds);
     auto& ts = TaskSystem::Get();
     ts.Start(workerCount);
 
@@ -74,6 +94,7 @@ void ScenarioConcurrentChurn(unsigned workerCount, unsigned externalThreads, int
 // Wait() in worker context (the never-park path).
 void ScenarioNestedWaits(unsigned workerCount, int iterations)
 {
+    ScopedSeconds timing(gNestedSeconds);
     auto& ts = TaskSystem::Get();
     ts.Start(workerCount);
 
@@ -99,6 +120,7 @@ void ScenarioNestedWaits(unsigned workerCount, int iterations)
 // capacity boundary itself does not trip the fail-fast.
 void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
 {
+    ScopedSeconds timing(gFanOutSeconds);
     auto& ts = TaskSystem::Get();
     ts.Start(workerCount);
 
@@ -148,6 +170,7 @@ void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
 // shutdown path (WaitForAll + sentinel drain) that the lost-wakeup fix touched.
 void ScenarioStartStopCycles(unsigned workerCount, int cycles)
 {
+    ScopedSeconds timing(gStartStopSeconds);
     auto& ts = TaskSystem::Get();
     std::atomic<long long> sum{0};
     long long expected = 0;
@@ -249,6 +272,8 @@ int RunTaskSystemStress(bool overflowDeathTest)
     }
 
     const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    Log("scenario totals: churn %.2fs, nested %.2fs, fanout %.2fs, startstop %.2fs\n",
+        gChurnSeconds, gNestedSeconds, gFanOutSeconds, gStartStopSeconds);
     Log("done in %.1fs, failures: %d\n", seconds, gFailures);
     if (gLog) {
         fclose(gLog);

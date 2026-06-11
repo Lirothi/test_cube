@@ -166,18 +166,20 @@ private:
     std::atomic<bool> shutdown_{false};
     // A task is outstanding from Submit until FinishTask; its execution window is
     // strictly inside that, so this single counter covers the WaitForAll predicate.
-    std::atomic<std::size_t> outstandingTasks_{0};
+    // Hot atomics below are cache-line separated: each is hammered by a different
+    // mix of threads (submit/finish vs push/pop-notify vs pool acquire/recycle).
+    alignas(64) std::atomic<std::size_t> outstandingTasks_{0};
     mutable std::mutex waitMutex_;
     std::condition_variable waitCv_;
     std::mutex trackedFrameMutex_;
     std::vector<TaskHandle> trackedFrameTasks_;
     std::atomic<std::size_t> workerCount_{0};
-    std::atomic<std::size_t> availableTasks_{0};
+    alignas(64) std::atomic<std::size_t> availableTasks_{0};
     // Treiber-stack freelists. Heads are tagged pointers: low 48 bits = node,
     // high 16 bits = pop counter, guarding against ABA (pop A / pop B / push A
     // between another thread's load and CAS).
-    std::atomic<std::uintptr_t> lambdaPool_{0};
-    std::atomic<std::uintptr_t> rangePool_{0};
+    alignas(64) std::atomic<std::uintptr_t> lambdaPool_{0};
+    alignas(64) std::atomic<std::uintptr_t> rangePool_{0};
 
     static thread_local std::size_t workerIndex_;
 };
