@@ -639,11 +639,24 @@ TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
     return AcquireRangeTask(jobCount, fn, batchSize, depCount);
 }
 
+// Registers dependencies and — side effect — auto-submits the handle once any
+// dependency is registered. This is why RenderGraph only explicitly submits root
+// passes: every pass with mt-deps is already submitted here, and gets scheduled
+// when its last dependency completes.
+//
+// Contract (asserted below): dependency setup is a single-threaded phase that
+// happens before anything can execute. The target must not have been submitted
+// yet, and no dependency may already be scheduled/executing — dependents_ is
+// unsynchronized and NotifyDependents iterates it on completion, so registering
+// on a running dependency is a data race.
 void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std::size_t depCount)
 {
     if (!handle) {
         return;
     }
+
+    assert(!handle->submitted_.load(std::memory_order_acquire) &&
+           "SetDependencies must run before the target task is submitted");
 
     bool registered = false;
     for (std::size_t i = 0; i < depCount; ++i) {
@@ -651,6 +664,11 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
         if (!dep) {
             continue;
         }
+        // scheduled_ (not submitted_): a dep with its own dependencies is legally
+        // auto-submitted by its own SetDependencies call; the race only exists
+        // once it can actually run.
+        assert(!dep->scheduled_.load(std::memory_order_acquire) &&
+               "Cannot add a dependent to a task that is already scheduled");
         handle->IncrementDependency();
         if (!dep->AddDependent(handle)) {
             // Fan-out overflow is fatal in every build config: the alternatives
@@ -662,7 +680,7 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
         registered = true;
     }
 
-    if (registered && !handle->submitted_.load(std::memory_order_acquire)) {
+    if (registered) {
         Submit(handle);
     }
 }

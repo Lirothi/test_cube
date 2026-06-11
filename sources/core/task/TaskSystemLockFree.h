@@ -99,12 +99,6 @@ public:
         Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
     }
 
-    template<class F>
-    static void ParallelForNoHelp(std::size_t jobCount, F&& fn, std::size_t batchSize)
-    {
-        Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
-    }
-
     void WaitForAll();
 
     std::size_t ThreadIndex() const;

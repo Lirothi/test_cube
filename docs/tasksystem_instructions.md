@@ -22,6 +22,11 @@ Already DONE and verified:
   the counter stays >= the item count and the unsigned wrap is gone.
 - ✅ Step 4: `activeTasks_` removed; `WaitForAll` predicate is `outstandingTasks_ == 0`.
   (The inactive TBB backend keeps its own counter — out of scope.)
+- ✅ Step 5: `SetDependencies` documents the auto-submit side effect and asserts the
+  setup contract; `ParallelForNoHelp` deleted from all three backends. NOTE deviation:
+  the dep-side assert is `!scheduled_`, not `!submitted_` — a dep with its own deps is
+  legally auto-submitted by its own SetDependencies call before later tasks register
+  on it; the race only exists once it can run.
 
 ## How to use
 
@@ -103,7 +108,7 @@ inside that, and each task decrements `activeTasks_` before `outstandingTasks_`.
 `WaitForAll` predicate only needs `outstandingTasks_ == 0`. Delete `activeTasks_` and
 its two RMWs per task in `RunTask`/`FinishTask`.
 
-## Step 5 (was part of 6) — contract assertions & documentation
+## ✅ DONE — Step 5 (was part of 6) — contract assertions & documentation
 
 - Comment `SetDependencies`' hidden side effect: it auto-submits the handle when any
   dependency registers, which is why RenderGraph only explicitly submits root passes.
