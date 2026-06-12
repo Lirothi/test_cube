@@ -1,17 +1,20 @@
 #pragma once
 
-// Renderer submission-timeline stress harness, run via
+// Renderer submission stress harness, run via
 // "test_cube.exe --renderer-submission-stress" instead of the app. CPU-only:
-// drives the registration/gathering layer (SubmitTimeline) with fake
-// command-list pointer values — registration only stores pointers; the real
-// submit path is never run (it calls Close()). Covers: retention beyond the
-// old 8-entry inline capacity, registration-order preservation (single-
-// threaded and concurrent), persistent-pool reuse across frames with varying
-// batch counts, and the invariant death tests (null registration, stale/
-// out-of-range batch index, duplicate registration), each spawned by the
-// harness in a child process that is EXPECTED to abort. Writes details to
-// renderer_submission_stress.log in the working directory and returns the
-// number of failed checks (0 = success).
+// drives the registration/gathering layer (SubmitTimeline) and the
+// ResourceStateTracker recording layer with fake command-list/resource
+// pointer values — registration only stores pointers; the real submit path is
+// never run (it calls Close()). Covers: retention beyond the old 8-entry
+// inline capacity, registration-order preservation (single-threaded and
+// concurrent), persistent-pool reuse across frames with varying batch counts,
+// the invariant death tests (null registration, stale/out-of-range batch
+// index, duplicate registration — each spawned in a child process that is
+// EXPECTED to abort), and the tracker's memory-safety paths: repeated lane
+// reset + reuse from persistent threads, flat-map rehash with many CL keys
+// per thread, more than 64 participating threads, and acquire-barrier
+// deduction. Writes details to renderer_submission_stress.log in the working
+// directory and returns the number of failed checks (0 = success).
 //
 // cmdLine is the raw command line; when it contains one of the death-test
 // sub-flags (--stress-null-cl, --stress-invalid-batch, --stress-duplicate-cl)

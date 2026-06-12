@@ -1,9 +1,37 @@
 #include "rendering/core/ResourceStateTracker.h"
 
-#include <algorithm>
+#include "rendering/core/RendererInvariantFailure.h"
 
-thread_local uint32_t ResourceStateTracker::tlLaneIndex_ = UINT32_MAX;
-thread_local ResourceStateTracker::CLStateEntry* ResourceStateTracker::tlCurrentEntry_ = nullptr;
+#include <cassert>
+
+thread_local ResourceStateTracker::CLStateLane* ResourceStateTracker::tlLane_ = nullptr;
+thread_local uint64_t ResourceStateTracker::tlLaneTrackerId_ = 0;
+thread_local ID3D12CommandList* ResourceStateTracker::tlCurrentKey_ = nullptr;
+thread_local uint64_t ResourceStateTracker::tlObservedEpoch_ = 0;
+
+namespace {
+// Tracker ids start at 1 so the TLS default (0) never matches an instance.
+std::atomic<uint64_t> gNextTrackerId{ 1 };
+
+#ifdef _DEBUG
+struct ScopedLaneRecording {
+    explicit ScopedLaneRecording(std::atomic<int32_t>& counter) : counter_(counter)
+    {
+        counter_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    ~ScopedLaneRecording()
+    {
+        counter_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    std::atomic<int32_t>& counter_;
+};
+#endif
+} // namespace
+
+ResourceStateTracker::ResourceStateTracker()
+    : trackerId_(gNextTrackerId.fetch_add(1, std::memory_order_relaxed))
+{
+}
 
 void ResourceStateTracker::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state)
 {
@@ -50,35 +78,32 @@ void ResourceStateTracker::ForgetResources(const std::vector<ID3D12Resource*>& r
 void ResourceStateTracker::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after)
 {
     if (!cl || !res) { return; }
-    ID3D12CommandList* base = static_cast<ID3D12CommandList*>(cl);
+    ID3D12CommandList* key = static_cast<ID3D12CommandList*>(cl);
 
-    // Fast path — the active command list is stored in TLS
-    CLStateEntry* entry = tlCurrentEntry_;
-    const uint32_t lane = tlLaneIndex_;
-    if (entry == nullptr || lane == UINT32_MAX ||
-        entry->epoch != clLanes_[lane].epoch || entry->cmd != base) {
-        if (lane != UINT32_MAX) {
-            CLStateLane& ln = clLanes_[lane];
-            auto found = ln.entries.find(base);
-            if (found != ln.entries.end()) {
-                entry = &found->second;
-                entry->epoch = ln.epoch;
-                tlCurrentEntry_ = entry;
-            } else {
-                RegisterCurrentThreadCL(cl);
-                entry = tlCurrentEntry_;
-            }
-        } else {
-            // Command list not yet registered on this thread — register it on the fly
-            RegisterCurrentThreadCL(cl);
-            entry = tlCurrentEntry_;
-        }
+    // Fast path: TLS holds the thread's lane and the CL key it last recorded
+    // into. The dereference of tlLane_ is safe only after the tracker-id check
+    // (short-circuit order matters): a stale pointer from another or destroyed
+    // tracker never gets this far.
+    CLStateLane* lane = tlLane_;
+    if (lane == nullptr || tlLaneTrackerId_ != trackerId_ ||
+        tlObservedEpoch_ != lane->epoch || tlCurrentKey_ != key) {
+        RegisterCurrentThreadCL(cl);
+        lane = tlLane_;
     }
 
-    if (!entry) {
-        return;
+#ifdef _DEBUG
+    ScopedLaneRecording recordingScope(lane->activeRecordings);
+#endif
+
+    // Resolve the entry by key — never via a cached pointer (the flat map
+    // relocates entries on rehash, and the per-frame reset destroys them).
+    auto found = lane->entries.find(key);
+    if (found == lane->entries.end()) {
+        // Unreachable unless the no-overlap contract broke; dropping the
+        // transition would record wrong barriers.
+        RendererInvariantFailure("ResourceStateTracker::Transition: registered CL entry missing from its lane");
     }
-    auto& st = entry->st;
+    CLState& st = found->second;
 
     auto itCur = st.current.find(res);
     if (itCur == st.current.end()) {
@@ -102,42 +127,81 @@ void ResourceStateTracker::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resou
     itCur->second = after;
 }
 
+ResourceStateTracker::CLStateLane* ResourceStateTracker::LaneForThisThread_()
+{
+    if (tlLane_ != nullptr && tlLaneTrackerId_ == trackerId_) {
+        return tlLane_;
+    }
+
+    std::lock_guard<std::mutex> lk(lanesMtx_);
+    CLStateLane* lane = nullptr;
+    try {
+        clLanes_.push_back(std::make_unique<CLStateLane>());
+        lane = clLanes_.back().get();
+    }
+    catch (...) {
+        // Never share a lane and never throw across a worker task — a thread
+        // without its own lane cannot track states safely.
+        RendererInvariantFailure("ResourceStateTracker: command-list state lane allocation failed");
+    }
+    tlLane_ = lane;
+    tlLaneTrackerId_ = trackerId_;
+    return lane;
+}
+
 void ResourceStateTracker::RegisterCurrentThreadCL(ID3D12GraphicsCommandList* cl)
 {
-    uint32_t lane = tlLaneIndex_;
-    if (lane == UINT32_MAX) {
-        lane = clLaneCount_.fetch_add(1, std::memory_order_relaxed);
-        if (lane >= kCLStateLanes) { lane = kCLStateLanes - 1; }
-        tlLaneIndex_ = lane;
+    if (!cl) {
+        return;
     }
-    CLStateLane& ln = clLanes_[lane];
-    if (ln.entries.size() == 0)
-    {
-        ln.entries.reserve(32);
+    CLStateLane& lane = *LaneForThisThread_();
+    ID3D12CommandList* key = static_cast<ID3D12CommandList*>(cl);
+
+#ifdef _DEBUG
+    ScopedLaneRecording recordingScope(lane.activeRecordings);
+#endif
+
+    if (lane.entries.empty()) {
+        lane.entries.reserve(32);
     }
-    CLStateEntry& e = ln.entries[static_cast<ID3D12CommandList*>(cl)];
-    e.cmd = static_cast<ID3D12CommandList*>(cl);
-    e.st.firstUse.clear(); e.st.firstUse.reserve(8);
-    e.st.current.clear(); e.st.current.reserve(16);
-    e.epoch = ln.epoch;
-    tlCurrentEntry_ = &e;
+    auto found = lane.entries.find(key);
+    if (found == lane.entries.end()) {
+        CLState& st = lane.entries[key];
+        st.firstUse.reserve(8);
+        st.current.reserve(16);
+    }
+    // An existing entry keeps its accumulated state: re-registering the same
+    // CL on this thread resumes recording where it left off within the frame.
+
+    tlCurrentKey_ = key;
+    tlObservedEpoch_ = lane.epoch;
 }
 
 void ResourceStateTracker::UnregisterCurrentThreadCL()
 {
-    tlCurrentEntry_ = nullptr;
+    tlCurrentKey_ = nullptr;
 }
 
 const ResourceStateTracker::CLState* ResourceStateTracker::FindCLStateForCmd(ID3D12CommandList* cmd) const
 {
-    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
-    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
-        auto found = clLanes_[i].entries.find(cmd);
-        if (found != clLanes_[i].entries.end()) {
-            return &found->second.st;
+    const CLState* result = nullptr;
+    for (const auto& lane : clLanes_) {
+        auto found = lane->entries.find(cmd);
+        if (found != lane->entries.end()) {
+#ifdef _DEBUG
+            // A CL recorded through two lanes means two threads recorded it —
+            // its state would be split between them. Keep scanning to detect.
+            assert(result == nullptr && "command list recorded through more than one thread lane");
+#endif
+            if (result == nullptr) {
+                result = &found->second;
+#ifndef _DEBUG
+                break;
+#endif
+            }
         }
     }
-    return nullptr;
+    return result;
 }
 
 void ResourceStateTracker::ApplyFinalStates(const CLState& st)
@@ -185,9 +249,12 @@ void ResourceStateTracker::SetKnownStateDirect(ID3D12Resource* res, D3D12_RESOUR
 
 void ResourceStateTracker::ResetLanesForFrame()
 {
-    const uint32_t lanes = clLaneCount_.load(std::memory_order_relaxed);
-    for (uint32_t i = 0; i < std::min<uint32_t>(lanes, kCLStateLanes); ++i) {
-        clLanes_[i].entries.clear();
-        clLanes_[i].epoch++;
+    for (auto& lane : clLanes_) {
+#ifdef _DEBUG
+        assert(lane->activeRecordings.load(std::memory_order_acquire) == 0 &&
+            "ResetLanesForFrame while a thread is still recording");
+#endif
+        lane->entries.clear();
+        lane->epoch++;
     }
 }
