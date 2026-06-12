@@ -1,4 +1,5 @@
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RendererInvariantFailure.h"
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
@@ -62,11 +63,10 @@ void Renderer::Shutdown()
     fontManager_.Clear();
     samplerManager_.Clear();
 
-    // 1) Stop the command “timeline”: prevent further submissions
-    {
-        std::lock_guard<std::mutex> lk(submitMtx_);
-        submitTimeline_.clear(); // PassBatch_ refers only to command lists from the frame pools :contentReference[oaicite:3]{index=3}
-    }
+    // 1) Stop the command “timeline”: prevent further submissions. Real clear —
+    // releases the pooled per-batch memory (batches refer only to command lists
+    // from the frame pools).
+    submitTimeline_.Clear();
 
     // 2) Offscreen targets (G-Buffer/Light/Scene/Depth) — destroy these first
     DestroyDeferredTargets(); // properly resets resources and heaps, and clears knownStates_ :contentReference[oaicite:4]{index=4}
@@ -395,15 +395,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
 
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandList);
-    if (!t.cl) { return; }
-
-    {
-        std::lock_guard<std::mutex> lk(submitMtx_);
-        if (batchIndex < submitTimeline_.size()) {
-            auto& b = submitTimeline_[batchIndex];
-            b.directs.push_back(t.cl);
-        }
-    }
+    submitTimeline_.RegisterDirect(t.cl, batchIndex);
 
     // Clear the TLS binding for this command list
     //UnregisterCurrentThreadCL();
@@ -413,37 +405,34 @@ void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
 }
 
 void Renderer::BeginSubmitTimeline() {
-    std::lock_guard<std::mutex> lk(submitMtx_);
-    submitTimeline_.clear();
+    submitTimeline_.BeginTimeline();
 }
 
 size_t Renderer::BeginSubmitBatch() {
-    std::lock_guard<std::mutex> lk(submitMtx_);
-    const size_t idx = submitTimeline_.size();
-    submitTimeline_.push_back({});
-    return idx;
+    return submitTimeline_.BeginBatch();
 }
 
 void Renderer::RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex)
 {
-    std::lock_guard<std::mutex> lk(submitMtx_);
-    if (batchIndex < submitTimeline_.size()) {
-        submitTimeline_[batchIndex].driver = cl;
-    }
+    submitTimeline_.RegisterDriver(cl, batchIndex);
 }
 
 void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
 {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandBundle);
-    if (b.cl != nullptr) {
-        ThrowIfFailed(b.cl->Close());
-        std::lock_guard<std::mutex> lk(submitMtx_);
-        if (batchIndex < submitTimeline_.size()) {
-            submitTimeline_[batchIndex].bundles.push_back(b.cl);
-        }
-        b.cl = nullptr;
-        b.alloc = nullptr;
+    if (b.cl == nullptr) {
+        RendererInvariantFailure("Renderer::EndThreadCommandBundle: null command list");
     }
+    // Runs on worker tasks, which must not throw (the task system swallows task
+    // exceptions) — check the HRESULT explicitly; a bundle that failed to Close
+    // would lose its GPU work.
+    const HRESULT hr = b.cl->Close();
+    if (FAILED(hr)) {
+        RendererInvariantFailure("Renderer::EndThreadCommandBundle: Close() failed");
+    }
+    submitTimeline_.RegisterBundle(b.cl, batchIndex);
+    b.cl = nullptr;
+    b.alloc = nullptr;
 }
 
 void Renderer::ExecuteTimelineAndPresent() {
@@ -454,47 +443,16 @@ void Renderer::ExecuteTimelineAndPresent() {
     // Gather batches in order
     {
         CPU_SCOPE(ProfilerScopes::kService1);
-        std::lock_guard<std::mutex> lk(submitMtx_);
-        size_t expectedListCount = 0;
-        for (const auto& pb : submitTimeline_) {
-            expectedListCount += pb.directs.size();
-            if (pb.driver != nullptr || !pb.bundles.empty()) {
-                ++expectedListCount;
-            }
-        }
-        submitListsScratch_.reserve(expectedListCount);
-        for (auto& pb : submitTimeline_) {
-            // If the driver exists (created in the pass) — append ExecuteBundle(...)
-            if (pb.driver != nullptr) {
-                for (auto* b : pb.bundles) {
-                    if (b != nullptr) {
-                        pb.driver->ExecuteBundle(b);
-                    }
-                }
-                submitListsScratch_.push_back(pb.driver);
-            }
-            else if (!pb.bundles.empty()) {
-                // Fallback: no driver available — create a temporary one
-                FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
-                ID3D12CommandAllocator* alloc =
-                    fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-                ID3D12GraphicsCommandList* cl =
-                    fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
-                RecordBindDefaultsNoClear(cl);
-                for (auto* b : pb.bundles) {
-                    if (b != nullptr) {
-                        cl->ExecuteBundle(b);
-                    }
-                }
-                submitListsScratch_.push_back(cl);
-            }
-
-            // Also attach any prepared DIRECT command lists
-            if (!pb.directs.empty()) {
-                submitListsScratch_.insert(submitListsScratch_.end(), pb.directs.begin(), pb.directs.end());
-            }
-        }
-        submitTimeline_.clear();
+        submitTimeline_.GatherFrameLists(submitListsScratch_, [this]() {
+            // Fallback: a batch has bundles but no driver — create a temporary one
+            FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
+            ID3D12CommandAllocator* alloc =
+                fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+            ID3D12GraphicsCommandList* cl =
+                fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+            RecordBindDefaultsNoClear(cl);
+            return cl;
+        });
     }
 
     fixedSubmitScratch_.clear();

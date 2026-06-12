@@ -192,8 +192,11 @@
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
+    <ClCompile Include="sources/rendering/core/RendererSubmissionStress.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
     <ClCompile Include="sources/rendering/core/ResourceStateTracker.cpp" />
+    <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp" />
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
@@ -268,8 +271,11 @@
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
+    <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />
+    <ClInclude Include="sources/rendering/core/RendererSubmissionStress.h" />
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />
     <ClInclude Include="sources/rendering/core/ResourceStateTracker.h" />
+    <ClInclude Include="sources/rendering/core/SubmitTimeline.h" />
     <ClInclude Include="sources/rendering/core/SwapchainManager.h" />
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />

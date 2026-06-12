@@ -6,6 +6,7 @@
 #pragma warning(pop)
 #include "app/App.h"
 #include "core/task/TaskSystemStress.h"
+#include "rendering/core/RendererSubmissionStress.h"
 
 #include <cstring>
 
@@ -81,6 +82,14 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "tasksystem-stress") != nullptr) {
         const bool overflow = std::strstr(lpCmdLine, "stress-overflow") != nullptr;
         return RunTaskSystemStress(overflow);
+    }
+
+    // "--renderer-submission-stress" runs the CPU-only submission-timeline
+    // stress harness instead of the app; exit code is the number of failed
+    // checks. Its death-test sub-flags (--stress-*) intentionally abort and
+    // are spawned by the harness itself in child processes.
+    if (lpCmdLine && std::strstr(lpCmdLine, "renderer-submission-stress") != nullptr) {
+        return RunRendererSubmissionStress(lpCmdLine);
     }
 
     EnableDpiAwareness();

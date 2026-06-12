@@ -213,6 +213,15 @@
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/RendererSubmissionStress.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
@@ -432,6 +441,15 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RendererSubmissionStress.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/SubmitTimeline.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/debug/DebugGrid.h">

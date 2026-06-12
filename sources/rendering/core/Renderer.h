@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "core/containers/inl_vector.h"
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
@@ -17,6 +16,7 @@
 #include "rendering/core/FrameScheduler.h"
 #include "rendering/core/ResourceStateTracker.h"
 #include "rendering/core/RenderTargetManager.h"
+#include "rendering/core/SubmitTimeline.h"
 #include "third_party/robin_hood.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "materials/Material.h"
@@ -270,14 +270,7 @@ private:
     static constexpr UINT kFrameCount = 2;
     static_assert(RenderTargetManager::kFrameCount == kFrameCount, "frame count mismatch");
 
-    static constexpr size_t kMaxNumCLsInPass = 8;
-    struct PassBatch_ {
-        ID3D12GraphicsCommandList* driver = nullptr;              // DIRECT
-        tc::inl_vector<ID3D12GraphicsCommandList*, kMaxNumCLsInPass> bundles;          // TYPE_BUNDLE
-        tc::inl_vector<ID3D12CommandList*, kMaxNumCLsInPass> directs;          // ready DIRECT command lists
-    };
-    std::vector<PassBatch_> submitTimeline_;
-    std::mutex submitMtx_;
+    SubmitTimeline submitTimeline_;
     std::vector<ID3D12CommandList*> submitListsScratch_;
     std::vector<ID3D12CommandList*> fixedSubmitScratch_;
     std::vector<D3D12_RESOURCE_BARRIER> barrierScratch_;
