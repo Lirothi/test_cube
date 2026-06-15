@@ -126,8 +126,8 @@ void PointLight::RenderZFail(Renderer* r, ID3D12GraphicsCommandList* cl,
 
     // CB b0: world/viewProj
     auto cb = r->GetFrameResource()->AllocDynamic(
-        matZFail_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
-        Renderer::kConstantBufferAlignment);
+        matZFail_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment),
+        render::kConstantBufferAlignment);
     const mat4 viewProj = view * proj;
     matZFail_->UpdateCBField(cbHandles_.zFail.world, BuildModel(), (uint8_t*)cb.cpu);
     matZFail_->UpdateCBField(cbHandles_.zFail.viewProj, viewProj, (uint8_t*)cb.cpu);
@@ -153,16 +153,16 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
 
     // CB b0: per-frame
     auto cb0 = r->GetFrameResource()->AllocDynamic(
-        matColorFS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment),
-        Renderer::kConstantBufferAlignment);
+        matColorFS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment),
+        render::kConstantBufferAlignment);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invView, invView, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.invProj, invProj, (uint8_t*)cb0.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.frame.camPos, camPos, (uint8_t*)cb0.cpu);
 
     // CB b1: per-light
     auto cb1 = r->GetFrameResource()->AllocDynamic(
-        matColorFS_->GetCBSizeBytesAligned(1, Renderer::kConstantBufferAlignment),
-        Renderer::kConstantBufferAlignment);
+        matColorFS_->GetCBSizeBytesAligned(1, render::kConstantBufferAlignment),
+        render::kConstantBufferAlignment);
     matColorFS_->UpdateCBField(cbHandles_.color.light.position, desc_.position, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.radius, desc_.radius, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);

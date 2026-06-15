@@ -27,7 +27,7 @@ void FrameScheduler::InitFence(ID3D12Device* device)
 
 void FrameScheduler::CreateFrameResources(ID3D12Device* device)
 {
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         // per-frame shader-visible heaps
         frameResources_[i] = std::make_unique<FrameResource>();
         frameResources_[i]->GetDescAlloc().Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
@@ -70,7 +70,7 @@ void FrameScheduler::WaitForGpuIdle(ID3D12CommandQueue* queue)
 
 void FrameScheduler::ResetFrameState(ID3D12Device* device)
 {
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         if (frameResources_[i]) {
             frameResources_[i]->ResetCommandAllocators(device);
             frameResources_[i]->ResetCommandListsUsage();

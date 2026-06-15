@@ -9,15 +9,15 @@ void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, H
     ThrowIfFailed(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)));
 
     // Destroy the old swap chain and RTVs when reinitializing (if any)
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         renderTargets_[i].Reset();
     }
     rtvHeap_.Reset();
     swapChain_.Reset();
 
-    // Create the swap chain (kFrameCount)
+    // Create the swap chain (render::kFrameCount)
     DXGI_SWAP_CHAIN_DESC1 scd{};
-    scd.BufferCount = kFrameCount;
+    scd.BufferCount = render::kFrameCount;
     scd.Width = width;
     scd.Height = height;
     scd.Format = resourceFormat;
@@ -33,7 +33,7 @@ void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, H
 
     // RTV heap
     D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};
-    rtvDesc.NumDescriptors = kFrameCount;
+    rtvDesc.NumDescriptors = render::kFrameCount;
     rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&rtvHeap_)));
@@ -41,7 +41,7 @@ void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, H
 
     // RTVs
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
 
         D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
@@ -101,7 +101,7 @@ void SwapchainManager::CreateDepth(ID3D12Device* device, UINT width, UINT height
 
 void SwapchainManager::ReleaseBuffersForResize()
 {
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         renderTargets_[i].Reset();
     }
     depthBuffer_.Reset();
@@ -113,7 +113,7 @@ void SwapchainManager::ResizeBuffers(UINT width, UINT height)
 {
     DXGI_SWAP_CHAIN_DESC desc{};
     ThrowIfFailed(swapChain_->GetDesc(&desc));
-    ThrowIfFailed(swapChain_->ResizeBuffers(kFrameCount, width, height, desc.BufferDesc.Format, desc.Flags));
+    ThrowIfFailed(swapChain_->ResizeBuffers(render::kFrameCount, width, height, desc.BufferDesc.Format, desc.Flags));
 }
 
 void SwapchainManager::Present()
@@ -123,7 +123,7 @@ void SwapchainManager::Present()
 
 void SwapchainManager::ReleaseBuffers()
 {
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         renderTargets_[i].Reset();
     }
     depthBuffer_.Reset();

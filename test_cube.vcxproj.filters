@@ -425,6 +425,9 @@
     <ClInclude Include="sources/rendering/core/UploadBatch.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderConstants.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>

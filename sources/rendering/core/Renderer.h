@@ -17,6 +17,7 @@
 #include "rendering/core/ResourceStateTracker.h"
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/SubmitTimeline.h"
+#include "rendering/core/RenderConstants.h"
 #include "third_party/robin_hood.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "materials/Material.h"
@@ -79,39 +80,21 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2
     D3D12_GPU_DESCRIPTOR_HANDLE StageTonemapSrvTable(); // t0     : Scene or DLSS output
 
-    // Formats
-    static constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    static constexpr DXGI_FORMAT kBackbufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-    static constexpr DXGI_FORMAT kDepthBufferResourceFormat = DXGI_FORMAT_D32_FLOAT;
-    static constexpr DXGI_FORMAT kDepthBufferViewFormat = DXGI_FORMAT_D32_FLOAT;
-    static constexpr DXGI_FORMAT kDeferredDepthFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
-    static constexpr DXGI_FORMAT kDeferredDepthSrvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-    static constexpr DXGI_FORMAT kGBuffer0Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    static constexpr DXGI_FORMAT kGBuffer1Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-    static constexpr DXGI_FORMAT kGBuffer2Format = DXGI_FORMAT_R11G11B10_FLOAT;
-    static constexpr DXGI_FORMAT kGBufferVelocityFormat = DXGI_FORMAT_R16G16_FLOAT;
-    static constexpr DXGI_FORMAT kLightTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    static constexpr DXGI_FORMAT kDlssBiasFormat = DXGI_FORMAT_R8_UNORM;
-    static constexpr DXGI_FORMAT kSsrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    static constexpr DXGI_FORMAT kSsrBlurFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    static constexpr UINT kConstantBufferAlignment = 256u;
-
-    // Formats
-    DXGI_FORMAT GetLightTargetFormat() const { return kLightTargetFormat; }
-    DXGI_FORMAT GetSceneColorFormat() const { return kSceneColorFormat; }
-    DXGI_FORMAT GetDlssBiasFormat() const { return kDlssBiasFormat; }
-    DXGI_FORMAT GetBackbufferFormat() const { return kBackbufferFormat; }
-    DXGI_FORMAT GetBackbufferResourceFormat() const { return kBackbufferResourceFormat; }
-    DXGI_FORMAT GetGBuffer0Format() const { return kGBuffer0Format; }
-    DXGI_FORMAT GetGBuffer1Format() const { return kGBuffer1Format; }
-    DXGI_FORMAT GetGBuffer2Format() const { return kGBuffer2Format; }
-    DXGI_FORMAT GetDeferredDepthFormat() const { return kDeferredDepthFormat; }
-    DXGI_FORMAT GetDsvFormat() const { return kDeferredDepthFormat; }
-    DXGI_FORMAT GetDepthSrvFormat() const { return kDeferredDepthSrvFormat; }
-    DXGI_FORMAT GetGBufferVelocityFormat() const { return kGBufferVelocityFormat; }
-    DXGI_FORMAT GetSsrFormat() const { return kSsrFormat; }
-    DXGI_FORMAT GetSsrBlurFormat() const { return kSsrBlurFormat; }
+    // Format accessors — definitions live in RenderConstants.h (render:: namespace).
+    DXGI_FORMAT GetLightTargetFormat() const { return render::kLightTargetFormat; }
+    DXGI_FORMAT GetSceneColorFormat() const { return render::kSceneColorFormat; }
+    DXGI_FORMAT GetDlssBiasFormat() const { return render::kDlssBiasFormat; }
+    DXGI_FORMAT GetBackbufferFormat() const { return render::kBackbufferFormat; }
+    DXGI_FORMAT GetBackbufferResourceFormat() const { return render::kBackbufferResourceFormat; }
+    DXGI_FORMAT GetGBuffer0Format() const { return render::kGBuffer0Format; }
+    DXGI_FORMAT GetGBuffer1Format() const { return render::kGBuffer1Format; }
+    DXGI_FORMAT GetGBuffer2Format() const { return render::kGBuffer2Format; }
+    DXGI_FORMAT GetDeferredDepthFormat() const { return render::kDeferredDepthFormat; }
+    DXGI_FORMAT GetDsvFormat() const { return render::kDeferredDepthFormat; }
+    DXGI_FORMAT GetDepthSrvFormat() const { return render::kDeferredDepthSrvFormat; }
+    DXGI_FORMAT GetGBufferVelocityFormat() const { return render::kGBufferVelocityFormat; }
+    DXGI_FORMAT GetSsrFormat() const { return render::kSsrFormat; }
+    DXGI_FORMAT GetSsrBlurFormat() const { return render::kSsrBlurFormat; }
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
@@ -146,7 +129,7 @@ public:
     float GetRenderResolutionScale() const { return renderResolutionScale_; }
     Math::float2 GetCameraJitter() const;
 
-    ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < kFrameCount ? swapchain_.Backbuffer(currentFrameIndex_) : nullptr; }
+    ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < render::kFrameCount ? swapchain_.Backbuffer(currentFrameIndex_) : nullptr; }
 
     // Access the global descriptor allocator and current frame
     DescriptorAllocator& GetDescAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetDescAlloc(); }
@@ -271,9 +254,6 @@ private:
 
 
 private:
-    static constexpr UINT kFrameCount = 2;
-    static_assert(RenderTargetManager::kFrameCount == kFrameCount, "frame count mismatch");
-
     SubmitTimeline submitTimeline_;
     std::vector<ID3D12CommandList*> submitListsScratch_;
     std::vector<ID3D12CommandList*> fixedSubmitScratch_;
@@ -309,10 +289,8 @@ private:
     GraphicsDevice                    graphicsDevice_;
     SwapchainManager                  swapchain_;
     FrameScheduler                    frameScheduler_;
-    static_assert(SwapchainManager::kFrameCount == kFrameCount, "frame count mismatch");
-    static_assert(FrameScheduler::kFrameCount == kFrameCount, "frame count mismatch");
 
-    UINT                              currentFrameIndex_ = 0;                   // 0..kFrameCount-1
+    UINT                              currentFrameIndex_ = 0;                   // 0..render::kFrameCount-1
     FrameResource*                    currentFrameResource_ = nullptr;
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};

@@ -283,37 +283,37 @@ void SceneResourceBootstrapper::RefreshHandles()
 
 UINT SceneResourceBootstrapper::GetLightingCBSizeBytes() const
 {
-    return matLighting_ ? matLighting_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matLighting_ ? matLighting_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetPointLightCBSizeBytes() const
 {
-    return matPointLightCS_ ? matPointLightCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matPointLightCS_ ? matPointLightCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetSpotLightCBSizeBytes() const
 {
-    return matSpotLightCS_ ? matSpotLightCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matSpotLightCS_ ? matSpotLightCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetSsrCBSizeBytes() const
 {
-    return matSSR_ ? matSSR_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matSSR_ ? matSSR_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetBlurCBSizeBytes() const
 {
-    return matBlur_ ? matBlur_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matBlur_ ? matBlur_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetComposeCBSizeBytes() const
 {
-    return matComposeCS_ ? matComposeCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matComposeCS_ ? matComposeCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetFxaaCBSizeBytes() const
 {
-    return matFxaaCS_ ? matFxaaCS_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment) : 0u;
+    return matFxaaCS_ ? matFxaaCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstants& data, uint8_t* dest) const

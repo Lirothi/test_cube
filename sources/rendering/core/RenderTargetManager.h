@@ -6,6 +6,7 @@
 
 #include "rendering/lighting/LightManager.h"
 #include "rendering/core/ResourceStateTracker.h"
+#include "rendering/core/RenderConstants.h"
 #include "core/math/Math.h"
 
 // Owns the per-frame deferred render targets (G-buffer, light/scene color,
@@ -15,8 +16,6 @@
 class RenderTargetManager
 {
 public:
-    static constexpr UINT kFrameCount = 2;
-
     struct DeferredTargets {
         static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
         // Resources
@@ -114,5 +113,5 @@ private:
     UINT deferredRtvIncr_ = 0, deferredDsvIncr_ = 0, deferredSrvIncr_ = 0;
 
     // Per-frame sets
-    DeferredTargets deferred_[kFrameCount];
+    DeferredTargets deferred_[render::kFrameCount];
 };

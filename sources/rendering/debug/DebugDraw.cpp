@@ -291,7 +291,7 @@ void DebugDrawSystem::Initialize(Renderer* renderer,
     gd.inputLayoutKey = "PosColor";
     gd.numRT = 1;
     gd.rtvFormats[0] = renderer->GetSceneColorFormat();
-    gd.dsvFormat = Renderer::kDeferredDepthFormat;
+    gd.dsvFormat = render::kDeferredDepthFormat;
     gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     gd.raster.CullMode = D3D12_CULL_MODE_NONE;
     gd.raster.FillMode = D3D12_FILL_MODE_SOLID;
@@ -324,7 +324,7 @@ void DebugDrawSystem::Initialize(Renderer* renderer,
     lineDesc.inputLayoutKey = "PosColor";
     lineDesc.numRT = 1;
     lineDesc.rtvFormats[0] = renderer->GetSceneColorFormat();
-    lineDesc.dsvFormat = Renderer::kDeferredDepthFormat;
+    lineDesc.dsvFormat = render::kDeferredDepthFormat;
     lineDesc.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
     lineDesc.raster.CullMode = D3D12_CULL_MODE_NONE;
     lineDesc.raster.FillMode = D3D12_FILL_MODE_SOLID;

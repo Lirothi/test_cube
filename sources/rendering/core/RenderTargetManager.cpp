@@ -54,19 +54,19 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,Light,Scene,DLSS bias
+        desc.NumDescriptors = render::kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,Light,Scene,DLSS bias
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-        desc.NumDescriptors = kFrameCount * kDeferredDsvPerFrame;  // Depth
+        desc.NumDescriptors = render::kFrameCount * kDeferredDsvPerFrame;  // Depth
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredDsvHeap_)));
     }
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = kFrameCount * kDeferredSrvPerFrame;
+        desc.NumDescriptors = render::kFrameCount * kDeferredSrvPerFrame;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
@@ -419,7 +419,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
-    for (UINT f = 0; f < kFrameCount; ++f)
+    for (UINT f = 0; f < render::kFrameCount; ++f)
     {
         auto& D = deferred_[f];
 
@@ -457,7 +457,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
 {
     deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
     std::vector<ID3D12Resource*> released;
-    released.reserve(kFrameCount * DeferredTargets::kResourceCount);
+    released.reserve(render::kFrameCount * DeferredTargets::kResourceCount);
 
     auto collect = [&released](ComPtr<ID3D12Resource>& res) {
         if (ID3D12Resource* ptr = res.Get()) {
@@ -466,7 +466,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         }
     };
 
-    for (UINT f = 0; f < kFrameCount; ++f) {
+    for (UINT f = 0; f < render::kFrameCount; ++f) {
         auto& D = deferred_[f];
         collect(D.gb0);
         collect(D.gb1);

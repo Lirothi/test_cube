@@ -36,7 +36,7 @@ inline void RecordComputeDispatch(
 
     if (cbSizeBytes > 0)
     {
-        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, Renderer::kConstantBufferAlignment);
+        auto cb = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, render::kConstantBufferAlignment);
         std::forward<WriteCBFn>(writeConstants)(static_cast<uint8_t*>(cb.cpu));
         rc.cbv[0] = cb.gpu;
     }

@@ -1,0 +1,46 @@
+#pragma once
+
+#include <dxgiformat.h> // DXGI_FORMAT
+
+// Rendering-wide compile-time constants, in the render:: namespace. Single
+// source of truth shared across the renderer core (Renderer, SwapchainManager,
+// FrameScheduler, RenderTargetManager) and consumers like materials/dispatch.
+// This header depends only on the DXGI format enum, so it sits below the
+// renderer subsystems in the include graph — any of them can include it freely
+// without pulling in Renderer.
+//
+// Keep entries to values that span multiple subsystems and change rarely — this
+// header is included widely, so editing it recompiles a lot.
+namespace render {
+
+// Frames in flight = swapchain backbuffer count = number of per-frame resource
+// sets (command allocators/lists, descriptor heaps, deferred render targets,
+// fence values). Change once (e.g. 2 -> 3 for triple buffering) and every
+// per-frame array resizes together.
+inline constexpr unsigned kFrameCount = 3;
+
+// D3D12 constant-buffer placement alignment (CBV size/offset must be a multiple).
+inline constexpr unsigned kConstantBufferAlignment = 256u;
+
+// --- Swapchain / backbuffer formats ---
+inline constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+inline constexpr DXGI_FORMAT kBackbufferFormat         = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+
+// --- Window-sized depth (swapchain depth) formats ---
+inline constexpr DXGI_FORMAT kDepthBufferResourceFormat = DXGI_FORMAT_D32_FLOAT;
+inline constexpr DXGI_FORMAT kDepthBufferViewFormat     = DXGI_FORMAT_D32_FLOAT;
+
+// --- Deferred G-buffer + intermediate target formats ---
+inline constexpr DXGI_FORMAT kDeferredDepthFormat    = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+inline constexpr DXGI_FORMAT kDeferredDepthSrvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+inline constexpr DXGI_FORMAT kGBuffer0Format         = DXGI_FORMAT_R8G8B8A8_UNORM;
+inline constexpr DXGI_FORMAT kGBuffer1Format         = DXGI_FORMAT_R10G10B10A2_UNORM;
+inline constexpr DXGI_FORMAT kGBuffer2Format         = DXGI_FORMAT_R11G11B10_FLOAT;
+inline constexpr DXGI_FORMAT kGBufferVelocityFormat  = DXGI_FORMAT_R16G16_FLOAT;
+inline constexpr DXGI_FORMAT kLightTargetFormat      = DXGI_FORMAT_R16G16B16A16_FLOAT;
+inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_FLOAT;
+inline constexpr DXGI_FORMAT kDlssBiasFormat         = DXGI_FORMAT_R8_UNORM;
+inline constexpr DXGI_FORMAT kSsrFormat              = DXGI_FORMAT_R8G8B8A8_UNORM;
+inline constexpr DXGI_FORMAT kSsrBlurFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+} // namespace render

@@ -268,6 +268,7 @@
     <ClInclude Include="sources/rendering/core/DlssHandler.h" />
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
     <ClInclude Include="sources/rendering/core/RenderPass.h" />
+    <ClInclude Include="sources/rendering/core/RenderConstants.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />

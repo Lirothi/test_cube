@@ -139,7 +139,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     if (cl == nullptr) { return; }
     if (!graphicsMaterial_) { return; }
 
-    constexpr UINT kAlign = Renderer::kConstantBufferAlignment;
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
     const UINT cbSizeBytes = graphicsMaterial_->GetCBSizeBytesAligned(0, kAlign);
 
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
@@ -192,8 +192,8 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
         return;
     }
 
-    UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, Renderer::kConstantBufferAlignment);
-    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, Renderer::kConstantBufferAlignment);
+    UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, render::kConstantBufferAlignment);
     uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
     auto h = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = h.ref();

@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include "rendering/core/FrameResource.h"
+#include "rendering/core/RenderConstants.h"
 
 // Owns frame pacing state: the frame fence + event, per-frame fence values,
 // and the per-frame FrameResource pools (command allocators/lists, descriptor
@@ -13,8 +14,6 @@
 class FrameScheduler
 {
 public:
-    static constexpr UINT kFrameCount = 2;
-
     ~FrameScheduler();
 
     void InitFence(ID3D12Device* device);     // safe no-op when already initialized
@@ -30,7 +29,7 @@ public:
     bool HasFence() const { return fence_ != nullptr; }
     FrameResource* GetFrameResource(UINT frameIndex) const
     {
-        return frameIndex < kFrameCount ? frameResources_[frameIndex].get() : nullptr;
+        return frameIndex < render::kFrameCount ? frameResources_[frameIndex].get() : nullptr;
     }
 
     // Shutdown is staged to preserve the original release order.
@@ -41,7 +40,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
     HANDLE fenceEvent_ = nullptr;
     UINT64 nextFenceValue_ = 1;                  // global increment
-    UINT64 frameFenceValues_[kFrameCount] = {};  // last signal value for each frame
+    UINT64 frameFenceValues_[render::kFrameCount] = {};  // last signal value for each frame
 
-    std::unique_ptr<FrameResource> frameResources_[kFrameCount];
+    std::unique_ptr<FrameResource> frameResources_[render::kFrameCount];
 };

@@ -167,7 +167,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     // --- Queue ---
     graphicsDevice_.InitQueue();
 
-    // --- SwapChain + RTVs (kFrameCount) ---
+    // --- SwapChain + RTVs (render::kFrameCount) ---
     CreateSwapChainAndRTVs(width_, height_);
 
     // --- Depth ---
@@ -218,7 +218,7 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
 
 void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
     // Forget tracked states of the old backbuffers before they are released
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         ClearResourceState(swapchain_.Backbuffer(i));
     }
 
@@ -227,13 +227,13 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
 
     currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();
 
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         SetResourceState(swapchain_.Backbuffer(i), D3D12_RESOURCE_STATE_PRESENT);
     }
 }
 
 void Renderer::CreateDepthResources(UINT width, UINT height) {
-    swapchain_.CreateDepth(GetDevice(), width, height, kDepthBufferResourceFormat, kDepthBufferViewFormat);
+    swapchain_.CreateDepth(GetDevice(), width, height, render::kDepthBufferResourceFormat, render::kDepthBufferViewFormat);
 }
 
 void Renderer::WaitForFrame(UINT frameIndex) {
@@ -249,7 +249,7 @@ void Renderer::RefreshCurrentFrameCaches() {
     currentFrameDescriptorHeapCount_ = 0;
     currentFrameDescriptorHeaps_.fill(nullptr);
 
-    if (currentFrameIndex_ >= kFrameCount) {
+    if (currentFrameIndex_ >= render::kFrameCount) {
         return;
     }
 
@@ -333,7 +333,7 @@ void Renderer::Tick(float dt)
         }
 
         // 2) Apply pending rebuilds (if the scan found changes and set the flag)
-        if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/kFrameCount + 1)) {
+        if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/render::kFrameCount + 1)) {
             materialsHotReloaded_ = true;
         }
     }
@@ -594,7 +594,7 @@ void Renderer::OnResize(UINT width, UINT height) {
     WaitForPreviousFrame();
 
     // Release the old RTV/DSV objects
-    for (UINT i = 0; i < kFrameCount; ++i) {
+    for (UINT i = 0; i < render::kFrameCount; ++i) {
         ClearResourceState(swapchain_.Backbuffer(i));
     }
     ClearResourceState(swapchain_.DepthBuffer());
@@ -694,18 +694,18 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
 
     RenderTargetManager::Formats formats{};
-    formats.gb0 = kGBuffer0Format;
-    formats.gb1 = kGBuffer1Format;
-    formats.gb2 = kGBuffer2Format;
-    formats.velocity = kGBufferVelocityFormat;
-    formats.depth = kDeferredDepthFormat;
-    formats.depthSrv = kDeferredDepthSrvFormat;
-    formats.light = kLightTargetFormat;
-    formats.sceneColor = kSceneColorFormat;
-    formats.dlssBias = kDlssBiasFormat;
-    formats.ssr = kSsrFormat;
-    formats.ssrBlur = kSsrBlurFormat;
-    formats.backbufferResource = kBackbufferResourceFormat;
+    formats.gb0 = render::kGBuffer0Format;
+    formats.gb1 = render::kGBuffer1Format;
+    formats.gb2 = render::kGBuffer2Format;
+    formats.velocity = render::kGBufferVelocityFormat;
+    formats.depth = render::kDeferredDepthFormat;
+    formats.depthSrv = render::kDeferredDepthSrvFormat;
+    formats.light = render::kLightTargetFormat;
+    formats.sceneColor = render::kSceneColorFormat;
+    formats.dlssBias = render::kDlssBiasFormat;
+    formats.ssr = render::kSsrFormat;
+    formats.ssrBlur = render::kSsrBlurFormat;
+    formats.backbufferResource = render::kBackbufferResourceFormat;
 
     RenderTargetManager::Sizes sizes{};
     sizes.renderWidth = rtWidth;
