@@ -261,6 +261,11 @@ grid each frame → the snap is defeated → shadow edges crawl/shimmer on rotat
 `normalBiasWS`/`depthBiasNDC` (`:205-206`) scale with `unitsPerTexel` too, so the bias
 swims as well.
 
+**Observed (confirmed with user 2026-06-15):** in the demo, a thin line on FLAT LIT ground
+at each split (~15/40/100 m) CRAWLS/SHIMMERS as the camera rotates — that motion is this
+bias/texel-grid swim. After 2a the line must stop moving (the remaining static line is
+Step 3's job). Verify by panning the camera and watching a split line.
+
 **Fix:** drop the `min(., rLS)` and use the rotation-invariant `radiusFor(...) + overlap`
 directly. `unitsPerTexel` becomes constant per cascade → the texel snap actually
 stabilizes the map (invariant 4). Accept the few-% resolution cost vs the tight corner
@@ -311,6 +316,12 @@ layer clean.
 `ChooseCascadeIndex` (`lighting_cs.hlsl:49-54`) returns a single cascade by view-space
 depth. At a split the cascade flips discontinuously, and bias / texel density / PCF
 radius all change with it → a visible seam at the split distance (15 / 40 / 100 m).
+
+**Observed (confirmed with user 2026-06-15):** the seam shows on FLAT LIT ground (not only
+on shadowed surfaces) as a thin self-shadow/bias step at each split — each cascade biases
+its own acne differently. The blend band must fade this static line into a gradient. (Its
+crawl/shimmer is a separate symptom, fixed by Step 2a — do 2a first.) Residual within-a-
+cascade acne, if any remains, is bias tuning (Step 4 / parked D32 precision).
 
 **Fix:** define a blend band of width `w` just before each split (reuse
 `cascadeConfig_.overlap` = 2 m, or a fraction of the cascade's range — pass it into the

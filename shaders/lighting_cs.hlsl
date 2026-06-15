@@ -77,33 +77,56 @@ float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
 float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 {
     int idx = ChooseCascadeIndex(Pws);
-    float4x4 LVP = lightViewProj[idx];
-    float4 sb = cascadeScaleBias[idx];
-    float2 scale = sb.xy;
-    float2 bias = sb.zw;
 
-    float3 Poff = Pws + Nws * normalBiasWS[idx];
+    const float2 texel = 1.0 / shadowAtlasSize;
 
-    float4 lc = mul(float4(Poff, 1), LVP);
-    float2 uv = (lc.xy / max(1e-6, lc.w)) * float2(0.5, -0.5) + float2(0.5, 0.5);
-    float z = lc.z / max(1e-6, lc.w);
-
-    uv = uv * scale + bias;
-
-    if (any(uv < 0.0) || any(uv > 1.0))
+    // Walk from the depth-chosen cascade toward the coarsest, sampling the first
+    // cascade whose OWN [0,1] frustum actually contains the (normal-bias-offset)
+    // point. We test the cascade-local UV (BEFORE the atlas scale+bias) so we
+    // never sample a neighbour tile, and we fall back to a coarser cascade rather
+    // than returning lit at a tile edge. Only return lit when even cascade 3
+    // misses — there the point is genuinely beyond the directional shadow range.
+    [unroll]
+    for (int c = 0; c < 4; ++c)
     {
-        return 1.0;
+        if (c < idx)
+        {
+            continue;
+        }
+
+        const float4x4 LVP = lightViewProj[c];
+        const float4 sb = cascadeScaleBias[c];
+        const float2 scale = sb.xy;
+        const float2 biasUV = sb.zw;
+
+        // Re-evaluate the offset per cascade: each has its own texel size.
+        const float3 Poff = Pws + Nws * normalBiasWS[c];
+
+        const float4 lc = mul(float4(Poff, 1), LVP);
+        const float2 uvLocal = (lc.xy / max(1e-6, lc.w)) * float2(0.5, -0.5) + float2(0.5, 0.5);
+        const float z = lc.z / max(1e-6, lc.w);
+
+        // The four tiles are packed with NO gutter, so inset the in-cascade test by
+        // the PCF tap reach (in this cascade's local UV units). A 3x3 tap then can
+        // never read across the tile border into a neighbour cascade's texels.
+        const float2 margin = (pcfRadius * texel) / max(1e-6, scale);
+        if (any(uvLocal < margin) || any(uvLocal > 1.0 - margin))
+        {
+            continue;
+        }
+
+        const float2 uv = uvLocal * scale + biasUV;
+        const float bBase = shadowBiasNDC[c];
+        const float b = bBase + (1.0 - saturate(NdotL)) * bBase;
+
+        if (c < 3)
+        {
+            return ShadowPCF3x3(uv, z - b, texel, pcfRadius);
+        }
+        return ShadowPCF(uv, z - b);
     }
 
-    float2 texel = 1.0 / shadowAtlasSize;
-    float bBase = shadowBiasNDC[idx];
-    float b = bBase + (1.0 - saturate(NdotL)) * bBase;
-
-    if (idx < 3)
-    {
-        return ShadowPCF3x3(uv, z - b, texel, pcfRadius);
-    }
-    return ShadowPCF(uv, z - b);
+    return 1.0;
 }
 
 [numthreads(8,8,1)]
