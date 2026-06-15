@@ -103,6 +103,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
     MainRenderGraph rg;
+    // CL group (step 5): the prologue clear and the object-compute dispatches are
+    // two tiny back-to-back lists with no mtDeps; share one command list.
+    rg.BeginCLGroup();
     auto pClear = rg.AddPass(RenderPass::Main_PrologueClear, {},
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassPrologueClear); Pass_PrologueClear(renderer, ctx); });
 
@@ -111,6 +114,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassObjectCompute);
             Pass_ObjectCompute(renderer, ctx);
         });
+    rg.EndCLGroup();
 
     auto pShoreDepth = rg.AddPass(RenderPass::Main_TerrainDepth, { pCompute },
         [this, renderer](RenderGraphPassContext ctx) {
@@ -248,6 +252,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // always includes any debug geometry submitted during rendering.
     // Only the unconditional outputs are declared; the tonemap source (scene or
     // DLSS output) and the backbuffer copy are handled inside the pass body.
+    // CL group (step 5): the optional debug-texture draw follows tonemap on the
+    // same target with no mtDeps; share one command list (Debug usually early-outs).
+    rg.BeginCLGroup();
     auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pDebugDraw },
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
@@ -255,6 +262,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     rg.AddPass(RenderPass::Main_Debug, { pTone },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassDebug); Pass_Debug(renderer, ctx); });
+    rg.EndCLGroup();
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     rg.ExecuteParallel(renderer, TaskSystem::Get());
@@ -416,13 +424,13 @@ void SceneRenderer::RenderShadowBatch(Renderer* renderer,
 
 void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
 {
-    auto t = r->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPrologueClear);
         r->RecordBindAndClear(t.cl);
     }
-    r->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx)
@@ -432,7 +440,7 @@ void SceneRenderer::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContex
         return;
     }
 
-    auto compute = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto compute = ctx.BeginCL();
     SetCommandListName(compute.cl, ctx.pass);
     {
         GPU_SCOPE(compute.cl, ProfilerScopes::kPassObjectCompute);
@@ -447,7 +455,7 @@ void SceneRenderer::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContex
         }
     }
 
-    renderer->EndThreadCommandList(compute, ctx.batchIndex);
+    ctx.EndCL(compute);
 }
 
 void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext ctx,
@@ -1242,7 +1250,7 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
 
 void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
@@ -1267,7 +1275,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         auto tonemapMaterial = resources_.GetTonemapMaterial();
         if (!tonemapMaterial)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1327,7 +1335,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
-    renderer->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
@@ -1337,7 +1345,7 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         return;
     }
     const auto& D = renderer->GetDeferredForFrame();
-    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebug);
@@ -1355,7 +1363,7 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         auto debugMaterial = resources_.GetDebugMaterial();
         if (!debugMaterial)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1364,7 +1372,7 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         t.cl->DrawInstanced(3, 1, 0, 0);
     }
 
-    renderer->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
