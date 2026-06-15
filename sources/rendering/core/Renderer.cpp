@@ -395,6 +395,17 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
 
 void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex, uint32_t localOrder) {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandList);
+    if (t.cl == nullptr) {
+        RendererInvariantFailure("Renderer::EndThreadCommandList: null command list");
+    }
+    // Step 4: work lists close at End time (no longer at submit time, when the
+    // fixup used to append the next list's acquire barriers to this one's tail).
+    // Runs on worker tasks, which must not throw — check the HRESULT explicitly;
+    // a list that failed to Close would lose its GPU work.
+    const HRESULT hr = t.cl->Close();
+    if (FAILED(hr)) {
+        RendererInvariantFailure("Renderer::EndThreadCommandList: Close() failed");
+    }
     submitTimeline_.RegisterDirect(t.cl, batchIndex, localOrder);
 
     // Clear the TLS binding for this command list
@@ -457,13 +468,19 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     fixedSubmitScratch_.clear();
     fixedSubmitScratch_.reserve(submitListsScratch_.size() * 2 + 3);
-#if PROF_GPU_ENABLED
-    {
+
+    // Acquire a fresh, open DIRECT command list from this frame's pool.
+    auto acquireDirectCL = [this]() -> ID3D12GraphicsCommandList* {
         FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
         ID3D12CommandAllocator* alloc =
             fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-        ID3D12GraphicsCommandList* cl =
-            fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+        return fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
+    };
+
+#if PROF_GPU_ENABLED
+    {
+        // GPU-profiler frame-begin: first list submitted this frame.
+        ID3D12GraphicsCommandList* cl = acquireDirectCL();
         Profiler::Get().BeginGpuFrame(cl);
         ThrowIfFailed(cl->Close());
         fixedSubmitScratch_.push_back(cl);
@@ -473,42 +490,37 @@ void Renderer::ExecuteTimelineAndPresent() {
     {
         CPU_SCOPE(ProfilerScopes::kService2);
 
-        ID3D12GraphicsCommandList* previousCmd = nullptr;
+        // Step 4: work lists are already closed (directs at EndThreadCommandList,
+        // drivers at gather time). For each in submission order, compute its
+        // acquire barriers against the global state and, when non-empty, record
+        // them into a small DEDICATED command list submitted immediately before
+        // that work list. Per-list (never one prologue per batch): a later list
+        // in a batch may transition out of an earlier list's final state, which
+        // a single aggregated prologue could not represent.
         const ResourceStateTracker::CLState* previousState = nullptr;
 
         for (auto* cmd : submitListsScratch_) {
-            auto* currentCmd = static_cast<ID3D12GraphicsCommandList*>(cmd);
             const ResourceStateTracker::CLState* currentState = stateTracker_.FindCLStateForCmd(cmd);
 
-            barrierScratch_.clear();
-
+            // Fold the previous list's final states into the global map first,
+            // then resolve this list's acquire barriers against it.
             if (previousState) {
                 stateTracker_.ApplyFinalStates(*previousState);
             }
 
+            barrierScratch_.clear();
             if (currentState) {
                 stateTracker_.AppendAcquireBarriers(*currentState, barrierScratch_);
             }
 
-            if (previousCmd != nullptr) {
-                if (!barrierScratch_.empty()) {
-                    previousCmd->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
-                }
-
-                ThrowIfFailed(previousCmd->Close());
-                fixedSubmitScratch_.push_back(previousCmd);
-            } else if (!barrierScratch_.empty()) {
-                FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
-                ID3D12CommandAllocator* alloc =
-                    fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-                ID3D12GraphicsCommandList* prologue =
-                    fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
-                prologue->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
-                ThrowIfFailed(prologue->Close());
-                fixedSubmitScratch_.push_back(prologue);
+            if (!barrierScratch_.empty()) {
+                ID3D12GraphicsCommandList* acquire = acquireDirectCL();
+                acquire->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
+                ThrowIfFailed(acquire->Close());
+                fixedSubmitScratch_.push_back(acquire);
             }
 
-            previousCmd = currentCmd;
+            fixedSubmitScratch_.push_back(cmd);
             previousState = currentState;
         }
 
@@ -516,14 +528,9 @@ void Renderer::ExecuteTimelineAndPresent() {
             stateTracker_.ApplyFinalStates(*previousState);
         }
 
-        ID3D12GraphicsCommandList* epilogueCmd = previousCmd;
-        if (epilogueCmd == nullptr) {
-            FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
-            ID3D12CommandAllocator* alloc =
-                fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
-            epilogueCmd =
-                fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
-        }
+        // Dedicated epilogue list submitted last: present transition (+ GPU
+        // profiler frame-end). Never reopen or append to the final work list.
+        ID3D12GraphicsCommandList* epilogueCmd = acquireDirectCL();
 
         ID3D12Resource* backbuffer = swapchain_.Backbuffer(currentFrameIndex_);
 

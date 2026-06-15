@@ -75,9 +75,11 @@ ID3D12GraphicsCommandList* UnexpectedFallback()
     return FakeGfxCL(0xDEAD);
 }
 
-// Registration-order retention across batches, including a batch far beyond
-// the 8-entry inline capacity of the container this layer replaced (which
-// went out of bounds in Release).
+// Registration retention + localOrder sort across batches, including a batch
+// far beyond the 8-entry inline capacity of the container this layer replaced
+// (which went out of bounds in Release). Directs only: gather now closes
+// drivers (a real D3D12 Close that fake pointers can't survive), so driver
+// placement is covered separately by ScenarioDriverOrdering via inspection.
 void ScenarioOrderRetention(int round)
 {
     SubmitTimeline tl;
@@ -85,20 +87,12 @@ void ScenarioOrderRetention(int round)
     size_t id = static_cast<size_t>(round) * 1000;
 
     tl.BeginTimeline();
-    const size_t bDriverOnly = tl.BeginBatch();
     const size_t bMixed = tl.BeginBatch();
     const size_t bBig = tl.BeginBatch();
     const size_t bEmpty = tl.BeginBatch();
     const size_t bSmall = tl.BeginBatch();
     (void)bEmpty; // an activated batch nothing registers into must gather to nothing
 
-    ID3D12GraphicsCommandList* driverOnly = FakeGfxCL(id++);
-    tl.RegisterDriver(driverOnly, bDriverOnly);
-    expected.push_back(driverOnly);
-
-    ID3D12GraphicsCommandList* mixedDriver = FakeGfxCL(id++);
-    tl.RegisterDriver(mixedDriver, bMixed);
-    expected.push_back(mixedDriver); // driver gathers before the batch's directs
     for (int i = 0; i < 3; ++i) {
         ID3D12CommandList* cl = FakeCL(id++);
         tl.RegisterDirect(cl, bMixed, static_cast<uint32_t>(i));
@@ -124,6 +118,33 @@ void ScenarioOrderRetention(int round)
     char what[128];
     std::snprintf(what, sizeof(what), "order retention round=%d (%zu lists, one batch >8)", round, expected.size());
     Check(ok, what);
+}
+
+// Driver placement + direct sort without gathering: gather closes the driver
+// (real D3D12 Close) which a fake pointer can't survive, so this inspects the
+// batch directly. Directs are registered in reverse localOrder; after
+// ApplySubmitOrder the batch holds the driver plus directs sorted ascending,
+// which gather then flattens driver-first by construction.
+void ScenarioDriverOrdering()
+{
+    SubmitTimeline tl;
+    tl.BeginTimeline();
+    const size_t batch = tl.BeginBatch();
+
+    ID3D12GraphicsCommandList* driver = FakeGfxCL(900000);
+    tl.RegisterDriver(driver, batch);
+    for (int i = 4; i >= 0; --i) {
+        tl.RegisterDirect(FakeCL(900100 + i), batch, static_cast<uint32_t>(i));
+    }
+    tl.ApplySubmitOrder();
+
+    const SubmitTimeline::PassBatch& pb = tl.Batch(batch);
+    bool ok = pb.driver == driver && pb.directs.size() == 5 && pb.bundles.empty();
+    for (int i = 0; i < 5 && ok; ++i) {
+        ok = pb.directs[i].order == static_cast<uint32_t>(i) &&
+             pb.directs[i].cl == FakeCL(900100 + i);
+    }
+    Check(ok, "driver present + directs reverse-order sorted (driver gathers first)");
 }
 
 // Concurrent registration from many threads, one batch per thread (matching
@@ -632,6 +653,7 @@ int RunRendererSubmissionStress(const char* cmdLine)
         Log("--- round %d/%d ---\n", round + 1, kRounds);
 
         ScenarioOrderRetention(round);
+        ScenarioDriverOrdering();
         ScenarioConcurrentRegistration(hw, 64, 40);
         ScenarioConcurrentRegistration(2, 256, 20);
         ScenarioPoolReuse(200);

@@ -6,6 +6,8 @@
 #include <mutex>
 #include <vector>
 
+#include "rendering/core/RendererInvariantFailure.h"
+
 // Per-frame submission timeline: the ordered pass batches that collect the
 // command lists render-pass workers record (concurrently) for one frame.
 // Batch order defines GPU execution order; within a batch the driver list
@@ -76,6 +78,10 @@ public:
     // (after executing its bundles into it, in localOrder order), then the
     // direct lists in localOrder order. A batch with bundles but no driver
     // gets one from makeFallbackDriver(). Deactivates the timeline afterwards.
+    //
+    // The driver's lifecycle ends here (step 4): bundles are appended in sorted
+    // order and the driver is CLOSED exactly once, at gather time. Direct lists
+    // were already closed by EndThreadCommandList; this only collects them.
     template <class MakeFallbackDriver>
     void GatherFrameLists(std::vector<ID3D12CommandList*>& out, MakeFallbackDriver&& makeFallbackDriver)
     {
@@ -99,6 +105,9 @@ public:
             if (driver != nullptr) {
                 for (const auto& bundle : pb.bundles) {
                     driver->ExecuteBundle(bundle.cl); // bundles are non-null (checked at registration)
+                }
+                if (FAILED(driver->Close())) {
+                    RendererInvariantFailure("SubmitTimeline::GatherFrameLists: driver Close() failed");
                 }
                 out.push_back(driver);
             }
