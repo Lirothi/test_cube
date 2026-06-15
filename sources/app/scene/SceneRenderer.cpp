@@ -189,6 +189,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_Skybox(renderer, ctx, *frame_->camera);
         });
 
+    // CL group (step 5): SSR -> SSRBlur -> Compose is a sequential single-dispatch
+    // chain with no mtDeps. Grouping collapses its 3 command lists into 1 — the
+    // per-CL prologue/acquire overhead dominates these passes' tiny record cost,
+    // and the inter-pass acquire barriers become correctly-placed intra-CL barriers.
+    rg.BeginCLGroup();
     auto pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
         { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -220,6 +225,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassCompose);
             Pass_Compose(renderer, ctx, *frame_->camera);
         });
+    rg.EndCLGroup();
 
     // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST
     // flips mid-list) before rebinding the targets — inherently ordered work that
@@ -993,7 +999,7 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
     //return;
-    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSR);
@@ -1004,7 +1010,7 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
         const UINT cbSize = resources_.GetSsrCBSizeBytes();
         if (!ssrMaterial || cbSize == 0)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1038,13 +1044,13 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
             renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
             D.ssr.Get());
     }
-    renderer->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx)
 {
     //return;
-    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSSRBlur);
@@ -1059,7 +1065,7 @@ void SceneRenderer::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx
         const UINT cbSize = resources_.GetBlurCBSizeBytes();
         if (!blurMaterial || cbSize == 0)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1088,13 +1094,13 @@ void SceneRenderer::Pass_SSR_Blur(Renderer* renderer, RenderGraphPassContext ctx
             ssrWidth, ssrHeight,
             D.ssr.Get());
     }
-    renderer->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
-    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassCompose);
@@ -1106,7 +1112,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         if (width <= 0.0f || height <= 0.0f)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1116,7 +1122,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         if (!composeMaterial || cbSize == 0 || !skybox)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
+            ctx.EndCL(t);
             return;
         }
 
@@ -1140,7 +1146,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
-    renderer->EndThreadCommandList(t, ctx.batchIndex);
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,

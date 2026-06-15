@@ -24,14 +24,51 @@ struct ResourceStateDecl {
 using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 8>;
 
 struct RenderGraphPassContext {
+    // Shared command-list state for a CL group (step 5). Lives on the group
+    // task's stack; every member's context points at the same instance so they
+    // record into one CL. Opened lazily on the first BeginCL (an all-early-out
+    // group emits no CL); the group closes it once after its last member.
+    struct GroupCL {
+        Renderer::ThreadCL shared{};
+        bool opened = false;
+    };
+
     Renderer* renderer = nullptr;
     size_t      batchIndex = (size_t)-1;
     RenderPass  pass{};
     const ResourceStateDeclList* declares = nullptr;
+    GroupCL* groupCL = nullptr; // non-null => this pass is a member of a CL group
+
+    // Provision the pass's command list. Ungrouped: a fresh DIRECT list, closed
+    // into the batch by EndCL. Grouped: the group's shared list (opened on first
+    // call), and EndCL is a no-op — the group closes it after its last member.
+    // Pass bodies are agnostic: same shape either way, only the provider differs.
+    Renderer::ThreadCL BeginCL(ID3D12PipelineState* initialPSO = nullptr) const
+    {
+        if (groupCL) {
+            if (!groupCL->opened) {
+                groupCL->shared = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT, initialPSO);
+                groupCL->opened = true;
+            }
+            return groupCL->shared;
+        }
+        return renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT, initialPSO);
+    }
+
+    void EndCL(Renderer::ThreadCL& t) const
+    {
+        if (groupCL) {
+            return; // group owns the shared list's lifecycle (closed after last member)
+        }
+        // Lone list in its own batch -> local order 0.
+        renderer->EndThreadCommandList(t, batchIndex, 0);
+    }
 
     // Registers the pass's declared resource states on the given (just-opened)
-    // command list. Call once, right after BeginThreadCommandList, on the command
-    // list that must observe the declared states first.
+    // command list. Call once, right after BeginCL, on the command list that
+    // must observe the declared states first. In a group each member calls this
+    // at its own recording position, so the tracker places intra-CL barriers
+    // exactly between members (see step 5d).
     void ApplyDeclaredStates(ID3D12GraphicsCommandList* cl) const
     {
         if (!renderer || !declares || !cl) { return; }
@@ -66,6 +103,10 @@ public:
     static constexpr size_t kPassDependencyCapacity = 4;
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
 
+    static constexpr size_t kNoGroup = (size_t)-1;
+    static constexpr size_t kMaxGroupMembers = 8;
+    using GroupMemberList = tc::inl_vector<size_t, kMaxGroupMembers>;
+
     struct Pass {
         RenderPass name{};
         DependencyList prereqs; // batch opening order (DAG)
@@ -73,6 +114,7 @@ public:
         DependencyList mtDeps;  // runtime dependencies (which passes must complete)
         SuccessorList successors;
         ResourceStateDeclList declares; // resource states the pass needs on entry
+        size_t groupId = kNoGroup;      // CL group this pass belongs to (kNoGroup = ungrouped)
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
@@ -129,6 +171,42 @@ public:
         return AddPassInternal(name, prereqs, mtDeps, {}, std::move(fn));
     }
 
+    // Command-list group brackets (step 5). Passes added between Begin/End share
+    // ONE command list and run as ONE schedulable node (one batch, one task,
+    // members executed in declaration order). Members must form a contiguous
+    // prereq chain; only the first member may have prereqs from outside the
+    // group (asserted in EndCLGroup). Use for short single-dispatch passes whose
+    // per-CL overhead dominates their recording cost — measure one group at a
+    // time. Fan-out passes (drivers, per-chunk/cascade/light workers) are never
+    // groupable and must keep calling the renderer directly.
+    void BeginCLGroup()
+    {
+        assert(currentGroup_ == kNoGroup && "nested CL groups are not supported");
+        assert(groupCount_ < MaxPasses && "CL group capacity exceeded");
+        currentGroup_ = groupCount_++;
+        groups_[currentGroup_].clear_fast();
+    }
+
+    void EndCLGroup()
+    {
+        assert(currentGroup_ != kNoGroup && "EndCLGroup without BeginCLGroup");
+        const GroupMemberList& members = groups_[currentGroup_];
+        assert(members.size() >= 1 && "empty CL group");
+        // Contiguity: every member after the first may only depend on earlier
+        // members of the same group (no external prereq into the middle of a
+        // group, which would let other work interleave between members).
+        for (size_t i = 1; i < members.size(); ++i) {
+            const Pass& m = passes_[members[i]];
+            for (size_t pr : m.prereqs) {
+                bool inGroup = false;
+                for (size_t mm : members) { if (mm == pr) { inGroup = true; break; } }
+                assert(inGroup && "grouped pass (non-first) has a prereq from outside the group");
+                (void)inGroup;
+            }
+        }
+        currentGroup_ = kNoGroup;
+    }
+
     struct FlatNode { size_t pass; size_t batch; };
 
     // Legacy path: sequential execution in place
@@ -155,58 +233,55 @@ public:
 
         const size_t N = passesNum_;
 
+        // schedule holds one entry per NODE (group owner or singleton). passDone
+        // is keyed by pass index; only owners carry a handle, so a wait/release
+        // walk over schedule touches each task exactly once.
         tc::inl_vector<TaskSystem::TaskHandle, MaxPasses> passDone;
-
         passDone.resize(N, nullptr);
 
-        // create all tasks first
+        DependencyList nodeDeps;
+
+        // create all tasks first (a group runs all its members in one task)
         for (const auto& n : schedule) {
-            const size_t passIdx = n.pass;
-            if (!passes_[passIdx].exec) { continue; }
-
-            auto handle = tasks.CreateTask([this, renderer, n, passIdx]() {
-                PassContext ctx;
-                ctx.renderer = renderer;
-                ctx.batchIndex = n.batch;
-                ctx.pass = passes_[passIdx].name;
-                ctx.declares = &passes_[passIdx].declares;
-                passes_[passIdx].exec(ctx);
-            }, passes_[passIdx].mtDeps.size());
-
-            passDone[passIdx] = handle;
+            const size_t ownerIdx = n.pass;
+            const size_t batch = n.batch;
+            CollectNodeDeps(ownerIdx, nodeDeps);
+            auto handle = tasks.CreateTask([this, renderer, ownerIdx, batch]() {
+                RunNode(renderer, ownerIdx, batch);
+            }, nodeDeps.size());
+            passDone[ownerIdx] = handle;
         }
 
         tc::inl_vector<TaskSystem::TaskHandle, kPassDependencyCapacity> deps;
-        // set up dependencies between created tasks
+        // set up dependencies between created tasks (member deps resolve to owners)
         for (const auto& n : schedule) {
-            const size_t passIdx = n.pass;
-            if (!passes_[passIdx].exec) { continue; }
-
+            const size_t ownerIdx = n.pass;
+            CollectNodeDeps(ownerIdx, nodeDeps);
             deps.clear();
-            for (size_t dep : passes_[passIdx].mtDeps) {
-                if (dep < passDone.size() && passDone[dep]) {
+            for (size_t dep : nodeDeps) {
+                if (passDone[dep]) {
                     deps.push_back(passDone[dep]);
                 }
             }
-
-            tasks.SetDependencies(passDone[passIdx], deps.data(), deps.size());
+            tasks.SetDependencies(passDone[ownerIdx], deps.data(), deps.size());
         }
 
-        // finally submit tasks for execution
+        // finally submit nodes with no runtime dependencies
         for (const auto& n : schedule) {
-            const size_t passIdx = n.pass;
-            auto& pass = passes_[passIdx];
-            if (!pass.exec || pass.mtDeps.size() > 0) { continue; }
-            tasks.Submit(passDone[passIdx]);
-        }
-
-        for (size_t i = 0; i < N; ++i) {
-            if (passDone[i]) {
-                tasks.Wait(passDone[i]);
+            const size_t ownerIdx = n.pass;
+            CollectNodeDeps(ownerIdx, nodeDeps);
+            if (nodeDeps.size() == 0) {
+                tasks.Submit(passDone[ownerIdx]);
             }
         }
-        for (size_t i = N; i-- > 0;) {
-            tasks.Release(passDone[i]);
+
+        for (const auto& n : schedule) {
+            if (passDone[n.pass]) {
+                tasks.Wait(passDone[n.pass]);
+            }
+        }
+        for (size_t i = schedule.size(); i-- > 0;) {
+            tasks.Release(passDone[schedule[i].pass]);
         }
     }
 
@@ -219,6 +294,71 @@ public:
     }
 
 private:
+    // The owner of a pass's node: itself if ungrouped, else its group's first
+    // member. Tasks, batches, and dependency edges are keyed by owner.
+    size_t OwnerOf(size_t passIdx) const
+    {
+        const size_t gid = passes_[passIdx].groupId;
+        return (gid == kNoGroup) ? passIdx : groups_[gid][0];
+    }
+
+    // Run a node into one batch: a singleton pass, or every member of a group in
+    // declaration order sharing one command list (closed once after the last).
+    void RunNode(Renderer* renderer, size_t ownerIdx, size_t batch)
+    {
+        const size_t gid = passes_[ownerIdx].groupId;
+        if (gid == kNoGroup) {
+            if (!passes_[ownerIdx].exec) { return; }
+            PassContext ctx;
+            ctx.renderer = renderer;
+            ctx.batchIndex = batch;
+            ctx.pass = passes_[ownerIdx].name;
+            ctx.declares = &passes_[ownerIdx].declares;
+            ctx.groupCL = nullptr;
+            passes_[ownerIdx].exec(ctx);
+            return;
+        }
+
+        PassContext::GroupCL groupCL;
+        for (size_t m : groups_[gid]) {
+            if (!passes_[m].exec) { continue; }
+            PassContext ctx;
+            ctx.renderer = renderer;
+            ctx.batchIndex = batch;
+            ctx.pass = passes_[m].name;
+            ctx.declares = &passes_[m].declares;
+            ctx.groupCL = &groupCL;
+            passes_[m].exec(ctx);
+        }
+        if (groupCL.opened) {
+            // The group's single shared list is the lone direct in its batch.
+            renderer->EndThreadCommandList(groupCL.shared, batch, 0);
+        }
+    }
+
+    // A node's runtime dependencies: the union of its members' mtDeps, each
+    // remapped to the owner of the depended-on pass (a dep on any group member
+    // becomes a dep on that group's task), de-duplicated, excluding self.
+    void CollectNodeDeps(size_t ownerIdx, DependencyList& out) const
+    {
+        out.clear_fast();
+        auto addFrom = [&](size_t passIdx) {
+            for (size_t d : passes_[passIdx].mtDeps) {
+                if (d >= passesNum_) { continue; }
+                const size_t od = OwnerOf(d);
+                if (od == ownerIdx || !passes_[od].exec) { continue; }
+                bool dup = false;
+                for (size_t e : out) { if (e == od) { dup = true; break; } }
+                if (dup) { continue; }
+                assert(out.size() < out.capacity() && "node dependency capacity exceeded");
+                if (out.size() < out.capacity()) { out.push_back(od); }
+            }
+        };
+        const size_t gid = passes_[ownerIdx].groupId;
+        if (gid == kNoGroup) { addFrom(ownerIdx); }
+        else { for (size_t m : groups_[gid]) { addFrom(m); } }
+    }
+
     // General unrolling: build the topological order, create batches, or execute inplace
     void Unroll(Renderer* renderer, bool executeInplace, tc::inl_vector<FlatNode, MaxPasses>* outFlat)
     {
@@ -250,21 +390,19 @@ private:
         size_t qIndex = 0;
         while (qIndex < q.size()) {
             const size_t u = q[qIndex++];
-            const auto& p = passes_[u];
 
-            if (p.exec) {
+            // A node (group or singleton) materializes once, when its OWNER is
+            // reached in topological order. Non-owner group members are skipped
+            // here — they were run as part of their owner's node — but their
+            // successor edges are still relaxed below so the topo order is correct.
+            if (OwnerOf(u) == u && passes_[u].exec) {
                 const size_t batch =
                     (submitBatchIndex_ == (size_t)-1)
                     ? renderer->BeginSubmitBatch()
                     : submitBatchIndex_;
 
                 if (executeInplace) {
-                    PassContext ctx;
-                    ctx.renderer = renderer;
-                    ctx.batchIndex = batch;
-                    ctx.pass = p.name;
-                    ctx.declares = &p.declares;
-                    p.exec(ctx);
+                    RunNode(renderer, u, batch);
                 }
                 else if (outFlat != nullptr) {
                     outFlat->push_back(FlatNode{ u, batch });
@@ -311,6 +449,14 @@ private:
 
         p.exec = std::move(fn);
 
+        // CL group membership: passes added between BeginCLGroup/EndCLGroup join
+        // the active group (declaration order = member order).
+        p.groupId = currentGroup_;
+        if (currentGroup_ != kNoGroup) {
+            assert(groups_[currentGroup_].size() < groups_[currentGroup_].capacity() && "CL group member capacity exceeded");
+            groups_[currentGroup_].push_back(newIndex);
+        }
+
         for (size_t prereq : p.prereqs) {
             if (prereq < passesNum_) {
                 passes_[prereq].successors.push_back(newIndex);
@@ -354,4 +500,9 @@ private:
     size_t passesNum_ = 0;
     size_t submitBatchIndex_ = (size_t)-1;
     std::array<SuccessorList, MaxPasses> pendingSuccessors_{};
+
+    // CL groups (step 5): groups_[g] is the ordered member list of group g.
+    std::array<GroupMemberList, MaxPasses> groups_{};
+    size_t groupCount_ = 0;
+    size_t currentGroup_ = kNoGroup; // active group during construction
 };
