@@ -49,6 +49,10 @@ std::string EscapeJson(const std::string& input) {
 const Profiler::ScopeNameKey kTraceHandlingKey = Profiler::RegisterTraceLiteral(L"TraceHandling");
 const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLiteral(L"Profiler::EmitOverlay");
 const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
+// Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
+// manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
+// which includes Renderer::BeginFrame's fence wait.
+const Profiler::ScopeNameKey kCpuFrameKey = Profiler::RegisterTraceLiteral(L"CPU.Frame");
 
 std::wstring BuildWideName(const Profiler::ScopeNameKey& key) {
     if (!key.name || key.name->empty()) {
@@ -589,6 +593,17 @@ void Profiler::EndFrame() {
         frameOpen_ = false;
     }
     traceCapturingAtomic_.store(traceCapturing_, std::memory_order_release);
+
+    // Whole-CPU-frame counter: the full BeginFrame..EndFrame span (includes
+    // Renderer::BeginFrame's fence wait). Pushed into this frame's CPU samples
+    // so it accumulates into stats_ / the overlay like any scope — past the
+    // early-out above, so the frame was open. Excludes only the profiler's own
+    // post-frameEnd work.
+    {
+        const double wholeFrameMs =
+            std::chrono::duration<double, std::milli>(frameEnd - frameCpuStart_).count();
+        asyncCpuSamples_.push_back(ScopeSample{ kCpuFrameKey, wholeFrameMs });
+    }
 
 #if PROF_GPU_ENABLED
     // 2) prepare gpu samples for next frame
