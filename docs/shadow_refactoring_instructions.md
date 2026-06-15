@@ -266,26 +266,46 @@ at each split (~15/40/100 m) CRAWLS/SHIMMERS as the camera rotates — that moti
 bias/texel-grid swim. After 2a the line must stop moving (the remaining static line is
 Step 3's job). Verify by panning the camera and watching a split line.
 
-**Fix:** drop the `min(., rLS)` and use the rotation-invariant `radiusFor(...) + overlap`
-directly. `unitsPerTexel` becomes constant per cascade → the texel snap actually
-stabilizes the map (invariant 4). Accept the few-% resolution cost vs the tight corner
-fit — that is the standard CSM tradeoff and the entire reason the snap exists.
+**Implemented 2026-06-15 — corrected mechanism (the prescription below was wrong).** The
+naive "drop the `min(., rLS)` and use `radiusFor` directly" is INSUFFICIENT: `radiusFor`
+is the far-corner distance from the far-PLANE center, not a true bounding radius, and the
+coarse world-space snap (`stabilizationStepFraction`, the old `Scene.cpp:159-166`) shifted
+the center by up to ~0.1·radius BEFORE the corners were measured — so `radiusFor` failed to
+enclose the near corners. The `min` was clamping to `rLS` precisely to absorb that shift,
+which is exactly what made the radius rotation-dependent. Flying the camera with the naive
+fix tripped the coverage assert at once.
 
-This ALSO closes a latent COVERAGE hole: when `radiusFor < rLS` (narrow FOV + long far
-cascade + sun ≈ perpendicular to view), the current `min` picks the smaller analytic
-radius and the ortho square UNDER-covers the slice corners → clipped casters at cascade
-edges. The demo's wide FOV hides this; a zoomed camera would expose it. The larger,
-guaranteed-enclosing sphere radius removes the case.
+**Actual fix applied (two parts — second was needed after the first still danced):**
+1. **Bounding-sphere fit** — `sphereCenter` = centroid of the 8 slice corners, `radius` =
+   max corner distance + `overlap`. The sphere radius depends only on slice shape + FOV →
+   `unitsPerTexel` constant; a sphere projects to a same-radius circle in any light
+   orientation, so the extent never changes with sun/camera angle. Coverage is guaranteed
+   BY CONSTRUCTION (`radius ≥ sphereRadius ≥ |corner−center| ≥ rLS`), closing the
+   narrow-FOV under-coverage hole.
+2. **Real texel snap** — the old `centerLS = lightView * center` snap was a NO-OP: `center`
+   is the `LookAt` target, so a view matrix maps it to light-space (0,0,dist) → XY always
+   (0,0) → `floor(0/upt)*upt = 0`. (The deleted coarse world snap was the only thing ever
+   stabilizing anything, crudely.) Fix: snap `center` along the FIXED light right/up axes
+   (`up.Cross(fwd)`, `fwd.Cross(right)`) to whole-`unitsPerTexel` steps in WORLD space,
+   BEFORE building `lightView`. Because `radius` is constant, `unitsPerTexel` is constant,
+   and `radius` is an integer multiple of it, so the covered world region shifts in exact
+   whole-texel steps as the camera moves → texels pinned to fixed world cells → no crawl.
+
+`forwardOffset` and `stabilizationStepFraction` (`SceneRenderConfig.h`) are now UNUSED
+config — remove in Step 7 cleanup.
 
 **Landmines:**
-- Confirm the sphere radius truly encloses all 8 slice corners (it must, since
-  `radiusFor` is the far-corner distance + `overlap`, and far corners dominate). Add a
-  DEBUG assert that every corner's light-space XY lies within `±radius` of `centerLS`.
-- Keep the light-space texel snap; ONLY the radius source changes.
+- The DEBUG `assert(radius + 1e-3f ≥ rLS)` is kept as a tripwire; it now holds by
+  construction and would fire only if someone reintroduces a center offset or a coarse
+  pre-measure snap.
+- The centroid sphere is a valid (not minimal) enclosing sphere — slightly larger than the
+  old tight `rLS` fit, so shadows are marginally softer. If too soft, the minimal on-axis
+  sphere or per-cascade resolution (Step 5) is the lever — do NOT re-add the `min`.
 
-**Acceptance:** shadow edges stable under pure camera ROTATION (USER confirm — pan the
-camera and watch a hard shadow edge: before = crawl, after = stable); no clipped shadows
-at cascade extremes; `Pass_CSM` cost unchanged (identical draw work).
+**Acceptance (build + headless run PASS 2026-06-15; visual pending USER):** shadow edges
+stable under pure camera ROTATION (USER confirm — pan and watch a split line: before =
+crawl, after = stable); coverage assert did NOT fire while flying (translation tested
+headless; rotation covered by the construction proof); `Pass_CSM` draw work unchanged.
 
 ### 2b — Pancake the light near-plane (fixes missing shadows from off-slice casters)
 

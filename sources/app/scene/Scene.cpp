@@ -126,15 +126,9 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         return;
     }
 
-    const mat4& proj = camera.GetProjMatrix();
     const mat4& invView = camera.GetInvViewMatrix();
     const mat4& invProj = camera.GetInvProjMatrix();
-    const float3 camDir = camera.GetDirection();
-    const float3 camPos = camera.GetPosition();
     const float3 sunDirWS = dirLight_.GetDirection();
-
-    const float tanH = 1.0f / proj.m._11;
-    const float tanV = 1.0f / proj.m._22;
 
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
     {
@@ -144,32 +138,58 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         std::array<float3, 8> cornersWS{};
         BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
 
-        const float halfSlice = 0.5f * (sliceFar - sliceNear);
-        const float farCoef = (sliceFar * tanH) * (sliceFar * tanH) + (sliceFar * tanV) * (sliceFar * tanV);
+        // Step 2a: fit each cascade to the rotation-INVARIANT bounding sphere of its
+        // slice corners. The sphere center and radius depend only on the slice shape
+        // (near/far + FOV), never on camera/light orientation, so unitsPerTexel is
+        // constant frame-to-frame and the light-space texel snap below is the ONLY
+        // stabilization needed (no edge crawl / bias swim on rotation). A sphere also
+        // projects to a circle of the same radius in any light orientation, so the ortho
+        // extent never changes with the sun/camera angle. (The old far-plane center +
+        // far-corner radius + coarse world-space snap did NOT enclose the near corners
+        // once the snap shifted the center, so the radius had to be clamped to the
+        // rotation-dependent corner extent — that clamp was the source of the shimmer.)
+        float3 sphereCenter = float3(0.0f, 0.0f, 0.0f);
+        for (const auto& corner : cornersWS) { sphereCenter = sphereCenter + corner; }
+        sphereCenter = sphereCenter / static_cast<float>(cornersWS.size());
 
-        float delta = cascadeConfig_.forwardOffset * halfSlice;
-        auto radiusFor = [&](float d)
+        float sphereRadius = 0.0f;
+        for (const auto& corner : cornersWS)
         {
-            const float rf2 = farCoef + (halfSlice - d) * (halfSlice - d);
-            return std::sqrt(rf2);
-        };
-
-        float radius = radiusFor(delta) + cascadeConfig_.overlap;
-        float3 center = camPos + camDir * (sliceNear + halfSlice + delta);
-        if (cascadeConfig_.stabilizationStepFraction > 0.0f)
-        {
-            const float spatialStep = radius * cascadeConfig_.stabilizationStepFraction;
-            if (spatialStep > 0.0f)
-            {
-                center = Floor(center / spatialStep) * spatialStep;
-            }
+            const float3 d = corner - sphereCenter;
+            sphereRadius = std::max(sphereRadius, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
         }
+
+        const float radius = sphereRadius + cascadeConfig_.overlap;
+        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
 
         const float3 up(0, 1, 0);
         const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
+
+        // Texel snap — the actual stabilization. Snap the cascade center along the FIXED
+        // light right/up axes to whole-texel steps in WORLD space, BEFORE building the
+        // view. (The previous `lightView * center` snap was a no-op: center is the LookAt
+        // target, so its light-space XY is always (0,0).) Snapping the center in a fixed
+        // light frame makes the covered world region shift in whole-texel increments as
+        // the camera moves, pinning shadow texels to fixed world cells -> no edge crawl.
+        const float3 fwd = sunDirWS.Normalized();
+        float3 right = up.Cross(fwd);
+        if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
+        right = right.Normalized();
+        const float3 trueUp = fwd.Cross(right);
+
+        float3 center = sphereCenter;
+        if (unitsPerTexel > 0.0f)
+        {
+            const float cx = center.Dot(right);
+            const float cy = center.Dot(trueUp);
+            center = center
+                + right  * (std::floor(cx / unitsPerTexel) * unitsPerTexel - cx)
+                + trueUp * (std::floor(cy / unitsPerTexel) * unitsPerTexel - cy);
+        }
+
         const mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
 
-        float2 centerLS = (lightView * float4(center, 1)).xy();
+        const float2 centerLS = (lightView * float4(center, 1)).xy(); // ~(0,0): center is the target
         float minZ = +1e9f;
         float maxZ = -1e9f;
         float rLS = 0.0f;
@@ -180,14 +200,10 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             minZ = std::min(minZ, ls.z);
             maxZ = std::max(maxZ, ls.z);
         }
-        radius = std::min(radius, rLS);
-
-        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
-        if (unitsPerTexel > 0.0f)
-        {
-            centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-            centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-        }
+        // The bounding sphere encloses every corner by construction (plus the <=1-texel
+        // snap shift, absorbed by `overlap`), so the ortho square contains every corner.
+        assert(radius + 1e-3f >= rLS && "cascade ortho radius under-covers slice corners");
+        (void)rLS;
 
         const float minX = centerLS.x - radius;
         const float maxX = centerLS.x + radius;
