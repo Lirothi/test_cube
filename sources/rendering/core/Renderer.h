@@ -120,9 +120,13 @@ public:
     void OnResize(UINT width, UINT height);
 
     ThreadCL BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* initialPSO = nullptr);
-    void EndThreadCommandList(ThreadCL& t, size_t batchIndex);
+    // localOrder positions this list deterministically within its batch's
+    // direct namespace, assigned BEFORE dispatch (chunk/cascade/light index;
+    // a lone direct in its batch uses 0). See SubmitTimeline.
+    void EndThreadCommandList(ThreadCL& t, size_t batchIndex, uint32_t localOrder = 0);
     ThreadCL BeginThreadCommandBundle(ID3D12PipelineState* initialPSO = nullptr);
-    void EndThreadCommandBundle(ThreadCL& b, size_t batchIndex);
+    // localOrder positions this bundle within its batch's bundle namespace.
+    void EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t localOrder = 0);
 
     void BeginSubmitTimeline();
     size_t BeginSubmitBatch();

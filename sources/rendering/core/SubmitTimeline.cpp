@@ -2,6 +2,8 @@
 
 #include "rendering/core/RendererInvariantFailure.h"
 
+#include <algorithm>
+
 void SubmitTimeline::BeginTimeline()
 {
     std::lock_guard<std::mutex> lk(mtx_);
@@ -19,7 +21,7 @@ size_t SubmitTimeline::BeginBatch()
     return idx;
 }
 
-void SubmitTimeline::RegisterDirect(ID3D12CommandList* cl, size_t batchIndex)
+void SubmitTimeline::RegisterDirect(ID3D12CommandList* cl, size_t batchIndex, uint32_t localOrder)
 {
     if (cl == nullptr) {
         RendererInvariantFailure("SubmitTimeline::RegisterDirect: null command list");
@@ -29,10 +31,10 @@ void SubmitTimeline::RegisterDirect(ID3D12CommandList* cl, size_t batchIndex)
         "SubmitTimeline::RegisterDirect: batch index outside the active range (command list would be lost)");
     CheckNotAlreadyRegisteredLocked_(batch, cl,
         "SubmitTimeline::RegisterDirect: command list already registered in this batch");
-    batch.directs.push_back(cl);
+    batch.directs.push_back({ cl, localOrder });
 }
 
-void SubmitTimeline::RegisterBundle(ID3D12GraphicsCommandList* cl, size_t batchIndex)
+void SubmitTimeline::RegisterBundle(ID3D12GraphicsCommandList* cl, size_t batchIndex, uint32_t localOrder)
 {
     if (cl == nullptr) {
         RendererInvariantFailure("SubmitTimeline::RegisterBundle: null command list");
@@ -42,7 +44,7 @@ void SubmitTimeline::RegisterBundle(ID3D12GraphicsCommandList* cl, size_t batchI
         "SubmitTimeline::RegisterBundle: batch index outside the active range (bundle would be lost)");
     CheckNotAlreadyRegisteredLocked_(batch, cl,
         "SubmitTimeline::RegisterBundle: bundle already registered in this batch");
-    batch.bundles.push_back(cl);
+    batch.bundles.push_back({ cl, localOrder });
 }
 
 void SubmitTimeline::RegisterDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex)
@@ -86,14 +88,45 @@ void SubmitTimeline::CheckNotAlreadyRegisteredLocked_(const PassBatch& batch, ID
     if (batch.driver == cl) {
         RendererInvariantFailure(invariantMsg);
     }
-    for (ID3D12GraphicsCommandList* bundle : batch.bundles) {
-        if (bundle == cl) {
+    for (const auto& bundle : batch.bundles) {
+        if (bundle.cl == cl) {
             RendererInvariantFailure(invariantMsg);
         }
     }
-    for (ID3D12CommandList* direct : batch.directs) {
-        if (direct == cl) {
+    for (const auto& direct : batch.directs) {
+        if (direct.cl == cl) {
             RendererInvariantFailure(invariantMsg);
+        }
+    }
+}
+
+void SubmitTimeline::ApplySubmitOrder()
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    ApplySubmitOrderLocked_();
+}
+
+void SubmitTimeline::ApplySubmitOrderLocked_()
+{
+    // Sort each namespace by its pre-assigned localOrder so GPU order follows
+    // the dispatch order, not worker completion order. Orders are unique
+    // within a namespace, so the sort is fully determined (no tie-break on
+    // pointers, which would reintroduce run-to-run nondeterminism).
+    auto byOrder = [](const auto& a, const auto& b) { return a.order < b.order; };
+    for (size_t i = 0; i < activeBatchCount_; ++i) {
+        PassBatch& batch = batches_[i];
+        std::sort(batch.directs.begin(), batch.directs.end(), byOrder);
+        std::sort(batch.bundles.begin(), batch.bundles.end(), byOrder);
+
+        for (size_t j = 1; j < batch.directs.size(); ++j) {
+            if (batch.directs[j].order == batch.directs[j - 1].order) {
+                RendererInvariantFailure("SubmitTimeline: duplicate localOrder among a batch's direct command lists (nondeterministic GPU order)");
+            }
+        }
+        for (size_t j = 1; j < batch.bundles.size(); ++j) {
+            if (batch.bundles[j].order == batch.bundles[j - 1].order) {
+                RendererInvariantFailure("SubmitTimeline: duplicate localOrder among a batch's bundles (nondeterministic GPU order)");
+            }
         }
     }
 }

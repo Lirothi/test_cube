@@ -393,9 +393,9 @@ Renderer::ThreadCL Renderer::BeginThreadCommandBundle(ID3D12PipelineState* initi
     return BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_BUNDLE, initialPSO);
 }
 
-void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex) {
+void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex, uint32_t localOrder) {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandList);
-    submitTimeline_.RegisterDirect(t.cl, batchIndex);
+    submitTimeline_.RegisterDirect(t.cl, batchIndex, localOrder);
 
     // Clear the TLS binding for this command list
     //UnregisterCurrentThreadCL();
@@ -417,7 +417,7 @@ void Renderer::RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchInd
     submitTimeline_.RegisterDriver(cl, batchIndex);
 }
 
-void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
+void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t localOrder)
 {
     CPU_SCOPE(ProfilerScopes::kRendererEndThreadCommandBundle);
     if (b.cl == nullptr) {
@@ -430,7 +430,7 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex)
     if (FAILED(hr)) {
         RendererInvariantFailure("Renderer::EndThreadCommandBundle: Close() failed");
     }
-    submitTimeline_.RegisterBundle(b.cl, batchIndex);
+    submitTimeline_.RegisterBundle(b.cl, batchIndex, localOrder);
     b.cl = nullptr;
     b.alloc = nullptr;
 }

@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +26,8 @@ constexpr int kSurvivedExitCode = 100;
 constexpr const char* kFlagNullCl = "--stress-null-cl";
 constexpr const char* kFlagInvalidBatch = "--stress-invalid-batch";
 constexpr const char* kFlagDuplicateCl = "--stress-duplicate-cl";
+constexpr const char* kFlagDupOrderDirect = "--stress-dup-order-direct";
+constexpr const char* kFlagDupOrderBundle = "--stress-dup-order-bundle";
 
 FILE* gLog = nullptr;
 int gFailures = 0;
@@ -97,19 +101,19 @@ void ScenarioOrderRetention(int round)
     expected.push_back(mixedDriver); // driver gathers before the batch's directs
     for (int i = 0; i < 3; ++i) {
         ID3D12CommandList* cl = FakeCL(id++);
-        tl.RegisterDirect(cl, bMixed);
+        tl.RegisterDirect(cl, bMixed, static_cast<uint32_t>(i));
         expected.push_back(cl);
     }
 
     for (int i = 0; i < 40; ++i) {
         ID3D12CommandList* cl = FakeCL(id++);
-        tl.RegisterDirect(cl, bBig);
+        tl.RegisterDirect(cl, bBig, static_cast<uint32_t>(i));
         expected.push_back(cl);
     }
 
     for (int i = 0; i < 11; ++i) {
         ID3D12CommandList* cl = FakeCL(id++);
-        tl.RegisterDirect(cl, bSmall);
+        tl.RegisterDirect(cl, bSmall, static_cast<uint32_t>(i));
         expected.push_back(cl);
     }
 
@@ -142,7 +146,7 @@ void ScenarioConcurrentRegistration(unsigned threadCount, int clsPerThread, int 
             const size_t base = (static_cast<size_t>(f) * threadCount + t) * clsPerThread;
             threads.emplace_back([&tl, batch, base, clsPerThread]() {
                 for (int i = 0; i < clsPerThread; ++i) {
-                    tl.RegisterDirect(FakeCL(base + i), batch);
+                    tl.RegisterDirect(FakeCL(base + i), batch, static_cast<uint32_t>(i));
                 }
             });
         }
@@ -189,7 +193,7 @@ void ScenarioPoolReuse(int frames)
             const size_t directCount = (static_cast<size_t>(f) + b * 7) % 13; // 0..12, regularly past 8
             for (size_t i = 0; i < directCount; ++i) {
                 ID3D12CommandList* cl = FakeCL(id++);
-                tl.RegisterDirect(cl, batch);
+                tl.RegisterDirect(cl, batch, static_cast<uint32_t>(i));
                 expected.push_back(cl);
             }
         }
@@ -203,9 +207,11 @@ void ScenarioPoolReuse(int frames)
     Check(ok, what);
 }
 
-// Bundle registration past the old inline capacity, verified by inspection
-// (gathering would ExecuteBundle through the fake driver pointer), plus the
-// pooled slot coming back clean after the next BeginTimeline.
+// Bundle registration past the old inline capacity, registered in REVERSE
+// localOrder so the gather-time sort is exercised (gathering can't run here —
+// ExecuteBundle would dereference the fake driver pointer — so ApplySubmitOrder
+// is invoked directly and the batch inspected). Also checks the pooled slot
+// comes back clean after the next BeginTimeline.
 void ScenarioBundleRetention()
 {
     SubmitTimeline tl;
@@ -214,15 +220,22 @@ void ScenarioBundleRetention()
 
     ID3D12GraphicsCommandList* driver = FakeGfxCL(1);
     tl.RegisterDriver(driver, batch);
-    std::vector<ID3D12GraphicsCommandList*> expected;
-    for (size_t i = 0; i < 12; ++i) {
-        ID3D12GraphicsCommandList* bundle = FakeGfxCL(100 + i);
-        tl.RegisterBundle(bundle, batch);
-        expected.push_back(bundle);
+
+    constexpr size_t kBundles = 12;
+    for (size_t i = 0; i < kBundles; ++i) {
+        // Register order i as the (kBundles-1-i)-th call: registration order is
+        // the reverse of localOrder, so only the sort can recover it.
+        const uint32_t order = static_cast<uint32_t>(kBundles - 1 - i);
+        tl.RegisterBundle(FakeGfxCL(100 + order), batch, order);
     }
 
+    tl.ApplySubmitOrder();
     const SubmitTimeline::PassBatch& pb = tl.Batch(batch);
-    bool ok = pb.driver == driver && pb.bundles == expected && pb.directs.empty();
+    bool ok = pb.driver == driver && pb.bundles.size() == kBundles && pb.directs.empty();
+    for (size_t i = 0; i < kBundles && ok; ++i) {
+        ok = pb.bundles[i].order == static_cast<uint32_t>(i) &&
+             pb.bundles[i].cl == FakeGfxCL(100 + i);
+    }
 
     tl.BeginTimeline(); // reset without gathering
     ok = ok && tl.ActiveBatchCount() == 0;
@@ -230,7 +243,52 @@ void ScenarioBundleRetention()
     const SubmitTimeline::PassBatch& pb2 = tl.Batch(again);
     ok = ok && again == batch && pb2.driver == nullptr && pb2.bundles.empty() && pb2.directs.empty();
 
-    Check(ok, "bundle retention >8 and pooled slot reset");
+    Check(ok, "bundle retention >8, reverse-order sort, pooled slot reset");
+}
+
+// Deterministic GPU order: register directs whose localOrder is a fixed
+// canonical mapping (order i -> CL i), but whose REGISTRATION sequence is
+// shuffled differently each run — simulating workers finishing in arbitrary
+// order. Gather must always reproduce the localOrder-sorted sequence, byte-for-
+// byte identical across every shuffle.
+void ScenarioDeterministicOrder(int permutations)
+{
+    constexpr int N = 64;
+    std::vector<ID3D12CommandList*> canonical;
+    canonical.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        canonical.push_back(FakeCL(600000 + i)); // localOrder i maps to this CL
+    }
+
+    bool ok = true;
+    std::vector<ID3D12CommandList*> firstOut;
+    for (int p = 0; p < permutations && ok; ++p) {
+        std::vector<int> seq(N);
+        std::iota(seq.begin(), seq.end(), 0);
+        std::mt19937 rng(static_cast<unsigned>(p) * 2654435761u + 12345u);
+        std::shuffle(seq.begin(), seq.end(), rng);
+
+        SubmitTimeline tl;
+        tl.BeginTimeline();
+        const size_t batch = tl.BeginBatch();
+        for (int idx : seq) {
+            tl.RegisterDirect(canonical[idx], batch, static_cast<uint32_t>(idx));
+        }
+        std::vector<ID3D12CommandList*> out;
+        tl.GatherFrameLists(out, &UnexpectedFallback);
+
+        if (p == 0) {
+            firstOut = out;
+            ok = (out == canonical); // sorted output equals the canonical order
+        }
+        else {
+            ok = (out == firstOut);  // identical regardless of registration order
+        }
+    }
+
+    char what[128];
+    std::snprintf(what, sizeof(what), "deterministic order: %d shuffled registrations -> identical sorted gather", permutations);
+    Check(ok, what);
 }
 
 // --- ResourceStateTracker scenarios -----------------------------------------
@@ -468,7 +526,7 @@ int RunDeathTestChild(const char* flag)
 
     if (std::strcmp(flag, kFlagNullCl) == 0) {
         const size_t batch = tl.BeginBatch();
-        tl.RegisterDirect(nullptr, batch); // must abort
+        tl.RegisterDirect(nullptr, batch, 0); // must abort
     }
     else if (std::strcmp(flag, kFlagInvalidBatch) == 0) {
         // Grow the pool to 4 slots in a "previous frame", then activate only
@@ -479,12 +537,25 @@ int RunDeathTestChild(const char* flag)
         }
         tl.BeginTimeline();
         tl.BeginBatch();
-        tl.RegisterDirect(FakeCL(1), 2); // must abort
+        tl.RegisterDirect(FakeCL(1), 2, 0); // must abort
     }
     else if (std::strcmp(flag, kFlagDuplicateCl) == 0) {
         const size_t batch = tl.BeginBatch();
-        tl.RegisterDirect(FakeCL(1), batch);
-        tl.RegisterDirect(FakeCL(1), batch); // must abort
+        tl.RegisterDirect(FakeCL(1), batch, 0);
+        tl.RegisterDirect(FakeCL(1), batch, 1); // same pointer (distinct order) -> must abort
+    }
+    else if (std::strcmp(flag, kFlagDupOrderDirect) == 0) {
+        const size_t batch = tl.BeginBatch();
+        tl.RegisterDirect(FakeCL(1), batch, 5);
+        tl.RegisterDirect(FakeCL(2), batch, 5); // distinct CLs, same localOrder
+        tl.ApplySubmitOrder();                  // must abort (nondeterministic tie)
+    }
+    else if (std::strcmp(flag, kFlagDupOrderBundle) == 0) {
+        const size_t batch = tl.BeginBatch();
+        tl.RegisterDriver(FakeGfxCL(1), batch);
+        tl.RegisterBundle(FakeGfxCL(2), batch, 3);
+        tl.RegisterBundle(FakeGfxCL(3), batch, 3); // distinct bundles, same localOrder
+        tl.ApplySubmitOrder();                     // must abort (nondeterministic tie)
     }
 
     return kSurvivedExitCode; // not reached when the fail-fast works
@@ -535,7 +606,10 @@ bool SpawnDeathTest(const char* flag)
 
 int RunRendererSubmissionStress(const char* cmdLine)
 {
-    const char* deathFlags[] = { kFlagNullCl, kFlagInvalidBatch, kFlagDuplicateCl };
+    const char* deathFlags[] = {
+        kFlagNullCl, kFlagInvalidBatch, kFlagDuplicateCl,
+        kFlagDupOrderDirect, kFlagDupOrderBundle,
+    };
     if (cmdLine != nullptr) {
         for (const char* flag : deathFlags) {
             if (std::strstr(cmdLine, flag) != nullptr) {
@@ -562,6 +636,7 @@ int RunRendererSubmissionStress(const char* cmdLine)
         ScenarioConcurrentRegistration(2, 256, 20);
         ScenarioPoolReuse(200);
         ScenarioBundleRetention();
+        ScenarioDeterministicOrder(32);
 
         ScenarioTrackerLaneReuse(hw, 30, 4, 48);
         ScenarioTrackerManyThreads(96, 2);

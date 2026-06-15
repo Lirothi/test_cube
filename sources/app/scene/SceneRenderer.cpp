@@ -306,7 +306,9 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     obj->Render(renderer, b.cl, camera);
                 }
             }
-            renderer->EndThreadCommandBundle(b, batchIndex);
+            // Chunk index is the deterministic submit order within the batch's
+            // bundle namespace (transparents must blend in sorted-queue order).
+            renderer->EndThreadCommandBundle(b, batchIndex, static_cast<uint32_t>(jobIndex));
         }
         else {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -336,7 +338,9 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     }
                 }
             }
-            renderer->EndThreadCommandList(t, batchIndex);
+            // Chunk index is the deterministic submit order within the batch's
+            // direct namespace (transparents must blend in sorted-queue order).
+            renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(jobIndex));
         }
     };
 
@@ -390,7 +394,7 @@ void SceneRenderer::RenderShadowBatch(Renderer* renderer,
                 }
             }
         }
-        renderer->EndThreadCommandList(t, batchIndex);
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(jobIndex));
     };
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
@@ -578,7 +582,9 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             }
         }
 
-        renderer->EndThreadCommandList(t, batchIndex);
+        // localOrder: the clear list (recorded above) is 0; cascades follow in
+        // index order so the atlas clear always precedes every cascade's draws.
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(cascadeIndex) + 1u);
     };
 
     TaskSystem::Get().DispatchWait(cascadeViews.size(), renderCascade, 1);
@@ -618,7 +624,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             }
         }
 
-        renderer->EndThreadCommandList(t, ctx.batchIndex);
+        // Matches the parallel path: clear list is 0, cascades follow in order.
+        renderer->EndThreadCommandList(t, ctx.batchIndex, static_cast<uint32_t>(idx) + 1u);
     }
 #endif
 }
@@ -677,7 +684,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
                 }
             }
         }
-        renderer->EndThreadCommandList(t, batchIndex);
+        // Per-light index is the deterministic submit order within the batch.
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(lightIndex));
     };
 
     TaskSystem::Get().DispatchWait(viewCount, renderSpotShadow, 1);
