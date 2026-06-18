@@ -74,22 +74,22 @@ float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
     return s / 9.0;
 }
 
-float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
-{
-    int idx = ChooseCascadeIndex(Pws);
+// Blend-band width as a fraction of each split distance (Step 3).
+static const float kBlendFraction = 0.1;
 
+// Sample the shadow factor starting at cascade `start`, falling back to a coarser cascade
+// if the (normal-bias-offset) point lands outside `start`'s atlas tile. Tests the
+// cascade-local UV (BEFORE atlas scale+bias) so a neighbour tile is never sampled, and
+// insets by the PCF reach so 3x3 taps never bleed across the gutterless tile border.
+// Returns 1.0 (lit) only when the point is beyond cascade 3 — past the shadow range.
+float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws)
+{
     const float2 texel = 1.0 / shadowAtlasSize;
 
-    // Walk from the depth-chosen cascade toward the coarsest, sampling the first
-    // cascade whose OWN [0,1] frustum actually contains the (normal-bias-offset)
-    // point. We test the cascade-local UV (BEFORE the atlas scale+bias) so we
-    // never sample a neighbour tile, and we fall back to a coarser cascade rather
-    // than returning lit at a tile edge. Only return lit when even cascade 3
-    // misses — there the point is genuinely beyond the directional shadow range.
     [unroll]
     for (int c = 0; c < 4; ++c)
     {
-        if (c < idx)
+        if (c < start)
         {
             continue;
         }
@@ -106,9 +106,6 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
         const float2 uvLocal = (lc.xy / max(1e-6, lc.w)) * float2(0.5, -0.5) + float2(0.5, 0.5);
         const float z = lc.z / max(1e-6, lc.w);
 
-        // The four tiles are packed with NO gutter, so inset the in-cascade test by
-        // the PCF tap reach (in this cascade's local UV units). A 3x3 tap then can
-        // never read across the tile border into a neighbour cascade's texels.
         const float2 margin = (pcfRadius * texel) / max(1e-6, scale);
         if (any(uvLocal < margin) || any(uvLocal > 1.0 - margin))
         {
@@ -127,6 +124,31 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
     }
 
     return 1.0;
+}
+
+float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
+{
+    const int idx = ChooseCascadeIndex(Pws);
+    float shadow = SampleCascadeChain(idx, Pws, NdotL, Nws);
+
+    // Step 3: blend band. In a band just before cascade idx's far split, cross-fade into
+    // cascade idx+1 so the hard cascade switch (and its bias / texel-density / PCF
+    // discontinuity) becomes a gradient instead of a visible seam. Cascade 3 has no
+    // coarser neighbour, so it never blends. Costs a second sample only inside the band.
+    if (idx < 3)
+    {
+        const float zView = dot(Pws - camPosWS, camDirWS);
+        const float splitNext = idx == 0 ? cascadeSplitsVS.y : (idx == 1 ? cascadeSplitsVS.z : cascadeSplitsVS.w);
+        const float band = splitNext * kBlendFraction;
+        const float t = saturate((zView - (splitNext - band)) / max(1e-4, band));
+        if (t > 0.0)
+        {
+            const float shadowNext = SampleCascadeChain(idx + 1, Pws, NdotL, Nws);
+            shadow = lerp(shadow, shadowNext, t);
+        }
+    }
+
+    return shadow;
 }
 
 [numthreads(8,8,1)]

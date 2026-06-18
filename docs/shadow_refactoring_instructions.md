@@ -352,24 +352,27 @@ its own acne differently. The blend band must fade this static line into a gradi
 crawl/shimmer is a separate symptom, fixed by Step 2a — do 2a first.) Residual within-a-
 cascade acne, if any remains, is bias tuning (Step 4 / parked D32 precision).
 
-**Fix:** define a blend band of width `w` just before each split (reuse
-`cascadeConfig_.overlap` = 2 m, or a fraction of the cascade's range — pass it into the
-shader constants alongside `cascadeSplitsVS`). Inside the band, sample BOTH cascade `n`
-and `n+1` fully (each with its own bias/normalBias/scale — they differ, so you cannot
-share the projection) and `lerp` the two shadow factors by the band fraction. Outside
-the band, single-sample as today.
+**Implemented 2026-06-16 (`lighting_cs.hlsl`).** Refactored the Step 1 fallback walk into
+`SampleCascadeChain(start, …)`. `SampleShadowCSM` picks `idx` by depth, samples
+`chain(idx)`, and in a band just before idx's far split also samples `chain(idx+1)` and
+lerps. Band width = `splitNext * kBlendFraction` (`kBlendFraction = 0.1`, in-shader — no
+new cbuffer constant needed; `splitNext` read from `cascadeSplitsVS.y/z/w` via a ternary
+to avoid dynamic vector indexing). `t = saturate((zView − (splitNext − band)) / band)` so
+`t=0` at band start (pure idx) → `t=1` at the split (pure idx+1), continuous with the
+`idx+1` region just past the split. The second sample runs ONLY inside the band.
 
-**Landmines:**
-- The band must lie inside cascade `n+1`'s coverage — Step 1's fallback guarantees the
-  `n+1` sample is valid even if `n+1`'s tile doesn't quite reach.
-- The far split (cascade 3) has no `n+1`: no blend there, just cascade 3.
-- This up to doubles shadow samples IN THE BAND ONLY. A cheaper variant is a
-  dithered/interleaved pick (sample one cascade per pixel, alternating) — try the full
-  lerp first, measure, downgrade to dither only if the band cost shows up.
+**Landmines (handled):**
+- Step 1's fallback makes the `idx+1` sample valid even at idx+1's tile edge.
+- Cascade 3 has no `idx+1` → guarded by `if (idx < 3)`, never blends.
+- Doubles samples in-band only. If the band cost shows up, switch to a dithered pick — not
+  done (band is narrow; measure first).
 
-**Acceptance:** split-distance seam gone on camera movement (USER confirm);
-`Pass_CSM`/`lighting_cs` GPU cost measured before/after, band overhead acceptable
-(<3% GPU frame); shadow factor stays in `[0,1]`.
+**Acceptance (build + headless run PASS 2026-06-16; visual pending USER):** the split line
+should now fade into a gradient instead of a hard seam — USER confirm by moving across the
+~15 / 40 / 100 m boundaries (do this AFTER 2a so the line is also static). `lighting_cs`
+GPU cost — NOT measured (read F9 `Pass_CSM`/lighting if you want the in-band overhead
+number; expected small). Shadow factor stays in `[0,1]` (lerp of two `[0,1]` values).
+`kBlendFraction` is the tuning knob if the band looks too wide/narrow.
 
 ## Step 4 — consistent filtering & bias across cascades
 
