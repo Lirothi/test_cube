@@ -416,6 +416,31 @@ expected negligible, read F9 if you want the number).
 
 ## Step 5 — atlas resolution / per-cascade tile sizing
 
+> **MEASURED & SKIPPED 2026-06-16 — `Pass_CSM` is DRAW-bound, not fill-bound (confirmed in
+> Release).** Headless measurement (temp `OutputDebugStringA` probe summing the `Pass_CSM` /
+> `GPU.Frame` GPU scopes in `Profiler::CollectGpuResults`, captured via the DBWIN listener;
+> probe removed after), same default camera:
+>
+> | build | `shadowRes` 4096 | `shadowRes` 2048 |
+> |---|---|---|
+> | Debug   | Pass_CSM ~0.12 ms | ~0.12 ms |
+> | Release | Pass_CSM ~0.31 ms | ~0.31 ms |
+>
+> Quartering the texels changed `Pass_CSM` by ~0% in BOTH builds ⇒ the cost is
+> vertex/draw/state, not depth-fill. **Do NOT do Step 5; the lever is Step 6 (caster
+> culling).** Revisit only if a future change makes the pass fill-bound (far fewer casters,
+> or much higher atlas res).
+>
+> ⚠️ **Always measure perf in RELEASE.** Debug shows Pass_CSM ~0.12 ms / ~11% of frame;
+> Release shows ~0.31 ms / ~28% (matches the review brief). The gap is GPU OCCUPANCY, not
+> camera and not the shaders (identical in both): Debug is CPU-bound so the GPU runs each
+> pass with slack (clean, low measured time); Release is GPU-saturated so passes contend
+> and pipeline bubbles land inside the per-pass timestamp window. Tell-tale: Pass_CSM rose
+> +0.19 ms Debug→Release while GPU.Frame rose only +0.06 ms — per-pass GPU timestamps are
+> NOT cleanly additive under saturation, so trust the Release numbers and treat absolute
+> per-pass GPU times as approximate. The 4096-vs-2048 comparison is still valid (same
+> build/occupancy each time). Real shadow cost ≈ 0.31 ms / ~28% → Step 6 is worthwhile.
+
 **Category: perf (potentially the biggest direct `Pass_CSM` win — but verify the bound
 first). Risk: medium (quality tradeoff — USER must confirm sharpness).**
 
@@ -461,6 +486,25 @@ acceptable to the USER at the chosen size; no other pass regresses >3% GPU frame
 layer clean.
 
 ## Step 6 — shadow-caster culling & far-cascade cost (multi-part)
+
+> **STATUS 2026-06-16 — 6a + 6e DONE (kept); 6c TRIED & REVERTED; 6b/6d skipped.**
+> 6e: shadow-caster set bucketized ONCE per frame (`Scene::shadowCasterSource_`) and shared
+> by all cascade+spot views (identical objects/mask/filter); each shadow view runs only its
+> own per-frustum `Cull(frustum, source)`. CPU-only cleanup (~5 redundant bucketizes/frame
+> removed); GPU FPS unchanged (GPU-bound); visuals identical. Step 6 effectively done.
+> 6c (shadow-reach cull) measured ~0% `Pass_CSM` win (it cut per-cascade casters to
+> c0=32/c1=9/c2=6/c3=5 and total draws ~180→~52/3.5×, but the pass is neither fill- nor
+> draw-call-bound — see Step 5 — so the cost is FIXED per-pass overhead [5 CLs incl. the
+> 4096² clear, barriers, query pairs] and/or kept near-geometry VERTEX throughput).
+> **Then it was found to DROP SHADOWS** (user repro): the reach estimate used the caster's
+> own size (`2r·shadowLenPerHeight`), but shadow reach is set by HEIGHT ABOVE THE RECEIVER —
+> the metalRoughGrid spheres float 1–5.8 m up (`DemoLevel.cpp:185`) and cast ~13 m shadows,
+> so they were wrongly culled from cascades their shadows reach (and popped on camera move).
+> A correct reach bound needs the receiver/ground plane, which the cull can't know; making
+> it safe ⇒ near-infinite reach ⇒ culls ~nothing. **Zero benefit + a correctness hole ⇒
+> 6c reverted.** Only 6a remains. **Caster culling is a dead end for this demo.** If perf is
+> ever revisited: a draw-nothing diagnostic (split fixed-overhead vs vertex) → CL
+> restructuring or LOD; diminishing returns. 6b/6d/6e NOT done.
 
 **Category: culling/perf. Risk: ranges per sub-step (6a none → 6c correctness-sensitive).
 Builds on Step 2b.** Five separable commits; land and measure ONE at a time (protocol 9).

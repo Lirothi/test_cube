@@ -21,9 +21,10 @@ public:
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
-    void Cull(const Frustum& frustum, bool clampDepthRange,
-        const float3& cameraPosition, const float3& cameraDirection,
-        float minDepth, float maxDepth);
+    void Cull(const Frustum& frustum);
+    // Step 6e: cull `source`'s (already-bucketized) casters into THIS queue's visible
+    // buckets — lets many views share one Bucketize. The single-arg overload culls own.
+    void Cull(const Frustum& frustum, const SceneRenderQueue& source);
 
     const ObjectBucket& GetBucket(BucketType type) const;
     ObjectBucket& GetBucket(BucketType type);

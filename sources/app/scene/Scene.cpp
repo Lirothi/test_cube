@@ -301,8 +301,6 @@ void Scene::PrepareViews(Renderer* renderer)
         return;
     }
 
-    const float3 cameraPosition = camera_.GetPosition();
-    const float3 cameraDirection = camera_.GetDirection();
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
     camera_.CalcMatrices(renderer);
     renderer->UpdateDlssCameraData(camera_);
@@ -356,9 +354,14 @@ void Scene::PrepareViews(Renderer* renderer)
         view.requiresDepthCheck = false;
     }
 
-    const float cascadeOverlap = cascadeConfig_.overlap;
+    // Step 6e: bucketize the shared shadow-caster set ONCE — every directional cascade and
+    // spot view uses identical inputs (same objects, camera layer mask, shadow-caster
+    // filter), so re-bucketizing per view was ~5 redundant passes/frame. Each shadow view
+    // now only runs its own per-frustum Cull against this. CPU-only (does not move GPU FPS).
+    const uint32_t camMask = camera_.GetRenderLayerMask();
+    shadowCasterSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/true);
 
-    auto prepareQueue = [this, cameraPosition, cameraDirection, cascadeOverlap](SceneView& view)
+    auto prepareQueue = [this, camMask](SceneView& view)
     {
         CPU_SCOPE(ProfilerScopes::kPrepareQueue);
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
@@ -367,15 +370,19 @@ void Scene::PrepareViews(Renderer* renderer)
             return;
         }
 
+        // Shadow views with the camera's layer mask reuse the shared shadow-caster set (6e);
+        // anything else (e.g. the camera view, filterShadowCaster=false) bucketizes its own.
+        // Step 6a pure frustum cull: the old camera-distance "depth clamp" was wrong-axis and
+        // disabled; the light-space ortho frustum (Step 2b pancaked) is the correct cull.
+        if (view.type == SceneView::Type::Shadow && view.renderLayerMask == camMask)
         {
-            //CPU_SCOPE(ProfilerScopes::kService1);
-            view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
+            view.queue.Cull(view.frustum, shadowCasterSource_);
         }
-
-        const bool clampDepthRange = false;// view.requiresDepthCheck&& view.zFar > view.zNear; //doesnt work well, fix in future
-        const float minDepth = clampDepthRange ? (view.zNear - cascadeOverlap) : 0.0f;
-        const float maxDepth = clampDepthRange ? (view.zFar + cascadeOverlap) : 0.0f;
-        view.queue.Cull(view.frustum, clampDepthRange, cameraPosition, cameraDirection, minDepth, maxDepth);
+        else
+        {
+            view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
+            view.queue.Cull(view.frustum);
+        }
         if (view.type == SceneView::Type::Camera)
         {
             view.queue.SortTransparent(view.view);

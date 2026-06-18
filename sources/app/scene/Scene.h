@@ -76,6 +76,10 @@ private:
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     std::array<SceneView, kCascades> cascadeViews_{};
     std::array<SceneView, LightManager::kMaxSpotLights> spotShadowViews_{};
+    // Step 6e: the directional cascades + spot shadow views all bucketize the same
+    // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
+    // shared — each shadow view only runs its own per-frustum Cull against it.
+    SceneRenderQueue shadowCasterSource_{};
     LightManager lightManager_{};
     Camera camera_;
 

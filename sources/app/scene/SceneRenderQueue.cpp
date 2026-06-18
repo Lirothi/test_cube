@@ -133,9 +133,12 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
     }
 }
 
-void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
-    const float3& cameraPosition, const float3& cameraDirection,
-    float minDepth, float maxDepth)
+void SceneRenderQueue::Cull(const Frustum& frustum)
+{
+    Cull(frustum, *this);
+}
+
+void SceneRenderQueue::Cull(const Frustum& frustum, const SceneRenderQueue& source)
 {
     //CPU_SCOPE(ProfilerScopes::kService3);
     for (auto& bucket : visibleBuckets_)
@@ -147,9 +150,9 @@ void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
         entries.clear();
     }
 
-    for (size_t bucketIndex = 0; bucketIndex < buckets_.size(); ++bucketIndex)
+    for (size_t bucketIndex = 0; bucketIndex < source.buckets_.size(); ++bucketIndex)
     {
-        const auto& bucket = buckets_[bucketIndex];
+        const auto& bucket = source.buckets_[bucketIndex];
         auto& visibleBucket = visibleBuckets_[bucketIndex];
         visibleBucket.reserve(bucket.size());
 
@@ -170,25 +173,7 @@ void SceneRenderQueue::Cull(const Frustum& frustum, bool clampDepthRange,
             }
 
             const AABB& bounds = obj->GetWorldBounds();
-            bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
-            if (visible && clampDepthRange && bounds.IsValid())
-            {
-                const float3 center = bounds.GetCenter();
-                const float radius = bounds.GetRadius();
-                const float3 toCenter = center - cameraPosition;
-                //const float depth = toCenter.Dot(cameraDirection);
-                const float depth = toCenter.Length();
-                const float objMinDepth = depth - radius;
-                const float objMaxDepth = depth + radius;
-
-                constexpr float minDepthDist = 50.0f;
-                constexpr float overlap = 10.0f;
-
-                if ((objMinDepth >= minDepthDist || std::fabs(objMaxDepth - minDepth) > minDepthDist) && (objMaxDepth < (minDepth - overlap) || objMinDepth > (maxDepth + overlap)))
-                {
-                    visible = false;
-                }
-            }
+            const bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
 
             if (visible)
             {
