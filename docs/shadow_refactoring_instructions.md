@@ -612,20 +612,24 @@ it); both configs build; debug clean.
 
 ## Step 7 — cleanup: remove dead shadow code
 
-**Category: cleanup. Risk: none (no behavior change). Order-independent — can be taken
-any time.**
+> **DONE 2026-06-16.** Removed (66 lines, grep-confirmed dead, build PASS both configs):
+> `SceneRenderer::RenderShadowBatch` (def + decl) and its orphaned profiler scopes
+> `kRenderShadowBatchAsync`/`kRenderShadowBatchGpu` (defs + decls); the now-unused
+> `CascadeShadowConfig::forwardOffset` and `stabilizationStepFraction` (dead since Step 2a);
+> the 1×1 `ShadowPCF` helper in `lighting_cs.hlsl` (dead since Step 4 went all-3×3). The
+> dead `shadowBias` const was already removed in Step 4. Shader recompiles clean; visuals
+> identical; debug layer silent.
 
-- `SceneRenderer::RenderShadowBatch` (`SceneRenderer.cpp:372-423`, decl
-  `SceneRenderer.h:56`) is **dead**: `Pass_CSM` inlines the per-cascade draw loop and
-  nothing calls `RenderShadowBatch` (grep-confirmed). Remove the definition + decl, and
-  its now-orphaned profiler scopes `kRenderShadowBatchAsync` / `kRenderShadowBatchGpu`
-  (`ProfilerScopes.cpp:42-45`, `ProfilerScopes.h:48-51`) — but re-grep first; remove a
-  scope only if nothing else references it.
-- Remove the dead `static const float shadowBias` (`lighting_cs.hlsl:46`) if Step 4
-  didn't already.
+**Category: cleanup. Risk: none (no behavior change). Order-independent.**
+
+- `SceneRenderer::RenderShadowBatch` was **dead** (`Pass_CSM` inlines the per-cascade draw
+  loop; nothing called it). Removed def + decl + its orphaned `kRenderShadowBatch*` scopes.
+- `forwardOffset` / `stabilizationStepFraction` (`SceneRenderConfig.h`) went dead at Step 2a
+  (bounding-sphere fit + world-axis texel snap replaced the far-plane center + world snap).
+- The 1×1 `ShadowPCF` helper (`lighting_cs.hlsl`) went dead at Step 4 (all cascades 3×3).
 
 **Acceptance:** both configs build; `grep` shows no dangling references; visuals
-identical; debug layer clean.
+identical; debug layer clean. — all met.
 
 ---
 

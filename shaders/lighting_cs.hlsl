@@ -52,11 +52,6 @@ int ChooseCascadeIndex(float3 Pws)
     return (int)(gt.x + gt.y + gt.z);
 }
 
-float ShadowPCF(float2 uv, float zRef)
-{
-    return ShadowAtlas.SampleCmpLevelZero(gSmpLinear, uv, zRef).r;
-}
-
 float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
 {
     float s = 0.0;

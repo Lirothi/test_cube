@@ -9,8 +9,6 @@ struct CascadeShadowConfig
     float normalBiasInTexels = 0.75f;
     float depthBiasInTexels = 2.0f;
     float overlap = 2.0f;
-    float forwardOffset = 1.0f;
-    float stabilizationStepFraction = 0.1f; // UNUSED since Step 2a (texel snap replaced it)
     float zPadding = 25.0f;
     // Step 2b: how far (world units) a caster may extend TOWARD the light beyond a slice.
     // The light ortho near plane is pulled back by this so such casters still render and

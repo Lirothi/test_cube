@@ -53,8 +53,6 @@ private:
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize);
-    void RenderShadowBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const mat4& lightView, const mat4& lightProj, UINT cascadeIndex, size_t chunkSize);
 
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);

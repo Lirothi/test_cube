@@ -369,59 +369,6 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
 #endif
 }
 
-void SceneRenderer::RenderShadowBatch(Renderer* renderer,
-    const std::vector<RenderableObjectBase*>& objects,
-    size_t batchIndex,
-    const mat4& lightView, const mat4& lightProj,
-    UINT cascadeIndex, size_t chunkSize)
-{
-    if (objects.empty())
-    {
-        return;
-    }
-
-    auto& tasks = TaskSystem::Get();
-    const size_t N = objects.size();
-    if (chunkSize == 0)
-    {
-        chunkSize = 16;
-    }
-
-    auto shadowJob = [renderer, &objects, &lightView, &lightProj, cascadeIndex, chunkSize, batchIndex](std::size_t jobIndex)
-    {
-        CPU_SCOPE(ProfilerScopes::kRenderShadowBatchAsync);
-        const size_t begin = jobIndex * chunkSize;
-        const size_t end = std::min(begin + chunkSize, objects.size());
-
-        // Each chunk uses its own DIRECT command list
-        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        t.cl->SetName(L"RenderShadowBatch");
-        {
-            GPU_SCOPE(t.cl, ProfilerScopes::kRenderShadowBatchGpu);
-
-            // Important: bind the correct atlas tile for the cascade without clearing
-            renderer->BindShadowTarget(t.cl, cascadeIndex, /*clear=*/false);
-
-            for (size_t i = begin; i < end; ++i) {
-                if (auto* obj = objects[i]) {
-                    obj->RenderShadow(renderer, t.cl, lightView, lightProj);
-                }
-            }
-        }
-        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(jobIndex));
-    };
-
-#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    tasks.DispatchTrack((N + chunkSize - 1) / chunkSize, shadowJob, 1);
-#else
-    (void)tasks;
-    const size_t jobCount = (N + chunkSize - 1) / chunkSize;
-    for (size_t jobIndex = 0; jobIndex < jobCount; ++jobIndex) {
-        shadowJob(jobIndex);
-    }
-#endif
-}
-
 void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
 {
     auto t = ctx.BeginCL();
