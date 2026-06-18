@@ -1,8 +1,9 @@
-// RootSignature: TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+#define DEBUG_TEX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 Texture2D ShadowAtlas : register(t0);
 SamplerState Smp : register(s0);
 
 struct VSOut { float4 H:SV_POSITION; float2 UV:TEXCOORD0; };
+[RootSignature(DEBUG_TEX_RS)]
 VSOut VSMain(uint vid:SV_VertexID)
 {
     VSOut o;
@@ -11,6 +12,7 @@ VSOut VSMain(uint vid:SV_VertexID)
     o.UV = float2(p.x * 0.5 + 0.5, 1.0 - (p.y * 0.5 + 0.5));
     return o;
 }
+[RootSignature(DEBUG_TEX_RS)]
 float4 PSMain(VSOut i):SV_Target
 {
     float4 d = ShadowAtlas.SampleLevel(Smp, i.UV, 0);

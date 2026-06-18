@@ -1,4 +1,3 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
 // t0..t3 : GBuffer textures (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth (R32F)
 // t5     : Shadow atlas
@@ -148,6 +147,13 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
     return shadow;
 }
 
+#define LIGHTING_RS \
+    "CBV(b0)," \
+    "DescriptorTable(SRV(t0, numDescriptors=6))," \
+    "DescriptorTable(UAV(u0))," \
+    "DescriptorTable(Sampler(s0, numDescriptors=2))"
+
+[RootSignature(LIGHTING_RS)]
 [numthreads(8,8,1)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {

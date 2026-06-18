@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=8) TABLE(SRV(t0)) TABLE(UAV(u0, numDescriptors=4))
+#define OCEAN_MIPS_RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DATA_VOLATILE))"
 
 cbuffer MipParams : register(b0)
 {
@@ -16,6 +16,7 @@ Texture2DArray<float4> Source : register(t0);
 RWTexture2DArray<float4> Dest[4] : register(u0);
 
 [numthreads(8, 8, 1)]
+[RootSignature(OCEAN_MIPS_RS)]
 void GenerateMip(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     if (dispatchThreadId.z >= ArrayCount)

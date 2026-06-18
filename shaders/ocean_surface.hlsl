@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6) SRV(t7) SRV(t8) SRV(t9) SRV(t10) SRV(t11) SRV(t12) SRV(t13)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -418,6 +418,7 @@ float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
     return NormalFromCombinedDerivatives(combined);
 }
 
+[RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {
     VSOutput output;
@@ -913,6 +914,7 @@ struct PSOut
     float bias : SV_Target2;
 };
 
+[RootSignature(OCEAN_SURFACE_RS)]
 PSOut PSMain(VSOutput input)
 {
     uint cascadesCount = max((uint)simulationParams.w, 1u);

@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0) SRV(t1)) TABLE(UAV(u0))
+#define OCEAN_TIMESPEC_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
 
 cbuffer SpectrumParams : register(b0)
 {
@@ -23,6 +23,7 @@ float2 ComplexConj(float2 a)
 }
 
 [numthreads(8, 8, 1)]
+[RootSignature(OCEAN_TIMESPEC_RS)]
 void CalculateAmplitudes(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     if (dispatchThreadId.x >= Resolution || dispatchThreadId.y >= Resolution || dispatchThreadId.z >= Cascades)

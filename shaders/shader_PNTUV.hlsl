@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+#define SHADER_PNTUV_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 #pragma pack_matrix(row_major)
 
 cbuffer CB : register(b0)
@@ -30,6 +30,7 @@ struct PSInput
 Texture2D gTex : register(t0);
 SamplerState gSmp : register(s0);
 
+[RootSignature(SHADER_PNTUV_RS)]
 PSInput VSMain(VSInput input)
 {
     PSInput output;
@@ -40,6 +41,7 @@ PSInput VSMain(VSInput input)
     return output;
 }
 
+[RootSignature(SHADER_PNTUV_RS)]
 float4 PSMain(PSInput input) : SV_TARGET
 {
     float3 n = pow(input.nrm, 1.0f);

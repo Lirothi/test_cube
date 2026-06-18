@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(SRV(t0)) TABLE(UAV(u0))
+#define OCEAN_FOAM_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
 
 cbuffer FoamParams : register(b0)
 {
@@ -40,6 +40,7 @@ float4 SimulateFoamForCascade(uint2 coord, uint cascade)
 }
 
 [numthreads(8, 8, 1)]
+[RootSignature(OCEAN_FOAM_RS)]
 void SimulateFoam(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     if (dispatchThreadId.x >= Resolution || dispatchThreadId.y >= Resolution || dispatchThreadId.z >= CascadesCount)
@@ -50,6 +51,7 @@ void SimulateFoam(uint3 dispatchThreadId : SV_DispatchThreadID)
     FoamTurbulence[dispatchThreadId] = SimulateFoamForCascade(dispatchThreadId.xy, dispatchThreadId.z);
 }
 
+[RootSignature(OCEAN_FOAM_RS)]
 [numthreads(8, 8, 1)]
 void InitializeFoam(uint3 dispatchThreadId : SV_DispatchThreadID)
 {

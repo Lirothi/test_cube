@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0) SAMPLER(s1))
+#define POINTLIGHT_COLOR_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=4, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -33,6 +33,7 @@ struct VSOut {
     float2 UV : TEXCOORD0;
 };
 
+[RootSignature(POINTLIGHT_COLOR_RS)]
 VSOut VSMain(uint vid : SV_VertexID)
 {
     VSOut o;
@@ -42,6 +43,7 @@ VSOut VSMain(uint vid : SV_VertexID)
     return o;
 }
 
+[RootSignature(POINTLIGHT_COLOR_RS)]
 float4 PSMain(VSOut i) : SV_Target
 {
     const float2 uv = i.UV;

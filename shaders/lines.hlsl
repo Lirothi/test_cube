@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0)
+#define LINES_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
 
 cbuffer MVP : register(b0)
@@ -16,6 +16,7 @@ struct VSOut {
     float4 color    : COLOR;
 };
 
+[RootSignature(LINES_RS)]
 VSOut VSMain(VSIn i)
 {
     VSOut o;
@@ -24,6 +25,7 @@ VSOut VSMain(VSIn i)
     return o;
 }
 
+[RootSignature(LINES_RS)]
 float4 PSMain(VSOut i) : SV_Target
 {
     return i.color; // alpha comes from the vertex

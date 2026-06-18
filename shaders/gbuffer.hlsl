@@ -1,4 +1,3 @@
-// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 
@@ -7,11 +6,20 @@ Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
 SamplerState gSmp : register(s0);
 
+#define GBUFFER_RS \
+    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
+    "CBV(b0)," \
+    "CBV(b1)," \
+    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DATA_VOLATILE))," \
+    "DescriptorTable(Sampler(s0))"
+
+[RootSignature(GBUFFER_RS)]
 VSOut VSMain(VSIn i)
 {
     return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV);
 }
 
+[RootSignature(GBUFFER_RS)]
 PSOut PSMain(VSOut i)
 {
     float3 NNorm = normalize(i.NWS);

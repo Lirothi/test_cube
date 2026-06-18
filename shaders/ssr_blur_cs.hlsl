@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0)) TABLE(UAV(u0)) TABLE(SAMPLER(s0))
+#define SSR_BLUR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 // t0: SSR input (RGB premultiplied, A=visibility)
 // u0: SSR output (premultiplied RGBA)
 // s0: LinearClamp
@@ -21,6 +21,7 @@ cbuffer BlurCB : register(b0){
 }
 
 [numthreads(8, 8, 1)]
+[RootSignature(SSR_BLUR_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width, height;

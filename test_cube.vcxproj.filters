@@ -470,12 +470,6 @@
     <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h">
       <Filter>sources\rendering\descriptors</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h">
-      <Filter>sources\rendering\descriptors</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h">
-      <Filter>sources\rendering\descriptors</Filter>
-    </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/SamplerManager.h">
       <Filter>sources\rendering\descriptors</Filter>
     </ClInclude>

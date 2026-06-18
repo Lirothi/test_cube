@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=12) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+#define FONT_PP_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), RootConstants(num32BitConstants=12, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 
 struct VSIn {
     float2 pos : POSITION;
@@ -20,6 +20,7 @@ cbuffer TextParams : register(b0)
     float4 shadowColorRgb;   // xyz = shadow color rgb
 };
 
+[RootSignature(FONT_PP_RS)]
 VSOut VSMain(VSIn i) {
     VSOut o;
     float2 viewport = viewportAtlas.xy;
@@ -36,6 +37,7 @@ VSOut VSMain(VSIn i) {
 Texture2D tex0 : register(t0);
 SamplerState samp0 : register(s0);
 
+[RootSignature(FONT_PP_RS)]
 float4 PSMain(VSOut i) : SV_Target {
     //const float2 atlasTexelSize = viewportAtlas.zw;
     const float2 atlasTexelSize = 1.0f / viewportAtlas.xy;

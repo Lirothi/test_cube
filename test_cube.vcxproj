@@ -284,8 +284,6 @@
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h" />
     <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h" />
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureLayout.h" />
-    <ClInclude Include="sources/rendering/descriptors/RootSignatureParser.h" />
     <ClInclude Include="sources/rendering/descriptors/SamplerManager.h" />
     <ClInclude Include="sources/rendering/lighting/LightManager.h" />
     <ClInclude Include="sources/rendering/lighting/SpotLight.h" />

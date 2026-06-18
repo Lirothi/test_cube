@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2))"
 // t0: LightTarget (HDR)
 // t1: GB2 (Emissive)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -49,6 +49,7 @@ inline float ReadDepth(float2 uv)
 }
 
 [numthreads(8,8,1)]
+[RootSignature(COMPOSE_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width = (uint)screenSize.x;

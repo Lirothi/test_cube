@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
+#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=6, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : StructuredBuffer<PointLightData>
@@ -40,6 +40,7 @@ cbuffer PointLightFrame : register(b0)
 }
 
 [numthreads(8,8,1)]
+[RootSignature(POINTLIGHT_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width = (uint)screenSize.x;

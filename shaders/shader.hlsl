@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0)
+#define SHADER_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
 
 cbuffer CB : register(b0)
@@ -18,6 +18,7 @@ struct PSInput
     float4 color : COLOR;
 };
 
+[RootSignature(SHADER_RS)]
 PSInput VSMain(VSInput input)
 {
     PSInput output;
@@ -26,6 +27,7 @@ PSInput VSMain(VSInput input)
     return output;
 }
 
+[RootSignature(SHADER_RS)]
 float4 PSMain(PSInput input) : SV_TARGET
 {
     return input.color;

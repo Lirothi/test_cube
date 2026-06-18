@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 
 #include <d3d12shader.h>    // ID3D12ShaderReflection
 #include <d3dcompiler.h>    // D3DReflect (DXBC)
@@ -15,9 +16,7 @@
 #pragma comment(lib, "dxcompiler.lib")
 
 #include "core/Helpers.h"
-#include "rendering/descriptors/RootSignatureLayout.h"
 #include "rendering/core/RenderContext.h"
-#include "rendering/descriptors/RootSignatureParser.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -27,68 +26,6 @@ using Microsoft::WRL::ComPtr;
 // ----------------------------------------
 // Utilities
 // ----------------------------------------
-static std::string ReadFileToString(const std::wstring& path) {
-    std::ifstream file(path);
-    if (!file) {
-        throw std::runtime_error("Failed to open shader file!");
-    }
-    std::stringstream ss;
-    ss << file.rdbuf();
-    return ss.str();
-}
-
-static void BuildRootFromLayout(
-    ID3D12Device* device,
-    const RootSignatureLayout& inLayout,
-    D3D12_ROOT_SIGNATURE_FLAGS rsFlags,
-    ComPtr<ID3D12RootSignature>& outRS,
-    std::vector<Material::RootParameterInfo>& outParams)
-{
-    RootSignatureLayout layout = inLayout;
-    layout.flags = rsFlags;
-
-    outParams.clear();
-    outParams.reserve(layout.params.size());
-    for (size_t i = 0; i < layout.params.size(); ++i) {
-        const auto& p = layout.params[i];
-        Material::RootParameterInfo info{};
-        info.rootIndex = (UINT)i;
-        switch (p.type) {
-        case D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS:
-            info.type = Material::RootParameterInfo::Constants;
-            info.constantsCount = p.num32BitValues;
-            info.bindingRegister = p.shaderRegister; // bN
-            info.bindingSpace = p.registerSpace;
-            break;
-        case D3D12_ROOT_PARAMETER_TYPE_CBV:
-            info.type = Material::RootParameterInfo::CBV;
-            info.bindingRegister = p.shaderRegister; // bN
-            info.bindingSpace = p.registerSpace;
-            break;
-        case D3D12_ROOT_PARAMETER_TYPE_SRV:
-            info.type = Material::RootParameterInfo::SRV;
-            info.bindingRegister = p.shaderRegister; // tN
-            info.bindingSpace = p.registerSpace;
-            break;
-        case D3D12_ROOT_PARAMETER_TYPE_UAV:
-            info.type = Material::RootParameterInfo::UAV;
-            info.bindingRegister = p.shaderRegister; // uN
-            info.bindingSpace = p.registerSpace;
-            break;
-        case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
-            info.type = p.hasSamplerRanges ? Material::RootParameterInfo::TableSampler : Material::RootParameterInfo::Table;
-            info.bindingRegister = p.shaderRegister;
-            info.bindingSpace = p.registerSpace;
-            break;
-        }
-        outParams.push_back(info);
-    }
-
-    D3D12_ROOT_SIGNATURE_DESC desc = MakeRootSignatureDesc(layout);
-    ComPtr<ID3DBlob> sigBlob, errBlob;
-    ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob));
-    ThrowIfFailed(device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&outRS)));
-}
 
 static D3D_SHADER_MODEL QueryMaxShaderModel(ID3D12Device* dev)
 {
@@ -573,6 +510,132 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     }
 }
 
+// ===== Root signature from compiler-embedded blob ([RootSignature] attribute) =====
+// Option #2: the RS is authored in HLSL via [RootSignature(...)] and validated by
+// the compiler against actual register usage. We pull the serialized RS out of the
+// compiled shader container and rebuild rootParams_ from it (same bindingRegister/
+// rootIndex mapping Material::Bind relies on). Shaders without an embedded RS fall
+// back to the legacy `// RootSignature:` comment parser (coexistence during migration).
+
+// Pull the serialized root-signature blob out of a compiled shader container.
+// Returns null if the shader carries no embedded RS.
+static ComPtr<ID3DBlob> ExtractEmbeddedRootSig(ID3DBlob* shaderBlob)
+{
+    if (!shaderBlob || shaderBlob->GetBufferSize() == 0) { return nullptr; }
+
+    // DXBC-style part table (FXC output, and DXC containers share the header).
+    ComPtr<ID3DBlob> rs;
+    if (SUCCEEDED(D3DGetBlobPart(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(),
+            D3D_BLOB_ROOT_SIGNATURE, 0, &rs)) && rs && rs->GetBufferSize() > 0) {
+        return rs;
+    }
+
+    // DXIL container fallback via the DXC container reflection (RTS0 part).
+    ComPtr<IDxcContainerReflection> refl;
+    ComPtr<IDxcUtils> utils;
+    if (SUCCEEDED(DxcCreateInstance(CLSID_DxcContainerReflection, IID_PPV_ARGS(&refl))) &&
+        SUCCEEDED(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))) {
+        ComPtr<IDxcBlobEncoding> enc;
+        if (SUCCEEDED(utils->CreateBlob(shaderBlob->GetBufferPointer(),
+                (UINT32)shaderBlob->GetBufferSize(), DXC_CP_ACP, &enc)) &&
+            SUCCEEDED(refl->Load(enc.Get()))) {
+            UINT32 partIdx = 0;
+            if (SUCCEEDED(refl->FindFirstPartKind(DXC_PART_ROOT_SIGNATURE, &partIdx))) {
+                ComPtr<IDxcBlob> part;
+                if (SUCCEEDED(refl->GetPartContent(partIdx, &part)) && part && part->GetBufferSize() > 0) {
+                    ComPtr<ID3DBlob> out;
+                    if (SUCCEEDED(D3DCreateBlob(part->GetBufferSize(), &out))) {
+                        std::memcpy(out->GetBufferPointer(), part->GetBufferPointer(), part->GetBufferSize());
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+static void BuildRootParamsFromDesc(const D3D12_ROOT_SIGNATURE_DESC1& d,
+    std::vector<Material::RootParameterInfo>& outParams)
+{
+    outParams.clear();
+    outParams.reserve(d.NumParameters);
+    // Descriptor-table bindingRegister follows the legacy parser's convention:
+    // a sequential counter per table KIND (non-sampler tables share one counter,
+    // sampler tables another) — matching how RenderContext::table/samplerTable are
+    // populated by the callers. It is NOT the table's base shader register.
+    UINT tableCounter = 0;
+    UINT samplerTableCounter = 0;
+    for (UINT i = 0; i < d.NumParameters; ++i) {
+        const D3D12_ROOT_PARAMETER1& p = d.pParameters[i];
+        Material::RootParameterInfo info{};
+        info.rootIndex = i;
+        switch (p.ParameterType) {
+        case D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS:
+            info.type = Material::RootParameterInfo::Constants;
+            info.constantsCount = p.Constants.Num32BitValues;
+            info.bindingRegister = p.Constants.ShaderRegister;
+            info.bindingSpace = p.Constants.RegisterSpace;
+            break;
+        case D3D12_ROOT_PARAMETER_TYPE_CBV:
+            info.type = Material::RootParameterInfo::CBV;
+            info.bindingRegister = p.Descriptor.ShaderRegister;
+            info.bindingSpace = p.Descriptor.RegisterSpace;
+            break;
+        case D3D12_ROOT_PARAMETER_TYPE_SRV:
+            info.type = Material::RootParameterInfo::SRV;
+            info.bindingRegister = p.Descriptor.ShaderRegister;
+            info.bindingSpace = p.Descriptor.RegisterSpace;
+            break;
+        case D3D12_ROOT_PARAMETER_TYPE_UAV:
+            info.type = Material::RootParameterInfo::UAV;
+            info.bindingRegister = p.Descriptor.ShaderRegister;
+            info.bindingSpace = p.Descriptor.RegisterSpace;
+            break;
+        case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE: {
+            bool hasSampler = false;
+            for (UINT rIdx = 0; rIdx < p.DescriptorTable.NumDescriptorRanges; ++rIdx) {
+                if (p.DescriptorTable.pDescriptorRanges[rIdx].RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER) {
+                    hasSampler = true; break;
+                }
+            }
+            info.type = hasSampler ? Material::RootParameterInfo::TableSampler : Material::RootParameterInfo::Table;
+            info.bindingRegister = hasSampler ? samplerTableCounter++ : tableCounter++;
+            if (p.DescriptorTable.NumDescriptorRanges > 0) {
+                info.bindingSpace = p.DescriptorTable.pDescriptorRanges[0].RegisterSpace;
+            }
+            break;
+        }
+        default: break;
+        }
+        outParams.push_back(info);
+    }
+}
+
+// Creates the RS object + rebuilds rootParams_ from an embedded serialized RS blob.
+// Returns false if the blob is absent/undeserializable (caller falls back to parser).
+static bool BuildRootFromEmbedded(ID3D12Device* device, ID3DBlob* rsBlob,
+    ComPtr<ID3D12RootSignature>& outRS,
+    std::vector<Material::RootParameterInfo>& outParams)
+{
+    if (!device || !rsBlob) { return false; }
+    if (FAILED(device->CreateRootSignature(0, rsBlob->GetBufferPointer(), rsBlob->GetBufferSize(),
+            IID_PPV_ARGS(&outRS)))) {
+        return false;
+    }
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> deser;
+    if (FAILED(D3D12CreateVersionedRootSignatureDeserializer(rsBlob->GetBufferPointer(),
+            rsBlob->GetBufferSize(), IID_PPV_ARGS(&deser)))) {
+        return false;
+    }
+    const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* desc = nullptr;
+    if (FAILED(deser->GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_1, &desc)) || !desc) {
+        return false;
+    }
+    BuildRootParamsFromDesc(desc->Desc_1_1, outParams);
+    return true;
+}
+
 // ===== Shared builder: Graphics =====
 bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3D12RootSignature>& outRS,
@@ -581,12 +644,6 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
-    RootSignatureLayout layoutParsed;
-    {
-        std::string src = ReadFileToString(gd.shaderFile);
-        ParseRootSignatureFromSource(src, layoutParsed);
-    }
-
     ComPtr<ID3DBlob> vs, ps;
     std::vector<std::wstring> incVS, incPS;
 
@@ -621,7 +678,13 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ReflectShaderBlob(vs.Get(), cbInfos_);
     ReflectShaderBlob(ps.Get(), cbInfos_);
 
-    BuildRootFromLayout(r->GetDevice(), layoutParsed, gd.rsFlags, outRS, outParams);
+    // Root signature comes from the shader's compiler-validated [RootSignature]
+    // attribute (extracted from the VS blob, deserialized into rootParams_).
+    ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(vs.Get());
+    if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
+        OutputDebugStringW((L"[Material] missing/invalid [RootSignature] in " + gd.shaderFile + L"\n").c_str());
+        return false;
+    }
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
@@ -697,12 +760,13 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     cbInfos_.clear();
     ReflectShaderBlob(cs.Get(), cbInfos_);
 
-    RootSignatureLayout layoutParsed;
-    {
-        std::string src = ReadFileToString(cd.shaderFile);
-        ParseRootSignatureFromSource(src, layoutParsed);
+    // Root signature comes from the shader's compiler-validated [RootSignature]
+    // attribute (extracted from the CS blob, deserialized into rootParams_).
+    ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(cs.Get());
+    if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
+        OutputDebugStringW((L"[Material] missing/invalid [RootSignature] in " + cd.shaderFile + L"\n").c_str());
+        return false;
     }
-    BuildRootFromLayout(r->GetDevice(), layoutParsed, cd.rsFlags, outRS, outParams);
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();

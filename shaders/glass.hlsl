@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=7, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -87,6 +87,7 @@ struct VSOut
     float2 uv : TEXCOORD4;
 };
 
+[RootSignature(GLASS_RS)]
 VSOut VSMain(VSIn input)
 {
     VSOut o;
@@ -210,6 +211,7 @@ struct PSOut
     float bias : SV_Target2;
 };
 
+[RootSignature(GLASS_RS)]
 PSOut PSMain(VSOut i)
 {
     float3 N = normalize(i.normalWS);

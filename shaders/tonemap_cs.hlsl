@@ -1,4 +1,4 @@
-// RootSignature: TABLE(SRV(t0)) TABLE(UAV(u0)) TABLE(SAMPLER(s0))
+#define TONEMAP_CS_RS "DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 
 Texture2D HDRColor : register(t0);
 RWTexture2D<float4> LdrTarget : register(u0);
@@ -25,6 +25,7 @@ float Dither(uint2 p)
 }
 
 [numthreads(8,8,1)]
+[RootSignature(TONEMAP_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width, height;

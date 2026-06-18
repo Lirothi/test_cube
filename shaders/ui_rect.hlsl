@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4)
+#define UI_RECT_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), RootConstants(num32BitConstants=4, b0)"
 struct VSIn
 {
     float2 pos : POSITION;
@@ -27,6 +27,7 @@ static float2 PixelToNDC(float2 p, float2 vp)
     return float2(x, y);
 }
 
+[RootSignature(UI_RECT_RS)]
 VSOut VSMain(VSIn i)
 {
     VSOut o;
@@ -36,6 +37,7 @@ VSOut VSMain(VSIn i)
     return o;
 }
 
+[RootSignature(UI_RECT_RS)]
 float4 PSMain(VSOut i) : SV_Target
 {
     return i.col;

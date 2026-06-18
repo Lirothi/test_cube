@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0)
+#define AXES_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
 
 cbuffer MVP_Axis : register(b0)
@@ -38,6 +38,7 @@ static void ClipEndToNear(inout float4 P, float4 Q)
     }
 }
 
+[RootSignature(AXES_RS)]
 VSOut VSMain(VSIn i)
 {
     VSOut o;
@@ -86,6 +87,7 @@ VSOut VSMain(VSIn i)
     return o;
 }
 
+[RootSignature(AXES_RS)]
 float4 PSMain(VSOut i) : SV_Target
 {
     return i.color;

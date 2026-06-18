@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2)) TABLE(UAV(u0)) TABLE(SAMPLER(s0) SAMPLER(s1))
+#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2))"
 // t0: LightTarget            (HDR color)
 // t1: GB1 (normal.xy in 0..1, rough in A)
 // t2: Depth (R32F SRV created from the DSV)
@@ -338,6 +338,7 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
 }
 
 [numthreads(8, 8, 1)]
+[RootSignature(SSR_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint renderWidth, renderHeight;

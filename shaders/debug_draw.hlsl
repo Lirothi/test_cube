@@ -1,4 +1,4 @@
-// RootSignature: TABLE(SRV(t0))
+#define DEBUG_DRAW_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DATA_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 struct VSInput
@@ -21,6 +21,7 @@ struct VSOutput
     float4 color    : COLOR;
 };
 
+[RootSignature(DEBUG_DRAW_RS)]
 VSOutput VSMain(VSInput input, uint instanceID : SV_InstanceID)
 {
     VSOutput output;
@@ -30,6 +31,7 @@ VSOutput VSMain(VSInput input, uint instanceID : SV_InstanceID)
     return output;
 }
 
+[RootSignature(DEBUG_DRAW_RS)]
 float4 PSMain(VSOutput input) : SV_TARGET
 {
     return input.color;

@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0)) TABLE(SAMPLER(s0))
+#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -24,6 +24,7 @@ struct VSOut {
     float4 clipPos : TEXCOORD2;
 };
 
+[RootSignature(SKYBOX_RS)]
 VSOut VSMain(VSIn i)
 {
     // 1) Position: remove translation from view, apply proj, and push to the far plane
@@ -63,6 +64,7 @@ struct PSOut
     float2 velocity : SV_Target1;
 };
 
+[RootSignature(SKYBOX_RS)]
 PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;

@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0)
+#define GLASS_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -19,6 +19,7 @@ struct VSOut
     float4 posH : SV_POSITION;
 };
 
+[RootSignature(GLASS_CSM_RS)]
 VSOut VSMain(VSIn input)
 {
     VSOut o;
@@ -27,4 +28,5 @@ VSOut VSMain(VSIn input)
     return o;
 }
 
+[RootSignature(GLASS_CSM_RS)]
 void PSMain() {}

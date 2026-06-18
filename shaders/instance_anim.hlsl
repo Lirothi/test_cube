@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(UAV(u0))
+#define INSTANCE_ANIM_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 struct InstanceData
@@ -20,6 +20,7 @@ cbuffer AnimParams : register(b0)
 }
 
 [numthreads(64, 1, 1)]
+[RootSignature(INSTANCE_ANIM_RS)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint idx = DTid.x;

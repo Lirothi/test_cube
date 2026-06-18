@@ -1,4 +1,4 @@
-// RootSignature: CONSTANTS(b0,count=4) TABLE(UAV(u0))
+#define OCEAN_FFT_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
 
 #ifndef FFT_SIZE
 #define FFT_SIZE 256
@@ -75,6 +75,7 @@ float4 DoFft(uint threadIndex, float4 input)
 }
 
 [numthreads(FFT_SIZE, 1, 1)]
+[RootSignature(OCEAN_FFT_RS)]
 void Fft(uint3 id : SV_DispatchThreadID)
 {
     uint threadIndex = id.x;
@@ -99,6 +100,7 @@ float4 DoPostProcess(float4 input, uint2 coord)
     return input;
 }
 
+[RootSignature(OCEAN_FFT_RS)]
 [numthreads(8, 8, 1)]
 void PostProcess(uint3 id : SV_DispatchThreadID)
 {

@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0)) TABLE(UAV(u0)) TABLE(SAMPLER(s0))
+#define FXAA_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
 // t0: LDR color input (R8G8B8A8)
 // u0: FXAA output (R8G8B8A8)
 // s0: LinearClamp
@@ -198,6 +198,7 @@ float3 FxaaPixelShader(float2 uv, float2 rcpFrame, out float3 rgbMOut)
 }
 
 [numthreads(8, 8, 1)]
+[RootSignature(FXAA_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width, height;
