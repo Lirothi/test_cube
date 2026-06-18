@@ -382,24 +382,37 @@ number; expected small). Shadow factor stays in `[0,1]` (lerp of two `[0,1]` val
 (`lighting_cs.hlsl:102-106`) → a filtering discontinuity (sharp vs soft) at the 100 m
 boundary, on top of any residual split seam.
 
-**Fix:**
-- Use a consistent kernel on all cascades. Cascade 3 covers the largest area / fewest
-  on-screen pixels, so 3×3 there is cheap — switch it to `ShadowPCF3x3`. (Optionally
-  scale `pcfRadius` per cascade so the world-space penumbra is roughly constant instead
-  of the texel-space kernel; only if the user wants uniform softness.)
-- Remove the dead `static const float shadowBias = 0.0015f` (`lighting_cs.hlsl:46`) —
-  it is unused; the live bias is `bBase = shadowBiasNDC[idx]` plus the grazing term
-  `b = bBase + (1-saturate(NdotL))*bBase` (`:99-100`). Leave the live model alone unless
-  acne/peter-panning is reported; just document it. (Note: Step 2a stops this bias from
-  swimming — do Step 2a first if both shimmer and bias-crawl are reported.)
+**Implemented 2026-06-16 (`lighting_cs.hlsl`, in `SampleCascadeChain`).** Replaced the
+`if (c < 3) 3x3 else 1x1` with an unconditional `ShadowPCF3x3` — every cascade now filters
+3×3. Deleted the dead `static const float shadowBias = 0.0015f`. The live bias model
+(`bBase = shadowBiasNDC[c]` + grazing term) is unchanged. The `ShadowPCF` (1×1) helper is
+now UNUSED → Step 7 cleanup candidate (left in place to keep this change surgical).
 
-**Landmines:** confirm cascade 3 with 3×3 doesn't reintroduce acne at distance (the D16
-precision is lowest in the far cascade); if it does, nudge `depthBiasInTexels` rather
+**Follow-up (same day) — per-cascade PCF radius.** A uniform `pcfRadius` of 1 *texel* made
+the far cascade a blurry mess (user-reported): its texels are ~10–16× larger in world
+space, so a 1-texel kernel = a ~0.7 m penumbra there vs ~0.02 m near. Fix — scale the
+texel radius by the per-cascade world-texel-size ratio (`normalBiasWS[c]` is proportional
+to that size, so the `normalBiasInTexels` factor cancels):
+
+```hlsl
+const float pcfR = pcfRadius * pow((normalBiasWS[0] / max(1e-6, normalBiasWS[c])), 0.25);
+```
+
+The **exponent is the look knob**: `1.0` = constant world penumbra (far cascades nearly as
+crisp as near — over-sharp); `0.0` = the original fixed-texel mush. The user tuned it to
+**`0.25`** (world penumbra ∝ `unitsPerTexel^0.75` — grows with distance but sublinearly,
+so far shadows stay soft without smearing); committed and visually preferred. `pcfRadius`
+(1.0) is the global softness multiplier. Cleaner alternative if ever wanted: a dedicated
+per-cascade radius / `unitsPerTexel` cbuffer field instead of the `normalBiasWS` proxy.
+
+**Landmines (watch):** confirm cascade 3 with 3×3 didn't reintroduce acne at distance
+(D16 precision is lowest in the far cascade); if it does, nudge `depthBiasInTexels` rather
 than reverting to 1×1.
 
-**Acceptance:** no sharp→soft seam at the cascade 2→3 boundary (USER confirm);
-acne/peter-panning unchanged elsewhere; `Pass_CSM` cost delta measured (cascade 3 3×3 is
-~8 extra taps per far pixel — should be negligible).
+**Acceptance (build + headless run PASS 2026-06-16; visual pending USER):** no sharp→soft
+seam at the cascade 2→3 (~100 m) boundary (USER confirm); acne/peter-panning unchanged
+elsewhere. `Pass_CSM`/lighting cost delta — NOT measured (cascade 3 gains ~8 taps/pixel;
+expected negligible, read F9 if you want the number).
 
 ## Step 5 — atlas resolution / per-cascade tile sizing
 

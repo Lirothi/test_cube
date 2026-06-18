@@ -43,7 +43,6 @@ cbuffer PerFrame : register(b0)
     float2 invScreenSize;
 }
 
-static const float shadowBias = 0.0015f;
 static const float pcfRadius = 1.0f;
 
 int ChooseCascadeIndex(float3 Pws)
@@ -116,11 +115,14 @@ float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws)
         const float bBase = shadowBiasNDC[c];
         const float b = bBase + (1.0 - saturate(NdotL)) * bBase;
 
-        if (c < 3)
-        {
-            return ShadowPCF3x3(uv, z - b, texel, pcfRadius);
-        }
-        return ShadowPCF(uv, z - b);
+        // Step 4: every cascade uses 3x3 PCF, but the texel radius is scaled per cascade
+        // so the WORLD-space penumbra is anchored to cascade 0 instead of growing with the
+        // cascade. A fixed 1-texel radius blurs far cascades ~10-16x more in world space
+        // (their texels are that much larger) — that turned the last cascade into mush.
+        // normalBiasWS[c] is proportional to cascade c's world texel size, so its ratio to
+        // cascade 0 is the scale (the normalBiasInTexels factor cancels); c==0 -> 1.0.
+        const float pcfR = pcfRadius * pow((normalBiasWS[0] / max(1e-6, normalBiasWS[c])), 0.25);
+        return ShadowPCF3x3(uv, z - b, texel, pcfR);
     }
 
     return 1.0;
