@@ -314,20 +314,29 @@ ortho near plane to the slice corners + 25 units. A caster more than ~25 units T
 sun from the slice falls outside the ortho near plane → not rendered → casts no shadow
 into the cascade.
 
-**Fix:** extend the near plane toward the light ("near-plane pancaking") — set `nearLS`
-from the scene/caster bound along the light axis, or pull it back by a generous fixed
-margin — leaving `farLS` fitted. This is also the prerequisite that makes Step 6's
-light-space culling correct: the ortho box itself now contains the casters that should be
-considered (invariant 5).
+**Implemented 2026-06-16.** Added `CascadeShadowConfig::casterReachWS` (default 150 m) and
+set `nearLS = max(0.001f, minZ - casterReachWS)` (far side keeps `zPadding`). Pulls the
+near plane ~150 m toward the light so casters that far above/behind a slice still render.
+
+Note — the precision landmine below is OVERCAUTIOUS for this codebase: the WORLD-space
+depth bias is `depthBiasInTexels · unitsPerTexel`, which is INDEPENDENT of the depth
+range (the NDC bias and the per-texel NDC slope both scale as 1/range, so their ratio is
+constant), and D16 quantization only causes acne past ~2500 m of range. So 150 m is
+acne-safe; it is bounded well under `maxDistance` (300) per the landmine. The fully robust
+alternative — depth-clamp pancaking via `DepthClipEnable=FALSE` on the shadow PSO, which
+captures casters of ANY height with zero range cost — is deferred (it's a material/PSO
+change; `Material.h` sets `raster.DepthClipEnable = TRUE` per material).
 
 **Landmines:**
-- Over-extending the near plane wastes depth precision (worse with D16) → acne. Extend
-  only as far as real casters require, NOT all the way to `lightDistance`.
+- Do NOT pull `nearLS` all the way to the light eye (`lightDistance`); keep it bounded.
 - This changes which casters draw → re-run the Step 1 / Step 4 visual checks afterward.
 
-**Acceptance:** a known tall/off-slice caster between sun and slice now casts (USER
-confirm); no new acne; `Pass_CSM` cost measured (a few more casters may draw); debug
-layer clean.
+**Acceptance (build + headless fly PASS 2026-06-16; visual pending USER):** for the demo
+this is a NO-OP visually (small teapots on flat ground — nothing sits 25–150 m toward the
+sun), so the USER check is NO REGRESSION (shadows unchanged, no new acne, no missing
+shadows). The "tall off-slice caster now casts" acceptance needs a scene with such a
+caster. Coverage assert did not fire while flying; `Pass_CSM` draw work unchanged for the
+demo.
 
 ## Step 3 — cascade blend band across splits
 

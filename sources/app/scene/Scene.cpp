@@ -210,8 +210,10 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         const float minY = centerLS.y - radius;
         const float maxY = centerLS.y + radius;
 
+        // Step 2b: pull the near plane TOWARD the light by casterReachWS so casters
+        // between the sun and this slice still render and cast; the far side stays fitted.
         const float zPad = cascadeConfig_.zPadding;
-        const float nearLS = std::max(0.001f, minZ - zPad);
+        const float nearLS = std::max(0.001f, minZ - cascadeConfig_.casterReachWS);
         const float farLS = maxZ + zPad;
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
