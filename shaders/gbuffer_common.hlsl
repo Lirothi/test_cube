@@ -8,14 +8,22 @@ cbuffer PerObject : register(b0)
 {
     float4x4 world;
     float4x4 prevWorld;
-    float4x4 viewProj;
-    float4x4 viewProjNoJitter;
-    float4x4 prevViewProjNoJitter;
 
     float4 baseColor; // fallback Albedo (linear)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
+};
+
+// Per-view/per-pass data shared by every object in a pass. Filled once per pass
+// (camera matrices for the gbuffer pass, light viewProj for the shadow passes).
+// Declared here so the gbuffer + shadow variants share one layout; the depth-only
+// shadow shaders only consume viewProj (the other two are unused there).
+cbuffer PerView : register(b1)
+{
+    float4x4 viewProj;
+    float4x4 viewProjNoJitter;
+    float4x4 prevViewProjNoJitter;
 };
 
 float2 tfUV(float2 rawUV)

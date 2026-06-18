@@ -17,9 +17,11 @@ public:
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) = 0;
     virtual void Tick(float /*dt*/) = 0;
     virtual void PostTick(float /*dt*/) {}
-    virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera) = 0;
+    // viewCB: GPU VA of the per-pass shared view/frame constant buffer bound at b1
+    // (camera matrices for the gbuffer/transparent pass, light viewProj for shadows).
+    virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) = 0;
     virtual void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) { (void)renderer; (void)cl; }
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj) = 0;
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB) = 0;
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;
     virtual bool CastsShadow() const = 0;

@@ -133,7 +133,7 @@ void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandL
     DrawGeometry(cl);
 }
 
-void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera)
+void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (!renderer) { return; }
     if (cl == nullptr) { return; }
@@ -147,6 +147,7 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     auto h = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = h.ref();
     ctx.cbv[0] = alloc.gpu;
+    ctx.cbv[1] = viewCB; // shared per-pass view CB (b1); ignored by shaders without b1
 
     RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
@@ -180,7 +181,7 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 }
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj)
+    const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -199,6 +200,7 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     auto& ctx = h.ref();
 
     ctx.cbv[0] = alloc.gpu;
+    ctx.cbv[1] = viewCB; // shared per-view light CB (b1: viewProj)
 
     if (uniformBinder_)
     {

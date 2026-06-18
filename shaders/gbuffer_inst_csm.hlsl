@@ -1,5 +1,5 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0))
-// Use the shared b0 from gbuffer_common
+// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0))
+// Use the shared b0 (per-object) + b1 (per-view: viewProj) from gbuffer_common
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 

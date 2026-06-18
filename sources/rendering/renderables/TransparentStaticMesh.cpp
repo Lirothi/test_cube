@@ -33,31 +33,13 @@ public:
         shadowCb_ = {};
         if (Material* material = obj.GetGraphicsMaterial())
         {
+            // Per-object only (b0). All per-frame/per-view fields now live in the
+            // shared GlassView CB (b1), filled once per pass.
             cb_.world = material->ComputeCBFieldHandle(0, "world");
-            cb_.view = material->ComputeCBFieldHandle(0, "view");
-            cb_.proj = material->ComputeCBFieldHandle(0, "proj");
             cb_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
-            cb_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
-            cb_.viewProjNoJitter = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
-            cb_.prevViewProjNoJitter = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
-            cb_.invView = material->ComputeCBFieldHandle(0, "invView");
-            cb_.invProj = material->ComputeCBFieldHandle(0, "invProj");
-            cb_.cameraPosIor = material->ComputeCBFieldHandle(0, "cameraPosIor");
             cb_.absorptionThickness = material->ComputeCBFieldHandle(0, "absorptionThickness");
             cb_.tintRoughness = material->ComputeCBFieldHandle(0, "tintRoughness");
-            cb_.reflectionRefraction = material->ComputeCBFieldHandle(0, "reflectionRefraction");
-            cb_.sunDirAmbient = material->ComputeCBFieldHandle(0, "sunDirAmbient");
-            cb_.sunColorExposure = material->ComputeCBFieldHandle(0, "sunColorExposure");
-            cb_.camDirWS = material->ComputeCBFieldHandle(0, "camDirWS");
-            cb_.screenSizeInv = material->ComputeCBFieldHandle(0, "screenSizeInv");
-            cb_.shadowAtlasSizeInv = material->ComputeCBFieldHandle(0, "shadowAtlasSizeInv");
-            cb_.shadowBiasNDC = material->ComputeCBFieldHandle(0, "shadowBiasNDC");
-            cb_.normalBiasWS = material->ComputeCBFieldHandle(0, "normalBiasWS");
-            cb_.cascadeSplitsVS = material->ComputeCBFieldHandle(0, "cascadeSplitsVS");
-            cb_.cascadeScaleBias = material->ComputeCBFieldHandle(0, "cascadeScaleBias");
-            cb_.spotShadowInfo = material->ComputeCBFieldHandle(0, "spotShadowInfo");
-            cb_.lightCounts = material->ComputeCBFieldHandle(0, "lightCounts");
-            cb_.lightViewProj = material->ComputeCBFieldHandle(0, "lightViewProj");
+            cb_.matExtra = material->ComputeCBFieldHandle(0, "matExtra");
         }
 
         if (Material* shadowMaterial = obj.GetShadowMaterial())
@@ -68,9 +50,9 @@ public:
         }
     }
 
-    void UpdateMainCB(RenderableObject& obj, Renderer* renderer, const Camera& camera, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& obj, Renderer* /*renderer*/, const Camera& /*camera*/, uint8_t* cbData) override
     {
-        if (!renderer || !scene_ || !owner_)
+        if (!owner_)
         {
             return;
         }
@@ -80,93 +62,16 @@ public:
             return;
         }
 
-        const mat4& view = camera.GetViewMatrix();
-        const mat4& proj = camera.GetProjMatrix();
-        const mat4& invView = camera.GetInvViewMatrix();
-        const mat4& invProj = camera.GetInvProjMatrix();
-        const float3 camPos = camera.GetPosition();
-        float3 camDir = camera.GetDirection();
-        if (camDir.Length() > Math::EPS)
-        {
-            camDir = camDir.Normalized();
-        }
-        else
-        {
-            camDir = float3(0.0f, 0.0f, 1.0f);
-        }
+        // Per-object only. Per-frame/per-view fields are written once per pass into
+        // the shared GlassView CB (b1) by SceneRenderer::Pass_Transparent.
+        const float normalInfo = owner_->HasNormalMap() ? 1.0f : 0.0f;
 
         UpdateUniform(obj, cb_.world, material, obj.GetModelMatrix(), cbData);
-        UpdateUniform(obj, cb_.view, material, view, cbData);
-        UpdateUniform(obj, cb_.proj, material, proj, cbData);
         UpdateUniform(obj, cb_.prevWorld, material, obj.GetPreviousModelMatrix(), cbData);
-        UpdateUniform(obj, cb_.viewProj, material, camera.GetViewProjMatrix(), cbData);
-        UpdateUniform(obj, cb_.viewProjNoJitter, material, camera.GetViewProjMatrixNoJitter(), cbData);
-        UpdateUniform(obj, cb_.prevViewProjNoJitter, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
-        UpdateUniform(obj, cb_.invView, material, invView, cbData);
-        UpdateUniform(obj, cb_.invProj, material, invProj, cbData);
-
-        UpdateUniform(obj, cb_.cameraPosIor, material, float4(camPos, owner_->ior_), cbData);
         UpdateUniform(obj, cb_.absorptionThickness, material, float4(owner_->absorption_, owner_->thickness_), cbData);
         UpdateUniform(obj, cb_.tintRoughness, material, float4(owner_->tint_, owner_->roughness_), cbData);
-
-        float skyIntensity = 1.0f;
-        if (auto* sky = scene_->GetSkybox())
-        {
-            skyIntensity = sky->GetExposure();
-        }
-        float normalInfo = owner_->HasNormalMap() ? 1.0f : 0.0f;
-        UpdateUniform(obj, cb_.reflectionRefraction, material, float4(owner_->reflectionStrength_, owner_->refractionDistortion_, skyIntensity, normalInfo), cbData);
-
-        const auto& dirLight = scene_->GetDirectionalLight();
-        UpdateUniform(obj, cb_.sunDirAmbient, material, float4(dirLight.GetDirection(), dirLight.GetAmbient()), cbData);
-        UpdateUniform(obj, cb_.sunColorExposure, material, float4(dirLight.GetColor(), dirLight.GetExposure()), cbData);
-        UpdateUniform(obj, cb_.camDirWS, material, float4(camDir, 0.0f), cbData);
-
-        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
-        const float invWidth = width > 0.0f ? 1.0f / width : 0.0f;
-        const float invHeight = height > 0.0f ? 1.0f / height : 0.0f;
-        UpdateUniform(obj, cb_.screenSizeInv, material, float4(width, height, invWidth, invHeight), cbData);
-
-        const auto& deferred = renderer->GetDeferredForFrame();
-        const float shadowRes = static_cast<float>(std::max(deferred.shadowRes, 1u));
-        const float invShadow = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
-        UpdateUniform(obj, cb_.shadowAtlasSizeInv, material, float4(shadowRes, shadowRes, invShadow, invShadow), cbData);
-
-        UpdateUniform(obj, cb_.shadowBiasNDC, material, float4(
-            scene_->GetCascadeDepthBias(0),
-            scene_->GetCascadeDepthBias(1),
-            scene_->GetCascadeDepthBias(2),
-            scene_->GetCascadeDepthBias(3)), cbData);
-
-        UpdateUniform(obj, cb_.normalBiasWS, material, float4(
-            scene_->GetCascadeNormalBias(0),
-            scene_->GetCascadeNormalBias(1),
-            scene_->GetCascadeNormalBias(2),
-            scene_->GetCascadeNormalBias(3)), cbData);
-
-        if (const float* splits = scene_->GetCascadeSplitsVS())
-        {
-            UpdateUniform(obj, cb_.cascadeSplitsVS, material, float4(splits[0], splits[1], splits[2], splits[3]), cbData);
-        }
-
-        for (size_t i = 0; i < kCascadeCount; ++i)
-        {
-            const mat4 viewProj = scene_->GetCascadeView(i) * scene_->GetCascadeProj(i);
-            UpdateUniform(obj, cb_.lightViewProj, material, viewProj, cbData, static_cast<uint32_t>(i));
-            const float2 scale = scene_->GetCascadeScale(i);
-            const float2 bias = scene_->GetCascadeBias(i);
-            UpdateUniform(obj, cb_.cascadeScaleBias, material, float4(scale.x, scale.y, bias.x, bias.y), cbData, static_cast<uint32_t>(i));
-        }
-
-        const float spotRes = static_cast<float>(std::max(deferred.spotShadowRes, 1u));
-        const float invSpot = spotRes > 0.0f ? 1.0f / spotRes : 0.0f;
-        UpdateUniform(obj, cb_.spotShadowInfo, material, float4(spotRes, spotRes, invSpot, invSpot), cbData);
-
-        auto& lightManager = scene_->GetLightManager();
-        const float pointCount = static_cast<float>(lightManager.PointLights().size());
-        const float spotCount = static_cast<float>(lightManager.GetSpotLightCount());
-        UpdateUniform(obj, cb_.lightCounts, material, float4(pointCount, spotCount, 0.0f, 0.0f), cbData);
+        UpdateUniform(obj, cb_.matExtra, material,
+            float4(owner_->ior_, owner_->reflectionStrength_, owner_->refractionDistortion_, normalInfo), cbData);
     }
 
     void UpdateShadowCB(RenderableObject& obj, Renderer* /*renderer*/, const mat4& lightView, const mat4& lightProj, uint8_t* cbData) override
@@ -186,30 +91,10 @@ private:
     struct MainHandles
     {
         Material::CBFieldHandle world;
-        Material::CBFieldHandle view;
-        Material::CBFieldHandle proj;
         Material::CBFieldHandle prevWorld;
-        Material::CBFieldHandle viewProj;
-        Material::CBFieldHandle viewProjNoJitter;
-        Material::CBFieldHandle prevViewProjNoJitter;
-        Material::CBFieldHandle invView;
-        Material::CBFieldHandle invProj;
-        Material::CBFieldHandle cameraPosIor;
         Material::CBFieldHandle absorptionThickness;
         Material::CBFieldHandle tintRoughness;
-        Material::CBFieldHandle reflectionRefraction;
-        Material::CBFieldHandle sunDirAmbient;
-        Material::CBFieldHandle sunColorExposure;
-        Material::CBFieldHandle camDirWS;
-        Material::CBFieldHandle screenSizeInv;
-        Material::CBFieldHandle shadowAtlasSizeInv;
-        Material::CBFieldHandle shadowBiasNDC;
-        Material::CBFieldHandle normalBiasWS;
-        Material::CBFieldHandle cascadeSplitsVS;
-        Material::CBFieldHandle cascadeScaleBias;
-        Material::CBFieldHandle spotShadowInfo;
-        Material::CBFieldHandle lightCounts;
-        Material::CBFieldHandle lightViewProj;
+        Material::CBFieldHandle matExtra;
     } cb_{};
 
     struct ShadowHandles

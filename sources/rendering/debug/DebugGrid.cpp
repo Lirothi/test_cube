@@ -368,12 +368,13 @@ void DebugGrid::Tick(float dt)
 
 void DebugGrid::Render(Renderer* renderer,
     ID3D12GraphicsCommandList* cl,
-    const Camera& camera)
+    const Camera& camera,
+    D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (grid_) {
-        grid_->Render(renderer, cl, camera);
+        grid_->Render(renderer, cl, camera, viewCB);
     }
     if (axes_) {
-        axes_->Render(renderer, cl, camera);
+        axes_->Render(renderer, cl, camera, viewCB);
     }
 }

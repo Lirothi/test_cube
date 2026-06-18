@@ -303,9 +303,8 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     // Engine-driven objects stay in C++ — they have constructor wiring (camera,
     // scene) rather than content parameters, and no data model yet.
     
-    // scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
-    
-    //scene.AddObject(std::make_unique<DebugGrid>(100.0f));
+    scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
+    scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
     if (j.contains("camera"))
     {

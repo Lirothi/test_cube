@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
+// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3) SRV(t4) SRV(t5) SRV(t6)) TABLE(SAMPLER(s0) SAMPLER(s1) SAMPLER(s2))
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -20,21 +20,27 @@ struct SpotLightData
     float4x4 viewProj;
 };
 
+// Per-object data (unique per glass instance).
 cbuffer GlassParams : register(b0)
 {
     float4x4 world;
+    float4x4 prevWorld;
+    float4 absorptionThickness;   // xyz = absorption, w = thickness
+    float4 tintRoughness;         // xyz = tint color, w = roughness
+    float4 matExtra;              // x = IOR, y = reflection strength, z = refraction distortion, w = normal map enabled (0=disabled, 1=enabled)
+};
+
+// Per-view/per-frame data shared by every glass object in the pass. Filled once.
+cbuffer GlassView : register(b1)
+{
     float4x4 view;
     float4x4 proj;
-    float4x4 prevWorld;
     float4x4 viewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
     float4x4 invView;
     float4x4 invProj;
-    float4 cameraPosIor;          // xyz = camera position, w = IOR
-    float4 absorptionThickness;   // xyz = absorption, w = thickness
-    float4 tintRoughness;         // xyz = tint color, w = roughness
-    float4 reflectionRefraction;  // x = reflection strength, y = refraction distortion, z = sky intensity, w = normal map enabled (0=disabled, 1=enabled)
+    float4 camPosSky;             // xyz = camera position, w = sky intensity
     float4 sunDirAmbient;         // xyz = sun direction, w = ambient intensity
     float4 sunColorExposure;      // xyz = sun color, w = sun exposure
     float4 camDirWS;              // xyz = camera forward, w unused
@@ -110,7 +116,7 @@ VSOut VSMain(VSIn input)
 
 int ChooseCascadeIndex(float3 Pws)
 {
-    float3 camPos = cameraPosIor.xyz;
+    float3 camPos = camPosSky.xyz;
     float3 camDir = normalize(camDirWS.xyz);
     float z = dot(Pws - camPos, camDir);
     float3 gt = saturate(sign(z.xxx - cascadeSplitsVS.yzw));
@@ -207,17 +213,17 @@ struct PSOut
 PSOut PSMain(VSOut i)
 {
     float3 N = normalize(i.normalWS);
-    float3 camPos = cameraPosIor.xyz;
+    float3 camPos = camPosSky.xyz;
     float3 V = normalize(camPos - i.posWS);
-    float ior = max(cameraPosIor.w, 1.0f);
+    float ior = max(matExtra.x, 1.0f);
     float3 absorption = max(absorptionThickness.xyz, 0.0f.xxx);
     float thickness = max(absorptionThickness.w, 0.0f);
     float3 tint = saturate(tintRoughness.xyz);
     float rough = saturate(tintRoughness.w);
-    float reflectionStrength = max(reflectionRefraction.x, 0.0f);
-    float refractionDistortion = reflectionRefraction.y;
-    float skyIntensity = reflectionRefraction.z;
-    float normalInfo = reflectionRefraction.w;
+    float reflectionStrength = max(matExtra.y, 0.0f);
+    float refractionDistortion = matExtra.z;
+    float skyIntensity = camPosSky.w;
+    float normalInfo = matExtra.w;
     float normalStrength = max(refractionDistortion, 0.0f);
 
     bool useNormalMap = (normalInfo > 0.5f) && (normalStrength > 0.0f);

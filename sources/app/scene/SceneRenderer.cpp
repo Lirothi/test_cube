@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstring>
 #include <memory>
 #include <utility>
+
+#include "rendering/core/RenderConstants.h"
 
 #include "app/camera/Camera.h"
 #include "app/Systems.h"
@@ -51,6 +54,127 @@ namespace
         filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::OpaqueComplex));
         filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::TransparentSimple));
         filterBucket(queue.GetBucket(SceneRenderQueue::BucketType::TransparentComplex));
+    }
+
+    // ---- Step 2: shared per-view/per-frame constant buffers (b1) ----
+    // Filled once per pass and bound for every object in that pass, replacing the
+    // old per-object duplication of view/light/cascade data.
+
+    // Matches gbuffer_common.hlsl `cbuffer PerView : register(b1)`. The depth-only
+    // shadow shaders consume only viewProj (the other two are left identity/unused).
+    struct PerViewCB
+    {
+        mat4 viewProj;
+        mat4 viewProjNoJitter;
+        mat4 prevViewProjNoJitter;
+    };
+
+    // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
+    struct GlassViewCB
+    {
+        mat4   view;
+        mat4   proj;
+        mat4   viewProj;
+        mat4   viewProjNoJitter;
+        mat4   prevViewProjNoJitter;
+        mat4   invView;
+        mat4   invProj;
+        float4 camPosSky;
+        float4 sunDirAmbient;
+        float4 sunColorExposure;
+        float4 camDirWS;
+        float4 screenSizeInv;
+        float4 shadowAtlasSizeInv;
+        float4 shadowBiasNDC;
+        float4 normalBiasWS;
+        float4 cascadeSplitsVS;
+        float4 cascadeScaleBias[4];
+        float4 spotShadowInfo;
+        float4 lightCounts;
+        mat4   lightViewProj[4];
+    };
+
+    template <typename T>
+    D3D12_GPU_VIRTUAL_ADDRESS UploadFrameCB(Renderer* renderer, const T& data)
+    {
+        constexpr UINT kAlign = render::kConstantBufferAlignment;
+        const UINT sizeBytes = static_cast<UINT>((sizeof(T) + (kAlign - 1)) & ~(kAlign - 1));
+        auto alloc = renderer->GetFrameResource()->AllocDynamic(sizeBytes, kAlign);
+        std::memcpy(alloc.cpu, &data, sizeof(T));
+        return alloc.gpu;
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera)
+    {
+        PerViewCB vc{};
+        vc.viewProj = camera.GetViewProjMatrix();
+        vc.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
+        vc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+        return UploadFrameCB(renderer, vc);
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS BuildShadowViewCB(Renderer* renderer, const mat4& lightView, const mat4& lightProj)
+    {
+        PerViewCB vc{};
+        vc.viewProj = lightView * lightProj; // viewProjNoJitter/prevViewProjNoJitter unused by shadow shaders
+        return UploadFrameCB(renderer, vc);
+    }
+
+    D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame)
+    {
+        GlassViewCB vc{};
+        vc.view = camera.GetViewMatrix();
+        vc.proj = camera.GetProjMatrix();
+        vc.viewProj = camera.GetViewProjMatrix();
+        vc.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
+        vc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+        vc.invView = camera.GetInvViewMatrix();
+        vc.invProj = camera.GetInvProjMatrix();
+
+        float skyIntensity = 1.0f;
+        if (frame.skybox) { skyIntensity = frame.skybox->GetExposure(); }
+        vc.camPosSky = float4(camera.GetPosition(), skyIntensity);
+
+        if (frame.dirLight)
+        {
+            const DirectionalLight& dirLight = *frame.dirLight;
+            vc.sunDirAmbient = float4(dirLight.GetDirection(), dirLight.GetAmbient());
+            vc.sunColorExposure = float4(dirLight.GetColor(), dirLight.GetExposure());
+        }
+
+        float3 camDir = camera.GetDirection();
+        if (camDir.Length() > Math::EPS) { camDir = camDir.Normalized(); }
+        else { camDir = float3(0.0f, 0.0f, 1.0f); }
+        vc.camDirWS = float4(camDir, 0.0f);
+
+        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
+        vc.screenSizeInv = float4(width, height, width > 0.0f ? 1.0f / width : 0.0f, height > 0.0f ? 1.0f / height : 0.0f);
+
+        const auto& deferred = renderer->GetDeferredForFrame();
+        const float shadowRes = static_cast<float>(std::max(deferred.shadowRes, 1u));
+        const float invShadow = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
+        vc.shadowAtlasSizeInv = float4(shadowRes, shadowRes, invShadow, invShadow);
+
+        const SceneFrameData::CascadeData& cascades = frame.cascades;
+        vc.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
+        vc.normalBiasWS = float4(cascades.normalBiasWS[0], cascades.normalBiasWS[1], cascades.normalBiasWS[2], cascades.normalBiasWS[3]);
+        vc.cascadeSplitsVS = float4(cascades.splitsVS[0], cascades.splitsVS[1], cascades.splitsVS[2], cascades.splitsVS[3]);
+        for (int i = 0; i < 4; ++i)
+        {
+            vc.cascadeScaleBias[i] = float4(cascades.atlasScale[i].x, cascades.atlasScale[i].y, cascades.atlasBias[i].x, cascades.atlasBias[i].y);
+            vc.lightViewProj[i] = cascades.lightView[i] * cascades.lightProj[i];
+        }
+
+        const float spotRes = static_cast<float>(std::max(deferred.spotShadowRes, 1u));
+        const float invSpot = spotRes > 0.0f ? 1.0f / spotRes : 0.0f;
+        vc.spotShadowInfo = float4(spotRes, spotRes, invSpot, invSpot);
+
+        const float pointCount = frame.lightManager ? static_cast<float>(frame.lightManager->PointLights().size()) : 0.0f;
+        const float spotCount = frame.lightManager ? static_cast<float>(frame.lightManager->GetSpotLightCount()) : 0.0f;
+        vc.lightCounts = float4(pointCount, spotCount, 0.0f, 0.0f);
+
+        return UploadFrameCB(renderer, vc);
     }
 }
 
@@ -296,7 +420,8 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     bool useBundles,
     bool bindGbufOrScene,
     bool bindVelocity,
-    size_t chunkSize)
+    size_t chunkSize,
+    D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (objects.empty()) {
         return;
@@ -307,7 +432,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity](std::size_t jobIndex)
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB](std::size_t jobIndex)
     {
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
@@ -317,7 +442,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
             auto b = renderer->BeginThreadCommandBundle(nullptr);
             for (size_t i = begin; i < end; ++i) {
                 if (auto* obj = objects[i]) {
-                    obj->Render(renderer, b.cl, camera);
+                    obj->Render(renderer, b.cl, camera, viewCB);
                 }
             }
             // Chunk index is the deterministic submit order within the batch's
@@ -348,7 +473,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
 
                 for (size_t i = begin; i < end; ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->Render(renderer, t.cl, camera);
+                        obj->Render(renderer, t.cl, camera, viewCB);
                     }
                 }
             }
@@ -458,11 +583,13 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
 
         t.cl->ClearDepthStencilView(shoreDepthDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view->view, view->proj);
+
         for (auto* obj : opaqueSimple)
         {
             if (obj)
             {
-                obj->RenderShadow(renderer, t.cl, view->view, view->proj);
+                obj->RenderShadow(renderer, t.cl, view->view, view->proj, viewCB);
             }
         }
 
@@ -470,7 +597,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
         {
             if (obj)
             {
-                obj->RenderShadow(renderer, t.cl, view->view, view->proj);
+                obj->RenderShadow(renderer, t.cl, view->view, view->proj, viewCB);
             }
         }
 
@@ -520,6 +647,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, passName);
         {
@@ -530,7 +659,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
 
@@ -538,7 +667,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
         }
@@ -562,6 +691,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             continue;
         }
 
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, ctx.pass);
         {
@@ -572,7 +703,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
 
@@ -580,7 +711,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
         }
@@ -626,6 +757,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -634,14 +766,14 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
             for (auto* obj : opaqueComplex)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
         }
@@ -662,6 +794,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -670,14 +803,14 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
             for (auto* obj : opaqueComplex)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
                 }
             }
         }
@@ -690,6 +823,9 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView)
 {
     const auto& D = renderer->GetDeferredForFrame();
+
+    // Shared per-view CB (b1) for every opaque object in this pass.
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera);
 
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
     rgGB.AddPass(RenderPass::GBuffer_Driver, {},
@@ -710,22 +846,22 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, true, 32);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, true, 32, viewCB);
         }
         });
 
     // 1.3 Opaque complex → direct command list, no clears
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, true, 32);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, true, 32, viewCB);
         }
         });
 
@@ -944,7 +1080,7 @@ void SceneRenderer::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
         // RTVs = Light + Velocity, DSV = GBuffer Depth (read-only), no clears
         renderer->BindLightTargetWithVelocity(t.cl, Renderer::ClearMode::None, true);
 
-        frame_->skybox->Render(renderer, t.cl, camera);
+        frame_->skybox->Render(renderer, t.cl, camera, 0); // skybox has no b1; viewCB ignored
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
@@ -1107,6 +1243,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView)
 {
+    // Shared per-view/per-frame CB (b1) for every transparent object in this pass.
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_);
+
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
@@ -1147,21 +1286,21 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
         {
-            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, true, 32);
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, true, 32, viewCB);
         }
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, true, 32);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, true, 32, viewCB);
         }
         });
 

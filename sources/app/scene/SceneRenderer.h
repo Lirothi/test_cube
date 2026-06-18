@@ -52,7 +52,8 @@ private:
     static constexpr int kCascades = SceneFrameData::kCascades;
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize);
+        const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize,
+        D3D12_GPU_VIRTUAL_ADDRESS viewCB);
 
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);

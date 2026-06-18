@@ -1,4 +1,4 @@
-// RootSignature: CBV(b0) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0))
+// RootSignature: CBV(b0) CBV(b1) TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) TABLE(SAMPLER(s0))
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 

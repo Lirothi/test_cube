@@ -18,11 +18,10 @@ public:
 
         if (Material* material = owner.GetGraphicsMaterial())
         {
+            // Per-object only (b0). The view matrices now live in the shared
+            // per-view CB (b1), filled once per pass by the renderer.
             cbHandles_.world = material->ComputeCBFieldHandle(0, "world");
             cbHandles_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
-            cbHandles_.viewProj = material->ComputeCBFieldHandle(0, "viewProj");
-            cbHandles_.viewProjNoJitter = material->ComputeCBFieldHandle(0, "viewProjNoJitter");
-            cbHandles_.prevViewProjNoJitter = material->ComputeCBFieldHandle(0, "prevViewProjNoJitter");
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
@@ -31,21 +30,18 @@ public:
 
         if (Material* shadowMaterial = owner.GetShadowMaterial())
         {
+            // viewProj (light) now comes from the shared per-view CB (b1).
             shadowHandles_.world = shadowMaterial->ComputeCBFieldHandle(0, "world");
-            shadowHandles_.viewProj = shadowMaterial->ComputeCBFieldHandle(0, "viewProj");
         }
     }
 
-    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const Camera& camera, uint8_t* cbData) override
+    void UpdateMainCB(RenderableObject& owner, Renderer* /*renderer*/, const Camera& /*camera*/, uint8_t* cbData) override
     {
         Material* material = owner.GetGraphicsMaterial();
         if (!material) { return; }
 
         UpdateUniform(owner, cbHandles_.world, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
-        UpdateUniform(owner, cbHandles_.viewProj, material, camera.GetViewProjMatrix(), cbData);
-        UpdateUniform(owner, cbHandles_.viewProjNoJitter, material, camera.GetViewProjMatrixNoJitter(), cbData);
-        UpdateUniform(owner, cbHandles_.prevViewProjNoJitter, material, camera.GetPrevViewProjMatrixNoJitter(), cbData);
 
         const auto& p = params_;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
@@ -54,14 +50,13 @@ public:
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
     }
 
-    void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& lightView, const mat4& lightProj, uint8_t* cbData) override
+    void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* cbData) override
     {
         Material* material = owner.GetShadowMaterial();
         if (!material) { return; }
 
-        const mat4 viewProj = lightView * lightProj;
+        // viewProj (light) is written once per cascade into the shared per-view CB (b1).
         UpdateUniform(owner, shadowHandles_.world, material, owner.GetModelMatrix(), cbData);
-        UpdateUniform(owner, shadowHandles_.viewProj, material, viewProj, cbData);
     }
 
 private:
@@ -69,9 +64,6 @@ private:
     {
         Material::CBFieldHandle world;
         Material::CBFieldHandle prevWorld;
-        Material::CBFieldHandle viewProj;
-        Material::CBFieldHandle viewProjNoJitter;
-        Material::CBFieldHandle prevViewProjNoJitter;
         Material::CBFieldHandle baseColor;
         Material::CBFieldHandle metalRough;
         Material::CBFieldHandle texOffsScale;
@@ -81,7 +73,6 @@ private:
     struct ShadowCBHandles
     {
         Material::CBFieldHandle world;
-        Material::CBFieldHandle viewProj;
     } shadowHandles_{};
 
     MaterialParams& params_;
