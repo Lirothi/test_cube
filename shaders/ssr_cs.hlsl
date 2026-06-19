@@ -1,4 +1,4 @@
-#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2))"
+#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget            (HDR color)
 // t1: GB1 (normal.xy in 0..1, rough in A)
 // t2: Depth (R32F SRV created from the DSV)

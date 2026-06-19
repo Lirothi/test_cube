@@ -55,6 +55,9 @@ public:
     const AABB& GetBoundingBox() const { return bounds_; }
 
 private:
+    // Step 3: bind VB/IB/topology, skipping calls already matching the CL bind cache.
+    void BindIA(ID3D12GraphicsCommandList* cmdList) const;
+
     // Generate normals/tangents (simple: per triangle with vertex averaging)
     static void GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
         const uint32_t* indices, UINT indexCount);

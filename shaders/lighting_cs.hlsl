@@ -149,9 +149,9 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=6))," \
-    "DescriptorTable(UAV(u0))," \
-    "DescriptorTable(Sampler(s0, numDescriptors=2))"
+    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
 [RootSignature(LIGHTING_RS)]
 [numthreads(8,8,1)]

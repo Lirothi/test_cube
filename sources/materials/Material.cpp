@@ -17,6 +17,7 @@
 
 #include "core/Helpers.h"
 #include "rendering/core/RenderContext.h"
+#include "rendering/core/CommandListBindState.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -447,15 +448,23 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     // with no PSO/root signature. Skip binding rather than feed null state to D3D12.
     if (!rootSignature_ || !pipelineState_) { return; }
 
-    if (isCompute_) { cmdList->SetComputeRootSignature(rootSignature_.Get()); }
-    else { cmdList->SetGraphicsRootSignature(rootSignature_.Get()); }
+    // Step 3: skip redundant state via the per-command-list bind cache (reset at CL
+    // acquire). Skipping is safe because the command list retains bound state across
+    // draws; a root-signature change invalidates root arguments (handled below).
+    render::CommandListBindState& cache = render::g_clBindState;
+    const bool batch = render::g_bindBatchingEnabled;
 
-    if (wireframe && pipelineStateWire_)
-    {
-        cmdList->SetPipelineState(pipelineStateWire_.Get());
-    }else
-    {
-	    cmdList->SetPipelineState(pipelineState_.Get());
+    ID3D12RootSignature* rs = rootSignature_.Get();
+    if (!batch || cache.rs != rs || cache.isCompute != isCompute_) {
+        if (isCompute_) { cmdList->SetComputeRootSignature(rs); }
+        else { cmdList->SetGraphicsRootSignature(rs); }
+        if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
+    }
+
+    ID3D12PipelineState* pso = (wireframe && pipelineStateWire_) ? pipelineStateWire_.Get() : pipelineState_.Get();
+    if (!batch || cache.pso != pso) {
+        cmdList->SetPipelineState(pso);
+        if (batch) { cache.pso = pso; }
     }
 
     for (const auto& p : rootParams_) {
@@ -463,6 +472,7 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         if (reg >= RenderContext::kMaxBindings) { continue; } // shape guarded at build time
         switch (p.type) {
         case RootParameterInfo::Constants:
+            // Root constants are tiny and rarely repeated across draws; always set.
             if (reg < RenderContext::kMaxConstantsBindings && !ctx.constants[reg].empty()) {
                 auto& vals = ctx.constants[reg];
                 if (isCompute_) { cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)vals.size(), vals.data(), 0); }
@@ -470,27 +480,31 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
             }
             break;
         case RootParameterInfo::CBV:
-            if (ctx.cbv[reg] != 0) {
+            if (ctx.cbv[reg] != 0 && (!batch || cache.cbv[reg] != ctx.cbv[reg])) {
                 if (isCompute_) { cmdList->SetComputeRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
                 else { cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
+                if (batch) { cache.cbv[reg] = ctx.cbv[reg]; }
             }
             break;
         case RootParameterInfo::TableSRV:
-            if (ctx.srvTable[reg].ptr != 0) {
+            if (ctx.srvTable[reg].ptr != 0 && (!batch || cache.srvTable[reg].ptr != ctx.srvTable[reg].ptr)) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
+                if (batch) { cache.srvTable[reg] = ctx.srvTable[reg]; }
             }
             break;
         case RootParameterInfo::TableUAV:
-            if (ctx.uavTable[reg].ptr != 0) {
+            if (ctx.uavTable[reg].ptr != 0 && (!batch || cache.uavTable[reg].ptr != ctx.uavTable[reg].ptr)) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.uavTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.uavTable[reg]); }
+                if (batch) { cache.uavTable[reg] = ctx.uavTable[reg]; }
             }
             break;
         case RootParameterInfo::TableSampler:
-            if (ctx.samplerTable[reg].ptr != 0) {
+            if (ctx.samplerTable[reg].ptr != 0 && (!batch || cache.samplerTable[reg].ptr != ctx.samplerTable[reg].ptr)) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
+                if (batch) { cache.samplerTable[reg] = ctx.samplerTable[reg]; }
             }
             break;
         }

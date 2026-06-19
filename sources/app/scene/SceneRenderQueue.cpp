@@ -133,6 +133,20 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
     }
 }
 
+void SceneRenderQueue::SortOpaque()
+{
+    auto cmp = [](RenderableObjectBase* a, RenderableObjectBase* b)
+    {
+        if (a->BatchPSO() != b->BatchPSO()) { return a->BatchPSO() < b->BatchPSO(); }
+        if (a->BatchMaterial() != b->BatchMaterial()) { return a->BatchMaterial() < b->BatchMaterial(); }
+        return a->BatchMesh() < b->BatchMesh();
+    };
+    std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].begin(),
+              visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].end(), cmp);
+    std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].begin(),
+              visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].end(), cmp);
+}
+
 void SceneRenderQueue::Cull(const Frustum& frustum)
 {
     Cull(frustum, *this);

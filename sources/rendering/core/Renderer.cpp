@@ -1,5 +1,6 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RendererInvariantFailure.h"
+#include "rendering/core/CommandListBindState.h"
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
@@ -371,6 +372,10 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
 
     // Register the command list in the lock-free state tracker
     //RegisterCurrentThreadCL(cl);
+
+    // Step 3: a fresh command list / bundle inherits no pipeline/root state, so reset
+    // this thread's bind cache — the first draw recorded into it binds fully.
+    render::g_clBindState.Reset();
 
     return ThreadCL{ alloc, cl, type };
 }

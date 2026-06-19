@@ -1,4 +1,4 @@
-#define DEBUG_TEX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define DEBUG_TEX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 Texture2D ShadowAtlas : register(t0);
 SamplerState Smp : register(s0);
 

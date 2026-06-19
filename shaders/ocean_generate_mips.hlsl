@@ -1,4 +1,4 @@
-#define OCEAN_MIPS_RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DATA_VOLATILE))"
+#define OCEAN_MIPS_RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer MipParams : register(b0)
 {

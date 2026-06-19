@@ -10,8 +10,8 @@ SamplerState gSmp : register(s0);
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
     "CBV(b0)," \
     "CBV(b1)," \
-    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DATA_VOLATILE))," \
-    "DescriptorTable(Sampler(s0))"
+    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 [RootSignature(GBUFFER_RS)]
 VSOut VSMain(VSIn i)

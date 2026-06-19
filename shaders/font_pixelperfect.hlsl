@@ -1,4 +1,4 @@
-#define FONT_PP_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), RootConstants(num32BitConstants=12, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define FONT_PP_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), RootConstants(num32BitConstants=12, b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 struct VSIn {
     float2 pos : POSITION;

@@ -108,6 +108,11 @@ public:
 
     virtual bool CastsShadow() const { return true; }
 
+    // Step 3 batch-sort keys.
+    const void* BatchPSO() const override { return graphicsMaterial_ ? graphicsMaterial_->GetPipelineState() : nullptr; }
+    const void* BatchMaterial() const override { return graphicsMaterial_.get(); }
+    const void* BatchMesh() const override { return mesh_.get(); }
+
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);

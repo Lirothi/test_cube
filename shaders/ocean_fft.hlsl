@@ -1,4 +1,4 @@
-#define OCEAN_FFT_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
+#define OCEAN_FFT_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #ifndef FFT_SIZE
 #define FFT_SIZE 256

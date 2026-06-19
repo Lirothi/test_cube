@@ -407,6 +407,9 @@
     <ClInclude Include="sources/rendering/core/FrameResource.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/CommandListBindState.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/RenderContext.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>

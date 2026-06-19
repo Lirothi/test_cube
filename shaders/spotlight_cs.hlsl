@@ -1,4 +1,4 @@
-#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3))"
+#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : Texture2DArray Spot Shadow Atlas

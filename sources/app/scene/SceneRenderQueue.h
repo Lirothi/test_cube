@@ -21,6 +21,11 @@ public:
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
+    // Step 3: group the visible OPAQUE buckets into runs of identical pipeline state
+    // (PSO, material, mesh) so the bind cache can elide redundant state changes. Safe
+    // because opaque draws are depth-tested (order-independent); transparents are NOT
+    // touched (their blend order is set by SortTransparent).
+    void SortOpaque();
     void Cull(const Frustum& frustum);
     // Step 6e: cull `source`'s (already-bucketized) casters into THIS queue's visible
     // buckets — lets many views share one Bucketize. The single-arg overload culls own.

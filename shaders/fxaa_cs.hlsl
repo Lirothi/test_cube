@@ -1,4 +1,4 @@
-#define FXAA_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define FXAA_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 // t0: LDR color input (R8G8B8A8)
 // u0: FXAA output (R8G8B8A8)
 // s0: LinearClamp

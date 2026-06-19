@@ -1,4 +1,4 @@
-#define OCEAN_FOAM_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
+#define OCEAN_FOAM_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer FoamParams : register(b0)
 {

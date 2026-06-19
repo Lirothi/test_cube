@@ -1,4 +1,4 @@
-#define SSR_BLUR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define SSR_BLUR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 // t0: SSR input (RGB premultiplied, A=visibility)
 // u0: SSR output (premultiplied RGBA)
 // s0: LinearClamp

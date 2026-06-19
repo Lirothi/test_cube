@@ -263,6 +263,7 @@
     <ClInclude Include="sources/ocean/OceanSpectrum.h" />
     <ClInclude Include="sources/rendering/core/ComputeDispatch.h" />
     <ClInclude Include="sources/rendering/core/FrameResource.h" />
+    <ClInclude Include="sources/rendering/core/CommandListBindState.h" />
     <ClInclude Include="sources/rendering/core/RenderContext.h" />
     <ClInclude Include="sources/rendering/core/RenderContextPool.h" />
     <ClInclude Include="sources/rendering/core/DlssHandler.h" />

@@ -27,6 +27,13 @@ public:
     virtual bool CastsShadow() const = 0;
     virtual void OnMaterialHotReload(Renderer* renderer) {}
 
+    // Step 3: keys for sorting opaque draws into runs of identical pipeline state
+    // (PSO, then material, then mesh) so the bind cache can skip redundant binds.
+    // Default null -> such objects sort together (stable).
+    virtual const void* BatchPSO() const { return nullptr; }
+    virtual const void* BatchMaterial() const { return nullptr; }
+    virtual const void* BatchMesh() const { return nullptr; }
+
     virtual const AABB& GetWorldBounds() const
     {
         static const AABB kInvalidBounds = AABB::Empty();

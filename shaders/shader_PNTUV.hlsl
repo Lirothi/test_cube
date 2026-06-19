@@ -1,4 +1,4 @@
-#define SHADER_PNTUV_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define SHADER_PNTUV_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 cbuffer CB : register(b0)

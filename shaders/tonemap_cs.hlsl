@@ -1,4 +1,4 @@
-#define TONEMAP_CS_RS "DescriptorTable(SRV(t0, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE)), DescriptorTable(Sampler(s0))"
+#define TONEMAP_CS_RS "DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D HDRColor : register(t0);
 RWTexture2D<float4> LdrTarget : register(u0);

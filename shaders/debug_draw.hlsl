@@ -1,4 +1,4 @@
-#define DEBUG_DRAW_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DATA_VOLATILE))"
+#define DEBUG_DRAW_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 struct VSInput

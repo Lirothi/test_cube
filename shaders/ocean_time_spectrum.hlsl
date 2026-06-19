@@ -1,4 +1,4 @@
-#define OCEAN_TIMESPEC_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DATA_VOLATILE))"
+#define OCEAN_TIMESPEC_RS "RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer SpectrumParams : register(b0)
 {

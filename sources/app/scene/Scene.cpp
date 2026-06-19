@@ -386,6 +386,7 @@ void Scene::PrepareViews(Renderer* renderer)
         if (view.type == SceneView::Type::Camera)
         {
             view.queue.SortTransparent(view.view);
+            view.queue.SortOpaque(); // Step 3: group opaque draws by pipeline state
         }
     };
 
