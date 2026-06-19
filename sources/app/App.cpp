@@ -23,7 +23,18 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
     }
 
     if (app && app->systems_) {
-        app->systems_->input.OnWndProc(hWnd, message, wParam, lParam);
+        auto& renderer = app->systems_->renderer;
+        renderer.HandleImGuiWndProc(hWnd, message, wParam, lParam);
+
+        const bool mouseMessage = message >= WM_MOUSEFIRST && message <= WM_MOUSELAST;
+        const bool keyMessage = message >= WM_KEYFIRST && message <= WM_KEYLAST;
+        const bool consumedByImGui =
+            (mouseMessage && renderer.ImGuiWantsMouse()) ||
+            (keyMessage && renderer.ImGuiWantsKeyboard());
+
+        if (!consumedByImGui) {
+            app->systems_->input.OnWndProc(hWnd, message, wParam, lParam);
+        }
     }
 
     switch (message) {
