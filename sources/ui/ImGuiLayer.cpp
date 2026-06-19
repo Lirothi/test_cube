@@ -51,6 +51,7 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;
 
     if (!ImGui_ImplWin32_Init(hwnd))
     {

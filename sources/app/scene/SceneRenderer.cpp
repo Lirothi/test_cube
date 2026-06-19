@@ -1463,12 +1463,14 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
 
 void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    if (auto* tm = renderer->GetTextManager()) {
-        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
-        SetCommandListName(t.cl, ctx.pass);
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
+        renderer->RecordBindDefaultsNoClear(t.cl);
+
+        if (auto* tm = renderer->GetTextManager())
         {
-            GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
-            renderer->RecordBindDefaultsNoClear(t.cl);
             if (frame_->settings.showProfiler)
             {
                 Profiler::Get().EmitOverlay(tm, /*x=*/16, /*y=*/64, /*maxLines=*/20);
@@ -1476,6 +1478,9 @@ void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
             tm->Build(renderer, t.cl);
             tm->Draw(renderer, t.cl);
         }
-        renderer->EndThreadCommandList(t, ctx.batchIndex);
+
+        renderer->RenderImGui(t.cl);
     }
+
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
