@@ -4,6 +4,7 @@ namespace ProfilerScopes {
 
 const Profiler::ScopeNameKey kWholeCycle = Profiler::RegisterTraceLiteral(L"Whole Cycle");
 const Profiler::ScopeNameKey kWinMessages = Profiler::RegisterTraceLiteral(L"Win Messages");
+const Profiler::ScopeNameKey kAppControllerTick = Profiler::RegisterTraceLiteral(L"AppController::Tick");
 
 const Profiler::ScopeNameKey kMaterialFSProbe = Profiler::RegisterTraceLiteral(L"Material::FSProbeAndFlagPending");
 
@@ -52,6 +53,8 @@ const Profiler::ScopeNameKey kUpdateCascades = Profiler::RegisterTraceLiteral(L"
 
 const Profiler::ScopeNameKey kTextManagerBuild = Profiler::RegisterTraceLiteral(L"TextManager::Build");
 const Profiler::ScopeNameKey kTextManagerDraw = Profiler::RegisterTraceLiteral(L"TextManager::Draw");
+const Profiler::ScopeNameKey kTextManagerAddText = Profiler::RegisterTraceLiteral(L"TextManager::AddText");
+const Profiler::ScopeNameKey kTextManagerBuildGlyphRun = Profiler::RegisterTraceLiteral(L"TextManager::BuildGlyphRun");
 const Profiler::ScopeNameKey kTextManagerEmitImmediate = Profiler::RegisterTraceLiteral(L"TextManager::EmitTextImmediate");
 
 const Profiler::ScopeNameKey kRenderGraphExecute = Profiler::RegisterTraceLiteral(L"RenderGraph::Execute");

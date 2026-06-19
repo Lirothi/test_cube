@@ -180,6 +180,8 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::strin
     AddText(id, px, color, UTF8toW(utf8), enableShadow);
 }
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
+    CPU_SCOPE(ProfilerScopes::kTextManagerAddText);
+
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
@@ -445,6 +447,8 @@ void TextManager::RecycleRegionLines() {
 
 // Shared helper to build a glyph run and compute width in a single pass
 void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {
+    CPU_SCOPE(ProfilerScopes::kTextManagerBuildGlyphRun);
+
     outRun.Reset();
     outRun.scale = px / float(font_->PxSize());
     outRun.ready = false;

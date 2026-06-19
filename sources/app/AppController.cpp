@@ -10,9 +10,12 @@
 #include "rendering/core/Renderer.h"
 #include "text/TextManager.h"
 #include "core/math/Math.h"
+#include "core/profiling/ProfilerScopes.h"
 
 void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime)
 {
+    CPU_SCOPE(ProfilerScopes::kAppControllerTick);
+
     const bool uiCapturingMouse = renderer.ImGuiWantsMouse();
     const bool uiCapturingKeyboard = renderer.ImGuiWantsKeyboard();
     const bool uiCapturingInput = uiCapturingMouse || uiCapturingKeyboard;

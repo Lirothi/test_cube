@@ -217,6 +217,23 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     renderer->BeginSubmitTimeline();
 
+    const bool showProfilerOverlay = frame.settings.showProfiler;
+    TaskSystem::TaskHandle overlayPrepTask = TaskSystem::Get().Submit([renderer, showProfilerOverlay]()
+    {
+        TextManager* tm = renderer->GetTextManager();
+        if (!tm)
+        {
+            return;
+        }
+
+        if (showProfilerOverlay)
+        {
+            Profiler::Get().EmitOverlay(tm, /*x=*/16, /*y=*/64, /*maxLines=*/20);
+        }
+
+        tm->Build(renderer, nullptr);
+    });
+
     // The deferred targets are stable between BeginFrame and Present, so pass
     // declarations capture the frame's resources directly. The declared states
     // are registered as first-use states on each pass's main command list; the
@@ -401,13 +418,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     RenderGraph<kEpilogueRenderGraphPassCount> epilogueRG;
     epilogueRG.AddPass(RenderPass::Epilogue_Overlay, {},
-        [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx); });
+        [this, renderer, &overlayPrepTask](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx, overlayPrepTask); });
     epilogueRG.Execute(renderer);
-
-    {
-        CPU_SCOPE(ProfilerScopes::kOverlayAsyncWait);
-        TaskSystem::Get().WaitForTrackedAsyncTasks();
-    }
     renderer->EndFrame();
 
     frame_ = nullptr;
@@ -1461,8 +1473,15 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
     ctx.EndCL(t);
 }
 
-void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
+void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask)
 {
+    if (overlayPrepTask)
+    {
+        CPU_SCOPE(ProfilerScopes::kOverlayAsyncWait);
+        TaskSystem::Get().Wait(overlayPrepTask);
+        TaskSystem::Get().Release(overlayPrepTask);
+    }
+
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
     {
@@ -1471,11 +1490,6 @@ void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx)
 
         if (auto* tm = renderer->GetTextManager())
         {
-            if (frame_->settings.showProfiler)
-            {
-                Profiler::Get().EmitOverlay(tm, /*x=*/16, /*y=*/64, /*maxLines=*/20);
-            }
-            tm->Build(renderer, t.cl);
             tm->Draw(renderer, t.cl);
         }
 

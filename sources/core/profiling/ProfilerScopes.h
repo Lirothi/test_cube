@@ -7,6 +7,7 @@ namespace ProfilerScopes {
 // App
 extern const Profiler::ScopeNameKey kWholeCycle;
 extern const Profiler::ScopeNameKey kWinMessages;
+extern const Profiler::ScopeNameKey kAppControllerTick;
 
 // Material
 extern const Profiler::ScopeNameKey kMaterialFSProbe;
@@ -59,6 +60,8 @@ extern const Profiler::ScopeNameKey kUpdateCascades;
 // TextManager
 extern const Profiler::ScopeNameKey kTextManagerBuild;
 extern const Profiler::ScopeNameKey kTextManagerDraw;
+extern const Profiler::ScopeNameKey kTextManagerAddText;
+extern const Profiler::ScopeNameKey kTextManagerBuildGlyphRun;
 extern const Profiler::ScopeNameKey kTextManagerEmitImmediate;
 
 // RenderGraph

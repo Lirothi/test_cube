@@ -7,6 +7,7 @@
 
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
+#include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
@@ -85,7 +86,7 @@ private:
         const Camera& camera);
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
     SceneResourceBootstrapper resources_{};
 
