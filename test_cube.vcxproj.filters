@@ -67,6 +67,12 @@
     <Filter Include="third_party\enkiTS\src">
       <UniqueIdentifier>{2123397a-80ef-4fc1-af02-75b8aed52681}</UniqueIdentifier>
     </Filter>
+    <Filter Include="third_party\imgui">
+      <UniqueIdentifier>{f8e1a35c-06be-43cf-9883-c139d4d4192f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui\backends">
+      <UniqueIdentifier>{32c7f7c2-32a5-407c-aa81-1e55761ba075}</UniqueIdentifier>
+    </Filter>
     <Filter Include="input">
       <UniqueIdentifier>{09b469f3-2854-440a-8b45-695e11cfe0e6}</UniqueIdentifier>
     </Filter>
@@ -287,6 +293,27 @@
     </ClCompile>
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
       <Filter>third_party\enkiTS\src</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_demo.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_draw.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_tables.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
+      <Filter>third_party\imgui</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -545,6 +572,30 @@
     <ClInclude Include="sources\core\containers\inl_vector.h">
       <Filter>sources\core\containers</Filter>
     </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_dx12.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imconfig.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui_internal.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_rectpack.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_textedit.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_truetype.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl">
@@ -669,6 +720,9 @@
     </None>
     <None Include="input\bindings.json">
       <Filter>input</Filter>
+    </None>
+    <None Include="third_party\imgui\LICENSE.txt">
+      <Filter>third_party\imgui</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
