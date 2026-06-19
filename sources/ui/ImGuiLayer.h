@@ -42,4 +42,5 @@ private:
     uint32_t nextDescriptorIndex_ = 0;
     std::vector<uint32_t> freeDescriptorIndices_;
     bool initialized_ = false;
+    bool frameBegun_ = false;
 };

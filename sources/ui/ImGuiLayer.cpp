@@ -87,7 +87,14 @@ void ImGuiLayer::Shutdown()
         descriptorCapacity_ = 0;
         nextDescriptorIndex_ = 0;
         freeDescriptorIndices_.clear();
+        frameBegun_ = false;
         return;
+    }
+
+    if (frameBegun_)
+    {
+        ImGui::EndFrame();
+        frameBegun_ = false;
     }
 
     ImGui_ImplDX12_Shutdown();
@@ -99,6 +106,7 @@ void ImGuiLayer::Shutdown()
     descriptorCapacity_ = 0;
     nextDescriptorIndex_ = 0;
     freeDescriptorIndices_.clear();
+    frameBegun_ = false;
     initialized_ = false;
 }
 
@@ -109,19 +117,27 @@ void ImGuiLayer::BeginFrame()
         return;
     }
 
+    if (frameBegun_)
+    {
+        ImGui::EndFrame();
+        frameBegun_ = false;
+    }
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    frameBegun_ = true;
 }
 
 void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
 {
-    if (!initialized_ || !commandList)
+    if (!initialized_ || !commandList || !frameBegun_)
     {
         return;
     }
 
     ImGui::Render();
+    frameBegun_ = false;
     ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
     commandList->SetDescriptorHeaps(1, heaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);

@@ -200,6 +200,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
+                renderer.BeginImGuiFrame();
+
                 Profiler::Get().Tick();
 
                 double now = GetTimeSeconds();
