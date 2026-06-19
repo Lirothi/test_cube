@@ -95,6 +95,8 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     {
         input.SetMouseCapture(false);
     }
+
+    ScheduleHudBuild(renderer, scene, input);
 }
 
 void AppController::BuildHud(Renderer& renderer, const Scene& scene, const InputManager& input) const
@@ -130,6 +132,27 @@ void AppController::BuildDebugUi(Renderer& renderer)
     ImGui::Checkbox("Profiler", &settings_.showProfiler);
     ImGui::Text("FPS: %.1f", renderer.GetFPS());
     ImGui::End();
+}
+
+void AppController::WaitForHudBuild()
+{
+    if (!hudBuildTask_)
+    {
+        return;
+    }
+
+    TaskSystem::Get().Wait(hudBuildTask_);
+    TaskSystem::Get().Release(hudBuildTask_);
+}
+
+void AppController::ScheduleHudBuild(Renderer& renderer, const Scene& scene, const InputManager& input)
+{
+    WaitForHudBuild();
+    hudBuildTask_ = TaskSystem::Get().Submit([this, &renderer, &scene, &input]()
+    {
+        BuildHud(renderer, scene, input);
+        //BuildDebugUi(renderer);
+    });
 }
 
 void AppController::BuildBindingsOverlay(Renderer& renderer, const InputManager& input) const

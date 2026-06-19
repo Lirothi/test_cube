@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/scene/SceneFrameData.h"
+#include "core/task/TaskSystem.h"
 
 class InputManager;
 class Renderer;
@@ -14,13 +15,16 @@ class AppController
 public:
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene, const InputManager& input) const;
+    void WaitForHudBuild();
     void BuildDebugUi(Renderer& renderer);
 
     const SceneRenderSettings& Settings() const { return settings_; }
 
 private:
+    void ScheduleHudBuild(Renderer& renderer, const Scene& scene, const InputManager& input);
     void BuildBindingsOverlay(Renderer& renderer, const InputManager& input) const;
 
     SceneRenderSettings settings_{};
+    TaskSystem::TaskHandle hudBuildTask_ = nullptr;
     bool showBindings_ = false;
 };

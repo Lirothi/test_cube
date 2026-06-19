@@ -230,8 +230,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
-                appController_.BuildHud(renderer, scene, input);
-                //appController_.BuildDebugUi(renderer);
+                appController_.WaitForHudBuild();
                 scene.Render(&renderer);
             }
 
