@@ -691,11 +691,11 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             renderer->GetDevice()->CopyDescriptorsSimple(
                 1, srvHandle.cpu, buffer.srvCPU, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-            ctx.table[0] = srvHandle.gpu;
+            ctx.srvTable[0] = srvHandle.gpu;
             material_->Bind(cl, ctx, wireframe);
             mesh->DrawInstanced(cl, instanceCountU);
         }
-        ctx.table[0] = {};
+        ctx.srvTable[0] = {};
     };
 
     drawList(solidCommandScratch_, false);

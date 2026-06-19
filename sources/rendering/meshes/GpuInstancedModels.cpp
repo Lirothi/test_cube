@@ -83,7 +83,7 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
 
     // UAV/SRV table for the compute shader: u0 = instanceBuffer UAV
     auto uavTbl = renderer->StageSrvUavTable({ instanceBuffer_.GetUAVCPU() });
-    ctx.table[0] = uavTbl.gpu;
+    ctx.uavTable[0] = uavTbl.gpu;
 
     // Dispatch the compute shader
     computeMaterial_->Bind(cl, ctx);
@@ -109,7 +109,7 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
     }
 
     auto tbl = renderer->StageSrvUavTable(srvs, count);
-    ctx.table[0] = tbl.gpu;
+    ctx.srvTable[0] = tbl.gpu;
 
     const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *aniso);
@@ -132,7 +132,7 @@ void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandL
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
-    ctx.table[0] = instanceBuffer_.GetSRVForFrame(renderer);
+    ctx.srvTable[0] = instanceBuffer_.GetSRVForFrame(renderer);
 
     RenderableObject::RecordShadow(renderer, cl, lightView, lightProj, ctx);
 }

@@ -89,7 +89,7 @@ void Skybox::Init(Renderer* renderer,
 
 void Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
-    ctx.table[0] = cube_.GetSRVForFrame(renderer);
+    ctx.srvTable[0] = cube_.GetSRVForFrame(renderer);
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

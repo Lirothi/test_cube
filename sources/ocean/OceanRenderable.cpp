@@ -637,7 +637,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     pushSrv(shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
-    ctx.table[0] = tbl.gpu;
+    ctx.srvTable[0] = tbl.gpu;
 
     const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);

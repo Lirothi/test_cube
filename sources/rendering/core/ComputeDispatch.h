@@ -42,11 +42,11 @@ inline void RecordComputeDispatch(
     }
     if (srvTable.size() > 0)
     {
-        rc.table[0] = renderer->StageSrvUavTable(srvTable).gpu;
+        rc.srvTable[0] = renderer->StageSrvUavTable(srvTable).gpu;
     }
     if (uavTable.size() > 0)
     {
-        rc.table[1] = renderer->StageSrvUavTable(uavTable).gpu;
+        rc.uavTable[0] = renderer->StageSrvUavTable(uavTable).gpu;
     }
     rc.samplerTable[0] = samplerTable;
 

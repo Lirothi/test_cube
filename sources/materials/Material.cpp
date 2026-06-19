@@ -443,6 +443,10 @@ void Material::CollectRetired(uint64_t frameNumber, uint64_t keepAliveFrames)
 
 void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe) const
 {
+    // A failed build (e.g. a shader missing its [RootSignature]) leaves the material
+    // with no PSO/root signature. Skip binding rather than feed null state to D3D12.
+    if (!rootSignature_ || !pipelineState_) { return; }
+
     if (isCompute_) { cmdList->SetComputeRootSignature(rootSignature_.Get()); }
     else { cmdList->SetGraphicsRootSignature(rootSignature_.Get()); }
 
@@ -455,67 +459,50 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     }
 
     for (const auto& p : rootParams_) {
-        uint32_t reg = p.bindingRegister;
+        const uint32_t reg = p.bindingRegister;
+        if (reg >= RenderContext::kMaxBindings) { continue; } // shape guarded at build time
         switch (p.type) {
         case RootParameterInfo::Constants:
-        {
-            if (reg < RenderContext::kMaxBindings && !ctx.constants[reg].empty()) {
+            if (reg < RenderContext::kMaxConstantsBindings && !ctx.constants[reg].empty()) {
                 auto& vals = ctx.constants[reg];
                 if (isCompute_) { cmdList->SetComputeRoot32BitConstants(p.rootIndex, (UINT)vals.size(), vals.data(), 0); }
                 else { cmdList->SetGraphicsRoot32BitConstants(p.rootIndex, (UINT)vals.size(), vals.data(), 0); }
             }
             break;
-        }
         case RootParameterInfo::CBV:
-        {
-            if (reg < RenderContext::kMaxBindings && ctx.cbv[reg] != 0) {
+            if (ctx.cbv[reg] != 0) {
                 if (isCompute_) { cmdList->SetComputeRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
                 else { cmdList->SetGraphicsRootConstantBufferView(p.rootIndex, ctx.cbv[reg]); }
             }
             break;
-        }
-        case RootParameterInfo::SRV:
-        {
-            if (reg < RenderContext::kMaxBindings && ctx.srv[reg] != 0) {
-                if (isCompute_) { cmdList->SetComputeRootShaderResourceView(p.rootIndex, ctx.srv[reg]); }
-                else { cmdList->SetGraphicsRootShaderResourceView(p.rootIndex, ctx.srv[reg]); }
+        case RootParameterInfo::TableSRV:
+            if (ctx.srvTable[reg].ptr != 0) {
+                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
+                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
             }
             break;
-        }
-        case RootParameterInfo::UAV:
-        {
-            if (reg < RenderContext::kMaxBindings && ctx.uav[reg] != 0) {
-                if (isCompute_) { cmdList->SetComputeRootUnorderedAccessView(p.rootIndex, ctx.uav[reg]); }
-                else { cmdList->SetGraphicsRootUnorderedAccessView(p.rootIndex, ctx.uav[reg]); }
+        case RootParameterInfo::TableUAV:
+            if (ctx.uavTable[reg].ptr != 0) {
+                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.uavTable[reg]); }
+                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.uavTable[reg]); }
             }
             break;
-        }
-        case RootParameterInfo::Table:
-        {
-            if (reg < RenderContext::kMaxBindings && ctx.table[reg].ptr != 0) {
-                if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.table[reg]); }
-                else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.table[reg]); }
-            }
-            break;
-        }
         case RootParameterInfo::TableSampler:
-        {
-            if (reg < RenderContext::kMaxBindings && ctx.samplerTable[reg].ptr != 0) {
+            if (ctx.samplerTable[reg].ptr != 0) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
             }
             break;
         }
-        }
     }
 }
 
 // ===== Root signature from compiler-embedded blob ([RootSignature] attribute) =====
-// Option #2: the RS is authored in HLSL via [RootSignature(...)] and validated by
-// the compiler against actual register usage. We pull the serialized RS out of the
-// compiled shader container and rebuild rootParams_ from it (same bindingRegister/
-// rootIndex mapping Material::Bind relies on). Shaders without an embedded RS fall
-// back to the legacy `// RootSignature:` comment parser (coexistence during migration).
+// The RS is authored in HLSL via [RootSignature(...)] and validated by the compiler
+// against actual register usage. We pull the serialized RS out of the compiled shader
+// container and rebuild rootParams_ from it (same bindingRegister/rootIndex mapping
+// Material::Bind relies on). Every shader MUST carry an embedded RS — there is no
+// legacy comment-parser fallback (it was removed); a missing RS fails material build.
 
 // Pull the serialized root-signature blob out of a compiled shader container.
 // Returns null if the shader carries no embedded RS.
@@ -560,12 +547,9 @@ static void BuildRootParamsFromDesc(const D3D12_ROOT_SIGNATURE_DESC1& d,
 {
     outParams.clear();
     outParams.reserve(d.NumParameters);
-    // Descriptor-table bindingRegister follows the legacy parser's convention:
-    // a sequential counter per table KIND (non-sampler tables share one counter,
-    // sampler tables another) — matching how RenderContext::table/samplerTable are
-    // populated by the callers. It is NOT the table's base shader register.
-    UINT tableCounter = 0;
-    UINT samplerTableCounter = 0;
+    // Every binding is keyed by SHADER REGISTER (matching RenderContext): a root CBV
+    // by its b#, a descriptor table by its first range's base register. This is
+    // invariant to root-parameter declaration order and to dropped/unused tables.
     for (UINT i = 0; i < d.NumParameters; ++i) {
         const D3D12_ROOT_PARAMETER1& p = d.pParameters[i];
         Material::RootParameterInfo info{};
@@ -583,37 +567,42 @@ static void BuildRootParamsFromDesc(const D3D12_ROOT_SIGNATURE_DESC1& d,
             info.bindingSpace = p.Descriptor.RegisterSpace;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_SRV:
-            info.type = Material::RootParameterInfo::SRV;
-            info.bindingRegister = p.Descriptor.ShaderRegister;
-            info.bindingSpace = p.Descriptor.RegisterSpace;
-            break;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
-            info.type = Material::RootParameterInfo::UAV;
-            info.bindingRegister = p.Descriptor.ShaderRegister;
-            info.bindingSpace = p.Descriptor.RegisterSpace;
-            break;
+            // Root SRV/UAV descriptors are not used by any shader and have no
+            // RenderContext slot. Use a descriptor table instead.
+            assert(false && "root SRV/UAV descriptors are unsupported; use a descriptor table");
+            continue;
         case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE: {
-            bool hasSampler = false;
-            for (UINT rIdx = 0; rIdx < p.DescriptorTable.NumDescriptorRanges; ++rIdx) {
-                if (p.DescriptorTable.pDescriptorRanges[rIdx].RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER) {
-                    hasSampler = true; break;
-                }
+            if (p.DescriptorTable.NumDescriptorRanges == 0) { continue; }
+            const D3D12_DESCRIPTOR_RANGE1& first = p.DescriptorTable.pDescriptorRanges[0];
+            switch (first.RangeType) {
+            case D3D12_DESCRIPTOR_RANGE_TYPE_SRV:     info.type = Material::RootParameterInfo::TableSRV;     break;
+            case D3D12_DESCRIPTOR_RANGE_TYPE_UAV:     info.type = Material::RootParameterInfo::TableUAV;     break;
+            case D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER: info.type = Material::RootParameterInfo::TableSampler; break;
+            default:
+                // CBV descriptor tables aren't used (CBVs bind as root descriptors).
+                assert(false && "CBV descriptor tables are unsupported; use a root CBV");
+                continue;
             }
-            info.type = hasSampler ? Material::RootParameterInfo::TableSampler : Material::RootParameterInfo::Table;
-            info.bindingRegister = hasSampler ? samplerTableCounter++ : tableCounter++;
-            if (p.DescriptorTable.NumDescriptorRanges > 0) {
-                info.bindingSpace = p.DescriptorTable.pDescriptorRanges[0].RegisterSpace;
-            }
+            info.bindingRegister = first.BaseShaderRegister;
+            info.bindingSpace = first.RegisterSpace;
+            // RenderContext arrays are fixed-size (kMaxBindings); Bind skips an
+            // out-of-range register, so catch that shape in debug instead of
+            // failing silently at draw time.
+            assert(info.bindingRegister < RenderContext::kMaxBindings &&
+                   "descriptor table base register exceeds RenderContext bindings");
             break;
         }
-        default: break;
+        default:
+            continue;
         }
         outParams.push_back(info);
     }
 }
 
 // Creates the RS object + rebuilds rootParams_ from an embedded serialized RS blob.
-// Returns false if the blob is absent/undeserializable (caller falls back to parser).
+// Returns false if the blob is absent/undeserializable (caller treats this as a
+// material-build failure).
 static bool BuildRootFromEmbedded(ID3D12Device* device, ID3DBlob* rsBlob,
     ComPtr<ID3D12RootSignature>& outRS,
     std::vector<Material::RootParameterInfo>& outParams)
@@ -678,8 +667,11 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ReflectShaderBlob(vs.Get(), cbInfos_);
     ReflectShaderBlob(ps.Get(), cbInfos_);
 
-    // Root signature comes from the shader's compiler-validated [RootSignature]
-    // attribute (extracted from the VS blob, deserialized into rootParams_).
+    // Root signature comes from the shader's compiler-validated [RootSignature].
+    // CONVENTION: graphics shaders tag [RootSignature] on BOTH VSMain and PSMain
+    // (so the compiler validates each stage's register usage against the same RS),
+    // but the serialized blob is taken from the VS only. A graphics shader that tags
+    // only PS (or has no embedded RS) therefore fails the build below.
     ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(vs.Get());
     if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
         OutputDebugStringW((L"[Material] missing/invalid [RootSignature] in " + gd.shaderFile + L"\n").c_str());

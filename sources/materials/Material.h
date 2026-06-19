@@ -89,9 +89,12 @@ public:
     };
 
     struct RootParameterInfo {
-        enum Type { Constants, CBV, SRV, UAV, Table, TableSampler } type;
+        // Tables are split by heap/resource kind so a slot can be keyed by the
+        // table's base register (TableSRV at t0 and TableUAV at u0 don't collide).
+        // Root SRV/UAV descriptors are not used by any shader and are unsupported.
+        enum Type { Constants, CBV, TableSRV, TableUAV, TableSampler } type;
         UINT rootIndex = 0;       // Root parameter index
-        UINT bindingRegister = 0; // Register number b0/t0/u0 used for lookup in RenderContext
+        UINT bindingRegister = 0; // Shader register (b#/t#/u#/s#) used for lookup in RenderContext
         UINT bindingSpace = 0;    // Register space for additional offsets
         UINT constantsCount = 0;  // Only for constants
     };

@@ -333,7 +333,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         auto& rc = h.ref();
 
         auto tbl = r->StageSrvUavTable({ font_->GetSRVCPU() });
-        rc.table[0] = tbl.gpu;
+        rc.srvTable[0] = tbl.gpu;
 
         const bool useCoverage = font_->IsCoverage();
         //const D3D12_SAMPLER_DESC samplerDesc = useCoverage ? *SamplerManager::PointClamp() : *SamplerManager::LinearClamp();

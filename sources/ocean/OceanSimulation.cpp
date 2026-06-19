@@ -1000,8 +1000,8 @@ void OceanSimulation::DispatchSpectrum(Renderer* renderer, ID3D12GraphicsCommand
     auto srvTable = renderer->StageSrvUavTable({ h0Srv_, waveDataSrv_ });
     auto uavTable = renderer->StageSrvUavTable({ displacementUavs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementUavs_[0] });
 
-    ctx.table[0] = srvTable.gpu;
-    ctx.table[1] = uavTable.gpu;
+    ctx.srvTable[0] = srvTable.gpu;
+    ctx.uavTable[0] = uavTable.gpu;
 
     spectrumMaterial_->Bind(cl, ctx);
 
@@ -1031,7 +1031,7 @@ void OceanSimulation::DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList*
             1u,
             0u,
         };
-        ctx.table[1] = uavTable.gpu;
+        ctx.uavTable[0] = uavTable.gpu;
         fftMaterial_->Bind(cl, ctx);
         cl->Dispatch(1, resolution_, 1);
     }
@@ -1047,7 +1047,7 @@ void OceanSimulation::DispatchFFT(Renderer* renderer, ID3D12GraphicsCommandList*
             1u,
             0u,
         };
-        ctx.table[1] = uavTable.gpu;
+        ctx.uavTable[0] = uavTable.gpu;
         fftMaterial_->Bind(cl, ctx);
         cl->Dispatch(1, resolution_, 1);
     }
@@ -1074,7 +1074,7 @@ void OceanSimulation::DispatchFFTPost(Renderer* renderer, ID3D12GraphicsCommandL
         1u,
         kFftFlagPermute,
     };
-    ctx.table[1] = uavTable.gpu;
+    ctx.uavTable[0] = uavTable.gpu;
 
     fftPostMaterial_->Bind(cl, ctx);
 
@@ -1149,8 +1149,8 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         }
         auto uavTable = renderer->StageSrvUavTable(uavs);
 
-        ctx.table[0] = srvTable.gpu;
-        ctx.table[1] = uavTable.gpu;
+        ctx.srvTable[0] = srvTable.gpu;
+        ctx.uavTable[0] = uavTable.gpu;
 
         mipMaterial_->Bind(cl, ctx);
 
@@ -1186,8 +1186,8 @@ void OceanSimulation::InitializeFoamTexture(Renderer* renderer, ID3D12GraphicsCo
     auto srvTable = renderer->StageSrvUavTable({ displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0] });
     auto uavTable = renderer->StageSrvUavTable({ foamUav_ });
 
-    ctx.table[0] = srvTable.gpu;
-    ctx.table[1] = uavTable.gpu;
+    ctx.srvTable[0] = srvTable.gpu;
+    ctx.uavTable[0] = uavTable.gpu;
 
     foamInitMaterial_->Bind(cl, ctx);
 
@@ -1235,8 +1235,8 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
     auto srvTable = renderer->StageSrvUavTable({ displacementSrvs_.empty() ? D3D12_CPU_DESCRIPTOR_HANDLE{} : displacementSrvs_[0] });
     auto uavTable = renderer->StageSrvUavTable({ foamUav_ });
 
-    ctx.table[0] = srvTable.gpu;
-    ctx.table[1] = uavTable.gpu;
+    ctx.srvTable[0] = srvTable.gpu;
+    ctx.uavTable[0] = uavTable.gpu;
 
     foamSimMaterial_->Bind(cl, ctx);
 
@@ -1297,8 +1297,8 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             }
             auto uavTable = renderer->StageSrvUavTable(uavs);
 
-            ctxMip.table[0] = srvTable.gpu;
-            ctxMip.table[1] = uavTable.gpu;
+            ctxMip.srvTable[0] = srvTable.gpu;
+            ctxMip.uavTable[0] = uavTable.gpu;
 
             mipMaterial_->Bind(cl, ctxMip);
 

@@ -194,7 +194,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         lights.GetSpotLightSrv(),
         normalSrv
     };
-    ctx.table[0] = renderer->StageSrvUavTable(srvs).gpu;
+    ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 
     const auto samplerDescs = std::array{
         *SamplerManager::LinearClamp(),
