@@ -220,6 +220,7 @@
     <ClCompile Include="sources/text/FontGenerator.cpp" />
     <ClCompile Include="sources/text/FontManager.cpp" />
     <ClCompile Include="sources/text/TextManager.cpp" />
+    <ClCompile Include="sources/ui/ImGuiLayer.cpp" />
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp" />
@@ -313,6 +314,7 @@
     <ClInclude Include="sources/text/FontGenerator.h" />
     <ClInclude Include="sources/text/FontManager.h" />
     <ClInclude Include="sources/text/TextManager.h" />
+    <ClInclude Include="sources/ui/ImGuiLayer.h" />
     <ClInclude Include="sources\core\containers\inl_vector.h" />
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h" />
     <ClInclude Include="third_party\imgui\backends\imgui_impl_dx12.h" />

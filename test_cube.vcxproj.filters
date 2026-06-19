@@ -58,6 +58,9 @@
     <Filter Include="sources\text">
       <UniqueIdentifier>{4426bb63-b333-4e9f-b709-016e83f65a2e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\ui">
+      <UniqueIdentifier>{cb40cf8e-0162-4bfd-8b37-c4a59fe60aae}</UniqueIdentifier>
+    </Filter>
     <Filter Include="third_party">
       <UniqueIdentifier>{7a300746-b1e1-41ad-bbd4-6f265c38c41a}</UniqueIdentifier>
     </Filter>
@@ -290,6 +293,9 @@
     </ClCompile>
     <ClCompile Include="sources/text/TextManager.cpp">
       <Filter>sources\text</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ui/ImGuiLayer.cpp">
+      <Filter>sources\ui</Filter>
     </ClCompile>
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
       <Filter>third_party\enkiTS\src</Filter>
@@ -556,6 +562,9 @@
     </ClInclude>
     <ClInclude Include="sources/text/TextManager.h">
       <Filter>sources\text</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ui/ImGuiLayer.h">
+      <Filter>sources\ui</Filter>
     </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
       <Filter>third_party\enkiTS\src</Filter>
