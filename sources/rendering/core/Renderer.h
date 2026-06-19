@@ -29,6 +29,7 @@
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/debug/DebugDraw.h"
+#include "ui/ImGuiLayer.h"
 #include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
@@ -61,6 +62,13 @@ public:
     // Frame cycle
     void BeginFrame();                 // waits for its frame, resets allocator and command list
     void EndFrame();                   // barrier RT->Present, Execute, Present, signal fence
+    void InitImGui();
+    void BeginImGuiFrame();
+    void RenderImGui(ID3D12GraphicsCommandList* commandList);
+    void ShutdownImGui();
+    bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    bool ImGuiWantsMouse() const;
+    bool ImGuiWantsKeyboard() const;
 
     void Tick(float dt);
     bool ConsumeMaterialHotReloadFlag();
@@ -316,6 +324,7 @@ private:
     MaterialDataManager materialDataManager_;
     RenderContextPool ctxPool_;
     DebugDrawSystem debugDrawSystem_;
+    ImGuiLayer imguiLayer_;
 
     friend class DlssHandler;
 };

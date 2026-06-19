@@ -56,6 +56,8 @@ void Renderer::Shutdown()
     Profiler::Get().ShutdownGpu();
 #endif
 
+    ShutdownImGui();
+
     debugDrawSystem_.Shutdown();
     materialManager_.Clear();
     materialDataManager_.ClearAll();
@@ -186,6 +188,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     RefreshCurrentFrameCaches();
 
     samplerManager_.Init(GetDevice(), 512);
+    InitImGui();
 
     InitFence();
 }
@@ -298,6 +301,51 @@ void Renderer::BeginFrame() {
 
 void Renderer::EndFrame() {
     ExecuteTimelineAndPresent();
+}
+
+void Renderer::InitImGui()
+{
+    if (imguiLayer_.IsInitialized())
+    {
+        return;
+    }
+
+    if (!hWnd_ || !GetDevice() || !GetCommandQueue())
+    {
+        return;
+    }
+
+    imguiLayer_.Init(hWnd_, *this);
+}
+
+void Renderer::BeginImGuiFrame()
+{
+    imguiLayer_.BeginFrame();
+}
+
+void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
+{
+    imguiLayer_.Render(commandList);
+}
+
+void Renderer::ShutdownImGui()
+{
+    imguiLayer_.Shutdown();
+}
+
+bool Renderer::HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    return imguiLayer_.HandleWndProc(hwnd, message, wParam, lParam);
+}
+
+bool Renderer::ImGuiWantsMouse() const
+{
+    return imguiLayer_.WantsMouse();
+}
+
+bool Renderer::ImGuiWantsKeyboard() const
+{
+    return imguiLayer_.WantsKeyboard();
 }
 
 void Renderer::ReportLiveObjects()
