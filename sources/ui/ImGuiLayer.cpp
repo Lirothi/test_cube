@@ -15,6 +15,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace
 {
 constexpr uint32_t kSrvDescriptorCapacity = 64;
+constexpr float kUiScale = 2.0f;
 } // namespace
 
 void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
@@ -52,6 +53,10 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = nullptr;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.FontScaleMain = kUiScale;
+    style.ScaleAllSizes(kUiScale);
 
     if (!ImGui_ImplWin32_Init(hwnd))
     {
