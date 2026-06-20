@@ -943,6 +943,11 @@ bool Renderer::IsDlssActive() const
     return dlssHandler_ && dlssHandler_->IsActive();
 }
 
+bool Renderer::IsDlssAvailable() const
+{
+    return dlssHandler_ && dlssHandler_->IsAvailable();
+}
+
 void Renderer::SetDlssActive(bool active)
 {
     if (dlssHandler_)

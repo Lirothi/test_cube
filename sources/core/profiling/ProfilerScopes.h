@@ -8,6 +8,7 @@ namespace ProfilerScopes {
 extern const Profiler::ScopeNameKey kWholeCycle;
 extern const Profiler::ScopeNameKey kWinMessages;
 extern const Profiler::ScopeNameKey kAppControllerTick;
+extern const Profiler::ScopeNameKey kBuildDeveloperWindow;
 
 // Material
 extern const Profiler::ScopeNameKey kMaterialFSProbe;

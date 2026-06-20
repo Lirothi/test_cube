@@ -178,6 +178,7 @@ public:
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
     bool IsDlssActive() const;
+    bool IsDlssAvailable() const;
     void SetDlssActive(bool active);
     void SetDlssMode(sl::DLSSMode mode);
     sl::DLSSMode GetDlssMode() const { return dlssMode_; }
