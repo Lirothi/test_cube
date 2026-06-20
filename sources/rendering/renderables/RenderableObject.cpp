@@ -116,12 +116,12 @@ void RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsC
     graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
-void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl)
+void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)
 {
     if (cl == nullptr) { return; }
     if (auto* mesh = GetMesh())
     {
-        mesh->Draw(cl);
+        mesh->Draw(cl, lod);
     }
 }
 

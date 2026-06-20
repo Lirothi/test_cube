@@ -136,7 +136,7 @@ public:
         um.StealKeepAlive(uploadKeepAlive);
     }
 
-    void DrawGeometry(ID3D12GraphicsCommandList* cl) override
+    void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT /*lod*/) override
     {
         if (!cl) { return; }
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
@@ -252,7 +252,7 @@ public:
 
     float GetThicknessPx() const { return thicknessPx_; }
 
-    void DrawGeometry(ID3D12GraphicsCommandList* cl) override
+    void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT /*lod*/) override
     {
         if (!cl) { return; }
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

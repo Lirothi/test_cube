@@ -33,7 +33,7 @@ protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx) override;
-    void DrawGeometry(ID3D12GraphicsCommandList* cl) override;
+    void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod) override;
 
 private:
     // Instancing data

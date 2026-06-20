@@ -2,6 +2,7 @@
 #include "core/Helpers.h"
 #include "materials/UploadManager.h"
 #include "rendering/core/CommandListBindState.h"
+#include <algorithm>
 #include <cstring>
 
 using namespace DirectX;
@@ -72,19 +73,35 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
     bounds_ = bounds;
 }
 
+void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
+    const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {
+    if (lod == 0 || extraLods_.empty()) {
+        vbv = &vertexBufferView_;
+        ibv = &indexBufferView_;
+        indexCount = indexCount_;
+        return;
+    }
+    const UINT idx = std::min(lod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
+    const LodLevel& L = extraLods_[idx];
+    vbv = &L.vertexBufferView;
+    ibv = &L.indexBufferView;
+    indexCount = L.indexCount;
+}
+
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the
 // per-command-list bind cache (e.g. a sorted run of the same mesh). IA state persists on
 // the command list and is unaffected by root-signature changes.
-void Mesh::BindIA(ID3D12GraphicsCommandList* cmdList) const {
+void Mesh::BindIA(ID3D12GraphicsCommandList* cmdList,
+    const D3D12_VERTEX_BUFFER_VIEW& vbv, const D3D12_INDEX_BUFFER_VIEW& ibv) const {
     render::CommandListBindState& cache = render::g_clBindState;
     const bool batch = render::g_bindBatchingEnabled;
-    if (!batch || cache.vb != vertexBufferView_.BufferLocation) {
-        cmdList->IASetVertexBuffers(0, 1, &vertexBufferView_);
-        if (batch) { cache.vb = vertexBufferView_.BufferLocation; }
+    if (!batch || cache.vb != vbv.BufferLocation) {
+        cmdList->IASetVertexBuffers(0, 1, &vbv);
+        if (batch) { cache.vb = vbv.BufferLocation; }
     }
-    if (!batch || cache.ib != indexBufferView_.BufferLocation) {
-        cmdList->IASetIndexBuffer(&indexBufferView_);
-        if (batch) { cache.ib = indexBufferView_.BufferLocation; }
+    if (!batch || cache.ib != ibv.BufferLocation) {
+        cmdList->IASetIndexBuffer(&ibv);
+        if (batch) { cache.ib = ibv.BufferLocation; }
     }
     if (!batch || cache.topology != D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) {
         cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -92,14 +109,18 @@ void Mesh::BindIA(ID3D12GraphicsCommandList* cmdList) const {
     }
 }
 
-void Mesh::Draw(ID3D12GraphicsCommandList* cmdList) const {
-    BindIA(cmdList);
-    cmdList->DrawIndexedInstanced(indexCount_, 1, 0, 0, 0);
+void Mesh::Draw(ID3D12GraphicsCommandList* cmdList, UINT lod) const {
+    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
+    SelectLod(lod, vbv, ibv, indexCount);
+    BindIA(cmdList, *vbv, *ibv);
+    cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }
 
-void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount) const {
-    BindIA(cmdList);
-    cmdList->DrawIndexedInstanced(indexCount_, instanceCount, 0, 0, 0);
+void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount, UINT lod) const {
+    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
+    SelectLod(lod, vbv, ibv, indexCount);
+    BindIA(cmdList, *vbv, *ibv);
+    cmdList->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, 0);
 }
 
 // ====== Normal and tangent generation ======

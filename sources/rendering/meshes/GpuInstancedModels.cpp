@@ -121,10 +121,10 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
-void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl)
+void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)
 {
     if (!cl || !mesh_) { return; } // 5b: skip cleanly if mesh-less
-    mesh_->DrawInstanced(cl, instanceCount_);
+    mesh_->DrawInstanced(cl, instanceCount_, lod);
 }
 
 void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx)

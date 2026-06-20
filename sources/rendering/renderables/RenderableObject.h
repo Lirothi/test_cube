@@ -116,7 +116,7 @@ protected:
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
     void UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
-    virtual void DrawGeometry(ID3D12GraphicsCommandList* cl);
+    virtual void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod = 0);
 
     void MarkTransformDirty();
 

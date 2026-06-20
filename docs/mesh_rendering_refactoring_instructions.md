@@ -306,15 +306,58 @@ Build Debug+Release, debug-layer clean, smoke idle + flight.
 
 **Category: perf (vertex lever). Risk: medium (visual). Ties to shadow doc 6b.**
 
-Add per-mesh LOD levels (lower-poly proxies) and select by screen-size / distance / cascade
-index. Biggest value: low-poly proxies in shadow far cascades and for distant gbuffer draws
-(where detail is invisible) — directly attacks the vertex-bound cost the shadow work found.
+Add per-mesh LOD levels and select by screen-size / cascade index. Biggest value: coarse
+proxies in shadow far cascades and distant gbuffer draws (detail invisible there) — attacks
+the vertex-bound cost Step 1 / the shadow work found. **Motivation (measured):** the demo's
+100 instanced teapots are 2048 tris each → ~205K tris/pass × ~7 views (GBuffer + 4 CSM + 2
+spot) ≈ **1.4M tris/frame, mostly shadows**; the sphere grid (512 tris × 50) adds more. `Pass_CSM`
+is vertex/overhead-bound (atlas shrink moved it ~0%), so triangles are the lever.
 
-**Landmines:** LOD pop / silhouette shift on shadows; keep near cascades + near gbuffer at
-full detail. Needs LOD assets or runtime decimation (asset-pipeline work).
+**LOD source: runtime decimation via meshoptimizer (`meshopt_simplify`)** — chosen 2026-06-20.
+No LOD assets exist (only base `.obj`); meshoptimizer generates LOD1..N at load by index-ratio
+targets (e.g. 0.5 / 0.25 / 0.12) with a quality/error bound. **Must be vendored** under
+`third_party/meshoptimizer` (its `src/*.cpp` + `src/meshoptimizer.h`), added to the vcxproj as
+`ClCompile`/include dir, like imgui/mimalloc/tbb — it is NOT yet in the repo. (Fallbacks if the
+dep is unwanted: bake LOD `.obj`s offline + load by naming convention; or an in-house
+vertex-cluster decimator — lower quality, risks the no-pop acceptance.)
 
-**Acceptance:** triangle count drops for distant/shadow draws; `Pass_GBuffer`/`Pass_CSM` ms
-down; no visible LOD pop (USER); near detail unchanged.
+**Key design — keep Step 4 instancing intact:** `BatchKey{mesh, material, materialData}` keys
+on `Mesh*`. Do NOT make each LOD a separate `Mesh*` (that breaks batching). Instead **fold the
+LOD chain INTO `Mesh`** (`Mesh` holds `LodLevel{VB, IB, indexCount}[]`, level 0 = full); `BatchKey.mesh`
+stays the LOD-set identity, and the **selected LOD index is applied at draw time**. So grouping
+is unchanged; an instanced batch / the `GpuInstancedModels` cloud picks ONE LOD per view from
+its (run/whole-cloud) bounds — fine for clustered groups (already the instancing tradeoff).
+
+**Selection:** GBuffer = screen-space size (project world-bounds radius → pixels, threshold by
+pixel size; accounts for FOV + render scale). Shadows = bias by **cascade index** (far cascades
+force a coarse floor where texels are huge / silhouette error invisible; cascade 0 near-full) —
+this is where the ~1.4M-tri win is. Add **hysteresis** so LOD doesn't oscillate frame-to-frame
+(pop + motion-vector shimmer). Culling bounds stay **LOD0's** (visibility must not change with LOD).
+
+**Plumbing:** `Mesh::Draw`/`DrawInstanced` take a LOD index (default 0 → behavior-identical);
+`RenderableObject::DrawGeometry(cl, lod)` (virtual; `GpuInstancedModels` overrides);
+`Render(camera,…)` / `RenderShadow(lightView/Proj,…)` compute the index; `InstancedDrawBatch`
+computes the run's index. The Step 3 bind cache keys VB/IB by `BufferLocation`, so different
+LODs rebind correctly.
+
+**Sub-parts (one commit each; measure 6c/6d):**
+- **6a — LOD storage + draw-by-index.** Add `LodLevel` to `Mesh`, `DrawGeometry(cl, lod)`,
+  default all selections to LOD0 → BEHAVIOR-IDENTICAL (proves plumbing, zero visual change).
+- **6b — LOD generation.** Vendor meshoptimizer; generate the chain at `MeshManager` load
+  (`meshopt_simplify` per target ratio, weld first). Still select LOD0 → identical until 6c.
+- **6c — Selection.** Screen-size (GBuffer) + cascade floor (shadows) + hysteresis. Visuals
+  change here → USER confirms no pop; near detail unchanged.
+- **6d — Instanced/cloud LOD.** `InstancedDrawBatch` + `GpuInstancedModels` pick a per-run /
+  per-cloud LOD.
+
+**Landmines:** LOD pop / shadow silhouette shift (mitigate: cascade-0 full + hysteresis);
+motion-vector discontinuity at switches (hysteresis); instancing forces one LOD per run
+(fine for clustered runs); bounds from LOD0; degenerate decimation on tiny meshes (skip LOD
+below a min tri count, e.g. box=6 tris).
+
+**Acceptance:** triangle count/frame drops for distant/shadow draws (temp probe sum
+`indexCount/3`); `Pass_GBuffer`/`Pass_CSM` Release ms down (demo + stressed, before/after); no
+visible LOD pop (USER); near detail unchanged; instancing counts unchanged.
 
 ## Step 7 — Submesh / multi-material support
 
