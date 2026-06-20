@@ -48,6 +48,13 @@ public:
     UINT GetIndexCount() const { return indexCount_; }
     UINT GetLodCount() const { return 1u + static_cast<UINT>(extraLods_.size()); }
 
+    // Step 6: append a coarser LOD as a reduced 32-bit index buffer over the SAME vertex
+    // buffer (meshopt_simplify output references the base verts). Call after the base
+    // CreateGPU*, on the same upload command list.
+    void AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
+        const uint32_t* indices, UINT indexCount);
+
     ID3D12Resource* GetVertexBufferResource() const { return vertexBuffer_.Get(); }
     ID3D12Resource* GetIndexBufferResource()  const { return indexBuffer_.Get(); }
 
@@ -57,11 +64,9 @@ public:
     const AABB& GetBoundingBox() const { return bounds_; }
 
 private:
-    // Step 6: a coarser LOD's GPU buffers (lod 0 lives in the base members below).
+    // Step 6: a coarser LOD = a reduced index buffer over the SAME (base) vertex buffer.
     struct LodLevel {
-        Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
-        D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
         D3D12_INDEX_BUFFER_VIEW  indexBufferView = {};
         UINT indexCount = 0;
     };

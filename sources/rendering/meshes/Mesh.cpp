@@ -75,17 +75,32 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
 
 void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
     const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {
+    vbv = &vertexBufferView_; // LODs share the base vertex buffer (simplify only cuts indices)
     if (lod == 0 || extraLods_.empty()) {
-        vbv = &vertexBufferView_;
         ibv = &indexBufferView_;
         indexCount = indexCount_;
         return;
     }
     const UINT idx = std::min(lod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
-    const LodLevel& L = extraLods_[idx];
-    vbv = &L.vertexBufferView;
-    ibv = &L.indexBufferView;
-    indexCount = L.indexCount;
+    ibv = &extraLods_[idx].indexBufferView;
+    indexCount = extraLods_[idx].indexCount;
+}
+
+void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
+    const uint32_t* indices, UINT indexCount) {
+    if (!indices || indexCount == 0) { return; }
+    UploadManager up(device, uploadCmdList);
+    LodLevel lod;
+    const UINT ibSize = sizeof(uint32_t) * indexCount;
+    lod.indexBuffer = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    lod.indexBufferView.BufferLocation = lod.indexBuffer->GetGPUVirtualAddress();
+    lod.indexBufferView.SizeInBytes = ibSize;
+    lod.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
+    lod.indexCount = indexCount;
+    extraLods_.push_back(std::move(lod));
+    up.StealKeepAlive(uploadKeepAlive);
 }
 
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the

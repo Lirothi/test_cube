@@ -8,8 +8,44 @@
 #include <cstring> // strchr, atoi
 #include <DirectXMath.h>
 #include <queue>
+#include "meshoptimizer.h"
 
 using namespace DirectX;
+
+namespace
+{
+// Step 6: generate coarser LODs as reduced index buffers (meshopt_simplify, over the same
+// vertices) and append them to the mesh. Called once at load on the upload command list.
+void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive,
+    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+{
+    const size_t baseIdx = indices.size();
+    constexpr size_t kMinIndicesForLod = 384; // ~128 tris; skip tiny meshes (box = 6 tris)
+    if (!mesh || verts.empty() || baseIdx < kMinIndicesForLod) { return; }
+
+    const float ratios[] = { 0.5f, 0.25f, 0.12f };
+    const float errors[] = { 0.02f, 0.05f, 0.12f };
+    std::vector<uint32_t> simplified(baseIdx);
+    size_t prevCount = baseIdx;
+    for (int i = 0; i < 3; ++i)
+    {
+        size_t target = static_cast<size_t>(baseIdx * ratios[i]);
+        target -= target % 3;
+        if (target < 12) { break; }
+
+        float resultError = 0.0f;
+        const size_t n = meshopt_simplify(simplified.data(), indices.data(), baseIdx,
+            &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+            target, errors[i], 0, &resultError);
+
+        if (n == 0 || n + (n / 10) >= prevCount) { break; } // < ~10% shrink -> stop adding LODs
+        mesh->AddLod(device, uploadCmdList, keepAlive, simplified.data(), static_cast<UINT>(n));
+        prevCount = n;
+        (void)resultError;
+    }
+}
+} // namespace
 
 using Microsoft::WRL::ComPtr;
 
@@ -74,6 +110,7 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
     cache_[path] = m;
     return m;
 }
@@ -98,6 +135,7 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
     cache_[path] = m;
     return m;
 }
@@ -119,6 +157,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
     std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV may modify the data
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, indices.data(), (UINT)indices.size(), generateTangentSpace);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, indices);
     cache_[key] = m;
     return m;
 }

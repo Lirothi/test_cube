@@ -85,7 +85,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -101,7 +101,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -118,7 +118,7 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>26495;28182;6011;26454;26819;6387;6385;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -143,7 +143,7 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -230,6 +230,26 @@
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
     <ClCompile Include="third_party\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="third_party\meshoptimizer\src\allocator.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\clusterizer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\indexanalyzer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\indexcodec.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\indexgenerator.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\meshletcodec.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\meshletutils.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\opacitymap.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\overdrawoptimizer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\partition.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\quantization.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\rasterizer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\simplifier.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\spatialorder.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\stripifier.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\tangentspace.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\vcacheoptimizer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\vertexcodec.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\vertexfilter.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
+    <ClCompile Include="third_party\meshoptimizer\src\vfetchoptimizer.cpp"><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
