@@ -19,11 +19,14 @@ public:
 
     MaterialData* GetMaterialData() const { return matData_.get(); }
 
+    // Draw identity includes the textures (MaterialData) — objects sharing a PSO but not
+    // textures must NOT batch together (the single instanced draw binds one texture set).
+    RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), GetGraphicsMaterial(), matData_.get() }; }
+
     // Step 4 auto-instancing: opt in when an instanced shader variant was built (Init).
     bool SupportsInstancing() const override { return instancedGraphicsMaterial_ != nullptr; }
     Material* GetInstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
     Material* GetInstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
-    MaterialData* GetInstanceMaterialData() const override { return matData_.get(); }
     void FillInstanceData(render::InstancePerObject& out) const override;
 
 protected:

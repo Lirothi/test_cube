@@ -138,14 +138,11 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
 
 void SceneRenderQueue::SortOpaque()
 {
+    // Sort by the single draw-identity key (mesh + material/PSO + textures). Groups identical
+    // pipeline state for the bind cache AND makes instanceable runs contiguous.
     auto cmp = [](RenderableObjectBase* a, RenderableObjectBase* b)
     {
-        if (a->BatchPSO() != b->BatchPSO()) { return a->BatchPSO() < b->BatchPSO(); }
-        if (a->BatchMaterial() != b->BatchMaterial()) { return a->BatchMaterial() < b->BatchMaterial(); }
-        if (a->BatchMesh() != b->BatchMesh()) { return a->BatchMesh() < b->BatchMesh(); }
-        // Step 4: also group by MaterialData (textures) — objects can share a PSO/Material
-        // but have different textures, and an instanced batch binds ONE texture set.
-        return a->GetInstanceMaterialData() < b->GetInstanceMaterialData();
+        return a->BatchKey() < b->BatchKey();
     };
     std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].begin(),
               visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].end(), cmp);
@@ -179,22 +176,17 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
     {
         RenderableObjectBase* lead = bucket[i];
 
-        // Extend a run of identical (mesh, material) instanceable objects. The bucket is
-        // pre-sorted by (PSO, material, mesh) so such objects are contiguous.
+        // Extend a run of identical instanceable objects. The bucket is pre-sorted by
+        // BatchKey(), so objects with the same draw identity (mesh + material + textures)
+        // are contiguous. One key = correct grouping by construction.
+        const RenderBatchKey leadKey = lead ? lead->BatchKey() : RenderBatchKey{};
         size_t j = i + 1;
         if (lead && lead->SupportsInstancing())
         {
-            const void* mesh = lead->BatchMesh();
-            const void* material = lead->BatchMaterial();
-            const MaterialData* matData = lead->GetInstanceMaterialData();
             while (j < bucket.size())
             {
                 RenderableObjectBase* o = bucket[j];
-                // A run must share mesh, Material (PSO) AND MaterialData (textures): the
-                // batch binds one texture set, so mismatched textures must NOT be grouped.
-                if (!o || !o->SupportsInstancing() ||
-                    o->BatchMesh() != mesh || o->BatchMaterial() != material ||
-                    o->GetInstanceMaterialData() != matData)
+                if (!o || !o->SupportsInstancing() || o->BatchKey() != leadKey)
                 {
                     break;
                 }
@@ -210,8 +202,8 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
             batch->Configure(std::move(members),
                              lead->GetInstancedGraphicsMaterial(),
                              lead->GetInstancedShadowMaterial(),
-                             lead->GetInstanceMaterialData(),
-                             lead->GetInstanceMesh(),
+                             leadKey.materialData,
+                             leadKey.mesh,
                              simple);
             rewritten.push_back(batch);
         }

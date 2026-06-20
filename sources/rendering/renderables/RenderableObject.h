@@ -96,7 +96,6 @@ public:
     // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
     const Mesh* GetMesh() const { return mesh_.get(); }
-    Mesh* GetInstanceMesh() const override { return mesh_.get(); }
 
     AABB GetLocalBounds() const;
     const AABB& GetWorldBounds() const override;
@@ -109,10 +108,8 @@ public:
 
     virtual bool CastsShadow() const { return true; }
 
-    // Step 3 batch-sort keys.
-    const void* BatchPSO() const override { return graphicsMaterial_ ? graphicsMaterial_->GetPipelineState() : nullptr; }
-    const void* BatchMaterial() const override { return graphicsMaterial_.get(); }
-    const void* BatchMesh() const override { return mesh_.get(); }
+    // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
+    RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
 
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}

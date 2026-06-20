@@ -149,7 +149,7 @@ bound** (→ batching/instancing help), **GPU-state-change-bound** (→ batching
   CPU-submission-bound config (e.g. 1600×900 native, DLSS off) since the demo's shipping
   config is GPU-bound.
 - Decide the lever: if state-change/CPU-submission dominates → Step 3 (batching) first; if
-  vertex throughput dominates → Step 5 (LOD) / Step 4 (instancing); if repeated identical
+  vertex throughput dominates → Step 6 (LOD) / Step 4 (instancing); if repeated identical
   meshes dominate → Step 4 (auto-instancing). Step 2 (CB split) is worth doing regardless.
 
 **Acceptance:** a written before-table (draw calls, state changes, CPU record ms, GPU pass
@@ -229,7 +229,80 @@ would have cut the shadow draw load (shadow doc's deferred per-instance idea).
 **Acceptance:** identical visuals (USER); draw-call count drops for the grid; `Pass_GBuffer`
 and `Pass_CSM` Release ms before/after; no popping.
 
-## Step 5 — Mesh LOD
+## Step 5 — Renderable/mesh architecture cleanup (refactor; behavior-preserving)
+
+**Category: architecture / maintainability (NOT a feature). Risk: medium (touches the
+renderable hierarchy + draw/batch path; output must stay PIXEL-IDENTICAL and perf-neutral).
+Do as a cleanup once Steps 2–4 have settled; not gated on Step 1's bound.**
+
+Motivation (concrete, from this work): the hierarchy bakes "a renderable IS one textured
+mesh with a graphics + shadow material" into the mid-tier `RenderableObject`, so the cases
+that don't fit fight it — `GpuInstancedModels` inherits `GBufferRenderable` then overrides
+most of `Render`/`RenderShadow`/`DrawGeometry`/`Tick`/bounds; `InstancedDrawBatch` derives
+`RenderableObjectBase` directly to dodge that baggage; the Step 4 instancing virtuals were
+bolted onto `RenderableObjectBase`; and "batch identity" is hand-assembled from scattered
+accessors — the Step 4 wrong-texture bug was exactly a missing field in that hand key (it
+omitted `MaterialData`, so objects sharing a PSO but not textures were wrongly grouped). This
+step pays that down WITHOUT a component/ECS rewrite (that stays out of scope, engine-v2). It
+is a pure refactor: no visual change, no perf change.
+
+Do ONE sub-part per commit; build + smoke between each; re-measure for 5a/5d.
+
+- **5a — Consolidate "draw identity" into one value.** Add a small
+  `RenderBatchKey { const Mesh*; const Material* /*PSO/RS*/; const MaterialData* /*textures*/ }`
+  with a total order. Replace `RenderableObjectBase`'s `BatchPSO()/BatchMaterial()/BatchMesh()`
+  + `GetInstanceMaterialData()` with a single `RenderBatchKey BatchKey() const`.
+  `SceneRenderQueue::SortOpaque` + `BuildInstancedBatchesForBucket` sort/group by the one key,
+  so "these draws are identical" is correct-by-construction (prevents the Step 4 class of bug).
+  Behavior MUST equal today's (mesh, Material, MaterialData) grouping exactly.
+  - Landmine: keep the comparator a strict weak ordering (compare the 3 pointers in a fixed
+    order). Identical sort order ⇒ identical draw/instancing counts ⇒ pixel-identical.
+
+- **5b — Represent "no mesh" honestly.** Drop the empty-`Mesh` default in `RenderableObject`'s
+  ctor (`SetMesh(std::make_shared<Mesh>())`); start `mesh_` null and make `DrawGeometry` +
+  instance-fill no-op when absent. The current `if (mesh)` guard in `DrawGeometry` is dead
+  (mesh is never null). Audit Init paths (`StaticMesh`, `GpuInstancedModels` set a real mesh)
+  and confirm nothing reads the empty mesh (bounds, IA). Removes the per-object empty-mesh
+  allocation and the misleading guard.
+  - Landmine: every drawn object must Init a real mesh before first record; a mesh-less object
+    must skip cleanly (no null VB/IB bind, no 0-index draw).
+
+- **5c — Move instancing capability off the base interface.** The Step 4 virtuals
+  (`SupportsInstancing`/`GetInstancedGraphicsMaterial`/`GetInstancedShadowMaterial`/
+  `GetInstanceMesh`/`FillInstanceData`) only mean anything for `GBufferRenderable`; on
+  `RenderableObjectBase` they are surface pollution. Relocate behind ONE narrow hook — e.g.
+  `virtual const IInstanceable* AsInstanceable() const { return nullptr; }` — so
+  non-instanceable renderables carry no instancing surface.
+  - Landmine: `SceneRenderQueue::BuildInstancedBatches` must still cheaply obtain the instanced
+    materials + per-instance fill (one virtual call; no RTTI/`dynamic_cast` in the per-object loop).
+
+- **5d (stretch; gate on 5a–5c) — Inheritance strain, narrowed by the facts.** NOTE before
+  touching this: `mesh_` is NOT a `StaticMesh` concept. It is used by EVERY concrete renderable
+  across all three branches — `StaticMesh` + `GpuInstancedModels` (via `GBufferRenderable`), and
+  `TransparentStaticMesh`/glass, `Skybox`, `OceanRenderable` (direct `RenderableObject` children
+  that build/load their own mesh). The ONLY mesh-less renderable is the transient
+  `InstancedDrawBatch` (correctly at `RenderableObjectBase`). So `mesh_` belongs in
+  `RenderableObject` — do NOT push it to a leaf, and do NOT reparent glass under `StaticMesh`
+  (that drags GBuffer-only `MaterialData` / `GBufferUniformBinder` / 4-RT config into glass,
+  which uses none of it and overrides the rest). The only optional cleanups here: (i) rename
+  `RenderableObject` → `MeshRenderable` so the name reflects that it always carries a mesh;
+  (ii) evaluate whether `GpuInstancedModels` should COMPOSE the per-object material machinery
+  instead of inheriting `GBufferRenderable` and overriding most of it. Both are
+  low-value / medium-churn — PARK unless they clearly pay for themselves. A full component/ECS
+  model stays out of scope (engine-v2).
+
+**Landmines (whole step):**
+- This is a re-org of the SAME draws — any visual or count change is a bug, not an improvement.
+- Preserve the deterministic submit order + transparent ordering (invariants 2–3); only the
+  internal representation changes, not WHAT/he order it records.
+- Keep the permanent `render::g_instancingEnabled` toggle and the F2 binding working.
+
+**Acceptance:** pixel-identical output (USER); identical per-frame draw-call + instanced-draw
+counts (temp probe, before/after); no Release GPU/CPU regression (>3% = fail); measurable
+reduction in `RenderableObjectBase` interface surface and the batch key expressed exactly once.
+Build Debug+Release, debug-layer clean, smoke idle + flight.
+
+## Step 6 — Mesh LOD
 
 **Category: perf (vertex lever). Risk: medium (visual). Ties to shadow doc 6b.**
 
@@ -243,7 +316,7 @@ full detail. Needs LOD assets or runtime decimation (asset-pipeline work).
 **Acceptance:** triangle count drops for distant/shadow draws; `Pass_GBuffer`/`Pass_CSM` ms
 down; no visible LOD pop (USER); near detail unchanged.
 
-## Step 6 — Submesh / multi-material support
+## Step 7 — Submesh / multi-material support
 
 **Category: feature/architecture. Risk: medium. Do only if assets need it.**
 
