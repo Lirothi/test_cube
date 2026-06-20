@@ -741,8 +741,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 {
     const UINT rtWidth = std::max(1u, renderWidth_);
     const UINT rtHeight = std::max(1u, renderHeight_);
+    const UINT displayWidth = std::max(1u, width);
+    const UINT displayHeight = std::max(1u, height);
 
-    const auto ssrSize = ComputeSsrTextureSize(rtWidth, rtHeight);
+    const auto ssrSize = ComputeSsrTextureSize(displayWidth, displayHeight);
     ssrTextureWidth_ = ssrSize.first > 0 ? ssrSize.first : 1;
     ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
 
@@ -763,8 +765,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     RenderTargetManager::Sizes sizes{};
     sizes.renderWidth = rtWidth;
     sizes.renderHeight = rtHeight;
-    sizes.displayWidth = std::max(1u, width);
-    sizes.displayHeight = std::max(1u, height);
+    sizes.displayWidth = displayWidth;
+    sizes.displayHeight = displayHeight;
     sizes.ssrWidth = ssrTextureWidth_;
     sizes.ssrHeight = ssrTextureHeight_;
 
@@ -779,10 +781,10 @@ void Renderer::DestroyDeferredTargets() {
 }
 
 
-std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const
+std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT referenceWidth, UINT referenceHeight) const
 {
-    const UINT refWidth = std::max(baseWidth, 1u);
-    const UINT refHeight = std::max(baseHeight, 1u);
+    const UINT refWidth = std::max(referenceWidth, 1u);
+    const UINT refHeight = std::max(referenceHeight, 1u);
 
     auto computeDim = [](UINT dim, float scale) -> UINT
     {

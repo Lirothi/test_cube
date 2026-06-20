@@ -257,7 +257,7 @@ private:
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
     void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
-    std::pair<UINT, UINT> ComputeSsrTextureSize(UINT baseWidth, UINT baseHeight) const;
+    std::pair<UINT, UINT> ComputeSsrTextureSize(UINT referenceWidth, UINT referenceHeight) const;
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
 
