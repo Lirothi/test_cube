@@ -175,6 +175,14 @@ private:
             return base;
         }
 
+        size_t appendUninitializedReserved(size_t count) {
+            if (count == 0) { return size_; }
+            assert(size_ + count <= capacity_);
+            const size_t base = size_;
+            size_ += count;
+            return base;
+        }
+
     private:
         void ensureCapacity(size_t required) {
             if (required <= capacity_) { return; }
@@ -213,12 +221,16 @@ private:
 
     // Fast rendering of a prepared glyph run
     void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
+    void  EmitGlyphRunReserved(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
+    void  EmitGlyphRunImpl(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow, bool reservedAppend);
 
     // Legacy positional rendering now routed through BuildGlyphRun
     void  EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow);
 
     // Render a rectangle (background)
     void  EmitRect(int x, int y, float w, float h, const float4& color);
+    void  EmitRectReserved(int x, int y, float w, float h, const float4& color);
+    void  EmitRectImpl(int x, int y, float w, float h, const float4& color, bool reservedAppend);
 
     RegionLine* AcquireRegionLine(size_t glyphReserveHint);
     void       RecycleRegionLines();
@@ -247,6 +259,8 @@ private:
     std::vector<RegionLine*> freeRegionLines_;
     std::vector<CachedGlyphRun> cachedGlyphRuns_;
     const FontAtlas* cachedGlyphRunsFont_ = nullptr;
+    size_t frameRegionGlyphCount_ = 0;
+    size_t frameBackgroundRectCount_ = 0;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;

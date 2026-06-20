@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -36,12 +37,19 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return tex_.GetSRVCPU(); }
 
 private:
+    void BuildLookupCaches();
+
+private:
+    static constexpr size_t kAsciiCacheSize = 128;
+
     Texture2D tex_;
     int pxSize_=0, spread_=0, atlasW_=0, atlasH_=0, ascent_=0, descent_=0, lineAdvance_=0;
     Type type_ = Type::SDF;
     std::vector<FontGlyph> glyphs_;
     std::vector<uint32_t> glyphRemap_;
     uint32_t glyphRemapBase_ = 0;
+    std::array<const FontGlyph*, kAsciiCacheSize> asciiGlyphs_{};
+    std::array<int16_t, kAsciiCacheSize * kAsciiCacheSize> asciiKerning_{};
 
     struct KerningPair {
         uint64_t key = 0;

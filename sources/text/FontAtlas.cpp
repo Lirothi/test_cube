@@ -41,6 +41,13 @@ static std::string ReadAllUtf8(const std::wstring& path) {
 
 bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                      const std::wstring& jsonPath, const std::wstring& tgaPath) {
+    glyphs_.clear();
+    glyphRemap_.clear();
+    glyphRemapBase_ = 0;
+    kerning_.clear();
+    asciiGlyphs_.fill(nullptr);
+    asciiKerning_.fill(0);
+
     // JSON metadata
     std::string j = ReadAllUtf8(jsonPath);
     json parsed = json::parse(j, nullptr, false);
@@ -80,9 +87,6 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     lineAdvance_ = getInt(parsed, "lineAdvance");
 
     // glyphs
-    glyphs_.clear();
-    glyphRemap_.clear();
-    glyphRemapBase_ = 0;
     if (parsed.contains("glyphs") && parsed["glyphs"].is_array()) {
         for (const auto& entry : parsed["glyphs"]) {
             if (!entry.is_object()) { continue; }
@@ -116,7 +120,6 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     }
 
     // kern
-    kerning_.clear();
     if (parsed.contains("kern") && parsed["kern"].is_array()) {
         for (const auto& entry : parsed["kern"]) {
             if (!entry.is_object()) { continue; }
@@ -219,10 +222,15 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         kerning_.erase(write, kerning_.end());
     }
 
+    BuildLookupCaches();
     return true;
 }
 
 const FontGlyph* FontAtlas::Find(uint32_t cp) const {
+    if (cp < asciiGlyphs_.size()) {
+        return asciiGlyphs_[static_cast<size_t>(cp)];
+    }
+
     if (!glyphRemap_.empty()) {
         if (cp < glyphRemapBase_) { return nullptr; }
         const uint64_t offset = uint64_t(cp) - uint64_t(glyphRemapBase_);
@@ -243,6 +251,10 @@ const FontGlyph* FontAtlas::Find(uint32_t cp) const {
 
 int FontAtlas::Kerning(uint32_t a, uint32_t b) const {
     if (kerning_.empty()) { return 0; }
+    if (a < kAsciiCacheSize && b < kAsciiCacheSize) {
+        return static_cast<int>(asciiKerning_[static_cast<size_t>(a) * kAsciiCacheSize + static_cast<size_t>(b)]);
+    }
+
     const uint64_t key = ((uint64_t)a << 32) | (uint64_t)b;
     auto it = std::lower_bound(kerning_.begin(), kerning_.end(), key, [](const KerningPair& pair, uint64_t value) {
         return pair.key < value;
@@ -251,4 +263,42 @@ int FontAtlas::Kerning(uint32_t a, uint32_t b) const {
         return 0;
     }
     return it->value;
+}
+
+void FontAtlas::BuildLookupCaches() {
+    asciiGlyphs_.fill(nullptr);
+    asciiKerning_.fill(0);
+
+    for (size_t cp = 0; cp < asciiGlyphs_.size(); ++cp) {
+        if (!glyphRemap_.empty()) {
+            if (cp >= glyphRemapBase_) {
+                const uint64_t offset = uint64_t(cp) - uint64_t(glyphRemapBase_);
+                if (offset < glyphRemap_.size()) {
+                    const uint32_t glyphIndex = glyphRemap_[static_cast<size_t>(offset)];
+                    if (glyphIndex != kInvalidGlyphIndex && glyphIndex < glyphs_.size()) {
+                        asciiGlyphs_[cp] = &glyphs_[glyphIndex];
+                    }
+                }
+            }
+        }
+        else {
+            auto it = std::lower_bound(glyphs_.begin(), glyphs_.end(), static_cast<uint32_t>(cp), [](const FontGlyph& glyph, uint32_t value) {
+                return glyph.cp < value;
+            });
+            if (it != glyphs_.end() && it->cp == cp) {
+                asciiGlyphs_[cp] = &(*it);
+            }
+        }
+    }
+
+    for (const KerningPair& pair : kerning_) {
+        const uint32_t a = static_cast<uint32_t>(pair.key >> 32);
+        const uint32_t b = static_cast<uint32_t>(pair.key & 0xffffffffull);
+        if (a < kAsciiCacheSize && b < kAsciiCacheSize) {
+            const int clamped = std::clamp(pair.value,
+                static_cast<int>(std::numeric_limits<int16_t>::min()),
+                static_cast<int>(std::numeric_limits<int16_t>::max()));
+            asciiKerning_[static_cast<size_t>(a) * kAsciiCacheSize + static_cast<size_t>(b)] = static_cast<int16_t>(clamped);
+        }
+    }
 }
