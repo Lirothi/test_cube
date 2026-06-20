@@ -8,6 +8,7 @@
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/renderables/InstanceTypes.h"
 #include "text/TextManager.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -94,6 +95,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         if (input.WasActionPressed("Wireframe"))
         {
             renderer.SetWireframeMode(!renderer.GetWireframeMode());
+        }
+        if (input.WasActionPressed("ToggleInstancing"))
+        {
+            render::g_instancingEnabled = !render::g_instancingEnabled; // F2: A/B Step 4 auto-instancing
         }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)

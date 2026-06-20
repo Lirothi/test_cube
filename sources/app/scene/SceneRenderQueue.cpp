@@ -6,6 +6,8 @@
 
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
+#include "rendering/renderables/InstancedDrawBatch.h"
+#include "rendering/renderables/InstanceTypes.h"
 
 namespace
 {
@@ -27,6 +29,7 @@ namespace
 }
 
 SceneRenderQueue::SceneRenderQueue() = default;
+SceneRenderQueue::~SceneRenderQueue() = default;
 
 void SceneRenderQueue::Clear()
 {
@@ -139,12 +142,101 @@ void SceneRenderQueue::SortOpaque()
     {
         if (a->BatchPSO() != b->BatchPSO()) { return a->BatchPSO() < b->BatchPSO(); }
         if (a->BatchMaterial() != b->BatchMaterial()) { return a->BatchMaterial() < b->BatchMaterial(); }
-        return a->BatchMesh() < b->BatchMesh();
+        if (a->BatchMesh() != b->BatchMesh()) { return a->BatchMesh() < b->BatchMesh(); }
+        // Step 4: also group by MaterialData (textures) — objects can share a PSO/Material
+        // but have different textures, and an instanced batch binds ONE texture set.
+        return a->GetInstanceMaterialData() < b->GetInstanceMaterialData();
     };
     std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].begin(),
               visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].end(), cmp);
     std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].begin(),
               visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].end(), cmp);
+}
+
+InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
+{
+    if (cursor >= instancedBatches_.size())
+    {
+        instancedBatches_.push_back(std::make_unique<InstancedDrawBatch>());
+    }
+    return instancedBatches_[cursor++].get();
+}
+
+void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor)
+{
+    ObjectBucket& bucket = visibleBuckets_[ToIndex(type)];
+    if (bucket.size() < render::kInstancingThreshold)
+    {
+        return;
+    }
+
+    const bool simple = (type == BucketType::OpaqueSimple);
+    ObjectBucket rewritten;
+    rewritten.reserve(bucket.size());
+
+    size_t i = 0;
+    while (i < bucket.size())
+    {
+        RenderableObjectBase* lead = bucket[i];
+
+        // Extend a run of identical (mesh, material) instanceable objects. The bucket is
+        // pre-sorted by (PSO, material, mesh) so such objects are contiguous.
+        size_t j = i + 1;
+        if (lead && lead->SupportsInstancing())
+        {
+            const void* mesh = lead->BatchMesh();
+            const void* material = lead->BatchMaterial();
+            const MaterialData* matData = lead->GetInstanceMaterialData();
+            while (j < bucket.size())
+            {
+                RenderableObjectBase* o = bucket[j];
+                // A run must share mesh, Material (PSO) AND MaterialData (textures): the
+                // batch binds one texture set, so mismatched textures must NOT be grouped.
+                if (!o || !o->SupportsInstancing() ||
+                    o->BatchMesh() != mesh || o->BatchMaterial() != material ||
+                    o->GetInstanceMaterialData() != matData)
+                {
+                    break;
+                }
+                ++j;
+            }
+        }
+
+        const size_t runLen = j - i;
+        if (lead && lead->SupportsInstancing() && runLen >= render::kInstancingThreshold)
+        {
+            std::vector<RenderableObjectBase*> members(bucket.begin() + i, bucket.begin() + j);
+            InstancedDrawBatch* batch = AcquireBatch(batchCursor);
+            batch->Configure(std::move(members),
+                             lead->GetInstancedGraphicsMaterial(),
+                             lead->GetInstancedShadowMaterial(),
+                             lead->GetInstanceMaterialData(),
+                             lead->GetInstanceMesh(),
+                             simple);
+            rewritten.push_back(batch);
+        }
+        else
+        {
+            for (size_t k = i; k < j; ++k)
+            {
+                rewritten.push_back(bucket[k]);
+            }
+        }
+        i = j;
+    }
+
+    bucket.swap(rewritten);
+}
+
+void SceneRenderQueue::BuildInstancedBatches()
+{
+    if (!render::g_instancingEnabled)
+    {
+        return;
+    }
+    size_t batchCursor = 0;
+    BuildInstancedBatchesForBucket(BucketType::OpaqueSimple, batchCursor);
+    BuildInstancedBatchesForBucket(BucketType::OpaqueComplex, batchCursor);
 }
 
 void SceneRenderQueue::Cull(const Frustum& frustum)

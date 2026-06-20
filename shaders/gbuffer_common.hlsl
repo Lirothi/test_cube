@@ -4,6 +4,24 @@
 #ifndef GBUFFER_COMMON_HLSL
 #define GBUFFER_COMMON_HLSL
 
+// Per-instance payload (Step 4 auto-instancing). Same field layout as PerObject so the
+// shading math is shared; arrayed and indexed by SV_InstanceID. The explicit pad makes
+// the C++/HLSL offsets match (metalRough at 144, texOffsScale at 160 — cbuffer rules).
+#ifndef GBUFFER_MAX_INSTANCES
+#define GBUFFER_MAX_INSTANCES 256
+#endif
+struct InstancePerObject
+{
+    float4x4 world;
+    float4x4 prevWorld;
+    float4 baseColor;
+    float2 metalRough;
+    float2 _instPad0;
+    float4 texOffsScale;
+    float4 texFlags;
+};
+
+#ifndef GBUFFER_SKIP_PEROBJECT
 cbuffer PerObject : register(b0)
 {
     float4x4 world;
@@ -14,6 +32,13 @@ cbuffer PerObject : register(b0)
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
 };
+#else
+// Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).
+cbuffer InstanceArray : register(b0)
+{
+    InstancePerObject inst[GBUFFER_MAX_INSTANCES];
+};
+#endif
 
 // Per-view/per-pass data shared by every object in a pass. Filled once per pass
 // (camera matrices for the gbuffer pass, light viewProj for the shadow passes).
@@ -26,11 +51,20 @@ cbuffer PerView : register(b1)
     float4x4 prevViewProjNoJitter;
 };
 
-float2 tfUV(float2 rawUV)
+// Parameterized UV transform (per-instance texOffsScale). The non-instanced wrapper below
+// delegates to this with the PerObject global so both paths produce identical math.
+float2 tfUVp(float2 rawUV, float4 texOffsScale)
 {
     //return float2((rawUV + texOffsScale.xy) * texOffsScale.zw);
     return float2((rawUV * texOffsScale.zw) + texOffsScale.xy);
 }
+
+#ifndef GBUFFER_SKIP_PEROBJECT
+float2 tfUV(float2 rawUV)
+{
+    return tfUVp(rawUV, texOffsScale);
+}
+#endif
 
 struct VSIn
 {
@@ -111,21 +145,24 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss,
 //#define NORMALMAP_IS_RG 1
 //#endif
 
-inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
+// Parameterized shading fetch (per-instance texOffsScale/texFlags). The non-instanced
+// wrapper delegates with the PerObject globals so both paths produce identical math.
+inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
+                                float4 texOffsScale, float4 texFlags,
                                 out float3 albedo, out float2 mr, inout float3 norm)
 {
-    albedo = txAlbedo.Sample(samp, tfUV(uv)).rgb;
-    mr = txMR.Sample(samp, tfUV(uv)).rg;
-    
+    albedo = txAlbedo.Sample(samp, tfUVp(uv, texOffsScale)).rgb;
+    mr = txMR.Sample(samp, tfUVp(uv, texOffsScale)).rg;
+
 #if NORMALMAP_IS_RG
     // --- RG (BC5/R8G8_UNORM): n.xy in [-1..1], reconstruct n.z ---
-    float2 nrg = txNorm.Sample(samp, tfUV(uv)).rg * 2.0 - 1.0;
+    float2 nrg = txNorm.Sample(samp, tfUVp(uv, texOffsScale)).rg * 2.0 - 1.0;
     nrg *= texFlags.w;
     float  nz2 = saturate(1.0 - dot(nrg, nrg));
     float3 nTS = float3(nrg, sqrt(nz2));
 #else
     // --- RGB(A): standard path ---
-    float3 nTS = txNorm.Sample(samp, tfUV(uv)).xyz * 2.0 - 1.0;
+    float3 nTS = txNorm.Sample(samp, tfUVp(uv, texOffsScale)).xyz * 2.0 - 1.0;
     nTS.xy *= texFlags.w * 1;
 #endif
     //norm = PerturbNormal_Deriv(nTS, norm, PVS, uv);
@@ -134,5 +171,13 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
 
     norm = normalize(T * nTS.x + B * nTS.y + norm * nTS.z);
 }
+
+#ifndef GBUFFER_SKIP_PEROBJECT
+inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
+                                out float3 albedo, out float2 mr, inout float3 norm)
+{
+    FetchShadingValuesP(txAlbedo, txMR, txNorm, samp, uv, TWS, texOffsScale, texFlags, albedo, mr, norm);
+}
+#endif
 
 #endif

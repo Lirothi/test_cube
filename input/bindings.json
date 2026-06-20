@@ -12,6 +12,7 @@
     { "name": "Sprint", "keys": ["LShift","RShift"] },
 
     { "name": "ToggleBindings", "keys": ["F1"] },
+    { "name": "ToggleInstancing", "keys": ["F2"] },
     { "name": "Wireframe", "keys": ["F3"] },
     { "name": "DebugTex", "keys": ["F4"] },
     { "name": "ToggleSSR", "keys": ["F5"] },

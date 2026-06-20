@@ -1,0 +1,45 @@
+#pragma once
+#include "rendering/renderables/RenderableObjectBase.h"
+#include <vector>
+
+class Material;
+class MaterialData;
+class Mesh;
+
+// Step 4 auto-instancing. A transient, per-frame, per-view draw that collapses a run of
+// identical (mesh, material) opaque objects into one DrawInstanced for the GBuffer pass and
+// one per shadow cascade/spot. It is INJECTED into the visible bucket in place of the run
+// (after culling + sort), so the normal passes record it via Render()/RenderShadow() with
+// no change to the dispatch code. Members are non-owning pointers to the (already visible)
+// scene objects; per-instance data is gathered into a root-CBV array (b0) each record.
+class InstancedDrawBatch final : public RenderableObjectBase
+{
+public:
+    // gfx/shadow are the instanced (cbuffer-array) materials; matData supplies the shared
+    // GBuffer textures; mesh is the shared geometry. `simple` mirrors the run's bucket.
+    void Configure(std::vector<RenderableObjectBase*> members,
+                   Material* gfx, Material* shadow, MaterialData* matData, Mesh* mesh,
+                   bool simple);
+
+    void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
+    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
+
+    void Init(Renderer*, ID3D12GraphicsCommandList*, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>*) override {}
+    void Tick(float) override {}
+    bool IsTransparent() const override { return false; }
+    bool IsSimpleRender() const override { return simple_; }
+    bool CastsShadow() const override { return shadowMat_ != nullptr; }
+
+    size_t InstanceCount() const { return members_.size(); }
+
+private:
+    void RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer);
+
+    std::vector<RenderableObjectBase*> members_;
+    Material* gfxMat_ = nullptr;
+    Material* shadowMat_ = nullptr;
+    MaterialData* matData_ = nullptr;
+    Mesh* mesh_ = nullptr;
+    bool simple_ = true;
+};

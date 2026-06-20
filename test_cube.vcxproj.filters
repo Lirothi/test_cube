@@ -276,6 +276,9 @@
     <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/InstancedDrawBatch.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -537,6 +540,12 @@
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/InstanceTypes.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h">

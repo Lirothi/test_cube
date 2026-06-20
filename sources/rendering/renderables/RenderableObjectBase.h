@@ -5,9 +5,13 @@
 #include "core/math/AABB.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/core/RenderGraph.h"
+#include "rendering/renderables/InstanceTypes.h"
 
 class Renderer;
 class Camera;
+class Material;
+class MaterialData;
+class Mesh;
 
 class RenderableObjectBase
 {
@@ -33,6 +37,18 @@ public:
     virtual const void* BatchPSO() const { return nullptr; }
     virtual const void* BatchMaterial() const { return nullptr; }
     virtual const void* BatchMesh() const { return nullptr; }
+
+    // Step 4: auto-instancing. An object opts in only if it has a CPU-instanced shader
+    // variant (cbuffer-array b0). A run of objects sharing (BatchMesh, BatchMaterial) and
+    // all SupportsInstancing() can be collapsed into one DrawInstanced per pass. The
+    // instanced materials are pre-built (single-threaded) so these accessors are cheap and
+    // thread-safe to read during per-view batch detection.
+    virtual bool SupportsInstancing() const { return false; }
+    virtual Material* GetInstancedGraphicsMaterial() const { return nullptr; }
+    virtual Material* GetInstancedShadowMaterial() const { return nullptr; }
+    virtual MaterialData* GetInstanceMaterialData() const { return nullptr; }
+    virtual Mesh* GetInstanceMesh() const { return nullptr; }
+    virtual void FillInstanceData(render::InstancePerObject& /*out*/) const {}
 
     virtual const AABB& GetWorldBounds() const
     {

@@ -103,6 +103,50 @@ void GBufferRenderable::Init(Renderer* renderer,
     }
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
+
+    BuildInstancedMaterials(renderer);
+}
+
+void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
+{
+    // Step 4: only the default gbuffer shader has cbuffer-array instanced counterparts
+    // (gbuffer_instcb.hlsl + gbuffer_instcb_csm.hlsl). Build them with the SAME pipeline
+    // config + material defines as the per-object materials so instanced draws match
+    // pixel-for-pixel. MaterialManager caches by desc, so all objects of one material
+    // share a single instanced PSO. Both gbuffer + shadow variants are required; if either
+    // fails to compile we disable instancing for this object (no half-instanced state).
+    if (!renderer) { return; }
+    if (GetGraphicsShaderPath() != L"shaders/gbuffer.hlsl") { return; }
+
+    Material::GraphicsDesc gd = BuildGraphicsDesc(renderer);
+    gd.shaderFile = L"shaders/gbuffer_instcb.hlsl";
+    auto gfx = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    if (!gfx || !gfx->GetPipelineState()) { return; }
+
+    std::shared_ptr<Material> shadow;
+    if (CastsShadow())
+    {
+        Material::GraphicsDesc sd = BuildShadowDesc(renderer, gd); // -> gbuffer_instcb_csm.hlsl
+        shadow = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
+        if (!shadow || !shadow->GetPipelineState()) { return; }
+    }
+
+    instancedGraphicsMaterial_ = std::move(gfx);
+    instancedShadowMaterial_ = std::move(shadow);
+}
+
+void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
+{
+    out.world = GetModelMatrix().m;
+    out.prevWorld = GetPreviousModelMatrix().m;
+
+    const MaterialParams& p = matParams_;
+    out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
+    out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
+    out._pad0[0] = 0.0f;
+    out._pad0[1] = 0.0f;
+    out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
+    out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
 }
 
 void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)

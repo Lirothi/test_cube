@@ -386,8 +386,13 @@ void Scene::PrepareViews(Renderer* renderer)
         if (view.type == SceneView::Type::Camera)
         {
             view.queue.SortTransparent(view.view);
-            view.queue.SortOpaque(); // Step 3: group opaque draws by pipeline state
         }
+        // Step 3: group opaque draws by pipeline state (PSO/material/mesh). Step 4: collapse
+        // the resulting identical-(mesh,material) runs into instanced batches. Applied to the
+        // camera gbuffer view AND every shadow view — opaque draws are depth-tested, so the
+        // reorder is invisible, and the grid instances in both the gbuffer and shadow passes.
+        view.queue.SortOpaque();
+        view.queue.BuildInstancedBatches();
     };
 
     tc::inl_vector<SceneView*, 32> viewsToCull;

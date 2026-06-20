@@ -19,12 +19,27 @@ public:
 
     MaterialData* GetMaterialData() const { return matData_.get(); }
 
+    // Step 4 auto-instancing: opt in when an instanced shader variant was built (Init).
+    bool SupportsInstancing() const override { return instancedGraphicsMaterial_ != nullptr; }
+    Material* GetInstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
+    Material* GetInstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
+    MaterialData* GetInstanceMaterialData() const override { return matData_.get(); }
+    void FillInstanceData(render::InstancePerObject& out) const override;
+
 protected:
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
 private:
+    void BuildInstancedMaterials(Renderer* renderer);
+
     std::shared_ptr<MaterialData> matData_;
     MaterialParams matParams_;
     std::string matPreset_;
+
+    // Instanced (cbuffer-array) variants of the gbuffer + shadow materials, built once at
+    // Init when this object's graphics shader has an instanced counterpart. Shared/cached
+    // across all objects of the same material by MaterialManager.
+    std::shared_ptr<Material> instancedGraphicsMaterial_;
+    std::shared_ptr<Material> instancedShadowMaterial_;
 };

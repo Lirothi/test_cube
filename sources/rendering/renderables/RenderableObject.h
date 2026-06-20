@@ -96,6 +96,7 @@ public:
     // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
     const Mesh* GetMesh() const { return mesh_.get(); }
+    Mesh* GetInstanceMesh() const override { return mesh_.get(); }
 
     AABB GetLocalBounds() const;
     const AABB& GetWorldBounds() const override;
@@ -139,6 +140,8 @@ protected:
         if (!handle.field) { return false; }
         return material->UpdateCBField(handle, value, cbData, arrayIndex);
     }
+
+    const std::wstring& GetGraphicsShaderPath() const { return graphicsShader_; }
 
 protected:
     Material::GraphicsDesc BuildGraphicsDesc(Renderer* renderer) const;

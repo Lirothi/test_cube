@@ -9,6 +9,8 @@
 
 #include "rendering/renderables/RenderableObjectBase.h"
 
+class InstancedDrawBatch;
+
 class SceneRenderQueue
 {
 public:
@@ -17,10 +19,15 @@ public:
     using ObjectBucket = std::vector<RenderableObjectBase*>;
 
     SceneRenderQueue();
+    ~SceneRenderQueue();
 
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
+    // Step 4: collapse contiguous runs of instanceable (mesh,material) objects in the
+    // visible OPAQUE buckets into one InstancedDrawBatch each. Call AFTER SortOpaque (so
+    // identical objects are contiguous) and after Cull (so only visible members instance).
+    void BuildInstancedBatches();
     // Step 3: group the visible OPAQUE buckets into runs of identical pipeline state
     // (PSO, material, mesh) so the bind cache can elide redundant state changes. Safe
     // because opaque draws are depth-tested (order-independent); transparents are NOT
@@ -48,7 +55,14 @@ private:
 
     float ComputeDepth(const mat4& view, const TransparentEntry& entry) const;
 
+    // Step 4: rewrite one visible opaque bucket, replacing instanceable runs with batches.
+    void BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor);
+    InstancedDrawBatch* AcquireBatch(size_t& cursor);
+
     std::array<ObjectBucket, 4> buckets_{};
     std::array<ObjectBucket, 4> visibleBuckets_{};
     std::array<std::vector<TransparentEntry>, 2> transparentEntries_{};
+
+    // Pooled per-frame instanced batches (reused across frames; one queue per view).
+    std::vector<std::unique_ptr<InstancedDrawBatch>> instancedBatches_;
 };
