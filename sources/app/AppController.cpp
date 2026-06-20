@@ -282,6 +282,39 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
                 ImGui::Text("Move speed multiplier: %.2f", camera.GetMoveSpeedMult());
                 ImGui::Text("Frame: %llu", static_cast<unsigned long long>(renderer.GetTotalFrameNumber()));
 
+                ImGui::Separator();
+                if (ImGui::TreeNodeEx("TextManager stats", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    TextManager* textManager = renderer.GetTextManager();
+                    bool textStatsEnabled = textManager->GetPerfStatsEnabled();
+                    if (ImGui::Checkbox("Enable TextManager instrumentation", &textStatsEnabled))
+                    {
+                        textManager->SetPerfStatsEnabled(textStatsEnabled);
+                    }
+                    const TextManager::PerfStats& textStats = renderer.GetTextManager()->GetPerfStats();
+                    ImGui::Text("Instrumentation: %s", textStatsEnabled ? "enabled" : "disabled");
+                    ImGui::Text("Regions:%u backgrounds:%u AddText:%u AddTextf:%u cached:%u positional:%u",
+                        textStats.regions, textStats.backgrounds, textStats.addTextCalls,
+                        textStats.addTextfCalls, textStats.addCachedTextCalls, textStats.positionalTextCalls);
+                    ImGui::Text("Lines direct:%u deferred:%u chars:%u direct glyphs:%u run glyphs:%u retarget verts:%u",
+                        textStats.directLines, textStats.deferredLines, textStats.inputChars,
+                        textStats.directGlyphs, textStats.runGlyphs, textStats.retargetedVertices);
+                    ImGui::Text("AddText %.2fus  cached %.2fus  format %.2fus",
+                        textStats.addTextUs, textStats.addCachedTextUs, textStats.formatUs);
+                    ImGui::Text("GlyphRun %.2fus (%u)  direct emit %.2fus (%u)  run emit %.2fus (%u)",
+                        textStats.buildGlyphRunUs, textStats.glyphRunBuilds,
+                        textStats.directEmitUs, textStats.directEmitCalls,
+                        textStats.runEmitUs, textStats.runEmitCalls);
+                    ImGui::Text("Direct split reserve %.2fus  setup %.2fus  loop %.2fus",
+                        textStats.directEmitReserveUs, textStats.directEmitSetupUs, textStats.directEmitLoopUs);
+                    ImGui::Text("Retarget %.2fus  Build %.2fus  reserve %.2fus  regions %.2fus",
+                        textStats.lineRetargetUs, textStats.buildUs,
+                        textStats.buildReserveUs, textStats.buildRegionsUs);
+                    ImGui::Text("Upload rect %.2fus  upload text %.2fus  Draw %.2fus  Begin %.2fus",
+                        textStats.uploadRectUs, textStats.uploadTextUs, textStats.drawUs, textStats.beginUs);
+                    ImGui::TreePop();
+                }
+
                 ImGui::EndTabItem();
             }
 

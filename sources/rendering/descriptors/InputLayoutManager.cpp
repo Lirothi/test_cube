@@ -62,9 +62,9 @@ void InputLayoutManager::InitBuiltins() {
     // pos(float2), color, uv, shadow params
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0)
-        .Add("COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0)
         .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0)
-        .Add("TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0)
+        .Add("TEXCOORD", 1, DXGI_FORMAT_R16G16_FLOAT, 0)
         .Build(*this, "PosColorUV");
 
     // pos only

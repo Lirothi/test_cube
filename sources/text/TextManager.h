@@ -12,6 +12,7 @@
 #include <wrl/client.h>
 #include "materials/Material.h"
 #include "rendering/core/RenderContext.h"
+#include "rendering/core/RenderConstants.h"
 #include "core/math/Math.h"
 
 class FontAtlas;
@@ -21,6 +22,52 @@ class TextManager {
 public:
     enum class Align : uint8_t { Left = 0, Center = 1, Right = 2 };
     using RegionId = uint32_t;
+
+#ifndef TEXT_MANAGER_PERF_STATS
+#if defined(_DEBUG)
+#define TEXT_MANAGER_PERF_STATS 0
+#else
+#define TEXT_MANAGER_PERF_STATS 0
+#endif
+#endif
+
+    static constexpr bool kPerfStatsEnabled = TEXT_MANAGER_PERF_STATS != 0;
+
+    struct PerfStats {
+        uint32_t regions = 0;
+        uint32_t backgrounds = 0;
+        uint32_t addTextCalls = 0;
+        uint32_t addCachedTextCalls = 0;
+        uint32_t addTextfCalls = 0;
+        uint32_t positionalTextCalls = 0;
+        uint32_t directLines = 0;
+        uint32_t deferredLines = 0;
+        uint32_t glyphRunBuilds = 0;
+        uint32_t directEmitCalls = 0;
+        uint32_t runEmitCalls = 0;
+        uint32_t inputChars = 0;
+        uint32_t directGlyphs = 0;
+        uint32_t runGlyphs = 0;
+        uint32_t retargetedVertices = 0;
+
+        double beginUs = 0.0;
+        double addTextUs = 0.0;
+        double addCachedTextUs = 0.0;
+        double formatUs = 0.0;
+        double buildGlyphRunUs = 0.0;
+        double directEmitUs = 0.0;
+        double directEmitReserveUs = 0.0;
+        double directEmitSetupUs = 0.0;
+        double directEmitLoopUs = 0.0;
+        double runEmitUs = 0.0;
+        double lineRetargetUs = 0.0;
+        double buildUs = 0.0;
+        double buildReserveUs = 0.0;
+        double buildRegionsUs = 0.0;
+        double uploadRectUs = 0.0;
+        double uploadTextUs = 0.0;
+        double drawUs = 0.0;
+    };
 
     struct ShadowDesc {
         float offsetX = 1.0f;
@@ -58,6 +105,9 @@ public:
     // Disable per-line width measurement inside the region (faster for Align::Left)
     void RegionSetAutoMeasure(RegionId id, bool enabled);
 
+    // Disable kerning for debug/profiler-style aligned text.
+    void RegionSetKerning(RegionId id, bool enabled);
+
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text);
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow);
@@ -71,13 +121,21 @@ public:
 
     void SetFont(FontAtlas* f);
     void Clear();
+    const PerfStats& GetPerfStats() const noexcept { return lastPerf_; }
+    bool GetPerfStatsEnabled() const noexcept { return perfStatsEnabled_; }
+    void SetPerfStatsEnabled(bool enabled) noexcept {
+        if (perfStatsEnabled_ == enabled) { return; }
+        perfStatsEnabled_ = enabled;
+        framePerf_ = {};
+        lastPerf_ = {};
+    }
 
 private:
     struct Vertex {
         float2 pos;
-        float4 col;
+        uint32_t col;
         float2 uv;
-        float2 shadowParams; // x = offset scale factor, y = final shadow alpha
+        uint32_t shadowParams; // half2: x = offset scale factor, y = final shadow alpha
     };
 
     // Precomputed glyph run for a single line
@@ -121,9 +179,14 @@ private:
         float    px = 16.0f;
         float    widthPx = 0;   // line width (used for Center/Right)
         GlyphRun run;           // cached glyphs/offsets
+        size_t   directVertexFirst = 0;
+        size_t   directVertexCount = 0;
         uint32_t glyphCount = 0; // glyph reserve count
+        int      lineIndex = 0;
+        int      emittedY = 0;
         bool     inUse = false;
         bool     shadowEnabled = false;
+        bool     emittedDirect = false;
     };
 
     struct Region {
@@ -133,7 +196,9 @@ private:
         std::optional<float4> bg;
 
         std::optional<float> fixedWidthPx; // use for background/alignment when provided
-        bool  autoMeasure = true;          // when false and Align::Left — skip line width measurement
+        bool  autoMeasure = true;          // when false and Align::Left, skip line width measurement
+
+        bool  kerning = true;
 
         std::vector<RegionLine*> lines;
         float maxLineWidth = 0;
@@ -183,6 +248,11 @@ private:
             return base;
         }
 
+        void resizeReserved(size_t size) {
+            assert(size <= capacity_);
+            size_ = size;
+        }
+
     private:
         void ensureCapacity(size_t required) {
             if (required <= capacity_) { return; }
@@ -218,6 +288,9 @@ private:
     // === Shared helper to build a glyph run and compute width ===
     void  BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const;
     const CachedGlyphRun& GetCachedGlyphRun(std::wstring_view text, float px);
+    static bool CanEmitRegionLineImmediately(const Region& rg) noexcept;
+    void  SetRegionLineStep(Region& rg, int lineStepPx);
+    size_t EmitTextDirect(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow, bool useKerning, float* outWidthPx);
 
     // Fast rendering of a prepared glyph run
     void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
@@ -234,6 +307,9 @@ private:
 
     RegionLine* AcquireRegionLine(size_t glyphReserveHint);
     void       RecycleRegionLines();
+    void       EnsureTextIndexCapacity(Renderer* r, size_t quadCount);
+    void       CollectRetiredTextIndexBuffers(Renderer* r);
+    void       RetireTextIndexBuffer(Renderer* r);
 
 private:
     FontAtlas* font_ = nullptr;
@@ -243,9 +319,12 @@ private:
     std::shared_ptr<Material> matRect_;
 
     GrowOnlyArray<Vertex>    verts_;
-    GrowOnlyArray<uint32_t>  idx_;
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
-    D3D12_INDEX_BUFFER_VIEW  ibv_{};
+    D3D12_INDEX_BUFFER_VIEW  textIBV_{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> textIndexBuffer_;
+    std::array<std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>, render::kFrameCount> retiredTextIndexBuffers_;
+    uint32_t retiredTextIndexFrameMask_ = 0;
+    size_t textIndexQuadCapacity_ = 0;
 
     GrowOnlyArray<Vertex>    rectVerts_;
     GrowOnlyArray<uint32_t>  rectIdx_;
@@ -261,8 +340,13 @@ private:
     const FontAtlas* cachedGlyphRunsFont_ = nullptr;
     size_t frameRegionGlyphCount_ = 0;
     size_t frameBackgroundRectCount_ = 0;
+    mutable PerfStats framePerf_{};
+    PerfStats lastPerf_{};
+    bool perfStatsEnabled_ = false;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;
     std::optional<ShadowDesc> shadow_;
 };
+
+int RunTextManagerBenchmark(const char* outputPath);

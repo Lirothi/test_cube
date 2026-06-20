@@ -7,6 +7,7 @@
 #include "app/App.h"
 #include "core/task/TaskSystemStress.h"
 #include "rendering/core/RendererSubmissionStress.h"
+#include "text/TextManager.h"
 
 #include <cstring>
 
@@ -90,6 +91,10 @@ int WINAPI WinMain(
     // are spawned by the harness itself in child processes.
     if (lpCmdLine && std::strstr(lpCmdLine, "renderer-submission-stress") != nullptr) {
         return RunRendererSubmissionStress(lpCmdLine);
+    }
+
+    if (lpCmdLine && std::strstr(lpCmdLine, "textmanager-benchmark") != nullptr) {
+        return RunTextManagerBenchmark("textmanager_benchmark.csv");
     }
 
     EnableDpiAwareness();

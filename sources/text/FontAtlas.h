@@ -20,8 +20,15 @@ public:
 
     bool Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
               const std::wstring& jsonPath, const std::wstring& tgaPath);
+    void InitAsciiBenchmarkFont();
 
     const FontGlyph* Find(uint32_t cp) const;
+    const FontGlyph* FindFast(uint32_t cp) const {
+        if (cp < asciiGlyphs_.size()) {
+            return asciiGlyphs_[static_cast<size_t>(cp)];
+        }
+        return Find(cp);
+    }
     int Kerning(uint32_t a, uint32_t b) const;
     int Ascent() const { return ascent_; }
     int Descent() const { return descent_; }

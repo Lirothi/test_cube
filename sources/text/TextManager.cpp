@@ -4,9 +4,13 @@
 #include <optional>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <fstream>
 #include <limits>
+#include <memory>
 #include <string_view>
+#include <DirectXPackedVector.h>
 #include "text/TextManager.h"
 #include "materials/UploadManager.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -28,7 +32,62 @@ using Microsoft::WRL::ComPtr;
 #define TEXT_MANAGER_FINE_CPU_SCOPE(keyExpr) do { } while (0)
 #endif
 
-// utf8 → wide
+#if TEXT_MANAGER_PERF_STATS
+namespace {
+class TextPerfScope {
+public:
+    TextPerfScope(double& targetUs, bool enabled) noexcept
+        : targetUs_(targetUs), enabled_(enabled) {
+        if (enabled_) {
+            start_ = Clock::now();
+        }
+    }
+
+    ~TextPerfScope() {
+        if (!enabled_) { return; }
+        const auto end = Clock::now();
+        targetUs_ += std::chrono::duration<double, std::micro>(end - start_).count();
+    }
+
+private:
+    using Clock = std::chrono::steady_clock;
+    double& targetUs_;
+    Clock::time_point start_;
+    bool enabled_ = false;
+};
+} // namespace
+
+#define TEXT_PERF_JOIN2(a, b) a##b
+#define TEXT_PERF_JOIN(a, b) TEXT_PERF_JOIN2(a, b)
+#define TEXT_PERF_SCOPE(field) TextPerfScope TEXT_PERF_JOIN(_textPerfScope_, __LINE__)(framePerf_.field, perfStatsEnabled_)
+#define TEXT_PERF_ADD(field, value) do { if (perfStatsEnabled_) { framePerf_.field += (value); } } while (0)
+#else
+#define TEXT_PERF_SCOPE(field) do { } while (0)
+#define TEXT_PERF_ADD(field, value) do { } while (0)
+#endif
+
+namespace {
+uint32_t PackColorUnorm8(const float4& color) {
+    const auto toByte = [](float value) -> uint32_t {
+        const float clamped = std::clamp(value, 0.0f, 1.0f);
+        return static_cast<uint32_t>(clamped * 255.0f + 0.5f);
+    };
+
+    const uint32_t r = toByte(color.x);
+    const uint32_t g = toByte(color.y);
+    const uint32_t b = toByte(color.z);
+    const uint32_t a = toByte(color.w);
+    return r | (g << 8) | (b << 16) | (a << 24);
+}
+
+uint32_t PackHalf2(float x, float y) {
+    using DirectX::PackedVector::XMConvertFloatToHalf;
+    const uint32_t hx = static_cast<uint32_t>(XMConvertFloatToHalf(x));
+    const uint32_t hy = static_cast<uint32_t>(XMConvertFloatToHalf(y));
+    return hx | (hy << 16);
+}
+} // namespace
+// utf8 to wide
 std::wstring TextManager::UTF8toW(std::string_view s) {
     if (s.empty()) { return L""; }
     int wlen = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
@@ -101,11 +160,19 @@ void TextManager::Init(Renderer* r) {
 }
 
 void TextManager::Begin(UINT vpW, UINT vpH, float dpiScale) {
+#if TEXT_MANAGER_PERF_STATS
+    if (perfStatsEnabled_) {
+        lastPerf_ = framePerf_;
+        framePerf_ = {};
+    }
+#endif
+    TEXT_PERF_SCOPE(beginUs);
+
     vpW_ = (vpW == 0u ? 1u : vpW);
     vpH_ = (vpH == 0u ? 1u : vpH);
     dpi_ = (dpiScale <= 0.f ? 1.f : dpiScale);
 
-    verts_.clear();   idx_.clear();
+    verts_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     frameRegionGlyphCount_ = 0;
     frameBackgroundRectCount_ = 0;
@@ -124,6 +191,8 @@ void TextManager::AddText(int x, int y, float px, const float4& color, std::stri
     AddText(x, y, px, color, utf8, false);
 }
 void TextManager::AddText(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow) {
+    TEXT_PERF_ADD(positionalTextCalls, 1u);
+    TEXT_PERF_ADD(inputChars, static_cast<uint32_t>(std::min<size_t>(text.size(), std::numeric_limits<uint32_t>::max())));
     EmitTextImmediate(x, y, px, color, text, enableShadow);
 }
 void TextManager::AddText(int x, int y, float px, const float4& color, std::string_view utf8, bool enableShadow) {
@@ -131,23 +200,35 @@ void TextManager::AddText(int x, int y, float px, const float4& color, std::stri
 }
 void TextManager::AddTextf(int x, int y, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    TEXT_PERF_ADD(addTextfCalls, 1u);
     wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
+    int len = 0;
+    {
+        TEXT_PERF_SCOPE(formatUs);
+        va_list args; va_start(args, fmt);
+        len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+        va_end(args);
+    }
     if (len > 0) { AddText(x, y, px, color, std::wstring_view(buf, (size_t)len)); }
 }
 void TextManager::AddTextfShadow(int x, int y, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    TEXT_PERF_ADD(addTextfCalls, 1u);
     wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
+    int len = 0;
+    {
+        TEXT_PERF_SCOPE(formatUs);
+        va_list args; va_start(args, fmt);
+        len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+        va_end(args);
+    }
     if (len > 0) { AddText(x, y, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
 // Regions
 TextManager::RegionId TextManager::CreateRegion(int x, int y, Align align) {
+    TEXT_PERF_ADD(regions, 1u);
+
     Region r;
     if (!regionPool_.empty()) {
         r = std::move(regionPool_.back());
@@ -161,6 +242,7 @@ TextManager::RegionId TextManager::CreateRegion(int x, int y, Align align) {
     r.bg.reset();
     r.fixedWidthPx.reset();
     r.autoMeasure = true;
+    r.kerning = true;
     r.lines.clear();
     r.maxLineWidth = 0.0f;
     r.totalLines = 0;
@@ -176,6 +258,7 @@ void TextManager::RegionSetBackground(RegionId id, std::optional<float4> color) 
     const bool hasBackground = color.has_value();
     if (!hadBackground && hasBackground) {
         ++frameBackgroundRectCount_;
+        TEXT_PERF_ADD(backgrounds, 1u);
     }
     else if (hadBackground && !hasBackground && frameBackgroundRectCount_ > 0) {
         --frameBackgroundRectCount_;
@@ -198,6 +281,10 @@ void TextManager::RegionSetAutoMeasure(RegionId id, bool enabled) {
     if (id >= regions_.size()) { return; }
     regions_[id].autoMeasure = enabled;
 }
+void TextManager::RegionSetKerning(RegionId id, bool enabled) {
+    if (id >= regions_.size()) { return; }
+    regions_[id].kerning = enabled;
+}
 
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text) {
     AddText(id, px, color, text, false);
@@ -210,11 +297,15 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::strin
 }
 void TextManager::AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     TEXT_MANAGER_FINE_CPU_SCOPE(ProfilerScopes::kTextManagerAddText);
+    TEXT_PERF_SCOPE(addTextUs);
+    TEXT_PERF_ADD(addTextCalls, 1u);
+    TEXT_PERF_ADD(inputChars, static_cast<uint32_t>(std::min<size_t>(text.size(), std::numeric_limits<uint32_t>::max())));
 
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
     const size_t charCount = text.size();
+    const bool emitDirect = CanEmitRegionLineImmediately(rg);
     RegionLine* ln = AcquireRegionLine(charCount);
     if (!ln) {
         return;
@@ -223,25 +314,43 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     ln->color = color;
     ln->px = px;
     ln->shadowEnabled = enableShadow;
-    BuildGlyphRun(text, ln->px, ln->run, ln->widthPx);
-    const size_t glyphReserve = (ln->run.ready ? ln->run.glyphCount : charCount);
-    ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
+    ln->lineIndex = rg.totalLines;
 
-    if (rg.autoMeasure || (rg.align != Align::Left)) {
-        rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
+    const int lineStepPx = (int)std::round(px + 2.0f);
+    SetRegionLineStep(rg, lineStepPx);
+
+    if (emitDirect) {
+        ln->emittedDirect = true;
+        ln->emittedY = rg.y + (ln->lineIndex * rg.lineStepPx);
+        ln->directVertexFirst = verts_.size();
+        const size_t emittedGlyphs = EmitTextDirect(rg.x, ln->emittedY, px, color, text, enableShadow, rg.kerning, &ln->widthPx);
+        ln->directVertexCount = verts_.size() - ln->directVertexFirst;
+        ln->glyphCount = (uint32_t)std::min<size_t>(emittedGlyphs, std::numeric_limits<uint32_t>::max());
+        rg.glyphCount += emittedGlyphs;
+        TEXT_PERF_ADD(directLines, 1u);
     }
     else {
-        // For Align::Left + fixedWidth the measurement is already stored in ln.widthPx
-    }
+        BuildGlyphRun(text, ln->px, ln->run, ln->widthPx);
+        const size_t glyphReserve = (ln->run.ready ? ln->run.glyphCount : charCount);
+        ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
 
-    rg.glyphCount += glyphReserve;
-    frameRegionGlyphCount_ += glyphReserve;
+        if (rg.autoMeasure || (rg.align != Align::Left)) {
+            rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
+        }
+
+        rg.glyphCount += glyphReserve;
+        frameRegionGlyphCount_ += glyphReserve;
+        TEXT_PERF_ADD(deferredLines, 1u);
+    }
     rg.lines.push_back(ln);
     rg.totalLines = (int)rg.lines.size();
-    rg.lineStepPx = (int)std::round(px + 2.0f);
 }
 
 void TextManager::AddCachedText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
+    TEXT_PERF_SCOPE(addCachedTextUs);
+    TEXT_PERF_ADD(addCachedTextCalls, 1u);
+    TEXT_PERF_ADD(inputChars, static_cast<uint32_t>(std::min<size_t>(text.size(), std::numeric_limits<uint32_t>::max())));
+
     if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
     Region& rg = regions_[id];
 
@@ -258,82 +367,122 @@ void TextManager::AddCachedText(RegionId id, float px, const float4& color, std:
     ln->run = cached.run;
     ln->widthPx = cached.widthPx;
     ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
+    ln->lineIndex = rg.totalLines;
 
     if (rg.autoMeasure || (rg.align != Align::Left)) {
         rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
     }
 
+    const int lineStepPx = (int)std::round(px + 2.0f);
+    SetRegionLineStep(rg, lineStepPx);
+
     rg.glyphCount += glyphReserve;
-    frameRegionGlyphCount_ += glyphReserve;
+    if (CanEmitRegionLineImmediately(rg)) {
+        ln->emittedDirect = true;
+        ln->emittedY = rg.y + (ln->lineIndex * rg.lineStepPx);
+        ln->directVertexFirst = verts_.size();
+        EmitGlyphRun(rg.x, ln->emittedY, 0.0f, ln->color, ln->run, ln->shadowEnabled);
+        ln->directVertexCount = verts_.size() - ln->directVertexFirst;
+        TEXT_PERF_ADD(directLines, 1u);
+    }
+    else {
+        frameRegionGlyphCount_ += glyphReserve;
+        TEXT_PERF_ADD(deferredLines, 1u);
+    }
     rg.lines.push_back(ln);
     rg.totalLines = (int)rg.lines.size();
-    rg.lineStepPx = (int)std::round(px + 2.0f);
 }
 
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    TEXT_PERF_ADD(addTextfCalls, 1u);
     wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
+    int len = 0;
+    {
+        TEXT_PERF_SCOPE(formatUs);
+        va_list args; va_start(args, fmt);
+        len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+        va_end(args);
+    }
     if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len)); }
 }
 void TextManager::AddTextfShadow(RegionId id, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
+    TEXT_PERF_ADD(addTextfCalls, 1u);
     wchar_t buf[256];
-    va_list args; va_start(args, fmt);
-    int len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
-    va_end(args);
+    int len = 0;
+    {
+        TEXT_PERF_SCOPE(formatUs);
+        va_list args; va_start(args, fmt);
+        len = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), fmt, args);
+        va_end(args);
+    }
     if (len > 0) { AddText(id, px, color, std::wstring_view(buf, (size_t)len), enableShadow); }
 }
 
 // ======== BUILD / RENDER ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
+    CollectRetiredTextIndexBuffers(r);
+
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerBuild);
+    TEXT_PERF_SCOPE(buildUs);
 
     // 0) Reserve once from frame counters maintained during AddText/RegionSetBackground.
-    if (frameRegionGlyphCount_) {
-        verts_.ensureAdditional(frameRegionGlyphCount_ * 4);
-        idx_.ensureAdditional(frameRegionGlyphCount_ * 6);
+    {
+        TEXT_PERF_SCOPE(buildReserveUs);
+        if (frameRegionGlyphCount_) {
+            verts_.ensureAdditional(frameRegionGlyphCount_ * 4);
+        }
+
+        // 1) Reserve space for known background rectangles.
+        rectVerts_.ensureAdditional(frameBackgroundRectCount_ * 4);
+        rectIdx_.ensureAdditional(frameBackgroundRectCount_ * 6);
     }
 
-    // 1) Reserve space for known background rectangles.
-    rectVerts_.ensureAdditional(frameBackgroundRectCount_ * 4);
-    rectIdx_.ensureAdditional(frameBackgroundRectCount_ * 6);
-
     // 2) Single pass over regions: backgrounds and lines
-    for (const Region& rg : regions_) {
-        if (rg.totalLines <= 0) { continue; }
+    {
+        TEXT_PERF_SCOPE(buildRegionsUs);
+        for (const Region& rg : regions_) {
+            if (rg.totalLines <= 0) { continue; }
 
-        // Background
-        if (rg.bg.has_value()) {
-            const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth)
-                + float(rg.padX * 2);
-            const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
-            const int   bx = rg.x - rg.padX;
-            const int   by = rg.y - rg.padY;
-            EmitRectReserved(bx, by, w, h, rg.bg.value());
-        }
-
-        // Lines
-        int y = rg.y;
-        if (rg.align == Align::Left) {
-            for (const RegionLine* ln : rg.lines) {
-                if (!ln) { continue; }
-                EmitGlyphRunReserved(rg.x, y, 0.0f, ln->color, ln->run, ln->shadowEnabled);
-                y += rg.lineStepPx;
+            // Background
+            if (rg.bg.has_value()) {
+                const float w = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth)
+                    + float(rg.padX * 2);
+                const float h = float(rg.totalLines * rg.lineStepPx) + float(rg.padY * 2);
+                const int   bx = rg.x - rg.padX;
+                const int   by = rg.y - rg.padY;
+                EmitRectReserved(bx, by, w, h, rg.bg.value());
             }
-        }
-        else {
-            const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth);
-            for (const RegionLine* ln : rg.lines) {
-                if (!ln) { continue; }
-                const float xOff = (rg.align == Align::Center)
-                    ? std::max(0.0f, 0.5f * (regionW - ln->widthPx))
-                    : std::max(0.0f, (regionW - ln->widthPx));
-                EmitGlyphRunReserved(rg.x, y, xOff, ln->color, ln->run, ln->shadowEnabled);
-                y += rg.lineStepPx;
+
+            // Lines
+            int y = rg.y;
+            if (rg.align == Align::Left) {
+                for (const RegionLine* ln : rg.lines) {
+                    if (!ln) { continue; }
+                    if (ln->emittedDirect) {
+                        y += rg.lineStepPx;
+                        continue;
+                    }
+                    EmitGlyphRunReserved(rg.x, y, 0.0f, ln->color, ln->run, ln->shadowEnabled);
+                    y += rg.lineStepPx;
+                }
+            }
+            else {
+                const float regionW = (rg.fixedWidthPx.has_value() ? rg.fixedWidthPx.value() : rg.maxLineWidth);
+                for (const RegionLine* ln : rg.lines) {
+                    if (!ln) { continue; }
+                    if (ln->emittedDirect) {
+                        y += rg.lineStepPx;
+                        continue;
+                    }
+                    const float xOff = (rg.align == Align::Center)
+                        ? std::max(0.0f, 0.5f * (regionW - ln->widthPx))
+                        : std::max(0.0f, (regionW - ln->widthPx));
+                    EmitGlyphRunReserved(rg.x, y, xOff, ln->color, ln->run, ln->shadowEnabled);
+                    y += rg.lineStepPx;
+                }
             }
         }
     }
@@ -343,6 +492,7 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 
     // rects
     {
+        TEXT_PERF_SCOPE(uploadRectUs);
         const UINT vbBytes = (UINT)(rectVerts_.size() * sizeof(Vertex));
         const UINT ibBytes = (UINT)(rectIdx_.size() * sizeof(uint32_t));
         if (vbBytes > 0 && ibBytes > 0) {
@@ -365,29 +515,26 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
 
     // text
     {
+        TEXT_PERF_SCOPE(uploadTextUs);
         const UINT vbBytes = (UINT)(verts_.size() * sizeof(Vertex));
-        const UINT ibBytes = (UINT)(idx_.size() * sizeof(uint32_t));
-        if (vbBytes > 0 && ibBytes > 0) {
+        const size_t textQuadCount = verts_.size() / 4u;
+        if (vbBytes > 0 && textQuadCount > 0) {
+            EnsureTextIndexCapacity(r, textQuadCount);
             auto v = fr->AllocDynamic(vbBytes, 16);
-            auto i = fr->AllocDynamic(ibBytes, 16);
             std::memcpy(v.cpu, verts_.data(), vbBytes);
-            std::memcpy(i.cpu, idx_.data(), ibBytes);
             vbv_.BufferLocation = v.gpu;
             vbv_.StrideInBytes = sizeof(Vertex);
             vbv_.SizeInBytes = vbBytes;
-            ibv_.BufferLocation = i.gpu;
-            ibv_.Format = DXGI_FORMAT_R32_UINT;
-            ibv_.SizeInBytes = ibBytes;
         }
         else {
             vbv_ = {};
-            ibv_ = {};
         }
     }
 }
 
 void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     CPU_SCOPE(ProfilerScopes::kTextManagerDraw);
+    TEXT_PERF_SCOPE(drawUs);
     // 1) Background
     if (!rectVerts_.empty() && !rectIdx_.empty() && matRect_) {
         auto h = r->GetRenderContextPool()->Acquire();
@@ -403,7 +550,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
     }
 
     // 2) Text
-    if (!verts_.empty() && !idx_.empty() && font_) {
+    if (!verts_.empty() && textIndexQuadCapacity_ > 0 && font_) {
         auto h = r->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
@@ -421,7 +568,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
 
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         cl->IASetVertexBuffers(0, 1, &vbv_);
-        cl->IASetIndexBuffer(&ibv_);
+        cl->IASetIndexBuffer(&textIBV_);
 
         const float invAtlasW = (font_->AtlasWidth() > 0) ? (1.0f / float(font_->AtlasWidth())) : 0.0f;
         const float invAtlasH = (font_->AtlasHeight() > 0) ? (1.0f / float(font_->AtlasHeight())) : 0.0f;
@@ -444,7 +591,8 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
 
         mat->Bind(cl, rc);
 
-        cl->DrawIndexedInstanced((UINT)idx_.size(), 1, 0, 0, 0);
+        const UINT indexCount = (UINT)((verts_.size() / 4u) * 6u);
+        cl->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
     }
 }
 
@@ -452,10 +600,19 @@ void TextManager::Clear() {
     matTextSdf_.reset();
     matTextCoverage_.reset();
     matRect_.reset();
-    verts_.clear(); idx_.clear();
+    verts_.clear();
     rectVerts_.clear(); rectIdx_.clear();
     frameRegionGlyphCount_ = 0;
     frameBackgroundRectCount_ = 0;
+    framePerf_ = {};
+    lastPerf_ = {};
+    textIndexBuffer_.Reset();
+    for (auto& buffers : retiredTextIndexBuffers_) {
+        buffers.clear();
+    }
+    retiredTextIndexFrameMask_ = 0;
+    textIBV_ = {};
+    textIndexQuadCapacity_ = 0;
     RecycleRegionLines();
     nextUnusedRegionLine_ = 0;
     freeRegionLines_.clear();
@@ -485,9 +642,14 @@ TextManager::RegionLine* TextManager::AcquireRegionLine(size_t glyphReserveHint)
     ln->color = {};
     ln->px = 16.0f;
     ln->widthPx = 0.0f;
+    ln->directVertexFirst = 0;
+    ln->directVertexCount = 0;
     ln->glyphCount = 0;
+    ln->lineIndex = 0;
+    ln->emittedY = 0;
     ln->run.Reset();
     ln->shadowEnabled = false;
+    ln->emittedDirect = false;
 
     assert(glyphReserveHint <= GlyphRun::kDefaultCapacity);
     (void)glyphReserveHint;
@@ -504,9 +666,14 @@ void TextManager::RecycleRegionLines() {
             assert(ln >= poolBegin && ln < poolEnd);
             ln->run.Reset();
             ln->widthPx = 0.0f;
+            ln->directVertexFirst = 0;
+            ln->directVertexCount = 0;
             ln->glyphCount = 0;
+            ln->lineIndex = 0;
+            ln->emittedY = 0;
             ln->inUse = false;
             ln->shadowEnabled = false;
+            ln->emittedDirect = false;
             freeRegionLines_.push_back(ln);
         }
         rg.lines.clear();
@@ -516,6 +683,102 @@ void TextManager::RecycleRegionLines() {
         rg.lineStepPx = 18;
     }
     assert(freeRegionLines_.size() <= regionLinePool_.size());
+}
+
+void TextManager::EnsureTextIndexCapacity(Renderer* r, size_t quadCount) {
+    if (r == nullptr || quadCount == 0 || quadCount <= textIndexQuadCapacity_) {
+        return;
+    }
+
+    size_t newCapacity = (textIndexQuadCapacity_ != 0) ? textIndexQuadCapacity_ : 256u;
+    while (newCapacity < quadCount) {
+        const size_t next = newCapacity * 2u;
+        if (next <= newCapacity) {
+            newCapacity = quadCount;
+            break;
+        }
+        newCapacity = next;
+    }
+
+    const size_t indexCount = newCapacity * 6u;
+    const size_t byteSize = indexCount * sizeof(uint32_t);
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = byteSize;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    ThrowIfFailed(r->GetDevice()->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(buffer.GetAddressOf())));
+
+    D3D12_RANGE readRange{ 0, 0 };
+    uint32_t* mapped = nullptr;
+    ThrowIfFailed(buffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
+    for (size_t i = 0; i < newCapacity; ++i) {
+        const uint32_t base = static_cast<uint32_t>(i * 4u);
+        uint32_t* dst = mapped + i * 6u;
+        dst[0] = base + 0u;
+        dst[1] = base + 1u;
+        dst[2] = base + 2u;
+        dst[3] = base + 0u;
+        dst[4] = base + 2u;
+        dst[5] = base + 3u;
+    }
+    buffer->Unmap(0, nullptr);
+
+    RetireTextIndexBuffer(r);
+
+    textIndexBuffer_ = std::move(buffer);
+    textIndexQuadCapacity_ = newCapacity;
+    textIBV_.BufferLocation = textIndexBuffer_->GetGPUVirtualAddress();
+    textIBV_.Format = DXGI_FORMAT_R32_UINT;
+    textIBV_.SizeInBytes = static_cast<UINT>(byteSize);
+}
+
+void TextManager::CollectRetiredTextIndexBuffers(Renderer* r) {
+    if (r == nullptr || retiredTextIndexFrameMask_ == 0u) {
+        return;
+    }
+
+    const UINT frameIndex = r->GetCurrentFrameIndex();
+    if (frameIndex >= retiredTextIndexBuffers_.size() || frameIndex >= 32u) {
+        return;
+    }
+
+    const uint32_t frameBit = 1u << frameIndex;
+    if ((retiredTextIndexFrameMask_ & frameBit) == 0u) {
+        return;
+    }
+
+    retiredTextIndexBuffers_[frameIndex].clear();
+    retiredTextIndexFrameMask_ &= ~frameBit;
+}
+
+void TextManager::RetireTextIndexBuffer(Renderer* r) {
+    if (!textIndexBuffer_) {
+        return;
+    }
+
+    if (r != nullptr) {
+        const UINT frameIndex = r->GetCurrentFrameIndex();
+        if (frameIndex < retiredTextIndexBuffers_.size() && frameIndex < 32u) {
+            retiredTextIndexBuffers_[frameIndex].push_back(std::move(textIndexBuffer_));
+            retiredTextIndexFrameMask_ |= (1u << frameIndex);
+            return;
+        }
+    }
+
+    retiredTextIndexBuffers_[0].push_back(std::move(textIndexBuffer_));
+    retiredTextIndexFrameMask_ |= 1u;
 }
 
 // ===== Private helpers =====
@@ -541,9 +804,226 @@ const TextManager::CachedGlyphRun& TextManager::GetCachedGlyphRun(std::wstring_v
     return cachedGlyphRuns_.back();
 }
 
+bool TextManager::CanEmitRegionLineImmediately(const Region& rg) noexcept {
+    return rg.align == Align::Left && !rg.autoMeasure && rg.fixedWidthPx.has_value();
+}
+
+void TextManager::SetRegionLineStep(Region& rg, int lineStepPx) {
+    if (rg.lineStepPx == lineStepPx) { return; }
+    TEXT_PERF_SCOPE(lineRetargetUs);
+
+    rg.lineStepPx = lineStepPx;
+    for (RegionLine* ln : rg.lines) {
+        if (!ln || !ln->emittedDirect || ln->directVertexCount == 0) { continue; }
+
+        const int newY = rg.y + (ln->lineIndex * rg.lineStepPx);
+        const float dy = float(newY - ln->emittedY);
+        if (dy == 0.0f) {
+            ln->emittedY = newY;
+            continue;
+        }
+
+        Vertex* v = verts_.data() + ln->directVertexFirst;
+        for (size_t i = 0; i < ln->directVertexCount; ++i) {
+            v[i].pos.y += dy;
+        }
+        TEXT_PERF_ADD(retargetedVertices, static_cast<uint32_t>(std::min<size_t>(ln->directVertexCount, std::numeric_limits<uint32_t>::max())));
+        ln->emittedY = newY;
+    }
+}
+
+size_t TextManager::EmitTextDirect(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow, bool useKerning, float* outWidthPx) {
+    TEXT_PERF_SCOPE(directEmitUs);
+    TEXT_PERF_ADD(directEmitCalls, 1u);
+
+    if (outWidthPx) { *outWidthPx = 0.0f; }
+    if (font_ == nullptr || text.empty()) { return 0; }
+
+    const FontAtlas* font = nullptr;
+    float scale = 1.0f;
+    float penY = 0.0f;
+    float spaceAdvance = 0.0f;
+    float tabAdvance = 0.0f;
+    float shadowScale = 0.0f;
+    float shadowAlpha = 0.0f;
+
+    {
+        TEXT_PERF_SCOPE(directEmitSetupUs);
+        font = font_;
+        scale = px / float(font->PxSize());
+        penY = (float)y + float(font->Ascent()) * scale;
+
+        const FontGlyph* glyphSpace = font->FindFast((uint32_t)L' ');
+        const FontGlyph* glyphTab = font->FindFast((uint32_t)L'\t');
+        const FontGlyph* glyphN = font->FindFast((uint32_t)'n');
+        const float emAdvance = (glyphN ? float(glyphN->xadv) : float(font->PxSize()));
+        spaceAdvance = (glyphSpace ? float(glyphSpace->xadv) : emAdvance * 0.5f) * scale;
+        tabAdvance = (glyphTab ? float(glyphTab->xadv) : emAdvance * 2.0f) * scale;
+
+        if (enableShadow && shadow_.has_value()) {
+            const ShadowDesc& desc = shadow_.value();
+            float offsetScale = (desc.scaleWithTextSize ? 1.0f / scale : 1.0f);
+            if (desc.scaleWithDpi) {
+                offsetScale *= dpi_;
+            }
+            else {
+                offsetScale = 0.0f;
+            }
+
+            const float baseAlpha = desc.color.w * desc.alphaMultiplier * color.w;
+            const float finalAlpha = std::clamp(baseAlpha, 0.0f, 1.0f);
+            if (finalAlpha > 0.0f) {
+                shadowScale = offsetScale;
+                shadowAlpha = finalAlpha;
+            }
+        }
+    }
+
+    const size_t maxGlyphs = text.size();
+    size_t vertexBase = 0;
+    {
+        TEXT_PERF_SCOPE(directEmitReserveUs);
+        vertexBase = verts_.appendUninitialized(maxGlyphs * 4);
+    }
+
+    Vertex* const vData = verts_.data() + vertexBase;
+    const uint32_t packedColor = PackColorUnorm8(color);
+    const uint32_t packedShadow = PackHalf2(shadowScale, shadowAlpha);
+    const float baseX = static_cast<float>(x);
+
+    const bool hasKerning = useKerning && font->HasKerning();
+    size_t emittedGlyphs = 0;
+
+    {
+        TEXT_PERF_SCOPE(directEmitLoopUs);
+        const wchar_t* cur = text.data();
+        const wchar_t* const end = cur + text.size();
+        float penX = 0.0f;
+
+        if (!hasKerning) {
+            for (; cur != end; ++cur) {
+                const wchar_t wc = *cur;
+                if (wc == L'\n') { break; }
+                if (wc == L' ') {
+                    penX += spaceAdvance;
+                    continue;
+                }
+                if (wc == L'\t') {
+                    penX += tabAdvance;
+                    continue;
+                }
+
+                const FontGlyph* gph = font->FindFast(static_cast<uint32_t>(wc));
+                if (!gph) { continue; }
+
+                const float gx = baseX + penX + float(gph->xoff) * scale;
+                const float gy = penY + float(gph->yoff) * scale;
+                const float gw = float(gph->w) * scale;
+                const float gh = float(gph->h) * scale;
+
+                Vertex* curV = vData + emittedGlyphs * 4;
+
+                Vertex v;
+                v.col = packedColor;
+                v.shadowParams = packedShadow;
+
+                v.pos.x = gx; v.pos.y = gy;
+                v.uv.x = gph->u0; v.uv.y = gph->v0;
+                curV[0] = v;
+
+                v.pos.x = gx + gw;
+                v.uv.x = gph->u1;
+                curV[1] = v;
+
+                v.pos.y = gy + gh;
+                v.uv.y = gph->v1;
+                curV[2] = v;
+
+                v.pos.x = gx;
+                v.uv.x = gph->u0;
+                curV[3] = v;
+
+                penX += float(gph->xadv) * scale;
+                ++emittedGlyphs;
+            }
+        }
+        else {
+            uint32_t prev = 0;
+            for (; cur != end; ++cur) {
+                const wchar_t wc = *cur;
+                if (wc == L'\n') { break; }
+                if (wc == L' ') {
+                    penX += spaceAdvance;
+                    prev = 0;
+                    continue;
+                }
+                if (wc == L'\t') {
+                    penX += tabAdvance;
+                    prev = 0;
+                    continue;
+                }
+
+                const uint32_t cp = static_cast<uint32_t>(wc);
+                const FontGlyph* gph = font->FindFast(cp);
+                if (!gph) {
+                    prev = 0;
+                    continue;
+                }
+
+                if (prev) {
+                    const int kern = font->Kerning(prev, cp);
+                    if (kern) {
+                        penX += float(kern) * scale;
+                    }
+                }
+
+                const float gx = baseX + penX + float(gph->xoff) * scale;
+                const float gy = penY + float(gph->yoff) * scale;
+                const float gw = float(gph->w) * scale;
+                const float gh = float(gph->h) * scale;
+
+                Vertex* curV = vData + emittedGlyphs * 4;
+
+                Vertex v;
+                v.col = packedColor;
+                v.shadowParams = packedShadow;
+
+                v.pos.x = gx; v.pos.y = gy;
+                v.uv.x = gph->u0; v.uv.y = gph->v0;
+                curV[0] = v;
+
+                v.pos.x = gx + gw;
+                v.uv.x = gph->u1;
+                curV[1] = v;
+
+                v.pos.y = gy + gh;
+                v.uv.y = gph->v1;
+                curV[2] = v;
+
+                v.pos.x = gx;
+                v.uv.x = gph->u0;
+                curV[3] = v;
+
+                penX += float(gph->xadv) * scale;
+                prev = cp;
+                ++emittedGlyphs;
+            }
+        }
+
+        if (outWidthPx) { *outWidthPx = penX; }
+    }
+
+    verts_.resizeReserved(vertexBase + emittedGlyphs * 4);
+
+    TEXT_PERF_ADD(directGlyphs, static_cast<uint32_t>(std::min<size_t>(emittedGlyphs, std::numeric_limits<uint32_t>::max())));
+    return emittedGlyphs;
+}
+
 // Shared helper to build a glyph run and compute width in a single pass
 void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {
     TEXT_MANAGER_FINE_CPU_SCOPE(ProfilerScopes::kTextManagerBuildGlyphRun);
+    TEXT_PERF_SCOPE(buildGlyphRunUs);
+    TEXT_PERF_ADD(glyphRunBuilds, 1u);
 
     outRun.Reset();
     outRun.scale = px / float(font_->PxSize());
@@ -559,9 +1039,9 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
         assert(text.size() <= GlyphRun::kDefaultCapacity);
     }
 
-    const FontGlyph* glyphSpace = font->Find((uint32_t)L' ');
-    const FontGlyph* glyphTab   = font->Find((uint32_t)L'\t');
-    const FontGlyph* glyphN     = font->Find((uint32_t)'n');
+    const FontGlyph* glyphSpace = font->FindFast((uint32_t)L' ');
+    const FontGlyph* glyphTab   = font->FindFast((uint32_t)L'\t');
+    const FontGlyph* glyphN     = font->FindFast((uint32_t)'n');
     const float emAdvance       = (glyphN ? float(glyphN->xadv) : float(font->PxSize()));
     const float spaceAdvance    = (glyphSpace ? float(glyphSpace->xadv) : emAdvance * 0.5f) * scale;
     const float tabAdvance      = (glyphTab ? float(glyphTab->xadv) : emAdvance * 2.0f) * scale;
@@ -587,7 +1067,7 @@ void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outR
         }
 
         const uint32_t cp = (uint32_t)wc;
-        const FontGlyph* gph = font->Find(cp);
+        const FontGlyph* gph = font->FindFast(cp);
         if (!gph) {
             prev = 0;
             continue;
@@ -626,17 +1106,19 @@ void TextManager::EmitGlyphRunReserved(int x, int y, float xOffset, const float4
 
 void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow, bool reservedAppend) {
     if (!run.ready || run.glyphCount == 0) { return; }
+    TEXT_PERF_SCOPE(runEmitUs);
+    TEXT_PERF_ADD(runEmitCalls, 1u);
 
     const float scale = run.scale;
     const float penY = (float)y + float(font_->Ascent()) * scale;
+    const float baseX = static_cast<float>(x) + xOffset;
 
     const size_t n = run.glyphCount;
     if (n == 0) { return; }
+    TEXT_PERF_ADD(runGlyphs, static_cast<uint32_t>(std::min<size_t>(n, std::numeric_limits<uint32_t>::max())));
 
     const size_t baseVert = reservedAppend ? verts_.appendUninitializedReserved(n * 4) : verts_.appendUninitialized(n * 4);
-    const size_t baseIdx = reservedAppend ? idx_.appendUninitializedReserved(n * 6) : idx_.appendUninitialized(n * 6);
     Vertex* const vData = verts_.data() + baseVert;
-    uint32_t* const iData = idx_.data() + baseIdx;
 
     float shadowScale = 0.0f;
     float shadowAlpha = 0.0f;
@@ -659,6 +1141,9 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
         }
     }
 
+    const uint32_t packedColor = PackColorUnorm8(color);
+    const uint32_t packedShadow = PackHalf2(shadowScale, shadowAlpha);
+
     for (size_t i = 0; i < n; ++i) {
         const FontGlyph* gph = run.GlyphAt(i);
         assert(gph != nullptr);
@@ -670,13 +1155,9 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
             curV[2] = v;
             curV[3] = v;
 
-            uint32_t* curI = iData + i * 6;
-            const uint32_t base = static_cast<uint32_t>(baseVert + i * 4);
-            curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
-            curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
             continue;
         }
-        const float penX = (float)x + xOffset + run.XOffsetAt(i);
+        const float penX = baseX + run.XOffsetAt(i);
 
         const float gx = penX + float(gph->xoff) * scale;
         const float gy = penY + float(gph->yoff) * scale;
@@ -684,9 +1165,9 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
         const float gh = float(gph->h) * scale;
 
         Vertex* curV = vData + i * 4;
-        Vertex v{};
-        v.col = color;
-        v.shadowParams = { shadowScale, shadowAlpha };
+        Vertex v;
+        v.col = packedColor;
+        v.shadowParams = packedShadow;
 
         v.pos.x = gx; v.pos.y = gy;
         v.uv.x = gph->u0; v.uv.y = gph->v0;
@@ -710,10 +1191,6 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
         v.uv.x = gph->u0;
         curV[3] = v;
 
-        uint32_t* curI = iData + i * 6;
-        const uint32_t base = static_cast<uint32_t>(baseVert + i * 4);
-        curI[0] = base + 0u; curI[1] = base + 1u; curI[2] = base + 2u;
-        curI[3] = base + 0u; curI[4] = base + 2u; curI[5] = base + 3u;
     }
 
 }
@@ -742,10 +1219,10 @@ void TextManager::EmitRectImpl(int x, int y, float w, float h, const float4& col
     const size_t baseVert = reservedAppend ? rectVerts_.appendUninitializedReserved(4) : rectVerts_.appendUninitialized(4);
     Vertex* vData = rectVerts_.data() + baseVert;
 
-    Vertex v{};
-    v.col = color;
+    Vertex v;
+    v.col = PackColorUnorm8(color);
     v.uv = { 0.0f, 0.0f };
-    v.shadowParams = { 0.0f, 0.0f };
+    v.shadowParams = PackHalf2(0.0f, 0.0f);
 
     v.pos = { gx, gy };
     vData[0] = v;
@@ -764,4 +1241,80 @@ void TextManager::EmitRectImpl(int x, int y, float w, float h, const float4& col
     const uint32_t base = static_cast<uint32_t>(baseVert);
     iData[0] = base + 0u; iData[1] = base + 1u; iData[2] = base + 2u;
     iData[3] = base + 0u; iData[4] = base + 2u; iData[5] = base + 3u;
+}
+
+int RunTextManagerBenchmark(const char* outputPath) {
+    const char* path = (outputPath && outputPath[0]) ? outputPath : "textmanager_benchmark.csv";
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        return 2;
+    }
+
+    auto atlas = std::make_unique<FontAtlas>();
+    atlas->InitAsciiBenchmarkFont();
+
+    auto tm = std::make_unique<TextManager>();
+    tm->SetFont(atlas.get());
+    tm->SetPerfStatsEnabled(true);
+    auto shadowDesc = TextManager::ShadowDesc();
+    shadowDesc.offsetX = 4.0f;
+    shadowDesc.offsetY = 4.0f;
+    shadowDesc.color.w = 0.9f;
+    shadowDesc.scaleWithTextSize = true;
+    tm->SetShadow(shadowDesc);
+
+    std::vector<std::wstring> rows;
+    rows.reserve(20);
+    for (int i = 0; i < 20; ++i) {
+        wchar_t buf[192];
+        std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
+            L"TextManagerBenchmark.Row%02d          avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
+            i, 0.10 + double(i) * 0.01, 0.20 + double(i) * 0.015, 0.010 + double(i) * 0.001, 1u + static_cast<uint32_t>(i));
+        rows.emplace_back(buf);
+    }
+
+    out << "sample,directEmitUs,directReserveUs,directSetupUs,directLoopUs,addTextUs,formatUs,"
+        << "directCalls,directLines,directGlyphs,inputChars,retargetUs,retargetVertices\n";
+
+    constexpr int kWarmupFrames = 50;
+    constexpr int kSampleFrames = 300;
+    tm->Begin(1920, 1080, 1.0f);
+    for (int frame = 0; frame < kWarmupFrames + kSampleFrames; ++frame) {
+        auto reg = tm->CreateRegion(16, 64, TextManager::Align::Left);
+        tm->RegionSetPadding(reg, 8, 6);
+        tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.75f));
+        tm->RegionSetFixedWidth(reg, 760.0f);
+        tm->RegionSetAutoMeasure(reg, false);
+        tm->RegionSetKerning(reg, false);
+
+        tm->AddTextfShadow(reg, 18.0f, float4(1.0f, 1.0f, 0.6f, 0.95f), true,
+            L"[CPU profiler] frame=%u  (max reset: %.1fs, sort every: %.2fs)",
+            static_cast<uint32_t>(frame), 3.0, 2.0);
+        tm->AddText(reg, 18.0f, float4(1.0f, 1.0f, 0.6f, 0.95f), L" ");
+
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+            const float4 color = (i & 1) ? float4(1.0f, 1.0f, 1.0f, 0.92f) : float4(0.5f, 0.5f, 0.5f, 0.92f);
+            tm->AddText(reg, 16.0f, color, rows[static_cast<size_t>(i)], true);
+        }
+
+        tm->Begin(1920, 1080, 1.0f);
+        if (frame >= kWarmupFrames) {
+            const TextManager::PerfStats& s = tm->GetPerfStats();
+            out << (frame - kWarmupFrames) << ','
+                << s.directEmitUs << ','
+                << s.directEmitReserveUs << ','
+                << s.directEmitSetupUs << ','
+                << s.directEmitLoopUs << ','
+                << s.addTextUs << ','
+                << s.formatUs << ','
+                << s.directEmitCalls << ','
+                << s.directLines << ','
+                << s.directGlyphs << ','
+                << s.inputChars << ','
+                << s.lineRetargetUs << ','
+                << s.retargetedVertices << '\n';
+        }
+    }
+
+    return 0;
 }

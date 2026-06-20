@@ -39,6 +39,50 @@ static std::string ReadAllUtf8(const std::wstring& path) {
     return ss.str();
 }
 
+void FontAtlas::InitAsciiBenchmarkFont() {
+    pxSize_ = 32;
+    spread_ = 0;
+    atlasW_ = 256;
+    atlasH_ = 256;
+    ascent_ = 26;
+    descent_ = -6;
+    lineAdvance_ = 34;
+    type_ = Type::Coverage;
+
+    glyphs_.clear();
+    glyphRemap_.clear();
+    glyphRemapBase_ = 0;
+    kerning_.clear();
+
+    glyphs_.reserve(95);
+    for (uint32_t cp = 32; cp <= 126; ++cp) {
+        FontGlyph g{};
+        g.cp = cp;
+        g.x = static_cast<int>((cp - 32u) % 16u) * 8;
+        g.y = static_cast<int>((cp - 32u) / 16u) * 16;
+        g.w = (cp == 32u) ? 0 : 8;
+        g.h = (cp == 32u) ? 0 : 16;
+        g.xoff = 0;
+        g.yoff = -14;
+        g.xadv = (cp == 32u) ? 8 : 9;
+        const float invW = 1.0f / float(atlasW_);
+        const float invH = 1.0f / float(atlasH_);
+        g.u0 = float(g.x) * invW;
+        g.v0 = float(g.y) * invH;
+        g.u1 = float(g.x + g.w) * invW;
+        g.v1 = float(g.y + g.h) * invH;
+        glyphs_.push_back(g);
+    }
+
+    glyphRemapBase_ = glyphs_.front().cp;
+    glyphRemap_.assign(glyphs_.back().cp - glyphRemapBase_ + 1u, kInvalidGlyphIndex);
+    for (size_t i = 0; i < glyphs_.size(); ++i) {
+        glyphRemap_[glyphs_[i].cp - glyphRemapBase_] = static_cast<uint32_t>(i);
+    }
+
+    BuildLookupCaches();
+}
+
 bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                      const std::wstring& jsonPath, const std::wstring& tgaPath) {
     glyphs_.clear();

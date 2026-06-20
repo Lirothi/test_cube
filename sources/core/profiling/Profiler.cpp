@@ -1090,6 +1090,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.75f));
     tm->RegionSetFixedWidth(reg, (float)boxW);
     tm->RegionSetAutoMeasure(reg, false);
+    tm->RegionSetKerning(reg, false);
 
     // Header
     tm->AddTextfShadow(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), true,
@@ -1131,6 +1132,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.75f));
         tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
         tm->RegionSetAutoMeasure(regGpu, false);
+        tm->RegionSetKerning(regGpu, false);
 
         tm->AddTextfShadow(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), true,
             L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
