@@ -13,6 +13,7 @@
 
     { "name": "ToggleDeveloperPanel", "keys": ["F1"] },
     { "name": "ToggleInstancing", "keys": ["F2"] },
+    { "name": "ToggleLOD", "keys": ["F10"] },
     { "name": "Wireframe", "keys": ["F3"] },
     { "name": "DebugTex", "keys": ["F4"] },
     { "name": "ToggleProfiler", "keys": ["F9"] },

@@ -22,19 +22,21 @@ public:
                    bool simple);
 
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
-    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
+    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override;
 
     void Init(Renderer*, ID3D12GraphicsCommandList*, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>*) override {}
     void Tick(float) override {}
     bool IsTransparent() const override { return false; }
     bool IsSimpleRender() const override { return simple_; }
     bool CastsShadow() const override { return shadowMat_ != nullptr; }
+    // Step 6d: union of the run's member bounds -> one LOD for the whole run per view.
+    const AABB& GetWorldBounds() const override { return bounds_; }
 
     size_t InstanceCount() const { return members_.size(); }
 
 private:
     void RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer);
+                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod);
 
     std::vector<RenderableObjectBase*> members_;
     Material* gfxMat_ = nullptr;
@@ -42,4 +44,5 @@ private:
     MaterialData* matData_ = nullptr;
     Mesh* mesh_ = nullptr;
     bool simple_ = true;
+    AABB bounds_ = AABB::Empty(); // union of member world bounds (for LOD selection)
 };

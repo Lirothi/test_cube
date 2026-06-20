@@ -7,6 +7,8 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/renderables/IInstanceable.h"
 #include "rendering/meshes/Mesh.h"
+#include "rendering/meshes/LodSelect.h"
+#include "app/camera/Camera.h"
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
 
@@ -20,22 +22,31 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*> members,
     matData_ = matData;
     mesh_ = mesh;
     simple_ = simple;
+
+    // Step 6d: union of member world bounds -> the run picks ONE LOD per view (camera screen
+    // size for gbuffer / cascade floor for shadows). Members are already visible (post-cull).
+    bounds_ = AABB::Empty();
+    for (RenderableObjectBase* m : members_)
+    {
+        if (m) { bounds_.Expand(m->GetWorldBounds()); }
+    }
 }
 
-void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& /*camera*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (!renderer || !cl || !gfxMat_ || !mesh_ || members_.empty()) { return; }
-    RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true);
+    const UINT lod = render::SelectLodTier(bounds_, camera.GetPosition());
+    RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true, lod);
 }
 
-void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod)
 {
     if (!renderer || !cl || !shadowMat_ || !mesh_ || members_.empty()) { return; }
-    RecordInstanced(renderer, cl, shadowMat_, viewCB, /*gbuffer=*/false);
+    RecordInstanced(renderer, cl, shadowMat_, viewCB, /*gbuffer=*/false, lod);
 }
 
 void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer)
+                                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod)
 {
     const size_t total = members_.size();
     const bool wireframe = gbuffer && renderer->GetWireframeMode();
@@ -70,6 +81,6 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         }
 
         material->Bind(cl, ctx, wireframe);
-        mesh_->DrawInstanced(cl, count);
+        mesh_->DrawInstanced(cl, count, lod);
     }
 }

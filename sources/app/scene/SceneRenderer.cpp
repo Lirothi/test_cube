@@ -667,11 +667,14 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
             renderer->BindShadowTarget(t.cl, static_cast<int>(cascadeIndex), /*clear=*/false);
 
+            // Step 6c: far cascades cast coarse LODs (texels are huge there; silhouette error
+            // invisible). Cascade 0 (near, sharp shadows) stays full detail. Mesh clamps.
+            const UINT shadowLod = static_cast<UINT>(cascadeIndex);
             for (auto* obj : opaqueSimple)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
                 }
             }
 
@@ -679,7 +682,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
                 }
             }
         }
@@ -711,11 +714,12 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
             renderer->BindShadowTarget(t.cl, static_cast<int>(idx), /*clear=*/false);
 
+            const UINT shadowLod = static_cast<UINT>(idx); // Step 6c: cascade-index LOD floor
             for (auto* obj : opaqueSimple)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
                 }
             }
 
@@ -723,7 +727,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
                 }
             }
         }

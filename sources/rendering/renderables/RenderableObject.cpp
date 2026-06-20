@@ -7,6 +7,8 @@
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
+#include "rendering/meshes/LodSelect.h"
+#include "app/camera/Camera.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -131,8 +133,9 @@ void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandL
     if (cl == nullptr) { return; }
     if (!graphicsMaterial_) { return; }
 
+    // Binds only — the draw is issued by Render()/RenderShadow() so the per-pass LOD index
+    // can be passed to DrawGeometry without threading it through the Record* virtuals.
     UpdateAndBindGraphics(renderer, cl, ctx, camera, cbData);
-    DrawGeometry(cl);
 }
 
 void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
@@ -152,6 +155,8 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ctx.cbv[1] = viewCB; // shared per-pass view CB (b1); ignored by shaders without b1
 
     RecordGraphics(renderer, cl, ctx, camera, cbData);
+    // Step 6c: screen-size LOD for the gbuffer/camera view (clamped to available LODs).
+    DrawGeometry(cl, render::SelectLodTier(GetWorldBounds(), camera.GetPosition()));
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -183,7 +188,7 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 }
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+    const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -210,7 +215,7 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     }
 
     RecordShadow(renderer, cl, lightView, lightProj, ctx);
-    DrawGeometry(cl);
+    DrawGeometry(cl, lod); // Step 6c: caller passes the per-cascade LOD floor
 }
 
 void RenderableObject::SetGraphicsMaterial(Material* m)

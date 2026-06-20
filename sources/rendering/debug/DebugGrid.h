@@ -29,7 +29,7 @@ public:
         const Camera& camera,
         D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override {}
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override {}
 
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return true; }

@@ -54,7 +54,7 @@ public:
     // Base renderer: Compute -> Graphics
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
     void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override;
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform

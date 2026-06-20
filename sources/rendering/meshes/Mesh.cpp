@@ -2,6 +2,7 @@
 #include "core/Helpers.h"
 #include "materials/UploadManager.h"
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/meshes/LodSelect.h"
 #include <algorithm>
 #include <cstring>
 
@@ -76,7 +77,7 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
 void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
     const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {
     vbv = &vertexBufferView_; // LODs share the base vertex buffer (simplify only cuts indices)
-    if (lod == 0 || extraLods_.empty()) {
+    if (lod == 0 || extraLods_.empty() || !render::g_lodEnabled) {
         ibv = &indexBufferView_;
         indexCount = indexCount_;
         return;

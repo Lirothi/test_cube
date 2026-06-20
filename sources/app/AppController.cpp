@@ -5,6 +5,7 @@
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "rendering/meshes/LodSelect.h"
 #include "text/TextManager.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -79,6 +80,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         if (input.WasActionPressed("ToggleInstancing"))
         {
             render::g_instancingEnabled = !render::g_instancingEnabled; // F2: A/B Step 4 auto-instancing
+        }
+        if (input.WasActionPressed("ToggleLOD"))
+        {
+            render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
         }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)
