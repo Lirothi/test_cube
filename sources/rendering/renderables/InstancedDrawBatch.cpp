@@ -5,6 +5,7 @@
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
+#include "rendering/renderables/IInstanceable.h"
 #include "rendering/meshes/Mesh.h"
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
@@ -49,7 +50,11 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         auto* dst = static_cast<render::InstancePerObject*>(alloc.cpu);
         for (UINT i = 0; i < count; ++i)
         {
-            members_[base + i]->FillInstanceData(dst[i]);
+            // Members are guaranteed instanceable by the detection in SceneRenderQueue.
+            if (const IInstanceable* inst = members_[base + i]->AsInstanceable())
+            {
+                inst->FillInstanceData(dst[i]);
+            }
         }
 
         auto h = renderer->GetRenderContextPool()->Acquire();

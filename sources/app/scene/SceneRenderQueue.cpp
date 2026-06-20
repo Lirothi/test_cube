@@ -7,6 +7,7 @@
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/InstancedDrawBatch.h"
+#include "rendering/renderables/IInstanceable.h"
 #include "rendering/renderables/InstanceTypes.h"
 
 namespace
@@ -180,13 +181,14 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
         // BatchKey(), so objects with the same draw identity (mesh + material + textures)
         // are contiguous. One key = correct grouping by construction.
         const RenderBatchKey leadKey = lead ? lead->BatchKey() : RenderBatchKey{};
+        const IInstanceable* leadInst = lead ? lead->AsInstanceable() : nullptr;
         size_t j = i + 1;
-        if (lead && lead->SupportsInstancing())
+        if (leadInst)
         {
             while (j < bucket.size())
             {
                 RenderableObjectBase* o = bucket[j];
-                if (!o || !o->SupportsInstancing() || o->BatchKey() != leadKey)
+                if (!o || !o->AsInstanceable() || o->BatchKey() != leadKey)
                 {
                     break;
                 }
@@ -195,13 +197,13 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
         }
 
         const size_t runLen = j - i;
-        if (lead && lead->SupportsInstancing() && runLen >= render::kInstancingThreshold)
+        if (leadInst && runLen >= render::kInstancingThreshold)
         {
             std::vector<RenderableObjectBase*> members(bucket.begin() + i, bucket.begin() + j);
             InstancedDrawBatch* batch = AcquireBatch(batchCursor);
             batch->Configure(std::move(members),
-                             lead->GetInstancedGraphicsMaterial(),
-                             lead->GetInstancedShadowMaterial(),
+                             leadInst->InstancedGraphicsMaterial(),
+                             leadInst->InstancedShadowMaterial(),
                              leadKey.materialData,
                              leadKey.mesh,
                              simple);

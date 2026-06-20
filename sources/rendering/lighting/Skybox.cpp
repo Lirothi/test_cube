@@ -103,6 +103,7 @@ void Skybox::BuildCubeMesh_(Renderer* r,
     std::vector<uint32_t> cubeIndices;
     BuildCubeCW(cubeVerts, cubeIndices);
 
+    SetMesh(std::make_shared<Mesh>()); // 5b: own the mesh explicitly (no base default)
     GetMesh()->CreateGPU_PNTUV(r->GetDevice(), uploadCmdList, keepAlive, cubeVerts, cubeIndices.data(), (UINT)cubeIndices.size(), true);
 }
 

@@ -5,13 +5,13 @@
 #include "core/math/AABB.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/core/RenderGraph.h"
-#include "rendering/renderables/InstanceTypes.h"
 
 class Renderer;
 class Camera;
 class Material;
 class MaterialData;
 class Mesh;
+class IInstanceable;
 
 // A renderable's "draw identity": two OPAQUE draws with the same key are interchangeable —
 // same geometry (mesh), pipeline state (material = PSO + root sig, 1:1 with the PSO here),
@@ -60,15 +60,11 @@ public:
     // (mesh-less / transient renderables sort together). See RenderBatchKey above.
     virtual RenderBatchKey BatchKey() const { return {}; }
 
-    // Step 4: auto-instancing. An object opts in only if it has a CPU-instanced shader
-    // variant (cbuffer-array b0). A run of objects sharing BatchKey() and all
-    // SupportsInstancing() collapses into one DrawInstanced per pass. The instanced
-    // materials are pre-built (single-threaded) so these accessors are cheap and thread-safe
-    // to read during per-view batch detection.
-    virtual bool SupportsInstancing() const { return false; }
-    virtual Material* GetInstancedGraphicsMaterial() const { return nullptr; }
-    virtual Material* GetInstancedShadowMaterial() const { return nullptr; }
-    virtual void FillInstanceData(render::InstancePerObject& /*out*/) const {}
+    // Step 4/5c: auto-instancing capability. Non-null only for renderables that have a
+    // CPU-instanced shader variant. A run of objects sharing BatchKey() that all return
+    // non-null collapses into one DrawInstanced per pass. Returned pointer is owned by the
+    // renderable; valid for the object's lifetime. See IInstanceable.
+    virtual const IInstanceable* AsInstanceable() const { return nullptr; }
 
     virtual const AABB& GetWorldBounds() const
     {

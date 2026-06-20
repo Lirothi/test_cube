@@ -25,7 +25,9 @@ RenderableObject::RenderableObject(
     : graphicsShader_(graphicsShader)
     , inputLayoutKey_(inputLayout)
 {
-    SetMesh(std::make_shared<Mesh>());
+    // No mesh by default (5b): concrete types Init a real one (StaticMesh/GpuInstancedModels
+    // via MeshManager, Skybox/Ocean build their own). A null mesh draws nothing (DrawGeometry
+    // skips), instead of allocating a 0-index Mesh that binds null buffers.
     SetModelMatrix(mat4::Identity());
 }
 

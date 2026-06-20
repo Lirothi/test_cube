@@ -1,9 +1,10 @@
 #pragma once
 
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/renderables/IInstanceable.h"
 #include "materials/MaterialData.h"
 
-class GBufferRenderable : public RenderableObject
+class GBufferRenderable : public RenderableObject, public IInstanceable
 {
 public:
     GBufferRenderable(const std::string& matPreset,
@@ -23,10 +24,11 @@ public:
     // textures must NOT batch together (the single instanced draw binds one texture set).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), GetGraphicsMaterial(), matData_.get() }; }
 
-    // Step 4 auto-instancing: opt in when an instanced shader variant was built (Init).
-    bool SupportsInstancing() const override { return instancedGraphicsMaterial_ != nullptr; }
-    Material* GetInstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
-    Material* GetInstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
+    // Step 5c: auto-instancing capability via IInstanceable. Non-null only when an instanced
+    // shader variant was built at Init (i.e. the default gbuffer shader).
+    const IInstanceable* AsInstanceable() const override { return instancedGraphicsMaterial_ ? this : nullptr; }
+    Material* InstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
+    Material* InstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
     void FillInstanceData(render::InstancePerObject& out) const override;
 
 protected:

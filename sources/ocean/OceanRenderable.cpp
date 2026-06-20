@@ -710,6 +710,7 @@ void OceanRenderable::BuildMesh(Renderer* renderer,
     const float skirtScale = std::pow(2.0f, static_cast<float>(levels));
     AppendMesh(combined, skirt, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(skirtScale, skirtScale, skirtScale));
 
+    SetMesh(std::make_shared<Mesh>()); // 5b: own the mesh explicitly (no base default)
     mesh_->CreateGPUFlexible(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         combined.vertices.data(), static_cast<UINT>(combined.vertices.size()), sizeof(OceanVertex),
         combined.indices.data(), static_cast<UINT>(combined.indices.size()), DXGI_FORMAT_R32_UINT);

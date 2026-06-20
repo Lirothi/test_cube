@@ -123,7 +123,7 @@ void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsComman
 
 void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl)
 {
-    if (!cl) { return; }
+    if (!cl || !mesh_) { return; } // 5b: skip cleanly if mesh-less
     mesh_->DrawInstanced(cl, instanceCount_);
 }
 
