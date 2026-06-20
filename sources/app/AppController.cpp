@@ -12,6 +12,50 @@
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
 
+namespace
+{
+    std::size_t HashBindingsOverlay(const std::vector<ActionMap::BindingDesc>& descs)
+    {
+        constexpr std::size_t kFnvOffset = sizeof(std::size_t) == 8
+            ? static_cast<std::size_t>(14695981039346656037ull)
+            : static_cast<std::size_t>(2166136261u);
+        constexpr std::size_t kFnvPrime = sizeof(std::size_t) == 8
+            ? static_cast<std::size_t>(1099511628211ull)
+            : static_cast<std::size_t>(16777619u);
+
+        std::size_t hash = kFnvOffset;
+        const auto mixByte = [&](unsigned char value)
+        {
+            hash ^= static_cast<std::size_t>(value);
+            hash *= kFnvPrime;
+        };
+        const auto mixString = [&](std::string_view text)
+        {
+            for (const char ch : text)
+            {
+                mixByte(static_cast<unsigned char>(ch));
+            }
+            mixByte(0xffu);
+        };
+
+        for (const ActionMap::BindingDesc& desc : descs)
+        {
+            mixString(desc.keys);
+            mixString(desc.action);
+        }
+        return hash;
+    }
+
+    void AppendAsciiAsWide(std::wstring& out, std::string_view text)
+    {
+        out.reserve(out.size() + text.size());
+        for (const char ch : text)
+        {
+            out.push_back(static_cast<wchar_t>(static_cast<unsigned char>(ch)));
+        }
+    }
+}
+
 void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime)
 {
     CPU_SCOPE(ProfilerScopes::kAppControllerTick);
@@ -169,36 +213,53 @@ void AppController::BuildBindingsOverlay(Renderer& renderer, const InputManager&
     constexpr float kFontPx = 14.0f;
     constexpr float kApproxCharW = 8.0f; // Consolas advance at 14px, rounded up
     constexpr int kMargin = 16;
-    const std::string title = "Controls [F1]";
+    const std::size_t signature = HashBindingsOverlay(descs);
 
-    size_t keysColWidth = 0;
-    for (const auto& d : descs)
+    if (bindingsOverlayCache_.signature != signature)
     {
-        keysColWidth = std::max(keysColWidth, d.keys.size());
+        bindingsOverlayCache_.signature = signature;
+        bindingsOverlayCache_.title = L"Controls [F1]";
+        bindingsOverlayCache_.lines.clear();
+        bindingsOverlayCache_.lines.reserve(descs.size());
+
+        std::size_t keysColWidth = 0;
+        for (const auto& desc : descs)
+        {
+            keysColWidth = std::max(keysColWidth, desc.keys.size());
+        }
+
+        std::size_t maxLineChars = bindingsOverlayCache_.title.size();
+        for (const auto& desc : descs)
+        {
+            maxLineChars = std::max(maxLineChars, keysColWidth + 2 + desc.action.size());
+
+            std::wstring& line = bindingsOverlayCache_.lines.emplace_back();
+            line.reserve(keysColWidth + 2 + desc.action.size());
+            AppendAsciiAsWide(line, desc.keys);
+            line.append(keysColWidth - desc.keys.size() + 2, L' ');
+            AppendAsciiAsWide(line, desc.action);
+        }
+
+        bindingsOverlayCache_.regionWidth = static_cast<float>(maxLineChars) * kApproxCharW;
     }
 
-    size_t maxLineChars = title.size();
-    for (const auto& d : descs)
-    {
-        maxLineChars = std::max(maxLineChars, keysColWidth + 2 + d.action.size());
-    }
-
-    const float regionW = static_cast<float>(maxLineChars) * kApproxCharW;
+    const float regionW = bindingsOverlayCache_.regionWidth;
     const int x = std::max(0, static_cast<int>(renderer.GetWidth()) - static_cast<int>(regionW) - kMargin);
 
     auto* tb = renderer.GetTextManager();
+    if (!tb)
+    {
+        return;
+    }
+
     const TextManager::RegionId region = tb->CreateRegion(x, kMargin, TextManager::Align::Left);
     tb->RegionSetBackground(region, float4(0.0f, 0.0f, 0.0f, 0.55f));
     tb->RegionSetFixedWidth(region, regionW);
 
-    tb->AddText(region, kFontPx, float4(1.0f, 1.0f, 0.6f, 0.95f), std::string_view(title), true);
+    tb->AddCachedText(region, kFontPx, float4(1.0f, 1.0f, 0.6f, 0.95f), bindingsOverlayCache_.title, true);
 
-    std::string line;
-    for (const auto& d : descs)
+    for (const std::wstring& line : bindingsOverlayCache_.lines)
     {
-        line.assign(d.keys);
-        line.append(keysColWidth - d.keys.size() + 2, ' ');
-        line += d.action;
-        tb->AddText(region, kFontPx, float4(1.0f, 1.0f, 1.0f, 0.9f), std::string_view(line), true);
+        tb->AddCachedText(region, kFontPx, float4(1.0f, 1.0f, 1.0f, 0.9f), line, true);
     }
 }

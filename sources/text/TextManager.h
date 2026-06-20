@@ -62,13 +62,14 @@ public:
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8);
     void AddText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow);
     void AddText(RegionId id, float px, const float4& color, std::string_view utf8, bool enableShadow);
+    void AddCachedText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow);
     void AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...);
     void AddTextfShadow(RegionId id, float px, const float4& color, bool enableShadow, const wchar_t* fmt, ...);
 
     void Build(Renderer* r, ID3D12GraphicsCommandList* cl);
     void Draw(Renderer* r, ID3D12GraphicsCommandList* cl);
 
-    void SetFont(FontAtlas* f) { font_ = f; }
+    void SetFont(FontAtlas* f);
     void Clear();
 
 private:
@@ -141,6 +142,13 @@ private:
         size_t glyphCount = 0;
     };
 
+    struct CachedGlyphRun {
+        std::wstring text;
+        float px = 0.0f;
+        GlyphRun run;
+        float widthPx = 0.0f;
+    };
+
 private:
     static constexpr size_t kRegionLinePoolCapacity = 128;
 
@@ -201,6 +209,7 @@ private:
 
     // === Shared helper to build a glyph run and compute width ===
     void  BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const;
+    const CachedGlyphRun& GetCachedGlyphRun(std::wstring_view text, float px);
 
     // Fast rendering of a prepared glyph run
     void  EmitGlyphRun(int x, int y, float xOffset, const float4& color, const GlyphRun& run, bool enableShadow);
@@ -236,6 +245,8 @@ private:
     std::array<RegionLine, kRegionLinePoolCapacity> regionLinePool_{};
     size_t nextUnusedRegionLine_ = 0;
     std::vector<RegionLine*> freeRegionLines_;
+    std::vector<CachedGlyphRun> cachedGlyphRuns_;
+    const FontAtlas* cachedGlyphRunsFont_ = nullptr;
 
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;

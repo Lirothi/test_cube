@@ -35,6 +35,14 @@ void TextManager::DisableShadow() {
     shadow_.reset();
 }
 
+void TextManager::SetFont(FontAtlas* f) {
+    if (font_ != f) {
+        cachedGlyphRuns_.clear();
+        cachedGlyphRunsFont_ = nullptr;
+    }
+    font_ = f;
+}
+
 void TextManager::Init(Renderer* r) {
     auto createTextMaterial = [&](const wchar_t* shaderPath) -> std::shared_ptr<Material> {
         Material::GraphicsDesc gd;
@@ -210,6 +218,35 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
     rg.totalLines = (int)rg.lines.size();
     rg.lineStepPx = (int)std::round(px + 2.0f);
 }
+
+void TextManager::AddCachedText(RegionId id, float px, const float4& color, std::wstring_view text, bool enableShadow) {
+    if (id >= regions_.size() || font_ == nullptr || text.empty()) { return; }
+    Region& rg = regions_[id];
+
+    const CachedGlyphRun& cached = GetCachedGlyphRun(text, px);
+    const size_t glyphReserve = (cached.run.ready ? cached.run.glyphCount : text.size());
+    RegionLine* ln = AcquireRegionLine(glyphReserve);
+    if (!ln) {
+        return;
+    }
+
+    ln->color = color;
+    ln->px = px;
+    ln->shadowEnabled = enableShadow;
+    ln->run = cached.run;
+    ln->widthPx = cached.widthPx;
+    ln->glyphCount = (uint32_t)std::min<size_t>(glyphReserve, std::numeric_limits<uint32_t>::max());
+
+    if (rg.autoMeasure || (rg.align != Align::Left)) {
+        rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
+    }
+
+    rg.glyphCount += glyphReserve;
+    rg.lines.push_back(ln);
+    rg.totalLines = (int)rg.lines.size();
+    rg.lineStepPx = (int)std::round(px + 2.0f);
+}
+
 void TextManager::AddTextf(RegionId id, float px, const float4& color, const wchar_t* fmt, ...) {
     if (fmt == nullptr) { return; }
     wchar_t buf[256];
@@ -444,6 +481,27 @@ void TextManager::RecycleRegionLines() {
 }
 
 // ===== Private helpers =====
+
+const TextManager::CachedGlyphRun& TextManager::GetCachedGlyphRun(std::wstring_view text, float px) {
+    if (cachedGlyphRunsFont_ != font_) {
+        cachedGlyphRuns_.clear();
+        cachedGlyphRunsFont_ = font_;
+    }
+
+    for (const CachedGlyphRun& entry : cachedGlyphRuns_) {
+        if (entry.px == px && entry.text == text) {
+            return entry;
+        }
+    }
+
+    CachedGlyphRun entry;
+    entry.text.assign(text.data(), text.size());
+    entry.px = px;
+    BuildGlyphRun(entry.text, entry.px, entry.run, entry.widthPx);
+
+    cachedGlyphRuns_.push_back(std::move(entry));
+    return cachedGlyphRuns_.back();
+}
 
 // Shared helper to build a glyph run and compute width in a single pass
 void TextManager::BuildGlyphRun(std::wstring_view text, float px, GlyphRun& outRun, float& outWidthPx) const {

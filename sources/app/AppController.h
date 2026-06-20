@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
 
@@ -21,10 +25,18 @@ public:
     const SceneRenderSettings& Settings() const { return settings_; }
 
 private:
+    struct BindingsOverlayCache {
+        std::size_t signature = 0;
+        float regionWidth = 0.0f;
+        std::wstring title;
+        std::vector<std::wstring> lines;
+    };
+
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene, const InputManager& input);
     void BuildBindingsOverlay(Renderer& renderer, const InputManager& input) const;
 
     SceneRenderSettings settings_{};
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
+    mutable BindingsOverlayCache bindingsOverlayCache_{};
     bool showBindings_ = false;
 };
