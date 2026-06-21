@@ -1,10 +1,14 @@
 #pragma once
 
 #include <d3d12.h>
+#include <DirectXMath.h>
 #include <wrl/client.h>
+#include <array>
+#include <span>
 #include <vector>
 
 #include "third_party/robin_hood.h"
+#include "rendering/core/RenderConstants.h" // render::kFrameCount
 
 class Mesh;
 
@@ -19,37 +23,79 @@ struct Blas {
     }
 };
 
-// Builds and caches BLASes for meshes. The result buffers live in
+// One TLAS instance: which mesh's BLAS to reference, its world transform
+// (row-major, row-vector convention — exactly as InstanceData.world is stored,
+// already premultiplied with any object/base world), and an index that maps the
+// hit back to the instance/mesh (becomes InstanceID +
+// InstanceContributionToHitGroupIndex, consumed later by S10's hit shading).
+struct InstanceEntry {
+    Mesh* mesh = nullptr;
+    DirectX::XMFLOAT4X4 world{};
+    uint32_t instanceId = 0;
+};
+
+// Builds and caches BLASes for meshes and assembles a per-frame TLAS from a list
+// of instances. AS result buffers live in
 // D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE and must NOT be routed
-// through the normal resource-state tracker (see S5). Scratch buffers are
-// retained until the caller confirms the build's fence has signaled, then
-// released via ReleaseCompletedScratch().
+// through the normal resource-state tracker (see S5). BLAS scratch is retained
+// until the caller confirms the build's fence has signaled, then released via
+// ReleaseCompletedScratch(). The per-frame TLAS buffers are triple-buffered
+// (render::kFrameCount), so the caller must not reuse a frameIndex still in
+// flight on the GPU.
 class AccelerationStructureManager {
 public:
     void Init(ID3D12Device5* device5) { device5_ = device5; }
 
-    // Returns the cached BLAS for `mesh`, building it on `cmdList4` on first use.
-    // The build's UAV barrier is recorded too. On failure the returned Blas has
-    // a null result (Address() == 0).
+    // Returns the cached BLAS for `mesh`, building it on `cmdList4` on first use
+    // (with a UAV barrier). On failure the returned Blas has a null result.
     const Blas& GetOrBuildBlas(Mesh* mesh, ID3D12GraphicsCommandList4* cmdList4);
 
-    // Release scratch buffers retained from builds. Call ONLY after the fence for
-    // the command list(s) that ran the builds has completed — the GPU is still
-    // reading scratch until then.
+    // (Re)build the TLAS for `frameIndex` from `instances`. BLASes are built on
+    // demand on the same cmdList4 (so the per-BLAS UAV barrier already orders
+    // them before the TLAS build). Records the build + a UAV barrier and
+    // (re)creates the per-frame TLAS SRV. frameIndex must be < kFrameCount.
+    void BuildTlas(std::span<const InstanceEntry> instances,
+                   ID3D12GraphicsCommandList4* cmdList4, UINT frameIndex);
+
+    // CPU handle of the per-frame TLAS SRV (RAYTRACING_ACCELERATION_STRUCTURE),
+    // valid after a successful BuildTlas(frameIndex). Copy it into a
+    // shader-visible table like any other SRV. {0} if not yet built.
+    D3D12_CPU_DESCRIPTOR_HANDLE TlasSrvCpu(UINT frameIndex) const;
+
+    // Number of instances in the last BuildTlas(frameIndex) (0 if none).
+    UINT TlasInstanceCount(UINT frameIndex) const {
+        return frameIndex < tlasFrames_.size() ? tlasFrames_[frameIndex].instanceCount : 0;
+    }
+
+    // Release scratch buffers retained from BLAS builds. Call ONLY after the
+    // fence for the command list(s) that ran the builds has completed.
     void ReleaseCompletedScratch() { pendingScratch_.clear(); }
 
-    // Drop every cached BLAS and any retained scratch (e.g. on device teardown).
-    void Reset() {
-        blasCache_.clear();
-        pendingScratch_.clear();
-    }
+    // Drop every cached BLAS/TLAS, retained scratch, and the SRV heap.
+    void Reset();
 
     bool HasPendingScratch() const { return !pendingScratch_.empty(); }
 
 private:
+    void EnsureSrvHeap();
+
+    struct PerFrameTlas {
+        Microsoft::WRL::ComPtr<ID3D12Resource> instanceUpload; // UPLOAD: INSTANCE_DESC[]
+        UINT instanceCapacity = 0;                             // in instances
+        Microsoft::WRL::ComPtr<ID3D12Resource> result;         // DEFAULT, AS state
+        UINT64 resultSize = 0;
+        Microsoft::WRL::ComPtr<ID3D12Resource> scratch;        // DEFAULT, UAV state
+        UINT64 scratchSize = 0;
+        UINT instanceCount = 0;
+    };
+
     ID3D12Device5* device5_ = nullptr;
     robin_hood::unordered_map<Mesh*, Blas> blasCache_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pendingScratch_;
+
+    std::array<PerFrameTlas, render::kFrameCount> tlasFrames_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // CPU-only, kFrameCount slots
+    UINT srvIncrement_ = 0;
 };
 
 } // namespace rt

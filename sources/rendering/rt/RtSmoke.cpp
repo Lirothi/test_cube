@@ -42,36 +42,6 @@ void WriteVerdict(const char* outPath, const char* verdict)
     }
 }
 
-// Committed buffer helper. UPLOAD heaps stay in GENERIC_READ; DEFAULT heaps take
-// the requested state. Returns null on failure (logged by the caller).
-ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* dev,
-                                    UINT64 size,
-                                    D3D12_HEAP_TYPE heapType,
-                                    D3D12_RESOURCE_STATES initialState,
-                                    D3D12_RESOURCE_FLAGS flags)
-{
-    D3D12_HEAP_PROPERTIES heap{};
-    heap.Type = heapType;
-
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = size;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    desc.Flags = flags;
-
-    ComPtr<ID3D12Resource> res;
-    if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-                                            initialState, nullptr, IID_PPV_ARGS(&res)))) {
-        return nullptr;
-    }
-    return res;
-}
-
 } // namespace
 
 int RunRtSmoke(const char* outPath)
@@ -183,75 +153,37 @@ int RunRtSmoke(const char* outPath)
         cl4->Close();
         submitAndWait(); // mesh VB/IB now resident; uploadKeepAlive can be released
 
-        // --- Submission 2: build the mesh BLAS via the S3 manager, then a
-        //     single-instance TLAS referencing it. ---
+        // --- Submission 2: build a 2-instance TLAS via the S4 builder. It
+        //     builds the mesh BLAS (S3) on demand on the same list, then the
+        //     TLAS over two transformed instances of it. ---
         alloc->Reset();
         cl->Reset(alloc.Get(), nullptr);
 
         rt::AccelerationStructureManager asManager;
         asManager.Init(device5.Get());
-        const rt::Blas& blas = asManager.GetOrBuildBlas(&mesh, cl4.Get());
-        blasAddr = blas.Address();
-        Log("blas address: 0x%llX\n", static_cast<unsigned long long>(blasAddr));
 
-        ComPtr<ID3D12Resource> tlas, tlasScratch, instanceDescs;
-        if (blasAddr != 0) {
-            D3D12_RAYTRACING_INSTANCE_DESC inst{};
-            inst.Transform[0][0] = 1.0f;
-            inst.Transform[1][1] = 1.0f;
-            inst.Transform[2][2] = 1.0f;
-            inst.InstanceMask = 0xFF;
-            inst.AccelerationStructure = blasAddr;
+        rt::InstanceEntry entries[2] = {};
+        DirectX::XMStoreFloat4x4(&entries[0].world, DirectX::XMMatrixIdentity());
+        DirectX::XMStoreFloat4x4(&entries[1].world, DirectX::XMMatrixTranslation(2.0f, 0.0f, 0.0f));
+        entries[0].mesh = &mesh; entries[0].instanceId = 0;
+        entries[1].mesh = &mesh; entries[1].instanceId = 1;
 
-            instanceDescs = CreateBuffer(device.Get(), sizeof(inst), D3D12_HEAP_TYPE_UPLOAD,
-                                         D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
-            if (instanceDescs) {
-                void* mapped = nullptr;
-                D3D12_RANGE noRead{ 0, 0 };
-                if (SUCCEEDED(instanceDescs->Map(0, &noRead, &mapped))) {
-                    memcpy(mapped, &inst, sizeof(inst));
-                    instanceDescs->Unmap(0, nullptr);
-
-                    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
-                    inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
-                    inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-                    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-                    inputs.NumDescs = 1;
-                    inputs.InstanceDescs = instanceDescs->GetGPUVirtualAddress();
-
-                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
-                    device5->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
-                    Log("tlas prebuild: result=%llu scratch=%llu\n",
-                        info.ResultDataMaxSizeInBytes, info.ScratchDataSizeInBytes);
-
-                    tlas = CreateBuffer(device.Get(), info.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
-                                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-                    tlasScratch = CreateBuffer(device.Get(), info.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
-                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-                    if (tlas && tlasScratch) {
-                        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
-                        build.Inputs = inputs;
-                        build.DestAccelerationStructureData = tlas->GetGPUVirtualAddress();
-                        build.ScratchAccelerationStructureData = tlasScratch->GetGPUVirtualAddress();
-                        cl4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-
-                        D3D12_RESOURCE_BARRIER uav{};
-                        uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                        uav.UAV.pResource = tlas.Get();
-                        cl4->ResourceBarrier(1, &uav);
-                        tlasBuilt = true;
-                    }
-                }
-            }
-        }
+        asManager.BuildTlas(std::span<const rt::InstanceEntry>(entries, 2), cl4.Get(), /*frameIndex*/ 0);
 
         cl4->Close();
         submitAndWait();
 
         // GPU finished consuming scratch — safe to release it now.
         asManager.ReleaseCompletedScratch();
+
+        // The BLAS was built on demand inside BuildTlas; fetch the cached address.
+        blasAddr = asManager.GetOrBuildBlas(&mesh, nullptr).Address();
+        const UINT tlasInstances = asManager.TlasInstanceCount(0);
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager.TlasSrvCpu(0);
+        tlasBuilt = (tlasInstances == 2) && (tlasSrv.ptr != 0);
+        Log("blas address: 0x%llX, tlas instances: %u, tlas srv: 0x%llX\n",
+            static_cast<unsigned long long>(blasAddr), tlasInstances,
+            static_cast<unsigned long long>(tlasSrv.ptr));
 
         const HRESULT dr = device->GetDeviceRemovedReason();
         removed = FAILED(dr);
