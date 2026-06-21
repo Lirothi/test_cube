@@ -65,6 +65,7 @@ public:
     void InitImGui();
     void BeginImGuiFrame();
     void RenderImGui(ID3D12GraphicsCommandList* commandList);
+    ImTextureID CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
     void ShutdownImGui();
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     bool ImGuiWantsMouse() const;
@@ -284,6 +285,7 @@ private:
     UINT ssrTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
+    ID3D12Resource* pendingImGuiTextureResource_ = nullptr;
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.99f; // exponential smoothing: 0..1 (higher is smoother)

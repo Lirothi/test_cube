@@ -58,18 +58,21 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         input.WasActionPressed("ToggleDeveloperPanel") ||
         input.WasActionPressed("ToggleBindings") ||
         ImGui::IsKeyPressed(ImGuiKey_F1, false);
+    const bool toggleTextureInspector =
+        input.WasActionPressed("ToggleTextureInspector") ||
+        ImGui::IsKeyPressed(ImGuiKey_F4, false);
 
     if (toggleDeveloperWindow)
     {
         showDeveloperWindow_ = !showDeveloperWindow_;
     }
+    if (toggleTextureInspector)
+    {
+        textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
+    }
 
     if (!uiCapturingKeyboard)
     {
-        if (input.WasActionPressed("DebugTex"))
-        {
-            settings_.debugTexMode = !settings_.debugTexMode;
-        }
         if (input.WasActionPressed("ToggleProfiler"))
         {
             settings_.showProfiler = !settings_.showProfiler;
@@ -161,6 +164,7 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
 
     if (!showDeveloperWindow_)
     {
+        textureDebugViewer_.Draw(renderer);
         return;
     }
 
@@ -281,7 +285,12 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
                 {
                     renderer.SetWireframeMode(wireframe);
                 }
-                ImGui::Checkbox("Debug texture", &settings_.debugTexMode);
+                bool textureViewerOpen = textureDebugViewer_.IsOpen();
+                if (ImGui::Checkbox("Render target inspector [F4]", &textureViewerOpen))
+                {
+                    textureDebugViewer_.SetOpen(textureViewerOpen);
+                }
+                ImGui::Checkbox("Fullscreen debug texture", &settings_.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings_.showProfiler);
                 ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
 
@@ -384,6 +393,8 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
     }
     ImGui::End();
     showDeveloperWindow_ = open;
+
+    textureDebugViewer_.Draw(renderer);
 }
 
 void AppController::WaitForHudBuild()

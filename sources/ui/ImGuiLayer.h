@@ -4,8 +4,12 @@
 #include <windows.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
+
+#include "imgui.h"
+#include "rendering/core/RenderConstants.h"
 
 class Renderer;
 struct ImGui_ImplDX12_InitInfo;
@@ -23,9 +27,14 @@ public:
     bool WantsMouse() const;
     bool WantsKeyboard() const;
     bool IsInitialized() const { return initialized_; }
+    ImTextureID CreateTextureIdForSrv(ID3D12Device* device,
+        ID3D12Resource* resource,
+        const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc,
+        UINT frameIndex);
 
 private:
     void ApplyPendingRightClickFocusClear();
+    void ReleasePreviewDescriptors();
 
     static void AllocateSrvDescriptorCallback(ImGui_ImplDX12_InitInfo* info,
         D3D12_CPU_DESCRIPTOR_HANDLE* outCpuHandle,
@@ -39,6 +48,8 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE GpuHandleForCpuHandle(D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle) const;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> previewSrvCpu_{};
+    std::array<D3D12_GPU_DESCRIPTOR_HANDLE, render::kFrameCount> previewSrvGpu_{};
     UINT descriptorSize_ = 0;
     uint32_t descriptorCapacity_ = 0;
     uint32_t nextDescriptorIndex_ = 0;

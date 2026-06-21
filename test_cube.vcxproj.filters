@@ -237,6 +237,9 @@
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/debug/TextureDebugViewer.cpp">
+      <Filter>sources\rendering\debug</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
       <Filter>sources\rendering\descriptors</Filter>
     </ClCompile>
@@ -498,6 +501,9 @@
       <Filter>sources\rendering\debug</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/debug/DebugDraw.h">
+      <Filter>sources\rendering\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/debug/TextureDebugViewer.h">
       <Filter>sources\rendering\debug</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">

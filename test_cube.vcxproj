@@ -201,6 +201,7 @@
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
+    <ClCompile Include="sources/rendering/debug/TextureDebugViewer.cpp" />
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp" />
     <ClCompile Include="sources/rendering/descriptors/SamplerManager.cpp" />
     <ClCompile Include="sources/rendering/lighting/LightManager.cpp" />
@@ -311,6 +312,7 @@
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
+    <ClInclude Include="sources/rendering/debug/TextureDebugViewer.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h" />
     <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h" />
     <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h" />

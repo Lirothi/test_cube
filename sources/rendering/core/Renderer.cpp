@@ -297,6 +297,7 @@ void Renderer::BeginFrame() {
 
     ctxPool_.ResetForFrame();
     debugDrawSystem_.BeginFrame();
+    pendingImGuiTextureResource_ = nullptr;
 }
 
 void Renderer::EndFrame() {
@@ -325,7 +326,23 @@ void Renderer::BeginImGuiFrame()
 
 void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
 {
+    if (pendingImGuiTextureResource_)
+    {
+        Transition(commandList, pendingImGuiTextureResource_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
     imguiLayer_.Render(commandList);
+    pendingImGuiTextureResource_ = nullptr;
+}
+
+ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
+{
+    if (!resource)
+    {
+        return ImTextureID_Invalid;
+    }
+
+    pendingImGuiTextureResource_ = resource;
+    return imguiLayer_.CreateTextureIdForSrv(GetDevice(), resource, srvDesc, currentFrameIndex_);
 }
 
 void Renderer::ShutdownImGui()

@@ -2,6 +2,7 @@
 
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
+#include "rendering/debug/TextureDebugViewer.h"
 
 class InputManager;
 class Renderer;
@@ -25,5 +26,6 @@ private:
 
     SceneRenderSettings settings_{};
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
+    TextureDebugViewer textureDebugViewer_;
     bool showDeveloperWindow_ = false;
 };
