@@ -3,6 +3,7 @@
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
 #include "rendering/debug/TextureDebugViewer.h"
+#include "ui/ImGuiWindowUtils.h"
 
 class InputManager;
 class Renderer;
@@ -27,5 +28,6 @@ private:
     SceneRenderSettings settings_{};
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
     TextureDebugViewer textureDebugViewer_;
+    ui::ImGuiWindowMaximizeState developerWindowMaximize_;
     bool showDeveloperWindow_ = false;
 };

@@ -253,17 +253,23 @@ void TextureDebugViewer::Draw(Renderer& renderer)
 
     ImGui::SetNextWindowSize(ImVec2(1100.0f, 680.0f), ImGuiCond_FirstUseEver);
     bool open = open_;
-    if (!ImGui::Begin("Render Target Inspector###TextureDebugViewer", &open, ImGuiWindowFlags_NoCollapse))
+    const ImGuiWindowFlags windowFlags =
+        ImGuiWindowFlags_NoCollapse |
+        (windowMaximize_.maximized ? ImGuiWindowFlags_NoMove : 0);
+    if (!ImGui::Begin("Render Target Inspector###TextureDebugViewer", &open, windowFlags))
     {
         ImGui::End();
         open_ = open;
         return;
     }
+    ui::HandleWindowTitleDoubleClickMaximize(windowMaximize_);
 
     constexpr float controlsWidth = 400.0f;
     ImGui::BeginChild("TextureDebugControls", ImVec2(controlsWidth, 0.0f), true);
 
-    if (ImGui::BeginCombo("Render target", selected ? selected->name : "None"))
+    ImGui::TextUnformatted("Render target");
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::BeginCombo("##TextureDebugRenderTarget", selected ? selected->name : "None", ImGuiComboFlags_HeightLarge))
     {
         const char* previousGroup = "";
         for (const TargetView& view : targets)

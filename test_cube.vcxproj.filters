@@ -581,6 +581,9 @@
     <ClInclude Include="sources/ui/ImGuiLayer.h">
       <Filter>sources\ui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/ui/ImGuiWindowUtils.h">
+      <Filter>sources\ui</Filter>
+    </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
       <Filter>third_party\enkiTS\src</Filter>
     </ClInclude>

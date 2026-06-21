@@ -171,8 +171,13 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
     ImGui::SetNextWindowSize(ImVec2(700.0f, 800.0f), ImGuiCond_FirstUseEver);
 
     bool open = showDeveloperWindow_;
-    if (ImGui::Begin("Developer Controls [F1]###DeveloperControls", &open, ImGuiWindowFlags_NoCollapse))
+    const ImGuiWindowFlags windowFlags =
+        ImGuiWindowFlags_NoCollapse |
+        (developerWindowMaximize_.maximized ? ImGuiWindowFlags_NoMove : 0);
+    if (ImGui::Begin("Developer Controls [F1]###DeveloperControls", &open, windowFlags))
     {
+        ui::HandleWindowTitleDoubleClickMaximize(developerWindowMaximize_);
+
         if (ImGui::BeginTabBar("DeveloperControlsTabs"))
         {
             if (ImGui::BeginTabItem("Render"))

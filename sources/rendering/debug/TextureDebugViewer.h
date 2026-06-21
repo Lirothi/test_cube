@@ -3,6 +3,7 @@
 #include <d3d12.h>
 
 #include "imgui.h"
+#include "ui/ImGuiWindowUtils.h"
 
 class Renderer;
 
@@ -49,5 +50,6 @@ private:
     bool open_ = false;
     Target target_ = Target::Scene;
     ChannelMode channelMode_ = ChannelMode::Auto;
+    ui::ImGuiWindowMaximizeState windowMaximize_;
     bool showBorder_ = true;
 };
