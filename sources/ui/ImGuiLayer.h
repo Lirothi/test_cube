@@ -25,6 +25,8 @@ public:
     bool IsInitialized() const { return initialized_; }
 
 private:
+    void ApplyPendingRightClickFocusClear();
+
     static void AllocateSrvDescriptorCallback(ImGui_ImplDX12_InitInfo* info,
         D3D12_CPU_DESCRIPTOR_HANDLE* outCpuHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE* outGpuHandle);
@@ -43,4 +45,5 @@ private:
     std::vector<uint32_t> freeDescriptorIndices_;
     bool initialized_ = false;
     bool frameBegun_ = false;
+    bool pendingRightClickFocusClear_ = false;
 };

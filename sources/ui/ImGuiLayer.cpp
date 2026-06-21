@@ -94,6 +94,7 @@ void ImGuiLayer::Shutdown()
         nextDescriptorIndex_ = 0;
         freeDescriptorIndices_.clear();
         frameBegun_ = false;
+        pendingRightClickFocusClear_ = false;
         return;
     }
 
@@ -113,6 +114,7 @@ void ImGuiLayer::Shutdown()
     nextDescriptorIndex_ = 0;
     freeDescriptorIndices_.clear();
     frameBegun_ = false;
+    pendingRightClickFocusClear_ = false;
     initialized_ = false;
 }
 
@@ -133,6 +135,8 @@ void ImGuiLayer::BeginFrame()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     frameBegun_ = true;
+
+    ApplyPendingRightClickFocusClear();
 }
 
 void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
@@ -156,7 +160,37 @@ bool ImGuiLayer::HandleWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lP
         return false;
     }
 
-    return ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam) != 0;
+    const bool handled = ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam) != 0;
+    if (message == WM_RBUTTONDOWN || message == WM_RBUTTONDBLCLK)
+    {
+        pendingRightClickFocusClear_ = true;
+    }
+    return handled;
+}
+
+void ImGuiLayer::ApplyPendingRightClickFocusClear()
+{
+    if (!pendingRightClickFocusClear_)
+    {
+        return;
+    }
+    pendingRightClickFocusClear_ = false;
+
+    constexpr ImGuiHoveredFlags hoverFlags =
+        ImGuiHoveredFlags_AnyWindow |
+        ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem;
+    if (ImGui::IsWindowHovered(hoverFlags))
+    {
+        return;
+    }
+
+    ImGui::SetWindowFocus(nullptr);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.WantCaptureMouse = false;
+    io.WantCaptureKeyboard = false;
+    io.WantTextInput = false;
 }
 
 bool ImGuiLayer::WantsMouse() const
