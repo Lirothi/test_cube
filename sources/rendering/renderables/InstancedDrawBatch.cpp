@@ -35,20 +35,42 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*> members,
 void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     if (!renderer || !cl || !gfxMat_ || !mesh_ || members_.empty()) { return; }
-    const UINT lod = render::SelectLodTier(bounds_, camera.GetPosition());
-    RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true, lod);
+
+    // Step 6d: PER-INSTANCE LOD. Each member picks its tier from its OWN world bounds (no
+    // aggregate/cloud bound), then we emit one instanced draw per occupied tier — so a
+    // spatially spread run still LODs each object correctly, at the cost of <= kMaxLodTiers draws.
+    const Math::float3 camPos = camera.GetPosition();
+    const UINT maxTier = mesh_->GetLodCount() - 1u; // clamp so empty/duplicate tiers don't draw
+    for (auto& bucket : lodBuckets_) { bucket.clear(); }
+    for (RenderableObjectBase* m : members_)
+    {
+        if (!m) { continue; }
+        UINT tier = render::SelectLodTier(m->GetWorldBounds(), camPos);
+        if (tier > maxTier) { tier = maxTier; }
+        lodBuckets_[tier].push_back(m);
+    }
+    for (UINT tier = 0; tier < kMaxLodTiers; ++tier)
+    {
+        if (!lodBuckets_[tier].empty())
+        {
+            RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true, tier, lodBuckets_[tier]);
+        }
+    }
 }
 
 void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod)
 {
     if (!renderer || !cl || !shadowMat_ || !mesh_ || members_.empty()) { return; }
-    RecordInstanced(renderer, cl, shadowMat_, viewCB, /*gbuffer=*/false, lod);
+    // Shadows use the per-cascade LOD floor for the whole run (all casters in a cascade are at
+    // ~the same depth slice), so no per-instance bucketing is needed here.
+    RecordInstanced(renderer, cl, shadowMat_, viewCB, /*gbuffer=*/false, lod, members_);
 }
 
 void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod)
+                                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
+                                         const std::vector<RenderableObjectBase*>& members)
 {
-    const size_t total = members_.size();
+    const size_t total = members.size();
     const bool wireframe = gbuffer && renderer->GetWireframeMode();
 
     // Split runs larger than the shader's instance-array capacity into multiple draws.
@@ -62,7 +84,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         for (UINT i = 0; i < count; ++i)
         {
             // Members are guaranteed instanceable by the detection in SceneRenderQueue.
-            if (const IInstanceable* inst = members_[base + i]->AsInstanceable())
+            if (const IInstanceable* inst = members[base + i]->AsInstanceable())
             {
                 inst->FillInstanceData(dst[i]);
             }

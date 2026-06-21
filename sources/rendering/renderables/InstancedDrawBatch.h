@@ -1,5 +1,6 @@
 #pragma once
 #include "rendering/renderables/RenderableObjectBase.h"
+#include <array>
 #include <vector>
 
 class Material;
@@ -29,14 +30,20 @@ public:
     bool IsTransparent() const override { return false; }
     bool IsSimpleRender() const override { return simple_; }
     bool CastsShadow() const override { return shadowMat_ != nullptr; }
-    // Step 6d: union of the run's member bounds -> one LOD for the whole run per view.
+    // Union of the run's member bounds — for frustum culling of the batch as a whole.
     const AABB& GetWorldBounds() const override { return bounds_; }
 
     size_t InstanceCount() const { return members_.size(); }
 
 private:
+    // Records instanced draws for a SUBSET of the run at one LOD (chunked to the shader's
+    // instance-array capacity). Step 6d: the camera pass buckets members per-instance and
+    // calls this once per LOD tier; the shadow pass calls it once with all members.
     void RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod);
+                         Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
+                         const std::vector<RenderableObjectBase*>& members);
+
+    static constexpr unsigned int kMaxLodTiers = 4; // base + 3 (matches SelectLodTier range)
 
     std::vector<RenderableObjectBase*> members_;
     Material* gfxMat_ = nullptr;
@@ -44,5 +51,7 @@ private:
     MaterialData* matData_ = nullptr;
     Mesh* mesh_ = nullptr;
     bool simple_ = true;
-    AABB bounds_ = AABB::Empty(); // union of member world bounds (for LOD selection)
+    AABB bounds_ = AABB::Empty();
+    // Per-instance LOD buckets, reused each Render (pooled batch -> retains capacity).
+    std::array<std::vector<RenderableObjectBase*>, kMaxLodTiers> lodBuckets_;
 };

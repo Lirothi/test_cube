@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderStats.h"
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/meshes/LodSelect.h"
 #include "text/TextManager.h"
@@ -173,6 +174,9 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
                 ImGui::Text("FPS: %.1f (%.2f ms)", fps, frameMs);
                 ImGui::Text("Display: %ux%u", renderer.GetWidth(), renderer.GetHeight());
                 ImGui::Text("Render: %ux%u (scale %.2f)", renderer.GetRenderWidth(), renderer.GetRenderHeight(), renderer.GetRenderResolutionScale());
+                ImGui::Text("Draw calls: %u   Primitives: %.2fM",
+                    render::g_renderStats.lastDrawCalls,
+                    static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
 
                 ImGui::Separator();
 
@@ -276,6 +280,17 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
                 ImGui::Checkbox("Debug texture", &settings_.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings_.showProfiler);
                 ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
+
+                ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled);
+                ImGui::BeginDisabled(!render::g_lodEnabled);
+                // -1 = automatic (screen-size / cascade); 0..3 force that level on every mesh.
+                static const char* kForcedLodLabels[] = { "Auto", "0 (full)", "1", "2", "3" };
+                int forcedLodCombo = render::g_forcedLod + 1; // map -1..3 -> 0..4
+                if (ImGui::Combo("Force LOD level", &forcedLodCombo, kForcedLodLabels, IM_ARRAYSIZE(kForcedLodLabels)))
+                {
+                    render::g_forcedLod = forcedLodCombo - 1;
+                }
+                ImGui::EndDisabled();
 
                 ImGui::Separator();
 

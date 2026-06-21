@@ -2,6 +2,7 @@
 #include "core/Helpers.h"
 #include "materials/UploadManager.h"
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include <algorithm>
 #include <cstring>
@@ -77,12 +78,18 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
 void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
     const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {
     vbv = &vertexBufferView_; // LODs share the base vertex buffer (simplify only cuts indices)
-    if (lod == 0 || extraLods_.empty() || !render::g_lodEnabled) {
+
+    // g_lodEnabled off -> full detail; else g_forcedLod (>=0) overrides per-object selection.
+    UINT effectiveLod = lod;
+    if (!render::g_lodEnabled) { effectiveLod = 0u; }
+    else if (render::g_forcedLod >= 0) { effectiveLod = static_cast<UINT>(render::g_forcedLod); }
+
+    if (effectiveLod == 0 || extraLods_.empty()) {
         ibv = &indexBufferView_;
         indexCount = indexCount_;
         return;
     }
-    const UINT idx = std::min(lod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
+    const UINT idx = std::min(effectiveLod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
     ibv = &extraLods_[idx].indexBufferView;
     indexCount = extraLods_[idx].indexCount;
 }
@@ -130,6 +137,7 @@ void Mesh::Draw(ID3D12GraphicsCommandList* cmdList, UINT lod) const {
     SelectLod(lod, vbv, ibv, indexCount);
     BindIA(cmdList, *vbv, *ibv);
     cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+    render::g_renderStats.AddDraw(indexCount, 1);
 }
 
 void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount, UINT lod) const {
@@ -137,6 +145,7 @@ void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount,
     SelectLod(lod, vbv, ibv, indexCount);
     BindIA(cmdList, *vbv, *ibv);
     cmdList->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, 0);
+    render::g_renderStats.AddDraw(indexCount, instanceCount);
 }
 
 // ====== Normal and tangent generation ======

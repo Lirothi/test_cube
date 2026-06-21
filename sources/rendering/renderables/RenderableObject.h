@@ -100,6 +100,11 @@ public:
     AABB GetLocalBounds() const;
     const AABB& GetWorldBounds() const override;
 
+    // Step 6: radius of ONE drawn instance for LOD selection. Default = the object's world
+    // radius (standalone). Cloud/instanced objects override to the single-mesh radius so they
+    // don't stay at LOD 0 forever (their aggregate world bounds span the whole cloud).
+    virtual float GetLodRadius() const { return GetWorldBounds().GetRadius(); }
+
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
     Material* GetShadowMaterial() const { return shadowMaterial_.get(); }

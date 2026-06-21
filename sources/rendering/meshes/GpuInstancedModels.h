@@ -8,6 +8,8 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <array>
+#include <cstdint>
 
 class GpuInstancedModels : public GBufferRenderable {
 public:
@@ -24,14 +26,18 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
+    // Step 6: override the camera draw to issue one instanced draw per LOD tier (per-instance
+    // LOD) — the base path would draw the whole cloud at one LOD.
+    void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
     bool IsSimpleRender() const { return false; }
     bool CastsShadow() const override { return true; }
 
     const AABB& GetWorldBounds() const override;
+    // LOD from a single instance's size (not the whole-cloud bound), at the cloud's distance.
+    float GetLodRadius() const override { return GetMesh() ? GetMesh()->GetBoundingBox().GetRadius() : 0.0f; }
 
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx) override;
     void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod) override;
 
@@ -56,6 +62,15 @@ private:
     mutable bool instanceBoundsDirty_ = true;
     mutable Math::mat4 lastModelMatrix_;
     mutable const Mesh* cachedMesh_ = nullptr;
+
+    // Step 6 per-instance LOD: bucket instances by tier (from each instance's world position),
+    // building instanceRemap_ (draw order, grouped by tier) + per-tier start/count.
+    static constexpr UINT kLodTiers = 4;       // base + 3
+    static constexpr UINT kMaxLodInstances = 256; // matches gRemap[64] in gbuffer_inst.hlsl
+    std::array<uint32_t, kMaxLodInstances> instanceRemap_{};
+    std::array<UINT, kLodTiers> tierBase_{};
+    std::array<UINT, kLodTiers> tierCount_{};
+    void BuildLodPartition(const Math::float3& camPos);
 
     void MarkInstanceBoundsDirty();
     Math::float3 ComputeInstanceOffset(UINT index) const;

@@ -7,10 +7,14 @@
 #include <vector>
 
 #include "rendering/meshes/Mesh.h"
+#include "rendering/meshes/LodSelect.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderConstants.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "core/math/Math.h"
+#include "app/camera/Camera.h"
+#include <cstring>
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -94,31 +98,85 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
     renderer->UAVBarrier(cl, instanceBuffer_.GetResource());
 }
 
-void GpuInstancedModels::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
 {
-    if (!renderer)
-    {
-        return;
-    }
+    tierBase_.fill(0u);
+    tierCount_.fill(0u);
+    const UINT n = std::min(instanceCount_, kMaxLodInstances);
+    if (n == 0u || !GetMesh()) { return; }
 
+    const Math::mat4 model = GetModelMatrix();
+    const float radius = GetMesh()->GetBoundingBox().GetRadius();
+    const UINT maxTier = std::min<UINT>(GetMesh()->GetLodCount() - 1u, kLodTiers - 1u);
+
+    // Per-instance tier from its world position (rotation/scale don't move the center).
+    std::array<uint8_t, kMaxLodInstances> tierOf{};
+    for (UINT i = 0; i < n; ++i)
+    {
+        const Math::float3 wp = model.TransformPoint(ComputeInstanceOffset(i));
+        UINT t = render::SelectLodTier(wp, radius, camPos);
+        if (t > maxTier) { t = maxTier; }
+        tierOf[i] = static_cast<uint8_t>(t);
+        ++tierCount_[t];
+    }
+    // Prefix-sum the per-tier counts into start offsets, then scatter instance indices.
+    UINT acc = 0u;
+    for (UINT t = 0; t <= maxTier; ++t) { tierBase_[t] = acc; acc += tierCount_[t]; }
+    std::array<UINT, kLodTiers> cursor = tierBase_;
+    for (UINT i = 0; i < n; ++i)
+    {
+        instanceRemap_[cursor[tierOf[i]]++] = i;
+    }
+}
+
+void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    Material* mat = GetGraphicsMaterial();
+    if (!renderer || !cl || !mat || !mesh_ || instanceCount_ == 0u) { return; }
+
+    BuildLodPartition(camera.GetPosition());
+
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+
+    // Per-object CB (b0): the cloud's shared transform + material params.
+    const UINT cbSize = mat->GetCBSizeBytesAligned(0, kAlign);
+    auto b0 = renderer->GetFrameResource()->AllocDynamic(cbSize, kAlign);
+    if (auto* binder = GetUniformBinder()) { binder->UpdateMainCB(*this, renderer, camera, static_cast<uint8_t*>(b0.cpu)); }
+
+    // Remap CB (b3): instance indices grouped by LOD tier (matches gRemap[64] = 256 uints).
+    auto remapCB = renderer->GetFrameResource()->AllocDynamic(
+        static_cast<UINT>(instanceRemap_.size() * sizeof(uint32_t)), kAlign);
+    std::memcpy(remapCB.cpu, instanceRemap_.data(), instanceRemap_.size() * sizeof(uint32_t));
+
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
+    ctx.cbv[0] = b0.gpu;
+    ctx.cbv[1] = viewCB;
+    ctx.cbv[3] = remapCB.gpu;
+
+    // Instance SRV (t0) + material textures (t1..t3) + sampler (s0).
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{};
     size_t count = 0;
-    srvs[count++] = instanceBuffer_.GetSRVCPU(); // t0: instances
-    if (auto* data = GetMaterialData()) {
-        data->AppendGBufferSRVs(srvs.data(), count);
-    }
-
-    auto tbl = renderer->StageSrvUavTable(srvs, count);
-    ctx.srvTable[0] = tbl.gpu;
-
-    const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
-    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *aniso);
+    srvs[count++] = instanceBuffer_.GetSRVCPU();
+    if (auto* data = GetMaterialData()) { data->AppendGBufferSRVs(srvs.data(), count); }
+    ctx.srvTable[0] = renderer->StageSrvUavTable(srvs, count).gpu;
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::AnisoWrap(16));
 
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
 
-    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+    // One instanced draw per occupied LOD tier (gInstanceBase = the tier's start in gRemap).
+    const bool wireframe = renderer->GetWireframeMode() && allowWireframe_;
+    for (UINT tier = 0; tier < kLodTiers; ++tier)
+    {
+        if (tierCount_[tier] == 0u) { continue; }
+        auto baseCB = renderer->GetFrameResource()->AllocDynamic(kAlign, kAlign);
+        *static_cast<uint32_t*>(baseCB.cpu) = tierBase_[tier];
+        ctx.cbv[2] = baseCB.gpu;
+        mat->Bind(cl, ctx, wireframe);
+        mesh_->DrawInstanced(cl, tierCount_[tier], tier);
+    }
 }
 
 void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)

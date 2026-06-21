@@ -1,4 +1,4 @@
-#define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsl"
 
@@ -17,11 +17,19 @@ Texture2D gMR : register(t2);
 Texture2D gNormalMap : register(t3);
 SamplerState gSmp : register(s0);
 
+// Step 6 per-instance LOD: the cloud is drawn one range per LOD tier. gInstanceBase is the
+// tier's start offset into gRemap; gRemap maps draw-instance -> real instance index (the
+// instance buffer stays in grid order so prevWorld is stable). gRemap[64] = up to 256 insts.
+cbuffer InstDraw : register(b2) { uint gInstanceBase; uint3 _instDrawPad; };
+cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
+
 [RootSignature(GBUFFER_INST_RS)]
 VSOut VSMain(VSInInst i)
 {
-    float4x4 w = mul(gInstances[i.IID].world, world);
-    float4x4 pw = mul(gInstances[i.IID].prevWorld, prevWorld);
+    const uint slot = gInstanceBase + i.IID;
+    const uint ri = gRemap[slot >> 2u][slot & 3u];
+    float4x4 w = mul(gInstances[ri].world, world);
+    float4x4 pw = mul(gInstances[ri].prevWorld, prevWorld);
     return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV);
 }
 

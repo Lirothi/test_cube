@@ -9,6 +9,7 @@
 
 #include "app/levels/DemoLevel.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/core/RenderStats.h"
 
 static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
 
@@ -176,6 +177,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         double lastTime = GetTimeSeconds();
         while (isRunning_) {
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
+            render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
             TaskSystem::Get().WaitForTrackedAsyncTasks();
             renderer.BeginFrame();
 #if PROF_GPU_ENABLED
