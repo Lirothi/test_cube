@@ -37,7 +37,7 @@ public:
     const AABB& GetWorldBounds() const override;
     // RT (S5): instance transforms are GPU-computed (instance_anim.hlsl), so this
     // cloud is excluded from the CPU-built TLAS for now (revisit when RT needs it).
-    bool GetRtInstance(Mesh*&, Math::mat4&) const override { return false; }
+    bool GetRtInstance(RtInstanceDesc&) const override { return false; }
     // LOD from a single instance's size (not the whole-cloud bound), at the cloud's distance.
     float GetLodRadius() const override { return GetMesh() ? GetMesh()->GetBoundingBox().GetRadius() : 0.0f; }
 

@@ -612,20 +612,21 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
     if (frame_->objects)
     {
         uint32_t instanceId = 0;
-        Mesh* mesh = nullptr;
-        Math::mat4 world;
         for (const auto& obj : *frame_->objects)
         {
-            if (obj && obj->GetRtInstance(mesh, world))
+            RtInstanceDesc desc{};
+            if (obj && obj->GetRtInstance(desc))
             {
                 rt::InstanceEntry entry;
-                entry.mesh = mesh;
-                entry.world = world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
+                entry.mesh = desc.mesh;
+                entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
                 // TLAS InstanceID = the mesh's bindless geometry index (S9), so a
-                // hit can index the geometry table directly. Same mesh -> same
-                // index (instances share geometry). Falls back to a running index
-                // if the bindless table isn't up.
-                entry.instanceId = bindless_.Ready() ? bindless_.GetOrRegisterMesh(mesh) : instanceId;
+                // hit can index the geometry/material table directly. Same mesh ->
+                // same index (instances share geometry). Falls back to a running
+                // index if the bindless table isn't up.
+                entry.instanceId = bindless_.Ready()
+                    ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, &desc.baseColor.x)
+                    : instanceId;
                 rtInstances_.push_back(entry);
                 ++instanceId;
             }
@@ -1307,6 +1308,23 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
+// Matches the `Probe` cbuffer in rt_reflections_cs.hlsl (row-major; 4x mat4,
+// then light params, then bindless descriptor indices).
+namespace {
+struct RtReflectConstants
+{
+    Math::mat4 view;
+    Math::mat4 proj;
+    Math::mat4 invView;
+    Math::mat4 invProj;
+    Math::float3 sunDirWS;  float ambientIntensity = 0.0f;
+    Math::float3 lightRgb;  float exposure = 1.0f;
+    float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
+    uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
+    uint32_t ssrUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t pad0 = 0; uint32_t pad1 = 0;
+};
+} // namespace
+
 void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
@@ -1315,47 +1333,70 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassRTReflections);
         const auto& D = renderer->GetDeferredForFrame();
-        ctx.ApplyDeclaredStates(t.cl);
+        ctx.ApplyDeclaredStates(t.cl); // depth/gb1/light -> NPS, ssr -> UAV
 
         auto reflectMaterial = resources_.GetRtReflectMaterial();
-        const UINT cbSize = resources_.GetSsrCBSizeBytes(); // shares ssr_cs's b0 layout
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
-        if (!reflectMaterial || cbSize == 0 || tlasSrv.ptr == 0 ||
-            asManager_.TlasInstanceCount(frameIndex) == 0)
+        if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
+            asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight)
         {
-            // No usable TLAS this frame: leave ssr as is (degenerate/empty scene).
+            // No usable TLAS/bindless/light this frame: leave ssr as is (degenerate scene).
             ctx.EndCL(t);
             return;
         }
 
-        SsrPassConstants constants{};
+        // Per-frame scene descriptors into the bindless heap (geometry VB/IB +
+        // geometry-info are persistent, populated in Pass_BuildAS).
+        bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);    // TLAS
+        bindless_.WriteSceneDescriptor(frameIndex, 1, D.lightSRV); // lit HDR (fast path)
+        bindless_.WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]); // GB1 (normal)
+        bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV); // Depth
+        bindless_.WriteSceneDescriptor(frameIndex, 4, D.ssrUAV);   // ssr UAV (output)
+
+        RtReflectConstants c{};
         const float zNear = camera.GetZNear();
         const float zFar = camera.GetZFar();
-        constants.view = camera.GetViewMatrix();
-        constants.proj = camera.GetProjMatrix();
-        constants.invView = camera.GetInvViewMatrix();
-        constants.invProj = camera.GetInvProjMatrix();
-        constants.depthA = zNear / (zNear - zFar);
-        constants.depthB = (zNear * zFar) / (zFar - zNear);
-        constants.zNear = zNear;
-        constants.zFar = zFar;
-        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
-        constants.invScreenSize = float2(
-            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
-            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
-        constants.technique = 0;
+        c.view = camera.GetViewMatrix();
+        c.proj = camera.GetProjMatrix();
+        c.invView = camera.GetInvViewMatrix();
+        c.invProj = camera.GetInvProjMatrix();
+        const DirectionalLight& dl = *frame_->dirLight;
+        c.sunDirWS = dl.GetDirection();
+        c.ambientIntensity = dl.GetAmbient();
+        c.lightRgb = dl.GetColor();
+        c.exposure = dl.GetExposure();
+        c.depthA = zNear / (zNear - zFar);
+        c.depthB = (zNear * zFar) / (zFar - zNear);
+        c.outWidth = renderer->GetSsrTextureWidth();
+        c.outHeight = renderer->GetSsrTextureHeight();
+        c.tlasIndex = bindless_.SceneIndex(frameIndex, 0);
+        c.lightIndex = bindless_.SceneIndex(frameIndex, 1);
+        c.gb1Index = bindless_.SceneIndex(frameIndex, 2);
+        c.depthIndex = bindless_.SceneIndex(frameIndex, 3);
+        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 4);
+        c.geomInfoIndex = bindless_.GeomInfoIndex();
 
-        // TLAS SRV is staged like any other SRV; downstream (blur/compose) is
-        // identical to the SSR path since this writes the same premultiplied buffer.
-        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-        RecordComputeDispatch(renderer, t.cl, reflectMaterial.get(), cbSize,
-            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            { tlasSrv, D.lightSRV, D.gbSRV[1], D.depthSRV }, // t0 TLAS, t1 Light, t2 GB1, t3 Depth
-            { D.ssrUAV },                                    // u0 output
-            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
-            renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
-            D.ssr.Get());
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
+        std::memcpy(cb.cpu, &c, sizeof(c));
+
+        // Bespoke bindless dispatch (binds the persistent heap, not the frame heap).
+        ID3D12DescriptorHeap* heaps[] = { bindless_.Heap() };
+        t.cl->SetDescriptorHeaps(1, heaps);
+        t.cl->SetComputeRootSignature(reflectMaterial->GetRootSignature());
+        t.cl->SetPipelineState(reflectMaterial->GetPipelineState());
+        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+        const UINT gx = (c.outWidth + 7u) / 8u;
+        const UINT gy = (c.outHeight + 7u) / 8u;
+        if (gx > 0 && gy > 0)
+        {
+            t.cl->Dispatch(gx, gy, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.ssr.Get());
+
+        // Restore the frame heap: this pass shares its command list with the
+        // grouped blur + compose passes, which bind into the per-frame heap.
+        renderer->BindDescriptorHeaps(t.cl);
     }
     ctx.EndCL(t);
 }

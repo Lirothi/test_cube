@@ -20,6 +20,23 @@ public:
 
     MaterialData* GetMaterialData() const { return matData_.get(); }
 
+    // RT (S10): augment the base instance with this object's albedo texture +
+    // base-color tint so ray hits can be shaded with the real material color.
+    bool GetRtInstance(RtInstanceDesc& out) const override
+    {
+        if (!RenderableObject::GetRtInstance(out))
+        {
+            return false;
+        }
+        if (matData_ && matData_->hasAlbedo)
+        {
+            out.albedoTex = matData_->albedo.GetResource();
+            out.albedoSrv = matData_->albedo.GetSRVCPU();
+        }
+        out.baseColor = matParams_.baseColor;
+        return true;
+    }
+
     // Draw identity includes the textures (MaterialData) — objects sharing a PSO but not
     // textures must NOT batch together (the single instanced draw binds one texture set).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), GetGraphicsMaterial(), matData_.get() }; }

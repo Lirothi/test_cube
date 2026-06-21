@@ -323,21 +323,26 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         uploadCmd->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
     }
 
-    // 8) Barrier COPY_DEST -> PIXEL_SHADER_RESOURCE
+    // 8) Barrier COPY_DEST -> shader resource. Leave it readable by BOTH pixel and
+    //    non-pixel (compute) stages: the GBuffer pass reads it in a pixel shader,
+    //    and RT reflection hit-shading (S10) reads it bindlessly in a compute
+    //    shader. The combined read state is valid for both (read-only texture).
+    constexpr D3D12_RESOURCE_STATES kShaderReadStates =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     {
         D3D12_RESOURCE_BARRIER b{};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         b.Transition.pResource = tex_.Get();
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        b.Transition.StateAfter = kShaderReadStates;
         uploadCmd->ResourceBarrier(1, &b);
     }
 
     if (keepAlive) {
         keepAlive->push_back(upload);
     }
-    r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    r->SetResourceState(tex_.Get(), kShaderReadStates);
 
     // 9) Select the SRV format based on usage (sRGB for Albedo)
     DXGI_FORMAT srvFmt = fp.srvUnorm;
@@ -509,13 +514,15 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
 
     uploadCmd->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
 
-    // Barrier COPY_DEST -> PIXEL_SHADER_RESOURCE
+    // Barrier COPY_DEST -> shader resource (pixel + non-pixel; see CreateFromFile).
+    constexpr D3D12_RESOURCE_STATES kShaderReadStates =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition.pResource = tex_.Get();
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    b.Transition.StateAfter = kShaderReadStates;
     uploadCmd->ResourceBarrier(1, &b);
 
     // Keep the upload resource alive until execution
@@ -524,7 +531,7 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     }
 
     // Record the state in the tracker
-    r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    r->SetResourceState(tex_.Get(), kShaderReadStates);
 }
 
 void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels)

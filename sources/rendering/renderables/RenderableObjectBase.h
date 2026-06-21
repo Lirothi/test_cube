@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <d3d12.h>
 
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
@@ -8,6 +9,19 @@
 #include "rendering/core/RenderGraph.h"
 
 class Renderer;
+
+// One ray-traced instance's geometry + material, gathered for the TLAS/bindless
+// table (S9/S10). albedoTex is null when the renderable has no albedo texture
+// (then baseColor is the flat color); albedoSrv is a CPU SRV handle to copy into
+// the bindless heap.
+struct RtInstanceDesc
+{
+    Mesh* mesh = nullptr;
+    Math::mat4 world;
+    ID3D12Resource* albedoTex = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv{};
+    Math::float4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+};
 class Camera;
 class Material;
 class MaterialData;
@@ -81,14 +95,13 @@ public:
         return kInvalidBounds;
     }
 
-    // RT (S5): if this renderable is a single mesh placed by a CPU world matrix,
-    // fill outMesh + outWorld and return true. Instanced/GPU-driven, transformless
-    // or transparent renderables return false (excluded from the ray-tracing TLAS
-    // for now — S13 defines their handling).
-    virtual bool GetRtInstance(Mesh*& outMesh, Math::mat4& outWorld) const
+    // RT (S5/S10): if this renderable is a single mesh placed by a CPU world
+    // matrix, fill `out` (mesh, world, and material albedo/base color) and return
+    // true. Instanced/GPU-driven, transformless or transparent renderables return
+    // false (excluded from the ray-tracing TLAS for now — S13 defines their handling).
+    virtual bool GetRtInstance(RtInstanceDesc& out) const
     {
-        (void)outMesh;
-        (void)outWorld;
+        (void)out;
         return false;
     }
 

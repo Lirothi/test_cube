@@ -20,8 +20,8 @@ struct GeometryInfoGPU
     uint32_t vbIndex = 0;
     uint32_t ibIndex = 0;
     uint32_t indexIs32 = 1;
-    uint32_t materialIndex = 0;
-    float    albedo[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    uint32_t albedoTexIndex = 0xFFFFFFFFu; // ~0 = no albedo texture (use baseColor)
+    float    baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f }; // material tint / fallback
 };
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that
@@ -32,11 +32,12 @@ struct GeometryInfoGPU
 //
 //   heap[0]                                      geometry-info structured SRV
 //   heap[kSceneBase + f*kScenePerFrame + i]      per-frame scene descriptor i
-//   heap[kGeoBase + 2*g], +1                     mesh g: VB raw SRV, IB raw SRV
+//   heap[kGeoBase + kDescPerGeom*g + {0,1,2}]    mesh g: VB raw, IB raw, albedo SRVs
 class BindlessTable
 {
 public:
     static constexpr UINT kScenePerFrame = 8;  // TLAS, gbuffers, depth, ssr UAV, ...
+    static constexpr UINT kDescPerGeom = 3;    // VB raw, IB raw, albedo texture
     static constexpr UINT kGeomInfoSlot = 0;
     static constexpr UINT kSceneBase = 1;
     static constexpr UINT kGeoBase = kSceneBase + kScenePerFrame * render::kFrameCount;
@@ -48,9 +49,10 @@ public:
     bool Ready() const { return heap_ != nullptr; }
     ID3D12DescriptorHeap* Heap() const { return heap_.Get(); }
 
-    // Register a mesh (idempotent): creates its VB/IB raw SRVs in the heap and a
-    // geometry-info record. Returns the geometry index (used as TLAS InstanceID).
-    uint32_t GetOrRegisterMesh(Mesh* mesh);
+    // Register a mesh (idempotent): creates its VB/IB raw SRVs (+ albedo texture
+    // SRV if albedoSrv is valid) in the heap and a geometry-info record. Returns
+    // the geometry index (used as TLAS InstanceID). baseColor4 may be null (white).
+    uint32_t GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv, const float* baseColor4);
 
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const

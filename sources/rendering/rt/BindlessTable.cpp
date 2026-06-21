@@ -47,7 +47,7 @@ void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_
                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
-uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh)
+uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv, const float* baseColor4)
 {
     auto it = meshToGeom_.find(mesh);
     if (it != meshToGeom_.end()) {
@@ -57,15 +57,17 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh)
     const uint32_t geomIndex = static_cast<uint32_t>(geomInfo_.size());
     ID3D12Resource* vb = mesh ? mesh->GetVertexBufferResource() : nullptr;
     ID3D12Resource* ib = mesh ? mesh->GetIndexBufferResource() : nullptr;
+    const UINT geoSlot = kGeoBase + kDescPerGeom * geomIndex;
 
     GeometryInfoGPU rec{};
-    rec.vbIndex = kGeoBase + 2u * geomIndex;
-    rec.ibIndex = rec.vbIndex + 1u;
+    rec.vbIndex = geoSlot;
+    rec.ibIndex = geoSlot + 1u;
     rec.indexIs32 = (mesh && mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 1u : 0u;
-    rec.materialIndex = 0u;
-    // Placeholder per-geometry color so the material fetch is observable (S9);
-    // S10 replaces this with the real material/texture lookup.
-    rec.albedo[0] = rec.albedo[1] = rec.albedo[2] = rec.albedo[3] = 1.0f;
+    rec.albedoTexIndex = 0xFFFFFFFFu;
+    if (baseColor4) {
+        rec.baseColor[0] = baseColor4[0]; rec.baseColor[1] = baseColor4[1];
+        rec.baseColor[2] = baseColor4[2]; rec.baseColor[3] = baseColor4[3];
+    }
 
     // Raw (ByteAddressBuffer) SRVs over the whole VB/IB.
     auto makeRawSrv = [&](ID3D12Resource* res, UINT slot) {
@@ -84,6 +86,14 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh)
     };
     makeRawSrv(vb, rec.vbIndex);
     makeRawSrv(ib, rec.ibIndex);
+
+    // Albedo texture SRV (copied from the material's CPU SRV) at the 3rd slot.
+    if (albedoSrv.ptr != 0 && heap_) {
+        const UINT albedoSlot = geoSlot + 2u;
+        device_->CopyDescriptorsSimple(1, CpuHandle(albedoSlot), albedoSrv,
+                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        rec.albedoTexIndex = albedoSlot;
+    }
 
     meshToGeom_.emplace(mesh, geomIndex);
     geomInfo_.push_back(rec);

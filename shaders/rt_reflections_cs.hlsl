@@ -1,112 +1,177 @@
-// Tier-1 hardware ray-traced reflections (S7).
+// Tier-2 hardware ray-traced reflections (S7 + S9 + S10).
 //
-// cs_6_5 inline RayQuery: trace one mirror reflection ray per GBuffer surface
-// against the scene TLAS. On a hit that reprojects onto the visible surface at
-// some screen pixel, sample the HDR light buffer for radiance; otherwise leave
-// coverage 0 so compose's existing skybox fallback fills it. Writes premultiplied
-// (rgb*coverage, coverage) into the SSR target so the unchanged Pass_SSR_Blur +
-// Pass_Compose consume it (compose: refl = ssrRGB + sky*(1-ssrA), then Fresnel*gloss).
+// cs_6_6 inline RayQuery + SM6.6 dynamic resources. Per GBuffer surface, trace
+// one reflection ray against the TLAS. On a hit:
+//   - if it reprojects onto the visible surface on screen, sample the lit HDR
+//     buffer (Tier-1 fast path: exact first-bounce color);
+//   - otherwise SHADE the hit directly (Tier-2): bindless-fetch the interpolated
+//     normal + albedo (texture), then sun diffuse + ambient with a shadow ray.
+//     This lets OFF-SCREEN geometry reflect instead of falling back to skybox.
+// On miss: coverage 0 -> compose's skybox fallback. Writes premultiplied
+// (rgb, coverage) into the SSR target; blur + compose are unchanged.
 //
-// Tier-1 has no bindless geometry/material table, so off-screen or occluded hits
-// can't be shaded and fall back to skybox (S10 adds real hit shading). The b0
-// layout matches ssr_cs.hlsl's PerFrame so WriteSsrConstants fills it.
+// NOTE: reflections are sharp (mirror). Roughness-driven glossy blur needs a
+// denoiser to be clean (a few stochastic rays alone are noisy) — that is S11's
+// job (temporal accumulation / DLSS-RR); see the integration plan.
 #define RT_REFLECT_CS_RS \
+    "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
-// t0: Scene TLAS, t1: LightTarget (HDR), t2: GB1 (world normal), t3: Depth
-// u0: SSR output (premultiplied); s0 LinearClamp, s1 PointClamp
+    "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)," \
+    "StaticSampler(s1, filter=FILTER_MIN_MAG_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)"
 
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
-RaytracingAccelerationStructure Scene : register(t0);
-Texture2D           LightTarget : register(t1);
-Texture2D           GB1         : register(t2);
-Texture2D           DepthT      : register(t3);
-RWTexture2D<float4> SsrOut      : register(u0);
-SamplerState        gSmp        : register(s0);
-SamplerState        gSmpPoint   : register(s1);
-
-cbuffer PerFrame : register(b0)
+// Mirrors rt::GeometryInfoGPU.
+struct GeometryInfo
 {
-    float4x4 view, proj, invView, invProj;
-    float    depthA, depthB, zNear, zFar;
-    float2   screenSize;
-    float2   invScreenSize;
-    uint     tech;
-    float3   _padding;
+    uint   vbIndex;
+    uint   ibIndex;
+    uint   indexIs32;
+    uint   albedoTexIndex; // 0xFFFFFFFF = no texture (use baseColor)
+    float4 baseColor;
+};
+
+cbuffer Probe : register(b0)
+{
+    float4x4 view;
+    float4x4 proj;
+    float4x4 invView;
+    float4x4 invProj;
+    float3 sunDirWS;     float ambientIntensity;
+    float3 lightRgb;     float exposure;
+    float depthA;        float depthB;        uint outWidth;     uint outHeight;
+    uint tlasIndex;      uint lightIndex;     uint gb1Index;     uint depthIndex;
+    uint ssrUavIndex;    uint geomInfoIndex;  uint _pad0;        uint _pad1;
 }
 
-static const float kRayTMax = 1e4f;
-static const float kRtEps   = 1e-6f;
+SamplerState gSmp      : register(s0);
+SamplerState gSmpPoint : register(s1);
 
-float DepthToViewZ(float d) { return depthB / (d - depthA); }
-float ReadDepth(float2 uv)  { return DepthT.SampleLevel(gSmpPoint, uv, 0).r; }
+static const uint kVertexStride = 48u; // VertexPNTUV
+static const uint kNormalOffset = 12u;
+static const uint kUVOffset     = 40u;
 
-[numthreads(8, 8, 1)]
-[RootSignature(RT_REFLECT_CS_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+uint LoadIndex16(ByteAddressBuffer ib, uint i)
 {
-    uint outW, outH;
-    SsrOut.GetDimensions(outW, outH);
-    if (dtid.x >= outW || dtid.y >= outH)
+    const uint byteOff = i * 2u;
+    const uint word = ib.Load(byteOff & ~3u);
+    return ((byteOff & 2u) != 0u) ? (word >> 16) : (word & 0xFFFFu);
+}
+uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
+{
+    if (is32 != 0u) { return ib.Load3(prim * 12u); }
+    const uint b = prim * 3u;
+    return uint3(LoadIndex16(ib, b), LoadIndex16(ib, b + 1u), LoadIndex16(ib, b + 2u));
+}
+float3 LoadNormal(ByteAddressBuffer vb, uint vertex) { return asfloat(vb.Load3(vertex * kVertexStride + kNormalOffset)); }
+float2 LoadUV(ByteAddressBuffer vb, uint vertex)     { return asfloat(vb.Load2(vertex * kVertexStride + kUVOffset)); }
+
+// Trace one reflection ray; on hit, return its radiance (screen color where the
+// hit is visible, else shaded). Returns false on miss.
+bool TraceReflection(float3 origin, float3 dir, out float3 radiance)
+{
+    radiance = float3(0.0f, 0.0f, 0.0f);
+
+    RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
+    RayDesc ray; ray.Origin = origin; ray.Direction = dir; ray.TMin = 0.0f; ray.TMax = 1e4f;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    while (q.Proceed()) {}
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return false; }
+
+    float3 hitWS = origin + dir * q.CommittedRayT();
+    Texture2D depthT = ResourceDescriptorHeap[depthIndex];
+
+    // Fast path: the hit is the visible surface at some screen pixel -> exact color.
+    float4 hv = mul(float4(hitWS, 1.0f), view);
+    float4 hc = mul(hv, proj);
+    if (hc.w > 1e-6f)
     {
-        return;
-    }
-
-    float2 uv = (float2(dtid.xy) + 0.5f) / float2(outW, outH);
-    float depth = ReadDepth(uv);
-
-    float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f); // no surface / no reflection -> skybox via compose
-    if (depth > kRtEps)
-    {
-        float3 N = normalize(GB1.SampleLevel(gSmp, uv, 0).rgb * 2.0f - 1.0f);
-        float3 P = ReconstructPosWS(uv, depth, invProj, invView);
-        float3 camPos = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
-        float3 I = normalize(P - camPos); // camera -> surface
-        float3 R = reflect(I, N);
-
-        RayDesc ray;
-        ray.Origin    = P + N * 0.02f;    // nudge off the surface
-        ray.Direction = R;
-        ray.TMin      = 0.0f;
-        ray.TMax      = kRayTMax;
-
-        RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
-        q.TraceRayInline(Scene, RAY_FLAG_NONE, 0xFFu, ray);
-        while (q.Proceed()) {}
-
-        if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        float2 huv = (hc.xy / hc.w) * float2(0.5f, -0.5f) + 0.5f;
+        if (all(huv >= 0.0f) && all(huv <= 1.0f))
         {
-            // Reproject the hit point to screen and, if it is the visible surface
-            // there, sample the lit HDR color (Tier-1 screen-color reflection).
-            float3 hitWS = ray.Origin + R * q.CommittedRayT();
-            float4 hv = mul(float4(hitWS, 1.0f), view);
-            float4 hc = mul(hv, proj);
-            if (hc.w > kRtEps)
+            float sd = depthT.SampleLevel(gSmpPoint, huv, 0).r;
+            if (sd > 1e-6f)
             {
-                float2 huv = (hc.xy / hc.w) * float2(0.5f, -0.5f) + 0.5f;
-                if (all(huv >= 0.0f) && all(huv <= 1.0f))
+                float visVZ = depthB / (sd - depthA);
+                if (abs(hv.z - visVZ) / max(visVZ, 1e-3f) < 0.05f)
                 {
-                    float sd = ReadDepth(huv);
-                    if (sd > kRtEps)
-                    {
-                        float hitVZ = hv.z;
-                        float visVZ = DepthToViewZ(sd);
-                        // Visible iff the hit sits at the depth of what the camera
-                        // sees at that pixel (else it's occluded -> skybox).
-                        if (abs(hitVZ - visVZ) / max(visVZ, 1e-3f) < 0.05f)
-                        {
-                            float3 c = LightTarget.SampleLevel(gSmp, huv, 0).rgb;
-                            result = float4(c, 1.0f); // premultiplied, full coverage
-                        }
-                    }
+                    Texture2D lightT = ResourceDescriptorHeap[lightIndex];
+                    radiance = lightT.SampleLevel(gSmp, huv, 0).rgb;
+                    return true;
                 }
             }
         }
     }
 
-    SsrOut[dtid.xy] = result;
+    // Tier-2 shaded path: bindless geometry + material, sun diffuse + ambient + shadow.
+    StructuredBuffer<GeometryInfo> geom = ResourceDescriptorHeap[geomInfoIndex];
+    GeometryInfo g = geom[q.CommittedInstanceID()];
+    ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
+    ByteAddressBuffer ib = ResourceDescriptorHeap[g.ibIndex];
+
+    uint3 tri = LoadTriangle(ib, q.CommittedPrimitiveIndex(), g.indexIs32);
+    float2 bary = q.CommittedTriangleBarycentrics();
+    float  bw = 1.0f - bary.x - bary.y;
+    float3 nObj = normalize(LoadNormal(vb, tri.x) * bw + LoadNormal(vb, tri.y) * bary.x + LoadNormal(vb, tri.z) * bary.y);
+    float3x4 o2w = q.CommittedObjectToWorld3x4();
+    float3 Nw = normalize(mul((float3x3)o2w, nObj));
+    if (dot(Nw, dir) > 0.0f) { Nw = -Nw; }
+
+    float3 albedo = g.baseColor.rgb;
+    if (g.albedoTexIndex != 0xFFFFFFFFu)
+    {
+        float2 uvHit = LoadUV(vb, tri.x) * bw + LoadUV(vb, tri.y) * bary.x + LoadUV(vb, tri.z) * bary.y;
+        Texture2D albedoTex = ResourceDescriptorHeap[g.albedoTexIndex];
+        albedo *= albedoTex.SampleLevel(gSmp, uvHit, 0).rgb;
+    }
+
+    float3 L = normalize(-sunDirWS);
+    float ndl = saturate(dot(Nw, L));
+    float shadow = 1.0f;
+    if (ndl > 0.0f)
+    {
+        RayDesc sray; sray.Origin = hitWS + Nw * 0.02f; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = 1e4f;
+        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+        sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
+        sq.Proceed();
+        if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) { shadow = 0.0f; }
+    }
+    radiance = (albedo * ambientIntensity + albedo * ndl * shadow) * lightRgb * exposure;
+    return true;
+}
+
+[numthreads(8, 8, 1)]
+[RootSignature(RT_REFLECT_CS_RS)]
+void CSMain(uint3 dtid : SV_DispatchThreadID)
+{
+    if (dtid.x >= outWidth || dtid.y >= outHeight)
+    {
+        return;
+    }
+
+    RWTexture2D<float4> outTex = ResourceDescriptorHeap[ssrUavIndex];
+    Texture2D depthT = ResourceDescriptorHeap[depthIndex];
+    Texture2D gb1    = ResourceDescriptorHeap[gb1Index];
+
+    float2 uv = (float2(dtid.xy) + 0.5f) / float2(outWidth, outHeight);
+    float depth = depthT.SampleLevel(gSmpPoint, uv, 0).r;
+
+    float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f); // no surface / miss -> skybox via compose
+    if (depth > 1e-6f)
+    {
+        float3 N = normalize(gb1.SampleLevel(gSmp, uv, 0).rgb * 2.0f - 1.0f);
+        float3 P = ReconstructPosWS(uv, depth, invProj, invView);
+        float3 camPos = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
+        float3 R = reflect(normalize(P - camPos), N);
+
+        float3 radiance;
+        if (TraceReflection(P + N * 0.02f, R, radiance))
+        {
+            result = float4(radiance, 1.0f); // premultiplied, full coverage
+        }
+    }
+
+    outTex[dtid.xy] = result;
 }

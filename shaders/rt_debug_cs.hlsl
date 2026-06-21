@@ -22,8 +22,8 @@ struct GeometryInfo
     uint   vbIndex;
     uint   ibIndex;
     uint   indexIs32;
-    uint   materialIndex;
-    float4 albedo;
+    uint   albedoTexIndex;
+    float4 baseColor;
 };
 
 cbuffer Probe : register(b0)
@@ -125,7 +125,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             float3x4 o2w = q.CommittedObjectToWorld3x4();
             float3 nWorld = normalize(mul((float3x3)o2w, nObj));
 
-            result = float4(nWorld * 0.5f + 0.5f, 1.0f) * g.albedo; // hit normal as color
+            result = float4(nWorld * 0.5f + 0.5f, 1.0f) * g.baseColor; // hit normal as color
         }
         else
         {

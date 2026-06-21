@@ -121,16 +121,16 @@ public:
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
 
     // RT (S5): a standalone opaque mesh contributes one TLAS instance at its CPU
-    // world matrix. (GpuInstancedModels overrides this back to false — its
-    // transforms are GPU-driven.)
-    bool GetRtInstance(Mesh*& outMesh, Math::mat4& outWorld) const override
+    // world matrix. No material textures at this tier (GBufferRenderable adds the
+    // albedo); GpuInstancedModels overrides back to false (GPU-driven transforms).
+    bool GetRtInstance(RtInstanceDesc& out) const override
     {
         if (!mesh_ || mesh_->GetIndexCount() == 0 || IsTransparent())
         {
             return false;
         }
-        outMesh = mesh_.get();
-        outWorld = modelMatrix_;
+        out.mesh = mesh_.get();
+        out.world = modelMatrix_;
         return true;
     }
 
