@@ -105,6 +105,10 @@ public:
     // don't stay at LOD 0 forever (their aggregate world bounds span the whole cloud).
     virtual float GetLodRadius() const { return GetWorldBounds().GetRadius(); }
 
+    // Step 6: camera LOD chosen in PrepareViews (with hysteresis), read at draw time.
+    void SelectLod(const Camera& camera) override;
+    unsigned int GetCameraLod() const override { return cameraLod_; }
+
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
     Material* GetShadowMaterial() const { return shadowMaterial_.get(); }
@@ -188,6 +192,7 @@ private:
 
     mutable AABB worldBoundsCache_;
     mutable bool worldBoundsDirty_ = true;
+    unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
 
     Math::float3 pos_{};
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);

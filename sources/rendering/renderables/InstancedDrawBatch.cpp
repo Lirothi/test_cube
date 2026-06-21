@@ -32,23 +32,27 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*> members,
     }
 }
 
-void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+void InstancedDrawBatch::BuildLodBuckets()
 {
-    if (!renderer || !cl || !gfxMat_ || !mesh_ || members_.empty()) { return; }
-
-    // Step 6d: PER-INSTANCE LOD. Each member picks its tier from its OWN world bounds (no
-    // aggregate/cloud bound), then we emit one instanced draw per occupied tier — so a
-    // spatially spread run still LODs each object correctly, at the cost of <= kMaxLodTiers draws.
-    const Math::float3 camPos = camera.GetPosition();
-    const UINT maxTier = mesh_->GetLodCount() - 1u; // clamp so empty/duplicate tiers don't draw
+    // Step 6d: PER-INSTANCE LOD — group members by the camera LOD chosen in PrepareViews (each
+    // member used its OWN bounds, so a spatially spread run LODs each object correctly). Render
+    // then emits one instanced draw per occupied tier. Called in PrepareViews (not recording).
     for (auto& bucket : lodBuckets_) { bucket.clear(); }
+    if (!mesh_) { return; }
+    const UINT maxTier = mesh_->GetLodCount() - 1u; // clamp so empty/duplicate tiers don't draw
     for (RenderableObjectBase* m : members_)
     {
         if (!m) { continue; }
-        UINT tier = render::SelectLodTier(m->GetWorldBounds(), camPos);
+        UINT tier = m->GetCameraLod();
         if (tier > maxTier) { tier = maxTier; }
+        if (tier >= kMaxLodTiers) { tier = kMaxLodTiers - 1u; }
         lodBuckets_[tier].push_back(m);
     }
+}
+
+void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& /*camera*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    if (!renderer || !cl || !gfxMat_ || !mesh_ || members_.empty()) { return; }
     for (UINT tier = 0; tier < kMaxLodTiers; ++tier)
     {
         if (!lodBuckets_[tier].empty())

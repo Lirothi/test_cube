@@ -22,6 +22,10 @@ public:
                    Material* gfx, Material* shadow, MaterialData* matData, Mesh* mesh,
                    bool simple);
 
+    // Step 6: bucket members by their (PrepareViews-computed) camera LOD, for the camera pass.
+    // Called once when the batch is built (PrepareViews), so Render stays side-effect-free.
+    void BuildLodBuckets();
+
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
     void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override;
 

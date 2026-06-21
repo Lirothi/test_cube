@@ -114,8 +114,9 @@ void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
     for (UINT i = 0; i < n; ++i)
     {
         const Math::float3 wp = model.TransformPoint(ComputeInstanceOffset(i));
-        UINT t = render::SelectLodTier(wp, radius, camPos);
+        UINT t = render::SelectLodTier(wp, radius, camPos, instanceLastTier_[i]); // per-instance hysteresis
         if (t > maxTier) { t = maxTier; }
+        instanceLastTier_[i] = static_cast<uint8_t>(t);
         tierOf[i] = static_cast<uint8_t>(t);
         ++tierCount_[t];
     }
@@ -129,12 +130,16 @@ void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
     }
 }
 
+void GpuInstancedModels::SelectLod(const Camera& camera)
+{
+    // Step 6: build the per-instance LOD partition once per frame in PrepareViews; Render reads it.
+    BuildLodPartition(camera.GetPosition());
+}
+
 void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {
     Material* mat = GetGraphicsMaterial();
     if (!renderer || !cl || !mat || !mesh_ || instanceCount_ == 0u) { return; }
-
-    BuildLodPartition(camera.GetPosition());
 
     constexpr UINT kAlign = render::kConstantBufferAlignment;
 

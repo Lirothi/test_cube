@@ -57,6 +57,13 @@ public:
     virtual bool CastsShadow() const = 0;
     virtual void OnMaterialHotReload(Renderer* renderer) {}
 
+    // Step 6: choose this object's camera/gbuffer LOD for the frame. Called once per visible
+    // object in Scene::PrepareViews (NOT during recording) so the per-object/per-instance
+    // state (incl. hysteresis) is updated outside the parallel record. Render() just reads it.
+    // Shadow LOD is the cascade index, chosen per-pass by the renderer — not here.
+    virtual void SelectLod(const Camera& /*camera*/) {}
+    virtual unsigned int GetCameraLod() const { return 0u; }
+
     // Draw identity for opaque sorting + instanced-run grouping (Step 3/4). Default empty key
     // (mesh-less / transient renderables sort together). See RenderBatchKey above.
     virtual RenderBatchKey BatchKey() const { return {}; }

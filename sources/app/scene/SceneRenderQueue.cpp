@@ -160,7 +160,18 @@ InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
     return instancedBatches_[cursor++].get();
 }
 
-void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor)
+void SceneRenderQueue::SelectLods(const Camera& camera)
+{
+    for (auto& bucket : visibleBuckets_)
+    {
+        for (RenderableObjectBase* obj : bucket)
+        {
+            if (obj) { obj->SelectLod(camera); }
+        }
+    }
+}
+
+void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor, bool computeLodBuckets)
 {
     ObjectBucket& bucket = visibleBuckets_[ToIndex(type)];
     if (bucket.size() < render::kInstancingThreshold)
@@ -207,6 +218,7 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
                              leadKey.materialData,
                              leadKey.mesh,
                              simple);
+            if (computeLodBuckets) { batch->BuildLodBuckets(); } // camera view: per-instance LOD
             rewritten.push_back(batch);
         }
         else
@@ -222,15 +234,15 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
     bucket.swap(rewritten);
 }
 
-void SceneRenderQueue::BuildInstancedBatches()
+void SceneRenderQueue::BuildInstancedBatches(bool computeLodBuckets)
 {
     if (!render::g_instancingEnabled)
     {
         return;
     }
     size_t batchCursor = 0;
-    BuildInstancedBatchesForBucket(BucketType::OpaqueSimple, batchCursor);
-    BuildInstancedBatchesForBucket(BucketType::OpaqueComplex, batchCursor);
+    BuildInstancedBatchesForBucket(BucketType::OpaqueSimple, batchCursor, computeLodBuckets);
+    BuildInstancedBatchesForBucket(BucketType::OpaqueComplex, batchCursor, computeLodBuckets);
 }
 
 void SceneRenderQueue::Cull(const Frustum& frustum)

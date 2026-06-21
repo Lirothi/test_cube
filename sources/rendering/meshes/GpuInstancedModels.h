@@ -29,6 +29,8 @@ public:
     // Step 6: override the camera draw to issue one instanced draw per LOD tier (per-instance
     // LOD) — the base path would draw the whole cloud at one LOD.
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
+    // Step 6: build the per-instance LOD partition in PrepareViews; Render just reads it.
+    void SelectLod(const Camera& camera) override;
     bool IsSimpleRender() const { return false; }
     bool CastsShadow() const override { return true; }
 
@@ -70,6 +72,7 @@ private:
     std::array<uint32_t, kMaxLodInstances> instanceRemap_{};
     std::array<UINT, kLodTiers> tierBase_{};
     std::array<UINT, kLodTiers> tierCount_{};
+    std::array<uint8_t, kMaxLodInstances> instanceLastTier_{}; // per-instance hysteresis state
     void BuildLodPartition(const Math::float3& camPos);
 
     void MarkInstanceBoundsDirty();

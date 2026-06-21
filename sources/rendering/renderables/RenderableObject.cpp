@@ -155,9 +155,16 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ctx.cbv[1] = viewCB; // shared per-pass view CB (b1); ignored by shaders without b1
 
     RecordGraphics(renderer, cl, ctx, camera, cbData);
-    // Step 6c: screen-size LOD for the gbuffer/camera view (clamped to available LODs). Uses
-    // GetLodRadius() (per-instance size) so cloud/instanced objects select correctly too.
-    DrawGeometry(cl, render::SelectLodTier(GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition()));
+    // Step 6: draw at the camera LOD chosen in PrepareViews (see SelectLod). Mesh::SelectLod
+    // clamps to available LODs. No selection/mutation here — recording is side-effect-free.
+    DrawGeometry(cl, cameraLod_);
+}
+
+void RenderableObject::SelectLod(const Camera& camera)
+{
+    // Hysteresis off the current tier; per-instance radius (GetLodRadius) so cloud/instanced
+    // objects select on their single-mesh size, not their aggregate bound.
+    cameraLod_ = render::SelectLodTier(GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition(), cameraLod_);
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,

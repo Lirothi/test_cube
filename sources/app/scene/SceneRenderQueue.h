@@ -24,10 +24,14 @@ public:
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
     void SortTransparent(const mat4& view);
+    // Step 6: choose each visible object's camera LOD (PrepareViews, camera view only) so it's
+    // ready before batching + recording. Call AFTER Cull, BEFORE BuildInstancedBatches.
+    void SelectLods(const Camera& camera);
     // Step 4: collapse contiguous runs of instanceable (mesh,material) objects in the
     // visible OPAQUE buckets into one InstancedDrawBatch each. Call AFTER SortOpaque (so
     // identical objects are contiguous) and after Cull (so only visible members instance).
-    void BuildInstancedBatches();
+    // computeLodBuckets: build each batch's per-tier camera-LOD buckets (camera view only).
+    void BuildInstancedBatches(bool computeLodBuckets);
     // Step 3: group the visible OPAQUE buckets into runs of identical pipeline state
     // (PSO, material, mesh) so the bind cache can elide redundant state changes. Safe
     // because opaque draws are depth-tested (order-independent); transparents are NOT
@@ -56,7 +60,8 @@ private:
     float ComputeDepth(const mat4& view, const TransparentEntry& entry) const;
 
     // Step 4: rewrite one visible opaque bucket, replacing instanceable runs with batches.
-    void BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor);
+    // computeLodBuckets: build each batch's per-instance camera-LOD buckets (camera view only).
+    void BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor, bool computeLodBuckets);
     InstancedDrawBatch* AcquireBatch(size_t& cursor);
 
     std::array<ObjectBucket, 4> buckets_{};

@@ -386,13 +386,17 @@ void Scene::PrepareViews(Renderer* renderer)
         if (view.type == SceneView::Type::Camera)
         {
             view.queue.SortTransparent(view.view);
+            // Step 6: choose each visible object's camera LOD here (per-view, before parallel
+            // recording) so Render stays side-effect-free; persistent per-object state gives
+            // hysteresis. Shadow views keep their per-cascade LOD floor (chosen at record time).
+            view.queue.SelectLods(camera_);
         }
         // Step 3: group opaque draws by pipeline state (PSO/material/mesh). Step 4: collapse
         // the resulting identical-(mesh,material) runs into instanced batches. Applied to the
         // camera gbuffer view AND every shadow view — opaque draws are depth-tested, so the
         // reorder is invisible, and the grid instances in both the gbuffer and shadow passes.
         view.queue.SortOpaque();
-        view.queue.BuildInstancedBatches();
+        view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
     };
 
     tc::inl_vector<SceneView*, 32> viewsToCull;
