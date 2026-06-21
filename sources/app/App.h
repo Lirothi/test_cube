@@ -18,16 +18,26 @@
 
 class App {
 public:
+    ~App();
+
     void Run(HINSTANCE hInstance, int nCmdShow);
 
 private:
     std::unique_ptr<Systems::AppSystems> systems_;
     AppController appController_;
+    HWND hWnd_ = nullptr;
+    HBITMAP loadingBitmap_ = nullptr;
+    BITMAP loadingBitmapInfo_{};
     bool isRunning_ = true;
+    bool loadingScreenVisible_ = true;
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     void InitWindow(HINSTANCE hInstance, int nCmdShow);
     void InitScene();
+    void LoadLoadingScreen();
+    void ReleaseLoadingScreen();
+    void HideLoadingScreen();
+    void PaintLoadingScreen(HDC dc) const;
 
     void SetRunnig(bool running)
     {

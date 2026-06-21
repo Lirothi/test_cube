@@ -4,14 +4,152 @@
 #include "core/profiling/ProfilerScopes.h"
 #include <algorithm>
 #include <cassert>
+#include <climits>
 #include <mimalloc.h>
 #include <vector>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include "app/levels/DemoLevel.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
 
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
+
 static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
+
+namespace
+{
+    constexpr const wchar_t* kLoadingScreenPath = L"data/loading_screen.jpg";
+
+    class ScopedComInitialization
+    {
+    public:
+        ScopedComInitialization()
+            : hr_(CoInitializeEx(nullptr, COINIT_MULTITHREADED))
+            , uninitialize_(SUCCEEDED(hr_))
+        {
+        }
+
+        ~ScopedComInitialization()
+        {
+            if (uninitialize_)
+            {
+                CoUninitialize();
+            }
+        }
+
+        bool IsValid() const
+        {
+            return SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE;
+        }
+
+    private:
+        HRESULT hr_;
+        bool uninitialize_;
+    };
+
+    HBITMAP LoadBitmapFromWicFile(const wchar_t* path, BITMAP& outInfo)
+    {
+        outInfo = {};
+
+        ScopedComInitialization com;
+        if (!com.IsValid())
+        {
+            return nullptr;
+        }
+
+        Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(factory.GetAddressOf()));
+        if (FAILED(hr))
+        {
+            return nullptr;
+        }
+
+        Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+        hr = factory->CreateDecoderFromFilename(
+            path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, decoder.GetAddressOf());
+        if (FAILED(hr))
+        {
+            return nullptr;
+        }
+
+        Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+        hr = decoder->GetFrame(0, frame.GetAddressOf());
+        if (FAILED(hr))
+        {
+            return nullptr;
+        }
+
+        UINT width = 0;
+        UINT height = 0;
+        hr = frame->GetSize(&width, &height);
+        if (FAILED(hr) || width == 0 || height == 0 || width > static_cast<UINT>(INT_MAX) || height > static_cast<UINT>(INT_MAX) ||
+            width > UINT_MAX / 4u || height > UINT_MAX / (width * 4u))
+        {
+            return nullptr;
+        }
+
+        Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+        hr = factory->CreateFormatConverter(converter.GetAddressOf());
+        if (FAILED(hr))
+        {
+            return nullptr;
+        }
+
+        hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+        if (FAILED(hr))
+        {
+            return nullptr;
+        }
+
+        BITMAPINFO bitmapInfo{};
+        bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
+        bitmapInfo.bmiHeader.biWidth = static_cast<LONG>(width);
+        bitmapInfo.bmiHeader.biHeight = -static_cast<LONG>(height);
+        bitmapInfo.bmiHeader.biPlanes = 1;
+        bitmapInfo.bmiHeader.biBitCount = 32;
+        bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+        void* pixels = nullptr;
+        HDC screenDc = GetDC(nullptr);
+        if (!screenDc)
+        {
+            return nullptr;
+        }
+
+        HBITMAP bitmap = CreateDIBSection(screenDc, &bitmapInfo, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        ReleaseDC(nullptr, screenDc);
+        if (!bitmap || !pixels)
+        {
+            if (bitmap)
+            {
+                DeleteObject(bitmap);
+            }
+            return nullptr;
+        }
+
+        const UINT stride = width * 4u;
+        const UINT byteCount = stride * height;
+        hr = converter->CopyPixels(nullptr, stride, byteCount, static_cast<BYTE*>(pixels));
+        if (FAILED(hr))
+        {
+            DeleteObject(bitmap);
+            return nullptr;
+        }
+
+        GetObjectW(bitmap, sizeof(outInfo), &outInfo);
+        return bitmap;
+    }
+}
+
+App::~App()
+{
+    ReleaseLoadingScreen();
+}
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     App* app = reinterpret_cast<App*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -48,6 +186,23 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         }
         break;
     }
+    case WM_ERASEBKGND:
+        if (app && app->loadingScreenVisible_)
+        {
+            app->PaintLoadingScreen(reinterpret_cast<HDC>(wParam));
+            return 1;
+        }
+        break;
+    case WM_PAINT:
+        if (app && app->loadingScreenVisible_)
+        {
+            PAINTSTRUCT ps{};
+            HDC dc = BeginPaint(hWnd, &ps);
+            app->PaintLoadingScreen(dc);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        break;
     case WM_DESTROY:
         if (app)
         {
@@ -91,7 +246,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     int posX = (screenRect.right - windowWidth) / 2;
     int posY = (screenRect.bottom - windowHeight) / 2;
 
-    HWND hWnd = CreateWindow(
+    hWnd_ = CreateWindow(
         wc.lpszClassName,
         L"D3D12 Multi-Mesh Renderer",
         WS_OVERLAPPEDWINDOW,
@@ -101,14 +256,17 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
         nullptr, nullptr,
         hInstance, this
     );
-    SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    SetWindowLongPtr(hWnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
-    ShowWindow(hWnd, nCmdShow);
+    LoadLoadingScreen();
+    loadingScreenVisible_ = true;
+    ShowWindow(hWnd_, nCmdShow);
+    UpdateWindow(hWnd_);
 
     auto& renderer = systems_->renderer;
     auto& input = systems_->input;
-    renderer.InitD3D12(hWnd, defWidth, defHeight);
-    input.Initialize(hWnd);
+    renderer.InitD3D12(hWnd_, defWidth, defHeight);
+    input.Initialize(hWnd_);
 #if PROF_GPU_ENABLED
     Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue());
 #endif
@@ -154,6 +312,103 @@ void App::InitScene()
     assert(levelLoaded && "Failed to load initial level");
 
     uploadBatch.SubmitAndWait(&renderer);
+    HideLoadingScreen();
+}
+
+void App::LoadLoadingScreen()
+{
+    ReleaseLoadingScreen();
+
+    loadingBitmap_ = LoadBitmapFromWicFile(kLoadingScreenPath, loadingBitmapInfo_);
+}
+
+void App::ReleaseLoadingScreen()
+{
+    if (loadingBitmap_)
+    {
+        DeleteObject(loadingBitmap_);
+        loadingBitmap_ = nullptr;
+    }
+    loadingBitmapInfo_ = {};
+}
+
+void App::HideLoadingScreen()
+{
+    loadingScreenVisible_ = false;
+    ReleaseLoadingScreen();
+}
+
+void App::PaintLoadingScreen(HDC dc) const
+{
+    if (!dc || !hWnd_)
+    {
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(hWnd_, &client);
+    const int clientW = std::max<LONG>(client.right - client.left, 1);
+    const int clientH = std::max<LONG>(client.bottom - client.top, 1);
+
+    HBRUSH blackBrush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    FillRect(dc, &client, blackBrush);
+
+    if (loadingBitmap_ && loadingBitmapInfo_.bmWidth > 0 && loadingBitmapInfo_.bmHeight > 0)
+    {
+        HDC imageDc = CreateCompatibleDC(dc);
+        HGDIOBJ oldBitmap = SelectObject(imageDc, loadingBitmap_);
+
+        const double scaleX = static_cast<double>(clientW) / static_cast<double>(loadingBitmapInfo_.bmWidth);
+        const double scaleY = static_cast<double>(clientH) / static_cast<double>(loadingBitmapInfo_.bmHeight);
+        const double scale = std::max(scaleX, scaleY);
+        const int drawW = std::max(1, static_cast<int>(static_cast<double>(loadingBitmapInfo_.bmWidth) * scale + 0.5));
+        const int drawH = std::max(1, static_cast<int>(static_cast<double>(loadingBitmapInfo_.bmHeight) * scale + 0.5));
+        const int drawX = (clientW - drawW) / 2;
+        const int drawY = (clientH - drawH) / 2;
+
+        SetStretchBltMode(dc, HALFTONE);
+        SetBrushOrgEx(dc, 0, 0, nullptr);
+        StretchBlt(dc, drawX, drawY, drawW, drawH,
+            imageDc, 0, 0, loadingBitmapInfo_.bmWidth, loadingBitmapInfo_.bmHeight, SRCCOPY);
+
+        SelectObject(imageDc, oldBitmap);
+        DeleteDC(imageDc);
+    }
+
+    const int minDim = std::max(1, std::min(clientW, clientH));
+    const int margin = std::max(24, minDim / 24);
+    const int fontHeight = std::max(32, minDim / 18);
+    HFONT font = CreateFontW(
+        -fontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    const int oldBkMode = SetBkMode(dc, TRANSPARENT);
+    const COLORREF oldColor = SetTextColor(dc, RGB(0, 0, 0));
+
+    RECT textRect{
+        client.left + margin,
+        client.top + margin,
+        client.right - margin,
+        client.bottom - margin
+    };
+    RECT shadowRect = textRect;
+    OffsetRect(&shadowRect, 3, 3);
+    DrawTextW(dc, L"Loading...", -1, &shadowRect, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+
+    SetTextColor(dc, RGB(245, 248, 252));
+    DrawTextW(dc, L"Loading...", -1, &textRect, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+
+    SetTextColor(dc, oldColor);
+    SetBkMode(dc, oldBkMode);
+    if (oldFont)
+    {
+        SelectObject(dc, oldFont);
+    }
+    if (font)
+    {
+        DeleteObject(font);
+    }
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
