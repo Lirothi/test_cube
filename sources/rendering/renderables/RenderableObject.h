@@ -120,6 +120,20 @@ public:
     // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
 
+    // RT (S5): a standalone opaque mesh contributes one TLAS instance at its CPU
+    // world matrix. (GpuInstancedModels overrides this back to false — its
+    // transforms are GPU-driven.)
+    bool GetRtInstance(Mesh*& outMesh, Math::mat4& outWorld) const override
+    {
+        if (!mesh_ || mesh_->GetIndexCount() == 0 || IsTransparent())
+        {
+            return false;
+        }
+        outMesh = mesh_.get();
+        outWorld = modelMatrix_;
+        return true;
+    }
+
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);

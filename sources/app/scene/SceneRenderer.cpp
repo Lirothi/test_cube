@@ -203,6 +203,12 @@ void SceneRenderer::RefreshMaterialHandles(Renderer* renderer,
 void SceneRenderer::Reset()
 {
     resources_ = SceneResourceBootstrapper{};
+    // Drop cached BLAS/TLAS — their Mesh* keys become dangling across a level
+    // reload. Re-inited lazily on the next RT-enabled frame.
+    asManager_.Reset();
+    asManagerInited_ = false;
+    asScratchRetireFrame_ = 0;
+    rtInstances_.clear();
     frame_ = nullptr;
 }
 
@@ -214,6 +220,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
 
     frame_ = &frame;
+
+    // RT acceleration structures (S5): gated on hardware support AND the runtime
+    // toggle. When off (the default) or unsupported, the Main_BuildAS pass is
+    // never added below and the frame is byte-identical to before.
+    const bool rtBuildAS = renderer->IsRaytracingSupported() && frame.settings.rtBuildAccelStructures;
+    if (rtBuildAS && !asManagerInited_)
+    {
+        asManager_.Init(renderer->GetDevice5());
+        asManagerInited_ = true;
+    }
 
     renderer->BeginSubmitTimeline();
 
@@ -244,6 +260,21 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
     MainRenderGraph rg;
+
+    // RT acceleration-structure build (S5): the first pass when RT is enabled.
+    // No consumer yet, so it's an independent node (no prereqs/dependents); a
+    // future RT reflections pass (S7) will depend on it. The pass declares no
+    // resource states and never transitions the AS buffers, so they bypass the
+    // ResourceStateTracker and stay in RAYTRACING_ACCELERATION_STRUCTURE.
+    if (rtBuildAS)
+    {
+        rg.AddPass(RenderPass::Main_BuildAS, {},
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassBuildAS);
+                Pass_BuildAS(renderer, ctx);
+            });
+    }
+
     // CL group (step 5): the prologue clear and the object-compute dispatches are
     // two tiny back-to-back lists with no mtDeps; share one command list.
     rg.BeginCLGroup();
@@ -504,6 +535,67 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
         renderJob(jobIndex);
     }
 #endif
+}
+
+void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    // Retire scratch from earlier (one-time) BLAS builds once their command
+    // list's frame has surely completed — kFrameCount frames later, when that
+    // frame slot is reused and BeginFrame has waited on its fence.
+    const uint64_t frameNo = renderer->GetTotalFrameNumber();
+    if (asManager_.HasPendingScratch() && frameNo >= asScratchRetireFrame_)
+    {
+        asManager_.ReleaseCompletedScratch();
+    }
+
+    // Gather opaque, single-mesh, CPU-placed instances. Instanced clouds (GPU
+    // transforms), ocean (displaced) and transparent/glass return false from
+    // GetRtInstance and are excluded for now (S13 defines their handling).
+    rtInstances_.clear();
+    if (frame_->objects)
+    {
+        uint32_t instanceId = 0;
+        Mesh* mesh = nullptr;
+        Math::mat4 world;
+        for (const auto& obj : *frame_->objects)
+        {
+            if (obj && obj->GetRtInstance(mesh, world))
+            {
+                rt::InstanceEntry entry;
+                entry.mesh = mesh;
+                entry.world = world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
+                entry.instanceId = instanceId++;
+                rtInstances_.push_back(entry);
+            }
+        }
+    }
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassBuildAS);
+        // AS buffers bypass the ResourceStateTracker: this pass declares no
+        // resource states and never calls Transition on them, so the RenderGraph
+        // never moves them out of RAYTRACING_ACCELERATION_STRUCTURE / UNORDERED_
+        // ACCESS. Mesh VB/IB are read by first-frame BLAS builds via implicit
+        // COMMON->NON_PIXEL_SHADER_RESOURCE promotion (this pass runs first, so
+        // the buffers are fresh-decayed to COMMON).
+        ID3D12GraphicsCommandList4* cl4 = renderer->AsCmdList4(t.cl);
+        if (cl4 && !rtInstances_.empty())
+        {
+            asManager_.BuildTlas(rtInstances_, cl4, renderer->GetCurrentFrameIndex());
+            if (asManager_.HasPendingScratch())
+            {
+                asScratchRetireFrame_ = frameNo + render::kFrameCount;
+            }
+        }
+    }
+    ctx.EndCL(t);
 }
 
 void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)

@@ -52,6 +52,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
         }
+        if (input.WasActionPressed("ToggleRTReflections"))
+        {
+            settings_.rtBuildAccelStructures = !settings_.rtBuildAccelStructures; // F7: S5 RT accel-structure build
+        }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)
         {

@@ -7,6 +7,7 @@
 
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
+#include "rendering/rt/AccelerationStructure.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderQueue.h"
@@ -56,6 +57,7 @@ private:
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize,
         D3D12_GPU_VIRTUAL_ADDRESS viewCB);
 
+    void Pass_BuildAS(Renderer* r, RenderGraphPassContext ctx);
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
 
@@ -89,6 +91,15 @@ private:
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
     SceneResourceBootstrapper resources_{};
+
+    // RT acceleration structures (S5). Built by Pass_BuildAS when RT is supported
+    // and enabled; no consumer yet. asManager_ owns the per-mesh BLAS cache and
+    // the per-frame TLAS. asScratchRetireFrame_ defers releasing one-time BLAS
+    // build scratch until its command list's frame has surely completed.
+    rt::AccelerationStructureManager asManager_;
+    bool asManagerInited_ = false;
+    uint64_t asScratchRetireFrame_ = 0;
+    std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
 
     // Valid only during Render(); pass bodies (running on task threads) read it.
     const SceneFrameData* frame_ = nullptr;

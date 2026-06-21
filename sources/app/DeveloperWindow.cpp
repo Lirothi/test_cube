@@ -156,6 +156,19 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
                 ImGui::Separator();
 
+                // RT acceleration structures (S5). Greyed out on non-RT hardware;
+                // builds the BLAS/TLAS each frame (no visible consumer yet).
+                const bool rtSupported = renderer.IsRaytracingSupported();
+                ImGui::BeginDisabled(!rtSupported);
+                ImGui::Checkbox("RT accel structures [F7]", &settings.rtBuildAccelStructures);
+                ImGui::EndDisabled();
+                if (!rtSupported)
+                {
+                    ImGui::TextDisabled("Hardware ray tracing not available.");
+                }
+
+                ImGui::Separator();
+
                 const bool dlssControlsRenderScale = renderer.IsDlssActive();
                 ImGui::BeginDisabled(dlssControlsRenderScale);
                 float renderScale = renderer.GetRenderResolutionScale();

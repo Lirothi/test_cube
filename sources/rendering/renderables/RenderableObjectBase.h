@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "core/math/AABB.h"
+#include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/core/RenderGraph.h"
 
@@ -78,6 +79,17 @@ public:
     {
         static const AABB kInvalidBounds = AABB::Empty();
         return kInvalidBounds;
+    }
+
+    // RT (S5): if this renderable is a single mesh placed by a CPU world matrix,
+    // fill outMesh + outWorld and return true. Instanced/GPU-driven, transformless
+    // or transparent renderables return false (excluded from the ray-tracing TLAS
+    // for now — S13 defines their handling).
+    virtual bool GetRtInstance(Mesh*& outMesh, Math::mat4& outWorld) const
+    {
+        (void)outMesh;
+        (void)outWorld;
+        return false;
     }
 
     uint32_t GetRenderLayerMask() const { return renderLayerMask_; }

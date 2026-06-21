@@ -93,9 +93,11 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12Graph
     Microsoft::WRL::ComPtr<ID3D12Resource> result =
         CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
                         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+    // Scratch is created in COMMON: D3D12 ignores (and warns about) a non-COMMON
+    // initial state on buffers, and the build's UAV write implicitly promotes it.
     Microsoft::WRL::ComPtr<ID3D12Resource> scratch =
         CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                        D3D12_RESOURCE_STATE_COMMON);
     if (!result || !scratch) {
         return slot;
     }
@@ -214,8 +216,10 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         f.resultSize = f.result ? info.ResultDataMaxSizeInBytes : 0;
     }
     if (f.scratchSize < info.ScratchDataSizeInBytes || !f.scratch) {
+        // COMMON: avoids the buffer-initial-state-ignored warning; the build's
+        // UAV write implicitly promotes it to UNORDERED_ACCESS.
         f.scratch = CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
-                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                                    D3D12_RESOURCE_STATE_COMMON);
         f.scratchSize = f.scratch ? info.ScratchDataSizeInBytes : 0;
     }
     if (!f.result || !f.scratch) {

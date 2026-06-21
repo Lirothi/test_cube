@@ -29,6 +29,11 @@ struct SceneRenderSettings
     bool doFxaa = false;
     bool debugTexMode = false;
     bool showProfiler = false;
+    // S5: build the ray-tracing acceleration structures each frame (gated also on
+    // Renderer::IsRaytracingSupported). Default off — when off, or on non-RT
+    // hardware, the Main_BuildAS pass is never added and the frame is unchanged.
+    // S8 will fold this into a proper reflection-source enum.
+    bool rtBuildAccelStructures = false;
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per
