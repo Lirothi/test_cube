@@ -37,6 +37,12 @@ VSOut VSMain(VSIn i) {
 Texture2D tex0 : register(t0);
 SamplerState samp0 : register(s0);
 
+// #3 shadow-compositing toggle: 1 = principled text-over-shadow over-composite,
+// 0 = legacy lerp(shadow, text, coverage*k). Flip and save to A/B via hot-reload.
+#ifndef FONT_SHADOW_COMPOSITE
+#define FONT_SHADOW_COMPOSITE 1
+#endif
+
 [RootSignature(FONT_SDF_RS)]
 float4 PSMain(VSOut i) : SV_Target {
     float d = tex0.Sample(samp0, i.uv).r;
@@ -51,16 +57,25 @@ float4 PSMain(VSOut i) : SV_Target {
 
     float shadowAlpha = i.shadowParams.y;
     if (shadowAlpha > 0.0f) {
-        float4 shadowColor = float4(shadowColorRgb.xyz, 0.0f);
         float2 atlasTexelSize = viewportAtlas.zw;
         float2 shadowUv = i.uv - shadowOffsetBase.xy * i.shadowParams.x * atlasTexelSize;
         float shadowD = tex0.Sample(samp0, shadowUv).r;
 
-        float shadowCoverage = smoothstep(0.5 - w, 0.5 + w, shadowD);
-        shadowCoverage = saturate(shadowCoverage);
-        shadowColor.a = saturate(shadowAlpha * shadowCoverage);
+        float shadowCoverage = saturate(smoothstep(0.5 - w, 0.5 + w, shadowD));
 
+#if FONT_SHADOW_COMPOSITE
+        // Suppress the shadow where the glyph covers it, then composite
+        // text-over-shadow into one straight-alpha output. Exact for the
+        // SrcAlpha/InvSrcAlpha blend: equals text over (shadow over background).
+        float fgA = textColor.a;                                  // i.col.a * coverage
+        float shA = saturate(shadowAlpha * shadowCoverage) * (1.0 - fgA);
+        float outA = fgA + shA;
+        float3 outRGB = (textColor.rgb * fgA + shadowColorRgb.xyz * shA) / max(outA, 1e-5);
+        return float4(outRGB, outA);
+#else
+        float4 shadowColor = float4(shadowColorRgb.xyz, saturate(shadowAlpha * shadowCoverage));
         return lerp(shadowColor, textColor, saturate(coverage * 3.0f));
+#endif
     }
     return textColor;
 }

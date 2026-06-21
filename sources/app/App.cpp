@@ -381,7 +381,7 @@ void App::PaintLoadingScreen(HDC dc) const
     HFONT font = CreateFontW(
         -fontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        DEFAULT_PITCH | FF_SWISS, L"Consolas");
     HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
     const int oldBkMode = SetBkMode(dc, TRANSPARENT);
     const COLORREF oldColor = SetTextColor(dc, RGB(0, 0, 0));
