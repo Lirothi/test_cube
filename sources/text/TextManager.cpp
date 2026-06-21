@@ -944,19 +944,19 @@ size_t TextManager::EmitTextDirect(int x, int y, float px, const float4& color, 
                 v.shadowParams = packedShadow;
 
                 v.pos.x = gx; v.pos.y = gy;
-                v.uv.x = gph->u0; v.uv.y = gph->v0;
+                v.uv = gph->uv00;
                 curV[0] = v;
 
                 v.pos.x = gx + gw;
-                v.uv.x = gph->u1;
+                v.uv = gph->uv10;
                 curV[1] = v;
 
                 v.pos.y = gy + gh;
-                v.uv.y = gph->v1;
+                v.uv = gph->uv11;
                 curV[2] = v;
 
                 v.pos.x = gx;
-                v.uv.x = gph->u0;
+                v.uv = gph->uv01;
                 curV[3] = v;
 
                 penX += float(gph->xadv) * scale;
@@ -1005,19 +1005,19 @@ size_t TextManager::EmitTextDirect(int x, int y, float px, const float4& color, 
                 v.shadowParams = packedShadow;
 
                 v.pos.x = gx; v.pos.y = gy;
-                v.uv.x = gph->u0; v.uv.y = gph->v0;
+                v.uv = gph->uv00;
                 curV[0] = v;
 
                 v.pos.x = gx + gw;
-                v.uv.x = gph->u1;
+                v.uv = gph->uv10;
                 curV[1] = v;
 
                 v.pos.y = gy + gh;
-                v.uv.y = gph->v1;
+                v.uv = gph->uv11;
                 curV[2] = v;
 
                 v.pos.x = gx;
-                v.uv.x = gph->u0;
+                v.uv = gph->uv01;
                 curV[3] = v;
 
                 penX += float(gph->xadv) * scale;
@@ -1183,25 +1183,25 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
         v.shadowParams = packedShadow;
 
         v.pos.x = gx; v.pos.y = gy;
-        v.uv.x = gph->u0; v.uv.y = gph->v0;
+        v.uv = gph->uv00;
         curV[0] = v;
 
         //v.pos = { gx + gw, gy };
-        //v.uv = { gph->u1, gph->v0 };
+        //v.uv = gph->uv10;
         v.pos.x = gx + gw;
-        v.uv.x = gph->u1;
+        v.uv = gph->uv10;
         curV[1] = v;
 
         //v.pos = { gx + gw, gy + gh };
-        //v.uv = { gph->u1, gph->v1 };
+        //v.uv = gph->uv11;
         v.pos.y = gy + gh;
-        v.uv.y = gph->v1;
+        v.uv = gph->uv11;
         curV[2] = v;
 
         //v.pos = { gx, gy + gh };
-        //v.uv = { gph->u0, gph->v1 };
+        //v.uv = gph->uv01;
         v.pos.x = gx;
-        v.uv.x = gph->u0;
+        v.uv = gph->uv01;
         curV[3] = v;
 
     }
@@ -1235,7 +1235,7 @@ void TextManager::EmitRectImpl(int x, int y, float w, float h, const float4& col
 
     Vertex v;
     v.col = PackColorUnorm8(color);
-    v.uv = { 0.0f, 0.0f };
+    v.uv = 0u;
     v.shadowParams = PackHalf2(0.0f, 0.0f);
 
     v.pos = { gx, gy };

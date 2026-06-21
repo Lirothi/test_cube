@@ -307,7 +307,7 @@ void AppController::BuildDeveloperWindow(Renderer& renderer, const Scene& scene,
                 ImGui::Text("Frame: %llu", static_cast<unsigned long long>(renderer.GetTotalFrameNumber()));
 
                 ImGui::Separator();
-                if (ImGui::TreeNodeEx("TextManager stats", ImGuiTreeNodeFlags_DefaultOpen))
+                if (ImGui::TreeNodeEx("TextManager stats"))
                 {
                     TextManager* textManager = renderer.GetTextManager();
                     bool textStatsEnabled = textManager->GetPerfStatsEnabled();

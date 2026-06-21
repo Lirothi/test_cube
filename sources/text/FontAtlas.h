@@ -12,6 +12,7 @@ struct FontGlyph {
     int x=0,y=0,w=0,h=0;
     int xoff=0,yoff=0,xadv=0;
     float u0=0, v0=0, u1=0, v1=0;
+    uint32_t uv00=0, uv10=0, uv11=0, uv01=0;
 };
 
 class FontAtlas {

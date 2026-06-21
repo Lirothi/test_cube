@@ -14,6 +14,21 @@ using nlohmann::json;
 
 namespace {
 constexpr uint32_t kInvalidGlyphIndex = std::numeric_limits<uint32_t>::max();
+
+uint32_t PackUvUnorm16(float u, float v) {
+    const auto toU16 = [](float value) -> uint32_t {
+        const float clamped = std::clamp(value, 0.0f, 1.0f);
+        return static_cast<uint32_t>(clamped * 65535.0f + 0.5f);
+    };
+    return toU16(u) | (toU16(v) << 16);
+}
+
+void UpdatePackedUv(FontGlyph& glyph) {
+    glyph.uv00 = PackUvUnorm16(glyph.u0, glyph.v0);
+    glyph.uv10 = PackUvUnorm16(glyph.u1, glyph.v0);
+    glyph.uv11 = PackUvUnorm16(glyph.u1, glyph.v1);
+    glyph.uv01 = PackUvUnorm16(glyph.u0, glyph.v1);
+}
 }
 
 // VERY small TGA reader (8-bit)
@@ -71,6 +86,7 @@ void FontAtlas::InitAsciiBenchmarkFont() {
         g.v0 = float(g.y) * invH;
         g.u1 = float(g.x + g.w) * invW;
         g.v1 = float(g.y + g.h) * invH;
+        UpdatePackedUv(g);
         glyphs_.push_back(g);
     }
 
@@ -159,6 +175,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
             else {
                 g.u0 = g.v0 = g.u1 = g.v1 = 0.0f;
             }
+            UpdatePackedUv(g);
             glyphs_.push_back(g);
         }
     }
@@ -228,6 +245,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
         auto itN = std::lower_bound(glyphs_.begin(), glyphs_.end(), static_cast<uint32_t>('n'), lowerBoundCp);
         const bool hasN = (itN != glyphs_.end() && itN->cp == (uint32_t)'n');
         sp.xadv = (hasN ? itN->xadv : (pxSize_ / 2));
+        UpdatePackedUv(sp);
 
         itSpace = glyphs_.insert(itSpace, sp);
     }

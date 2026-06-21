@@ -134,9 +134,10 @@ private:
     struct Vertex {
         float2 pos;
         uint32_t col;
-        float2 uv;
+        uint32_t uv; // R16G16_UNORM
         uint32_t shadowParams; // half2: x = offset scale factor, y = final shadow alpha
     };
+    static_assert(sizeof(Vertex) == 20, "Text vertex packing expects a 20-byte stride");
 
     // Precomputed glyph run for a single line
     struct GlyphRun {
