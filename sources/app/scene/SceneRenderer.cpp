@@ -221,14 +221,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     frame_ = &frame;
 
-    // RT acceleration structures (S5) + debug viz (S6): gated on hardware support
-    // AND the runtime toggles. When off (the default) or unsupported, neither
-    // pass is added below and the frame is byte-identical. The debug view (S6)
-    // needs the TLAS, so it implies the AS build.
-    const bool rtDebugView = renderer->IsRaytracingSupported() && frame.settings.rtDebugView;
-    const bool rtReflections = renderer->IsRaytracingSupported() && frame.settings.rtReflections;
-    const bool rtBuildAS = renderer->IsRaytracingSupported() &&
-        (frame.settings.rtBuildAccelStructures || rtDebugView || rtReflections);
+    // Reflection source (S8) + RT debug viz (S6), gated on hardware support. RT
+    // reflections fall back to SSR on non-RT hardware (rtReflect stays false, so
+    // the SSR pass runs). The AS is built only when RT reflections or the debug
+    // viz need it; otherwise the frame is byte-identical to the SSR/Off path.
+    const bool rtSupported = renderer->IsRaytracingSupported();
+    const bool rtDebugView = rtSupported && frame.settings.rtDebugView;
+    const bool rtReflect = rtSupported && frame.settings.reflectionSource == ReflectionSource::RT;
+    const bool reflectionsOff = frame.settings.reflectionSource == ReflectionSource::Off;
+    const bool rtBuildAS = rtReflect || rtDebugView;
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -375,11 +376,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // per-CL prologue/acquire overhead dominates these passes' tiny record cost,
     // and the inter-pass acquire barriers become correctly-placed intra-CL barriers.
     rg.BeginCLGroup();
-    // Reflection source: RT reflections (S7) run INSTEAD of SSR, writing the same
-    // premultiplied ssr buffer, so the blur + compose chain is identical either
-    // way. The RT variant adds an mt-dep on Main_BuildAS (TLAS ready); the TLAS
-    // SRV it samples bypasses the state tracker.
-    const bool useRtReflections = rtReflections && pBuildAS != (size_t)-1;
+    // Reflection source (S8): whichever variant runs writes the same premultiplied
+    // ssr buffer, so the blur + compose chain is identical. RT (S7) runs instead
+    // of SSR (mt-dep on Main_BuildAS; its TLAS SRV bypasses the state tracker);
+    // Off just clears ssr so compose shows skybox specular only.
+    const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -392,6 +393,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassRTReflections);
                 Pass_RTReflections(renderer, ctx, *frame_->camera);
+            });
+    }
+    else if (reflectionsOff)
+    {
+        pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
+            { { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassSSR);
+                Pass_ClearReflections(renderer, ctx);
             });
     }
     else
@@ -1335,6 +1345,26 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
             D.ssr.Get());
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_ClearReflections(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    // Reflection source = Off: zero the ssr target so the (unchanged) blur +
+    // compose produce skybox-specular-only reflections. ssr is per-frame, so it
+    // must be cleared every frame, not once.
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSSR);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl); // ssr -> UNORDERED_ACCESS
+
+        renderer->BindDescriptorHeaps(t.cl);
+        const GpuDescHandle uav = renderer->StageSrvUavTable({ D.ssrUAV });
+        const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        t.cl->ClearUnorderedAccessViewFloat(uav.gpu, D.ssrUAV, D.ssr.Get(), zero, 0, nullptr);
     }
     ctx.EndCL(t);
 }

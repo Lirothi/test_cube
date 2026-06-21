@@ -52,17 +52,20 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
         }
-        if (input.WasActionPressed("ToggleRTReflections"))
+        if (input.WasActionPressed("CycleReflectionSource"))
         {
-            settings_.rtBuildAccelStructures = !settings_.rtBuildAccelStructures; // F7: S5 RT accel-structure build
+            // F5: cycle Off -> SSR -> RT -> Off (skip RT on non-RT hardware).
+            const bool rt = renderer.IsRaytracingSupported();
+            switch (settings_.reflectionSource)
+            {
+            case ReflectionSource::Off: settings_.reflectionSource = ReflectionSource::SSR; break;
+            case ReflectionSource::SSR: settings_.reflectionSource = rt ? ReflectionSource::RT : ReflectionSource::Off; break;
+            default:                    settings_.reflectionSource = ReflectionSource::Off; break;
+            }
         }
         if (input.WasActionPressed("ToggleRTDebugView"))
         {
             settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> SSR target
-        }
-        if (input.WasActionPressed("ToggleRTReflectionsMode"))
-        {
-            settings_.rtReflections = !settings_.rtReflections; // F5: S7 Tier-1 RT reflections (replaces SSR)
         }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)

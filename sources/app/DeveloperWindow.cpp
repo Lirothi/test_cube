@@ -156,19 +156,35 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
                 ImGui::Separator();
 
-                // RT acceleration structures (S5). Greyed out on non-RT hardware;
-                // builds the BLAS/TLAS each frame (no visible consumer yet).
+                // Reflection source (S8): Off / SSR / RT. RT is greyed out on
+                // non-RT hardware (and the renderer falls back to SSR anyway).
                 const bool rtSupported = renderer.IsRaytracingSupported();
-                ImGui::BeginDisabled(!rtSupported);
-                ImGui::Checkbox("RT reflections (replaces SSR) [F5]", &settings.rtReflections);
-                ImGui::Checkbox("RT accel structures [F7]", &settings.rtBuildAccelStructures);
-                ImGui::Checkbox("RT debug view -> SSR target [F6]", &settings.rtDebugView);
-                ImGui::EndDisabled();
+                const char* srcLabels[] = { "Off", "SSR", "RT" };
+                int curSrc = static_cast<int>(settings.reflectionSource);
+                if (curSrc < 0 || curSrc >= 3) { curSrc = 1; }
+                if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
+                {
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const bool isRT = (i == 2);
+                        ImGui::BeginDisabled(isRT && !rtSupported);
+                        if (ImGui::Selectable(srcLabels[i], curSrc == i))
+                        {
+                            settings.reflectionSource = static_cast<ReflectionSource>(i);
+                        }
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
                 if (!rtSupported)
                 {
-                    ImGui::TextDisabled("Hardware ray tracing not available.");
+                    ImGui::TextDisabled("RT requires hardware ray tracing (unavailable).");
                 }
-                else if (settings.rtDebugView)
+
+                ImGui::BeginDisabled(!rtSupported);
+                ImGui::Checkbox("RT debug view -> SSR target [F6]", &settings.rtDebugView);
+                ImGui::EndDisabled();
+                if (rtSupported && settings.rtDebugView)
                 {
                     ImGui::TextDisabled("Open the render-target inspector [F4] and select 'Ssr'.");
                 }

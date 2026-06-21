@@ -21,6 +21,17 @@ enum class SsrTechnique : uint32_t
     Count
 };
 
+// Where screen reflections come from (S8). Off = skybox specular only; SSR =
+// screen-space; RT = hardware ray-traced (Tier-1). RT is only honored when
+// Renderer::IsRaytracingSupported() — otherwise the renderer falls back to SSR.
+enum class ReflectionSource : uint32_t
+{
+    Off = 0,
+    SSR = 1,
+    RT = 2,
+    Count
+};
+
 // Debug/render toggles owned by the app layer (AppController maps input actions
 // to these) and snapshotted into SceneFrameData each frame.
 struct SceneRenderSettings
@@ -29,19 +40,14 @@ struct SceneRenderSettings
     bool doFxaa = false;
     bool debugTexMode = false;
     bool showProfiler = false;
-    // S5: build the ray-tracing acceleration structures each frame (gated also on
-    // Renderer::IsRaytracingSupported). Default off — when off, or on non-RT
-    // hardware, the Main_BuildAS pass is never added and the frame is unchanged.
-    // S8 will fold this into a proper reflection-source enum.
-    bool rtBuildAccelStructures = false;
-    // S6: RT hit/visibility debug viz. Traces a reflection ray per pixel against
-    // the TLAS and writes a hit-distance/miss image into the SSR target (view it
-    // via the render-target inspector -> Ssr). Implies the AS build. Default off.
+    // S8: the reflection source. Default SSR (today's behavior). RT runs the
+    // Tier-1 ray-traced pass instead of SSR; Off clears the reflection buffer
+    // (skybox specular only). RT auto-falls back to SSR on non-RT hardware.
+    ReflectionSource reflectionSource = ReflectionSource::SSR;
+    // S6: RT hit/visibility debug viz (dev tool). Traces a reflection ray per
+    // pixel and writes a hit-distance/miss image into the SSR target (view via
+    // the render-target inspector -> Ssr). Builds the AS regardless of source.
     bool rtDebugView = false;
-    // S7: Tier-1 RT reflections. Runs instead of Pass_SSR, writing premultiplied
-    // reflected radiance into the SSR target (blur + compose unchanged). Implies
-    // the AS build. Default off. S8 folds {SSR, RT} into a reflection-source enum.
-    bool rtReflections = false;
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per
