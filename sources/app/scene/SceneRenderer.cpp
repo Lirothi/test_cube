@@ -221,10 +221,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     frame_ = &frame;
 
-    // RT acceleration structures (S5): gated on hardware support AND the runtime
-    // toggle. When off (the default) or unsupported, the Main_BuildAS pass is
-    // never added below and the frame is byte-identical to before.
-    const bool rtBuildAS = renderer->IsRaytracingSupported() && frame.settings.rtBuildAccelStructures;
+    // RT acceleration structures (S5) + debug viz (S6): gated on hardware support
+    // AND the runtime toggles. When off (the default) or unsupported, neither
+    // pass is added below and the frame is byte-identical. The debug view (S6)
+    // needs the TLAS, so it implies the AS build.
+    const bool rtDebugView = renderer->IsRaytracingSupported() && frame.settings.rtDebugView;
+    const bool rtBuildAS = renderer->IsRaytracingSupported() &&
+        (frame.settings.rtBuildAccelStructures || rtDebugView);
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -266,9 +269,10 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // future RT reflections pass (S7) will depend on it. The pass declares no
     // resource states and never transitions the AS buffers, so they bypass the
     // ResourceStateTracker and stay in RAYTRACING_ACCELERATION_STRUCTURE.
+    size_t pBuildAS = (size_t)-1;
     if (rtBuildAS)
     {
-        rg.AddPass(RenderPass::Main_BuildAS, {},
+        pBuildAS = rg.AddPass(RenderPass::Main_BuildAS, {},
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassBuildAS);
                 Pass_BuildAS(renderer, ctx);
@@ -402,6 +406,23 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_Compose(renderer, ctx, *frame_->camera);
         });
     rg.EndCLGroup();
+
+    // RT debug visualization (S6): runs AFTER the SSR group so it can overwrite
+    // the (already-consumed) ssr target with ray-hit data for inspection via
+    // TextureDebugViewer -> Ssr, without disturbing the composited scene. Needs
+    // the TLAS (mtDep on Main_BuildAS) and ssr free (prereq/mtDep on Compose).
+    // The TLAS SRV bypasses the state tracker (staged as a plain descriptor).
+    if (rtDebugView && pBuildAS != (size_t)-1)
+    {
+        rg.AddPassMT(RenderPass::Main_RTDebug, { pCompose }, { pCompose, pBuildAS },
+            { { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassRTDebug);
+                Pass_RTDebug(renderer, ctx, *frame_->camera);
+            });
+    }
 
     // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST
     // flips mid-list) before rebinding the targets — inherently ordered work that
@@ -1345,6 +1366,62 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDebug);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl);
+
+        auto debugMaterial = resources_.GetRtDebugMaterial();
+        const UINT cbSize = resources_.GetSsrCBSizeBytes(); // shares ssr_cs's b0 layout
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
+        if (!debugMaterial || cbSize == 0 || tlasSrv.ptr == 0 ||
+            asManager_.TlasInstanceCount(frameIndex) == 0)
+        {
+            ctx.EndCL(t);
+            return; // no TLAS this frame — leave ssr as compose left it
+        }
+
+        SsrPassConstants constants{};
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
+        constants.view = camera.GetViewMatrix();
+        constants.proj = camera.GetProjMatrix();
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
+        constants.depthA = zNear / (zNear - zFar);
+        constants.depthB = (zNear * zFar) / (zFar - zNear);
+        constants.zNear = zNear;
+        constants.zFar = zFar;
+        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
+        constants.invScreenSize = float2(
+            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+        constants.technique = 0;
+
+        // TLAS SRV is staged like any other SRV (CopyDescriptorsSimple from the
+        // AS manager's CPU heap) — the descriptor encodes the AS via its Location.
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        RecordComputeDispatch(renderer, t.cl, debugMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
+            { tlasSrv, D.gbSRV[1], D.depthSRV }, // t0 TLAS, t1 GB1 (normal), t2 Depth
+            { D.ssrUAV },                        // u0 output (SSR target, viewed raw)
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
+            D.ssr.Get());
+
+        // Leave ssr in the same frame-end state compose does, so the texture
+        // inspector reads it exactly as it would the normal SSR result.
+        renderer->Transition(t.cl, D.ssr.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
     ctx.EndCL(t);
 }
 

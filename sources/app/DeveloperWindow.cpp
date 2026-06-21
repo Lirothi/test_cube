@@ -161,10 +161,15 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 const bool rtSupported = renderer.IsRaytracingSupported();
                 ImGui::BeginDisabled(!rtSupported);
                 ImGui::Checkbox("RT accel structures [F7]", &settings.rtBuildAccelStructures);
+                ImGui::Checkbox("RT debug view -> SSR target [F6]", &settings.rtDebugView);
                 ImGui::EndDisabled();
                 if (!rtSupported)
                 {
                     ImGui::TextDisabled("Hardware ray tracing not available.");
+                }
+                else if (settings.rtDebugView)
+                {
+                    ImGui::TextDisabled("Open the render-target inspector [F4] and select 'Ssr'.");
                 }
 
                 ImGui::Separator();

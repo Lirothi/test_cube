@@ -82,6 +82,8 @@ private:
     void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    void Pass_RTDebug(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,

@@ -35,6 +35,7 @@ const Profiler::ScopeNameKey kPassBuildAS = Profiler::RegisterTraceLiteral(L"Pas
 const Profiler::ScopeNameKey kPassSSR = Profiler::RegisterTraceLiteral(L"Pass_SSR");
 const Profiler::ScopeNameKey kPassSSRBlur = Profiler::RegisterTraceLiteral(L"Pass_SSR.Blur");
 const Profiler::ScopeNameKey kPassCompose = Profiler::RegisterTraceLiteral(L"Pass_Compose");
+const Profiler::ScopeNameKey kPassRTDebug = Profiler::RegisterTraceLiteral(L"Pass_RTDebug");
 const Profiler::ScopeNameKey kPassTransparent = Profiler::RegisterTraceLiteral(L"Pass_Transparent");
 const Profiler::ScopeNameKey kPassDebugDraw = Profiler::RegisterTraceLiteral(L"Pass_DebugDraw");
 const Profiler::ScopeNameKey kPassTonemap = Profiler::RegisterTraceLiteral(L"Pass_Tonemap");

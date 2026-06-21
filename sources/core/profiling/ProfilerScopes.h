@@ -41,6 +41,7 @@ extern const Profiler::ScopeNameKey kPassBuildAS;
 extern const Profiler::ScopeNameKey kPassSSR;
 extern const Profiler::ScopeNameKey kPassSSRBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
+extern const Profiler::ScopeNameKey kPassRTDebug;
 extern const Profiler::ScopeNameKey kPassTransparent;
 extern const Profiler::ScopeNameKey kPassDebugDraw;
 extern const Profiler::ScopeNameKey kPassTonemap;

@@ -34,6 +34,10 @@ struct SceneRenderSettings
     // hardware, the Main_BuildAS pass is never added and the frame is unchanged.
     // S8 will fold this into a proper reflection-source enum.
     bool rtBuildAccelStructures = false;
+    // S6: RT hit/visibility debug viz. Traces a reflection ray per pixel against
+    // the TLAS and writes a hit-distance/miss image into the SSR target (view it
+    // via the render-target inspector -> Ssr). Implies the AS build. Default off.
+    bool rtDebugView = false;
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per

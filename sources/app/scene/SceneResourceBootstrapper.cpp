@@ -237,6 +237,17 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matBlur_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // S6 RT debug viz: a cs_6_5 RayQuery shader. Only built on RT-capable
+    // hardware (else the cs_6_5 compile would fail / fall back); the debug pass
+    // is gated on the same support, so it stays null otherwise.
+    if (!matRtDebug_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_debug_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtDebug_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matDebug_)
     {
         Material::GraphicsDesc gd{};

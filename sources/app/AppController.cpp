@@ -56,6 +56,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             settings_.rtBuildAccelStructures = !settings_.rtBuildAccelStructures; // F7: S5 RT accel-structure build
         }
+        if (input.WasActionPressed("ToggleRTDebugView"))
+        {
+            settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> SSR target
+        }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)
         {
