@@ -248,6 +248,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtDebug_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matRtReflect_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_reflections_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtReflect_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matDebug_)
     {
         Material::GraphicsDesc gd{};

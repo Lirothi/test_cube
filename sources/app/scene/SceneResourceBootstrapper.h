@@ -218,6 +218,7 @@ public:
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
     std::shared_ptr<Material> GetRtDebugMaterial() const { return matRtDebug_; } // S6, null on non-RT HW
+    std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
 
     const SceneLightingCBHandles& LightingHandles() const { return lightingHandles_; }
     const ScenePointLightCBHandles& PointHandles() const { return pointHandles_; }
@@ -259,7 +260,8 @@ private:
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
-    std::shared_ptr<Material> matRtDebug_; // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
+    std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
+    std::shared_ptr<Material> matRtReflect_; // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
 
     SceneLightingCBHandles lightingHandles_{};
     ScenePointLightCBHandles pointHandles_{};

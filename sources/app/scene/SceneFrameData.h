@@ -38,6 +38,10 @@ struct SceneRenderSettings
     // the TLAS and writes a hit-distance/miss image into the SSR target (view it
     // via the render-target inspector -> Ssr). Implies the AS build. Default off.
     bool rtDebugView = false;
+    // S7: Tier-1 RT reflections. Runs instead of Pass_SSR, writing premultiplied
+    // reflected radiance into the SSR target (blur + compose unchanged). Implies
+    // the AS build. Default off. S8 folds {SSR, RT} into a reflection-source enum.
+    bool rtReflections = false;
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per

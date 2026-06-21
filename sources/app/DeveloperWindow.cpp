@@ -160,6 +160,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 // builds the BLAS/TLAS each frame (no visible consumer yet).
                 const bool rtSupported = renderer.IsRaytracingSupported();
                 ImGui::BeginDisabled(!rtSupported);
+                ImGui::Checkbox("RT reflections (replaces SSR) [F5]", &settings.rtReflections);
                 ImGui::Checkbox("RT accel structures [F7]", &settings.rtBuildAccelStructures);
                 ImGui::Checkbox("RT debug view -> SSR target [F6]", &settings.rtDebugView);
                 ImGui::EndDisabled();

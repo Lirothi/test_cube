@@ -79,6 +79,8 @@ private:
         const SceneView* view);
     void Pass_SSR(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera);
     void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);

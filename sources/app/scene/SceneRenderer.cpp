@@ -226,8 +226,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // pass is added below and the frame is byte-identical. The debug view (S6)
     // needs the TLAS, so it implies the AS build.
     const bool rtDebugView = renderer->IsRaytracingSupported() && frame.settings.rtDebugView;
+    const bool rtReflections = renderer->IsRaytracingSupported() && frame.settings.rtReflections;
     const bool rtBuildAS = renderer->IsRaytracingSupported() &&
-        (frame.settings.rtBuildAccelStructures || rtDebugView);
+        (frame.settings.rtBuildAccelStructures || rtDebugView || rtReflections);
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -374,15 +375,33 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // per-CL prologue/acquire overhead dominates these passes' tiny record cost,
     // and the inter-pass acquire barriers become correctly-placed intra-CL barriers.
     rg.BeginCLGroup();
-    auto pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky },
-        { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-          { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-          { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-          { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassSSR);
-            Pass_SSR(renderer, ctx, *frame_->camera);
-        });
+    // Reflection source: RT reflections (S7) run INSTEAD of SSR, writing the same
+    // premultiplied ssr buffer, so the blur + compose chain is identical either
+    // way. The RT variant adds an mt-dep on Main_BuildAS (TLAS ready); the TLAS
+    // SRV it samples bypasses the state tracker.
+    const bool useRtReflections = rtReflections && pBuildAS != (size_t)-1;
+    const std::initializer_list<ResourceStateDecl> reflectDecls = {
+        { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
+    size_t pSSR;
+    if (useRtReflections)
+    {
+        pSSR = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS }, reflectDecls,
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassRTReflections);
+                Pass_RTReflections(renderer, ctx, *frame_->camera);
+            });
+    }
+    else
+    {
+        pSSR = rg.AddPass(RenderPass::Main_SSR, { pSky }, reflectDecls,
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassSSR);
+                Pass_SSR(renderer, ctx, *frame_->camera);
+            });
+    }
 
     // First-use states only; the blur ping-pongs SSR<->SSRBlur states between
     // its two dispatches inside the pass body.
@@ -1260,6 +1279,59 @@ void SceneRenderer::Pass_SSR(Renderer* renderer, RenderGraphPassContext ctx,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
             { D.lightSRV, D.gbSRV[1], D.depthSRV }, // t0 Light, t1 GB1, t2 Depth
             { D.ssrUAV },                           // u0 output
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
+            D.ssr.Get());
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTReflections);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl);
+
+        auto reflectMaterial = resources_.GetRtReflectMaterial();
+        const UINT cbSize = resources_.GetSsrCBSizeBytes(); // shares ssr_cs's b0 layout
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
+        if (!reflectMaterial || cbSize == 0 || tlasSrv.ptr == 0 ||
+            asManager_.TlasInstanceCount(frameIndex) == 0)
+        {
+            // No usable TLAS this frame: leave ssr as is (degenerate/empty scene).
+            ctx.EndCL(t);
+            return;
+        }
+
+        SsrPassConstants constants{};
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
+        constants.view = camera.GetViewMatrix();
+        constants.proj = camera.GetProjMatrix();
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
+        constants.depthA = zNear / (zNear - zFar);
+        constants.depthB = (zNear * zFar) / (zFar - zNear);
+        constants.zNear = zNear;
+        constants.zFar = zFar;
+        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
+        constants.invScreenSize = float2(
+            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+        constants.technique = 0;
+
+        // TLAS SRV is staged like any other SRV; downstream (blur/compose) is
+        // identical to the SSR path since this writes the same premultiplied buffer.
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        RecordComputeDispatch(renderer, t.cl, reflectMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
+            { tlasSrv, D.lightSRV, D.gbSRV[1], D.depthSRV }, // t0 TLAS, t1 Light, t2 GB1, t3 Depth
+            { D.ssrUAV },                                    // u0 output
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
             D.ssr.Get());

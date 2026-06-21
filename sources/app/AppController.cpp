@@ -60,6 +60,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> SSR target
         }
+        if (input.WasActionPressed("ToggleRTReflectionsMode"))
+        {
+            settings_.rtReflections = !settings_.rtReflections; // F5: S7 Tier-1 RT reflections (replaces SSR)
+        }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)
         {
