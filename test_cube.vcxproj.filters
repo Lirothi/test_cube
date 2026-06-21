@@ -237,6 +237,9 @@
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp">
+      <Filter>sources\rendering\rt</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
@@ -454,6 +457,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/core/ComputeDispatch.h">
       <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/rt/AccelerationStructure.h">
+      <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/RtSmoke.h">
       <Filter>sources\rendering\rt</Filter>
