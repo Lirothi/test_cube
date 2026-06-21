@@ -52,15 +52,11 @@ float4 PSMain(VSOut i) : SV_Target {
     float shadowAlpha = i.shadowParams.y;
     if (shadowAlpha > 0.0f) {
         float4 shadowColor = float4(shadowColorRgb.xyz, 0.0f);
-        //float2 atlasTexelSize = viewportAtlas.zw;
-        float2 atlasTexelSize = 1.0f / viewportAtlas.xy;
+        float2 atlasTexelSize = viewportAtlas.zw;
         float2 shadowUv = i.uv - shadowOffsetBase.xy * i.shadowParams.x * atlasTexelSize;
         float shadowD = tex0.Sample(samp0, shadowUv).r;
 
-        float shadowW = fwidth(shadowD);
-        shadowW = max(shadowW, minw);
-
-        float shadowCoverage = smoothstep(0.5 - shadowW, 0.5 + shadowW, shadowD);
+        float shadowCoverage = smoothstep(0.5 - w, 0.5 + w, shadowD);
         shadowCoverage = saturate(shadowCoverage);
         shadowColor.a = saturate(shadowAlpha * shadowCoverage);
 

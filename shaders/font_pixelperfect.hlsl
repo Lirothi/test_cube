@@ -39,8 +39,7 @@ SamplerState samp0 : register(s0);
 
 [RootSignature(FONT_PP_RS)]
 float4 PSMain(VSOut i) : SV_Target {
-    //const float2 atlasTexelSize = viewportAtlas.zw;
-    const float2 atlasTexelSize = 1.0f / viewportAtlas.xy;
+    const float2 atlasTexelSize = viewportAtlas.zw;
     float coverage = saturate(tex0.Sample(samp0, i.uv).r);
     float4 textColor = float4(i.col.rgb, i.col.a * coverage);
 

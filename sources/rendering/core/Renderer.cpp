@@ -206,15 +206,15 @@ void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
     fontManager_.LoadFromFolder(this, uploadCl, uploadKeepAlive, folder);
 
     textManager_.Init(this);
-    //if (auto* def = fontManager_.Get(L"Consolas_32"))
-    if (auto* def = fontManager_.Get(L"Consolas_32_coverage"))
+    if (auto* def = fontManager_.Get(L"Consolas_32"))
+    //if (auto* def = fontManager_.Get(L"Consolas_32_coverage"))
     //if (auto* def = fontManager_.Get(L"cons_32"))
     {
         textManager_.SetFont(def);
     }
     auto shadowDesc = TextManager::ShadowDesc();
-    shadowDesc.offsetX = 4.0f;
-    shadowDesc.offsetY = 4.0f;
+    shadowDesc.offsetX = 2.0f;
+    shadowDesc.offsetY = 2.0f;
     shadowDesc.color.w = 0.9f;
     shadowDesc.scaleWithTextSize = true;
     textManager_.SetShadow(shadowDesc);
