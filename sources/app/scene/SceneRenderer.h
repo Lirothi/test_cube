@@ -8,6 +8,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/rt/AccelerationStructure.h"
+#include "rendering/rt/BindlessTable.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderQueue.h"
@@ -102,6 +103,7 @@ private:
     // the per-frame TLAS. asScratchRetireFrame_ defers releasing one-time BLAS
     // build scratch until its command list's frame has surely completed.
     rt::AccelerationStructureManager asManager_;
+    rt::BindlessTable bindless_; // S9: per-mesh VB/IB + geometry-info for RT hit shading
     bool asManagerInited_ = false;
     uint64_t asScratchRetireFrame_ = 0;
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)

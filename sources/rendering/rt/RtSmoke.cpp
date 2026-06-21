@@ -93,6 +93,21 @@ int RunRtSmoke(const char* outPath)
         return 0;
     }
 
+    // Bindless capability probe (S9): resource binding tier + highest shader model.
+    // SM6.6 dynamic resources (ResourceDescriptorHeap[]) need HighestShaderModel
+    // >= 0x66; the cleanest bindless path. Tier 3 also allows unbounded tables.
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+            Log("ResourceBindingTier: %d (1,2,3)\n", static_cast<int>(options.ResourceBindingTier));
+        }
+        D3D12_FEATURE_DATA_SHADER_MODEL sm{ D3D_SHADER_MODEL_6_7 };
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof(sm)))) {
+            Log("HighestShaderModel: 0x%02X (SM6.6 dynamic resources need >= 0x66)\n",
+                static_cast<unsigned>(sm.HighestShaderModel));
+        }
+    }
+
     // --- Queue / allocator / command list (QI to CommandList4) + fence ---
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12CommandAllocator> alloc;

@@ -240,6 +240,9 @@
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/rt/BindlessTable.cpp">
+      <Filter>sources\rendering\rt</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
@@ -459,6 +462,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h">
+      <Filter>sources\rendering\rt</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/rt/BindlessTable.h">
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/RtSmoke.h">

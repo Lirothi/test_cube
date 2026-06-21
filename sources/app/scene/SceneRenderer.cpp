@@ -206,6 +206,7 @@ void SceneRenderer::Reset()
     // Drop cached BLAS/TLAS — their Mesh* keys become dangling across a level
     // reload. Re-inited lazily on the next RT-enabled frame.
     asManager_.Reset();
+    bindless_.Reset();
     asManagerInited_ = false;
     asScratchRetireFrame_ = 0;
     rtInstances_.clear();
@@ -233,6 +234,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
+        bindless_.Init(renderer->GetDevice());
         asManagerInited_ = true;
     }
 
@@ -619,10 +621,19 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 rt::InstanceEntry entry;
                 entry.mesh = mesh;
                 entry.world = world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
-                entry.instanceId = instanceId++;
+                // TLAS InstanceID = the mesh's bindless geometry index (S9), so a
+                // hit can index the geometry table directly. Same mesh -> same
+                // index (instances share geometry). Falls back to a running index
+                // if the bindless table isn't up.
+                entry.instanceId = bindless_.Ready() ? bindless_.GetOrRegisterMesh(mesh) : instanceId;
                 rtInstances_.push_back(entry);
+                ++instanceId;
             }
         }
+    }
+    if (bindless_.Ready())
+    {
+        bindless_.UploadGeometryInfo();
     }
 
     auto t = ctx.BeginCL();
@@ -1471,6 +1482,23 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
+// Matches the `Probe` cbuffer in rt_debug_cs.hlsl (row-major; 2x mat4 then indices).
+namespace {
+struct RtDebugConstants
+{
+    Math::mat4 invView;
+    Math::mat4 invProj;
+    uint32_t tlasIndex = 0;
+    uint32_t gb1Index = 0;
+    uint32_t depthIndex = 0;
+    uint32_t ssrUavIndex = 0;
+    uint32_t geomInfoIndex = 0;
+    uint32_t outWidth = 0;
+    uint32_t outHeight = 0;
+    uint32_t _pad = 0;
+};
+} // namespace
+
 void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
@@ -1479,46 +1507,56 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDebug);
         const auto& D = renderer->GetDeferredForFrame();
-        ctx.ApplyDeclaredStates(t.cl);
+        ctx.ApplyDeclaredStates(t.cl); // ssr -> UAV, gb1/depth -> NON_PIXEL_SHADER_RESOURCE
 
         auto debugMaterial = resources_.GetRtDebugMaterial();
-        const UINT cbSize = resources_.GetSsrCBSizeBytes(); // shares ssr_cs's b0 layout
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
-        if (!debugMaterial || cbSize == 0 || tlasSrv.ptr == 0 ||
+        if (!debugMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0)
         {
             ctx.EndCL(t);
-            return; // no TLAS this frame — leave ssr as compose left it
+            return; // no TLAS / bindless table this frame — leave ssr as compose left it
         }
 
-        SsrPassConstants constants{};
-        const float zNear = camera.GetZNear();
-        const float zFar = camera.GetZFar();
-        constants.view = camera.GetViewMatrix();
-        constants.proj = camera.GetProjMatrix();
-        constants.invView = camera.GetInvViewMatrix();
-        constants.invProj = camera.GetInvProjMatrix();
-        constants.depthA = zNear / (zNear - zFar);
-        constants.depthB = (zNear * zFar) / (zFar - zNear);
-        constants.zNear = zNear;
-        constants.zFar = zFar;
-        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
-        constants.invScreenSize = float2(
-            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
-            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
-        constants.technique = 0;
+        // Copy this frame's scene descriptors into the persistent bindless heap so
+        // the shader can reach them via ResourceDescriptorHeap[]. (Geometry VB/IB +
+        // geometry-info live in the heap persistently, populated in Pass_BuildAS.)
+        bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);    // TLAS SRV
+        bindless_.WriteSceneDescriptor(frameIndex, 1, D.gbSRV[1]); // GB1 (normal)
+        bindless_.WriteSceneDescriptor(frameIndex, 2, D.depthSRV); // Depth
+        bindless_.WriteSceneDescriptor(frameIndex, 3, D.ssrUAV);   // ssr UAV (output)
 
-        // TLAS SRV is staged like any other SRV (CopyDescriptorsSimple from the
-        // AS manager's CPU heap) — the descriptor encodes the AS via its Location.
-        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-        RecordComputeDispatch(renderer, t.cl, debugMaterial.get(), cbSize,
-            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            { tlasSrv, D.gbSRV[1], D.depthSRV }, // t0 TLAS, t1 GB1 (normal), t2 Depth
-            { D.ssrUAV },                        // u0 output (SSR target, viewed raw)
-            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
-            renderer->GetSsrTextureWidth(), renderer->GetSsrTextureHeight(),
-            D.ssr.Get());
+        RtDebugConstants c{};
+        c.invView = camera.GetInvViewMatrix();
+        c.invProj = camera.GetInvProjMatrix();
+        c.tlasIndex = bindless_.SceneIndex(frameIndex, 0);
+        c.gb1Index = bindless_.SceneIndex(frameIndex, 1);
+        c.depthIndex = bindless_.SceneIndex(frameIndex, 2);
+        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 3);
+        c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.outWidth = renderer->GetSsrTextureWidth();
+        c.outHeight = renderer->GetSsrTextureHeight();
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtDebugConstants), render::kConstantBufferAlignment);
+        std::memcpy(cb.cpu, &c, sizeof(c));
+
+        // Bespoke dispatch: bind the bindless heap (not the per-frame heap) and the
+        // shader's root sig (RootFlags CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED + CBV(b0) +
+        // static samplers). Root param 0 is the b0 CBV.
+        ID3D12DescriptorHeap* heaps[] = { bindless_.Heap() };
+        t.cl->SetDescriptorHeaps(1, heaps);
+        t.cl->SetComputeRootSignature(debugMaterial->GetRootSignature());
+        t.cl->SetPipelineState(debugMaterial->GetPipelineState());
+        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+
+        const UINT gx = (c.outWidth + 7u) / 8u;
+        const UINT gy = (c.outHeight + 7u) / 8u;
+        if (gx > 0 && gy > 0)
+        {
+            t.cl->Dispatch(gx, gy, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.ssr.Get());
 
         // Leave ssr in the same frame-end state compose does, so the texture
         // inspector reads it exactly as it would the normal SSR result.
