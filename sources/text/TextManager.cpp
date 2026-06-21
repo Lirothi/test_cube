@@ -885,9 +885,6 @@ size_t TextManager::EmitTextDirect(int x, int y, float px, const float4& color, 
             if (desc.scaleWithDpi) {
                 offsetScale *= dpi_;
             }
-            else {
-                offsetScale = 0.0f;
-            }
 
             const float baseAlpha = desc.color.w * desc.alphaMultiplier * color.w;
             const float finalAlpha = std::clamp(baseAlpha, 0.0f, 1.0f);
@@ -1147,9 +1144,6 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
         float offsetScale = (desc.scaleWithTextSize ? 1.0f / scale : 1.0f);
         if (desc.scaleWithDpi) {
             offsetScale *= dpi_;
-        }
-        else {
-            offsetScale = 0.0f;
         }
 
         const float baseAlpha = desc.color.w * desc.alphaMultiplier * color.w;

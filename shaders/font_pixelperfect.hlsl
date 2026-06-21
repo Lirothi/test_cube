@@ -57,11 +57,10 @@ float4 PSMain(VSOut i) : SV_Target {
         float shadowCoverage = saturate(tex0.Sample(samp0, shadowUv).r);
 
 #if FONT_SHADOW_COMPOSITE
-        // Suppress the shadow where the glyph covers it, then composite
-        // text-over-shadow into one straight-alpha output. Exact for the
-        // SrcAlpha/InvSrcAlpha blend: equals text over (shadow over background).
+        // Suppress the shadow inside the glyph footprint so translucent text
+        // does not get tinted by its own shadow.
         float fgA = textColor.a;                                  // i.col.a * coverage
-        float shA = saturate(shadowAlpha * shadowCoverage) * (1.0 - fgA);
+        float shA = saturate(shadowAlpha * shadowCoverage) * (1.0 - coverage);
         float outA = fgA + shA;
         float3 outRGB = (textColor.rgb * fgA + shadowColorRgb.xyz * shA) / max(outA, 1e-5);
         return float4(outRGB, outA);
