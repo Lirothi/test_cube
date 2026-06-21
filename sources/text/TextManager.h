@@ -305,6 +305,11 @@ private:
     void  EmitRectReserved(int x, int y, float w, float h, const float4& color);
     void  EmitRectImpl(int x, int y, float w, float h, const float4& color, bool reservedAppend);
 
+    // CPU half of Build(): reserve + emit region backgrounds/lines into the
+    // vertex arrays. No Renderer dependency, so it is callable headless (the
+    // benchmark uses it to measure AddText+emit without a GPU device).
+    void  BuildVerticesCPU();
+
     RegionLine* AcquireRegionLine(size_t glyphReserveHint);
     void       RecycleRegionLines();
     void       EnsureTextIndexCapacity(Renderer* r, size_t quadCount);
@@ -347,6 +352,9 @@ private:
     UINT  vpW_ = 1, vpH_ = 1;
     float dpi_ = 1.0f;
     std::optional<ShadowDesc> shadow_;
+
+    // Headless benchmark needs the private CPU-only emit path (BuildVerticesCPU).
+    friend int RunTextManagerBenchmark(const char* outputPath);
 };
 
 int RunTextManagerBenchmark(const char* outputPath);

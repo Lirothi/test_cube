@@ -271,6 +271,10 @@ void TextManager::RegionSetPadding(RegionId id, int padX, int padY) {
 }
 void TextManager::RegionSetAlign(RegionId id, Align a) {
     if (id >= regions_.size()) { return; }
+    // Alignment decides whether lines are emitted directly (Left) or deferred
+    // (Center/Right) at AddText time, so it must be set before any text is added
+    // to the region; otherwise already-emitted Left lines cannot be re-aligned.
+    assert(regions_[id].lines.empty() && "RegionSetAlign must be called before AddText");
     regions_[id].align = a;
 }
 void TextManager::RegionSetFixedWidth(RegionId id, float wPx) {
@@ -327,6 +331,11 @@ void TextManager::AddText(RegionId id, float px, const float4& color, std::wstri
         ln->directVertexCount = verts_.size() - ln->directVertexFirst;
         ln->glyphCount = (uint32_t)std::min<size_t>(emittedGlyphs, std::numeric_limits<uint32_t>::max());
         rg.glyphCount += emittedGlyphs;
+        // emitDirect implies Align::Left; track width for the background rect when
+        // there is no fixed width to fall back on.
+        if (rg.autoMeasure) {
+            rg.maxLineWidth = std::max(rg.maxLineWidth, ln->widthPx);
+        }
         TEXT_PERF_ADD(directLines, 1u);
     }
     else {
@@ -428,6 +437,55 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
     CPU_SCOPE(ProfilerScopes::kTextManagerBuild);
     TEXT_PERF_SCOPE(buildUs);
 
+    // CPU: reserve + emit region backgrounds and deferred lines into the arrays.
+    BuildVerticesCPU();
+
+    // 3) Upload to GPU
+    FrameResource* fr = r->GetFrameResource();
+
+    // rects
+    {
+        TEXT_PERF_SCOPE(uploadRectUs);
+        const UINT vbBytes = (UINT)(rectVerts_.size() * sizeof(Vertex));
+        const UINT ibBytes = (UINT)(rectIdx_.size() * sizeof(uint32_t));
+        if (vbBytes > 0 && ibBytes > 0) {
+            auto v = fr->AllocDynamic(vbBytes, 16);
+            auto i = fr->AllocDynamic(ibBytes, 16);
+            std::memcpy(v.cpu, rectVerts_.data(), vbBytes);
+            std::memcpy(i.cpu, rectIdx_.data(), ibBytes);
+            rectVBV_.BufferLocation = v.gpu;
+            rectVBV_.StrideInBytes = sizeof(Vertex);
+            rectVBV_.SizeInBytes = vbBytes;
+            rectIBV_.BufferLocation = i.gpu;
+            rectIBV_.Format = DXGI_FORMAT_R32_UINT;
+            rectIBV_.SizeInBytes = ibBytes;
+        }
+        else {
+            rectVBV_ = {};
+            rectIBV_ = {};
+        }
+    }
+
+    // text
+    {
+        TEXT_PERF_SCOPE(uploadTextUs);
+        const UINT vbBytes = (UINT)(verts_.size() * sizeof(Vertex));
+        const size_t textQuadCount = verts_.size() / 4u;
+        if (vbBytes > 0 && textQuadCount > 0) {
+            EnsureTextIndexCapacity(r, textQuadCount);
+            auto v = fr->AllocDynamic(vbBytes, 16);
+            std::memcpy(v.cpu, verts_.data(), vbBytes);
+            vbv_.BufferLocation = v.gpu;
+            vbv_.StrideInBytes = sizeof(Vertex);
+            vbv_.SizeInBytes = vbBytes;
+        }
+        else {
+            vbv_ = {};
+        }
+    }
+}
+
+void TextManager::BuildVerticesCPU() {
     // 0) Reserve once from frame counters maintained during AddText/RegionSetBackground.
     {
         TEXT_PERF_SCOPE(buildReserveUs);
@@ -484,50 +542,6 @@ void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
                     y += rg.lineStepPx;
                 }
             }
-        }
-    }
-
-    // 3) Upload to GPU
-    FrameResource* fr = r->GetFrameResource();
-
-    // rects
-    {
-        TEXT_PERF_SCOPE(uploadRectUs);
-        const UINT vbBytes = (UINT)(rectVerts_.size() * sizeof(Vertex));
-        const UINT ibBytes = (UINT)(rectIdx_.size() * sizeof(uint32_t));
-        if (vbBytes > 0 && ibBytes > 0) {
-            auto v = fr->AllocDynamic(vbBytes, 16);
-            auto i = fr->AllocDynamic(ibBytes, 16);
-            std::memcpy(v.cpu, rectVerts_.data(), vbBytes);
-            std::memcpy(i.cpu, rectIdx_.data(), ibBytes);
-            rectVBV_.BufferLocation = v.gpu;
-            rectVBV_.StrideInBytes = sizeof(Vertex);
-            rectVBV_.SizeInBytes = vbBytes;
-            rectIBV_.BufferLocation = i.gpu;
-            rectIBV_.Format = DXGI_FORMAT_R32_UINT;
-            rectIBV_.SizeInBytes = ibBytes;
-        }
-        else {
-            rectVBV_ = {};
-            rectIBV_ = {};
-        }
-    }
-
-    // text
-    {
-        TEXT_PERF_SCOPE(uploadTextUs);
-        const UINT vbBytes = (UINT)(verts_.size() * sizeof(Vertex));
-        const size_t textQuadCount = verts_.size() / 4u;
-        if (vbBytes > 0 && textQuadCount > 0) {
-            EnsureTextIndexCapacity(r, textQuadCount);
-            auto v = fr->AllocDynamic(vbBytes, 16);
-            std::memcpy(v.cpu, verts_.data(), vbBytes);
-            vbv_.BufferLocation = v.gpu;
-            vbv_.StrideInBytes = sizeof(Vertex);
-            vbv_.SizeInBytes = vbBytes;
-        }
-        else {
-            vbv_ = {};
         }
     }
 }
@@ -805,7 +819,12 @@ const TextManager::CachedGlyphRun& TextManager::GetCachedGlyphRun(std::wstring_v
 }
 
 bool TextManager::CanEmitRegionLineImmediately(const Region& rg) noexcept {
-    return rg.align == Align::Left && !rg.autoMeasure && rg.fixedWidthPx.has_value();
+    // Left-aligned glyphs sit at x = rg.x regardless of line/region width, so
+    // they can be emitted in a single pass at AddText time. The background rect
+    // (which does depend on width) is emitted later in Build from the running
+    // maxLineWidth / fixedWidthPx, so it stays correct. Center/Right need the
+    // width up front and therefore must defer to Build (two passes).
+    return rg.align == Align::Left;
 }
 
 void TextManager::SetRegionLineStep(Region& rg, int lineStepPx) {
@@ -1195,14 +1214,15 @@ void TextManager::EmitGlyphRunImpl(int x, int y, float xOffset, const float4& co
 
 }
 
-// Positional drawing now also uses BuildGlyphRun + EmitGlyphRun
+// Positional text is always left-aligned at an explicit (x, y), so there is
+// nothing to measure first: emit straight into the vertex buffer in a single
+// pass (like ImGui's AddText) instead of building an intermediate GlyphRun and
+// walking the glyphs twice. useKerning=true keeps the previous behavior of
+// honoring the font's kerning when present.
 void TextManager::EmitTextImmediate(int x, int y, float px, const float4& color, std::wstring_view text, bool enableShadow) {
     if (font_ == nullptr) { return; }
     TEXT_MANAGER_FINE_CPU_SCOPE(ProfilerScopes::kTextManagerEmitImmediate);
-    GlyphRun run;
-    float width = 0.0f;
-    BuildGlyphRun(text, px, run, width);
-    EmitGlyphRun(x, y, 0.0f, color, run, enableShadow);
+    EmitTextDirect(x, y, px, color, text, enableShadow, /*useKerning*/ true, /*outWidthPx*/ nullptr);
 }
 
 void TextManager::EmitRect(int x, int y, float w, float h, const float4& color) {
@@ -1255,7 +1275,6 @@ int RunTextManagerBenchmark(const char* outputPath) {
 
     auto tm = std::make_unique<TextManager>();
     tm->SetFont(atlas.get());
-    tm->SetPerfStatsEnabled(true);
     auto shadowDesc = TextManager::ShadowDesc();
     shadowDesc.offsetX = 4.0f;
     shadowDesc.offsetY = 4.0f;
@@ -1263,9 +1282,11 @@ int RunTextManagerBenchmark(const char* outputPath) {
     shadowDesc.scaleWithTextSize = true;
     tm->SetShadow(shadowDesc);
 
+    // 22 profiler-style rows. Pre-formatted: formatting (vswprintf) is excluded
+    // from the timed region so we measure glyph emission, not printf.
     std::vector<std::wstring> rows;
-    rows.reserve(20);
-    for (int i = 0; i < 20; ++i) {
+    rows.reserve(22);
+    for (int i = 0; i < 22; ++i) {
         wchar_t buf[192];
         std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
             L"TextManagerBenchmark.Row%02d          avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
@@ -1273,48 +1294,93 @@ int RunTextManagerBenchmark(const char* outputPath) {
         rows.emplace_back(buf);
     }
 
-    out << "sample,directEmitUs,directReserveUs,directSetupUs,directLoopUs,addTextUs,formatUs,"
-        << "directCalls,directLines,directGlyphs,inputChars,retargetUs,retargetVertices\n";
+    constexpr UINT kVpW = 1920, kVpH = 1080;
+    constexpr int  kWarmupFrames = 256;
+    constexpr int  kSampleFrames = 30000;
+    using Clock = std::chrono::steady_clock;
 
-    constexpr int kWarmupFrames = 50;
-    constexpr int kSampleFrames = 300;
-    tm->Begin(1920, 1080, 1.0f);
-    for (int frame = 0; frame < kWarmupFrames + kSampleFrames; ++frame) {
+    const float4 colA(1.0f, 1.0f, 1.0f, 0.92f);
+    const float4 colB(0.5f, 0.5f, 0.5f, 0.92f);
+
+    out << "scenario,usPerFrame,directLines,deferredLines,positionalCalls,regionAddTextCalls,"
+        << "inputChars,directGlyphs,runGlyphs,buildGlyphRunUs,directEmitUs,runEmitUs,retargetUs\n";
+
+    // Each frame: Begin -> add one frame of text -> BuildVerticesCPU (the CPU
+    // half of Build). Timing the emit pass too keeps the deferred path's second
+    // pass counted fairly against the single-pass direct path. Wall-clock timing
+    // runs with PerfStats DISABLED so the internal TEXT_PERF_SCOPE timers don't
+    // pollute the measurement; one extra instrumented frame captures the
+    // fine-grained breakdown (populated only when built -DTEXT_MANAGER_PERF_STATS=1).
+    auto runScenario = [&](const char* name, auto&& addFrame) {
+        tm->SetPerfStatsEnabled(false);
+
+        for (int f = 0; f < kWarmupFrames; ++f) {
+            tm->Begin(kVpW, kVpH, 1.0f);
+            addFrame();
+            tm->BuildVerticesCPU();
+        }
+
+        double totalUs = 0.0;
+        for (int f = 0; f < kSampleFrames; ++f) {
+            tm->Begin(kVpW, kVpH, 1.0f);
+            const auto t0 = Clock::now();
+            addFrame();
+            tm->BuildVerticesCPU();
+            const auto t1 = Clock::now();
+            totalUs += std::chrono::duration<double, std::micro>(t1 - t0).count();
+        }
+        const double usPerFrame = totalUs / double(kSampleFrames);
+
+        // One instrumented frame for the breakdown (no-op fields when PERF_STATS off).
+        tm->SetPerfStatsEnabled(true);
+        tm->Begin(kVpW, kVpH, 1.0f);
+        addFrame();
+        tm->BuildVerticesCPU();
+        tm->Begin(kVpW, kVpH, 1.0f);
+        const TextManager::PerfStats s = tm->GetPerfStats();
+
+        out << name << ',' << usPerFrame << ','
+            << s.directLines << ',' << s.deferredLines << ','
+            << s.positionalTextCalls << ',' << s.addTextCalls << ','
+            << s.inputChars << ',' << s.directGlyphs << ',' << s.runGlyphs << ','
+            << s.buildGlyphRunUs << ',' << s.directEmitUs << ',' << s.runEmitUs << ','
+            << s.lineRetargetUs << '\n';
+    };
+
+    // S1: positional AddText. Always single-pass (left-aligned at explicit x,y).
+    runScenario("positional", [&] {
+        int y = 64;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            tm->AddText(16, y, 16.0f, (i & 1) ? colA : colB, rows[i], true);
+            y += 18;
+        }
+    });
+
+    // S2: Left region, auto-measure, no fixed width.
+    // Before the optimization this deferred to Build (two passes); now direct.
+    runScenario("left_automeasure", [&] {
         auto reg = tm->CreateRegion(16, 64, TextManager::Align::Left);
         tm->RegionSetPadding(reg, 8, 6);
-        tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.75f));
+        tm->RegionSetBackground(reg, float4(0.0f, 0.0f, 0.05f, 0.75f));
+        tm->RegionSetKerning(reg, false);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            tm->AddText(reg, 16.0f, (i & 1) ? colA : colB, rows[i], true);
+        }
+    });
+
+    // S3: Left region, fixed width, no auto-measure. Already direct before and
+    // after; serves as an unchanged-baseline sanity check.
+    runScenario("left_fixedwidth", [&] {
+        auto reg = tm->CreateRegion(16, 64, TextManager::Align::Left);
+        tm->RegionSetPadding(reg, 8, 6);
+        tm->RegionSetBackground(reg, float4(0.0f, 0.0f, 0.05f, 0.75f));
         tm->RegionSetFixedWidth(reg, 760.0f);
         tm->RegionSetAutoMeasure(reg, false);
         tm->RegionSetKerning(reg, false);
-
-        tm->AddTextfShadow(reg, 18.0f, float4(1.0f, 1.0f, 0.6f, 0.95f), true,
-            L"[CPU profiler] frame=%u  (max reset: %.1fs, sort every: %.2fs)",
-            static_cast<uint32_t>(frame), 3.0, 2.0);
-        tm->AddText(reg, 18.0f, float4(1.0f, 1.0f, 0.6f, 0.95f), L" ");
-
-        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
-            const float4 color = (i & 1) ? float4(1.0f, 1.0f, 1.0f, 0.92f) : float4(0.5f, 0.5f, 0.5f, 0.92f);
-            tm->AddText(reg, 16.0f, color, rows[static_cast<size_t>(i)], true);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            tm->AddText(reg, 16.0f, (i & 1) ? colA : colB, rows[i], true);
         }
-
-        tm->Begin(1920, 1080, 1.0f);
-        if (frame >= kWarmupFrames) {
-            const TextManager::PerfStats& s = tm->GetPerfStats();
-            out << (frame - kWarmupFrames) << ','
-                << s.directEmitUs << ','
-                << s.directEmitReserveUs << ','
-                << s.directEmitSetupUs << ','
-                << s.directEmitLoopUs << ','
-                << s.addTextUs << ','
-                << s.formatUs << ','
-                << s.directEmitCalls << ','
-                << s.directLines << ','
-                << s.directGlyphs << ','
-                << s.inputChars << ','
-                << s.lineRetargetUs << ','
-                << s.retargetedVertices << '\n';
-        }
-    }
+    });
 
     return 0;
 }
