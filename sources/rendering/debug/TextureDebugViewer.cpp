@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/Renderer.h"
 
 namespace
@@ -242,6 +243,7 @@ void TextureDebugViewer::Draw(Renderer& renderer)
     {
         return;
     }
+    CPU_SCOPE(ProfilerScopes::kTextureDebugViewerDraw);
 
     const auto targets = BuildTargets(renderer);
     const TargetView* selected = FindTarget(targets, target_);

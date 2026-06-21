@@ -9,6 +9,7 @@ extern const Profiler::ScopeNameKey kWholeCycle;
 extern const Profiler::ScopeNameKey kWinMessages;
 extern const Profiler::ScopeNameKey kAppControllerTick;
 extern const Profiler::ScopeNameKey kBuildDeveloperWindow;
+extern const Profiler::ScopeNameKey kTextureDebugViewerDraw;
 
 // Material
 extern const Profiler::ScopeNameKey kMaterialFSProbe;

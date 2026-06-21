@@ -1,9 +1,8 @@
 #pragma once
 
+#include "app/DeveloperWindow.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
-#include "rendering/debug/TextureDebugViewer.h"
-#include "ui/ImGuiWindowUtils.h"
 
 class InputManager;
 class Renderer;
@@ -23,11 +22,8 @@ public:
 
 private:
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene);
-    void BuildDeveloperWindow(Renderer& renderer, const Scene& scene, const InputManager& input);
 
     SceneRenderSettings settings_{};
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
-    TextureDebugViewer textureDebugViewer_;
-    ui::ImGuiWindowMaximizeState developerWindowMaximize_;
-    bool showDeveloperWindow_ = false;
+    DeveloperWindow developerWindow_;
 };
