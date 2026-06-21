@@ -207,6 +207,7 @@ void SceneRenderer::Reset()
     // reload. Re-inited lazily on the next RT-enabled frame.
     asManager_.Reset();
     bindless_.Reset();
+    reflectionHistory_.Reset();
     asManagerInited_ = false;
     asScratchRetireFrame_ = 0;
     rtInstances_.clear();
@@ -236,6 +237,18 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         asManager_.Init(renderer->GetDevice5());
         bindless_.Init(renderer->GetDevice());
         asManagerInited_ = true;
+    }
+    // S11 temporal-accumulation history (RT reflections only). (Re)allocate to the
+    // current SSR resolution; register both textures with the state tracker on a
+    // (re)alloc so the denoise pass can transition them.
+    if (rtReflect)
+    {
+        if (reflectionHistory_.EnsureSize(renderer->GetDevice(), renderer->GetSsrTextureWidth(),
+                                          renderer->GetSsrTextureHeight(), renderer->GetSsrFormat()))
+        {
+            renderer->SetResourceState(reflectionHistory_.Curr(0), D3D12_RESOURCE_STATE_COMMON);
+            renderer->SetResourceState(reflectionHistory_.Prev(0), D3D12_RESOURCE_STATE_COMMON);
+        }
     }
 
     renderer->BeginSubmitTimeline();
@@ -382,19 +395,39 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // ssr buffer, so the blur + compose chain is identical. RT (S7) runs instead
     // of SSR (mt-dep on Main_BuildAS; its TLAS SRV bypasses the state tracker);
     // Off just clears ssr so compose shows skybox specular only.
-    const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
+    const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1 && reflectionHistory_.Ready();
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
-    size_t pSSR;
+    size_t pSSR; // node the blur depends on (reflection chain end)
     if (useRtReflections)
     {
-        pSSR = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS }, reflectDecls,
+        // RT (S7/S10): write the raw (roughness-jittered) reflection to ssrBlur,
+        // then temporally accumulate (S11) into ssr + the current history texture.
+        const uint64_t parity = renderer->GetTotalFrameNumber();
+        ID3D12Resource* histPrev = reflectionHistory_.Prev(parity);
+        ID3D12Resource* histCurr = reflectionHistory_.Curr(parity);
+        size_t pRefl = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS },
+            { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.ssrBlur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassRTReflections);
                 Pass_RTReflections(renderer, ctx, *frame_->camera);
+            });
+        pSSR = rg.AddPass(RenderPass::Main_RTDenoise, { pRefl },
+            { { D.ssrBlur.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { histPrev, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { histCurr, D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { D.ssr.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassRTDenoise);
+                Pass_RTDenoise(renderer, ctx);
             });
     }
     else if (reflectionsOff)
@@ -1321,7 +1354,20 @@ struct RtReflectConstants
     Math::float3 lightRgb;  float exposure = 1.0f;
     float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
-    uint32_t ssrUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t pad0 = 0; uint32_t pad1 = 0;
+    uint32_t ssrUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t gb0Index = 0; uint32_t frameSeed = 0;
+};
+
+// Matches the `Denoise` cbuffer in rt_reflection_denoise_cs.hlsl.
+struct RtDenoiseConstants
+{
+    uint32_t rawIndex = 0;
+    uint32_t histPrevIndex = 0;
+    uint32_t velocityIndex = 0;
+    uint32_t ssrUavIndex = 0;
+    uint32_t histCurrUavIndex = 0;
+    uint32_t outWidth = 0;
+    uint32_t outHeight = 0;
+    float    alpha = 0.1f;
 };
 } // namespace
 
@@ -1347,12 +1393,16 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         }
 
         // Per-frame scene descriptors into the bindless heap (geometry VB/IB +
-        // geometry-info are persistent, populated in Pass_BuildAS).
-        bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);    // TLAS
-        bindless_.WriteSceneDescriptor(frameIndex, 1, D.lightSRV); // lit HDR (fast path)
-        bindless_.WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]); // GB1 (normal)
-        bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV); // Depth
-        bindless_.WriteSceneDescriptor(frameIndex, 4, D.ssrUAV);   // ssr UAV (output)
+        // geometry-info are persistent, populated in Pass_BuildAS). Scene slots
+        // 0-5 are this pass's; the denoise pass uses 6-10 (distinct, so the two
+        // passes never alias heap slots within a frame). The raw (jittered)
+        // reflection is written to ssrBlur; the denoise pass produces ssr.
+        bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);     // TLAS
+        bindless_.WriteSceneDescriptor(frameIndex, 1, D.lightSRV);  // lit HDR (fast path)
+        bindless_.WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]);  // GB1 (normal)
+        bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
+        bindless_.WriteSceneDescriptor(frameIndex, 4, D.ssrBlurUAV);// raw reflection out (ssrBlur)
+        bindless_.WriteSceneDescriptor(frameIndex, 5, D.gbSRV[0]);  // GB0 (rough/metal in .a)
 
         RtReflectConstants c{};
         const float zNear = camera.GetZNear();
@@ -1374,8 +1424,10 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.lightIndex = bindless_.SceneIndex(frameIndex, 1);
         c.gb1Index = bindless_.SceneIndex(frameIndex, 2);
         c.depthIndex = bindless_.SceneIndex(frameIndex, 3);
-        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 4);
+        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 4); // -> ssrBlur (raw)
+        c.gb0Index = bindless_.SceneIndex(frameIndex, 5);
         c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.frameSeed = static_cast<uint32_t>(renderer->GetTotalFrameNumber());
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
@@ -1392,10 +1444,71 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         {
             t.cl->Dispatch(gx, gy, 1);
         }
-        renderer->UAVBarrier(t.cl, D.ssr.Get());
+        renderer->UAVBarrier(t.cl, D.ssrBlur.Get()); // raw reflection -> consumed by the denoise pass
 
         // Restore the frame heap: this pass shares its command list with the
-        // grouped blur + compose passes, which bind into the per-frame heap.
+        // grouped denoise + blur + compose passes, which bind into the per-frame heap.
+        renderer->BindDescriptorHeaps(t.cl);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDenoise);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl); // ssrBlur(raw)/velocity/histPrev -> NPS, ssr/histCurr -> UAV
+
+        auto denoiseMaterial = resources_.GetRtDenoiseMaterial();
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        if (!denoiseMaterial || !bindless_.Ready() || !reflectionHistory_.Ready())
+        {
+            ctx.EndCL(t);
+            return;
+        }
+
+        const uint64_t parity = renderer->GetTotalFrameNumber();
+        // Scene slots 6-10 (distinct from the reflection pass's 0-5).
+        bindless_.WriteSceneDescriptor(frameIndex, 6, D.ssrBlurSRV);                 // raw reflection (this frame)
+        bindless_.WriteSceneDescriptor(frameIndex, 7, reflectionHistory_.PrevSrv(parity)); // accumulated (prev frame)
+        bindless_.WriteSceneDescriptor(frameIndex, 8, D.gbSRV[3]);                   // gbVelocity (motion)
+        bindless_.WriteSceneDescriptor(frameIndex, 9, D.ssrUAV);                     // denoised out -> blur/compose
+        bindless_.WriteSceneDescriptor(frameIndex, 10, reflectionHistory_.CurrUav(parity)); // history (this frame)
+
+        RtDenoiseConstants c{};
+        c.rawIndex = bindless_.SceneIndex(frameIndex, 6);
+        c.histPrevIndex = bindless_.SceneIndex(frameIndex, 7);
+        c.velocityIndex = bindless_.SceneIndex(frameIndex, 8);
+        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 9);
+        c.histCurrUavIndex = bindless_.SceneIndex(frameIndex, 10);
+        c.outWidth = renderer->GetSsrTextureWidth();
+        c.outHeight = renderer->GetSsrTextureHeight();
+        // alpha = 1 -> pass-through (no accumulation). The reflection is currently
+        // sharp + stable, so temporal accumulation isn't needed and would only add
+        // ghosting under motion. (Re-enable < 1 together with jittered glossy + a
+        // proper denoiser, e.g. DLSS Ray Reconstruction.)
+        c.alpha = 1.0f;
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtDenoiseConstants), render::kConstantBufferAlignment);
+        std::memcpy(cb.cpu, &c, sizeof(c));
+
+        ID3D12DescriptorHeap* heaps[] = { bindless_.Heap() };
+        t.cl->SetDescriptorHeaps(1, heaps);
+        t.cl->SetComputeRootSignature(denoiseMaterial->GetRootSignature());
+        t.cl->SetPipelineState(denoiseMaterial->GetPipelineState());
+        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+        const UINT gx = (c.outWidth + 7u) / 8u;
+        const UINT gy = (c.outHeight + 7u) / 8u;
+        if (gx > 0 && gy > 0)
+        {
+            t.cl->Dispatch(gx, gy, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.ssr.Get());
+
+        // Restore the frame heap for the grouped blur + compose passes.
         renderer->BindDescriptorHeaps(t.cl);
     }
     ctx.EndCL(t);
@@ -1563,18 +1676,20 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         // Copy this frame's scene descriptors into the persistent bindless heap so
         // the shader can reach them via ResourceDescriptorHeap[]. (Geometry VB/IB +
         // geometry-info live in the heap persistently, populated in Pass_BuildAS.)
-        bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);    // TLAS SRV
-        bindless_.WriteSceneDescriptor(frameIndex, 1, D.gbSRV[1]); // GB1 (normal)
-        bindless_.WriteSceneDescriptor(frameIndex, 2, D.depthSRV); // Depth
-        bindless_.WriteSceneDescriptor(frameIndex, 3, D.ssrUAV);   // ssr UAV (output)
+        // Scene slots 11-14 (distinct from the reflection 0-5 / denoise 6-10
+        // ranges, so the debug pass never aliases their heap slots in a frame).
+        bindless_.WriteSceneDescriptor(frameIndex, 11, tlasSrv);    // TLAS SRV
+        bindless_.WriteSceneDescriptor(frameIndex, 12, D.gbSRV[1]); // GB1 (normal)
+        bindless_.WriteSceneDescriptor(frameIndex, 13, D.depthSRV); // Depth
+        bindless_.WriteSceneDescriptor(frameIndex, 14, D.ssrUAV);   // ssr UAV (output)
 
         RtDebugConstants c{};
         c.invView = camera.GetInvViewMatrix();
         c.invProj = camera.GetInvProjMatrix();
-        c.tlasIndex = bindless_.SceneIndex(frameIndex, 0);
-        c.gb1Index = bindless_.SceneIndex(frameIndex, 1);
-        c.depthIndex = bindless_.SceneIndex(frameIndex, 2);
-        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 3);
+        c.tlasIndex = bindless_.SceneIndex(frameIndex, 11);
+        c.gb1Index = bindless_.SceneIndex(frameIndex, 12);
+        c.depthIndex = bindless_.SceneIndex(frameIndex, 13);
+        c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 14);
         c.geomInfoIndex = bindless_.GeomInfoIndex();
         c.outWidth = renderer->GetSsrTextureWidth();
         c.outHeight = renderer->GetSsrTextureHeight();

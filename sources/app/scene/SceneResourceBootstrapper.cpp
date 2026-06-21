@@ -256,6 +256,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtReflect_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matRtDenoise_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_reflection_denoise_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtDenoise_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matDebug_)
     {
         Material::GraphicsDesc gd{};

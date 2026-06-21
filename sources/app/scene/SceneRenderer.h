@@ -9,6 +9,7 @@
 #include "rendering/core/RenderPass.h"
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/BindlessTable.h"
+#include "rendering/rt/ReflectionHistory.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderQueue.h"
@@ -82,6 +83,7 @@ private:
         const Camera& camera);
     void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    void Pass_RTDenoise(Renderer* r, RenderGraphPassContext ctx); // S11 temporal accumulate
     void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 "Off": zero the ssr target
     void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
@@ -104,6 +106,7 @@ private:
     // build scratch until its command list's frame has surely completed.
     rt::AccelerationStructureManager asManager_;
     rt::BindlessTable bindless_; // S9: per-mesh VB/IB + geometry-info for RT hit shading
+    rt::ReflectionHistory reflectionHistory_; // S11: ping-pong temporal-accumulation textures
     bool asManagerInited_ = false;
     uint64_t asScratchRetireFrame_ = 0;
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)

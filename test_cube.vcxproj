@@ -201,6 +201,7 @@
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp" />
     <ClCompile Include="sources/rendering/rt/BindlessTable.cpp" />
+    <ClCompile Include="sources/rendering/rt/ReflectionHistory.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
@@ -317,6 +318,7 @@
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h" />
     <ClInclude Include="sources/rendering/rt/BindlessTable.h" />
+    <ClInclude Include="sources/rendering/rt/ReflectionHistory.h" />
     <ClInclude Include="sources/rendering/rt/RtSmoke.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />

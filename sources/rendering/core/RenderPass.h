@@ -19,6 +19,7 @@ enum class RenderPass : uint16_t {
     Main_SSRBlur,
     Main_Compose,
     Main_RTReflections,
+    Main_RTDenoise,
     Main_RTDebug,
     Main_Transparent,
     Main_DebugDraw,
@@ -61,6 +62,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SSRBlur: return L"SSR.Blur";
     case RenderPass::Main_Compose: return L"Compose";
     case RenderPass::Main_RTReflections: return L"RTReflections";
+    case RenderPass::Main_RTDenoise: return L"RTDenoise";
     case RenderPass::Main_RTDebug: return L"RTDebug";
     case RenderPass::Main_Transparent: return L"Transparent";
     case RenderPass::Main_DebugDraw: return L"DebugDraw";

@@ -10,9 +10,10 @@
 // On miss: coverage 0 -> compose's skybox fallback. Writes premultiplied
 // (rgb, coverage) into the SSR target; blur + compose are unchanged.
 //
-// NOTE: reflections are sharp (mirror). Roughness-driven glossy blur needs a
-// denoiser to be clean (a few stochastic rays alone are noisy) — that is S11's
-// job (temporal accumulation / DLSS-RR); see the integration plan.
+// Glossy (S10+S11): the reflection direction is jittered within a roughness-
+// scaled cone using a per-frame-varying seed, so the single noisy ray integrates
+// to a clean glossy reflection once the S11 temporal denoise accumulates it over
+// frames. Mirror surfaces (roughness ~0) trace a sharp ray.
 #define RT_REFLECT_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \
@@ -42,7 +43,7 @@ cbuffer Probe : register(b0)
     float3 lightRgb;     float exposure;
     float depthA;        float depthB;        uint outWidth;     uint outHeight;
     uint tlasIndex;      uint lightIndex;     uint gb1Index;     uint depthIndex;
-    uint ssrUavIndex;    uint geomInfoIndex;  uint _pad0;        uint _pad1;
+    uint ssrUavIndex;    uint geomInfoIndex;  uint gb0Index;     uint frameSeed;
 }
 
 SamplerState gSmp      : register(s0);
@@ -66,6 +67,32 @@ uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
 }
 float3 LoadNormal(ByteAddressBuffer vb, uint vertex) { return asfloat(vb.Load3(vertex * kVertexStride + kNormalOffset)); }
 float2 LoadUV(ByteAddressBuffer vb, uint vertex)     { return asfloat(vb.Load2(vertex * kVertexStride + kUVOffset)); }
+
+// Per-pixel+frame 2D hash for the glossy jitter (varies each frame so temporal
+// accumulation integrates many samples).
+float2 Hash22(uint2 p, uint s)
+{
+    uint3 v = uint3(p, s);
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x;
+    return float2(v.x & 0xFFFFu, v.y & 0xFFFFu) * (1.0f / 65535.0f);
+}
+
+// Perturb the mirror reflection R within a roughness-scaled cone.
+float3 JitterReflection(float3 R, float3 N, float rough, uint2 px, uint seed)
+{
+    float2 u = Hash22(px, seed);
+    float3 up = abs(R.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 T = normalize(cross(up, R));
+    float3 B = cross(R, T);
+    float a = rough * rough;
+    float phi = 6.2831853f * u.x;
+    float rad = a * sqrt(u.y);
+    float3 J = normalize(R + (rad * cos(phi)) * T + (rad * sin(phi)) * B);
+    return (dot(J, N) < 0.0f) ? R : J;
+}
 
 // Trace one reflection ray; on hit, return its radiance (screen color where the
 // hit is visible, else shaded). Returns false on miss.
@@ -154,6 +181,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     RWTexture2D<float4> outTex = ResourceDescriptorHeap[ssrUavIndex];
     Texture2D depthT = ResourceDescriptorHeap[depthIndex];
     Texture2D gb1    = ResourceDescriptorHeap[gb1Index];
+    Texture2D gb0    = ResourceDescriptorHeap[gb0Index];
 
     float2 uv = (float2(dtid.xy) + 0.5f) / float2(outWidth, outHeight);
     float depth = depthT.SampleLevel(gSmpPoint, uv, 0).r;
@@ -165,6 +193,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         float3 P = ReconstructPosWS(uv, depth, invProj, invView);
         float3 camPos = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
         float3 R = reflect(normalize(P - camPos), N);
+
+        // Sharp mirror ray (clean, stable). Stochastic roughness-jittered glossy is
+        // disabled: at 1 sample/pixel it needs a real denoiser (DLSS Ray
+        // Reconstruction) to not look noisy/"dance"; gb0/frameSeed/JitterReflection
+        // are kept for when that lands.
 
         float3 radiance;
         if (TraceReflection(P + N * 0.02f, R, radiance))
