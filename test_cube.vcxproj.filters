@@ -43,6 +43,9 @@
     <Filter Include="sources\rendering\debug">
       <UniqueIdentifier>{5b663f47-cdab-4683-891d-f6186e6cdece}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\rendering\rt">
+      <UniqueIdentifier>{7a1f2c34-9d8b-4e26-bf5a-3c0d1e6a7b42}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\rendering\descriptors">
       <UniqueIdentifier>{5012d3ff-a759-4130-a653-2bedd00122c0}</UniqueIdentifier>
     </Filter>
@@ -233,6 +236,9 @@
     </ClCompile>
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/rt/RtSmoke.cpp">
+      <Filter>sources\rendering\rt</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
       <Filter>sources\rendering\debug</Filter>
@@ -448,6 +454,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/core/ComputeDispatch.h">
       <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/rt/RtSmoke.h">
+      <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameResource.h">
       <Filter>sources\rendering\core</Filter>

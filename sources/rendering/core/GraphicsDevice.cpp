@@ -18,6 +18,16 @@ void GraphicsDevice::InitDevice()
 #endif
 
     ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
+
+    // DXR capability detection (S1). Both queries are optional: older runtimes
+    // leave device5_ null and the tier at NOT_SUPPORTED, and every RT path is
+    // gated on IsRaytracingSupported(), so this is a no-op on non-RT hardware.
+    if (SUCCEEDED(device_.As(&device5_))) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5)))) {
+            raytracingTier_ = options5.RaytracingTier;
+        }
+    }
 }
 
 void GraphicsDevice::SetupDebugBreaks()
@@ -73,6 +83,7 @@ void GraphicsDevice::ReleaseQueue()
 
 void GraphicsDevice::ReleaseDevice()
 {
+    device5_.Reset();
     if (device_) {
         device_.Reset();
     }

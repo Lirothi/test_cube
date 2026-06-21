@@ -130,6 +130,15 @@ public:
     // Getters
     ID3D12Device* GetDevice() const { return graphicsDevice_.Device(); }
     ID3D12CommandQueue* GetCommandQueue() const { return graphicsDevice_.Queue(); }
+
+    // DXR (S1). On non-RT hardware GetDevice5() is null and
+    // IsRaytracingSupported() is false; all ray-tracing paths gate on the latter.
+    bool IsRaytracingSupported() const { return graphicsDevice_.IsRaytracingSupported(); }
+    ID3D12Device5* GetDevice5() const { return graphicsDevice_.Device5(); }
+    // QI a recorded command list to CommandList4 (cheap). The returned pointer
+    // borrows the passed list's lifetime — use it within the same scope, do not
+    // store it. Null if the list is null or the interface is unavailable.
+    ID3D12GraphicsCommandList4* AsCmdList4(ID3D12GraphicsCommandList* cl) const;
     HWND GetHWND() const { return hWnd_; }
     UINT GetWidth() const { return width_; }
     UINT GetHeight() const { return height_; }

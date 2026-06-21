@@ -33,6 +33,22 @@ static void logFunctionCallback(sl::LogType type, const char* msg)
     OutputDebugStringA(msg);
 }
 
+ID3D12GraphicsCommandList4* Renderer::AsCmdList4(ID3D12GraphicsCommandList* cl) const
+{
+    if (!cl) {
+        return nullptr;
+    }
+    // QueryInterface AddRefs the same underlying object; it stays alive through
+    // the caller's `cl`, so release the extra ref immediately and hand back the
+    // borrowed view (valid for as long as `cl` is).
+    ID3D12GraphicsCommandList4* cl4 = nullptr;
+    if (SUCCEEDED(cl->QueryInterface(IID_PPV_ARGS(&cl4)))) {
+        cl4->Release();
+        return cl4;
+    }
+    return nullptr;
+}
+
 void Renderer::Shutdown()
 {
     // Guard against repeated calls

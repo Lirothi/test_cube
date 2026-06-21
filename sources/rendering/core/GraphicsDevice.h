@@ -25,7 +25,15 @@ public:
     ID3D12Device* Device() const { return device_.Get(); }
     ID3D12CommandQueue* Queue() const { return queue_.Get(); }
 
+    // DXR capability (queried once at device creation). Device5() is null and
+    // the tier is NOT_SUPPORTED on hardware/runtimes without ray tracing.
+    ID3D12Device5* Device5() const { return device5_.Get(); }
+    D3D12_RAYTRACING_TIER RaytracingTier() const { return raytracingTier_; }
+    bool IsRaytracingSupported() const { return raytracingTier_ >= D3D12_RAYTRACING_TIER_1_1; }
+
 private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
+    Microsoft::WRL::ComPtr<ID3D12Device5> device5_; // null if DXR unsupported
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
+    D3D12_RAYTRACING_TIER raytracingTier_ = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 };

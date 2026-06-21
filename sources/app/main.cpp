@@ -7,6 +7,7 @@
 #include "app/App.h"
 #include "core/task/TaskSystemStress.h"
 #include "rendering/core/RendererSubmissionStress.h"
+#include "rendering/rt/RtSmoke.h"
 #include "text/TextManager.h"
 
 #include <cstring>
@@ -95,6 +96,13 @@ int WINAPI WinMain(
 
     if (lpCmdLine && std::strstr(lpCmdLine, "textmanager-benchmark") != nullptr) {
         return RunTextManagerBenchmark("textmanager_benchmark.csv");
+    }
+
+    // "--rt-smoke" runs the headless DXR smoke harness (device + RT caps + a
+    // trivial BLAS/TLAS build) instead of the app; verdict in rt_smoke.txt,
+    // exit code 0 on PASS/SKIP, non-zero on FAIL.
+    if (lpCmdLine && std::strstr(lpCmdLine, "rt-smoke") != nullptr) {
+        return RunRtSmoke("rt_smoke.txt");
     }
 
     EnableDpiAwareness();
