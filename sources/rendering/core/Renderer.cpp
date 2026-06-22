@@ -777,9 +777,9 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     const UINT displayWidth = std::max(1u, width);
     const UINT displayHeight = std::max(1u, height);
 
-    const auto ssrSize = ComputeSsrTextureSize(displayWidth, displayHeight);
-    ssrTextureWidth_ = ssrSize.first > 0 ? ssrSize.first : 1;
-    ssrTextureHeight_ = ssrSize.second > 0 ? ssrSize.second : 1;
+    const auto reflectionSize = ComputeReflectionTextureSize(displayWidth, displayHeight);
+    reflectionTextureWidth_ = reflectionSize.first > 0 ? reflectionSize.first : 1;
+    reflectionTextureHeight_ = reflectionSize.second > 0 ? reflectionSize.second : 1;
 
     RenderTargetManager::Formats formats{};
     formats.gb0 = render::kGBuffer0Format;
@@ -791,8 +791,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.light = render::kLightTargetFormat;
     formats.sceneColor = render::kSceneColorFormat;
     formats.dlssBias = render::kDlssBiasFormat;
-    formats.ssr = render::kSsrFormat;
-    formats.ssrBlur = render::kSsrBlurFormat;
+    formats.reflection = render::kReflectionFormat;
+    formats.reflectionScratch = render::kReflectionScratchFormat;
     formats.backbufferResource = render::kBackbufferResourceFormat;
 
     RenderTargetManager::Sizes sizes{};
@@ -800,8 +800,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.renderHeight = rtHeight;
     sizes.displayWidth = displayWidth;
     sizes.displayHeight = displayHeight;
-    sizes.ssrWidth = ssrTextureWidth_;
-    sizes.ssrHeight = ssrTextureHeight_;
+    sizes.reflectionWidth = reflectionTextureWidth_;
+    sizes.reflectionHeight = reflectionTextureHeight_;
 
     rtManager_.Create(GetDevice(), formats, sizes, stateTracker_);
 }
@@ -809,12 +809,12 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 void Renderer::DestroyDeferredTargets() {
     rtManager_.Destroy(stateTracker_);
 
-    ssrTextureWidth_ = 1;
-    ssrTextureHeight_ = 1;
+    reflectionTextureWidth_ = 1;
+    reflectionTextureHeight_ = 1;
 }
 
 
-std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT referenceWidth, UINT referenceHeight) const
+std::pair<UINT, UINT> Renderer::ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const
 {
     const UINT refWidth = std::max(referenceWidth, 1u);
     const UINT refHeight = std::max(referenceHeight, 1u);
@@ -830,9 +830,9 @@ std::pair<UINT, UINT> Renderer::ComputeSsrTextureSize(UINT referenceWidth, UINT 
         return std::max(1u, value);
     };
 
-    const UINT ssrWidth = computeDim(refWidth, ssrTextureScale_.x);
-    const UINT ssrHeight = computeDim(refHeight, ssrTextureScale_.y);
-    return { ssrWidth, ssrHeight };
+    const UINT reflectionWidth = computeDim(refWidth, reflectionTextureScale_.x);
+    const UINT reflectionHeight = computeDim(refHeight, reflectionTextureScale_.y);
+    return { reflectionWidth, reflectionHeight };
 }
 
 void Renderer::RecreateDeferredTargets()
@@ -847,18 +847,18 @@ void Renderer::RecreateDeferredTargets()
     CreateDeferredTargets(width_, height_);
 }
 
-void Renderer::SetSsrTextureScale(Math::float2 scale)
+void Renderer::SetReflectionTextureScale(Math::float2 scale)
 {
     Math::float2 sanitized{ scale.x, scale.y };
     if (sanitized.x < 0.0f) { sanitized.x = 0.0f; }
     if (sanitized.y < 0.0f) { sanitized.y = 0.0f; }
 
-    if (sanitized.x == ssrTextureScale_.x && sanitized.y == ssrTextureScale_.y)
+    if (sanitized.x == reflectionTextureScale_.x && sanitized.y == reflectionTextureScale_.y)
     {
         return;
     }
 
-    ssrTextureScale_ = sanitized;
+    reflectionTextureScale_ = sanitized;
 
     if (rtManager_.IsCreated())
     {
@@ -866,14 +866,14 @@ void Renderer::SetSsrTextureScale(Math::float2 scale)
     }
 }
 
-UINT Renderer::GetSsrTextureWidth() const
+UINT Renderer::GetReflectionTextureWidth() const
 {
-    return std::max(1u, ssrTextureWidth_);
+    return std::max(1u, reflectionTextureWidth_);
 }
 
-UINT Renderer::GetSsrTextureHeight() const
+UINT Renderer::GetReflectionTextureHeight() const
 {
-    return std::max(1u, ssrTextureHeight_);
+    return std::max(1u, reflectionTextureHeight_);
 }
 
 void Renderer::UpdateRenderResolutionFromScale()

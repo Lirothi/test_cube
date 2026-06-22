@@ -40,13 +40,13 @@ struct SceneRenderSettings
     bool doFxaa = false;
     bool debugTexMode = false;
     bool showProfiler = false;
-    // S8: the reflection source. Default SSR (today's behavior). RT runs the
+    // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; Off clears the reflection buffer
     // (skybox specular only). RT auto-falls back to SSR on non-RT hardware.
-    ReflectionSource reflectionSource = ReflectionSource::SSR;
+    ReflectionSource reflectionSource = ReflectionSource::RT;
     // S6: RT hit/visibility debug viz (dev tool). Traces a reflection ray per
-    // pixel and writes a hit-distance/miss image into the SSR target (view via
-    // the render-target inspector -> Ssr). Builds the AS regardless of source.
+    // pixel and writes a hit-distance/miss image into the reflection target (view via
+    // the render-target inspector -> Reflection). Builds the AS regardless of source.
     bool rtDebugView = false;
 };
 

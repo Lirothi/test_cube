@@ -160,8 +160,8 @@ namespace
         case TextureDebugViewer::Target::Fxaa: return "FXAA";
         case TextureDebugViewer::Target::DlssOutput: return "DLSS Output";
         case TextureDebugViewer::Target::SceneOpaque: return "Scene Opaque";
-        case TextureDebugViewer::Target::Ssr: return "SSR Raw";
-        case TextureDebugViewer::Target::SsrBlur: return "SSR Blur";
+        case TextureDebugViewer::Target::Reflection: return "Reflection";
+        case TextureDebugViewer::Target::ReflectionScratch: return "Reflection Scratch";
         case TextureDebugViewer::Target::GBuffer0: return "GBuffer 0";
         case TextureDebugViewer::Target::GBuffer1: return "GBuffer 1";
         case TextureDebugViewer::Target::GBuffer2: return "GBuffer 2";
@@ -193,8 +193,8 @@ namespace
             MakeTarget(TextureDebugViewer::Target::Fxaa, "Post", "FXAA output at display resolution.", D.fxaa.Get(), renderer.GetBackbufferResourceFormat()),
             MakeTarget(TextureDebugViewer::Target::DlssOutput, "Post", "DLSS upscaled output.", D.dlssOutput.Get(), renderer.GetSceneColorFormat()),
             MakeTarget(TextureDebugViewer::Target::SceneOpaque, "Color", "Opaque scene copy used by refraction.", D.sceneOpaque.Get(), renderer.GetSceneColorFormat()),
-            MakeTarget(TextureDebugViewer::Target::Ssr, "SSR", "Raw SSR reflection result.", D.ssr.Get(), renderer.GetSsrFormat()),
-            MakeTarget(TextureDebugViewer::Target::SsrBlur, "SSR", "Blurred SSR reflection result.", D.ssrBlur.Get(), renderer.GetSsrBlurFormat()),
+            MakeTarget(TextureDebugViewer::Target::Reflection, "Reflection", "Main reflection result consumed by compose.", D.reflection.Get(), renderer.GetReflectionFormat()),
+            MakeTarget(TextureDebugViewer::Target::ReflectionScratch, "Reflection", "Scratch target used by reflection filtering and RT denoise.", D.reflectionScratch.Get(), renderer.GetReflectionScratchFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal and roughness.", D.gb1.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "Emissive.", D.gb2.Get(), renderer.GetGBuffer2Format()),

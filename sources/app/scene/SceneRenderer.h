@@ -79,13 +79,13 @@ private:
         const Camera& camera);
     void Pass_ShoreDepth(Renderer* r, RenderGraphPassContext ctx,
         const SceneView* view);
-    void Pass_SSR(Renderer* r, RenderGraphPassContext ctx,
+    void Pass_ScreenSpaceReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_RTDenoise(Renderer* r, RenderGraphPassContext ctx); // S11 temporal accumulate
-    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 "Off": zero the ssr target
-    void Pass_SSR_Blur(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 "Off": zero the reflection target
+    void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_RTDebug(Renderer* r, RenderGraphPassContext ctx,

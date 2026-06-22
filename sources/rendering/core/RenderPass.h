@@ -15,8 +15,8 @@ enum class RenderPass : uint16_t {
     Main_SpotLights,
     Main_PointLights,
     Main_Skybox,
-    Main_SSR,
-    Main_SSRBlur,
+    Main_ReflectionSource,
+    Main_ReflectionBlur,
     Main_Compose,
     Main_RTReflections,
     Main_RTDenoise,
@@ -58,8 +58,8 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SpotLights: return L"SpotLights";
     case RenderPass::Main_PointLights: return L"PointLights";
     case RenderPass::Main_Skybox: return L"Skybox";
-    case RenderPass::Main_SSR: return L"SSR";
-    case RenderPass::Main_SSRBlur: return L"SSR.Blur";
+    case RenderPass::Main_ReflectionSource: return L"ReflectionSource";
+    case RenderPass::Main_ReflectionBlur: return L"Reflection.Blur";
     case RenderPass::Main_Compose: return L"Compose";
     case RenderPass::Main_RTReflections: return L"RTReflections";
     case RenderPass::Main_RTDenoise: return L"RTDenoise";

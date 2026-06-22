@@ -10,14 +10,14 @@
 #include "core/math/Math.h"
 
 // Owns the per-frame deferred render targets (G-buffer, light/scene color,
-// shadow atlases, SSR/tonemap/FXAA/DLSS intermediates) and the CPU-only
+// shadow atlases, reflection/tonemap/FXAA/DLSS intermediates) and the CPU-only
 // RTV/DSV/SRV descriptor heaps that view them. Formats and sizes are supplied
 // by the caller (Renderer), which remains the single home for them.
 class RenderTargetManager
 {
 public:
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,ssr,ssrBlur,shadow,spotShadow,dlssOutput
+        static constexpr size_t kResourceCount = 17; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,shadow,spotShadow,dlssOutput
         // Resources
         Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
         Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // normalOcta+rough
@@ -31,8 +31,8 @@ public:
         Microsoft::WRL::ComPtr<ID3D12Resource> dlssBias;
         Microsoft::WRL::ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
         Microsoft::WRL::ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
-        Microsoft::WRL::ComPtr<ID3D12Resource> ssr;     // premultiplied
-        Microsoft::WRL::ComPtr<ID3D12Resource> ssrBlur;
+        Microsoft::WRL::ComPtr<ID3D12Resource> reflection;        // premultiplied; compose samples this after blur
+        Microsoft::WRL::ComPtr<ID3D12Resource> reflectionScratch; // ping-pong/scratch target for reflection filtering
         Microsoft::WRL::ComPtr<ID3D12Resource> shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
         Microsoft::WRL::ComPtr<ID3D12Resource> spotShadow; // R16_TYPELESS array for spot lights
         Microsoft::WRL::ComPtr<ID3D12Resource> dlssOutput; // scene color format, upscaled
@@ -49,8 +49,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE dlssBiasRTV{}, dlssBiasSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrSRV{}, ssrUAV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE ssrBlurSRV{}, ssrBlurUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE reflectionSRV{}, reflectionUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE reflectionScratchSRV{}, reflectionScratchUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
@@ -71,15 +71,15 @@ public:
         DXGI_FORMAT light;
         DXGI_FORMAT sceneColor;
         DXGI_FORMAT dlssBias;
-        DXGI_FORMAT ssr;
-        DXGI_FORMAT ssrBlur;
+        DXGI_FORMAT reflection;
+        DXGI_FORMAT reflectionScratch;
         DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
     };
 
     struct Sizes {
         UINT renderWidth = 1, renderHeight = 1;     // internal render resolution
         UINT displayWidth = 1, displayHeight = 1;   // window resolution (tonemap/FXAA/DLSS out)
-        UINT ssrWidth = 1, ssrHeight = 1;
+        UINT reflectionWidth = 1, reflectionHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceStateTracker& tracker);
@@ -91,7 +91,7 @@ public:
 
 private:
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, SSR, SSRBlur, Shadow, SpotShadow, SSRUAV, SSRBlurUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, Shadow, SpotShadow, ReflectionUAV, ReflectionScratchUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

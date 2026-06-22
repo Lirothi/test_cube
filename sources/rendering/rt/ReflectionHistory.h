@@ -6,8 +6,8 @@
 
 namespace rt {
 
-// Ping-pong history textures for temporal reflection denoise (S11). Two SSR-res
-// textures (kSsrFormat, UAV+SRV); each frame one is "current" (written) and the
+// Ping-pong history textures for temporal reflection denoise (S11). Two reflection-res
+// textures (kReflectionFormat, UAV+SRV); each frame one is "current" (written) and the
 // other is "previous" (reprojected + read). Recreated on size change. Their
 // SRV/UAV live in a CPU-only heap and are copied into the bindless heap per frame.
 // State tracking is the caller's job (register both textures after a realloc).

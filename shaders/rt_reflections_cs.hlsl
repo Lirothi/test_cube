@@ -11,7 +11,7 @@
 //   - plus an ENVIRONMENT term: skybox reflection at the hit, Fresnel*gloss
 //     (same as compose's spec) — this is what makes metals look metallic.
 // On miss: coverage 0 -> compose's skybox fallback. Writes premultiplied
-// (rgb, coverage) into the SSR target; blur + compose unchanged.
+// (rgb, coverage) into the reflection target; blur + compose unchanged.
 //
 // Glossy/rough blur is NOT done here: stochastic glossy needs a real denoiser
 // (DLSS Ray Reconstruction) — see plan S14. Reflections are sharp + clean.
@@ -36,7 +36,7 @@ cbuffer Probe : register(b0)
     float3 lightRgb;     float exposure;
     float depthA;        float depthB;        uint outWidth;       uint outHeight;
     uint tlasIndex;      uint lightIndex;     uint gb1Index;        uint depthIndex;
-    uint ssrUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
+    uint reflectionUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
     uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
 }
 
@@ -199,7 +199,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         return;
     }
 
-    RWTexture2D<float4> outTex = ResourceDescriptorHeap[ssrUavIndex];
+    RWTexture2D<float4> outTex = ResourceDescriptorHeap[reflectionUavIndex];
     Texture2D depthT = ResourceDescriptorHeap[depthIndex];
     Texture2D gb1    = ResourceDescriptorHeap[gb1Index];
 

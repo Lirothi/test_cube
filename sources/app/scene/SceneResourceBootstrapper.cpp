@@ -232,7 +232,7 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
     if (!matBlur_)
     {
         Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/ssr_blur_cs.hlsl";
+        cd.shaderFile = L"shaders/reflection_blur_cs.hlsl";
         cd.csEntry = "CSMain";
         matBlur_ = mm->GetOrCreateCompute(renderer, cd);
     }

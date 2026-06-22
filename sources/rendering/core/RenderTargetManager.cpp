@@ -254,15 +254,15 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             dev->CreateUnorderedAccessView(outRes.Get(), nullptr, &ud, outUAV);
 
             auto& D = deferred_[f];
-            if (srvSlot == DeferredSrvSlot::SSR)
+            if (srvSlot == DeferredSrvSlot::Reflection)
             {
-                D.ssrSRV = outSRV;
-                D.ssrUAV = outUAV;
+                D.reflectionSRV = outSRV;
+                D.reflectionUAV = outUAV;
             }
-            else if (srvSlot == DeferredSrvSlot::SSRBlur)
+            else if (srvSlot == DeferredSrvSlot::ReflectionScratch)
             {
-                D.ssrBlurSRV = outSRV;
-                D.ssrBlurUAV = outUAV;
+                D.reflectionScratchSRV = outSRV;
+                D.reflectionScratchUAV = outUAV;
             }
             else if (srvSlot == DeferredSrvSlot::Tonemap)
             {
@@ -443,8 +443,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
         CreateRT(formats.dlssBias, DeferredRtvSlot::DlssBias, DeferredSrvSlot::DlssBias, DeferredSrvSlot::Count, f, D.dlssBias, D.dlssBiasRTV, D.dlssBiasSRV, float4(0, 0, 0, 0));
         CreateSrvTexture(formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
-        CreateSrvUavTexture(formats.ssr, DeferredSrvSlot::SSR, DeferredSrvSlot::SSRUAV, f, D.ssr, D.ssrSRV, D.ssrUAV, sizes.ssrWidth, sizes.ssrHeight);
-        CreateSrvUavTexture(formats.ssrBlur, DeferredSrvSlot::SSRBlur, DeferredSrvSlot::SSRBlurUAV, f, D.ssrBlur, D.ssrBlurSRV, D.ssrBlurUAV, sizes.ssrWidth, sizes.ssrHeight);
+        CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateSrvUavTexture(formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
         CreateSrvUavTexture(formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
@@ -480,8 +480,8 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.sceneOpaque);
         collect(D.tonemap);
         collect(D.fxaa);
-        collect(D.ssr);
-        collect(D.ssrBlur);
+        collect(D.reflection);
+        collect(D.reflectionScratch);
         collect(D.shadow);
         collect(D.spotShadow);
         collect(D.dlssOutput);

@@ -661,7 +661,7 @@
     <None Include="shaders\axes.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\ssr_blur_cs.hlsl">
+    <None Include="shaders\reflection_blur_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\compose_cs.hlsl">

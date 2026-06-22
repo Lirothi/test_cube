@@ -608,8 +608,8 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(skySrv);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE ssrSrv = deferred.ssrSRV.ptr != 0 ? deferred.ssrSRV : fallbackSrv;
-    pushSrv(ssrSrv.ptr != 0 ? ssrSrv : fallbackSrv);
+    D3D12_CPU_DESCRIPTOR_HANDLE reflectionSrv = deferred.reflectionSRV.ptr != 0 ? deferred.reflectionSRV : fallbackSrv;
+    pushSrv(reflectionSrv.ptr != 0 ? reflectionSrv : fallbackSrv);
 
     pushTexture(distantRoughnessTexture_);
     pushTexture(foamDetailTexture_);

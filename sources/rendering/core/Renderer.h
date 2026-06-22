@@ -102,8 +102,8 @@ public:
     DXGI_FORMAT GetDsvFormat() const { return render::kDeferredDepthFormat; }
     DXGI_FORMAT GetDepthSrvFormat() const { return render::kDeferredDepthSrvFormat; }
     DXGI_FORMAT GetGBufferVelocityFormat() const { return render::kGBufferVelocityFormat; }
-    DXGI_FORMAT GetSsrFormat() const { return render::kSsrFormat; }
-    DXGI_FORMAT GetSsrBlurFormat() const { return render::kSsrBlurFormat; }
+    DXGI_FORMAT GetReflectionFormat() const { return render::kReflectionFormat; }
+    DXGI_FORMAT GetReflectionScratchFormat() const { return render::kReflectionScratchFormat; }
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
@@ -179,11 +179,11 @@ public:
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
-    void SetSsrTextureScale(Math::float2 scale);
-    void SetSsrTextureScale(float scale) { SetSsrTextureScale(Math::float2(scale, scale)); }
-    Math::float2 GetSsrTextureScale() const { return ssrTextureScale_; }
-    UINT GetSsrTextureWidth() const;
-    UINT GetSsrTextureHeight() const;
+    void SetReflectionTextureScale(Math::float2 scale);
+    void SetReflectionTextureScale(float scale) { SetReflectionTextureScale(Math::float2(scale, scale)); }
+    Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
+    UINT GetReflectionTextureWidth() const;
+    UINT GetReflectionTextureHeight() const;
     void SetRenderResolutionScale(float scale);
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
@@ -267,7 +267,7 @@ private:
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
     void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
-    std::pair<UINT, UINT> ComputeSsrTextureSize(UINT referenceWidth, UINT referenceHeight) const;
+    std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
 
@@ -289,9 +289,9 @@ private:
     UINT  renderWidth_ = width_;
     UINT  renderHeight_ = height_;
 
-    Math::float2 ssrTextureScale_ = Math::float2(0.5f, 0.5f);
-    UINT ssrTextureWidth_ = 1;
-    UINT ssrTextureHeight_ = 1;
+    Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
+    UINT reflectionTextureWidth_ = 1;
+    UINT reflectionTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
     ID3D12Resource* pendingImGuiTextureResource_ = nullptr;

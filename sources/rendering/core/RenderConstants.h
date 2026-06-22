@@ -40,7 +40,7 @@ inline constexpr DXGI_FORMAT kGBufferVelocityFormat  = DXGI_FORMAT_R16G16_FLOAT;
 inline constexpr DXGI_FORMAT kLightTargetFormat      = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kDlssBiasFormat         = DXGI_FORMAT_R8_UNORM;
-inline constexpr DXGI_FORMAT kSsrFormat              = DXGI_FORMAT_R8G8B8A8_UNORM;
-inline constexpr DXGI_FORMAT kSsrBlurFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
+inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R8G8B8A8_UNORM;
+inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 } // namespace render

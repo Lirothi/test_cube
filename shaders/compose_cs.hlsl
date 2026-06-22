@@ -5,7 +5,7 @@
 // t3: GB1 (Normal01 + Rough encoded in A)
 // t4: Depth (R32F SRV created from the DSV)
 // t5: Skybox cubemap
-// t6: SSR blurred (premultiplied)
+// t6: Filtered reflection (premultiplied)
 // u0: Scene color (HDR)
 
 #pragma pack_matrix(row_major)
@@ -18,7 +18,7 @@ Texture2D GB0 : register(t2);
 Texture2D GB1 : register(t3);
 Texture2D DepthT : register(t4);
 TextureCube SkyboxTex : register(t5);
-Texture2D SSRBlur : register(t6);
+Texture2D ReflectionTexture : register(t6);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -83,14 +83,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 Vw = NormalizeSafe(camPosWS - Pw, float3(0.0, 0.0, 1.0));
         float3 Rw = NormalizeSafe(reflect(-Vw, N_ws), N_ws);
 
-        float4 ssrT = SSRBlur.SampleLevel(gSmp, uv, 0); // premultiplied
-        float ssrA = ssrT.a;
-        float3 ssrRGB = ssrT.rgb;
+        float4 reflectionT = ReflectionTexture.SampleLevel(gSmp, uv, 0); // premultiplied
+        float reflectionA = reflectionT.a;
+        float3 reflectionRGB = reflectionT.rgb;
 
         float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α))
-        float3 refl = ssrRGB + skyCol * (1.0 - ssrA);
+        float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);
 
         float cosT = saturate(dot(N_ws, Vw));
         float3 F = FresnelSchlick(cosT, F0);

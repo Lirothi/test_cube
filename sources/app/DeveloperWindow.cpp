@@ -147,12 +147,12 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     settings.ssrTechnique = static_cast<SsrTechnique>(ssrTechnique);
                 }
 
-                float ssrScale = renderer.GetSsrTextureScale().x;
-                if (ImGui::SliderFloat("SSR resolution", &ssrScale, 0.25f, 1.0f, "%.2f"))
+                float ssrScale = renderer.GetReflectionTextureScale().x;
+                if (ImGui::SliderFloat("Reflection resolution", &ssrScale, 0.25f, 1.0f, "%.2f"))
                 {
-                    renderer.SetSsrTextureScale(ssrScale);
+                    renderer.SetReflectionTextureScale(ssrScale);
                 }
-                ImGui::Text("SSR target: %ux%u", renderer.GetSsrTextureWidth(), renderer.GetSsrTextureHeight());
+                ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
 
                 ImGui::Separator();
 
@@ -182,11 +182,11 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 }
 
                 ImGui::BeginDisabled(!rtSupported);
-                ImGui::Checkbox("RT debug view -> SSR target [F6]", &settings.rtDebugView);
+                ImGui::Checkbox("RT debug view -> Reflection target [F6]", &settings.rtDebugView);
                 ImGui::EndDisabled();
                 if (rtSupported && settings.rtDebugView)
                 {
-                    ImGui::TextDisabled("Open the render-target inspector [F4] and select 'Ssr'.");
+                    ImGui::TextDisabled("Open the render-target inspector [F4] and select 'Reflection'.");
                 }
 
                 ImGui::Separator();

@@ -1,9 +1,9 @@
 #define SSR_BLUR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
-// t0: SSR input (RGB premultiplied, A=visibility)
-// u0: SSR output (premultiplied RGBA)
+// t0: reflection input (RGB premultiplied, A=visibility)
+// u0: reflection output (premultiplied RGBA)
 // s0: LinearClamp
-Texture2D SSRIn : register(t0);
-RWTexture2D<float4> SSROut : register(u0);
+Texture2D ReflectionIn : register(t0);
+RWTexture2D<float4> ReflectionOut : register(u0);
 SamplerState gSmp : register(s0);
 
 #ifndef SSR_BLUR_TAP_COUNT
@@ -25,7 +25,7 @@ cbuffer BlurCB : register(b0){
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     uint width, height;
-    SSRIn.GetDimensions(width, height);
+    ReflectionIn.GetDimensions(width, height);
 
     if (dispatchThreadId.x >= width || dispatchThreadId.y >= height)
     {
@@ -52,14 +52,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float2 uv = (float2(dispatchThreadId.xy) + 0.5f) / texDim;
     float2 stepv = dir * radius;
 
-    float4 c = SSRIn.SampleLevel(gSmp, uv, 0) * weights[0];
+    float4 c = ReflectionIn.SampleLevel(gSmp, uv, 0) * weights[0];
     [unroll]
     for(uint k = 1; k < SSR_BLUR_TAP_COUNT; ++k){
         float2 off = stepv * k;
         float w = weights[k];
-        c += SSRIn.SampleLevel(gSmp, uv + off, 0) * w;
-        c += SSRIn.SampleLevel(gSmp, uv - off, 0) * w;
+        c += ReflectionIn.SampleLevel(gSmp, uv + off, 0) * w;
+        c += ReflectionIn.SampleLevel(gSmp, uv - off, 0) * w;
     }
 
-    SSROut[dispatchThreadId.xy] = c;
+    ReflectionOut[dispatchThreadId.xy] = c;
 }

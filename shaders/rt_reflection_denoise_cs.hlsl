@@ -4,7 +4,7 @@
 // previous accumulated result by the motion vector (prevUv = uv - motion, where
 // motion = currUv - prevUv from gbVelocity), clamps it to the current frame's
 // 3x3 neighbourhood (anti-ghosting), and blends. Writes the result to BOTH the
-// SSR buffer (for the downstream spatial blur + compose) and the current history
+// reflection buffer (for the downstream spatial blur + compose) and the current history
 // texture (next frame's "previous"). Premultiplied throughout.
 #define RT_DENOISE_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
@@ -18,7 +18,7 @@ cbuffer Denoise : register(b0)
     uint  rawIndex;        // this frame's raw reflection (SRV)
     uint  histPrevIndex;   // previous accumulated reflection (SRV)
     uint  velocityIndex;   // gbVelocity (SRV); motion = currUv - prevUv
-    uint  ssrUavIndex;     // denoised output -> SSR (UAV), feeds blur + compose
+    uint  reflectionUavIndex;     // denoised output -> reflection (UAV), feeds blur + compose
     uint  histCurrUavIndex;// current accumulated (UAV) -> next frame's prev
     uint  outWidth;
     uint  outHeight;
@@ -39,7 +39,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     Texture2D            rawTex  = ResourceDescriptorHeap[rawIndex];
     Texture2D            histTex = ResourceDescriptorHeap[histPrevIndex];
     Texture2D            velTex  = ResourceDescriptorHeap[velocityIndex];
-    RWTexture2D<float4>  ssrOut  = ResourceDescriptorHeap[ssrUavIndex];
+    RWTexture2D<float4>  reflectionOut = ResourceDescriptorHeap[reflectionUavIndex];
     RWTexture2D<float4>  histOut = ResourceDescriptorHeap[histCurrUavIndex];
 
     int2 px = int2(dtid.xy);
@@ -76,6 +76,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         acc = raw; // disocclusion / history off-screen -> no accumulation this frame
     }
 
-    ssrOut[px]  = acc;
+    reflectionOut[px] = acc;
     histOut[px] = acc;
 }

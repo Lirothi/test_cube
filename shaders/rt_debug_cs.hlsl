@@ -4,8 +4,8 @@
 // From each GBuffer surface, trace the reflection ray; on a hit, use the TLAS
 // InstanceID to index a bindless geometry table, fetch the hit triangle's vertex
 // normals from the raw VB/IB, interpolate by barycentrics, and write the world-
-// space hit normal (as color) into the SSR target for inspection (TextureDebug
-// Viewer -> Ssr). This proves bindless per-hit geometry access (S9). All
+// space hit normal (as color) into the reflection target for inspection (TextureDebug
+// Viewer -> Reflection). This proves bindless per-hit geometry access (S9). All
 // resources are accessed via ResourceDescriptorHeap; indices arrive in b0.
 #define RT_DEBUG_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
@@ -24,7 +24,7 @@ cbuffer Probe : register(b0)
     uint tlasIndex;
     uint gb1Index;
     uint depthIndex;
-    uint ssrUavIndex;
+    uint reflectionUavIndex;
     uint geomInfoIndex;
     uint outWidth;
     uint outHeight;
@@ -43,7 +43,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         return;
     }
 
-    RWTexture2D<float4> outTex = ResourceDescriptorHeap[ssrUavIndex];
+    RWTexture2D<float4> outTex = ResourceDescriptorHeap[reflectionUavIndex];
     Texture2D depthT = ResourceDescriptorHeap[depthIndex];
     Texture2D gb1    = ResourceDescriptorHeap[gb1Index];
 
