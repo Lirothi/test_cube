@@ -1,4 +1,4 @@
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -54,15 +54,14 @@ Texture2DArray<float4> PrevDisplacementDerivatives : register(t1);
 Texture2DArray<float4> FoamTurbulence : register(t2);
 Texture2D SceneColorTexture : register(t3);
 TextureCube SkyboxTexture : register(t4);
-Texture2D SsrTexture : register(t5);
-Texture2D DistantRoughnessMap : register(t6);
-Texture2D FoamDetailMap : register(t7);
-Texture2D FoamAlbedoTex : register(t8);
-Texture2D FoamUnderwaterTex : register(t9);
-Texture2D FoamTrailTex : register(t10);
-Texture2D ContactFoamTex : register(t11);
-Texture2D SceneDepthTexture : register(t12);
-Texture2D ShoreDepthTexture : register(t13);
+Texture2D DistantRoughnessMap : register(t5);
+Texture2D FoamDetailMap : register(t6);
+Texture2D FoamAlbedoTex : register(t7);
+Texture2D FoamUnderwaterTex : register(t8);
+Texture2D FoamTrailTex : register(t9);
+Texture2D ContactFoamTex : register(t10);
+Texture2D SceneDepthTexture : register(t11);
+Texture2D ShoreDepthTexture : register(t12);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -228,6 +227,12 @@ float DepthToViewZ_Fast(float d)
 {
     return depthParams.y / (d - depthParams.x);
 }
+
+#define SSR_TRACE_SCREEN_SIZE depthTextureSize.zw
+#define SSR_TRACE_INV_SCREEN_SIZE depthTextureSize.xy
+#define SSR_TRACE_READ_DEPTH(uv) SampleSceneDepth(uv)
+#define SSR_TRACE_RECONSTRUCT_POS_VS(uv, depthRaw) ViewSpacePosition(depthRaw, uv)
+#include "ssr_trace_logmarch.hlsli"
 
 float3 PositionWsFromDepth(float depthSample, float2 uv)
 {
@@ -769,12 +774,18 @@ float3 Reflection(const LightingInput li)
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
-    //float2 uv = saturate(li.screenUV);
-    //float4 ssrRaw = SsrTexture.SampleLevel(LinearClampSampler, uv, 0);
-    //float visibility = ssrRaw.a;
     float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 3).rgb;
-    //return lerp(skySample, ssrRaw.rgb, visibility);
-    return skySample;
+    float3 Pv = mul(float4(li.positionWS, 1.0f), view).xyz;
+    float3 Nv = normalize(mul(adjustedNormal, (float3x3)view));
+    SSRHit ssr = TraceSSR_LogMarch(Pv, Nv, li.screenUV * depthTextureSize.zw);
+
+    if (ssr.hit == 0)
+    {
+        return skySample;
+    }
+
+    float3 reflectedScene = SceneColorTexture.SampleLevel(LinearClampSampler, saturate(ssr.uv), 0).rgb;
+    return lerp(skySample, reflectedScene, ssr.visibility);
 }
 
 float3 DeepScatterColor(float depthScale)

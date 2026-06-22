@@ -551,7 +551,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -607,9 +607,6 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         skySrv = fallbackSrv;
     }
     pushSrv(skySrv);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE reflectionSrv = deferred.reflectionSRV.ptr != 0 ? deferred.reflectionSRV : fallbackSrv;
-    pushSrv(reflectionSrv.ptr != 0 ? reflectionSrv : fallbackSrv);
 
     pushTexture(distantRoughnessTexture_);
     pushTexture(foamDetailTexture_);

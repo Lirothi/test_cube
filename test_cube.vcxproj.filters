@@ -748,6 +748,9 @@
     <None Include="shaders\ssr_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\ssr_trace_logmarch.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\spotlight_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
