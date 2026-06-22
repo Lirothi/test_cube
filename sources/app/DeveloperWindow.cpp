@@ -1,5 +1,10 @@
 #include "app/DeveloperWindow.h"
 
+#include <string>
+#include <string_view>
+
+#include "app/levels/DemoLevel.h"
+#include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
@@ -51,7 +56,7 @@ void DeveloperWindow::ToggleTextureInspector()
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
 }
 
-void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, SceneRenderSettings& settings)
+void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings)
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
 
@@ -213,6 +218,19 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
             if (ImGui::BeginTabItem("Debug"))
             {
+                const std::string_view activeLevelName = levelManager.GetActiveLevelName();
+                ImGui::Text("Active level: %.*s", static_cast<int>(activeLevelName.size()), activeLevelName.data());
+                ImGui::BeginDisabled(!levelManager.HasLevel(DemoLevel::kName));
+                if (ImGui::Button("Reload Demo Level"))
+                {
+                    LevelLoadOptions reloadOptions;
+                    reloadOptions.preserveCameraTransform = true;
+                    levelManager.RequestLevelChange(std::string(DemoLevel::kName), reloadOptions);
+                }
+                ImGui::EndDisabled();
+
+                ImGui::Separator();
+
                 bool wireframe = renderer.GetWireframeMode();
                 if (ImGui::Checkbox("Wireframe", &wireframe))
                 {

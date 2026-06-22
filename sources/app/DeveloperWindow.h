@@ -5,6 +5,7 @@
 #include "ui/ImGuiWindowUtils.h"
 
 class InputManager;
+class LevelManager;
 class Renderer;
 class Scene;
 
@@ -16,7 +17,7 @@ public:
     void ToggleOpen() { open_ = !open_; }
     void ToggleTextureInspector();
 
-    void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, SceneRenderSettings& settings);
+    void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings);
 
 private:
     TextureDebugViewer textureDebugViewer_;

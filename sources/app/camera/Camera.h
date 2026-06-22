@@ -39,6 +39,8 @@ public:
     void SetYawPitch(float yaw, float pitch) {
         yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw();
     }
+    float GetYaw() const { return yaw_; }
+    float GetPitch() const { return pitch_; }
 
     void SetHFov(float fov) { view_.hfov = fov; }
     float GetHFov() const { return view_.hfov; }

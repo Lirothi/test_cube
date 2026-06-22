@@ -463,7 +463,7 @@ VSOutput VSMain(VSInput input)
             float viewDepth = ShoreViewDepth(shoreDepth);
             float terrainHeight = shoreViewParams.z - viewDepth;
             float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth * 0.5f);
+            attenuation = saturate(waterDepth * 0.15f);
         }
     }
 

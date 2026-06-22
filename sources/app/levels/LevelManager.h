@@ -10,6 +10,17 @@
 
 #include "app/levels/Level.h"
 
+struct LevelLoadOptions
+{
+    bool preserveCameraTransform = false;
+};
+
+struct LevelChangeRequest
+{
+    std::string levelName;
+    LevelLoadOptions options;
+};
+
 class LevelManager
 {
 public:
@@ -24,12 +35,12 @@ public:
         RegisterLevel(std::make_unique<TLevel>(std::forward<TArgs>(args)...));
     }
 
-    bool LoadLevel(std::string_view name, const LevelLoadContext& ctx);
+    bool LoadLevel(std::string_view name, const LevelLoadContext& ctx, const LevelLoadOptions& options = {});
 
     void Tick(float deltaTime);
 
-    void RequestLevelChange(std::string levelName);
-    std::optional<std::string> ConsumePendingLevelRequest();
+    void RequestLevelChange(std::string levelName, const LevelLoadOptions& options = {});
+    std::optional<LevelChangeRequest> ConsumePendingLevelRequest();
 
     Level* GetActiveLevel() const { return activeLevel_; }
     std::string_view GetActiveLevelName() const { return activeLevelName_; }
@@ -40,6 +51,6 @@ private:
     std::unordered_map<std::string, std::unique_ptr<Level>> levels_;
     Level* activeLevel_ = nullptr;
     std::string activeLevelName_;
-    std::optional<std::string> pendingLevelRequest_;
+    std::optional<LevelChangeRequest> pendingLevelRequest_;
 };
 

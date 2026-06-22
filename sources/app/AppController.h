@@ -5,6 +5,7 @@
 #include "core/task/TaskSystem.h"
 
 class InputManager;
+class LevelManager;
 class Renderer;
 class Scene;
 
@@ -14,7 +15,7 @@ class Scene;
 class AppController
 {
 public:
-    void Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime);
+    void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene) const;
     void WaitForHudBuild();
 

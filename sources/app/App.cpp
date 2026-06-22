@@ -468,19 +468,21 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
                 renderer.Tick(deltaTime);
-                appController_.Tick(input, renderer, scene, deltaTime);
+                appController_.Tick(input, renderer, scene, levelManager, deltaTime);
                 scene.Tick(deltaTime);
 
                 levelManager.Tick(deltaTime);
 
                 if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
                 {
+                    renderer.WaitForPreviousFrame();
+
                     UploadBatch levelBatch;
                     if (levelBatch.Begin(&renderer))
                     {
                         LevelLoadContext levelCtx{ levelBatch, renderer, scene };
 
-                        if (levelManager.LoadLevel(*pendingLevel, levelCtx))
+                        if (levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options))
                         {
                             levelBatch.SubmitAndWait(&renderer);
                         }
@@ -496,6 +498,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         TaskSystem::Get().Stop();
 
+        renderer.WaitForPreviousFrame();
         scene.Clear();
         renderer.Shutdown();
     }

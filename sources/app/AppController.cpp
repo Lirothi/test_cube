@@ -1,5 +1,6 @@
 #include "app/AppController.h"
 
+#include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -10,7 +11,7 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "text/TextManager.h"
 
-void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, float deltaTime)
+void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime)
 {
     CPU_SCOPE(ProfilerScopes::kAppControllerTick);
 
@@ -103,7 +104,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
     }
 
-    developerWindow_.Draw(renderer, scene, input, settings_);
+    developerWindow_.Draw(renderer, scene, input, levelManager, settings_);
     scene.SetRenderSettings(settings_);
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
