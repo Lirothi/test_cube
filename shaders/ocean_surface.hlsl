@@ -1,4 +1,4 @@
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
@@ -62,6 +62,7 @@ Texture2D FoamTrailTex : register(t9);
 Texture2D ContactFoamTex : register(t10);
 Texture2D SceneDepthTexture : register(t11);
 Texture2D ShoreDepthTexture : register(t12);
+Texture2D OceanReflectionTexture : register(t13);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -227,12 +228,6 @@ float DepthToViewZ_Fast(float d)
 {
     return depthParams.y / (d - depthParams.x);
 }
-
-#define SSR_TRACE_SCREEN_SIZE depthTextureSize.zw
-#define SSR_TRACE_INV_SCREEN_SIZE depthTextureSize.xy
-#define SSR_TRACE_READ_DEPTH(uv) SampleSceneDepth(uv)
-#define SSR_TRACE_RECONSTRUCT_POS_VS(uv, depthRaw) ViewSpacePosition(depthRaw, uv)
-#include "ssr_trace_logmarch.hlsli"
 
 float3 PositionWsFromDepth(float depthSample, float2 uv)
 {
@@ -768,35 +763,36 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi)
     return spec * li.mainLight.color;
 }
 
+float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
+{
+    float3 flatReflectDir = reflect(-li.viewDir, float3(0.0f, 1.0f, 0.0f));
+    float3 waveReflectDir = reflect(-li.viewDir, adjustedNormal);
+    float2 reflectionDelta = waveReflectDir.xz - flatReflectDir.xz;
+
+    float distanceFade = saturate(li.viewDist / max(specularParams.z, 1.0f));
+    float grazing = saturate(1.0f - abs(waveReflectDir.y));
+    float strength = lerp(0.08f, 0.025f, distanceFade) * lerp(0.45f, 1.0f, grazing) * 2;
+    return reflectionDelta * strength;
+}
+
+float OceanReflectionEdgeFade(float2 uv)
+{
+    float2 edgeDist = min(uv, float2(1.0f, 1.0f) - uv);
+    return saturate(min(edgeDist.x, edgeDist.y) * 64.0f);
+}
+
 float3 Reflection(const LightingInput li)
 {
-    static const float kUnderwaterSsrHitBias = -0.05f;
-
     float reflectionNormalStrength = heightFogParams.w;
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
     float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 3).rgb;
-    //return skySample;
-    
-    float3 Pv = mul(float4(li.positionWS, 1.0f), view).xyz;
-    float3 Nv = normalize(mul(adjustedNormal, (float3x3)view));
-    SSRHit ssr = TraceSSR_LogMarch(Pv, Nv, li.screenUV * depthTextureSize.zw);
-
-    if (ssr.hit == 0)
-    {
-        return skySample;
-    }
-
-    float hitDepth = SampleSceneDepth(ssr.uv);
-    float3 hitPositionWS = PositionWsFromDepth(hitDepth, ssr.uv);
-    if (hitPositionWS.y < kUnderwaterSsrHitBias)
-    {
-        return skySample;
-    }
-
-    float3 reflectedScene = SceneColorTexture.SampleLevel(LinearClampSampler, saturate(ssr.uv), 0).rgb;
-    return lerp(skySample, reflectedScene, ssr.visibility);
+    float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
+    float edgeFade = OceanReflectionEdgeFade(reflectionUV);
+    float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);
+    float visibility = saturate(oceanReflection.a) * edgeFade;
+    return oceanReflection.rgb * edgeFade + skySample * (1.0f - visibility);
 }
 
 float3 DeepScatterColor(float depthScale)

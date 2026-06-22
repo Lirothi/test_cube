@@ -215,6 +215,7 @@ public:
     std::shared_ptr<Material> GetTonemapMaterial() const { return matTonemapCS_; }
     std::shared_ptr<Material> GetFxaaMaterial() const { return matFxaaCS_; }
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
+    std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
     std::shared_ptr<Material> GetRtDebugMaterial() const { return matRtDebug_; } // S6, null on non-RT HW
@@ -233,6 +234,7 @@ public:
     UINT GetPointLightCBSizeBytes() const;
     UINT GetSpotLightCBSizeBytes() const;
     UINT GetSsrCBSizeBytes() const;
+    UINT GetOceanReflectionCBSizeBytes() const;
     UINT GetBlurCBSizeBytes() const;
     UINT GetComposeCBSizeBytes() const;
     UINT GetFxaaCBSizeBytes() const;
@@ -259,6 +261,7 @@ private:
     std::shared_ptr<Material> matTonemapCS_;
     std::shared_ptr<Material> matFxaaCS_;
     std::shared_ptr<Material> matSSR_;
+    std::shared_ptr<Material> matOceanReflection_;
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW

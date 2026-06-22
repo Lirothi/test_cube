@@ -264,6 +264,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 D.reflectionScratchSRV = outSRV;
                 D.reflectionScratchUAV = outUAV;
             }
+            else if (srvSlot == DeferredSrvSlot::OceanReflection)
+            {
+                D.oceanReflectionSRV = outSRV;
+                D.oceanReflectionUAV = outUAV;
+            }
             else if (srvSlot == DeferredSrvSlot::Tonemap)
             {
                 D.tonemapSRV = outSRV;
@@ -445,6 +450,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvTexture(formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateSrvUavTexture(formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
         CreateSrvUavTexture(formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
@@ -482,6 +488,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.fxaa);
         collect(D.reflection);
         collect(D.reflectionScratch);
+        collect(D.oceanReflection);
         collect(D.shadow);
         collect(D.spotShadow);
         collect(D.dlssOutput);

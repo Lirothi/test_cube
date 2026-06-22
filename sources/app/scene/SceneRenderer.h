@@ -90,6 +90,8 @@ private:
         const Camera& camera);
     void Pass_RTDebug(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    void RecordOceanReflection(Renderer* r, ID3D12GraphicsCommandList* cl,
+        const Camera& camera);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,

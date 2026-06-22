@@ -167,6 +167,13 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 }
                 ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
 
+                float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
+                if (ImGui::SliderFloat("Ocean reflection resolution", &oceanReflectionScale, 0.25f, 1.0f, "%.2f"))
+                {
+                    renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
+                }
+                ImGui::Text("Ocean reflection target: %ux%u", renderer.GetOceanReflectionTextureWidth(), renderer.GetOceanReflectionTextureHeight());
+
                 ImGui::Separator();
 
                 // Reflection source (S8): Off / SSR / RT. RT is greyed out on

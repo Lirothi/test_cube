@@ -24,6 +24,7 @@ public:
         SceneOpaque,
         Reflection,
         ReflectionScratch,
+        OceanReflection,
         GBuffer0,
         GBuffer1,
         GBuffer2,

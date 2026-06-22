@@ -551,7 +551,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -632,6 +632,9 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         shoreDepthSrv = depthSrv;
     }
     pushSrv(shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv = deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv;
+    pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
@@ -909,7 +912,7 @@ Math::float4 OceanRenderable::GetSpecularParams() const
 Math::float4 OceanRenderable::GetRefractionParams() const
 {
     // refraction strengths and absorption parameters
-    return Math::float4(0.28f, 0.75f, 10.0f, 0.1f);
+    return Math::float4(0.35f, 0.75f, 10.0f, 0.1f);
 }
 
 Math::float4 OceanRenderable::GetSubsurfaceParams() const

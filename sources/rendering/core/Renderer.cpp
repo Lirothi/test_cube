@@ -780,6 +780,9 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     const auto reflectionSize = ComputeReflectionTextureSize(displayWidth, displayHeight);
     reflectionTextureWidth_ = reflectionSize.first > 0 ? reflectionSize.first : 1;
     reflectionTextureHeight_ = reflectionSize.second > 0 ? reflectionSize.second : 1;
+    const auto oceanReflectionSize = ComputeScaledTextureSize(displayWidth, displayHeight, oceanReflectionTextureScale_);
+    oceanReflectionTextureWidth_ = oceanReflectionSize.first > 0 ? oceanReflectionSize.first : 1;
+    oceanReflectionTextureHeight_ = oceanReflectionSize.second > 0 ? oceanReflectionSize.second : 1;
 
     RenderTargetManager::Formats formats{};
     formats.gb0 = render::kGBuffer0Format;
@@ -793,6 +796,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.dlssBias = render::kDlssBiasFormat;
     formats.reflection = render::kReflectionFormat;
     formats.reflectionScratch = render::kReflectionScratchFormat;
+    formats.oceanReflection = render::kReflectionFormat;
     formats.backbufferResource = render::kBackbufferResourceFormat;
 
     RenderTargetManager::Sizes sizes{};
@@ -802,6 +806,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.displayHeight = displayHeight;
     sizes.reflectionWidth = reflectionTextureWidth_;
     sizes.reflectionHeight = reflectionTextureHeight_;
+    sizes.oceanReflectionWidth = oceanReflectionTextureWidth_;
+    sizes.oceanReflectionHeight = oceanReflectionTextureHeight_;
 
     rtManager_.Create(GetDevice(), formats, sizes, stateTracker_);
 }
@@ -811,10 +817,12 @@ void Renderer::DestroyDeferredTargets() {
 
     reflectionTextureWidth_ = 1;
     reflectionTextureHeight_ = 1;
+    oceanReflectionTextureWidth_ = 1;
+    oceanReflectionTextureHeight_ = 1;
 }
 
 
-std::pair<UINT, UINT> Renderer::ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const
+std::pair<UINT, UINT> Renderer::ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const
 {
     const UINT refWidth = std::max(referenceWidth, 1u);
     const UINT refHeight = std::max(referenceHeight, 1u);
@@ -830,9 +838,14 @@ std::pair<UINT, UINT> Renderer::ComputeReflectionTextureSize(UINT referenceWidth
         return std::max(1u, value);
     };
 
-    const UINT reflectionWidth = computeDim(refWidth, reflectionTextureScale_.x);
-    const UINT reflectionHeight = computeDim(refHeight, reflectionTextureScale_.y);
+    const UINT reflectionWidth = computeDim(refWidth, scale.x);
+    const UINT reflectionHeight = computeDim(refHeight, scale.y);
     return { reflectionWidth, reflectionHeight };
+}
+
+std::pair<UINT, UINT> Renderer::ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const
+{
+    return ComputeScaledTextureSize(referenceWidth, referenceHeight, reflectionTextureScale_);
 }
 
 void Renderer::RecreateDeferredTargets()
@@ -874,6 +887,35 @@ UINT Renderer::GetReflectionTextureWidth() const
 UINT Renderer::GetReflectionTextureHeight() const
 {
     return std::max(1u, reflectionTextureHeight_);
+}
+
+void Renderer::SetOceanReflectionTextureScale(Math::float2 scale)
+{
+    Math::float2 sanitized{ scale.x, scale.y };
+    if (sanitized.x < 0.0f) { sanitized.x = 0.0f; }
+    if (sanitized.y < 0.0f) { sanitized.y = 0.0f; }
+
+    if (sanitized.x == oceanReflectionTextureScale_.x && sanitized.y == oceanReflectionTextureScale_.y)
+    {
+        return;
+    }
+
+    oceanReflectionTextureScale_ = sanitized;
+
+    if (rtManager_.IsCreated())
+    {
+        RecreateDeferredTargets();
+    }
+}
+
+UINT Renderer::GetOceanReflectionTextureWidth() const
+{
+    return std::max(1u, oceanReflectionTextureWidth_);
+}
+
+UINT Renderer::GetOceanReflectionTextureHeight() const
+{
+    return std::max(1u, oceanReflectionTextureHeight_);
 }
 
 void Renderer::UpdateRenderResolutionFromScale()

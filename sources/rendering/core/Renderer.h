@@ -184,6 +184,11 @@ public:
     Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
     UINT GetReflectionTextureWidth() const;
     UINT GetReflectionTextureHeight() const;
+    void SetOceanReflectionTextureScale(Math::float2 scale);
+    void SetOceanReflectionTextureScale(float scale) { SetOceanReflectionTextureScale(Math::float2(scale, scale)); }
+    Math::float2 GetOceanReflectionTextureScale() const { return oceanReflectionTextureScale_; }
+    UINT GetOceanReflectionTextureWidth() const;
+    UINT GetOceanReflectionTextureHeight() const;
     void SetRenderResolutionScale(float scale);
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
@@ -267,6 +272,7 @@ private:
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
     void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
+    std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
@@ -292,6 +298,9 @@ private:
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT reflectionTextureWidth_ = 1;
     UINT reflectionTextureHeight_ = 1;
+    Math::float2 oceanReflectionTextureScale_ = Math::float2(0.5f, 0.5f);
+    UINT oceanReflectionTextureWidth_ = 1;
+    UINT oceanReflectionTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
     ID3D12Resource* pendingImGuiTextureResource_ = nullptr;

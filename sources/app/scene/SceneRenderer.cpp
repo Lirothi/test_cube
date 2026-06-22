@@ -94,6 +94,21 @@ namespace
         mat4   lightViewProj[4];
     };
 
+    struct OceanReflectionConstants
+    {
+        mat4 view{};
+        mat4 proj{};
+        mat4 invView{};
+        mat4 invProj{};
+        float depthA = 0.0f;
+        float depthB = 0.0f;
+        float2 screenSize{};
+        float2 invScreenSize{};
+        float2 outputSize{};
+        float3 camPosWS{};
+        float waterHeight = 0.0f;
+    };
+
     template <typename T>
     D3D12_GPU_VIRTUAL_ADDRESS UploadFrameCB(Renderer* renderer, const T& data)
     {
@@ -1742,6 +1757,78 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
+void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const Camera& camera)
+{
+    if (!renderer || !cl)
+    {
+        return;
+    }
+
+    GPU_SCOPE(cl, ProfilerScopes::kPassOceanReflection);
+
+    const auto& D = renderer->GetDeferredForFrame();
+    auto makePixelReadable = [&]()
+    {
+        renderer->Transition(cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, D.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    };
+
+    if (!D.sceneOpaque.Get() || !D.depthCopy.Get() || !D.oceanReflection.Get())
+    {
+        makePixelReadable();
+        return;
+    }
+
+    renderer->Transition(cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, D.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    auto material = resources_.GetOceanReflectionMaterial();
+    const UINT cbSize = resources_.GetOceanReflectionCBSizeBytes();
+    if (!material || cbSize == 0 || D.sceneOpaqueSRV.ptr == 0 || D.depthCopySRV.ptr == 0 || D.oceanReflectionUAV.ptr == 0)
+    {
+        makePixelReadable();
+        return;
+    }
+
+    OceanReflectionConstants constants{};
+    const mat4& view = camera.GetViewMatrix();
+    const mat4& proj = camera.GetProjMatrix();
+    const mat4& invView = camera.GetInvViewMatrix();
+    const mat4& invProj = camera.GetInvProjMatrix();
+    const float zNear = camera.GetZNear();
+    const float zFar = camera.GetZFar();
+
+    constants.view = view;
+    constants.proj = proj;
+    constants.invView = invView;
+    constants.invProj = invProj;
+    constants.depthA = zNear / (zNear - zFar);
+    constants.depthB = (zNear * zFar) / (zFar - zNear);
+    constants.screenSize = float2(static_cast<float>(std::max(renderer->GetRenderWidth(), 1u)),
+        static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)));
+    constants.invScreenSize = float2(
+        constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+        constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+    constants.outputSize = float2(static_cast<float>(renderer->GetOceanReflectionTextureWidth()),
+        static_cast<float>(renderer->GetOceanReflectionTextureHeight()));
+    constants.camPosWS = camera.GetPosition();
+    constants.waterHeight = 0.0f;
+
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+    RecordComputeDispatch(renderer, cl, material.get(), cbSize,
+        [&](uint8_t* dest) { std::memcpy(dest, &constants, sizeof(constants)); },
+        { D.sceneOpaqueSRV, D.depthCopySRV },
+        { D.oceanReflectionUAV },
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+        renderer->GetOceanReflectionTextureWidth(), renderer->GetOceanReflectionTextureHeight(),
+        D.oceanReflection.Get());
+
+    makePixelReadable();
+}
+
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView)
 {
@@ -1751,7 +1838,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
     // Driver: RTV=SceneColor, DSV=GBuffer. No clear. Do NOT close the driver list.
-    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer, &camera](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -1770,13 +1857,14 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             if (D.depthCopy.Get())
             {
                 driver.cl->CopyResource(D.depthCopy.Get(), D.depth.Get());
-                renderer->Transition(driver.cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
             if (D.sceneOpaque.Get())
             {
                 driver.cl->CopyResource(D.sceneOpaque.Get(), D.scene.Get());
-                renderer->Transition(driver.cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
+
+            RecordOceanReflection(renderer, driver.cl, camera);
+
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);

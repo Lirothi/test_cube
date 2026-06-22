@@ -383,6 +383,7 @@
     <None Include="shaders\ocean_fft.hlsl" />
     <None Include="shaders\ocean_generate_mips.hlsl" />
     <None Include="shaders\ocean_foam_simulation.hlsl" />
+    <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />
     <None Include="shaders\pointlight_color_fs.hlsl" />

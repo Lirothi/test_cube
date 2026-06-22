@@ -229,6 +229,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matSSR_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matOceanReflection_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/ocean_reflection_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matOceanReflection_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matBlur_)
     {
         Material::ComputeDesc cd{};
@@ -326,6 +334,11 @@ UINT SceneResourceBootstrapper::GetSpotLightCBSizeBytes() const
 UINT SceneResourceBootstrapper::GetSsrCBSizeBytes() const
 {
     return matSSR_ ? matSSR_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetOceanReflectionCBSizeBytes() const
+{
+    return matOceanReflection_ ? matOceanReflection_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetBlurCBSizeBytes() const
