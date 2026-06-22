@@ -658,7 +658,8 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 // same index (instances share geometry). Falls back to a running
                 // index if the bindless table isn't up.
                 entry.instanceId = bindless_.Ready()
-                    ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, &desc.baseColor.x)
+                    ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
+                                                  /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x)
                     : instanceId;
                 rtInstances_.push_back(entry);
                 ++instanceId;
@@ -1354,7 +1355,7 @@ struct RtReflectConstants
     Math::float3 lightRgb;  float exposure = 1.0f;
     float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
-    uint32_t ssrUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t gb0Index = 0; uint32_t frameSeed = 0;
+    uint32_t ssrUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
 };
 
 // Matches the `Denoise` cbuffer in rt_reflection_denoise_cs.hlsl.
@@ -1384,10 +1385,11 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         auto reflectMaterial = resources_.GetRtReflectMaterial();
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
+        Skybox* skybox = frame_->skybox;
         if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
-            asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight)
+            asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
-            // No usable TLAS/bindless/light this frame: leave ssr as is (degenerate scene).
+            // No usable TLAS/bindless/light/skybox this frame: leave ssr as is.
             ctx.EndCL(t);
             return;
         }
@@ -1402,7 +1404,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         bindless_.WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]);  // GB1 (normal)
         bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
         bindless_.WriteSceneDescriptor(frameIndex, 4, D.ssrBlurUAV);// raw reflection out (ssrBlur)
-        bindless_.WriteSceneDescriptor(frameIndex, 5, D.gbSRV[0]);  // GB0 (rough/metal in .a)
+        bindless_.WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube (env reflection)
 
         RtReflectConstants c{};
         const float zNear = camera.GetZNear();
@@ -1425,9 +1427,9 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.gb1Index = bindless_.SceneIndex(frameIndex, 2);
         c.depthIndex = bindless_.SceneIndex(frameIndex, 3);
         c.ssrUavIndex = bindless_.SceneIndex(frameIndex, 4); // -> ssrBlur (raw)
-        c.gb0Index = bindless_.SceneIndex(frameIndex, 5);
+        c.skyboxIndex = bindless_.SceneIndex(frameIndex, 5);
+        c.skyboxIntensity = skybox->GetExposure();
         c.geomInfoIndex = bindless_.GeomInfoIndex();
-        c.frameSeed = static_cast<uint32_t>(renderer->GetTotalFrameNumber());
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));

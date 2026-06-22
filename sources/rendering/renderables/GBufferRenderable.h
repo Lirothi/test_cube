@@ -33,7 +33,15 @@ public:
             out.albedoTex = matData_->albedo.GetResource();
             out.albedoSrv = matData_->albedo.GetSRVCPU();
         }
+        // Use the MR texture only when this material actually samples it (useMR);
+        // the metal/rough grid sets useMR=false and drives metalRough flat instead.
+        if (matData_ && matData_->hasMR && matParams_.texFlags.y > 0.5f)
+        {
+            out.mrTex = matData_->mr.GetResource();
+            out.mrSrv = matData_->mr.GetSRVCPU();
+        }
         out.baseColor = matParams_.baseColor;
+        out.metalRough = matParams_.metalRough; // x=metallic, y=roughness (flat fallback)
         return true;
     }
 

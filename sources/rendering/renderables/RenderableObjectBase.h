@@ -20,7 +20,10 @@ struct RtInstanceDesc
     Math::mat4 world;
     ID3D12Resource* albedoTex = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv{};
+    ID3D12Resource* mrTex = nullptr;       // metal/rough texture (null = use flat metalRough)
+    D3D12_CPU_DESCRIPTOR_HANDLE mrSrv{};
     Math::float4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+    Math::float2 metalRough{ 0.0f, 1.0f }; // x=metallic, y=roughness (flat fallback when no MR texture)
 };
 class Camera;
 class Material;

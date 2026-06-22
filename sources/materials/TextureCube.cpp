@@ -183,13 +183,17 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         uploadCmd->CopyTextureRegion(&dst, 0,0,0, &srcLoc, nullptr);
     }
 
-    // 7) Barrier COPY_DEST -> PS SRV
+    // 7) Barrier COPY_DEST -> shader resource (pixel + non-pixel): the skybox is
+    //    sampled in the GBuffer/compose pixel shaders AND bindlessly in the RT
+    //    reflection compute shader (S10 env reflection). Read-only -> combined OK.
+    constexpr D3D12_RESOURCE_STATES kShaderReadStates =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     {
         D3D12_RESOURCE_BARRIER b{};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         b.Transition.pResource = tex_.Get();
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        b.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        b.Transition.StateAfter  = kShaderReadStates;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         uploadCmd->ResourceBarrier(1, &b);
     }
@@ -198,7 +202,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         keepAlive->push_back(upload);
     }
 
-    r->SetResourceState(tex_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    r->SetResourceState(tex_.Get(), kShaderReadStates);
 
     // 8) Create the CPU SRV (TextureCube or TextureCubeArray, same format as the resource)
     CreateSrvCPU_(r, format_, mips, arr);

@@ -74,7 +74,9 @@ implementation. `S4` can be written against `S3`'s contract before `S3` lands.
 **Suggested milestones:**
 - **M-Smoke** = S1 + S2 (+ optional S0 harness): RT path detected, AS builds validate headless.
 - **M1 (Tier-1, ship-able prototype):** S1–S8. Sharp RT reflections reusing SSR buffer+compose.
-- **M2 (Tier-2, production):** + S9–S13. Glossy, shaded hits, denoised, perf-tuned.
+- **M2 (Tier-2, production):** + S9–S13. Shaded off-screen hits, perf-tuned, hardened.
+- **M3 (glossy):** + S14. Clean roughness-driven glossy via DLSS Ray Reconstruction (the
+  hand-rolled S11(a) denoiser proved inadequate; DLSS-RR is the real fix).
 
 ---
 
@@ -324,6 +326,14 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
   separate denoiser and interacts with the existing DLSS upscale ordering.
 - **Done-when:** Reflections are temporally stable under camera motion without excessive ghosting.
 - **Verify:** Motion sequence; confirm noise/ghosting with the human. Watch perf cost.
+- **STATUS (attempted):** Option (a) was implemented (ping-pong history + motion reprojection +
+  3×3 neighbourhood clamp, with a per-frame-jittered single glossy ray) and proved **insufficient**:
+  at 1 sample/pixel the result is too noisy for a simple accumulator, and DLSS jitter (always on
+  here) drives constant sub-pixel motion that keeps partially resetting the history → visible
+  "dancing"/noise. The infra (history textures, `Main_RTDenoise` pass, `JitterReflection`/
+  `frameSeed` in `rt_reflections_cs.hlsl`) is left in place but **inert** (glossy jitter disabled →
+  sharp mirror ray; denoise `alpha=1` → pass-through), so RT reflections are clean+sharp. Clean
+  glossy is deferred to **S14 (DLSS Ray Reconstruction)** — option (b) done as a dedicated step.
 
 ---
 
@@ -349,6 +359,51 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
   graceful disable if AS allocation fails; device-removed handling.
 - **Done-when:** Stable over long sessions and scene changes; clean disable under memory pressure.
 - **Verify:** Soak test; force AS alloc failure path; confirm fallback to SSR.
+
+---
+
+### S14 — Glossy reflections via DLSS Ray Reconstruction *(the real denoiser; replaces S11(a))*
+- **Depends:** S10 (Tier-2 hit shading), S11 (supersedes its hand-rolled option (a)).
+- **Why this step exists:** S11(a) — hand-rolled temporal accumulation over a single roughness-
+  jittered ray — was implemented and is **visually inadequate**: 1 sample/pixel is too noisy for a
+  simple history+clamp accumulator, and the always-on DLSS jitter drives constant sub-pixel motion
+  that keeps partially resetting the history → "dancing"/noise. Clean glossy from a sparse RT
+  signal is exactly what **DLSS Ray Reconstruction (DLSS-RR / DLSS-D)** is built for. Until this
+  lands, ship the **sharp** mirror reflection (clean + stable), not the noisy accumulator.
+- **Goal:** Clean, temporally-stable, roughness-appropriate **glossy** reflections by feeding the
+  (re-enabled) noisy jittered RT reflection through DLSS Ray Reconstruction.
+- **Touch:** `sources/rendering/core/DlssHandler.*` + `third_party/streamline` (load the RR/DLSS-D
+  feature, tag guide buffers); `rt_reflections_cs.hlsl` (re-enable the jittered glossy path — it is
+  already present, gated off); `SceneRenderer` post chain (ordering vs the existing DLSS upscale +
+  tonemap); retire/bypass the inert `Main_RTDenoise` + `ReflectionHistory`.
+- **Implement:**
+  - Load DLSS-RR via Streamline; gate on its availability **and** `IsRaytracingSupported()`.
+  - Re-enable the per-frame roughness-jittered single glossy ray in `rt_reflections_cs.hlsl`
+    (the `JitterReflection`/`frameSeed` path) so RR receives an unbiased noisy reflection. Mirror
+    surfaces still trace sharp.
+  - Tag the guide buffers RR needs through Streamline: world/view normals (`gb1`), roughness
+    (`gb0.a`), depth, motion vectors (`gbVelocity`), the noisy reflection (color-in) and the
+    denoised output; supply the existing camera **jitter offset** + matrices (reuse the
+    `DlssHandler` constants — note `motion = currUv - prevUv`, `mvecScale=1`, jitter currently
+    flagged not-jittered).
+  - **Ordering (the plan's open question — resolve here):** start narrow — have RR denoise **only
+    the reflection buffer** (SSR/render res), leaving compose → tonemap → existing DLSS upscale
+    unchanged. Only escalate to a full DLSS-RR path (denoise+upscale replacing the separate DLSS
+    upscale) if RR requires the whole-frame inputs. Document whichever lands.
+  - Remove or setting-gate the hand-rolled denoiser once RR is the denoiser (keep as a non-RR
+    fallback only if cheap to maintain).
+  - **Fallback:** if DLSS-RR is unavailable (HW/driver), keep the **sharp** mirror reflection (no
+    glossy) — never ship the noisy hand-rolled output.
+- **Interface contract:** `settings.reflectionSource == RT` yields clean roughness-driven glossy
+  when RR is available; sharp RT otherwise. No new toggle needed beyond a possible "RR on/off" dev flag.
+- **Done-when:** Glossy/rough surfaces show clean, roughness-appropriate, temporally-stable
+  reflections under **camera and object** motion — no dancing, no excessive ghosting; degrades to
+  sharp RT (or SSR) when RR is unavailable.
+- **Verify:** Motion sequence; A/B vs SSR and vs sharp RT; **confirm visually with the human**;
+  Streamline log + debug layer clean; record perf delta vs sharp RT.
+- **Risks:** DLSS-RR ↔ existing DLSS-upscale ordering/interaction; RR availability + driver
+  version; guide-buffer correctness (motion-vector + jitter conventions most error-prone); RR's
+  expected buffer formats/resolutions/scales.
 
 ---
 

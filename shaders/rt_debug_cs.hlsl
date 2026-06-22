@@ -16,13 +16,17 @@
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
-// Mirrors rt::GeometryInfoGPU.
+// Mirrors rt::GeometryInfoGPU (3x 16B rows).
 struct GeometryInfo
 {
     uint   vbIndex;
     uint   ibIndex;
     uint   indexIs32;
     uint   albedoTexIndex;
+    float  roughness;
+    float  metalness;
+    uint   mrTexIndex;
+    uint   _pad1;
     float4 baseColor;
 };
 

@@ -1,19 +1,19 @@
 // Tier-2 hardware ray-traced reflections (S7 + S9 + S10).
 //
-// cs_6_6 inline RayQuery + SM6.6 dynamic resources. Per GBuffer surface, trace
-// one reflection ray against the TLAS. On a hit:
-//   - if it reprojects onto the visible surface on screen, sample the lit HDR
-//     buffer (Tier-1 fast path: exact first-bounce color);
-//   - otherwise SHADE the hit directly (Tier-2): bindless-fetch the interpolated
-//     normal + albedo (texture), then sun diffuse + ambient with a shadow ray.
-//     This lets OFF-SCREEN geometry reflect instead of falling back to skybox.
+// cs_6_6 inline RayQuery + SM6.6 dynamic resources. One SHARP reflection ray per
+// GBuffer surface against the TLAS. On a hit, shade it to MATCH THE BASE PASS:
+//   - bindless-fetch the interpolated normal + UV and the material (albedo
+//     texture/tint, roughness, metalness);
+//   - DIRECT lighting: if the hit reprojects onto the visible surface on screen,
+//     sample the lit HDR buffer (exact); otherwise evaluate the same Cook-Torrance
+//     BRDF as lighting_cs (sun diffuse + spec) + ambient, with a shadow ray;
+//   - plus an ENVIRONMENT term: skybox reflection at the hit, Fresnel*gloss
+//     (same as compose's spec) — this is what makes metals look metallic.
 // On miss: coverage 0 -> compose's skybox fallback. Writes premultiplied
-// (rgb, coverage) into the SSR target; blur + compose are unchanged.
+// (rgb, coverage) into the SSR target; blur + compose unchanged.
 //
-// Glossy (S10+S11): the reflection direction is jittered within a roughness-
-// scaled cone using a per-frame-varying seed, so the single noisy ray integrates
-// to a clean glossy reflection once the S11 temporal denoise accumulates it over
-// frames. Mirror surfaces (roughness ~0) trace a sharp ray.
+// Glossy/rough blur is NOT done here: stochastic glossy needs a real denoiser
+// (DLSS Ray Reconstruction) — see plan S14. Reflections are sharp + clean.
 #define RT_REFLECT_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \
@@ -23,13 +23,17 @@
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
-// Mirrors rt::GeometryInfoGPU.
+// Mirrors rt::GeometryInfoGPU (3x 16B rows).
 struct GeometryInfo
 {
     uint   vbIndex;
     uint   ibIndex;
     uint   indexIs32;
     uint   albedoTexIndex; // 0xFFFFFFFF = no texture (use baseColor)
+    float  roughness;
+    float  metalness;
+    uint   mrTexIndex;     // 0xFFFFFFFF = no MR texture (use flat roughness/metalness)
+    uint   _pad1;
     float4 baseColor;
 };
 
@@ -41,9 +45,9 @@ cbuffer Probe : register(b0)
     float4x4 invProj;
     float3 sunDirWS;     float ambientIntensity;
     float3 lightRgb;     float exposure;
-    float depthA;        float depthB;        uint outWidth;     uint outHeight;
-    uint tlasIndex;      uint lightIndex;     uint gb1Index;     uint depthIndex;
-    uint ssrUavIndex;    uint geomInfoIndex;  uint gb0Index;     uint frameSeed;
+    float depthA;        float depthB;        uint outWidth;       uint outHeight;
+    uint tlasIndex;      uint lightIndex;     uint gb1Index;       uint depthIndex;
+    uint ssrUavIndex;    uint geomInfoIndex;  uint skyboxIndex;    float skyboxIntensity;
 }
 
 SamplerState gSmp      : register(s0);
@@ -68,35 +72,10 @@ uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
 float3 LoadNormal(ByteAddressBuffer vb, uint vertex) { return asfloat(vb.Load3(vertex * kVertexStride + kNormalOffset)); }
 float2 LoadUV(ByteAddressBuffer vb, uint vertex)     { return asfloat(vb.Load2(vertex * kVertexStride + kUVOffset)); }
 
-// Per-pixel+frame 2D hash for the glossy jitter (varies each frame so temporal
-// accumulation integrates many samples).
-float2 Hash22(uint2 p, uint s)
-{
-    uint3 v = uint3(p, s);
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z; v.y += v.z * v.x;
-    return float2(v.x & 0xFFFFu, v.y & 0xFFFFu) * (1.0f / 65535.0f);
-}
-
-// Perturb the mirror reflection R within a roughness-scaled cone.
-float3 JitterReflection(float3 R, float3 N, float rough, uint2 px, uint seed)
-{
-    float2 u = Hash22(px, seed);
-    float3 up = abs(R.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-    float3 T = normalize(cross(up, R));
-    float3 B = cross(R, T);
-    float a = rough * rough;
-    float phi = 6.2831853f * u.x;
-    float rad = a * sqrt(u.y);
-    float3 J = normalize(R + (rad * cos(phi)) * T + (rad * sin(phi)) * B);
-    return (dot(J, N) < 0.0f) ? R : J;
-}
-
-// Trace one reflection ray; on hit, return its radiance (screen color where the
-// hit is visible, else shaded). Returns false on miss.
-bool TraceReflection(float3 origin, float3 dir, out float3 radiance)
+// Trace one reflection ray; on hit, return its radiance shaded like the base pass.
+// camPos is the camera world position — the hit is shaded from the CAMERA view (as
+// the base pass / lightT does) so the recompute is seamless with the screen sample.
+bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radiance)
 {
     radiance = float3(0.0f, 0.0f, 0.0f);
 
@@ -108,31 +87,8 @@ bool TraceReflection(float3 origin, float3 dir, out float3 radiance)
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return false; }
 
     float3 hitWS = origin + dir * q.CommittedRayT();
-    Texture2D depthT = ResourceDescriptorHeap[depthIndex];
 
-    // Fast path: the hit is the visible surface at some screen pixel -> exact color.
-    float4 hv = mul(float4(hitWS, 1.0f), view);
-    float4 hc = mul(hv, proj);
-    if (hc.w > 1e-6f)
-    {
-        float2 huv = (hc.xy / hc.w) * float2(0.5f, -0.5f) + 0.5f;
-        if (all(huv >= 0.0f) && all(huv <= 1.0f))
-        {
-            float sd = depthT.SampleLevel(gSmpPoint, huv, 0).r;
-            if (sd > 1e-6f)
-            {
-                float visVZ = depthB / (sd - depthA);
-                if (abs(hv.z - visVZ) / max(visVZ, 1e-3f) < 0.05f)
-                {
-                    Texture2D lightT = ResourceDescriptorHeap[lightIndex];
-                    radiance = lightT.SampleLevel(gSmp, huv, 0).rgb;
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Tier-2 shaded path: bindless geometry + material, sun diffuse + ambient + shadow.
+    // --- Bindless geometry + material at the hit ---
     StructuredBuffer<GeometryInfo> geom = ResourceDescriptorHeap[geomInfoIndex];
     GeometryInfo g = geom[q.CommittedInstanceID()];
     ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
@@ -143,29 +99,83 @@ bool TraceReflection(float3 origin, float3 dir, out float3 radiance)
     float  bw = 1.0f - bary.x - bary.y;
     float3 nObj = normalize(LoadNormal(vb, tri.x) * bw + LoadNormal(vb, tri.y) * bary.x + LoadNormal(vb, tri.z) * bary.y);
     float3x4 o2w = q.CommittedObjectToWorld3x4();
-    float3 Nw = normalize(mul((float3x3)o2w, nObj));
-    if (dot(Nw, dir) > 0.0f) { Nw = -Nw; }
+    float3 N = normalize(mul((float3x3)o2w, nObj));
 
+    // Shade from the camera view (matches the base pass / lightT) so on-screen and
+    // off-screen parts of a reflected object don't show a specular seam.
+    float3 V = normalize(camPos - hitWS);
+    if (dot(N, V) < 0.0f) { N = -N; } // orient toward the camera (base-pass front-face)
+
+    float2 uvHit = LoadUV(vb, tri.x) * bw + LoadUV(vb, tri.y) * bary.x + LoadUV(vb, tri.z) * bary.y;
     float3 albedo = g.baseColor.rgb;
     if (g.albedoTexIndex != 0xFFFFFFFFu)
     {
-        float2 uvHit = LoadUV(vb, tri.x) * bw + LoadUV(vb, tri.y) * bary.x + LoadUV(vb, tri.z) * bary.y;
         Texture2D albedoTex = ResourceDescriptorHeap[g.albedoTexIndex];
         albedo *= albedoTex.SampleLevel(gSmp, uvHit, 0).rgb;
     }
-
-    float3 L = normalize(-sunDirWS);
-    float ndl = saturate(dot(Nw, L));
-    float shadow = 1.0f;
-    if (ndl > 0.0f)
+    // Roughness/metalness: from the MR texture (R=metal, G=rough, matching the
+    // GBuffer) when the material has one, else the flat per-material values.
+    float rough = saturate(g.roughness);
+    float metal = saturate(g.metalness);
+    if (g.mrTexIndex != 0xFFFFFFFFu)
     {
-        RayDesc sray; sray.Origin = hitWS + Nw * 0.02f; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = 1e4f;
-        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
-        sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
-        sq.Proceed();
-        if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) { shadow = 0.0f; }
+        Texture2D mrTex = ResourceDescriptorHeap[g.mrTexIndex];
+        float2 mr = mrTex.SampleLevel(gSmp, uvHit, 0).rg;
+        metal = saturate(mr.x);
+        rough = saturate(mr.y);
     }
-    radiance = (albedo * ambientIntensity + albedo * ndl * shadow) * lightRgb * exposure;
+
+    // --- Direct lighting (matches the base pass / lighting_cs) ---
+    float3 direct;
+    Texture2D depthT = ResourceDescriptorHeap[depthIndex];
+    float4 hv = mul(float4(hitWS, 1.0f), view);
+    float4 hc = mul(hv, proj);
+    bool haveScreen = false;
+    if (hc.w > 1e-6f)
+    {
+        float2 huv = (hc.xy / hc.w) * float2(0.5f, -0.5f) + 0.5f;
+        if (all(huv >= 0.0f) && all(huv <= 1.0f))
+        {
+            float sd = depthT.SampleLevel(gSmpPoint, huv, 0).r;
+            if (sd > 1e-6f && abs(hv.z - depthB / (sd - depthA)) / max(depthB / (sd - depthA), 1e-3f) < 0.05f)
+            {
+                Texture2D lightT = ResourceDescriptorHeap[lightIndex];
+                direct = lightT.SampleLevel(gSmp, huv, 0).rgb; // exact lit HDR
+                haveScreen = true;
+            }
+        }
+    }
+    if (!haveScreen)
+    {
+        float3 L = normalize(-sunDirWS);
+        float shadow = 1.0f;
+        if (dot(N, L) > 0.0f)
+        {
+            RayDesc sray; sray.Origin = hitWS + N * 0.02f; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = 1e4f;
+            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+            sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
+            sq.Proceed();
+            if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) { shadow = 0.0f; }
+        }
+        BRDFInput bi;
+        bi.albedo = albedo; bi.rough = rough; bi.metal = metal; bi.N = N; bi.V = V; bi.L = L;
+        BRDFResult br = EvalBRDF(bi);
+        float3 col = albedo * ambientIntensity * lightRgb;
+        if (br.NdotL > 0.0f) { col += (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow; }
+        direct = col * exposure;
+    }
+
+    // --- Environment (skybox) reflection at the hit (same as compose's spec) ---
+    // This is what makes metals reflect the sky and look metallic.
+    TextureCube skybox = ResourceDescriptorHeap[skyboxIndex];
+    float3 Rhit = reflect(-V, N);
+    float3 skyCol = skybox.SampleLevel(gSmp, Rhit, 0).rgb * skyboxIntensity;
+    float3 F0 = lerp(kF0Dielectric, albedo, metal);
+    float3 F = F_Schlick(saturate(dot(N, V)), F0);
+    float gloss = saturate(1.0f - rough);
+    float3 env = skyCol * F * gloss;
+
+    radiance = direct + env;
     return true;
 }
 
@@ -181,7 +191,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     RWTexture2D<float4> outTex = ResourceDescriptorHeap[ssrUavIndex];
     Texture2D depthT = ResourceDescriptorHeap[depthIndex];
     Texture2D gb1    = ResourceDescriptorHeap[gb1Index];
-    Texture2D gb0    = ResourceDescriptorHeap[gb0Index];
 
     float2 uv = (float2(dtid.xy) + 0.5f) / float2(outWidth, outHeight);
     float depth = depthT.SampleLevel(gSmpPoint, uv, 0).r;
@@ -194,13 +203,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         float3 camPos = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
         float3 R = reflect(normalize(P - camPos), N);
 
-        // Sharp mirror ray (clean, stable). Stochastic roughness-jittered glossy is
-        // disabled: at 1 sample/pixel it needs a real denoiser (DLSS Ray
-        // Reconstruction) to not look noisy/"dance"; gb0/frameSeed/JitterReflection
-        // are kept for when that lands.
-
         float3 radiance;
-        if (TraceReflection(P + N * 0.02f, R, radiance))
+        if (TraceReflection(P + N * 0.02f, R, camPos, radiance))
         {
             result = float4(radiance, 1.0f); // premultiplied, full coverage
         }

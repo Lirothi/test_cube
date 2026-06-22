@@ -6,6 +6,26 @@
 
 namespace rt {
 
+namespace {
+// FNV-1a hash of the fields that make a geometry-info record unique: the mesh
+// (geometry) plus the material (albedo SRV, base color, roughness, metalness).
+// Two instances with the same mesh AND material share one record; different
+// materials on a shared mesh get distinct records.
+uint64_t FloatBits(float f) { uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b; }
+uint64_t MakeGeomKey(Mesh* mesh, SIZE_T albedoSrvPtr, SIZE_T mrSrvPtr, const float* baseColor4, float roughness, float metalness)
+{
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    mix(reinterpret_cast<uint64_t>(mesh));
+    mix(static_cast<uint64_t>(albedoSrvPtr));
+    mix(static_cast<uint64_t>(mrSrvPtr));
+    mix(FloatBits(roughness));
+    mix(FloatBits(metalness));
+    if (baseColor4) { for (int i = 0; i < 4; ++i) { mix(FloatBits(baseColor4[i])); } }
+    return h;
+}
+} // namespace
+
 void BindlessTable::Init(ID3D12Device* device)
 {
     device_ = device;
@@ -23,7 +43,7 @@ void BindlessTable::Init(ID3D12Device* device)
 
 void BindlessTable::Reset()
 {
-    meshToGeom_.clear();
+    geomCache_.clear();
     geomInfo_.clear();
     geomInfoBuffer_.Reset();
     geomInfoCapacity_ = 0;
@@ -47,10 +67,13 @@ void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_
                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
-uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv, const float* baseColor4)
+uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
+                                          D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
+                                          const float* baseColor4, float roughness, float metalness)
 {
-    auto it = meshToGeom_.find(mesh);
-    if (it != meshToGeom_.end()) {
+    const uint64_t key = MakeGeomKey(mesh, albedoSrv.ptr, mrSrv.ptr, baseColor4, roughness, metalness);
+    auto it = geomCache_.find(key);
+    if (it != geomCache_.end()) {
         return it->second;
     }
 
@@ -64,6 +87,8 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDL
     rec.ibIndex = geoSlot + 1u;
     rec.indexIs32 = (mesh && mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 1u : 0u;
     rec.albedoTexIndex = 0xFFFFFFFFu;
+    rec.roughness = roughness;
+    rec.metalness = metalness;
     if (baseColor4) {
         rec.baseColor[0] = baseColor4[0]; rec.baseColor[1] = baseColor4[1];
         rec.baseColor[2] = baseColor4[2]; rec.baseColor[3] = baseColor4[3];
@@ -87,15 +112,21 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDL
     makeRawSrv(vb, rec.vbIndex);
     makeRawSrv(ib, rec.ibIndex);
 
-    // Albedo texture SRV (copied from the material's CPU SRV) at the 3rd slot.
+    // Albedo + MR texture SRVs (copied from the material's CPU SRVs) at slots 2 and 3.
     if (albedoSrv.ptr != 0 && heap_) {
         const UINT albedoSlot = geoSlot + 2u;
         device_->CopyDescriptorsSimple(1, CpuHandle(albedoSlot), albedoSrv,
                                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         rec.albedoTexIndex = albedoSlot;
     }
+    if (mrSrv.ptr != 0 && heap_) {
+        const UINT mrSlot = geoSlot + 3u;
+        device_->CopyDescriptorsSimple(1, CpuHandle(mrSlot), mrSrv,
+                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        rec.mrTexIndex = mrSlot;
+    }
 
-    meshToGeom_.emplace(mesh, geomIndex);
+    geomCache_.emplace(key, geomIndex);
     geomInfo_.push_back(rec);
     return geomIndex;
 }
