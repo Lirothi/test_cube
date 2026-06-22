@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 
+#include "app/Systems.h"
 #include "app/levels/DemoLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
@@ -13,6 +14,7 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 
 namespace
@@ -49,6 +51,12 @@ namespace
         }
         return "Unknown";
     }
+
+    ID3D12Resource* GetOceanShoreDepthResource()
+    {
+        OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
+        return oceanSimulation ? oceanSimulation->GetShoreDepthResource() : nullptr;
+    }
 }
 
 void DeveloperWindow::ToggleTextureInspector()
@@ -62,7 +70,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
     if (!open_)
     {
-        textureDebugViewer_.Draw(renderer);
+        textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
         return;
     }
 
@@ -191,7 +199,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 ImGui::EndDisabled();
                 if (rtSupported && settings.rtDebugView)
                 {
-                    ImGui::TextDisabled("Open the render-target inspector [F4] and select 'Reflection'.");
+                    ImGui::TextDisabled("Open the texture inspector [F4] and select 'Reflection'.");
                 }
 
                 ImGui::Separator();
@@ -237,7 +245,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     renderer.SetWireframeMode(wireframe);
                 }
                 bool textureViewerOpen = textureDebugViewer_.IsOpen();
-                if (ImGui::Checkbox("Render target inspector [F4]", &textureViewerOpen))
+                if (ImGui::Checkbox("Texture inspector [F4]", &textureViewerOpen))
                 {
                     textureDebugViewer_.SetOpen(textureViewerOpen);
                 }
@@ -345,5 +353,5 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
     ImGui::End();
     open_ = open;
 
-    textureDebugViewer_.Draw(renderer);
+    textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
 }

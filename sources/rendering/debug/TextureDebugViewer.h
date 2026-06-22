@@ -12,7 +12,7 @@ class TextureDebugViewer
 public:
     bool IsOpen() const { return open_; }
     void SetOpen(bool open) { open_ = open; }
-    void Draw(Renderer& renderer);
+    void Draw(Renderer& renderer, ID3D12Resource* oceanShoreDepth);
 
     enum class Target : int
     {
@@ -32,6 +32,7 @@ public:
         Depth,
         DepthCopy,
         ShadowAtlas,
+        OceanShoreDepth,
         Count
     };
 

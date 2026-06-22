@@ -170,6 +170,7 @@ namespace
         case TextureDebugViewer::Target::Depth: return "Depth";
         case TextureDebugViewer::Target::DepthCopy: return "Depth Copy";
         case TextureDebugViewer::Target::ShadowAtlas: return "Shadow Atlas";
+        case TextureDebugViewer::Target::OceanShoreDepth: return "Ocean Shore Depth";
         default: return "Unknown";
         }
     }
@@ -183,7 +184,8 @@ namespace
         return TargetView{ target, TargetLabel(target), group, description, resource, srvFormat };
     }
 
-    std::array<TargetView, static_cast<size_t>(TextureDebugViewer::Target::Count)> BuildTargets(Renderer& renderer)
+    std::array<TargetView, static_cast<size_t>(TextureDebugViewer::Target::Count)> BuildTargets(Renderer& renderer,
+        ID3D12Resource* oceanShoreDepth)
     {
         const auto& D = renderer.GetDeferredForFrame();
         return {
@@ -203,6 +205,7 @@ namespace
             MakeTarget(TextureDebugViewer::Target::Depth, "Depth", "Main deferred depth SRV.", D.depth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::DepthCopy, "Depth", "Depth copy before transparent pass.", D.depthCopy.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::ShadowAtlas, "Shadows", "Directional cascade shadow atlas.", D.shadow.Get(), DXGI_FORMAT_R16_UNORM),
+            MakeTarget(TextureDebugViewer::Target::OceanShoreDepth, "Ocean", "Orthographic terrain depth used by ocean shore blending.", oceanShoreDepth, DXGI_FORMAT_R16_UNORM),
         };
     }
 
@@ -237,7 +240,7 @@ namespace
     }
 }
 
-void TextureDebugViewer::Draw(Renderer& renderer)
+void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDepth)
 {
     if (!open_)
     {
@@ -245,7 +248,7 @@ void TextureDebugViewer::Draw(Renderer& renderer)
     }
     CPU_SCOPE(ProfilerScopes::kTextureDebugViewerDraw);
 
-    const auto targets = BuildTargets(renderer);
+    const auto targets = BuildTargets(renderer, oceanShoreDepth);
     const TargetView* selected = FindTarget(targets, target_);
     if (!selected)
     {
@@ -258,7 +261,7 @@ void TextureDebugViewer::Draw(Renderer& renderer)
     const ImGuiWindowFlags windowFlags =
         ImGuiWindowFlags_NoCollapse |
         (windowMaximize_.maximized ? ImGuiWindowFlags_NoMove : 0);
-    if (!ImGui::Begin("Render Target Inspector###TextureDebugViewer", &open, windowFlags))
+    if (!ImGui::Begin("Texture Inspector###TextureDebugViewer", &open, windowFlags))
     {
         ImGui::End();
         open_ = open;
@@ -269,7 +272,7 @@ void TextureDebugViewer::Draw(Renderer& renderer)
     constexpr float controlsWidth = 400.0f;
     ImGui::BeginChild("TextureDebugControls", ImVec2(controlsWidth, 0.0f), true);
 
-    ImGui::TextUnformatted("Render target");
+    ImGui::TextUnformatted("Texture");
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::BeginCombo("##TextureDebugRenderTarget", selected ? selected->name : "None", ImGuiComboFlags_HeightLarge))
     {
@@ -358,7 +361,7 @@ void TextureDebugViewer::Draw(Renderer& renderer)
     }
     else
     {
-        ImGui::TextDisabled("Selected render target is not available.");
+        ImGui::TextDisabled("Selected texture is not available.");
     }
 
     ImGui::EndChild();

@@ -770,16 +770,27 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi)
 
 float3 Reflection(const LightingInput li)
 {
+    static const float kUnderwaterSsrHitBias = -0.05f;
+
     float reflectionNormalStrength = heightFogParams.w;
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
     float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 3).rgb;
+    //return skySample;
+    
     float3 Pv = mul(float4(li.positionWS, 1.0f), view).xyz;
     float3 Nv = normalize(mul(adjustedNormal, (float3x3)view));
     SSRHit ssr = TraceSSR_LogMarch(Pv, Nv, li.screenUV * depthTextureSize.zw);
 
     if (ssr.hit == 0)
+    {
+        return skySample;
+    }
+
+    float hitDepth = SampleSceneDepth(ssr.uv);
+    float3 hitPositionWS = PositionWsFromDepth(hitDepth, ssr.uv);
+    if (hitPositionWS.y < kUnderwaterSsrHitBias)
     {
         return skySample;
     }

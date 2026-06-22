@@ -46,7 +46,7 @@ struct SceneRenderSettings
     ReflectionSource reflectionSource = ReflectionSource::RT;
     // S6: RT hit/visibility debug viz (dev tool). Traces a reflection ray per
     // pixel and writes a hit-distance/miss image into the reflection target (view via
-    // the render-target inspector -> Reflection). Builds the AS regardless of source.
+    // the texture inspector -> Reflection). Builds the AS regardless of source.
     bool rtDebugView = false;
 };
 
