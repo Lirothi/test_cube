@@ -15,20 +15,7 @@
 
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
-
-// Mirrors rt::GeometryInfoGPU (3x 16B rows).
-struct GeometryInfo
-{
-    uint   vbIndex;
-    uint   ibIndex;
-    uint   indexIs32;
-    uint   albedoTexIndex;
-    float  roughness;
-    float  metalness;
-    uint   mrTexIndex;
-    uint   _pad1;
-    float4 baseColor;
-};
+#include "rt_geometry.hlsli"
 
 cbuffer Probe : register(b0)
 {
@@ -46,32 +33,6 @@ cbuffer Probe : register(b0)
 
 SamplerState gSmp      : register(s0); // linear clamp
 SamplerState gSmpPoint : register(s1); // point clamp
-
-// VertexPNTUV: position@0 (float3), normal@12 (float3), tangent@24 (float4), uv@40 (float2).
-static const uint kVertexStride = 48u;
-static const uint kNormalOffset = 12u;
-
-uint LoadIndex16(ByteAddressBuffer ib, uint i)
-{
-    const uint byteOff = i * 2u;
-    const uint word = ib.Load(byteOff & ~3u);
-    return ((byteOff & 2u) != 0u) ? (word >> 16) : (word & 0xFFFFu);
-}
-
-uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
-{
-    if (is32 != 0u)
-    {
-        return ib.Load3(prim * 12u); // three 32-bit indices
-    }
-    const uint b = prim * 3u;
-    return uint3(LoadIndex16(ib, b), LoadIndex16(ib, b + 1u), LoadIndex16(ib, b + 2u));
-}
-
-float3 LoadNormal(ByteAddressBuffer vb, uint vertex)
-{
-    return asfloat(vb.Load3(vertex * kVertexStride + kNormalOffset));
-}
 
 [numthreads(8, 8, 1)]
 [RootSignature(RT_DEBUG_CS_RS)]

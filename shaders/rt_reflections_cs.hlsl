@@ -6,7 +6,8 @@
 //     texture/tint, roughness, metalness);
 //   - DIRECT lighting: if the hit reprojects onto the visible surface on screen,
 //     sample the lit HDR buffer (exact); otherwise evaluate the same Cook-Torrance
-//     BRDF as lighting_cs (sun diffuse + spec) + ambient, with a shadow ray;
+//     BRDF as the base pass -- sun (lighting_cs) + spot lights (spotlight_cs) +
+//     point lights (pointlight_cs) + ambient, with TLAS shadow rays for sun/spot;
 //   - plus an ENVIRONMENT term: skybox reflection at the hit, Fresnel*gloss
 //     (same as compose's spec) — this is what makes metals look metallic.
 // On miss: coverage 0 -> compose's skybox fallback. Writes premultiplied
@@ -22,20 +23,8 @@
 
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
-
-// Mirrors rt::GeometryInfoGPU (3x 16B rows).
-struct GeometryInfo
-{
-    uint   vbIndex;
-    uint   ibIndex;
-    uint   indexIs32;
-    uint   albedoTexIndex; // 0xFFFFFFFF = no texture (use baseColor)
-    float  roughness;
-    float  metalness;
-    uint   mrTexIndex;     // 0xFFFFFFFF = no MR texture (use flat roughness/metalness)
-    uint   _pad1;
-    float4 baseColor;
-};
+#include "rt_geometry.hlsli" // GeometryInfo + bindless VB/IB loaders
+#include "rt_lights.hlsli"   // SpotLightData/PointLightData + Eval helpers
 
 cbuffer Probe : register(b0)
 {
@@ -46,31 +35,24 @@ cbuffer Probe : register(b0)
     float3 sunDirWS;     float ambientIntensity;
     float3 lightRgb;     float exposure;
     float depthA;        float depthB;        uint outWidth;       uint outHeight;
-    uint tlasIndex;      uint lightIndex;     uint gb1Index;       uint depthIndex;
-    uint ssrUavIndex;    uint geomInfoIndex;  uint skyboxIndex;    float skyboxIntensity;
+    uint tlasIndex;      uint lightIndex;     uint gb1Index;        uint depthIndex;
+    uint ssrUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
+    uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
 }
 
 SamplerState gSmp      : register(s0);
 SamplerState gSmpPoint : register(s1);
 
-static const uint kVertexStride = 48u; // VertexPNTUV
-static const uint kNormalOffset = 12u;
-static const uint kUVOffset     = 40u;
-
-uint LoadIndex16(ByteAddressBuffer ib, uint i)
+// Shadow ray toward a local light: 0 if an opaque TLAS triangle occludes the path
+// to the light, else 1. Used for off-screen hit shading (sun + spot lights).
+float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 L, float maxDist)
 {
-    const uint byteOff = i * 2u;
-    const uint word = ib.Load(byteOff & ~3u);
-    return ((byteOff & 2u) != 0u) ? (word >> 16) : (word & 0xFFFFu);
+    RayDesc sray; sray.Origin = origin; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = maxDist;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+    sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
+    sq.Proceed();
+    return (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
 }
-uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
-{
-    if (is32 != 0u) { return ib.Load3(prim * 12u); }
-    const uint b = prim * 3u;
-    return uint3(LoadIndex16(ib, b), LoadIndex16(ib, b + 1u), LoadIndex16(ib, b + 2u));
-}
-float3 LoadNormal(ByteAddressBuffer vb, uint vertex) { return asfloat(vb.Load3(vertex * kVertexStride + kNormalOffset)); }
-float2 LoadUV(ByteAddressBuffer vb, uint vertex)     { return asfloat(vb.Load2(vertex * kVertexStride + kUVOffset)); }
 
 // Trace one reflection ray; on hit, return its radiance shaded like the base pass.
 // camPos is the camera world position — the hit is shaded from the CAMERA view (as
@@ -147,22 +129,51 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
     }
     if (!haveScreen)
     {
+        float3 hitOrigin = hitWS + N * 0.02f;
+
+        // Sun (directional) + ambient -- multiplied by exposure, as lighting_cs.
         float3 L = normalize(-sunDirWS);
-        float shadow = 1.0f;
-        if (dot(N, L) > 0.0f)
-        {
-            RayDesc sray; sray.Origin = hitWS + N * 0.02f; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = 1e4f;
-            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
-            sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
-            sq.Proceed();
-            if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) { shadow = 0.0f; }
-        }
+        float shadow = (dot(N, L) > 0.0f) ? RtTraceShadow(tlas, hitOrigin, L, 1e4f) : 1.0f;
         BRDFInput bi;
         bi.albedo = albedo; bi.rough = rough; bi.metal = metal; bi.N = N; bi.V = V; bi.L = L;
         BRDFResult br = EvalBRDF(bi);
         float3 col = albedo * ambientIntensity * lightRgb;
         if (br.NdotL > 0.0f) { col += (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow; }
         direct = col * exposure;
+
+        // Spot lights -- accumulated WITHOUT exposure, matching spotlight_cs.hlsl.
+        // Spot shadows use a TLAS ray (in place of the base pass's shadow atlas).
+        if (spotCount > 0u)
+        {
+            StructuredBuffer<SpotLightData> spots = ResourceDescriptorHeap[spotLightIndex];
+            for (uint si = 0u; si < spotCount; ++si)
+            {
+                float3 sl; float sdist;
+                float3 rad = RtEvalSpotLight(spots[si], hitWS, sl, sdist);
+                if (dot(rad, rad) <= 0.0f) { continue; }
+                BRDFInput sbi; sbi.albedo = albedo; sbi.rough = rough; sbi.metal = metal; sbi.N = N; sbi.V = V; sbi.L = sl;
+                BRDFResult sbr = EvalBRDF(sbi);
+                if (sbr.NdotL <= 0.0f) { continue; }
+                float ssh = RtTraceShadow(tlas, hitOrigin, sl, max(sdist - 0.04f, 0.0f));
+                direct += (sbr.diffBRDF + sbr.specBRDF) * sbr.NdotL * rad * ssh;
+            }
+        }
+
+        // Point lights -- no shadow + no exposure, matching pointlight_cs.hlsl.
+        if (pointCount > 0u)
+        {
+            StructuredBuffer<PointLightData> points = ResourceDescriptorHeap[pointLightIndex];
+            for (uint pi = 0u; pi < pointCount; ++pi)
+            {
+                float3 pl; float pdist;
+                float3 rad = RtEvalPointLight(points[pi], hitWS, pl, pdist);
+                if (dot(rad, rad) <= 0.0f) { continue; }
+                BRDFInput pbi; pbi.albedo = albedo; pbi.rough = rough; pbi.metal = metal; pbi.N = N; pbi.V = V; pbi.L = pl;
+                BRDFResult pbr = EvalBRDF(pbi);
+                if (pbr.NdotL <= 0.0f) { continue; }
+                direct += (pbr.diffBRDF + pbr.specBRDF) * pbr.NdotL * rad;
+            }
+        }
     }
 
     // --- Environment (skybox) reflection at the hit (same as compose's spec) ---

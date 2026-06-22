@@ -398,6 +398,8 @@
     <None Include="shaders\fxaa_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsl" />
+    <None Include="shaders\rt_geometry.hlsli" />
+    <None Include="shaders\rt_lights.hlsli" />
     <None Include="textures\ocean\ContactFoam.png" />
     <None Include="textures\ocean\FoamAlbedo.png" />
     <None Include="textures\ocean\FoamTrail.png" />

@@ -306,6 +306,28 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
     scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
+    PointLightDesc pointL;
+    pointL.position = float3{2.4f, 5.5f, -12.0f};
+    pointL.radius = 2.0f;
+    pointL.color = float3{ 1.0f, 0.0f, 0.0f };
+    pointL.intensity = 15.0f;
+    lightManager.PointLights().push_back({});
+    lightManager.PointLights().back().SetDesc(pointL);
+
+    pointL.position = float3{ 2.4f, 3.5f, -12.0f };
+    pointL.radius = 2.0f;
+    pointL.color = float3{ 0.0f, 1.0f, 0.0f };
+    pointL.intensity = 15.0f;
+    lightManager.PointLights().push_back({});
+    lightManager.PointLights().back().SetDesc(pointL);
+
+    pointL.position = float3{ 2.4f, 1.5f, -12.0f };
+    pointL.radius = 2.0f;
+    pointL.color = float3{ 0.0f, 0.0f, 1.0f };
+    pointL.intensity = 15.0f;
+    lightManager.PointLights().push_back({});
+    lightManager.PointLights().back().SetDesc(pointL);
+
     if (j.contains("camera"))
     {
         const json& cam = j["camera"];
