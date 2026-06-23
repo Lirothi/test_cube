@@ -94,6 +94,12 @@
     <Filter Include="textures\ocean">
       <UniqueIdentifier>{4f4e25a2-8f7a-4601-8f8b-fcf539813b4e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="data">
+      <UniqueIdentifier>{ef8c8f75-2723-43e9-9415-8f7479d6b118}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="data\ocean">
+      <UniqueIdentifier>{650d577a-685a-429d-82d2-afdd0a755f61}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\containers">
       <UniqueIdentifier>{b4d6f3fb-1d2f-45a3-8ea3-34403ce09d15}</UniqueIdentifier>
     </Filter>
@@ -187,6 +193,9 @@
       <Filter>sources\materials</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanRenderable.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanSimulationConfig.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanSimulation.cpp">
@@ -453,6 +462,9 @@
       <Filter>sources\materials</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanRenderable.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanSimulationConfig.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanSimulation.h">
@@ -792,6 +804,9 @@
     </None>
     <None Include="input\bindings.json">
       <Filter>input</Filter>
+    </None>
+    <None Include="data\ocean\default.json">
+      <Filter>data\ocean</Filter>
     </None>
     <None Include="third_party\imgui\LICENSE.txt">
       <Filter>third_party\imgui</Filter>

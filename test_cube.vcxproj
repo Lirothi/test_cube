@@ -184,6 +184,7 @@
     <ClCompile Include="sources/materials/Texture2D.cpp" />
     <ClCompile Include="sources/materials/TextureCube.cpp" />
     <ClCompile Include="sources/ocean/OceanRenderable.cpp" />
+    <ClCompile Include="sources/ocean/OceanSimulationConfig.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp" />
@@ -295,6 +296,7 @@
     <ClInclude Include="sources/materials/TextureCube.h" />
     <ClInclude Include="sources/materials/UploadManager.h" />
     <ClInclude Include="sources/ocean/OceanRenderable.h" />
+    <ClInclude Include="sources/ocean/OceanSimulationConfig.h" />
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
     <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
@@ -413,6 +415,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="input\bindings.json" />
+    <None Include="data\ocean\default.json" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="third_party\robin_hood.natvis" />

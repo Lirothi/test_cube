@@ -1,5 +1,6 @@
 #include "ocean/OceanSimulation.h"
 
+#include <cassert>
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -11,6 +12,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
 #include "materials/UploadManager.h"
+#include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSpectrum.h"
 #include "app/camera/Camera.h"
 
@@ -31,173 +33,34 @@ OceanSimulation::OceanSimulation()
 
 void OceanSimulation::InitializeDefaultAssets()
 {
-    defaultSettings_ = OceanSimulationSettings();
-    defaultSettings_.SetResolution(OceanSimulationSettings::ResolutionValue::Eight);
-    defaultSettings_.SetCascadeCount(OceanSimulationSettings::CascadesNumberValue::Four);
-    defaultSettings_.SetAnisotropyLevel(6u);
-    defaultSettings_.SetSimulateFoam(false);
-    defaultSettings_.SetUpdateSpectrum(false);
-    defaultSettings_.SetReadbackMode(OceanSimulationSettings::ReadbackCascadesMode::None);
-    defaultSettings_.SetSamplingIterations(3u);
-    defaultSettings_.SetDomainsMode(OceanSimulationSettings::CascadeDomainsMode::Auto);
-    defaultSettings_.SetSimulationScale(600.0f);
-    defaultSettings_.SetAllowOverlap(true);
-    defaultSettings_.SetMinWavesInCascade(6.0f);
-    defaultSettings_.SetManualLengthScales(Math::float4(65.72f, 12.0f, 12.84f, 5.62f));
+    OceanSimulationConfig config;
+    const bool loaded = LoadOceanSimulationConfigFromFile(L"data/ocean/default.json", config);
+    assert(loaded && "No data/ocean/default.json found or invalid JSON");
 
+    defaultSettings_ = config.settings;
     settings_ = defaultSettings_;
 
-    defaultEqualizerPreset_ = std::make_shared<EqualizerPreset>();
-    defaultEqualizerPreset_->SetScaleFilters({
-        { EqualizerPreset::FilterType::Lowshelf, -1.5f, -0.55f, 2.38f }
-    });
-    defaultEqualizerPreset_->SetChopFilters({
-        { EqualizerPreset::FilterType::Bell, 0.0f, 0.4f, 0.77f }
-    });
-
-    defaultSwellPreset_ = std::make_shared<SwellPreset>();
-    SpectrumParams swellSpectrum = defaultSwellPreset_->GetSpectrum();
-    swellSpectrum.energySpectrum = SpectrumParams::EnergySpectrumModel::PM;
-    //swellSpectrum.windSpeed = 6.3f;
-    swellSpectrum.windSpeed = 1.5f;
-    swellSpectrum.fetch = 100.0f;
-    swellSpectrum.peaking = 3.0f;
-    swellSpectrum.scale = 0.2f;
-    swellSpectrum.cutoffWavelength = 0.01f;
-    swellSpectrum.alignment = 0.8f;
-    swellSpectrum.extraAlignment = 0.5f;
-    defaultSwellPreset_->SetSpectrum(swellSpectrum);
-    defaultSwellPreset_->SetReferenceWaveHeight(0.0f);
-
-    defaultLocalPresets_.clear();
-    defaultLocalPresets_.reserve(6);
-
-    const auto makeSpectrum = [](float windSpeed,
-                                 float fetch,
-                                 float peaking,
-                                 float scale,
-                                 float cutoff,
-                                 float alignment,
-                                 float extraAlignment)
+    defaultEqualizerPreset_ = config.defaultEqualizer ? config.defaultEqualizer : EqualizerPreset::CreateDefault();
+    defaultSwellPreset_ = config.swellPreset ? config.swellPreset : std::make_shared<SwellPreset>();
+    defaultLocalPreset_ = config.localPreset ? config.localPreset : std::make_shared<LocalWavesPreset>();
+    defaultLocalPresets_ = std::move(config.localPresets);
+    if (defaultLocalPresets_.empty())
     {
-        SpectrumParams spectrum = SpectrumParams::GetDefaultLocal();
-        spectrum.energySpectrum = SpectrumParams::EnergySpectrumModel::PM;
-        spectrum.windSpeed = windSpeed;
-        spectrum.fetch = fetch;
-        spectrum.peaking = peaking;
-        spectrum.scale = scale;
-        spectrum.cutoffWavelength = cutoff;
-        spectrum.alignment = alignment;
-        spectrum.extraAlignment = extraAlignment;
-        return spectrum;
-    };
-
-    const auto makeFoam = [](float decayRate,
-                             float coverage,
-                             float density,
-                             float sharpness,
-                             float persistence,
-                             float trail,
-                             float trailStrength,
-                             const Math::float2& trailSize,
-                             float underwater,
-                             const Math::float4& cascadesWeights)
-    {
-        FoamParams foam = FoamParams::GetDefault();
-        foam.decayRate = decayRate;
-        foam.coverage = coverage;
-        foam.density = density;
-        foam.sharpness = sharpness;
-        foam.persistence = persistence;
-        foam.trail = trail;
-        foam.trailTextureStrength = trailStrength;
-        foam.trailTextureSize = trailSize;
-        foam.underwater = underwater;
-        foam.cascadesWeights = cascadesWeights;
-        return foam;
-    };
-
-    const auto addLocalPreset = [&](float windForce,
-                                     const SpectrumParams& spectrum,
-                                     float referenceWaveHeight,
-                                     float chop,
-                                     const FoamParams& foam)
-    {
-        auto preset = std::make_shared<LocalWavesPreset>();
-        preset->SetSpectrum(spectrum);
-        preset->SetReferenceWaveHeight(referenceWaveHeight);
-        preset->SetChop(chop);
-        preset->SetFoam(foam);
-        preset->SetEqualizer(defaultEqualizerPreset_);
-        preset->SetWindForce(windForce);
-        defaultLocalPresets_.push_back(preset);
-        return preset;
-    };
-
-    FoamParams calmFoam = FoamParams::GetDefault();
-    calmFoam.cascadesWeights = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
-
-    //defaultLocalPreset_ = addLocalPreset(0.0f,
-    //    makeSpectrum(4.0f, 100.0f, 3.0f, 1.0f, 0.01f, 1.0f, 0.0f),
-    //    1.0f,
-    //    1.0f,
-    //    calmFoam);
-    defaultLocalPreset_ = addLocalPreset(0.0f,
-        makeSpectrum(0.5f, 100.0f, 3.0f, 0.1f, 0.01f, 1.0f, 0.0f),
-        0.0f,
-        1.0f,
-        calmFoam);
-    //defaultLocalPreset_ = addLocalPreset(5.0f,
-    //    makeSpectrum(9.2f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-    //    3.4f,
-    //    1.49f,
-    //    makeFoam(0.02f, 0.575f, 13.99f, 0.5f, 0.762f, 0.265f, 0.5f,
-    //        Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
-
-    addLocalPreset(1.0f,
-        makeSpectrum(1.5f, 100.0f, 3.3f, 0.248f, 0.01f, 1.0f, 0.0f),
-        0.0f,
-        1.0f,
-        calmFoam);
-
-    addLocalPreset(2.0f,
-        makeSpectrum(2.5f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-        0.26f,
-        1.25f,
-        calmFoam);
-
-    addLocalPreset(3.0f,
-        makeSpectrum(4.5f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-        0.93f,
-        1.41f,
-        makeFoam(0.2f, 0.662f, 13.2f, 1.0f, 0.768f, 0.0f, 0.503f,
-            Math::float2(50.0f, 25.0f), 0.407f, Math::float4(1.0f, 1.0f, 0.5f, 0.3f)));
-
-    addLocalPreset(4.0f,
-        makeSpectrum(7.0f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-        1.84f,
-        1.44f,
-        makeFoam(0.1f, 0.61f, 19.38f, 0.651f, 0.746f, 0.0f, 0.5f,
-            Math::float2(100.0f, 50.0f), 0.46f, Math::float4(2.0f, 1.0f, 0.3f, 0.2f)));
-
-    addLocalPreset(5.0f,
-        makeSpectrum(9.2f, 100.0f, 3.3f, 1.0f, 0.01f, 1.0f, 0.0f),
-        3.4f,
-        1.49f,
-        makeFoam(0.02f, 0.575f, 13.99f, 0.5f, 0.762f, 0.265f, 0.5f,
-            Math::float2(100.0f, 50.0f), 0.476f, Math::float4(3.0f, 1.0f, 0.3f, 0.2f)));
+        defaultLocalPresets_.push_back(defaultLocalPreset_);
+    }
 
     inputsProvider_ = OceanSimulationInputsProvider();
-    inputsProvider_.SetMode(OceanSimulationInputsProvider::InputsProviderMode::Scale);
-    //inputsProvider_.SetTimeScale(0.001f);
-    inputsProvider_.SetTimeScale(1.0f);
-    inputsProvider_.SetDepth(1000.0f);
+    inputsProvider_.SetMode(config.inputMode);
+    inputsProvider_.SetTimeScale(config.timeScale);
+    inputsProvider_.SetDepth(config.depth);
     inputsProvider_.SetSwellPreset(defaultSwellPreset_);
     inputsProvider_.SetLocalWavesPreset(defaultLocalPreset_);
     inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
     inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
 
-    windForce01_ = 1.0f;
+    localWindDirection_ = config.localWindDirectionDegrees;
+    swellDirection_ = config.swellDirectionDegrees;
+    windForce01_ = Math::Saturate(config.windForce01);
     inputsProvider_.SetDisplayWindForce(windForce01_);
 }
 
