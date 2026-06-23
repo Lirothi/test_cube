@@ -207,8 +207,6 @@ void OceanSimulationInputsProvider::PopulateInputs(OceanSimulationInputs& target
 
 void OceanSimulationInputsProvider::PopulateInputs(OceanSimulationInputs& target, float windForce01) const
 {
-    windForce01 = displayWindForce01_;
-
     target.timeScale = timeScale_;
     target.depth = depth_;
 

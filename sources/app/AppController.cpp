@@ -25,6 +25,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     const bool toggleTextureInspector =
         input.WasActionPressed("ToggleTextureInspector") ||
         ImGui::IsKeyPressed(ImGuiKey_F4, false);
+    const bool toggleOceanControls =
+        input.WasActionPressed("ToggleOceanControls") ||
+        ImGui::IsKeyPressed(ImGuiKey_F7, false);
 
     if (toggleDeveloperWindow)
     {
@@ -33,6 +36,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (toggleTextureInspector)
     {
         developerWindow_.ToggleTextureInspector();
+    }
+    if (toggleOceanControls)
+    {
+        developerWindow_.ToggleOceanControls();
     }
 
     if (!uiCapturingKeyboard)

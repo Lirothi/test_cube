@@ -16,6 +16,7 @@
     { "name": "ToggleLOD", "keys": ["F10"] },
     { "name": "CycleReflectionSource", "keys": ["F5"] },
     { "name": "ToggleRTDebugView", "keys": ["F6"] },
+    { "name": "ToggleOceanControls", "keys": ["F7"] },
     { "name": "Wireframe", "keys": ["F3"] },
     { "name": "ToggleTextureInspector", "keys": ["F4"] },
     { "name": "ToggleProfiler", "keys": ["F9"] },

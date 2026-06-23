@@ -159,6 +159,12 @@ public:
 
     OceanSimulationInputsProvider();
 
+    InputsProviderMode GetMode() const { return mode_; }
+    float GetTimeScale() const { return timeScale_; }
+    float GetDepth() const { return depth_; }
+    std::shared_ptr<SwellPreset> GetSwellPreset() const { return swell_; }
+    std::shared_ptr<LocalWavesPreset> GetLocalWavesPreset() const { return localPreset_; }
+
     void SetMode(InputsProviderMode mode) { mode_ = mode; }
     void SetTimeScale(float value) { timeScale_ = value; }
     void SetDepth(float value) { depth_ = value; }

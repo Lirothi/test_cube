@@ -157,6 +157,7 @@
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
+    <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/app/levels/DemoLevel.cpp" />
@@ -261,6 +262,7 @@
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
+    <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/app/levels/DemoLevel.h" />

@@ -8,6 +8,7 @@
 #include "core/Helpers.h"
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
 #include "materials/UploadManager.h"
 #include "ocean/OceanSpectrum.h"
@@ -200,19 +201,28 @@ void OceanSimulation::InitializeDefaultAssets()
     inputsProvider_.SetDisplayWindForce(windForce01_);
 }
 
-void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
+void OceanSimulation::SetSettings(Renderer* renderer, const OceanSimulationSettings& settings)
 {
     settings_ = settings;
     RefreshDerivedSettings();
 
+    ResetGpuResources(renderer, true);
+}
+
+void OceanSimulation::ResetInitialSpectrum(Renderer* renderer)
+{
+    RefreshDerivedSettings();
+    ResetGpuResources(renderer, false);
+}
+
+void OceanSimulation::ResetGpuResources(Renderer* renderer, bool resetMaterials)
+{
+    CollectRetiredResources(renderer);
+    RetireGpuResources(renderer);
+
     initialized_ = false;
     ReleaseCpuData();
 
-    h0Buffer_.Reset();
-    waveDataBuffer_.Reset();
-    displacement_.Reset();
-    prevDisplacement_.Reset();
-    foamTurbulence_.Reset();
     descriptorHeap_.Reset();
     descriptorIncr_ = 0;
     h0Srv_ = {};
@@ -220,38 +230,138 @@ void OceanSimulation::SetSettings(const OceanSimulationSettings& settings)
     displacementFullSrv_ = {};
     displacementSrvs_.clear();
     prevDisplacementSrv_ = {};
+    shoreDepthSrv_ = {};
     displacementUavs_.clear();
+    foamSrvs_.clear();
+    foamUavs_.clear();
     foamSrv_ = {};
     foamUav_ = {};
 
-    spectrumMaterial_.reset();
-    fftMaterial_.reset();
-    fftPostMaterial_.reset();
-    mipMaterial_.reset();
-    foamSimMaterial_.reset();
-    foamInitMaterial_.reset();
+    if (resetMaterials)
+    {
+        spectrumMaterial_.reset();
+        fftMaterial_.reset();
+        fftPostMaterial_.reset();
+        mipMaterial_.reset();
+        foamSimMaterial_.reset();
+        foamInitMaterial_.reset();
+    }
 
     mipCount_ = 1u;
+    mipExtents_.clear();
     foamNeedsInit_ = true;
     hasDisplacementHistory_ = false;
     prevDisplacementValid_ = false;
     lastFoamSimTime_ = 0.0f;
 }
 
-void OceanSimulation::SetInputsProvider(const OceanSimulationInputsProvider& provider)
+void OceanSimulation::RetireGpuResources(Renderer* renderer)
+{
+    RetiredGpuResources retired{};
+    retired.retireFrame = renderer ? renderer->GetTotalFrameNumber() : 0u;
+
+    auto clearState = [renderer](const ComPtr<ID3D12Resource>& resource)
+    {
+        if (renderer && resource)
+        {
+            renderer->ClearResourceState(resource.Get());
+        }
+    };
+
+    clearState(h0Buffer_);
+    clearState(waveDataBuffer_);
+    clearState(displacement_);
+    clearState(prevDisplacement_);
+    clearState(foamTurbulence_);
+
+    retired.h0Buffer = std::move(h0Buffer_);
+    retired.waveDataBuffer = std::move(waveDataBuffer_);
+    retired.displacement = std::move(displacement_);
+    retired.prevDisplacement = std::move(prevDisplacement_);
+    retired.foamTurbulence = std::move(foamTurbulence_);
+
+    if (retired.h0Buffer || retired.waveDataBuffer || retired.displacement ||
+        retired.prevDisplacement || retired.foamTurbulence)
+    {
+        retiredGpuResources_.push_back(std::move(retired));
+    }
+}
+
+void OceanSimulation::RetireUploadResources(Renderer* renderer, std::vector<ComPtr<ID3D12Resource>> resources)
+{
+    if (resources.empty())
+    {
+        return;
+    }
+
+    RetiredUploadResources retired{};
+    retired.retireFrame = renderer ? renderer->GetTotalFrameNumber() : 0u;
+    retired.resources = std::move(resources);
+    retiredUploadResources_.push_back(std::move(retired));
+}
+
+void OceanSimulation::CollectRetiredResources(Renderer* renderer)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    constexpr uint64_t kKeepAliveFrames = render::kFrameCount + 1u;
+    const uint64_t frameNumber = renderer->GetTotalFrameNumber();
+    const auto canRelease = [frameNumber](uint64_t retireFrame)
+    {
+        return frameNumber > retireFrame + kKeepAliveFrames;
+    };
+
+    auto gpuIt = retiredGpuResources_.begin();
+    while (gpuIt != retiredGpuResources_.end())
+    {
+        if (canRelease(gpuIt->retireFrame))
+        {
+            gpuIt = retiredGpuResources_.erase(gpuIt);
+        }
+        else
+        {
+            ++gpuIt;
+        }
+    }
+
+    auto uploadIt = retiredUploadResources_.begin();
+    while (uploadIt != retiredUploadResources_.end())
+    {
+        if (canRelease(uploadIt->retireFrame))
+        {
+            uploadIt = retiredUploadResources_.erase(uploadIt);
+        }
+        else
+        {
+            ++uploadIt;
+        }
+    }
+}
+
+void OceanSimulation::SetInputsProvider(Renderer* renderer, const OceanSimulationInputsProvider& provider)
 {
     inputsProvider_ = provider;
     inputsProvider_.SetDisplayWindForce(windForce01_);
-    initialized_ = false;
+    ResetInitialSpectrum(renderer);
 }
 
-void OceanSimulation::SetSceneVariables(float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01)
+void OceanSimulation::SetSceneVariables(Renderer* renderer, float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01)
 {
     localWindDirection_ = localWindDirectionDegrees;
     swellDirection_ = swellDirectionDegrees;
     windForce01_ = Math::Saturate(windForce01);
     inputsProvider_.SetDisplayWindForce(windForce01_);
-    initialized_ = false;
+    ResetInitialSpectrum(renderer);
+}
+
+OceanSimulationInputs OceanSimulation::EvaluateInputs() const
+{
+    OceanSimulationInputs result;
+    inputsProvider_.PopulateInputs(result, windForce01_);
+    return result;
 }
 
 void OceanSimulation::RefreshDerivedSettings()
@@ -414,7 +524,10 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         return;
     }
 
-    CreateShoreDepth(renderer);
+    if (!shoreDepth_)
+    {
+        CreateShoreDepth(renderer);
+    }
 
     UploadManager uploader(renderer->GetDevice(), uploadCmdList);
 
@@ -428,7 +541,16 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         D3D12_RESOURCE_FLAG_NONE,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    uploader.StealKeepAlive(uploadKeepAlive);
+    if (uploadKeepAlive)
+    {
+        uploader.StealKeepAlive(uploadKeepAlive);
+    }
+    else
+    {
+        std::vector<ComPtr<ID3D12Resource>> runtimeUploadKeepAlive;
+        uploader.StealKeepAlive(&runtimeUploadKeepAlive);
+        RetireUploadResources(renderer, std::move(runtimeUploadKeepAlive));
+    }
 
     mipCount_ = 1u;
     UINT size = std::max<UINT>(1u, resolution_);
@@ -934,6 +1056,8 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     {
         return;
     }
+
+    CollectRetiredResources(renderer);
 
     if (!initialized_)
     {

@@ -57,6 +57,7 @@ namespace
         OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
         return oceanSimulation ? oceanSimulation->GetShoreDepthResource() : nullptr;
     }
+
 }
 
 void DeveloperWindow::ToggleTextureInspector()
@@ -71,6 +72,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
     if (!open_)
     {
         textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
+        oceanControlsWindow_.Draw(renderer);
         return;
     }
 
@@ -256,6 +258,11 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 {
                     textureDebugViewer_.SetOpen(textureViewerOpen);
                 }
+                bool oceanControlsOpen = oceanControlsWindow_.IsOpen();
+                if (ImGui::Checkbox("Ocean controls [F7]", &oceanControlsOpen))
+                {
+                    oceanControlsWindow_.SetOpen(oceanControlsOpen);
+                }
                 ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
                 ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
@@ -361,4 +368,5 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
     open_ = open;
 
     textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
+    oceanControlsWindow_.Draw(renderer);
 }

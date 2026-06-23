@@ -31,13 +31,15 @@ public:
     void Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds);
     void OnHotReload(Renderer* renderer);
 
-    void SetSettings(const OceanSimulationSettings& settings);
-    void SetInputsProvider(const OceanSimulationInputsProvider& provider);
+    void SetSettings(Renderer* renderer, const OceanSimulationSettings& settings);
+    void SetInputsProvider(Renderer* renderer, const OceanSimulationInputsProvider& provider);
+    void ResetInitialSpectrum(Renderer* renderer);
     OceanSimulationInputsProvider& GetInputsProvider() { return inputsProvider_; }
     const OceanSimulationInputsProvider& GetInputsProvider() const { return inputsProvider_; }
 
-    void SetSceneVariables(float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01);
+    void SetSceneVariables(Renderer* renderer, float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01);
     const OceanSimulationSettings& GetSettings() const { return settings_; }
+    OceanSimulationInputs EvaluateInputs() const;
 
     UINT GetResolution() const { return resolution_; }
     UINT GetCascadeCount() const { return cascadeCount_; }
@@ -46,6 +48,9 @@ public:
     const Math::float4& GetLengthScales() const { return lengthScales_; }
     const Math::float4& GetInvLengthScales() const { return invLengthScales_; }
     float GetDisplacementAmplitude() const { return displacementAmplitude_; }
+    float GetLocalWindDirectionDegrees() const { return localWindDirection_; }
+    float GetSwellDirectionDegrees() const { return swellDirection_; }
+    float GetWindForce01() const { return windForce01_; }
     float GetLocalWindDirectionRadians() const;
     Math::float2 GetLocalWindDirectionVector() const;
     float GetFoamTrailUpdateTime() const;
@@ -99,6 +104,10 @@ private:
     void DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList* cl, float simTime);
     void InitializeFoamTexture(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void RefreshDerivedSettings();
+    void ResetGpuResources(Renderer* renderer, bool resetMaterials);
+    void RetireGpuResources(Renderer* renderer);
+    void RetireUploadResources(Renderer* renderer, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> resources);
+    void CollectRetiredResources(Renderer* renderer);
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeDefaultAssets();
     void ReleaseCpuData();
@@ -138,6 +147,22 @@ private:
 
     std::vector<Math::float4> h0Data_;
     std::vector<Math::float4> waveData_;
+
+    struct RetiredGpuResources
+    {
+        uint64_t retireFrame = 0;
+        Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> displacement;
+        Microsoft::WRL::ComPtr<ID3D12Resource> prevDisplacement;
+        Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence;
+    };
+
+    struct RetiredUploadResources
+    {
+        uint64_t retireFrame = 0;
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> resources;
+    };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer_;
@@ -183,5 +208,7 @@ private:
     bool hasDisplacementHistory_ = false;
     bool prevDisplacementValid_ = false;
     bool shouldRenderShoreDepth_ = true;
+    std::vector<RetiredGpuResources> retiredGpuResources_;
+    std::vector<RetiredUploadResources> retiredUploadResources_;
 };
 
