@@ -312,14 +312,14 @@ private:
     CpuClock::time_point frameCpuStart_{};
 
     // EMA for avgMs
-    double emaAlpha_ = 0.995;
+    double emaAlpha_ = 0.997;
 
     std::atomic<bool> enabled_{ true };
 
     // Cooldown for resetting maxima
     using CoolClock = std::chrono::steady_clock;
     CoolClock::time_point lastMaxReset_{};
-    double maxResetIntervalSec_ = 3.0;
+    double maxResetIntervalSec_ = 5.0;
 
     double endFrameAsyncLastMs_ = 0.0;
     double endFrameAsyncAvgMs_ = 0.0;
@@ -349,7 +349,7 @@ private:
 
     // Resort by avgMs every N seconds
     CoolClock::time_point lastOverlaySort_{};
-    double overlayResortIntervalSec_ = 2.0; // defaults to once per second
+    double overlayResortIntervalSec_ = 4.0; // defaults to once per second
 
     // Overlay region width (fixed)—a smoothed estimate to avoid measuring strings
     double overlayWidthPx_ = 640.0;

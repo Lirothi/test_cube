@@ -1071,7 +1071,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const int namePad = 35;
     const int otherCols = 1 + 28;
     const int lineCols = namePad + otherCols + 16;
-    const double charW = 0.60 * 16.0;
+    const double charW = 0.60 * 18.0;
     const double needW = charW * (double)lineCols;
     overlayWidthPx_ = overlayWidthPx_ * 0.9 + needW * 0.1;
     const double boxW = std::max(overlayWidthPx_, 480.0);
@@ -1111,7 +1111,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         }
     }
 
-    tm->AddText(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), L" ");
+    tm->AddText(reg, 20.0f, float4(1, 1, 0.6f, 0.95f), L" ");
 
     // Rows
     int shown = 0;
@@ -1119,7 +1119,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }
-        tm->AddText(reg, 16.0f, (shown & 1) ? colOdd : colEven, r.formatted, true);
+        tm->AddText(reg, 18.0f, (shown & 1) ? colOdd : colEven, r.formatted, true);
         shown++;
     }
 
@@ -1137,12 +1137,12 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
         tm->AddTextfShadow(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), true,
             L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
             (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-        tm->AddText(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
+        tm->AddText(regGpu, 20.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
 
         int gshown = 0;
         for (const auto& r : gpuRows) {
             if (gshown >= maxLines) { break; }
-            tm->AddText(regGpu, 16.0f, (gshown & 1) ? colOdd : colEven, r.formatted, true);
+            tm->AddText(regGpu, 18.0f, (gshown & 1) ? colOdd : colEven, r.formatted, true);
             gshown++;
         }
     }
