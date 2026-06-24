@@ -88,6 +88,8 @@ namespace
         { EqualizerPreset::FilterType::Lowshelf, "Low shelf" },
     };
 
+    constexpr float kOceanControlItemWidth = 220.0f;
+
     constexpr const char* kSpectrumModelLabels[] = {
         "Pierson-Moskowitz",
         "JONSWAP",
@@ -205,6 +207,12 @@ namespace
             fileName += L".json";
         }
         return (std::filesystem::path(L"data/ocean") / fileName).wstring();
+    }
+
+    std::shared_ptr<EqualizerPreset> CloneEqualizerPreset(const std::shared_ptr<EqualizerPreset>& source)
+    {
+        const std::shared_ptr<EqualizerPreset> safe = source ? source : EqualizerPreset::CreateDefault();
+        return std::make_shared<EqualizerPreset>(safe->GetScaleFilters(), safe->GetChopFilters());
     }
 
     const char* SpectrumModelLabel(SpectrumParams::EnergySpectrumModel value)
@@ -395,7 +403,7 @@ namespace
         return changed;
     }
 
-    void DrawOceanSettingsControls(Renderer& renderer, OceanSimulation& ocean)
+    bool DrawOceanSettingsControls(Renderer& renderer, OceanSimulation& ocean)
     {
         OceanSimulationSettings edited = ocean.GetSettings();
         bool settingsChanged = false;
@@ -559,9 +567,10 @@ namespace
         {
             ocean.SetSettings(&renderer, edited);
         }
+        return settingsChanged;
     }
 
-    void DrawOceanSceneControls(Renderer& renderer, OceanSimulation& ocean)
+    bool DrawOceanSceneControls(Renderer& renderer, OceanSimulation& ocean)
     {
         float localWind = ocean.GetLocalWindDirectionDegrees();
         float swellDirection = ocean.GetSwellDirectionDegrees();
@@ -576,6 +585,7 @@ namespace
         {
             ocean.SetSceneVariables(&renderer, localWind, swellDirection, windForce);
         }
+        return changed;
     }
 
     void SanitizeConfigSelection(OceanSimulationConfig& config)
@@ -619,9 +629,11 @@ namespace
         return label;
     }
 
-    bool DrawLocalPresetControls(OceanSimulationConfig& config)
+    bool DrawLocalPresetControls(OceanSimulationConfig& config,
+        std::vector<std::shared_ptr<EqualizerPreset>>& localEqualizerBackups)
     {
         SanitizeConfigSelection(config);
+        localEqualizerBackups.resize(config.localPresets.size());
 
         bool changed = false;
         const std::string currentLabel = LocalPresetLabel(config.localPresetIndex, config.localPreset);
@@ -654,6 +666,7 @@ namespace
                 preset->SetWindForce(config.localPresets.back()->GetWindForce() + 1.0f);
             }
             config.localPresets.push_back(preset);
+            localEqualizerBackups.push_back(nullptr);
             config.localPresetIndex = config.localPresets.size() - 1u;
             config.localPreset = preset;
             changed = true;
@@ -661,8 +674,19 @@ namespace
         ImGui::SameLine();
         if (ImGui::Button("Duplicate"))
         {
+            std::shared_ptr<EqualizerPreset> backup;
+            if (config.localPresetIndex < localEqualizerBackups.size() && localEqualizerBackups[config.localPresetIndex])
+            {
+                backup = CloneEqualizerPreset(localEqualizerBackups[config.localPresetIndex]);
+            }
+            else if (config.localPreset && config.localPreset->GetEqualizer() &&
+                config.localPreset->GetEqualizer() != config.defaultEqualizer)
+            {
+                backup = CloneEqualizerPreset(config.localPreset->GetEqualizer());
+            }
             auto preset = std::make_shared<LocalWavesPreset>(*config.localPreset);
             config.localPresets.insert(config.localPresets.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex + 1u), preset);
+            localEqualizerBackups.insert(localEqualizerBackups.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex + 1u), backup);
             config.localPresetIndex += 1u;
             config.localPreset = preset;
             changed = true;
@@ -672,6 +696,7 @@ namespace
         if (ImGui::Button("Remove"))
         {
             config.localPresets.erase(config.localPresets.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex));
+            localEqualizerBackups.erase(localEqualizerBackups.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex));
             config.localPresetIndex = std::min(config.localPresetIndex, config.localPresets.size() - 1u);
             config.localPreset = config.localPresets[config.localPresetIndex];
             changed = true;
@@ -740,10 +765,27 @@ namespace
             ImGui::TreePop();
         }
 
-        bool useDefaultEqualizer = !preset.GetEqualizer() || preset.GetEqualizer() == config.defaultEqualizer;
+        std::shared_ptr<EqualizerPreset>& customEqualizerBackup = localEqualizerBackups[config.localPresetIndex];
+        const bool hadActiveCustomEqualizer = preset.GetEqualizer() && preset.GetEqualizer() != config.defaultEqualizer;
+        bool useDefaultEqualizer = !hadActiveCustomEqualizer;
         if (ImGui::Checkbox("Use default equalizer", &useDefaultEqualizer))
         {
-            preset.SetEqualizer(useDefaultEqualizer ? config.defaultEqualizer : EqualizerPreset::CreateDefault());
+            if (useDefaultEqualizer)
+            {
+                if (hadActiveCustomEqualizer)
+                {
+                    customEqualizerBackup = CloneEqualizerPreset(preset.GetEqualizer());
+                }
+                preset.SetEqualizer(config.defaultEqualizer);
+            }
+            else
+            {
+                if (!customEqualizerBackup)
+                {
+                    customEqualizerBackup = CloneEqualizerPreset(config.defaultEqualizer);
+                }
+                preset.SetEqualizer(CloneEqualizerPreset(customEqualizerBackup));
+            }
             changed = true;
         }
 
@@ -753,6 +795,7 @@ namespace
             if (DrawEqualizerPreset("LocalEqualizer", equalizer))
             {
                 preset.SetEqualizer(equalizer);
+                customEqualizerBackup = CloneEqualizerPreset(equalizer);
                 changed = true;
             }
             ImGui::TreePop();
@@ -761,7 +804,9 @@ namespace
         return changed;
     }
 
-    void DrawOceanInputControls(Renderer& renderer, OceanSimulation& ocean)
+    bool DrawOceanInputControls(Renderer& renderer,
+        OceanSimulation& ocean,
+        std::vector<std::shared_ptr<EqualizerPreset>>& localEqualizerBackups)
     {
         OceanSimulationConfig config = ocean.GetConfigCopy();
         SanitizeConfigSelection(config);
@@ -825,7 +870,7 @@ namespace
 
         if (ImGui::TreeNodeEx("Local presets", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            configChanged |= DrawLocalPresetControls(config);
+            configChanged |= DrawLocalPresetControls(config, localEqualizerBackups);
             ImGui::TreePop();
         }
 
@@ -850,32 +895,39 @@ namespace
             evaluated.swell.windSpeed,
             evaluated.swell.scale,
             evaluated.swell.cutoffWavelength);
+        return configChanged;
     }
 
-    void DrawOceanControlsContent(Renderer& renderer, OceanSimulation& ocean)
+    bool DrawOceanControlsContent(Renderer& renderer,
+        OceanSimulation& ocean,
+        std::vector<std::shared_ptr<EqualizerPreset>>& localEqualizerBackups)
     {
+        bool configChanged = false;
         if (ImGui::Button("Reset initial spectrum"))
         {
             ocean.ResetInitialSpectrum(&renderer);
         }
 
+        ImGui::PushItemWidth(kOceanControlItemWidth);
         if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanSettingsControls(renderer, ocean);
+            configChanged |= DrawOceanSettingsControls(renderer, ocean);
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Wind", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanSceneControls(renderer, ocean);
+            configChanged |= DrawOceanSceneControls(renderer, ocean);
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Spectrum inputs", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanInputControls(renderer, ocean);
+            configChanged |= DrawOceanInputControls(renderer, ocean, localEqualizerBackups);
             ImGui::TreePop();
         }
+        ImGui::PopItemWidth();
+        return configChanged;
     }
 }
 
@@ -937,6 +989,30 @@ void OceanControlsWindow::RefreshConfigFiles(const OceanSimulation& ocean)
     configFilesInitialized_ = true;
 }
 
+bool OceanControlsWindow::LoadConfigAtIndex(Renderer& renderer, OceanSimulation& ocean, int configIndex)
+{
+    if (configIndex < 0 || configIndex >= static_cast<int>(configPaths_.size()))
+    {
+        configStatus_ = "Load failed";
+        return false;
+    }
+
+    const int previousSelection = selectedConfigIndex_;
+    selectedConfigIndex_ = configIndex;
+    const std::wstring& path = configPaths_[static_cast<size_t>(configIndex)];
+    if (ocean.LoadConfig(&renderer, path))
+    {
+        configDirty_ = false;
+        localEqualizerBackups_.clear();
+        configStatus_ = "Loaded " + FileNameLabel(path);
+        return true;
+    }
+
+    selectedConfigIndex_ = previousSelection;
+    configStatus_ = "Load failed";
+    return false;
+}
+
 void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation& ocean)
 {
     if (!configFilesInitialized_)
@@ -955,6 +1031,7 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
         ? FileNameLabel(configPaths_[static_cast<size_t>(selectedConfigIndex_)])
         : std::string("None");
 
+    bool openLoadConfirm = false;
     if (ImGui::BeginCombo("Config file", selectedLabel.c_str()))
     {
         for (size_t i = 0; i < configPaths_.size(); ++i)
@@ -963,9 +1040,21 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
             const bool selected = static_cast<int>(i) == selectedConfigIndex_;
             if (ImGui::Selectable(label.c_str(), selected))
             {
-                selectedConfigIndex_ = static_cast<int>(i);
-                const std::wstring& path = configPaths_[i];
-                configStatus_ = ocean.LoadConfig(&renderer, path) ? ("Loaded " + FileNameLabel(path)) : "Load failed";
+                if (!selected)
+                {
+                    if (configDirty_)
+                    {
+                        pendingConfigLoadIndex_ = static_cast<int>(i);
+                        const ImVec2 mousePos = ImGui::GetMousePos();
+                        pendingConfigLoadPopupX_ = mousePos.x;
+                        pendingConfigLoadPopupY_ = mousePos.y;
+                        openLoadConfirm = true;
+                    }
+                    else
+                    {
+                        LoadConfigAtIndex(renderer, ocean, static_cast<int>(i));
+                    }
+                }
             }
             if (selected)
             {
@@ -973,6 +1062,10 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
             }
         }
         ImGui::EndCombo();
+    }
+    if (openLoadConfirm)
+    {
+        ImGui::OpenPopup("Load Ocean Config?###OceanConfigLoadConfirm");
     }
 
     if (ImGui::Button("Refresh"))
@@ -984,8 +1077,16 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
     if (ImGui::Button("Save"))
     {
         const std::wstring& path = configPaths_[static_cast<size_t>(selectedConfigIndex_)];
-        configStatus_ = ocean.SaveConfig(path) ? ("Saved " + FileNameLabel(path)) : "Save failed";
-        RefreshConfigFiles(ocean);
+        if (ocean.SaveConfig(path))
+        {
+            configDirty_ = false;
+            configStatus_ = "Saved " + FileNameLabel(path);
+            RefreshConfigFiles(ocean);
+        }
+        else
+        {
+            configStatus_ = "Save failed";
+        }
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1010,6 +1111,7 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
             }
             else if (ocean.SaveConfig(path))
             {
+                configDirty_ = false;
                 configStatus_ = "Saved " + FileNameLabel(path);
                 RefreshConfigFiles(ocean);
                 const std::filesystem::path normalized = std::filesystem::path(path).lexically_normal();
@@ -1036,9 +1138,58 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
         ImGui::EndPopup();
     }
 
+    constexpr float kLoadConfirmContentWidth = 660.0f;
+    if (openLoadConfirm)
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 popupPos(pendingConfigLoadPopupX_ + 12.0f, pendingConfigLoadPopupY_ + 12.0f);
+        if (viewport)
+        {
+            const float minX = viewport->WorkPos.x + 8.0f;
+            const float minY = viewport->WorkPos.y + 8.0f;
+            const float maxX = viewport->WorkPos.x + viewport->WorkSize.x - kLoadConfirmContentWidth - 40.0f;
+            const float maxY = viewport->WorkPos.y + viewport->WorkSize.y - 160.0f;
+            popupPos.x = std::clamp(popupPos.x, minX, std::max(minX, maxX));
+            popupPos.y = std::clamp(popupPos.y, minY, std::max(minY, maxY));
+        }
+        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Appearing);
+        ImGui::SetNextWindowContentSize(ImVec2(kLoadConfirmContentWidth, 0.0f));
+    }
+
+    if (ImGui::BeginPopupModal("Load Ocean Config?###OceanConfigLoadConfirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        const bool hasPending =
+            pendingConfigLoadIndex_ >= 0 && pendingConfigLoadIndex_ < static_cast<int>(configPaths_.size());
+        const std::string pendingName = hasPending
+            ? FileNameLabel(configPaths_[static_cast<size_t>(pendingConfigLoadIndex_)])
+            : std::string("selected config");
+        ImGui::TextWrapped("Current ocean config has unsaved changes.");
+        ImGui::TextWrapped("Load %s and discard those changes?", pendingName.c_str());
+        if (ImGui::Button("Load##OceanConfigLoadConfirmButton"))
+        {
+            if (hasPending)
+            {
+                LoadConfigAtIndex(renderer, ocean, pendingConfigLoadIndex_);
+            }
+            pendingConfigLoadIndex_ = -1;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##OceanConfigLoadCancelButton"))
+        {
+            pendingConfigLoadIndex_ = -1;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     if (!configStatus_.empty())
     {
         ImGui::TextDisabled("%s", configStatus_.c_str());
+    }
+    if (configDirty_)
+    {
+        ImGui::TextDisabled("Unsaved changes");
     }
 
     ImGui::TreePop();
@@ -1068,7 +1219,10 @@ void OceanControlsWindow::Draw(Renderer& renderer)
         {
             DrawConfigControls(renderer, *ocean);
             ImGui::Separator();
-            DrawOceanControlsContent(renderer, *ocean);
+            if (DrawOceanControlsContent(renderer, *ocean, localEqualizerBackups_))
+            {
+                configDirty_ = true;
+            }
         }
     }
     ImGui::End();
