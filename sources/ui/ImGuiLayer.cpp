@@ -52,7 +52,7 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = nullptr;
+    //io.IniFilename = nullptr;
 
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = kUiScale;

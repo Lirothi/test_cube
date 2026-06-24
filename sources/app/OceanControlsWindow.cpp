@@ -1,7 +1,13 @@
 #include "app/OceanControlsWindow.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdio>
+#include <filesystem>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "app/Systems.h"
 #include "core/math/Math.h"
@@ -58,6 +64,30 @@ namespace
         { OceanSimulationInputsProvider::InputsProviderMode::Fixed, "Fixed" },
     };
 
+    struct ReadbackModeOption
+    {
+        OceanSimulationSettings::ReadbackCascadesMode value;
+        const char* label;
+    };
+
+    constexpr ReadbackModeOption kReadbackModeOptions[] = {
+        { OceanSimulationSettings::ReadbackCascadesMode::None, "None" },
+        { OceanSimulationSettings::ReadbackCascadesMode::One, "One" },
+        { OceanSimulationSettings::ReadbackCascadesMode::Two, "Two" },
+    };
+
+    struct FilterTypeOption
+    {
+        EqualizerPreset::FilterType value;
+        const char* label;
+    };
+
+    constexpr FilterTypeOption kFilterTypeOptions[] = {
+        { EqualizerPreset::FilterType::Bell, "Bell" },
+        { EqualizerPreset::FilterType::Highshelf, "High shelf" },
+        { EqualizerPreset::FilterType::Lowshelf, "Low shelf" },
+    };
+
     constexpr const char* kSpectrumModelLabels[] = {
         "Pierson-Moskowitz",
         "JONSWAP",
@@ -112,6 +142,71 @@ namespace
         return "Unknown";
     }
 
+    const char* ReadbackModeLabel(OceanSimulationSettings::ReadbackCascadesMode value)
+    {
+        for (const ReadbackModeOption& option : kReadbackModeOptions)
+        {
+            if (option.value == value)
+            {
+                return option.label;
+            }
+        }
+        return "Unknown";
+    }
+
+    const char* FilterTypeLabel(EqualizerPreset::FilterType value)
+    {
+        for (const FilterTypeOption& option : kFilterTypeOptions)
+        {
+            if (option.value == value)
+            {
+                return option.label;
+            }
+        }
+        return "Unknown";
+    }
+
+    std::string Narrow(const std::wstring& value)
+    {
+        std::string out;
+        out.reserve(value.size());
+        for (wchar_t c : value)
+        {
+            out.push_back(c >= 0 && c <= 0x7f ? static_cast<char>(c) : '?');
+        }
+        return out;
+    }
+
+    std::wstring Widen(std::string_view value)
+    {
+        std::wstring out;
+        out.reserve(value.size());
+        for (char c : value)
+        {
+            out.push_back(static_cast<unsigned char>(c));
+        }
+        return out;
+    }
+
+    std::string FileNameLabel(const std::wstring& path)
+    {
+        return Narrow(std::filesystem::path(path).filename().wstring());
+    }
+
+    std::wstring BuildConfigPathFromName(std::string_view name)
+    {
+        std::filesystem::path fileName = std::filesystem::path(Widen(name)).filename();
+        if (fileName.empty())
+        {
+            return {};
+        }
+        if (fileName.extension().empty())
+        {
+            fileName += L".json";
+        }
+        return (std::filesystem::path(L"data/ocean") / fileName).wstring();
+    }
+
     const char* SpectrumModelLabel(SpectrumParams::EnergySpectrumModel value)
     {
         const int index = static_cast<int>(value);
@@ -142,6 +237,97 @@ namespace
                 }
             }
             ImGui::EndCombo();
+        }
+        return changed;
+    }
+
+    bool DrawFilterTypeCombo(const char* label, EqualizerPreset::FilterType& value)
+    {
+        bool changed = false;
+        if (ImGui::BeginCombo(label, FilterTypeLabel(value)))
+        {
+            for (const FilterTypeOption& option : kFilterTypeOptions)
+            {
+                const bool selected = option.value == value;
+                if (ImGui::Selectable(option.label, selected))
+                {
+                    value = option.value;
+                    changed = true;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        return changed;
+    }
+
+    bool DrawEqualizerFilterList(const char* label, std::vector<EqualizerPreset::Filter>& filters)
+    {
+        bool changed = false;
+        if (ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            for (size_t i = 0; i < filters.size(); ++i)
+            {
+                ImGui::PushID(static_cast<int>(i));
+                EqualizerPreset::Filter& filter = filters[i];
+                char nodeLabel[64];
+                std::snprintf(nodeLabel, sizeof(nodeLabel), "%zu: %s", i, FilterTypeLabel(filter.type));
+                if (ImGui::TreeNodeEx(nodeLabel))
+                {
+                    changed |= DrawFilterTypeCombo("Type", filter.type);
+                    changed |= ImGui::DragFloat("Center", &filter.center, 0.01f, EqualizerPreset::kXMin, EqualizerPreset::kXMax, "%.3f");
+                    changed |= ImGui::DragFloat("Value", &filter.value, 0.01f, -4.0f, 4.0f, "%.3f");
+                    changed |= ImGui::DragFloat("Width", &filter.width, 0.01f, EqualizerPreset::kMinWidth, 8.0f, "%.3f");
+                    if (filter.width < EqualizerPreset::kMinWidth)
+                    {
+                        filter.width = EqualizerPreset::kMinWidth;
+                    }
+                    if (ImGui::Button("Remove"))
+                    {
+                        filters.erase(filters.begin() + static_cast<std::ptrdiff_t>(i));
+                        changed = true;
+                        ImGui::TreePop();
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+
+            if (ImGui::Button("Add filter"))
+            {
+                filters.push_back({});
+                changed = true;
+            }
+            ImGui::TreePop();
+        }
+        return changed;
+    }
+
+    bool DrawEqualizerPreset(const char* id, std::shared_ptr<EqualizerPreset>& preset)
+    {
+        if (!preset)
+        {
+            preset = EqualizerPreset::CreateDefault();
+        }
+
+        std::vector<EqualizerPreset::Filter> scaleFilters = preset->GetScaleFilters();
+        std::vector<EqualizerPreset::Filter> chopFilters = preset->GetChopFilters();
+
+        bool changed = false;
+        ImGui::PushID(id);
+        changed |= DrawEqualizerFilterList("Scale filters", scaleFilters);
+        changed |= DrawEqualizerFilterList("Chop filters", chopFilters);
+        ImGui::PopID();
+
+        if (changed)
+        {
+            preset->SetScaleFilters(std::move(scaleFilters));
+            preset->SetChopFilters(std::move(chopFilters));
         }
         return changed;
     }
@@ -254,6 +440,54 @@ namespace
             ImGui::EndCombo();
         }
 
+        int anisotropy = static_cast<int>(edited.GetAnisotropyLevel());
+        if (ImGui::DragInt("Anisotropy", &anisotropy, 1.0f, 1, 16))
+        {
+            edited.SetAnisotropyLevel(static_cast<uint32_t>(std::max(1, anisotropy)));
+            settingsChanged = true;
+        }
+
+        bool simulateFoam = edited.ShouldSimulateFoam();
+        if (ImGui::Checkbox("Simulate foam", &simulateFoam))
+        {
+            edited.SetSimulateFoam(simulateFoam);
+            settingsChanged = true;
+        }
+
+        bool updateSpectrum = edited.ShouldUpdateSpectrum();
+        if (ImGui::Checkbox("Update spectrum each frame", &updateSpectrum))
+        {
+            edited.SetUpdateSpectrum(updateSpectrum);
+            settingsChanged = true;
+        }
+
+        OceanSimulationSettings::ReadbackCascadesMode readbackMode = edited.GetReadbackMode();
+        if (ImGui::BeginCombo("Readback cascades", ReadbackModeLabel(readbackMode)))
+        {
+            for (const ReadbackModeOption& option : kReadbackModeOptions)
+            {
+                const bool selected = option.value == readbackMode;
+                if (ImGui::Selectable(option.label, selected))
+                {
+                    edited.SetReadbackMode(option.value);
+                    readbackMode = option.value;
+                    settingsChanged = true;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        int samplingIterations = static_cast<int>(edited.GetSamplingIterations());
+        if (ImGui::DragInt("Sampling iterations", &samplingIterations, 1.0f, 1, 64))
+        {
+            edited.SetSamplingIterations(static_cast<uint32_t>(std::max(1, samplingIterations)));
+            settingsChanged = true;
+        }
+
         OceanSimulationSettings::CascadeDomainsMode domainMode = edited.GetDomainsMode();
         if (ImGui::BeginCombo("Domain mode", DomainModeLabel(domainMode)))
         {
@@ -274,42 +508,41 @@ namespace
             ImGui::EndCombo();
         }
 
-        if (domainMode == OceanSimulationSettings::CascadeDomainsMode::Auto)
+        float simulationScale = edited.GetSimulationScale();
+        ImGui::BeginDisabled(domainMode != OceanSimulationSettings::CascadeDomainsMode::Auto);
+        if (ImGui::DragFloat("Simulation scale", &simulationScale, 1.0f, 1.0f, 10000.0f, "%.1f"))
         {
-            float simulationScale = edited.GetSimulationScale();
-            if (ImGui::DragFloat("Simulation scale", &simulationScale, 1.0f, 1.0f, 10000.0f, "%.1f"))
-            {
-                edited.SetSimulationScale(std::max(1.0f, simulationScale));
-                settingsChanged = true;
-            }
+            edited.SetSimulationScale(std::max(1.0f, simulationScale));
+            settingsChanged = true;
         }
-        else
+        ImGui::EndDisabled();
+
+        Math::float4 manualScales = edited.GetManualLengthScales();
+        ImGui::BeginDisabled(domainMode != OceanSimulationSettings::CascadeDomainsMode::Manual);
+        if (ImGui::DragFloat4("Manual length scales", &manualScales.x, 0.1f, 1.0f, 10000.0f, "%.2f"))
         {
-            Math::float4 manualScales = edited.GetManualLengthScales();
-            if (ImGui::DragFloat4("Length scales", &manualScales.x, 0.1f, 1.0f, 10000.0f, "%.2f"))
-            {
-                manualScales.x = std::max(1.0f, manualScales.x);
-                manualScales.y = std::max(1.0f, manualScales.y);
-                manualScales.z = std::max(1.0f, manualScales.z);
-                manualScales.w = std::max(1.0f, manualScales.w);
-                edited.SetManualLengthScales(manualScales);
-                settingsChanged = true;
-            }
-
-            bool allowOverlap = edited.AllowOverlap();
-            if (ImGui::Checkbox("Allow cascade overlap", &allowOverlap))
-            {
-                edited.SetAllowOverlap(allowOverlap);
-                settingsChanged = true;
-            }
-
-            float minWaves = edited.GetMinWavesInCascade();
-            if (ImGui::DragFloat("Min waves in cascade", &minWaves, 0.05f, 1.0f, 32.0f, "%.2f"))
-            {
-                edited.SetMinWavesInCascade(std::max(1.0f, minWaves));
-                settingsChanged = true;
-            }
+            manualScales.x = std::max(1.0f, manualScales.x);
+            manualScales.y = std::max(1.0f, manualScales.y);
+            manualScales.z = std::max(1.0f, manualScales.z);
+            manualScales.w = std::max(1.0f, manualScales.w);
+            edited.SetManualLengthScales(manualScales);
+            settingsChanged = true;
         }
+
+        bool allowOverlap = edited.AllowOverlap();
+        if (ImGui::Checkbox("Allow cascade overlap", &allowOverlap))
+        {
+            edited.SetAllowOverlap(allowOverlap);
+            settingsChanged = true;
+        }
+
+        float minWaves = edited.GetMinWavesInCascade();
+        if (ImGui::DragFloat("Min waves in cascade", &minWaves, 0.05f, 1.0f, 32.0f, "%.2f"))
+        {
+            edited.SetMinWavesInCascade(std::max(1.0f, minWaves));
+            settingsChanged = true;
+        }
+        ImGui::EndDisabled();
 
         Math::float4 lengthScales = edited.ComputeLengthScales();
         Math::float4 cutoffsLow;
@@ -345,22 +578,64 @@ namespace
         }
     }
 
-    void DrawOceanInputControls(Renderer& renderer, OceanSimulation& ocean)
+    void SanitizeConfigSelection(OceanSimulationConfig& config)
     {
-        OceanSimulationInputsProvider provider = ocean.GetInputsProvider();
-        bool providerChanged = false;
-
-        OceanSimulationInputsProvider::InputsProviderMode mode = provider.GetMode();
-        if (ImGui::BeginCombo("Input mode", InputModeLabel(mode)))
+        if (!config.defaultEqualizer)
         {
-            for (const InputModeOption& option : kInputModeOptions)
+            config.defaultEqualizer = EqualizerPreset::CreateDefault();
+        }
+        if (!config.swellPreset)
+        {
+            config.swellPreset = std::make_shared<SwellPreset>();
+        }
+        if (config.localPresets.empty())
+        {
+            config.localPresets.push_back(config.localPreset ? config.localPreset : std::make_shared<LocalWavesPreset>());
+        }
+
+        config.localPresetIndex = std::min(config.localPresetIndex, config.localPresets.size() - 1u);
+        config.localPreset = config.localPresets[config.localPresetIndex];
+        if (!config.localPreset->GetEqualizer())
+        {
+            config.localPreset->SetEqualizer(config.defaultEqualizer);
+        }
+    }
+
+    std::string LocalPresetLabel(size_t index, const std::shared_ptr<LocalWavesPreset>& preset)
+    {
+        char label[128];
+        if (preset)
+        {
+            std::snprintf(label, sizeof(label), "%zu: wind %.2f  height %.2f  chop %.2f",
+                index,
+                preset->GetWindForce(),
+                preset->GetReferenceWaveHeight(),
+                preset->GetChop());
+        }
+        else
+        {
+            std::snprintf(label, sizeof(label), "%zu: empty", index);
+        }
+        return label;
+    }
+
+    bool DrawLocalPresetControls(OceanSimulationConfig& config)
+    {
+        SanitizeConfigSelection(config);
+
+        bool changed = false;
+        const std::string currentLabel = LocalPresetLabel(config.localPresetIndex, config.localPreset);
+        if (ImGui::BeginCombo("Selected local preset", currentLabel.c_str()))
+        {
+            for (size_t i = 0; i < config.localPresets.size(); ++i)
             {
-                const bool selected = option.value == mode;
-                if (ImGui::Selectable(option.label, selected))
+                const std::string label = LocalPresetLabel(i, config.localPresets[i]);
+                const bool selected = i == config.localPresetIndex;
+                if (ImGui::Selectable(label.c_str(), selected))
                 {
-                    provider.SetMode(option.value);
-                    mode = option.value;
-                    providerChanged = true;
+                    config.localPresetIndex = i;
+                    config.localPreset = config.localPresets[i];
+                    changed = true;
                 }
                 if (selected)
                 {
@@ -370,81 +645,194 @@ namespace
             ImGui::EndCombo();
         }
 
-        float timeScale = provider.GetTimeScale();
-        if (ImGui::DragFloat("Time scale", &timeScale, 0.01f, 0.0f, 20.0f, "%.3f"))
+        if (ImGui::Button("Add preset"))
         {
-            provider.SetTimeScale(std::max(0.0f, timeScale));
-            providerChanged = true;
-        }
-
-        float depth = provider.GetDepth();
-        if (ImGui::DragFloat("Water depth", &depth, 1.0f, 0.1f, 10000.0f, "%.1f"))
-        {
-            provider.SetDepth(std::max(0.1f, depth));
-            providerChanged = true;
-        }
-
-        auto swellPreset = provider.GetSwellPreset()
-            ? std::make_shared<SwellPreset>(*provider.GetSwellPreset())
-            : std::make_shared<SwellPreset>();
-        if (ImGui::TreeNodeEx("Swell", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            bool swellChanged = false;
-            SpectrumParams spectrum = swellPreset->GetSpectrum();
-            swellChanged |= DrawSpectrumParams("SwellSpectrum", spectrum);
-            float referenceHeight = swellPreset->GetReferenceWaveHeight();
-            swellChanged |= ImGui::DragFloat("Reference wave height", &referenceHeight, 0.01f, 0.0f, 20.0f, "%.2f");
-            if (swellChanged)
+            auto preset = std::make_shared<LocalWavesPreset>();
+            preset->SetEqualizer(config.defaultEqualizer);
+            if (!config.localPresets.empty() && config.localPresets.back())
             {
-                swellPreset->SetSpectrum(spectrum);
-                swellPreset->SetReferenceWaveHeight(std::max(0.0f, referenceHeight));
-                provider.SetSwellPreset(swellPreset);
-                providerChanged = true;
+                preset->SetWindForce(config.localPresets.back()->GetWindForce() + 1.0f);
             }
-            ImGui::TreePop();
+            config.localPresets.push_back(preset);
+            config.localPresetIndex = config.localPresets.size() - 1u;
+            config.localPreset = preset;
+            changed = true;
         }
-
-        auto localPreset = provider.GetLocalWavesPreset()
-            ? std::make_shared<LocalWavesPreset>(*provider.GetLocalWavesPreset())
-            : std::make_shared<LocalWavesPreset>();
-        const bool fixedMode = mode == OceanSimulationInputsProvider::InputsProviderMode::Fixed;
-        ImGui::BeginDisabled(!fixedMode);
-        if (ImGui::TreeNodeEx("Local waves", ImGuiTreeNodeFlags_DefaultOpen))
+        ImGui::SameLine();
+        if (ImGui::Button("Duplicate"))
         {
-            bool localChanged = false;
-            SpectrumParams spectrum = localPreset->GetSpectrum();
-            localChanged |= DrawSpectrumParams("LocalSpectrum", spectrum);
-            float referenceHeight = localPreset->GetReferenceWaveHeight();
-            localChanged |= ImGui::DragFloat("Reference wave height", &referenceHeight, 0.01f, 0.0f, 20.0f, "%.2f");
-            float chop = localPreset->GetChop();
-            localChanged |= ImGui::DragFloat("Chop", &chop, 0.01f, 0.0f, 5.0f, "%.2f");
-
-            if (ImGui::TreeNodeEx("Foam", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                FoamParams foam = localPreset->GetFoam();
-                if (DrawFoamParams(foam))
-                {
-                    localPreset->SetFoam(foam);
-                    localChanged = true;
-                }
-                ImGui::TreePop();
-            }
-
-            if (localChanged)
-            {
-                localPreset->SetSpectrum(spectrum);
-                localPreset->SetReferenceWaveHeight(std::max(0.0f, referenceHeight));
-                localPreset->SetChop(std::max(0.0f, chop));
-                provider.SetLocalWavesPreset(localPreset);
-                providerChanged = true;
-            }
-            ImGui::TreePop();
+            auto preset = std::make_shared<LocalWavesPreset>(*config.localPreset);
+            config.localPresets.insert(config.localPresets.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex + 1u), preset);
+            config.localPresetIndex += 1u;
+            config.localPreset = preset;
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(config.localPresets.size() <= 1u);
+        if (ImGui::Button("Remove"))
+        {
+            config.localPresets.erase(config.localPresets.begin() + static_cast<std::ptrdiff_t>(config.localPresetIndex));
+            config.localPresetIndex = std::min(config.localPresetIndex, config.localPresets.size() - 1u);
+            config.localPreset = config.localPresets[config.localPresetIndex];
+            changed = true;
         }
         ImGui::EndDisabled();
 
-        if (providerChanged)
+        ImGui::BeginDisabled(config.localPresetIndex == 0u);
+        if (ImGui::Button("Previous"))
         {
-            ocean.SetInputsProvider(&renderer, provider);
+            config.localPresetIndex -= 1u;
+            config.localPreset = config.localPresets[config.localPresetIndex];
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(config.localPresetIndex + 1u >= config.localPresets.size());
+        if (ImGui::Button("Next"))
+        {
+            config.localPresetIndex += 1u;
+            config.localPreset = config.localPresets[config.localPresetIndex];
+            changed = true;
+        }
+        ImGui::EndDisabled();
+
+        LocalWavesPreset& preset = *config.localPreset;
+        float windForce = preset.GetWindForce();
+        if (ImGui::DragFloat("Preset wind force", &windForce, 0.01f, 0.0f, 100.0f, "%.2f"))
+        {
+            preset.SetWindForce(std::max(0.0f, windForce));
+            changed = true;
+        }
+
+        float referenceHeight = preset.GetReferenceWaveHeight();
+        if (ImGui::DragFloat("Reference wave height", &referenceHeight, 0.01f, 0.0f, 20.0f, "%.2f"))
+        {
+            preset.SetReferenceWaveHeight(std::max(0.0f, referenceHeight));
+            changed = true;
+        }
+
+        float chop = preset.GetChop();
+        if (ImGui::DragFloat("Chop", &chop, 0.01f, 0.0f, 5.0f, "%.2f"))
+        {
+            preset.SetChop(std::max(0.0f, chop));
+            changed = true;
+        }
+
+        if (ImGui::TreeNodeEx("Local spectrum", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            SpectrumParams spectrum = preset.GetSpectrum();
+            if (DrawSpectrumParams("LocalSpectrum", spectrum))
+            {
+                preset.SetSpectrum(spectrum);
+                changed = true;
+            }
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNodeEx("Local foam", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            FoamParams foam = preset.GetFoam();
+            if (DrawFoamParams(foam))
+            {
+                preset.SetFoam(foam);
+                changed = true;
+            }
+            ImGui::TreePop();
+        }
+
+        bool useDefaultEqualizer = !preset.GetEqualizer() || preset.GetEqualizer() == config.defaultEqualizer;
+        if (ImGui::Checkbox("Use default equalizer", &useDefaultEqualizer))
+        {
+            preset.SetEqualizer(useDefaultEqualizer ? config.defaultEqualizer : EqualizerPreset::CreateDefault());
+            changed = true;
+        }
+
+        if (!useDefaultEqualizer && ImGui::TreeNodeEx("Local equalizer"))
+        {
+            std::shared_ptr<EqualizerPreset> equalizer = preset.GetEqualizer();
+            if (DrawEqualizerPreset("LocalEqualizer", equalizer))
+            {
+                preset.SetEqualizer(equalizer);
+                changed = true;
+            }
+            ImGui::TreePop();
+        }
+
+        return changed;
+    }
+
+    void DrawOceanInputControls(Renderer& renderer, OceanSimulation& ocean)
+    {
+        OceanSimulationConfig config = ocean.GetConfigCopy();
+        SanitizeConfigSelection(config);
+        bool configChanged = false;
+
+        OceanSimulationInputsProvider::InputsProviderMode mode = config.inputMode;
+        if (ImGui::BeginCombo("Input mode", InputModeLabel(mode)))
+        {
+            for (const InputModeOption& option : kInputModeOptions)
+            {
+                const bool selected = option.value == mode;
+                if (ImGui::Selectable(option.label, selected))
+                {
+                    config.inputMode = option.value;
+                    mode = option.value;
+                    configChanged = true;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        float timeScale = config.timeScale;
+        if (ImGui::DragFloat("Time scale", &timeScale, 0.01f, 0.0f, 20.0f, "%.3f"))
+        {
+            config.timeScale = std::max(0.0f, timeScale);
+            configChanged = true;
+        }
+
+        float depth = config.depth;
+        if (ImGui::DragFloat("Water depth", &depth, 1.0f, 0.1f, 10000.0f, "%.1f"))
+        {
+            config.depth = std::max(0.1f, depth);
+            configChanged = true;
+        }
+
+        if (ImGui::TreeNodeEx("Default equalizer"))
+        {
+            configChanged |= DrawEqualizerPreset("DefaultEqualizer", config.defaultEqualizer);
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNodeEx("Swell", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool swellChanged = false;
+            SpectrumParams spectrum = config.swellPreset->GetSpectrum();
+            swellChanged |= DrawSpectrumParams("SwellSpectrum", spectrum);
+            float referenceHeight = config.swellPreset->GetReferenceWaveHeight();
+            swellChanged |= ImGui::DragFloat("Reference wave height", &referenceHeight, 0.01f, 0.0f, 20.0f, "%.2f");
+            if (swellChanged)
+            {
+                config.swellPreset->SetSpectrum(spectrum);
+                config.swellPreset->SetReferenceWaveHeight(std::max(0.0f, referenceHeight));
+                configChanged = true;
+            }
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNodeEx("Local presets", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            configChanged |= DrawLocalPresetControls(config);
+            ImGui::TreePop();
+        }
+
+        if (configChanged)
+        {
+            SanitizeConfigSelection(config);
+            ocean.ApplyConfig(&renderer, config);
         }
 
         const OceanSimulationInputs evaluated = ocean.EvaluateInputs();
@@ -464,38 +852,196 @@ namespace
             evaluated.swell.cutoffWavelength);
     }
 
-    void DrawOceanControlsContent(Renderer& renderer)
+    void DrawOceanControlsContent(Renderer& renderer, OceanSimulation& ocean)
     {
-        OceanSimulation* ocean = Systems::GetOceanSimulation();
-        if (!ocean)
-        {
-            ImGui::TextDisabled("No ocean simulation.");
-            return;
-        }
-
         if (ImGui::Button("Reset initial spectrum"))
         {
-            ocean->ResetInitialSpectrum(&renderer);
+            ocean.ResetInitialSpectrum(&renderer);
         }
 
         if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanSettingsControls(renderer, *ocean);
+            DrawOceanSettingsControls(renderer, ocean);
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Wind", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanSceneControls(renderer, *ocean);
+            DrawOceanSceneControls(renderer, ocean);
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Spectrum inputs", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            DrawOceanInputControls(renderer, *ocean);
+            DrawOceanInputControls(renderer, ocean);
             ImGui::TreePop();
         }
     }
+}
+
+void OceanControlsWindow::RefreshConfigFiles(const OceanSimulation& ocean)
+{
+    const std::wstring previousSelection =
+        selectedConfigIndex_ >= 0 && selectedConfigIndex_ < static_cast<int>(configPaths_.size())
+            ? configPaths_[static_cast<size_t>(selectedConfigIndex_)]
+            : std::wstring{};
+
+    configPaths_.clear();
+    const std::filesystem::path configDir = L"data/ocean";
+    std::error_code ec;
+    if (std::filesystem::exists(configDir, ec))
+    {
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(configDir, ec))
+        {
+            if (ec)
+            {
+                break;
+            }
+            if (entry.is_regular_file(ec) && entry.path().extension() == L".json")
+            {
+                configPaths_.push_back(entry.path().wstring());
+            }
+        }
+    }
+
+    std::sort(configPaths_.begin(), configPaths_.end());
+
+    const auto selectPath = [this](const std::wstring& path)
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+        const std::filesystem::path normalized = std::filesystem::path(path).lexically_normal();
+        for (size_t i = 0; i < configPaths_.size(); ++i)
+        {
+            if (std::filesystem::path(configPaths_[i]).lexically_normal() == normalized)
+            {
+                selectedConfigIndex_ = static_cast<int>(i);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    selectedConfigIndex_ = -1;
+    if (!selectPath(previousSelection))
+    {
+        selectPath(ocean.GetConfigPath());
+    }
+    if (selectedConfigIndex_ < 0 && !configPaths_.empty())
+    {
+        selectedConfigIndex_ = 0;
+    }
+
+    configFilesInitialized_ = true;
+}
+
+void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation& ocean)
+{
+    if (!configFilesInitialized_)
+    {
+        RefreshConfigFiles(ocean);
+    }
+
+    if (!ImGui::TreeNodeEx("Config", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        return;
+    }
+
+    const bool hasSelection =
+        selectedConfigIndex_ >= 0 && selectedConfigIndex_ < static_cast<int>(configPaths_.size());
+    const std::string selectedLabel = hasSelection
+        ? FileNameLabel(configPaths_[static_cast<size_t>(selectedConfigIndex_)])
+        : std::string("None");
+
+    if (ImGui::BeginCombo("Config file", selectedLabel.c_str()))
+    {
+        for (size_t i = 0; i < configPaths_.size(); ++i)
+        {
+            const std::string label = FileNameLabel(configPaths_[i]);
+            const bool selected = static_cast<int>(i) == selectedConfigIndex_;
+            if (ImGui::Selectable(label.c_str(), selected))
+            {
+                selectedConfigIndex_ = static_cast<int>(i);
+                const std::wstring& path = configPaths_[i];
+                configStatus_ = ocean.LoadConfig(&renderer, path) ? ("Loaded " + FileNameLabel(path)) : "Load failed";
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (ImGui::Button("Refresh"))
+    {
+        RefreshConfigFiles(ocean);
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!hasSelection);
+    if (ImGui::Button("Save"))
+    {
+        const std::wstring& path = configPaths_[static_cast<size_t>(selectedConfigIndex_)];
+        configStatus_ = ocean.SaveConfig(path) ? ("Saved " + FileNameLabel(path)) : "Save failed";
+        RefreshConfigFiles(ocean);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Save as##OceanConfigSaveAsButton"))
+    {
+        const std::string defaultName = hasSelection
+            ? FileNameLabel(configPaths_[static_cast<size_t>(selectedConfigIndex_)])
+            : std::string("default.json");
+        std::snprintf(saveAsName_, sizeof(saveAsName_), "%s", defaultName.c_str());
+        ImGui::OpenPopup("Save Ocean Config As###OceanConfigSaveAsPopup");
+    }
+
+    if (ImGui::BeginPopupModal("Save Ocean Config As###OceanConfigSaveAsPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::InputText("Filename##OceanConfigSaveAsName", saveAsName_, IM_ARRAYSIZE(saveAsName_));
+        if (ImGui::Button("Save##OceanConfigSaveAsConfirm"))
+        {
+            const std::wstring path = BuildConfigPathFromName(saveAsName_);
+            if (path.empty())
+            {
+                configStatus_ = "Save failed";
+            }
+            else if (ocean.SaveConfig(path))
+            {
+                configStatus_ = "Saved " + FileNameLabel(path);
+                RefreshConfigFiles(ocean);
+                const std::filesystem::path normalized = std::filesystem::path(path).lexically_normal();
+                for (size_t i = 0; i < configPaths_.size(); ++i)
+                {
+                    if (std::filesystem::path(configPaths_[i]).lexically_normal() == normalized)
+                    {
+                        selectedConfigIndex_ = static_cast<int>(i);
+                        break;
+                    }
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            else
+            {
+                configStatus_ = "Save failed";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##OceanConfigSaveAsCancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (!configStatus_.empty())
+    {
+        ImGui::TextDisabled("%s", configStatus_.c_str());
+    }
+
+    ImGui::TreePop();
 }
 
 void OceanControlsWindow::Draw(Renderer& renderer)
@@ -513,7 +1059,17 @@ void OceanControlsWindow::Draw(Renderer& renderer)
     if (ImGui::Begin("Ocean Controls [F7]###OceanControls", &open_, windowFlags))
     {
         ui::HandleWindowTitleDoubleClickMaximize(maximize_);
-        DrawOceanControlsContent(renderer);
+        OceanSimulation* ocean = Systems::GetOceanSimulation();
+        if (!ocean)
+        {
+            ImGui::TextDisabled("No ocean simulation.");
+        }
+        else
+        {
+            DrawConfigControls(renderer, *ocean);
+            ImGui::Separator();
+            DrawOceanControlsContent(renderer, *ocean);
+        }
     }
     ImGui::End();
 }

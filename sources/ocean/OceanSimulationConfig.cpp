@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -278,6 +279,59 @@ namespace
         return false;
     }
 
+    const char* ReadbackModeName(OceanSimulationSettings::ReadbackCascadesMode value)
+    {
+        switch (value)
+        {
+        case OceanSimulationSettings::ReadbackCascadesMode::None: return "None";
+        case OceanSimulationSettings::ReadbackCascadesMode::One: return "One";
+        case OceanSimulationSettings::ReadbackCascadesMode::Two: return "Two";
+        default: return "None";
+        }
+    }
+
+    const char* DomainModeName(OceanSimulationSettings::CascadeDomainsMode value)
+    {
+        switch (value)
+        {
+        case OceanSimulationSettings::CascadeDomainsMode::Auto: return "Auto";
+        case OceanSimulationSettings::CascadeDomainsMode::Manual: return "Manual";
+        default: return "Auto";
+        }
+    }
+
+    const char* InputModeName(OceanSimulationInputsProvider::InputsProviderMode value)
+    {
+        switch (value)
+        {
+        case OceanSimulationInputsProvider::InputsProviderMode::Scale: return "Scale";
+        case OceanSimulationInputsProvider::InputsProviderMode::Fixed: return "Fixed";
+        default: return "Fixed";
+        }
+    }
+
+    const char* EnergyModelName(SpectrumParams::EnergySpectrumModel value)
+    {
+        switch (value)
+        {
+        case SpectrumParams::EnergySpectrumModel::PM: return "PM";
+        case SpectrumParams::EnergySpectrumModel::JONSWAP: return "JONSWAP";
+        case SpectrumParams::EnergySpectrumModel::TMA: return "TMA";
+        default: return "PM";
+        }
+    }
+
+    const char* FilterTypeName(EqualizerPreset::FilterType value)
+    {
+        switch (value)
+        {
+        case EqualizerPreset::FilterType::Bell: return "Bell";
+        case EqualizerPreset::FilterType::Highshelf: return "Highshelf";
+        case EqualizerPreset::FilterType::Lowshelf: return "Lowshelf";
+        default: return "Bell";
+        }
+    }
+
     SpectrumParams ReadSpectrum(const json& object, SpectrumParams spectrum)
     {
         if (const json* member = FindMember(object, "energySpectrum"))
@@ -356,6 +410,161 @@ namespace
         preset->SetScaleFilters(ReadFilters(object, "scaleFilters"));
         preset->SetChopFilters(ReadFilters(object, "chopFilters"));
         return preset;
+    }
+
+    json WriteFloat2(const Math::float2& value)
+    {
+        return json::array({ value.x, value.y });
+    }
+
+    json WriteFloat4(const Math::float4& value)
+    {
+        return json::array({ value.x, value.y, value.z, value.w });
+    }
+
+    json WriteSpectrum(const SpectrumParams& spectrum)
+    {
+        json out;
+        out["energySpectrum"] = EnergyModelName(spectrum.energySpectrum);
+        out["windSpeed"] = spectrum.windSpeed;
+        out["fetch"] = spectrum.fetch;
+        out["peaking"] = spectrum.peaking;
+        out["scale"] = spectrum.scale;
+        out["cutoffWavelength"] = spectrum.cutoffWavelength;
+        out["alignment"] = spectrum.alignment;
+        out["extraAlignment"] = spectrum.extraAlignment;
+        return out;
+    }
+
+    json WriteFoam(const FoamParams& foam)
+    {
+        json out;
+        out["decayRate"] = foam.decayRate;
+        out["coverage"] = foam.coverage;
+        out["density"] = foam.density;
+        out["sharpness"] = foam.sharpness;
+        out["persistence"] = foam.persistence;
+        out["trail"] = foam.trail;
+        out["trailTextureStrength"] = foam.trailTextureStrength;
+        out["trailTextureSize"] = WriteFloat2(foam.trailTextureSize);
+        out["underwater"] = foam.underwater;
+        out["cascadesWeights"] = WriteFloat4(foam.cascadesWeights);
+        return out;
+    }
+
+    json WriteFilters(const std::vector<EqualizerPreset::Filter>& filters)
+    {
+        json out = json::array();
+        for (const EqualizerPreset::Filter& filter : filters)
+        {
+            json item;
+            item["type"] = FilterTypeName(filter.type);
+            item["center"] = filter.center;
+            item["value"] = filter.value;
+            item["width"] = filter.width;
+            out.push_back(std::move(item));
+        }
+        return out;
+    }
+
+    json WriteEqualizer(const std::shared_ptr<EqualizerPreset>& preset)
+    {
+        const std::shared_ptr<EqualizerPreset> safe = preset ? preset : EqualizerPreset::CreateDefault();
+        json out;
+        out["scaleFilters"] = WriteFilters(safe->GetScaleFilters());
+        out["chopFilters"] = WriteFilters(safe->GetChopFilters());
+        return out;
+    }
+
+    json WriteSwellPreset(const std::shared_ptr<SwellPreset>& preset)
+    {
+        const std::shared_ptr<SwellPreset> safe = preset ? preset : std::make_shared<SwellPreset>();
+        json out;
+        out["referenceWaveHeight"] = safe->GetReferenceWaveHeight();
+        out["spectrum"] = WriteSpectrum(safe->GetSpectrum());
+        return out;
+    }
+
+    json WriteLocalPreset(const std::shared_ptr<LocalWavesPreset>& preset,
+        const std::shared_ptr<EqualizerPreset>& defaultEqualizer)
+    {
+        const std::shared_ptr<LocalWavesPreset> safe = preset ? preset : std::make_shared<LocalWavesPreset>();
+        json out;
+        out["windForce"] = safe->GetWindForce();
+        out["referenceWaveHeight"] = safe->GetReferenceWaveHeight();
+        out["chop"] = safe->GetChop();
+        out["spectrum"] = WriteSpectrum(safe->GetSpectrum());
+        out["foam"] = WriteFoam(safe->GetFoam());
+        out["equalizer"] = safe->GetEqualizer() == defaultEqualizer ? json("default") : WriteEqualizer(safe->GetEqualizer());
+        return out;
+    }
+
+    json WriteSettings(const OceanSimulationSettings& settings)
+    {
+        json out;
+        out["resolution"] = settings.GetResolution();
+        out["cascadeCount"] = settings.GetCascadeCount();
+        out["anisotropyLevel"] = settings.GetAnisotropyLevel();
+        out["simulateFoam"] = settings.ShouldSimulateFoam();
+        out["updateSpectrum"] = settings.ShouldUpdateSpectrum();
+        out["readbackCascades"] = ReadbackModeName(settings.GetReadbackMode());
+        out["samplingIterations"] = settings.GetSamplingIterations();
+
+        json domains;
+        domains["mode"] = DomainModeName(settings.GetDomainsMode());
+        domains["simulationScale"] = settings.GetSimulationScale();
+        domains["allowOverlap"] = settings.AllowOverlap();
+        domains["minWavesInCascade"] = settings.GetMinWavesInCascade();
+        domains["manualLengthScales"] = WriteFloat4(settings.GetManualLengthScales());
+        out["domains"] = std::move(domains);
+        return out;
+    }
+
+    std::shared_ptr<EqualizerPreset> CloneEqualizer(const std::shared_ptr<EqualizerPreset>& source)
+    {
+        if (!source)
+        {
+            return EqualizerPreset::CreateDefault();
+        }
+        return std::make_shared<EqualizerPreset>(source->GetScaleFilters(), source->GetChopFilters());
+    }
+
+    std::shared_ptr<SwellPreset> CloneSwellPreset(const std::shared_ptr<SwellPreset>& source)
+    {
+        auto clone = std::make_shared<SwellPreset>();
+        if (source)
+        {
+            clone->SetSpectrum(source->GetSpectrum());
+            clone->SetReferenceWaveHeight(source->GetReferenceWaveHeight());
+        }
+        return clone;
+    }
+
+    std::shared_ptr<LocalWavesPreset> CloneLocalPreset(const std::shared_ptr<LocalWavesPreset>& source,
+        const std::shared_ptr<EqualizerPreset>& sourceDefaultEqualizer,
+        const std::shared_ptr<EqualizerPreset>& clonedDefaultEqualizer)
+    {
+        auto clone = std::make_shared<LocalWavesPreset>();
+        if (!source)
+        {
+            clone->SetEqualizer(clonedDefaultEqualizer);
+            return clone;
+        }
+
+        clone->SetSpectrum(source->GetSpectrum());
+        clone->SetFoam(source->GetFoam());
+        clone->SetReferenceWaveHeight(source->GetReferenceWaveHeight());
+        clone->SetChop(source->GetChop());
+        clone->SetWindForce(source->GetWindForce());
+        if (!source->GetEqualizer() || source->GetEqualizer() == sourceDefaultEqualizer)
+        {
+            clone->SetEqualizer(clonedDefaultEqualizer);
+        }
+        else
+        {
+            clone->SetEqualizer(CloneEqualizer(source->GetEqualizer()));
+        }
+        return clone;
     }
 
     std::shared_ptr<EqualizerPreset> ResolveEqualizer(const json& object,
@@ -531,9 +740,47 @@ namespace
         {
             const int defaultIndex = std::clamp(ReadIntMember(object, "localPresetIndex", 0), 0,
                 static_cast<int>(config.localPresets.size() - 1));
+            config.localPresetIndex = static_cast<size_t>(defaultIndex);
             config.localPreset = config.localPresets[static_cast<size_t>(defaultIndex)];
         }
     }
+}
+
+OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& config)
+{
+    OceanSimulationConfig clone;
+    clone.settings = config.settings;
+    clone.localWindDirectionDegrees = config.localWindDirectionDegrees;
+    clone.swellDirectionDegrees = config.swellDirectionDegrees;
+    clone.windForce01 = config.windForce01;
+    clone.inputMode = config.inputMode;
+    clone.timeScale = config.timeScale;
+    clone.depth = config.depth;
+    clone.localPresetIndex = config.localPresetIndex;
+
+    clone.defaultEqualizer = CloneEqualizer(config.defaultEqualizer);
+    clone.swellPreset = CloneSwellPreset(config.swellPreset);
+
+    clone.localPresets.clear();
+    clone.localPresets.reserve(config.localPresets.size());
+    for (const auto& preset : config.localPresets)
+    {
+        clone.localPresets.push_back(CloneLocalPreset(preset, config.defaultEqualizer, clone.defaultEqualizer));
+    }
+
+    if (!clone.localPresets.empty())
+    {
+        clone.localPresetIndex = std::min(clone.localPresetIndex, clone.localPresets.size() - 1u);
+        clone.localPreset = clone.localPresets[clone.localPresetIndex];
+    }
+    else
+    {
+        clone.localPresetIndex = 0;
+        clone.localPreset = CloneLocalPreset(config.localPreset, config.defaultEqualizer, clone.defaultEqualizer);
+        clone.localPresets.push_back(clone.localPreset);
+    }
+
+    return clone;
 }
 
 bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulationConfig& outConfig)
@@ -574,4 +821,54 @@ bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulation
 
     outConfig = std::move(config);
     return true;
+}
+
+bool SaveOceanSimulationConfigToFile(const std::wstring& path, const OceanSimulationConfig& config)
+{
+    const OceanSimulationConfig safeConfig = CloneOceanSimulationConfig(config);
+
+    json root;
+    root["settings"] = WriteSettings(safeConfig.settings);
+
+    json scene;
+    scene["localWindDirectionDegrees"] = safeConfig.localWindDirectionDegrees;
+    scene["swellDirectionDegrees"] = safeConfig.swellDirectionDegrees;
+    scene["windForce01"] = Math::Saturate(safeConfig.windForce01);
+    root["scene"] = std::move(scene);
+
+    json inputs;
+    inputs["mode"] = InputModeName(safeConfig.inputMode);
+    inputs["timeScale"] = safeConfig.timeScale;
+    inputs["depth"] = safeConfig.depth;
+    inputs["defaultEqualizer"] = WriteEqualizer(safeConfig.defaultEqualizer);
+    inputs["swell"] = WriteSwellPreset(safeConfig.swellPreset);
+    inputs["localPresetIndex"] = safeConfig.localPresetIndex;
+
+    json localPresets = json::array();
+    for (const auto& preset : safeConfig.localPresets)
+    {
+        localPresets.push_back(WriteLocalPreset(preset, safeConfig.defaultEqualizer));
+    }
+    inputs["localPresets"] = std::move(localPresets);
+    root["inputs"] = std::move(inputs);
+
+    const std::filesystem::path filePath(path);
+    if (const std::filesystem::path parent = filePath.parent_path(); !parent.empty())
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec)
+        {
+            return false;
+        }
+    }
+
+    std::ofstream f(filePath);
+    if (!f)
+    {
+        return false;
+    }
+
+    f << root.dump(2) << '\n';
+    return static_cast<bool>(f);
 }

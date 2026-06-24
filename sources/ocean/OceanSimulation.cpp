@@ -23,6 +23,27 @@ namespace
     constexpr UINT kThreadGroupSize = 8;
     constexpr UINT kFftFlagPermute = 1u << 1;
     constexpr UINT kMipsPerDispatch = 4u;
+
+    bool Float4Equal(const Math::float4& lhs, const Math::float4& rhs)
+    {
+        return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
+    }
+
+    bool SettingsEqual(const OceanSimulationSettings& lhs, const OceanSimulationSettings& rhs)
+    {
+        return lhs.GetResolution() == rhs.GetResolution() &&
+            lhs.GetCascadeCount() == rhs.GetCascadeCount() &&
+            lhs.GetAnisotropyLevel() == rhs.GetAnisotropyLevel() &&
+            lhs.ShouldUpdateSpectrum() == rhs.ShouldUpdateSpectrum() &&
+            lhs.ShouldSimulateFoam() == rhs.ShouldSimulateFoam() &&
+            lhs.GetReadbackMode() == rhs.GetReadbackMode() &&
+            lhs.GetSamplingIterations() == rhs.GetSamplingIterations() &&
+            lhs.GetDomainsMode() == rhs.GetDomainsMode() &&
+            lhs.GetSimulationScale() == rhs.GetSimulationScale() &&
+            lhs.AllowOverlap() == rhs.AllowOverlap() &&
+            lhs.GetMinWavesInCascade() == rhs.GetMinWavesInCascade() &&
+            Float4Equal(lhs.GetManualLengthScales(), rhs.GetManualLengthScales());
+    }
 }
 
 OceanSimulation::OceanSimulation()
@@ -34,39 +55,17 @@ OceanSimulation::OceanSimulation()
 void OceanSimulation::InitializeDefaultAssets()
 {
     OceanSimulationConfig config;
-    const bool loaded = LoadOceanSimulationConfigFromFile(L"data/ocean/default.json", config);
+    configPath_ = L"data/ocean/default.json";
+    const bool loaded = LoadOceanSimulationConfigFromFile(configPath_, config);
     assert(loaded && "No data/ocean/default.json found or invalid JSON");
 
-    defaultSettings_ = config.settings;
-    settings_ = defaultSettings_;
-
-    defaultEqualizerPreset_ = config.defaultEqualizer ? config.defaultEqualizer : EqualizerPreset::CreateDefault();
-    defaultSwellPreset_ = config.swellPreset ? config.swellPreset : std::make_shared<SwellPreset>();
-    defaultLocalPreset_ = config.localPreset ? config.localPreset : std::make_shared<LocalWavesPreset>();
-    defaultLocalPresets_ = std::move(config.localPresets);
-    if (defaultLocalPresets_.empty())
-    {
-        defaultLocalPresets_.push_back(defaultLocalPreset_);
-    }
-
-    inputsProvider_ = OceanSimulationInputsProvider();
-    inputsProvider_.SetMode(config.inputMode);
-    inputsProvider_.SetTimeScale(config.timeScale);
-    inputsProvider_.SetDepth(config.depth);
-    inputsProvider_.SetSwellPreset(defaultSwellPreset_);
-    inputsProvider_.SetLocalWavesPreset(defaultLocalPreset_);
-    inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
-    inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
-
-    localWindDirection_ = config.localWindDirectionDegrees;
-    swellDirection_ = config.swellDirectionDegrees;
-    windForce01_ = Math::Saturate(config.windForce01);
-    inputsProvider_.SetDisplayWindForce(windForce01_);
+    ApplyConfigInternal(nullptr, loaded ? config : OceanSimulationConfig(), false);
 }
 
 void OceanSimulation::SetSettings(Renderer* renderer, const OceanSimulationSettings& settings)
 {
     settings_ = settings;
+    config_.settings = settings_;
     RefreshDerivedSettings();
 
     ResetGpuResources(renderer, true);
@@ -208,6 +207,22 @@ void OceanSimulation::SetInputsProvider(Renderer* renderer, const OceanSimulatio
 {
     inputsProvider_ = provider;
     inputsProvider_.SetDisplayWindForce(windForce01_);
+    config_.inputMode = inputsProvider_.GetMode();
+    config_.timeScale = inputsProvider_.GetTimeScale();
+    config_.depth = inputsProvider_.GetDepth();
+    config_.swellPreset = inputsProvider_.GetSwellPreset();
+    config_.localPreset = inputsProvider_.GetLocalWavesPreset();
+    config_.localPresets = inputsProvider_.GetLocalWavesPresets();
+    config_.defaultEqualizer = inputsProvider_.GetDefaultEqualizer();
+    config_.localPresetIndex = 0;
+    for (size_t i = 0; i < config_.localPresets.size(); ++i)
+    {
+        if (config_.localPresets[i] == config_.localPreset)
+        {
+            config_.localPresetIndex = i;
+            break;
+        }
+    }
     ResetInitialSpectrum(renderer);
 }
 
@@ -216,8 +231,83 @@ void OceanSimulation::SetSceneVariables(Renderer* renderer, float localWindDirec
     localWindDirection_ = localWindDirectionDegrees;
     swellDirection_ = swellDirectionDegrees;
     windForce01_ = Math::Saturate(windForce01);
+    config_.localWindDirectionDegrees = localWindDirection_;
+    config_.swellDirectionDegrees = swellDirection_;
+    config_.windForce01 = windForce01_;
     inputsProvider_.SetDisplayWindForce(windForce01_);
     ResetInitialSpectrum(renderer);
+}
+
+bool OceanSimulation::LoadConfig(Renderer* renderer, const std::wstring& path)
+{
+    OceanSimulationConfig config;
+    if (!LoadOceanSimulationConfigFromFile(path, config))
+    {
+        return false;
+    }
+
+    configPath_ = path;
+    ApplyConfig(renderer, config);
+    return true;
+}
+
+bool OceanSimulation::SaveConfig(const std::wstring& path) const
+{
+    if (path.empty())
+    {
+        return false;
+    }
+    return SaveOceanSimulationConfigToFile(path, config_);
+}
+
+void OceanSimulation::ApplyConfig(Renderer* renderer, const OceanSimulationConfig& config)
+{
+    ApplyConfigInternal(renderer, config, true);
+}
+
+OceanSimulationConfig OceanSimulation::GetConfigCopy() const
+{
+    return CloneOceanSimulationConfig(config_);
+}
+
+void OceanSimulation::ApplyConfigInternal(Renderer* renderer, const OceanSimulationConfig& config, bool resetResources)
+{
+    const bool settingsChanged = !SettingsEqual(settings_, config.settings);
+    config_ = CloneOceanSimulationConfig(config);
+
+    defaultSettings_ = config_.settings;
+    settings_ = config_.settings;
+
+    defaultEqualizerPreset_ = config_.defaultEqualizer ? config_.defaultEqualizer : EqualizerPreset::CreateDefault();
+    defaultSwellPreset_ = config_.swellPreset ? config_.swellPreset : std::make_shared<SwellPreset>();
+    defaultLocalPreset_ = config_.localPreset ? config_.localPreset : std::make_shared<LocalWavesPreset>();
+    defaultLocalPresets_ = config_.localPresets;
+    if (defaultLocalPresets_.empty())
+    {
+        defaultLocalPresets_.push_back(defaultLocalPreset_);
+    }
+
+    inputsProvider_ = OceanSimulationInputsProvider();
+    inputsProvider_.SetMode(config_.inputMode);
+    inputsProvider_.SetTimeScale(config_.timeScale);
+    inputsProvider_.SetDepth(config_.depth);
+    inputsProvider_.SetSwellPreset(defaultSwellPreset_);
+    inputsProvider_.SetLocalWavesPreset(defaultLocalPreset_);
+    inputsProvider_.SetLocalWavesArray(defaultLocalPresets_);
+    inputsProvider_.SetDefaultEqualizer(defaultEqualizerPreset_);
+
+    localWindDirection_ = config_.localWindDirectionDegrees;
+    swellDirection_ = config_.swellDirectionDegrees;
+    windForce01_ = Math::Saturate(config_.windForce01);
+    config_.windForce01 = windForce01_;
+    inputsProvider_.SetDisplayWindForce(windForce01_);
+
+    RefreshDerivedSettings();
+
+    if (resetResources)
+    {
+        ResetGpuResources(renderer, settingsChanged);
+    }
 }
 
 OceanSimulationInputs OceanSimulation::EvaluateInputs() const

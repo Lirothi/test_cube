@@ -4,12 +4,14 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <d3d12.h>
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
+#include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
 #include "app/scene/SceneView.h"
@@ -34,6 +36,11 @@ public:
     void SetSettings(Renderer* renderer, const OceanSimulationSettings& settings);
     void SetInputsProvider(Renderer* renderer, const OceanSimulationInputsProvider& provider);
     void ResetInitialSpectrum(Renderer* renderer);
+    bool LoadConfig(Renderer* renderer, const std::wstring& path);
+    bool SaveConfig(const std::wstring& path) const;
+    void ApplyConfig(Renderer* renderer, const OceanSimulationConfig& config);
+    OceanSimulationConfig GetConfigCopy() const;
+    const std::wstring& GetConfigPath() const { return configPath_; }
     OceanSimulationInputsProvider& GetInputsProvider() { return inputsProvider_; }
     const OceanSimulationInputsProvider& GetInputsProvider() const { return inputsProvider_; }
 
@@ -110,6 +117,7 @@ private:
     void CollectRetiredResources(Renderer* renderer);
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeDefaultAssets();
+    void ApplyConfigInternal(Renderer* renderer, const OceanSimulationConfig& config, bool resetResources);
     void ReleaseCpuData();
     void CreateShoreDepth(Renderer* renderer);
 
@@ -132,6 +140,8 @@ private:
     std::shared_ptr<SwellPreset> defaultSwellPreset_;
     std::shared_ptr<LocalWavesPreset> defaultLocalPreset_;
     std::vector<std::shared_ptr<LocalWavesPreset>> defaultLocalPresets_;
+    OceanSimulationConfig config_;
+    std::wstring configPath_;
 
     OceanSimulationInputsProvider inputsProvider_;
     OceanSimulationInputs inputs_;

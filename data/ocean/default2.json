@@ -1,0 +1,283 @@
+{
+  "inputs": {
+    "defaultEqualizer": {
+      "chopFilters": [
+        {
+          "center": 0.0,
+          "type": "Bell",
+          "value": 0.4000000059604645,
+          "width": 0.7699999809265137
+        }
+      ],
+      "scaleFilters": [
+        {
+          "center": -1.5,
+          "type": "Lowshelf",
+          "value": -0.550000011920929,
+          "width": 2.380000114440918
+        }
+      ]
+    },
+    "depth": 1000.0,
+    "localPresetIndex": 0,
+    "localPresets": [
+      {
+        "chop": 1.0,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "coverage": 0.0,
+          "decayRate": 0.019999999552965164,
+          "density": 8.399999618530273,
+          "persistence": 0.5,
+          "sharpness": 0.5,
+          "trail": 0.0,
+          "trailTextureSize": [
+            100.0,
+            50.0
+          ],
+          "trailTextureStrength": 0.5,
+          "underwater": 0.0
+        },
+        "referenceWaveHeight": 0.0,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.0,
+          "scale": 0.10000000149011612,
+          "windSpeed": 0.5
+        },
+        "windForce": 0.0
+      },
+      {
+        "chop": 1.0,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "coverage": 0.0,
+          "decayRate": 0.019999999552965164,
+          "density": 8.399999618530273,
+          "persistence": 0.5,
+          "sharpness": 0.5,
+          "trail": 0.0,
+          "trailTextureSize": [
+            100.0,
+            50.0
+          ],
+          "trailTextureStrength": 0.5,
+          "underwater": 0.0
+        },
+        "referenceWaveHeight": 0.0,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.299999952316284,
+          "scale": 0.24799999594688416,
+          "windSpeed": 1.5
+        },
+        "windForce": 1.0
+      },
+      {
+        "chop": 1.25,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "coverage": 0.0,
+          "decayRate": 0.019999999552965164,
+          "density": 8.399999618530273,
+          "persistence": 0.5,
+          "sharpness": 0.5,
+          "trail": 0.0,
+          "trailTextureSize": [
+            100.0,
+            50.0
+          ],
+          "trailTextureStrength": 0.5,
+          "underwater": 0.0
+        },
+        "referenceWaveHeight": 0.25999999046325684,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.299999952316284,
+          "scale": 1.0,
+          "windSpeed": 2.5
+        },
+        "windForce": 2.0
+      },
+      {
+        "chop": 1.409999966621399,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            1.0,
+            1.0,
+            0.5,
+            0.30000001192092896
+          ],
+          "coverage": 0.6620000004768372,
+          "decayRate": 0.20000000298023224,
+          "density": 13.199999809265137,
+          "persistence": 0.7680000066757202,
+          "sharpness": 1.0,
+          "trail": 0.0,
+          "trailTextureSize": [
+            50.0,
+            25.0
+          ],
+          "trailTextureStrength": 0.503000020980835,
+          "underwater": 0.40700000524520874
+        },
+        "referenceWaveHeight": 0.9300000071525574,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.299999952316284,
+          "scale": 1.0,
+          "windSpeed": 4.5
+        },
+        "windForce": 3.0
+      },
+      {
+        "chop": 1.440000057220459,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            2.0,
+            1.0,
+            0.30000001192092896,
+            0.20000000298023224
+          ],
+          "coverage": 0.6100000143051147,
+          "decayRate": 0.10000000149011612,
+          "density": 19.3799991607666,
+          "persistence": 0.7459999918937683,
+          "sharpness": 0.6510000228881836,
+          "trail": 0.0,
+          "trailTextureSize": [
+            100.0,
+            50.0
+          ],
+          "trailTextureStrength": 0.5,
+          "underwater": 0.46000000834465027
+        },
+        "referenceWaveHeight": 1.840000033378601,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.299999952316284,
+          "scale": 1.0,
+          "windSpeed": 7.0
+        },
+        "windForce": 4.0
+      },
+      {
+        "chop": 1.4900000095367432,
+        "equalizer": "default",
+        "foam": {
+          "cascadesWeights": [
+            3.0,
+            1.0,
+            0.30000001192092896,
+            0.20000000298023224
+          ],
+          "coverage": 0.574999988079071,
+          "decayRate": 0.019999999552965164,
+          "density": 13.989999771118164,
+          "persistence": 0.7620000243186951,
+          "sharpness": 0.5,
+          "trail": 0.26499998569488525,
+          "trailTextureSize": [
+            100.0,
+            50.0
+          ],
+          "trailTextureStrength": 0.5,
+          "underwater": 0.47600001096725464
+        },
+        "referenceWaveHeight": 3.4000000953674316,
+        "spectrum": {
+          "alignment": 1.0,
+          "cutoffWavelength": 0.009999999776482582,
+          "energySpectrum": "PM",
+          "extraAlignment": 0.0,
+          "fetch": 100.0,
+          "peaking": 3.299999952316284,
+          "scale": 1.0,
+          "windSpeed": 9.199999809265137
+        },
+        "windForce": 5.0
+      }
+    ],
+    "mode": "Fixed",
+    "swell": {
+      "referenceWaveHeight": 0.0,
+      "spectrum": {
+        "alignment": 0.800000011920929,
+        "cutoffWavelength": 0.009999999776482582,
+        "energySpectrum": "PM",
+        "extraAlignment": 0.5,
+        "fetch": 100.0,
+        "peaking": 3.0,
+        "scale": 0.20000000298023224,
+        "windSpeed": 1.5
+      }
+    },
+    "timeScale": 1.0
+  },
+  "scene": {
+    "localWindDirectionDegrees": 0.0,
+    "swellDirectionDegrees": 0.0,
+    "windForce01": 1.0
+  },
+  "settings": {
+    "anisotropyLevel": 6,
+    "cascadeCount": 4,
+    "domains": {
+      "allowOverlap": true,
+      "manualLengthScales": [
+        65.72000122070313,
+        12.0,
+        12.84000015258789,
+        5.619999885559082
+      ],
+      "minWavesInCascade": 6.0,
+      "mode": "Auto",
+      "simulationScale": 600.0
+    },
+    "readbackCascades": "None",
+    "resolution": 256,
+    "samplingIterations": 3,
+    "simulateFoam": false,
+    "updateSpectrum": false
+  }
+}

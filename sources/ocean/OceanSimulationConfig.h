@@ -23,6 +23,9 @@ struct OceanSimulationConfig
     std::shared_ptr<SwellPreset> swellPreset = std::make_shared<SwellPreset>();
     std::shared_ptr<LocalWavesPreset> localPreset = std::make_shared<LocalWavesPreset>();
     std::vector<std::shared_ptr<LocalWavesPreset>> localPresets;
+    size_t localPresetIndex = 0;
 };
 
+OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& config);
 bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulationConfig& outConfig);
+bool SaveOceanSimulationConfigToFile(const std::wstring& path, const OceanSimulationConfig& config);

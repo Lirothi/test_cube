@@ -79,6 +79,9 @@ public:
     void SetScaleFilters(std::vector<Filter> filters);
     void SetChopFilters(std::vector<Filter> filters);
 
+    const std::vector<Filter>& GetScaleFilters() const { return scaleFilters_; }
+    const std::vector<Filter>& GetChopFilters() const { return chopFilters_; }
+
     static std::shared_ptr<EqualizerPreset> CreateDefault();
 
 private:
@@ -164,6 +167,8 @@ public:
     float GetDepth() const { return depth_; }
     std::shared_ptr<SwellPreset> GetSwellPreset() const { return swell_; }
     std::shared_ptr<LocalWavesPreset> GetLocalWavesPreset() const { return localPreset_; }
+    const std::vector<std::shared_ptr<LocalWavesPreset>>& GetLocalWavesPresets() const { return localPresets_; }
+    std::shared_ptr<EqualizerPreset> GetDefaultEqualizer() const { return defaultEqualizer_; }
 
     void SetMode(InputsProviderMode mode) { mode_ = mode; }
     void SetTimeScale(float value) { timeScale_ = value; }
