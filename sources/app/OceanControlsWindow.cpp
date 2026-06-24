@@ -92,6 +92,8 @@ namespace
     };
 
     constexpr float kOceanControlItemWidth = 220.0f;
+    constexpr float kOceanControlLabelMinWidth = 220.0f;
+    constexpr float kOceanControlInputWidthFraction = 0.55f;
     constexpr int kEqualizerGraphSamples = 128;
     constexpr float kEqualizerGraphHeight = 150.0f;
     constexpr float kEqualizerGraphLabelHeight = 20.0f;
@@ -115,6 +117,20 @@ namespace
             }
         }
         return "Unknown";
+    }
+
+    float CalculateOceanControlItemWidth()
+    {
+        const float availableWidth = ImGui::GetContentRegionAvail().x;
+        const float minimumCombinedWidth = kOceanControlItemWidth + kOceanControlLabelMinWidth;
+        if (availableWidth <= minimumCombinedWidth)
+        {
+            return kOceanControlItemWidth;
+        }
+
+        const float desiredInputWidth = availableWidth * kOceanControlInputWidthFraction;
+        const float maxInputWidthWithLabelRoom = availableWidth - kOceanControlLabelMinWidth;
+        return std::clamp(desiredInputWidth, kOceanControlItemWidth, maxInputWidthWithLabelRoom);
     }
 
     const char* CascadeCountLabel(OceanSimulationSettings::CascadesNumberValue value)
@@ -1308,25 +1324,29 @@ namespace
             ocean.ResetInitialSpectrum(&renderer);
         }
 
-        ImGui::PushItemWidth(kOceanControlItemWidth);
         if (ImGui::TreeNodeEx("Simulation", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            ImGui::PushItemWidth(CalculateOceanControlItemWidth());
             configChanged |= DrawOceanSettingsControls(renderer, ocean);
+            ImGui::PopItemWidth();
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Wind", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            ImGui::PushItemWidth(CalculateOceanControlItemWidth());
             configChanged |= DrawOceanSceneControls(renderer, ocean);
+            ImGui::PopItemWidth();
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNodeEx("Spectrum inputs", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            ImGui::PushItemWidth(CalculateOceanControlItemWidth());
             configChanged |= DrawOceanInputControls(renderer, ocean, localEqualizerBackups);
+            ImGui::PopItemWidth();
             ImGui::TreePop();
         }
-        ImGui::PopItemWidth();
         return configChanged;
     }
 }
