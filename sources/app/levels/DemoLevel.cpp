@@ -26,6 +26,7 @@
 #include "rendering/meshes/GpuInstancedModels.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
+#include "app/Systems.h"
 #include "ocean/OceanRenderable.h"
 
 using namespace Math;
@@ -199,6 +200,71 @@ void SpawnInstancedModels(Scene& scene, const json& o)
 
     scene.AddObject(std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader));
 }
+
+std::string ReadOceanPresetPath(const json& ocean)
+{
+    if (ocean.is_string())
+    {
+        return ocean.get<std::string>();
+    }
+    if (!ocean.is_object())
+    {
+        return {};
+    }
+
+    constexpr const char* kPathKeys[] = { "preset", "presetFile", "config", "configFile" };
+    for (const char* key : kPathKeys)
+    {
+        if (ocean.contains(key) && ocean[key].is_string())
+        {
+            return ocean[key].get<std::string>();
+        }
+    }
+    return {};
+}
+
+void LoadOceanFromLevel(Scene& scene, const json& j)
+{
+    if (!j.contains("ocean"))
+    {
+        Systems::DestroyOceanSimulation();
+        return;
+    }
+
+    const json& ocean = j["ocean"];
+    if (ocean.is_boolean())
+    {
+        if (!ocean.get<bool>())
+        {
+            Systems::DestroyOceanSimulation();
+            return;
+        }
+
+        assert(false && "Level ocean requires a preset file path");
+        Systems::DestroyOceanSimulation();
+        return;
+    }
+
+    if (ocean.is_object() && !ocean.value("enabled", true))
+    {
+        Systems::DestroyOceanSimulation();
+        return;
+    }
+
+    const std::string presetPath = ReadOceanPresetPath(ocean);
+    if (presetPath.empty())
+    {
+        assert(false && "Level ocean requires preset/config path");
+        Systems::DestroyOceanSimulation();
+        return;
+    }
+
+    OceanSimulation* oceanSimulation = Systems::CreateOceanSimulation(Widen(presetPath));
+    if (oceanSimulation)
+    {
+        scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene, oceanSimulation));
+    }
+}
 } // namespace
 
 void DemoLevel::Load(const LevelLoadContext& ctx)
@@ -319,10 +385,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
         }
     }
 
-    // Engine-driven objects stay in C++ — they have constructor wiring (camera,
-    // scene) rather than content parameters, and no data model yet.
-    
-    scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene));
+    LoadOceanFromLevel(scene, j);
     scene.AddObject(std::make_unique<DebugGrid>(100.0f));
 
     if (j.contains("camera"))
@@ -347,4 +410,5 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 void DemoLevel::Unload(const LevelLoadContext& ctx)
 {
     Level::Unload(ctx);
+    Systems::DestroyOceanSimulation();
 }

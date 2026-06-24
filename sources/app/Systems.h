@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "rendering/core/Renderer.h"
 #include "app/scene/Scene.h"
@@ -28,6 +29,7 @@ Scene& GetScene();
 InputManager& GetInput();
 LevelManager& GetLevelManager();
 OceanSimulation* GetOceanSimulation();
-OceanSimulation* EnsureOceanSimulation();
+OceanSimulation* CreateOceanSimulation(const std::wstring& configPath);
+void DestroyOceanSimulation();
 
 } // namespace Systems

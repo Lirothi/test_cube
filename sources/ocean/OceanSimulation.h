@@ -24,6 +24,7 @@ class OceanSimulation
 {
 public:
     OceanSimulation();
+    explicit OceanSimulation(const std::wstring& configPath);
     ~OceanSimulation() = default;
 
     void Initialize(Renderer* renderer,
@@ -116,7 +117,7 @@ private:
     void RetireUploadResources(Renderer* renderer, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> resources);
     void CollectRetiredResources(Renderer* renderer);
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
-    void InitializeDefaultAssets();
+    void InitializeFromConfig(const std::wstring& configPath);
     void ApplyConfigInternal(Renderer* renderer, const OceanSimulationConfig& config, bool resetResources);
     void ReleaseCpuData();
     void CreateShoreDepth(Renderer* renderer);

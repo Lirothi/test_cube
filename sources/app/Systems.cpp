@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <memory>
+#include <mutex>
 
 namespace Systems {
 
@@ -10,6 +11,7 @@ namespace {
     // stop, so plain reads are safe — Get() is called from task threads every frame
     // and must not take a lock.
     AppSystems* gSystems = nullptr;
+    std::mutex gOceanMutex;
 }
 
 void Init(AppSystems* systems) {
@@ -48,16 +50,19 @@ OceanSimulation* GetOceanSimulation()
     return systems.oceanSimulation.get();
 }
 
-OceanSimulation* EnsureOceanSimulation()
+OceanSimulation* CreateOceanSimulation(const std::wstring& configPath)
 {
     auto& systems = Get();
-    static std::mutex oceanMutex;
-    std::lock_guard<std::mutex> lock(oceanMutex);
-    if (!systems.oceanSimulation)
-    {
-        systems.oceanSimulation = std::make_unique<OceanSimulation>();
-    }
+    std::lock_guard<std::mutex> lock(gOceanMutex);
+    systems.oceanSimulation = std::make_unique<OceanSimulation>(configPath);
     return systems.oceanSimulation.get();
+}
+
+void DestroyOceanSimulation()
+{
+    auto& systems = Get();
+    std::lock_guard<std::mutex> lock(gOceanMutex);
+    systems.oceanSimulation.reset();
 }
 
 } // namespace Systems

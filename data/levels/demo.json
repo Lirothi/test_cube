@@ -3,6 +3,11 @@
 
   "skybox": { "texture": "textures/skybox.dds" },
 
+  "ocean": {
+    "enabled": true,
+    "preset": "data/ocean/default.json"
+  },
+
   "directionalLight": {
     "direction": [-1.5, -0.7, -0.5],
     "color": [1.0, 0.9, 0.85],

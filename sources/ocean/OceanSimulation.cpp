@@ -48,18 +48,23 @@ namespace
 
 OceanSimulation::OceanSimulation()
 {
-    InitializeDefaultAssets();
-    RefreshDerivedSettings();
+    InitializeFromConfig(L"data/ocean/default.json");
 }
 
-void OceanSimulation::InitializeDefaultAssets()
+OceanSimulation::OceanSimulation(const std::wstring& configPath)
+{
+    InitializeFromConfig(configPath);
+}
+
+void OceanSimulation::InitializeFromConfig(const std::wstring& configPath)
 {
     OceanSimulationConfig config;
-    configPath_ = L"data/ocean/default.json";
+    configPath_ = configPath.empty() ? L"data/ocean/default.json" : configPath;
     const bool loaded = LoadOceanSimulationConfigFromFile(configPath_, config);
-    assert(loaded && "No data/ocean/default.json found or invalid JSON");
+    assert(loaded && "Ocean config file not found or invalid JSON");
 
     ApplyConfigInternal(nullptr, loaded ? config : OceanSimulationConfig(), false);
+    RefreshDerivedSettings();
 }
 
 void OceanSimulation::SetSettings(Renderer* renderer, const OceanSimulationSettings& settings)

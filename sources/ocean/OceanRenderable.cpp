@@ -9,7 +9,6 @@
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
 #include "rendering/lighting/DirectionalLight.h"
-#include "app/Systems.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
@@ -450,13 +449,12 @@ private:
     Material::CBFieldHandle depthParamsHandle_{};
 };
 
-OceanRenderable::OceanRenderable(Camera* camera, Scene* scene)
+OceanRenderable::OceanRenderable(Camera* camera, Scene* scene, OceanSimulation* simulation)
     : RenderableObject("PosLevelUV", L"shaders/ocean_surface.hlsl")
     , camera_(camera)
     , scene_(scene)
+    , simulation_(simulation)
 {
-    simulation_ = Systems::EnsureOceanSimulation();
-
     const FoamParams defaultFoam = FoamParams::GetDefault();
     foamTrailTextureSize0_ = defaultFoam.trailTextureSize;
     foamTrailTextureSize1_ = defaultFoam.trailTextureSize;
@@ -482,7 +480,6 @@ void OceanRenderable::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     BuildMesh(renderer, uploadCmdList, uploadKeepAlive);
-    simulation_ = Systems::EnsureOceanSimulation();
     if (simulation_)
     {
         simulation_->Initialize(renderer, uploadCmdList, uploadKeepAlive);
@@ -1050,9 +1047,9 @@ Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) cons
 
 Math::float2 OceanRenderable::GetDepthParams() const
 {
-    auto& scene = Systems::GetScene();
-    float zNear = scene.CameraRef().GetZNear();
-    float zFar = scene.CameraRef().GetZFar();
+    const Camera* camera = scene_ ? &scene_->CameraRef() : camera_;
+    const float zNear = camera ? camera->GetZNear() : 0.01f;
+    const float zFar = camera ? camera->GetZFar() : 10000.0f;
     return { zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear) };
 }
 

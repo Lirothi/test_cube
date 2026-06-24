@@ -500,6 +500,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         renderer.WaitForPreviousFrame();
         scene.Clear();
+        Systems::DestroyOceanSimulation();
         renderer.Shutdown();
     }
 

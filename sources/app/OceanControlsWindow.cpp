@@ -1,6 +1,8 @@
 #include "app/OceanControlsWindow.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
@@ -13,6 +15,7 @@
 #include "core/math/Math.h"
 #include "imgui.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanSpectrum.h"
 #include "rendering/core/Renderer.h"
 
 namespace
@@ -89,6 +92,12 @@ namespace
     };
 
     constexpr float kOceanControlItemWidth = 220.0f;
+    constexpr int kEqualizerGraphSamples = 128;
+    constexpr float kEqualizerGraphHeight = 150.0f;
+    constexpr float kEqualizerGraphLabelHeight = 20.0f;
+    constexpr int kSpectrumPlotSamples = 160;
+    constexpr float kSpectrumPlotHeight = 200.0f;
+    constexpr float kSpectrumPlotLabelHeight = 26.0f;
 
     constexpr const char* kSpectrumModelLabels[] = {
         "Pierson-Moskowitz",
@@ -195,6 +204,24 @@ namespace
         return Narrow(std::filesystem::path(path).filename().wstring());
     }
 
+    std::string FormatWavelength(float meters)
+    {
+        char label[32];
+        if (meters < 1.0f)
+        {
+            std::snprintf(label, sizeof(label), "%.0f cm", meters * 100.0f);
+        }
+        else if (meters < 1000.0f)
+        {
+            std::snprintf(label, sizeof(label), "%.1f m", meters);
+        }
+        else
+        {
+            std::snprintf(label, sizeof(label), "%.1f km", meters / 1000.0f);
+        }
+        return label;
+    }
+
     std::wstring BuildConfigPathFromName(std::string_view name)
     {
         std::filesystem::path fileName = std::filesystem::path(Widen(name)).filename();
@@ -223,6 +250,372 @@ namespace
             return kSpectrumModelLabels[index];
         }
         return "Unknown";
+    }
+
+    ImVec2 EqualizerGraphPoint(const ImVec2& min,
+        const ImVec2& max,
+        float x,
+        float y,
+        float yMax)
+    {
+        const float u = (x - EqualizerPreset::kXMin) / (EqualizerPreset::kXMax - EqualizerPreset::kXMin);
+        const float v = std::clamp(y / std::max(0.001f, yMax), 0.0f, 1.0f);
+        return ImVec2(
+            min.x + std::clamp(u, 0.0f, 1.0f) * (max.x - min.x),
+            max.y - v * (max.y - min.y));
+    }
+
+    void DrawEqualizerCurve(ImDrawList* drawList,
+        const std::array<Math::float2, kEqualizerGraphSamples>& samples,
+        int channel,
+        const ImVec2& min,
+        const ImVec2& max,
+        float yMax,
+        ImU32 fillColor,
+        ImU32 lineColor)
+    {
+        std::array<ImVec2, kEqualizerGraphSamples> points{};
+        for (int i = 0; i < kEqualizerGraphSamples; ++i)
+        {
+            const float u = static_cast<float>(i) / static_cast<float>(kEqualizerGraphSamples - 1);
+            const float x = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u);
+            const float y = channel == 0 ? samples[i].x : samples[i].y;
+            points[i] = EqualizerGraphPoint(min, max, x, y, yMax);
+        }
+
+        const ImVec2 baseline0 = EqualizerGraphPoint(min, max, EqualizerPreset::kXMin, 1.0f, yMax);
+        const ImVec2 baseline1 = EqualizerGraphPoint(min, max, EqualizerPreset::kXMax, 1.0f, yMax);
+        for (int i = 1; i < kEqualizerGraphSamples; ++i)
+        {
+            const float t0 = static_cast<float>(i - 1) / static_cast<float>(kEqualizerGraphSamples - 1);
+            const float t1 = static_cast<float>(i) / static_cast<float>(kEqualizerGraphSamples - 1);
+            const ImVec2 base0(Math::Lerp(baseline0.x, baseline1.x, t0), baseline0.y);
+            const ImVec2 base1(Math::Lerp(baseline0.x, baseline1.x, t1), baseline1.y);
+            drawList->AddQuadFilled(base0, base1, points[i], points[i - 1], fillColor);
+        }
+        drawList->AddPolyline(points.data(), kEqualizerGraphSamples, lineColor, ImDrawFlags_None, 2.0f);
+    }
+
+    void DrawEqualizerVisualization(const char* id, const std::shared_ptr<EqualizerPreset>& preset)
+    {
+        if (!preset)
+        {
+            return;
+        }
+
+        ImGui::PushID(id);
+        const float width = std::max(240.0f, ImGui::GetContentRegionAvail().x);
+        const ImVec2 canvasSize(width, kEqualizerGraphHeight + kEqualizerGraphLabelHeight);
+        const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##EqualizerGraph", canvasSize);
+        const bool hovered = ImGui::IsItemHovered();
+
+        const ImVec2 graphMin(canvasMin.x, canvasMin.y);
+        const ImVec2 graphMax(canvasMin.x + canvasSize.x, canvasMin.y + kEqualizerGraphHeight);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+        std::array<Math::float2, kEqualizerGraphSamples> samples{};
+        float yMax = 2.0f;
+        for (int i = 0; i < kEqualizerGraphSamples; ++i)
+        {
+            const float u = static_cast<float>(i) / static_cast<float>(kEqualizerGraphSamples - 1);
+            samples[i] = preset->Sample(u);
+            yMax = std::max(yMax, std::max(samples[i].x, samples[i].y));
+        }
+        yMax = std::ceil(yMax * 2.0f) * 0.5f;
+
+        const ImU32 backgroundColor = IM_COL32(42, 44, 48, 255);
+        const ImU32 gridColor = IM_COL32(106, 112, 122, 90);
+        const ImU32 borderColor = IM_COL32(150, 156, 166, 180);
+        const ImU32 baselineColor = IM_COL32(214, 218, 224, 170);
+        const ImU32 labelColor = IM_COL32(196, 202, 212, 255);
+        const ImU32 scaleFillColor = IM_COL32(54, 98, 160, 90);
+        const ImU32 scaleLineColor = IM_COL32(129, 180, 254, 255);
+        const ImU32 chopFillColor = IM_COL32(202, 87, 51, 85);
+        const ImU32 chopLineColor = IM_COL32(252, 109, 64, 255);
+
+        drawList->AddRectFilled(graphMin, graphMax, backgroundColor, 3.0f);
+
+        for (float x = -1.5f; x <= 3.51f; x += 0.5f)
+        {
+            const ImVec2 top = EqualizerGraphPoint(graphMin, graphMax, x, yMax, yMax);
+            const ImVec2 bottom = EqualizerGraphPoint(graphMin, graphMax, x, 0.0f, yMax);
+            drawList->AddLine(top, bottom, gridColor);
+        }
+        for (float y = 0.0f; y <= yMax + 0.001f; y += 0.5f)
+        {
+            const ImVec2 left = EqualizerGraphPoint(graphMin, graphMax, EqualizerPreset::kXMin, y, yMax);
+            const ImVec2 right = EqualizerGraphPoint(graphMin, graphMax, EqualizerPreset::kXMax, y, yMax);
+            drawList->AddLine(left, right, y == 1.0f ? baselineColor : gridColor, y == 1.0f ? 1.5f : 1.0f);
+        }
+
+        DrawEqualizerCurve(drawList, samples, 0, graphMin, graphMax, yMax, scaleFillColor, scaleLineColor);
+        DrawEqualizerCurve(drawList, samples, 1, graphMin, graphMax, yMax, chopFillColor, chopLineColor);
+
+        drawList->AddRect(graphMin, graphMax, borderColor, 3.0f);
+
+        constexpr float legendY = 8.0f;
+        drawList->AddLine(ImVec2(graphMin.x + 10.0f, graphMin.y + legendY),
+            ImVec2(graphMin.x + 28.0f, graphMin.y + legendY), scaleLineColor, 2.0f);
+        drawList->AddText(ImVec2(graphMin.x + 34.0f, graphMin.y + legendY - 7.0f), labelColor, "Scale");
+        drawList->AddLine(ImVec2(graphMin.x + 86.0f, graphMin.y + legendY),
+            ImVec2(graphMin.x + 104.0f, graphMin.y + legendY), chopLineColor, 2.0f);
+        drawList->AddText(ImVec2(graphMin.x + 110.0f, graphMin.y + legendY - 7.0f), labelColor, "Chop");
+
+        const struct
+        {
+            float x;
+            const char* label;
+        } wavelengthTicks[] = {
+            { -1.0f, "10 cm" },
+            { 0.0f, "1 m" },
+            { 1.0f, "10 m" },
+            { 2.0f, "100 m" },
+            { 3.0f, "1 km" },
+        };
+        for (const auto& tick : wavelengthTicks)
+        {
+            const ImVec2 p = EqualizerGraphPoint(graphMin, graphMax, tick.x, 0.0f, yMax);
+            const ImVec2 textSize = ImGui::CalcTextSize(tick.label);
+            drawList->AddText(ImVec2(p.x - textSize.x * 0.5f, graphMax.y + 3.0f), labelColor, tick.label);
+        }
+
+        char yLabel[32];
+        std::snprintf(yLabel, sizeof(yLabel), "%.1fx", yMax);
+        drawList->AddText(ImVec2(graphMax.x - ImGui::CalcTextSize(yLabel).x - 6.0f, graphMin.y + 4.0f), labelColor, yLabel);
+        drawList->AddText(ImVec2(graphMax.x - 28.0f, EqualizerGraphPoint(graphMin, graphMax, 0.0f, 1.0f, yMax).y - 8.0f),
+            labelColor,
+            "1x");
+
+        if (hovered)
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            if (mouse.x >= graphMin.x && mouse.x <= graphMax.x && mouse.y >= graphMin.y && mouse.y <= graphMax.y)
+            {
+                const float u = std::clamp((mouse.x - graphMin.x) / std::max(1.0f, graphMax.x - graphMin.x), 0.0f, 1.0f);
+                const float x = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u);
+                const Math::float2 sample = preset->Sample(u);
+                drawList->AddLine(ImVec2(mouse.x, graphMin.y), ImVec2(mouse.x, graphMax.y), IM_COL32(255, 255, 255, 110));
+
+                ImGui::BeginTooltip();
+                ImGui::Text("Wavelength: %s", FormatWavelength(std::pow(10.0f, x)).c_str());
+                ImGui::Text("Scale: %.3fx", sample.x);
+                ImGui::Text("Chop: %.3fx", sample.y);
+                ImGui::Text("log10 wavelength: %.2f", x);
+                ImGui::EndTooltip();
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    float Float4Component(const Math::float4& value, int index)
+    {
+        const float* data = &value.x;
+        return data[index];
+    }
+
+    float SpectrumPlotValue(const SpectrumParams& params, float depth, float x)
+    {
+        if (params.scale <= Math::EPS || params.windSpeed <= Math::EPS)
+        {
+            return 0.0f;
+        }
+
+        const float wavelength = std::pow(10.0f, x);
+        const float k = Math::TWO_PI / std::max(wavelength, Math::EPS);
+        const float omega = OceanSpectrum::Frequency(k, depth);
+        if (omega <= Math::EPS)
+        {
+            return 0.0f;
+        }
+
+        float value = OceanSpectrum::FullSpectrum(omega, 0.0f, params, depth);
+        value *= params.scale;
+        value *= OceanSpectrum::ShortWavesFade(k, params.cutoffWavelength);
+        return std::max(0.0f, value);
+    }
+
+    int CascadeForLogWavelength(const OceanSimulationSettings& settings, float x)
+    {
+        Math::float4 cutoffsLow;
+        Math::float4 cutoffsHigh;
+        settings.CalculateCascadeDomains(cutoffsLow, cutoffsHigh);
+
+        const uint32_t cascadeCount = settings.GetCascadeCount();
+        for (uint32_t i = 0; i < cascadeCount; ++i)
+        {
+            const float lowK = Float4Component(cutoffsLow, static_cast<int>(i));
+            const float highK = Float4Component(cutoffsHigh, static_cast<int>(i));
+            if (lowK <= Math::EPS || highK <= Math::EPS)
+            {
+                continue;
+            }
+
+            const float waveMin = std::log10(Math::TWO_PI / std::max(highK, Math::EPS));
+            const float waveMax = std::log10(Math::TWO_PI / std::max(lowK, Math::EPS));
+            if (x >= std::min(waveMin, waveMax) && x <= std::max(waveMin, waveMax))
+            {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
+    ImU32 CascadeColor(int cascade, int alpha)
+    {
+        switch (cascade)
+        {
+        case 0: return IM_COL32(241, 88, 84, alpha);
+        case 1: return IM_COL32(250, 164, 58, alpha);
+        case 2: return IM_COL32(96, 189, 104, alpha);
+        case 3: return IM_COL32(93, 165, 218, alpha);
+        default: return IM_COL32(14, 16, 18, alpha);
+        }
+    }
+
+    void DrawSpectrumVisualization(const char* id,
+        const OceanSimulationSettings& settings,
+        const OceanSimulationInputs& inputs)
+    {
+        ImGui::PushID(id);
+        const float width = std::max(300.0f, ImGui::GetContentRegionAvail().x);
+        const ImVec2 canvasSize(width, kSpectrumPlotHeight + kSpectrumPlotLabelHeight);
+        const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##SpectrumPlot", canvasSize);
+        const bool hovered = ImGui::IsItemHovered();
+
+        const ImVec2 graphMin(canvasMin.x, canvasMin.y);
+        const ImVec2 graphMax(canvasMin.x + canvasSize.x, canvasMin.y + kSpectrumPlotHeight);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+        std::array<float, kSpectrumPlotSamples> rawValues{};
+        std::array<float, kSpectrumPlotSamples> normalizedValues{};
+        float maxValue = 0.0f;
+        const float depth = std::max(0.1f, inputs.depth);
+        for (int i = 0; i < kSpectrumPlotSamples; ++i)
+        {
+            const float u = static_cast<float>(i) / static_cast<float>(kSpectrumPlotSamples - 1);
+            const float x = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u);
+            const float local = SpectrumPlotValue(inputs.local, depth, x);
+            const float swell = SpectrumPlotValue(inputs.swell, depth, x);
+            rawValues[i] = local + swell;
+            maxValue = std::max(maxValue, rawValues[i]);
+        }
+
+        for (int i = 0; i < kSpectrumPlotSamples; ++i)
+        {
+            const float normalized = maxValue > Math::EPS ? rawValues[i] / maxValue : 0.0f;
+            normalizedValues[i] = std::pow(std::clamp(normalized, 0.0f, 1.0f), 0.25f) * 0.95f;
+        }
+
+        const ImU32 backgroundColor = IM_COL32(42, 44, 48, 255);
+        const ImU32 gridColor = IM_COL32(160, 166, 176, 90);
+        const ImU32 borderColor = IM_COL32(180, 186, 196, 200);
+        const ImU32 lineColor = IM_COL32(226, 234, 244, 235);
+        const ImU32 labelColor = IM_COL32(200, 206, 216, 255);
+        const ImU32 inactiveFillColor = IM_COL32(10, 12, 14, 205);
+
+        drawList->AddRectFilled(graphMin, graphMax, backgroundColor, 3.0f);
+
+        for (float x = -1.5f; x <= 3.51f; x += 0.5f)
+        {
+            const ImVec2 top = EqualizerGraphPoint(graphMin, graphMax, x, 1.0f, 1.0f);
+            const ImVec2 bottom = EqualizerGraphPoint(graphMin, graphMax, x, 0.0f, 1.0f);
+            drawList->AddLine(top, bottom, gridColor);
+        }
+        for (float y = 0.0f; y <= 1.001f; y += 0.25f)
+        {
+            const ImVec2 left = EqualizerGraphPoint(graphMin, graphMax, EqualizerPreset::kXMin, y, 1.0f);
+            const ImVec2 right = EqualizerGraphPoint(graphMin, graphMax, EqualizerPreset::kXMax, y, 1.0f);
+            drawList->AddLine(left, right, gridColor);
+        }
+
+        std::array<ImVec2, kSpectrumPlotSamples> points{};
+        for (int i = 0; i < kSpectrumPlotSamples; ++i)
+        {
+            const float u = static_cast<float>(i) / static_cast<float>(kSpectrumPlotSamples - 1);
+            const float x = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u);
+            points[i] = EqualizerGraphPoint(graphMin, graphMax, x, normalizedValues[i], 1.0f);
+        }
+
+        for (int i = 1; i < kSpectrumPlotSamples; ++i)
+        {
+            const float u0 = static_cast<float>(i - 1) / static_cast<float>(kSpectrumPlotSamples - 1);
+            const float u1 = static_cast<float>(i) / static_cast<float>(kSpectrumPlotSamples - 1);
+            const float x0 = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u0);
+            const float x1 = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u1);
+            const float midX = (x0 + x1) * 0.5f;
+            const int cascade = CascadeForLogWavelength(settings, midX);
+            const ImU32 fillColor = cascade >= 0 ? CascadeColor(cascade, 155) : inactiveFillColor;
+            const ImVec2 base0(points[i - 1].x, graphMax.y);
+            const ImVec2 base1(points[i].x, graphMax.y);
+            drawList->AddQuadFilled(base0, base1, points[i], points[i - 1], fillColor);
+        }
+        drawList->AddPolyline(points.data(), kSpectrumPlotSamples, lineColor, ImDrawFlags_None, 2.0f);
+        drawList->AddRect(graphMin, graphMax, borderColor, 3.0f);
+
+        const uint32_t cascadeCount = settings.GetCascadeCount();
+        for (uint32_t i = 0; i < cascadeCount; ++i)
+        {
+            char label[32];
+            std::snprintf(label, sizeof(label), "Cascade %u", i);
+            drawList->AddText(ImVec2(graphMin.x + 12.0f, graphMin.y + 12.0f + static_cast<float>(i) * 17.0f),
+                CascadeColor(static_cast<int>(i), 255),
+                label);
+        }
+
+        const struct
+        {
+            float x;
+            const char* label;
+        } wavelengthTicks[] = {
+            { -1.0f, "10 cm" },
+            { 0.0f, "1 m" },
+            { 1.0f, "10 m" },
+            { 2.0f, "100 m" },
+            { 3.0f, "1 km" },
+        };
+        for (const auto& tick : wavelengthTicks)
+        {
+            const ImVec2 p = EqualizerGraphPoint(graphMin, graphMax, tick.x, 0.0f, 1.0f);
+            const ImVec2 textSize = ImGui::CalcTextSize(tick.label);
+            drawList->AddText(ImVec2(p.x - textSize.x * 0.5f, graphMax.y + 3.0f), labelColor, tick.label);
+        }
+        const char* axisLabel = "Wavelength";
+        const ImVec2 axisSize = ImGui::CalcTextSize(axisLabel);
+        drawList->AddText(ImVec2((graphMin.x + graphMax.x - axisSize.x) * 0.5f, graphMax.y + 17.0f), labelColor, axisLabel);
+
+        if (hovered)
+        {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            if (mouse.x >= graphMin.x && mouse.x <= graphMax.x && mouse.y >= graphMin.y && mouse.y <= graphMax.y)
+            {
+                const float u = std::clamp((mouse.x - graphMin.x) / std::max(1.0f, graphMax.x - graphMin.x), 0.0f, 1.0f);
+                const float x = Math::Lerp(EqualizerPreset::kXMin, EqualizerPreset::kXMax, u);
+                const float local = SpectrumPlotValue(inputs.local, depth, x);
+                const float swell = SpectrumPlotValue(inputs.swell, depth, x);
+                const int cascade = CascadeForLogWavelength(settings, x);
+                drawList->AddLine(ImVec2(mouse.x, graphMin.y), ImVec2(mouse.x, graphMax.y), IM_COL32(255, 255, 255, 120));
+
+                ImGui::BeginTooltip();
+                ImGui::Text("Wavelength: %s", FormatWavelength(std::pow(10.0f, x)).c_str());
+                ImGui::Text("Local spectrum: %.4g", local);
+                ImGui::Text("Swell spectrum: %.4g", swell);
+                if (cascade >= 0)
+                {
+                    ImGui::Text("Cascade: %d", cascade);
+                }
+                else
+                {
+                    ImGui::TextUnformatted("Cascade: none");
+                }
+                ImGui::Text("log10 wavelength: %.2f", x);
+                ImGui::EndTooltip();
+            }
+        }
+
+        ImGui::PopID();
     }
 
     bool DrawSpectrumModelCombo(const char* label, SpectrumParams::EnergySpectrumModel& value)
@@ -282,7 +675,7 @@ namespace
                 ImGui::PushID(static_cast<int>(i));
                 EqualizerPreset::Filter& filter = filters[i];
                 char nodeLabel[64];
-                std::snprintf(nodeLabel, sizeof(nodeLabel), "%zu: %s", i, FilterTypeLabel(filter.type));
+                std::snprintf(nodeLabel, sizeof(nodeLabel), "%zu: %s###Filter%zu", i, FilterTypeLabel(filter.type), i);
                 if (ImGui::TreeNodeEx(nodeLabel))
                 {
                     changed |= DrawFilterTypeCombo("Type", filter.type);
@@ -330,13 +723,14 @@ namespace
         ImGui::PushID(id);
         changed |= DrawEqualizerFilterList("Scale filters", scaleFilters);
         changed |= DrawEqualizerFilterList("Chop filters", chopFilters);
-        ImGui::PopID();
 
         if (changed)
         {
             preset->SetScaleFilters(std::move(scaleFilters));
             preset->SetChopFilters(std::move(chopFilters));
         }
+        DrawEqualizerVisualization("Preview", preset);
+        ImGui::PopID();
         return changed;
     }
 
@@ -562,6 +956,12 @@ namespace
             cutoffsLow.x, cutoffsLow.y, cutoffsLow.z, cutoffsLow.w);
         ImGui::Text("Cutoff high: %.3f  %.3f  %.3f  %.3f",
             cutoffsHigh.x, cutoffsHigh.y, cutoffsHigh.z, cutoffsHigh.w);
+
+        if (ImGui::TreeNodeEx("Spectrum plot", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            DrawSpectrumVisualization("SimulationSpectrum", edited, ocean.EvaluateInputs());
+            ImGui::TreePop();
+        }
 
         if (settingsChanged)
         {
@@ -1063,14 +1463,30 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
         }
         ImGui::EndCombo();
     }
-    if (openLoadConfirm)
-    {
-        ImGui::OpenPopup("Load Ocean Config?###OceanConfigLoadConfirm");
-    }
-
     if (ImGui::Button("Refresh"))
     {
         RefreshConfigFiles(ocean);
+        const bool hasRefreshedSelection =
+            selectedConfigIndex_ >= 0 && selectedConfigIndex_ < static_cast<int>(configPaths_.size());
+        if (hasRefreshedSelection)
+        {
+            if (configDirty_)
+            {
+                pendingConfigLoadIndex_ = selectedConfigIndex_;
+                const ImVec2 mousePos = ImGui::GetMousePos();
+                pendingConfigLoadPopupX_ = mousePos.x;
+                pendingConfigLoadPopupY_ = mousePos.y;
+                openLoadConfirm = true;
+            }
+            else
+            {
+                LoadConfigAtIndex(renderer, ocean, selectedConfigIndex_);
+            }
+        }
+    }
+    if (openLoadConfirm)
+    {
+        ImGui::OpenPopup("Load Ocean Config?###OceanConfigLoadConfirm");
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!hasSelection);
