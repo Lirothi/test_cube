@@ -348,6 +348,39 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Done-when:** Pass cost within an agreed GPU budget at target resolution; documented.
 - **Verify:** GPU timing via `GPU_SCOPE`/PIX; record before/after.
 
+- **STATUS — DONE (2026-06-25).** Measured (Release, default RT, this machine, RTX-class GPU) via
+  the `GPU_SCOPE` GPU-timestamp profiler, before/after:
+
+  | Pass (GPU ms) | Before | After |
+  |---|---|---|
+  | Pass_RTReflections | ~0.059 | ~0.055 |
+  | Pass_RTDenoise (inert pass-through) | ~0.040 | **removed** |
+  | Pass_Reflection.Blur | ~0.030 | ~0.037 |
+  | **Reflection chain** | **~0.129** | **~0.092** |
+  | GPU.Frame | ~1.37 | ~1.36 |
+
+  **What was done:**
+  1. **Resolution (the primary lever) was already in place.** Reflections run at
+     `reflectionTextureScale_` (default **0.5 = half render-res**), user-tunable 0.25–1.0
+     (DeveloperWindow "Reflection resolution"). `Pass_RTReflections` dispatches at
+     `GetReflectionTextureWidth/Height` and writes the reflection-res target, so the doc's
+     "half-res tracing + upscale (reuse SSR plumbing)" goal needed **no code** — it's the
+     existing reflection-target plumbing. Documented; not hard-coded lower (quality).
+  2. **Removed the inert temporal-denoise pass.** Once glossy was parked (S11), `Pass_RTDenoise`
+     was an `alpha=1` pass-through doing a full reflection-res copy + reading prev-history/velocity
+     + writing a history texture — ~0.040 ms/frame + 2 reflection-res history textures of VRAM, for
+     nothing. `Pass_RTReflections` now writes the **main reflection target** directly; the RT group
+     is `RTReflections → Blur → Compose`. History (`ReflectionHistory`) no longer allocated.
+     `Pass_RTDenoise` / `rt_reflection_denoise_cs.hlsl` / `ReflectionHistory` kept dormant (a future
+     glossy path uses DLSS-RR, S14, not the hand-rolled denoiser). Zero visual change; GPU-clean.
+  - **Ray-budget levers NOT taken (deliberate):** gloss-based ray-skip and checkerboard tracing.
+    At half-res the pass is already ~0.055 ms (well within budget) and the demo's main reflective
+    surface (floor) is glossy, so gloss-skip would save little while risking a visible threshold
+    seam — and the user is quality-sensitive. They remain available if a heavier scene needs them.
+  - **Verified:** offline dxc; Debug build + in-app default-RT under GPU-based validation +
+    break-on-ERROR (7 s) → exit 0, zero D3D12 messages; rt-smoke PASS tier=12; both stress
+    harnesses exit 0. **Uncommitted** (`sources/app/scene/SceneRenderer.cpp`).
+
 ---
 
 ### S13 — Robustness, exclusions, VRAM

@@ -253,18 +253,10 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         bindless_.Init(renderer->GetDevice());
         asManagerInited_ = true;
     }
-    // S11 temporal-accumulation history (RT reflections only). (Re)allocate to the
-    // current reflection resolution; register both textures with the state tracker on a
-    // (re)alloc so the denoise pass can transition them.
-    if (rtReflect)
-    {
-        if (reflectionHistory_.EnsureSize(renderer->GetDevice(), renderer->GetReflectionTextureWidth(),
-                                          renderer->GetReflectionTextureHeight(), renderer->GetReflectionFormat()))
-        {
-            renderer->SetResourceState(reflectionHistory_.Curr(0), D3D12_RESOURCE_STATE_COMMON);
-            renderer->SetResourceState(reflectionHistory_.Prev(0), D3D12_RESOURCE_STATE_COMMON);
-        }
-    }
+    // S11 temporal-accumulation history is retired (S12): the hand-rolled denoise pass
+    // it fed was an inert pass-through once glossy was parked, so it was removed and these
+    // history textures are no longer allocated. The infra (ReflectionHistory / Pass_RTDenoise
+    // / rt_reflection_denoise_cs.hlsl) is kept dormant; a future glossy path uses DLSS-RR (S14).
 
     renderer->BeginSubmitTimeline();
 
@@ -411,7 +403,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // instead of the screen-space source (mt-dep on Main_BuildAS; its TLAS SRV
     // bypasses the state tracker); Off just clears reflection so compose shows
     // skybox specular only.
-    const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1 && reflectionHistory_.Ready();
+    const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -420,30 +412,18 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
     if (useRtReflections)
     {
-        // RT (S7/S10): write the raw reflection to the scratch target, then
-        // temporally accumulate (S11) into reflection + the current history texture.
-        const uint64_t parity = renderer->GetTotalFrameNumber();
-        ID3D12Resource* histPrev = reflectionHistory_.Prev(parity);
-        ID3D12Resource* histCurr = reflectionHistory_.Curr(parity);
-        size_t pRefl = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS },
+        // RT (S7/S10): trace one sharp reflection ray per surface and shade the hit;
+        // write the premultiplied reflection straight into the main reflection target
+        // (S12: the old temporal-denoise pass was an inert pass-through once glossy was
+        // parked, so it was removed -- blur + compose consume `reflection` directly).
+        pReflectionSource = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS },
             { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+              { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassRTReflections);
                 Pass_RTReflections(renderer, ctx, *frame_->camera);
-            });
-        pReflectionSource = rg.AddPass(RenderPass::Main_RTDenoise, { pRefl },
-            { { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { histPrev, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { histCurr, D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
-              { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
-            [this, renderer](RenderGraphPassContext ctx) {
-                CPU_SCOPE(ProfilerScopes::kPassRTDenoise);
-                Pass_RTDenoise(renderer, ctx);
             });
     }
     else if (reflectionsOff)
@@ -1413,14 +1393,15 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
 
         // Per-frame scene descriptors into the bindless heap (geometry VB/IB +
         // geometry-info are persistent, populated in Pass_BuildAS). Scene slots
-        // 0-7 are this pass's; the denoise pass uses 8-12 and the debug pass 13-16
-        // (distinct, so passes in the same frame never alias heap slots). Raw RT
-        // reflection is written to scratch; denoise produces the main reflection target.
+        // 0-7 are this pass's; the debug pass uses 13-16 (distinct, so passes in
+        // the same frame never alias heap slots). The RT reflection is written
+        // straight into the main reflection target -- the denoise pass was removed
+        // in S12 (it was an inert pass-through once glossy was parked).
         bindless_.WriteSceneDescriptor(frameIndex, 0, tlasSrv);     // TLAS
         bindless_.WriteSceneDescriptor(frameIndex, 1, D.lightSRV);  // lit HDR (fast path)
         bindless_.WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]);  // GB1 (normal)
         bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
-        bindless_.WriteSceneDescriptor(frameIndex, 4, D.reflectionScratchUAV);
+        bindless_.WriteSceneDescriptor(frameIndex, 4, D.reflectionUAV); // reflection out -> blur/compose
         bindless_.WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube (env reflection)
 
         // Spot/point light buffers (filled earlier this frame by Pass_SpotLights /
@@ -1480,10 +1461,10 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         {
             t.cl->Dispatch(gx, gy, 1);
         }
-        renderer->UAVBarrier(t.cl, D.reflectionScratch.Get()); // raw reflection -> consumed by the denoise pass
+        renderer->UAVBarrier(t.cl, D.reflection.Get()); // reflection -> consumed by the blur pass
 
         // Restore the frame heap: this pass shares its command list with the
-        // grouped denoise + blur + compose passes, which bind into the per-frame heap.
+        // grouped blur + compose passes, which bind into the per-frame heap.
         renderer->BindDescriptorHeaps(t.cl);
     }
     ctx.EndCL(t);
