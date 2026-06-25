@@ -52,6 +52,7 @@ const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLi
 const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
 constexpr uint32_t kGpuTraceThreadIndex = 0u;
 constexpr const char* kGpuTraceThreadName = "GPU Queue";
+constexpr UINT kGpuReadbackFrameSlots = 8u;
 // Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
 // manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
 // which includes Renderer::BeginFrame's fence wait.
@@ -620,10 +621,20 @@ void Profiler::EndFrame() {
     // 2) prepare gpu samples for next frame
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        gpuResolved_ = std::move(gpuPending_);
+        if (!gpuPending_.empty() && nextGpuQuery_ > 0 && gpuQueue_ && gpuDrainFence_) {
+            const UINT64 fenceValue = gpuDrainFenceValue_++;
+            if (SUCCEEDED(gpuQueue_->Signal(gpuDrainFence_.Get(), fenceValue))) {
+                GpuResolvedBatch batch;
+                batch.ranges = std::move(gpuPending_);
+                batch.queryCount = nextGpuQuery_;
+                batch.readbackSlot = gpuRecordingReadbackSlot_;
+                batch.fenceValue = fenceValue;
+                gpuResolvedBatches_.push_back(std::move(batch));
+            }
+        }
         gpuPending_.clear();
-        lastGpuQueryCount_ = nextGpuQuery_;
         nextGpuQuery_ = 0;
+        gpuRecordingReadbackSlot_ = (gpuRecordingReadbackSlot_ + 1u) % kGpuReadbackFrameSlots;
     }
 
     if (finishTraceNow && WaitForGpuProfilerIdle()) {
@@ -951,66 +962,91 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
     uint64_t traceStartUs) {
     if (!gpuInitialized_) { return; }
 
-    std::vector<GpuSampleRange> resolved;
-    UINT queryCount = 0;
+    std::vector<GpuResolvedBatch> readyBatches;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (gpuResolved_.empty()) { return; }
-        resolved = std::move(gpuResolved_);
-        gpuResolved_.clear();
-        queryCount = lastGpuQueryCount_;
+        if (gpuResolvedBatches_.empty() || !gpuDrainFence_) { return; }
+
+        const UINT64 completedFence = gpuDrainFence_->GetCompletedValue();
+        auto writeIt = gpuResolvedBatches_.begin();
+        for (auto readIt = gpuResolvedBatches_.begin(); readIt != gpuResolvedBatches_.end(); ++readIt) {
+            if (readIt->fenceValue != 0 && completedFence >= readIt->fenceValue) {
+                readyBatches.push_back(std::move(*readIt));
+            }
+            else {
+                if (writeIt != readIt) {
+                    *writeIt = std::move(*readIt);
+                }
+                ++writeIt;
+            }
+        }
+        gpuResolvedBatches_.erase(writeIt, gpuResolvedBatches_.end());
+    }
+
+    if (readyBatches.empty()) {
+        return;
     }
 
     GpuTraceCalibration calibration{};
     const bool collectTrace = (traceOut != nullptr && traceStartUs != 0 && CaptureGpuTraceCalibration(calibration));
 
-    UINT64* data = nullptr;
-    D3D12_RANGE range{ 0, (SIZE_T)queryCount * sizeof(UINT64) };
-    if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
-        for (const auto& s : resolved) {
-            if (!s.completed || s.start >= queryCount || s.end >= queryCount) {
-                continue;
-            }
+    for (const GpuResolvedBatch& batch : readyBatches) {
+        if (batch.queryCount == 0 || batch.readbackSlot >= kGpuReadbackFrameSlots) {
+            continue;
+        }
 
-            const UINT64 a = data[s.start];
-            const UINT64 b = data[s.end];
-            if (b <= a || gpuFreq_ == 0) {
-                continue;
-            }
-
-            const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_);
-            if (sampleOut) {
-                sampleOut->push_back(ScopeSample{ s.key, ms });
-            }
-            else {
-                PushGpuSample(s.key, ms);
-            }
-
-            if (collectTrace) {
-                const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration);
-                const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration);
-                if (endCpuUs <= traceStartUs || endCpuUs <= startCpuUs) {
+        const SIZE_T slotBase = static_cast<SIZE_T>(batch.readbackSlot) *
+            static_cast<SIZE_T>(maxGpuQueries_) * sizeof(UINT64);
+        UINT64* data = nullptr;
+        D3D12_RANGE range{ slotBase, slotBase + static_cast<SIZE_T>(batch.queryCount) * sizeof(UINT64) };
+        if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
+            UINT64* slotData = reinterpret_cast<UINT64*>(reinterpret_cast<uint8_t*>(data) + slotBase);
+            for (const auto& s : batch.ranges) {
+                if (!s.completed || s.start >= batch.queryCount || s.end >= batch.queryCount) {
                     continue;
                 }
 
-                const uint64_t clippedStartUs = std::max(startCpuUs, traceStartUs);
-                TraceEvent ev;
-                ev.key = s.key;
-                if (s.key.name == kGpuFrameKey.name) {
-                    std::wstring frameName = L"GPU.Frame ";
-                    frameName += std::to_wstring(s.frameNo);
-                    ev.key = RegisterTraceDynamic(std::move(frameName));
-                    ev.frameNumber = s.frameNo;
-                    ev.hasFrameNumber = true;
+                const UINT64 a = slotData[s.start];
+                const UINT64 b = slotData[s.end];
+                if (b <= a || gpuFreq_ == 0) {
+                    continue;
                 }
-                ev.tsUs = clippedStartUs - traceStartUs;
-                ev.durUs = endCpuUs - clippedStartUs;
-                ev.threadIndex = kGpuTraceThreadIndex;
-                ev.category = TraceEvent::Category::Gpu;
-                traceOut->push_back(std::move(ev));
+
+                const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_);
+                if (sampleOut) {
+                    sampleOut->push_back(ScopeSample{ s.key, ms });
+                }
+                else {
+                    PushGpuSample(s.key, ms);
+                }
+
+                if (collectTrace) {
+                    const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration);
+                    const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration);
+                    if (endCpuUs <= traceStartUs || endCpuUs <= startCpuUs) {
+                        continue;
+                    }
+
+                    const uint64_t clippedStartUs = std::max(startCpuUs, traceStartUs);
+                    TraceEvent ev;
+                    ev.key = s.key;
+                    if (s.key.name == kGpuFrameKey.name) {
+                        std::wstring frameName = L"GPU.Frame ";
+                        frameName += std::to_wstring(s.frameNo);
+                        ev.key = RegisterTraceDynamic(std::move(frameName));
+                        ev.frameNumber = s.frameNo;
+                        ev.hasFrameNumber = true;
+                    }
+                    ev.tsUs = clippedStartUs - traceStartUs;
+                    ev.durUs = endCpuUs - clippedStartUs;
+                    ev.threadIndex = kGpuTraceThreadIndex;
+                    ev.category = TraceEvent::Category::Gpu;
+                    traceOut->push_back(std::move(ev));
+                }
             }
+            D3D12_RANGE writtenRange{ 0, 0 };
+            gpuReadback_->Unmap(0, &writtenRange);
         }
-        gpuReadback_->Unmap(0, nullptr);
     }
 }
 
@@ -1044,7 +1080,7 @@ void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT max
     qh.NodeMask = 0;
     device->CreateQueryHeap(&qh, IID_PPV_ARGS(&gpuQueryHeap_));
 
-    UINT64 bufSize = (UINT64)maxQueries * sizeof(UINT64);
+    UINT64 bufSize = (UINT64)maxQueries * sizeof(UINT64) * kGpuReadbackFrameSlots;
     D3D12_HEAP_PROPERTIES hp{};
     hp.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC rd{};
@@ -1159,8 +1195,11 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
         range.completed = true;
     }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
+    const UINT64 readbackOffset =
+        (static_cast<UINT64>(gpuRecordingReadbackSlot_) * static_cast<UINT64>(maxGpuQueries_) +
+            static_cast<UINT64>(start)) * sizeof(UINT64);
     cl->ResolveQueryData(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-        start, 2, gpuReadback_.Get(), start * sizeof(UINT64));
+        start, 2, gpuReadback_.Get(), readbackOffset);
 #else
     (void)cl; (void)idx;
 #endif
@@ -1175,7 +1214,7 @@ void Profiler::ShutdownGpu() {
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
         gpuPending_.clear();
-        gpuResolved_.clear();
+        gpuResolvedBatches_.clear();
     }
 
     gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
@@ -1194,7 +1233,7 @@ void Profiler::ShutdownGpu() {
     gpuDrainFenceValue_ = 1;
     maxGpuQueries_ = 0;
     nextGpuQuery_ = 0;
-    lastGpuQueryCount_ = 0;
+    gpuRecordingReadbackSlot_ = 0;
     gpuInitialized_ = false;
 #endif
 }

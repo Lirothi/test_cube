@@ -413,10 +413,16 @@ private:
     UINT64 gpuDrainFenceValue_ = 1;
     UINT maxGpuQueries_ = 0;
     UINT nextGpuQuery_ = 0;
-    UINT lastGpuQueryCount_ = 0;
+    UINT gpuRecordingReadbackSlot_ = 0;
     struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; uint64_t frameNo; };
     std::vector<GpuSampleRange> gpuPending_;
-    std::vector<GpuSampleRange> gpuResolved_;
+    struct GpuResolvedBatch {
+        std::vector<GpuSampleRange> ranges;
+        UINT queryCount = 0;
+        UINT readbackSlot = 0;
+        UINT64 fenceValue = 0;
+    };
+    std::vector<GpuResolvedBatch> gpuResolvedBatches_;
     bool gpuInitialized_ = false;
     std::atomic<size_t> gpuFrameSampleIdx_{ SIZE_MAX };
 #endif
