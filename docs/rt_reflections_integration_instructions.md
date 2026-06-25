@@ -65,6 +65,8 @@ S2 DXC cs_6_5/RayQuery ───┘                                             
 S1 ─> S9 bindless geo/material table ─────────────────────────────────────────> S10 hit shading (Tier2)│
                                                                                        (needs S7,S9)    ├─> S12 perf (half-res/checkerboard)
 S5,S7 ─> S13 robustness/exclusions/VRAM                                                                 ┘
+S4,S5,S9 ─> S14 GPU-instanced models in TLAS (instanced models reflect)
+S9,S10  ─> S15 RT reflections for transparent/glass (glass reflects the dynamic world)
 ```
 
 **Parallelizable at start:** `S1`, `S2`, and `S9` (design). After `S1`: `S3` and `S9`
@@ -75,8 +77,10 @@ implementation. `S4` can be written against `S3`'s contract before `S3` lands.
 - **M-Smoke** = S1 + S2 (+ optional S0 harness): RT path detected, AS builds validate headless.
 - **M1 (Tier-1, ship-able prototype):** S1–S8. Sharp RT reflections reusing SSR buffer+compose.
 - **M2 (Tier-2, production):** + S9–S13. Shaded off-screen hits, perf-tuned, hardened.
-- **M3 (glossy):** + S14. Clean roughness-driven glossy via DLSS Ray Reconstruction (the
-  hand-rolled S11(a) denoiser proved inadequate; DLSS-RR is the real fix).
+- **M3 (coverage — what reflects / what receives):** + S14 (GPU-instanced models reflect) +
+  S15 (transparent/glass get their own RT reflections). Prioritized ahead of glossy.
+- **M4 (glossy):** + S16. Clean roughness-driven glossy via DLSS Ray Reconstruction (the
+  hand-rolled S11(a) denoiser proved inadequate; DLSS-RR is the real fix). Independent of M3.
 
 ---
 
@@ -333,7 +337,7 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
   "dancing"/noise. The infra (history textures, `Main_RTDenoise` pass, `JitterReflection`/
   `frameSeed` in `rt_reflections_cs.hlsl`) is left in place but **inert** (glossy jitter disabled →
   sharp mirror ray; denoise `alpha=1` → pass-through), so RT reflections are clean+sharp. Clean
-  glossy is deferred to **S14 (DLSS Ray Reconstruction)** — option (b) done as a dedicated step.
+  glossy is deferred to **S16 (DLSS Ray Reconstruction)** — option (b) done as a dedicated step.
 
 ---
 
@@ -372,7 +376,7 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
      nothing. `Pass_RTReflections` now writes the **main reflection target** directly; the RT group
      is `RTReflections → Blur → Compose`. History (`ReflectionHistory`) no longer allocated.
      `Pass_RTDenoise` / `rt_reflection_denoise_cs.hlsl` / `ReflectionHistory` kept dormant (a future
-     glossy path uses DLSS-RR, S14, not the hand-rolled denoiser). Zero visual change; GPU-clean.
+     glossy path uses DLSS-RR, S16, not the hand-rolled denoiser). Zero visual change; GPU-clean.
   - **Ray-budget levers NOT taken (deliberate):** gloss-based ray-skip and checkerboard tracing.
     At half-res the pass is already ~0.055 ms (well within budget) and the demo's main reflective
     surface (floor) is glossy, so gloss-skip would save little while risking a visible threshold
@@ -387,15 +391,104 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Depends:** S5, S7.
 - **Goal:** Production hardening.
 - **Touch:** AS manager, scene integration, docs.
-- **Implement:** Exclude/define behavior for ocean + transparent/glass (kept on existing paths);
+- **Implement:** Exclude/define behavior for ocean (displaced — kept on its planar path);
   handle scene add/remove (BLAS cache invalidation, TLAS instance churn); VRAM budgeting +
   graceful disable if AS allocation fails; device-removed handling.
+  - **Note:** the two former "exclusions" are now their own features — **GPU-instanced models →
+    S14** (into the TLAS) and **transparent/glass → S15** (their own RT reflections). S13 only keeps
+    ocean excluded.
 - **Done-when:** Stable over long sessions and scene changes; clean disable under memory pressure.
 - **Verify:** Soak test; force AS alloc failure path; confirm fallback to SSR.
 
 ---
 
-### S14 — Glossy reflections via DLSS Ray Reconstruction *(the real denoiser; replaces S11(a))*
+### S14 — GPU-instanced geometry in the TLAS *(instanced models reflect)*
+- **Depends:** S4 (TLAS builder), S5 (AS build pass), S9 (bindless geometry table).
+- **Why this step exists:** `GpuInstancedModels` (e.g. the cloud field) is currently excluded from
+  the TLAS — `GpuInstancedModels::GetRtInstance` returns `false` — because its per-instance world
+  matrices are GPU-computed (`instance_anim.hlsl` writes the DEFAULT+UAV `InstanceBuffer`; no CPU
+  copy). So instanced models do **not** appear in RT reflections. This step brings them in.
+- **Goal:** Instanced models appear, correctly positioned, in RT reflections (and any future RT pass).
+- **Touch:** `GpuInstancedModels.{h,cpp}` (instance enumeration), `rt::AccelerationStructureManager`
+  (TLAS build), `SceneRenderer::Pass_BuildAS`, `rt::BindlessTable` (register the shared instanced mesh).
+- **Implement:** the crux is sourcing per-instance transforms for the TLAS instance descs. Two paths:
+  - **MVP — CPU reconstruction (cheapest; viable today).** A CPU mirror already exists:
+    `GpuInstancedModels::BuildInstanceTransform(i)` rebuilds each world matrix from the CPU-mirrored
+    rotation (`instanceRotations_`, updated in `Tick`) + the deterministic grid placement — the same
+    math `instance_anim.hlsl` runs on the GPU. Add a plural enumerator (e.g.
+    `virtual size_t GetRtInstances(std::vector<RtInstanceDesc>&)`, default = the single
+    `GetRtInstance`) and have `GpuInstancedModels` emit one `RtInstanceDesc` per instance: shared
+    BLAS for the instanced mesh (built once), per-instance `world = BuildInstanceTransform(i)`,
+    **same bindless geom/`InstanceID`** for all (register the mesh+material once). Reuses
+    `BuildTlas(span<InstanceEntry>)` unchanged. Use a **single LOD** (e.g. LOD0) for all reflected
+    instances — reflections don't need per-instance LOD. ~100 instances ⇒ ~100 extra instance
+    descs/frame, negligible. **Risk:** the CPU reconstruction must stay bit-aligned with the GPU
+    animation; it does today (deterministic, mirrored) but is fragile if instancing later becomes
+    GPU-culled/dynamic.
+  - **Production — GPU-built instance descs.** A compute pass after `instance_anim.hlsl` reads
+    `InstanceBuffer.world` and writes `D3D12_RAYTRACING_INSTANCE_DESC[]` into a GPU buffer
+    (`InstanceID` = bindless geom index, `Transform` = transpose of the upper 3×4, `Acceleration
+    Structure` = the instanced mesh's BLAS address); the TLAS build consumes GPU-generated descs
+    (DXR takes `InstanceDescs` from a GPU VA natively). Merge with the CPU-uploaded static descs
+    into one contiguous instance-desc buffer (or build all descs on GPU). Avoids CPU/GPU divergence
+    and supports future GPU culling. Adopt this once instancing stops being deterministic-on-CPU.
+  - Start with the MVP; evolve to GPU-built descs if/when needed.
+- **Done-when:** instanced models visibly reflect in RT reflections, matching their on-screen
+  positions (no offset/lag vs the GPU-animated instances); no perf cliff at the instance count;
+  RT-off path byte-identical.
+- **Verify:** dxc/build; in-app GPU-based validation clean; visually confirm instanced models in the
+  floor reflection; A/B that the reflected instance positions track the visible ones under animation.
+
+---
+
+### S15 — RT reflections for transparent / glass surfaces
+- **Depends:** S9 (bindless geometry), S10 (hit shading), spot/point-in-reflections (`rt_lights.hlsli`).
+- **Why this step exists:** glass renders in a **forward** pass (`Main_Transparent`, after Compose,
+  before tonemap) and its reflection today is **skybox-only** — `glass.hlsl` does
+  `SkyboxTex.SampleLevel(EnvSampler, reflect(-V,N), rough*5)` × `reflectionStrength` × Fresnel. So
+  glass reflects the static environment but **not** the RT-lit dynamic world. This step gives glass
+  its own RT reflections.
+- **Goal:** Glass reflects the RT-traced world (dynamic opaque + instanced geometry, lit like the
+  base pass), with skybox fallback on ray miss; refraction stays screen-space.
+- **Touch:** `glass.hlsl` (inline `RayQuery`), `TransparentStaticMesh::RecordGraphics` (bind the
+  persistent bindless heap + pass RT indices), the glass root signature
+  (`CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED`), `Main_Transparent` pass (depend on `Pass_BuildAS`), and a
+  new shared `rt_shade.hlsli` factored out of `rt_reflections_cs.hlsl`.
+- **Implement:**
+  - **Inline `RayQuery` in the glass pixel shader** (PS supports `RayQuery` at SM6.5+). At the glass
+    pixel: trace `reflect(-V,N)` vs the TLAS; on hit, shade exactly like `rt_reflections_cs`
+    (bindless geom + material + sun/spot/point + ambient + env + shadow rays); on miss, fall back to
+    the current skybox sample. Blend with Fresnel × `reflectionStrength` as today, just swapping the
+    reflection **source** from skybox-only to RT(+skybox-fallback).
+  - **Share the hit-shading code:** extract the geometry-fetch + hit-shading body of
+    `rt_reflections_cs.hlsl` into `shaders/rt_shade.hlsli` (alongside the existing `rt_geometry.hlsli`
+    / `rt_lights.hlsli`) so glass and the reflection CS use one implementation (consistent with the
+    include refactor already done).
+  - **Bindless in a graphics pass:** the transparent pass currently binds a normal descriptor table
+    via `StageSrvUavTable`. To let `glass.hlsl` use `ResourceDescriptorHeap[]`, bind the persistent
+    bindless heap during the transparent pass (bespoke, like `Pass_RTReflections`) and add the
+    directly-indexed root flag to the glass root sig; pass the bindless indices
+    (`tlasIndex`/`geomInfoIndex`/`skyboxIndex`/spot+point) via the glass CB. Restore the frame heap
+    after. The skybox cube is already bound (t3) for the miss fallback.
+  - **Ordering/state:** `Main_Transparent` must run after `Pass_BuildAS` (add the mtDep); the TLAS
+    SRV bypasses the state tracker (as elsewhere).
+  - **MVP scope:** glass stays **out** of the TLAS, so it reflects the opaque+instanced world but not
+    other glass. Glass-in-TLAS (alpha-aware, glass-reflects-glass) and **RT refraction** are
+    stretch goals — note, don't build.
+- **Interface contract:** `reflectionSource == RT` ⇒ glass uses RT reflections; SSR/Off or non-RT
+  HW ⇒ glass keeps skybox-only reflection (current behavior) by construction.
+- **Done-when:** dynamic RT-lit objects appear in glass reflections (e.g. the spinning teapot in the
+  glass cube), skybox where the ray misses; non-RT path unchanged.
+- **Verify:** dxc (ps + cs RayQuery); in-app GPU-based validation clean (bindless heap bound during a
+  **graphics** pass is the new risk); **confirm visually with the human** that glass shows the
+  dynamic world, not just sky.
+- **Risks:** binding the bindless heap mid-transparent-pass + root-flag on a graphics PSO; per-pixel
+  ray cost in a forward pass over many glass pixels (mitigate: trace only above a Fresnel/strength
+  threshold); glass excluded from TLAS ⇒ no glass-self-reflection (documented).
+
+---
+
+### S16 — Glossy reflections via DLSS Ray Reconstruction *(the real denoiser; replaces S11(a))*
 - **Depends:** S10 (Tier-2 hit shading), S11 (supersedes its hand-rolled option (a)).
 - **Why this step exists:** S11(a) — hand-rolled temporal accumulation over a single roughness-
   jittered ray — was implemented and is **visually inadequate**: 1 sample/pixel is too noisy for a

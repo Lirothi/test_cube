@@ -14,7 +14,7 @@
 // (rgb, coverage) into the reflection target; blur + compose unchanged.
 //
 // Glossy/rough blur is NOT done here: stochastic glossy needs a real denoiser
-// (DLSS Ray Reconstruction) — see plan S14. Reflections are sharp + clean.
+// (DLSS Ray Reconstruction) — see plan S16. Reflections are sharp + clean.
 #define RT_REFLECT_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \

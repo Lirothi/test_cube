@@ -93,10 +93,18 @@ public:
     };
 
     struct TraceEvent {
+        enum class Category : uint8_t {
+            Cpu,
+            Gpu,
+        };
+
         ScopeNameKey key{};
         uint64_t     tsUs = 0;
         uint64_t     durUs = 0;
         uint32_t     threadIndex = 0;
+        Category     category = Category::Cpu;
+        uint64_t     frameNumber = 0;
+        bool         hasFrameNumber = false;
     };
 
     struct TraceNameEntry {
@@ -242,6 +250,16 @@ private:
     void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end);
 #if PROF_GPU_ENABLED
     void PushGpuSample(const ScopeNameKey& key, double ms);
+    struct GpuTraceCalibration {
+        UINT64 gpuTimestamp = 0;
+        UINT64 cpuQpc = 0;
+    };
+    bool CaptureGpuTraceCalibration(GpuTraceCalibration& calibration) const;
+    uint64_t GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration) const;
+    void CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
+        std::vector<TraceEvent>* traceOut,
+        uint64_t traceStartUs);
+    bool WaitForGpuProfilerIdle();
     size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key);
     void EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx);
 #endif
@@ -385,12 +403,18 @@ private:
     std::mutex gpuMtx_;
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_;
     Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_;
+    Microsoft::WRL::ComPtr<ID3D12Fence> gpuDrainFence_;
     ID3D12CommandQueue* gpuQueue_ = nullptr;
+    HANDLE gpuDrainFenceEvent_ = nullptr;
     UINT64 gpuFreq_ = 0;
+    UINT64 gpuTraceQpcFreq_ = 0;
+    UINT64 gpuTraceQpcOrigin_ = 0;
+    uint64_t gpuTraceCpuOriginUs_ = 0;
+    UINT64 gpuDrainFenceValue_ = 1;
     UINT maxGpuQueries_ = 0;
     UINT nextGpuQuery_ = 0;
     UINT lastGpuQueryCount_ = 0;
-    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; };
+    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; uint64_t frameNo; };
     std::vector<GpuSampleRange> gpuPending_;
     std::vector<GpuSampleRange> gpuResolved_;
     bool gpuInitialized_ = false;

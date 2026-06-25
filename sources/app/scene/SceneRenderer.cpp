@@ -256,7 +256,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // S11 temporal-accumulation history is retired (S12): the hand-rolled denoise pass
     // it fed was an inert pass-through once glossy was parked, so it was removed and these
     // history textures are no longer allocated. The infra (ReflectionHistory / Pass_RTDenoise
-    // / rt_reflection_denoise_cs.hlsl) is kept dormant; a future glossy path uses DLSS-RR (S14).
+    // / rt_reflection_denoise_cs.hlsl) is kept dormant; a future glossy path uses DLSS-RR (S16).
 
     renderer->BeginSubmitTimeline();
 

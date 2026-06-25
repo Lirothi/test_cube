@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string_view>
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <limits>
 #include "third_party/robin_hood.h"
@@ -49,6 +50,8 @@ std::string EscapeJson(const std::string& input) {
 const Profiler::ScopeNameKey kTraceHandlingKey = Profiler::RegisterTraceLiteral(L"TraceHandling");
 const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLiteral(L"Profiler::EmitOverlay");
 const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
+constexpr uint32_t kGpuTraceThreadIndex = 0u;
+constexpr const char* kGpuTraceThreadName = "GPU Queue";
 // Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
 // manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
 // which includes Renderer::BeginFrame's fence wait.
@@ -216,6 +219,13 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
         L"%-35s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
         name->c_str(), row.avgMs, row.maxMs, perUse, row.usages);
     row.formatted.assign(buf);
+}
+
+uint64_t TraceOutputThreadIndex(const Profiler::TraceEvent& ev) {
+    if (ev.category == Profiler::TraceEvent::Category::Gpu) {
+        return kGpuTraceThreadIndex;
+    }
+    return static_cast<uint64_t>(ev.threadIndex) + 1u;
 }
 
 } // namespace
@@ -517,6 +527,8 @@ void Profiler::EndFrame() {
     traceDump.events.clear();
     traceDump.dynamicKeys.clear();
     bool haveTraceDump = false;
+    bool finishTraceNow = false;
+    uint64_t finishedTraceStartUs = 0;
     const auto frameEnd = CpuClock::now();
     frameSamples_.clear();
 #if PROF_GPU_ENABLED
@@ -581,12 +593,11 @@ void Profiler::EndFrame() {
             }
 
             if (finishTrace) {
+                finishTraceNow = true;
+                finishedTraceStartUs = traceStartUs_;
                 traceCapturing_ = false;
                 traceStartUs_ = 0;
                 traceStartSet_ = false;
-                traceDump.events = std::move(traceEvents_);
-                traceDump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
-                haveTraceDump = true;
                 traceRequestFrameCount_ = 0;
             }
         }
@@ -614,7 +625,25 @@ void Profiler::EndFrame() {
         lastGpuQueryCount_ = nextGpuQuery_;
         nextGpuQuery_ = 0;
     }
+
+    if (finishTraceNow && WaitForGpuProfilerIdle()) {
+        std::vector<TraceEvent> finalGpuTraceEvents;
+        CollectGpuResolvedSamples(&gpuSamples, &finalGpuTraceEvents, finishedTraceStartUs);
+        if (!finalGpuTraceEvents.empty()) {
+            std::lock_guard<std::mutex> traceLock(traceMtx_);
+            for (auto& ev : finalGpuTraceEvents) {
+                traceEvents_.push_back(std::move(ev));
+            }
+        }
+    }
 #endif
+
+    if (finishTraceNow) {
+        std::lock_guard<std::mutex> traceLock(traceMtx_);
+        traceDump.events = std::move(traceEvents_);
+        traceDump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
+        haveTraceDump = true;
+    }
 
     auto overlayJob = [this, haveTraceDump]() mutable {
         const auto t0 = CoolClock::now();
@@ -885,6 +914,124 @@ void Profiler::PushGpuSample(const ScopeNameKey& key, double ms) {
     }
 }
 
+bool Profiler::CaptureGpuTraceCalibration(GpuTraceCalibration& calibration) const {
+    if (!gpuInitialized_ || !gpuQueue_ || gpuFreq_ == 0 || gpuTraceQpcFreq_ == 0) {
+        return false;
+    }
+    UINT64 gpuTimestamp = 0;
+    UINT64 cpuQpc = 0;
+    if (FAILED(gpuQueue_->GetClockCalibration(&gpuTimestamp, &cpuQpc))) {
+        return false;
+    }
+    calibration.gpuTimestamp = gpuTimestamp;
+    calibration.cpuQpc = cpuQpc;
+    return true;
+}
+
+uint64_t Profiler::GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration) const {
+    if (gpuFreq_ == 0 || gpuTraceQpcFreq_ == 0) {
+        return 0;
+    }
+
+    const double gpuDelta = static_cast<double>(gpuTimestamp) - static_cast<double>(calibration.gpuTimestamp);
+    const double cpuQpc =
+        static_cast<double>(calibration.cpuQpc) +
+        gpuDelta * static_cast<double>(gpuTraceQpcFreq_) / static_cast<double>(gpuFreq_);
+    const double cpuUs =
+        static_cast<double>(gpuTraceCpuOriginUs_) +
+        (cpuQpc - static_cast<double>(gpuTraceQpcOrigin_)) * 1000000.0 / static_cast<double>(gpuTraceQpcFreq_);
+    if (cpuUs <= 0.0) {
+        return 0;
+    }
+    return static_cast<uint64_t>(std::llround(cpuUs));
+}
+
+void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
+    std::vector<TraceEvent>* traceOut,
+    uint64_t traceStartUs) {
+    if (!gpuInitialized_) { return; }
+
+    std::vector<GpuSampleRange> resolved;
+    UINT queryCount = 0;
+    {
+        std::lock_guard<std::mutex> lk(gpuMtx_);
+        if (gpuResolved_.empty()) { return; }
+        resolved = std::move(gpuResolved_);
+        gpuResolved_.clear();
+        queryCount = lastGpuQueryCount_;
+    }
+
+    GpuTraceCalibration calibration{};
+    const bool collectTrace = (traceOut != nullptr && traceStartUs != 0 && CaptureGpuTraceCalibration(calibration));
+
+    UINT64* data = nullptr;
+    D3D12_RANGE range{ 0, (SIZE_T)queryCount * sizeof(UINT64) };
+    if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
+        for (const auto& s : resolved) {
+            if (!s.completed || s.start >= queryCount || s.end >= queryCount) {
+                continue;
+            }
+
+            const UINT64 a = data[s.start];
+            const UINT64 b = data[s.end];
+            if (b <= a || gpuFreq_ == 0) {
+                continue;
+            }
+
+            const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_);
+            if (sampleOut) {
+                sampleOut->push_back(ScopeSample{ s.key, ms });
+            }
+            else {
+                PushGpuSample(s.key, ms);
+            }
+
+            if (collectTrace) {
+                const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration);
+                const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration);
+                if (endCpuUs <= traceStartUs || endCpuUs <= startCpuUs) {
+                    continue;
+                }
+
+                const uint64_t clippedStartUs = std::max(startCpuUs, traceStartUs);
+                TraceEvent ev;
+                ev.key = s.key;
+                if (s.key.name == kGpuFrameKey.name) {
+                    std::wstring frameName = L"GPU.Frame ";
+                    frameName += std::to_wstring(s.frameNo);
+                    ev.key = RegisterTraceDynamic(std::move(frameName));
+                    ev.frameNumber = s.frameNo;
+                    ev.hasFrameNumber = true;
+                }
+                ev.tsUs = clippedStartUs - traceStartUs;
+                ev.durUs = endCpuUs - clippedStartUs;
+                ev.threadIndex = kGpuTraceThreadIndex;
+                ev.category = TraceEvent::Category::Gpu;
+                traceOut->push_back(std::move(ev));
+            }
+        }
+        gpuReadback_->Unmap(0, nullptr);
+    }
+}
+
+bool Profiler::WaitForGpuProfilerIdle() {
+    if (!gpuInitialized_ || !gpuQueue_ || !gpuDrainFence_ || !gpuDrainFenceEvent_) {
+        return false;
+    }
+
+    const UINT64 value = gpuDrainFenceValue_++;
+    if (FAILED(gpuQueue_->Signal(gpuDrainFence_.Get(), value))) {
+        return false;
+    }
+    if (gpuDrainFence_->GetCompletedValue() < value) {
+        if (FAILED(gpuDrainFence_->SetEventOnCompletion(value, gpuDrainFenceEvent_))) {
+            return false;
+        }
+        WaitForSingleObject(gpuDrainFenceEvent_, INFINITE);
+    }
+    return true;
+}
+
 void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries) {
 #if PROF_ENABLED
     if (!device || !queue) { return; }
@@ -912,6 +1059,15 @@ void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT max
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_));
 
     queue->GetTimestampFrequency(&gpuFreq_);
+    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_));
+    gpuDrainFenceEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    LARGE_INTEGER qpcFreq{};
+    LARGE_INTEGER qpcNow{};
+    if (QueryPerformanceFrequency(&qpcFreq) && QueryPerformanceCounter(&qpcNow)) {
+        gpuTraceQpcFreq_ = static_cast<UINT64>(qpcFreq.QuadPart);
+        gpuTraceQpcOrigin_ = static_cast<UINT64>(qpcNow.QuadPart);
+        gpuTraceCpuOriginUs_ = ToMicroseconds(CpuClock::now());
+    }
     gpuInitialized_ = true;
 #else
     (void)device; (void)queue; (void)maxQueries;
@@ -922,28 +1078,21 @@ void Profiler::CollectGpuResults() {
 #if PROF_ENABLED
     if (!gpuInitialized_) { return; }
 
-    std::vector<GpuSampleRange> resolved;
-    UINT queryCount = 0;
+    bool collectTrace = false;
+    uint64_t traceStartUs = 0;
     {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (gpuResolved_.empty()) { return; }
-        resolved = std::move(gpuResolved_);
-        gpuResolved_.clear();
-        queryCount = lastGpuQueryCount_;
+        std::lock_guard<std::mutex> lk(mtx_);
+        collectTrace = traceCapturing_ && traceStartSet_;
+        traceStartUs = traceStartUs_;
     }
 
-    UINT64* data = nullptr;
-    D3D12_RANGE range{ 0, (SIZE_T)queryCount * sizeof(UINT64) };
-    if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
-        for (const auto& s : resolved) {
-            if (s.completed && s.start < queryCount && s.end < queryCount) {
-                UINT64 a = data[s.start];
-                UINT64 b = data[s.end];
-                double ms = (double)(b - a) * 1000.0 / (double)gpuFreq_;
-                PushGpuSample(s.key, ms);
-            }
+    std::vector<TraceEvent> gpuTraceEvents;
+    CollectGpuResolvedSamples(nullptr, collectTrace ? &gpuTraceEvents : nullptr, traceStartUs);
+    if (!gpuTraceEvents.empty()) {
+        std::lock_guard<std::mutex> traceLock(traceMtx_);
+        for (auto& ev : gpuTraceEvents) {
+            traceEvents_.push_back(std::move(ev));
         }
-        gpuReadback_->Unmap(0, nullptr);
     }
 #endif
 }
@@ -986,7 +1135,7 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKe
         end = start + 1;
         nextGpuQuery_ += 2;
         idx = gpuPending_.size();
-        gpuPending_.push_back({ key, start, end, false });
+        gpuPending_.push_back({ key, start, end, false, frameNo_ });
     }
     cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
     return idx;
@@ -1032,8 +1181,17 @@ void Profiler::ShutdownGpu() {
     gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
     gpuQueryHeap_.Reset();
     gpuReadback_.Reset();
+    gpuDrainFence_.Reset();
+    if (gpuDrainFenceEvent_) {
+        CloseHandle(gpuDrainFenceEvent_);
+        gpuDrainFenceEvent_ = nullptr;
+    }
     gpuQueue_ = nullptr;
     gpuFreq_ = 0;
+    gpuTraceQpcFreq_ = 0;
+    gpuTraceQpcOrigin_ = 0;
+    gpuTraceCpuOriginUs_ = 0;
+    gpuDrainFenceValue_ = 1;
     maxGpuQueries_ = 0;
     nextGpuQuery_ = 0;
     lastGpuQueryCount_ = 0;
@@ -1279,10 +1437,19 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
     robin_hood::unordered_flat_map<const std::wstring*, std::string> nameLookup;
     nameLookup.reserve(events.size());
 
+#if PROF_GPU_ENABLED
+    {
+        std::ostringstream line;
+        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << kGpuTraceThreadIndex
+             << ",\"args\":{\"name\":\"" << EscapeJson(kGpuTraceThreadName) << "\"}}";
+        writeEntry(line.str());
+    }
+#endif
+
     for (size_t tid = 0; tid < threadIndexToName_.size(); ++tid) {
         if (threadIndexToName_[tid].empty()) { continue; }
         std::ostringstream line;
-        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << tid
+        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << (tid + 1u)
              << ",\"args\":{\"name\":\"" << EscapeJson(threadIndexToName_[tid]) << "\"}}";
         writeEntry(line.str());
     }
@@ -1301,9 +1468,15 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
             lookupIt = nameLookup.emplace(nameWidePtr, std::move(narrow)).first;
         }
         const std::string& name = lookupIt->second;
+        const char* category = (ev.category == TraceEvent::Category::Gpu) ? "GPU" : "CPU";
+        const uint64_t outputTid = TraceOutputThreadIndex(ev);
         std::ostringstream line;
-        line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"CPU\",\"ph\":\"X\",\"ts\":"
-             << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << ev.threadIndex << "}";
+        line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"" << category << "\",\"ph\":\"X\",\"ts\":"
+             << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << outputTid;
+        if (ev.hasFrameNumber) {
+            line << ",\"args\":{\"frame\":" << ev.frameNumber << "}";
+        }
+        line << "}";
         writeEntry(line.str());
     }
 
