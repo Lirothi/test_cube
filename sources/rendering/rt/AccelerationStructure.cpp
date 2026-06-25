@@ -1,10 +1,16 @@
 #include "rendering/rt/AccelerationStructure.h"
 
+#include <atomic>
+
 #include "rendering/meshes/Mesh.h"
 
 namespace rt {
 
 namespace {
+
+// S13 test/dev hook: forces every AS buffer allocation to fail so the graceful
+// disable → SSR-fallback path can be exercised (set via the rt-force-as-fail flag).
+std::atomic<bool> g_forceAsAllocFailure{ false };
 
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferHelper(ID3D12Device* device,
                                                          UINT64 size,
@@ -12,6 +18,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferHelper(ID3D12Device* device,
                                                          D3D12_RESOURCE_STATES initialState,
                                                          D3D12_RESOURCE_FLAGS flags)
 {
+    if (g_forceAsAllocFailure.load(std::memory_order_relaxed)) {
+        return nullptr; // simulate out-of-memory
+    }
+
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = heapType;
 
@@ -99,6 +109,7 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12Graph
         CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
                         D3D12_RESOURCE_STATE_COMMON);
     if (!result || !scratch) {
+        buildFailed_ = true; // out of VRAM / device lost -> caller disables RT, falls back to SSR
         return slot;
     }
 
@@ -166,12 +177,14 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         f.instanceCapacity = f.instanceUpload ? count : 0;
     }
     if (!f.instanceUpload) {
+        buildFailed_ = true;
         return;
     }
 
     D3D12_RAYTRACING_INSTANCE_DESC* descs = nullptr;
     D3D12_RANGE noRead{ 0, 0 };
     if (FAILED(f.instanceUpload->Map(0, &noRead, reinterpret_cast<void**>(&descs)))) {
+        buildFailed_ = true;
         return;
     }
     for (UINT i = 0; i < count; ++i) {
@@ -191,6 +204,9 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.InstanceContributionToHitGroupIndex = e.instanceId & 0xFFFFFFu;
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
         d.AccelerationStructure = GetOrBuildBlas(e.mesh, cmdList4).Address();
+        if (d.AccelerationStructure == 0) {
+            buildFailed_ = true; // a referenced BLAS failed to build (alloc/device) — disable RT
+        }
         descs[i] = d;
     }
     f.instanceUpload->Unmap(0, nullptr);
@@ -223,6 +239,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         f.scratchSize = f.scratch ? info.ScratchDataSizeInBytes : 0;
     }
     if (!f.result || !f.scratch) {
+        buildFailed_ = true; // out of VRAM / device lost -> caller disables RT, falls back to SSR
         return;
     }
 
@@ -257,6 +274,29 @@ void AccelerationStructureManager::Reset()
     }
     srvHeap_.Reset();
     srvIncrement_ = 0;
+    buildFailed_ = false; // a fresh scene gets a fresh chance at RT
+}
+
+uint64_t AccelerationStructureManager::GetAsMemoryBytes() const
+{
+    uint64_t total = 0;
+    for (const auto& kv : blasCache_) {
+        if (kv.second.result) { total += kv.second.result->GetDesc().Width; }
+    }
+    for (const PerFrameTlas& f : tlasFrames_) {
+        if (f.result) { total += f.result->GetDesc().Width; }
+        if (f.scratch) { total += f.scratch->GetDesc().Width; }
+        if (f.instanceUpload) { total += f.instanceUpload->GetDesc().Width; }
+    }
+    for (const auto& s : pendingScratch_) {
+        if (s) { total += s->GetDesc().Width; }
+    }
+    return total;
+}
+
+void AccelerationStructureManager::SetForceAllocFailureForTest(bool enable)
+{
+    g_forceAsAllocFailure.store(enable, std::memory_order_relaxed);
 }
 
 } // namespace rt

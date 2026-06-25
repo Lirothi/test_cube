@@ -7,6 +7,7 @@
 #include "app/App.h"
 #include "core/task/TaskSystemStress.h"
 #include "rendering/core/RendererSubmissionStress.h"
+#include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "text/TextManager.h"
 
@@ -103,6 +104,13 @@ int WINAPI WinMain(
     // exit code 0 on PASS/SKIP, non-zero on FAIL.
     if (lpCmdLine && std::strstr(lpCmdLine, "rt-smoke") != nullptr) {
         return RunRtSmoke("rt_smoke.txt");
+    }
+
+    // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
+    // allocation fail, so the graceful RT-disable → SSR-fallback path can be
+    // exercised in the live app without actually exhausting VRAM.
+    if (lpCmdLine && std::strstr(lpCmdLine, "rt-force-as-fail") != nullptr) {
+        rt::AccelerationStructureManager::SetForceAllocFailureForTest(true);
     }
 
     EnableDpiAwareness();

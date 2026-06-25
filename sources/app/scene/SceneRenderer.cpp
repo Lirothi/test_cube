@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -243,8 +244,18 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // the screen-space reflection source runs). The AS is built only when RT reflections or the debug
     // viz need it; otherwise the frame is byte-identical to the SSR/Off path.
     const bool rtSupported = renderer->IsRaytracingSupported();
-    const bool rtDebugView = rtSupported && frame.settings.rtDebugView;
-    const bool rtReflect = rtSupported && frame.settings.reflectionSource == ReflectionSource::RT;
+    // S13: once an AS allocation has failed (low VRAM / device lost), disable RT for
+    // the rest of this scene and fall back to SSR — cleanly, never a crash. Sticky
+    // until the next level (asManager_.Reset clears it).
+    const bool rtFailed = asManager_.BuildFailed();
+    if (rtFailed && !rtFailureLogged_)
+    {
+        OutputDebugStringA("[RT] Acceleration-structure allocation failed; disabling RT, "
+                           "falling back to SSR.\n");
+        rtFailureLogged_ = true;
+    }
+    const bool rtDebugView = rtSupported && !rtFailed && frame.settings.rtDebugView;
+    const bool rtReflect = rtSupported && !rtFailed && frame.settings.reflectionSource == ReflectionSource::RT;
     const bool reflectionsOff = frame.settings.reflectionSource == ReflectionSource::Off;
     const bool rtBuildAS = rtReflect || rtDebugView;
     if (rtBuildAS && !asManagerInited_)
@@ -634,9 +645,10 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
         asManager_.ReleaseCompletedScratch();
     }
 
-    // Gather opaque, single-mesh, CPU-placed instances. Instanced clouds (GPU
-    // transforms), ocean (displaced) and transparent/glass return false from
-    // GetRtInstance and are excluded for now (S13 defines their handling).
+    // Gather opaque, single-mesh, CPU-placed instances. Ocean (GPU-displaced) is
+    // excluded by design — kept on its planar-reflection path (S13). Instanced clouds
+    // (S14) and transparent/glass (S15) also return false from GetRtInstance today;
+    // bringing each into RT is its own step.
     rtInstances_.clear();
     if (frame_->objects)
     {
@@ -684,6 +696,16 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
             if (asManager_.HasPendingScratch())
             {
                 asScratchRetireFrame_ = frameNo + render::kFrameCount;
+            }
+            // S13: one-time AS VRAM accounting for visibility/budgeting.
+            if (!asVramLogged_ && !asManager_.BuildFailed())
+            {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              "[RT] Acceleration structures: %.2f MB VRAM, %zu instances.\n",
+                              asManager_.GetAsMemoryBytes() / (1024.0 * 1024.0), rtInstances_.size());
+                OutputDebugStringA(buf);
+                asVramLogged_ = true;
             }
         }
     }

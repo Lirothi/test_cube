@@ -111,6 +111,8 @@ private:
     rt::ReflectionHistory reflectionHistory_; // S11: ping-pong temporal-accumulation textures
     bool asManagerInited_ = false;
     uint64_t asScratchRetireFrame_ = 0;
+    bool rtFailureLogged_ = false; // S13: one-time "AS alloc failed -> SSR fallback" log
+    bool asVramLogged_ = false;    // S13: one-time AS VRAM accounting log
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
 
     // Valid only during Render(); pass bodies (running on task threads) read it.

@@ -400,6 +400,35 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Done-when:** Stable over long sessions and scene changes; clean disable under memory pressure.
 - **Verify:** Soak test; force AS alloc failure path; confirm fallback to SSR.
 
+- **STATUS — DONE (2026-06-25), uncommitted.**
+  - **Graceful AS-alloc-failure → clean RT disable → SSR (the headline).** `CreateBufferHelper`
+    already returned null on failure; now every BLAS/TLAS result/scratch/instance-buffer alloc
+    failure (and a null referenced BLAS) sets a **sticky** `AccelerationStructureManager::BuildFailed()`.
+    `SceneRenderer` gates `rtReflect`/`rtDebugView` on `!asManager_.BuildFailed()`, so on failure RT
+    stops building (no further allocations) and the graph runs the **SSR** source instead — never a
+    crash, never stale reflection. Sticky until the next scene (`Reset()` clears it). Logged once.
+  - **VRAM accounting/budgeting:** `AccelerationStructureManager::GetAsMemoryBytes()` sums live AS
+    buffers; one-time log after the first build (e.g. *"Acceleration structures: 0.50 MB VRAM,
+    65 instances"*). Actual alloc failure is the authoritative memory-pressure signal (drives the
+    disable above); an explicit byte-cap could be layered on this if ever needed.
+  - **Scene add/remove — verified already correct (documented, no new code):** `Scene::Clear()` calls
+    `sceneRenderer_.Reset()` → `asManager_.Reset()` (clears the BLAS cache **before** `objects_`/meshes
+    are freed; the cache `clear()` never dereferences the `Mesh*` keys). Mid-level, meshes persist in
+    `MeshManager` and the **TLAS rebuilds every frame** from the live instance list, so per-object
+    add/remove needs no cache invalidation; there's no mid-level mesh eviction, so no dangling-`Mesh*`
+    reuse within a scene.
+  - **Ocean:** confirmed excluded by the default `GetRtInstance` → `false` (kept on its planar path).
+  - **Device-removed:** the engine has **no** device-removed recovery anywhere — that's an engine-wide
+    feature, out of RT scope. RT's AS-failure path *does* catch device-lost-induced allocation
+    failures and disables RT cleanly; full device recreation is a separate effort.
+  - **Test hook:** launch flag `--rt-force-as-fail` forces every AS allocation to fail
+    (`SetForceAllocFailureForTest`) so the disable→SSR path is exercisable without exhausting VRAM.
+  - **Verified:** Debug build + in-app under GPU-based validation + break-on-ERROR — normal RT run
+    (VRAM-accounting log, zero D3D12 messages) **and** `--rt-force-as-fail` run (fallback log, clean
+    SSR, zero D3D12 messages, no crash); rt-smoke PASS tier=12; both stress harnesses exit 0; Release
+    builds clean. **Not run here (handed off):** the multi-minute VRAM soak (design is build-once BLAS
+    + reused per-frame TLAS, scratch retired post-fence → expected stable).
+
 ---
 
 ### S14 — GPU-instanced geometry in the TLAS *(instanced models reflect)*

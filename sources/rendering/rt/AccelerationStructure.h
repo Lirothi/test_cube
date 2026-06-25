@@ -76,6 +76,20 @@ public:
 
     bool HasPendingScratch() const { return !pendingScratch_.empty(); }
 
+    // S13 robustness: true once any AS allocation (BLAS/TLAS result/scratch/instance
+    // buffer) has failed this session. Sticky until Reset(); the caller gates RT off
+    // and falls back to SSR so a low-VRAM / device-lost condition disables RT cleanly
+    // instead of crashing.
+    bool BuildFailed() const { return buildFailed_; }
+
+    // Total bytes currently held by AS buffers (cached BLAS results + per-frame TLAS
+    // result/scratch/instance-desc + retained scratch). For VRAM visibility/budgeting.
+    uint64_t GetAsMemoryBytes() const;
+
+    // Test/dev hook: when enabled, every AS buffer allocation fails — exercises the
+    // graceful-disable → SSR-fallback path (driven by the `rt-force-as-fail` launch flag).
+    static void SetForceAllocFailureForTest(bool enable);
+
 private:
     void EnsureSrvHeap();
 
@@ -92,6 +106,7 @@ private:
     ID3D12Device5* device5_ = nullptr;
     robin_hood::unordered_map<Mesh*, Blas> blasCache_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pendingScratch_;
+    bool buildFailed_ = false; // sticky: an AS allocation failed (see BuildFailed())
 
     std::array<PerFrameTlas, render::kFrameCount> tlasFrames_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // CPU-only, kFrameCount slots
