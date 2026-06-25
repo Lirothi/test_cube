@@ -108,6 +108,17 @@ public:
         return false;
     }
 
+    // RT: append every ray-traced instance of this renderable to `out`, returning
+    // the count added. Default: the single instance from GetRtInstance (covers all
+    // single-mesh objects). GPU-instanced renderables (S14) override this to emit one
+    // entry per instance (same mesh/material, per-instance world matrix).
+    virtual size_t GetRtInstances(std::vector<RtInstanceDesc>& out) const
+    {
+        RtInstanceDesc d{};
+        if (GetRtInstance(d)) { out.push_back(d); return 1; }
+        return 0;
+    }
+
     uint32_t GetRenderLayerMask() const { return renderLayerMask_; }
     void SetRenderLayerMask(uint32_t mask) { renderLayerMask_ = mask; }
     void SetRenderLayer(RenderLayer layer) { renderLayerMask_ = RenderLayerMask(layer); }

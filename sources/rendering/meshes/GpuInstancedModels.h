@@ -35,9 +35,11 @@ public:
     bool CastsShadow() const override { return true; }
 
     const AABB& GetWorldBounds() const override;
-    // RT (S5): instance transforms are GPU-computed (instance_anim.hlsl), so this
-    // cloud is excluded from the CPU-built TLAS for now (revisit when RT needs it).
+    // RT: a single instance is meaningless for the whole field — GetRtInstance stays
+    // false; GetRtInstances (S14) emits one TLAS instance per GPU instance instead,
+    // reconstructing each world matrix on the CPU (matches instance_anim.hlsl).
     bool GetRtInstance(RtInstanceDesc&) const override { return false; }
+    size_t GetRtInstances(std::vector<RtInstanceDesc>& out) const override;
     // LOD from a single instance's size (not the whole-cloud bound), at the cloud's distance.
     float GetLodRadius() const override { return GetMesh() ? GetMesh()->GetBoundingBox().GetRadius() : 0.0f; }
 

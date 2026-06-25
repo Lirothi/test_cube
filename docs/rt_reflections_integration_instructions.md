@@ -468,6 +468,29 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Verify:** dxc/build; in-app GPU-based validation clean; visually confirm instanced models in the
   floor reflection; A/B that the reflected instance positions track the visible ones under animation.
 
+- **STATUS — DONE via the MVP CPU path (2026-06-25), uncommitted; awaiting user visual A/B.**
+  - **Plural enumerator:** new `RenderableObjectBase::GetRtInstances(std::vector<RtInstanceDesc>&)`
+    (default = one entry via `GetRtInstance`, so single-mesh objects are unchanged). `Pass_BuildAS`
+    now calls `GetRtInstances` per object and feeds every returned desc into the TLAS + bindless
+    registration. `GpuInstancedModels` overrides it: reuses `GBufferRenderable::GetRtInstance` for the
+    shared mesh+material (rejects null/transparent), then emits one desc per instance with
+    `world = BuildInstanceTransform(i) * GetModelMatrix()`.
+  - **Transform correctness (the crux):** verified `BuildInstanceTransform` mirrors `instance_anim.hlsl`
+    exactly — CPU `Tick` accumulates `rotationY += (angularSpeed + (idx%7)*0.1)*dt` (wrap 2π) and the
+    angle is `rotationY + idx`, matching the compute shader; grid is `gridSize=10`, `spacing=1.3`,
+    centered; scale=1. The `* GetModelMatrix()` folds in the object world because the instanced VS does
+    `mul(gInstances[i].world, world)` (`gbuffer_inst.hlsl`). All instances share one bindless geom
+    record + the cached mesh BLAS (`GetOrBuildBlas` builds the LOD0 BLAS — extra LODs are just reduced
+    index buffers over the same VB).
+  - **Verified:** Debug build + Release build clean; in-app default-RT under GPU-based validation +
+    break-on-ERROR → exit 0, **zero D3D12 messages**, and the AS log shows the instance count rise
+    **65 → 165** (the demo's 100 instanced bronze teapots entered the TLAS), VRAM 0.50 → 0.54 MB (BLAS
+    shared with the standalone teapot, so only ~100 instance descs added); rt-smoke PASS tier=12;
+    both stress harnesses exit 0. **User to A/B-confirm visually:** the reflected teapots track the
+    visible spinning ones with no positional drift.
+  - **Not taken (deliberate):** the GPU-built-instance-desc path — unneeded while the transforms are
+    deterministically CPU-mirrored; revisit if instancing becomes GPU-culled/non-deterministic.
+
 ---
 
 ### S15 — RT reflections for transparent / glass surfaces

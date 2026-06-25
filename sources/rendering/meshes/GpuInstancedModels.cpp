@@ -307,6 +307,36 @@ Math::mat4 GpuInstancedModels::BuildInstanceTransform(UINT index) const
     return rotation * translation;
 }
 
+size_t GpuInstancedModels::GetRtInstances(std::vector<RtInstanceDesc>& out) const
+{
+    if (instanceCount_ == 0)
+    {
+        return 0;
+    }
+    // Reuse the GBufferRenderable path for the shared mesh + material (albedo/MR
+    // textures, base color, metal/rough); it also rejects a null/transparent mesh.
+    // Its world (= modelMatrix_) is then overwritten per instance below.
+    RtInstanceDesc base{};
+    if (!GBufferRenderable::GetRtInstance(base))
+    {
+        return 0;
+    }
+
+    // Each instance's rendered world is BuildInstanceTransform(i) * objectWorld: the
+    // instanced VS does mul(gInstances[i].world, world) (gbuffer_inst.hlsl), so the
+    // object matrix must be folded in or the reflected instances drift from the
+    // visible ones. BuildInstanceTransform mirrors instance_anim.hlsl's S*R*T exactly.
+    const Math::mat4 objectWorld = GetModelMatrix();
+    out.reserve(out.size() + instanceCount_);
+    for (UINT i = 0; i < instanceCount_; ++i)
+    {
+        RtInstanceDesc d = base;
+        d.world = BuildInstanceTransform(i) * objectWorld;
+        out.push_back(d);
+    }
+    return instanceCount_;
+}
+
 AABB GpuInstancedModels::ComputeCombinedWorstCaseLocalBounds(const AABB& meshLocalBounds) const
 {
     if (!meshLocalBounds.IsValid() || instanceCount_ == 0)

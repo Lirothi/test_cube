@@ -653,18 +653,23 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
     if (frame_->objects)
     {
         uint32_t instanceId = 0;
+        std::vector<RtInstanceDesc> descs; // reused across objects this frame
         for (const auto& obj : *frame_->objects)
         {
-            RtInstanceDesc desc{};
-            if (obj && obj->GetRtInstance(desc))
+            if (!obj) { continue; }
+            // GetRtInstances appends one desc for a single-mesh object, or one per GPU
+            // instance for instanced renderables (S14: instanced models reflect).
+            descs.clear();
+            obj->GetRtInstances(descs);
+            for (const RtInstanceDesc& desc : descs)
             {
                 rt::InstanceEntry entry;
                 entry.mesh = desc.mesh;
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
-                // TLAS InstanceID = the mesh's bindless geometry index (S9), so a
-                // hit can index the geometry/material table directly. Same mesh ->
-                // same index (instances share geometry). Falls back to a running
-                // index if the bindless table isn't up.
+                // TLAS InstanceID = the mesh's bindless geometry index (S9), so a hit
+                // can index the geometry/material table directly. Same mesh+material ->
+                // same index (all instances of a cloud share one record). Falls back to
+                // a running index if the bindless table isn't up.
                 entry.instanceId = bindless_.Ready()
                     ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
                                                   /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x)
