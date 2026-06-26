@@ -168,6 +168,10 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     renderer.SetReflectionTextureScale(ssrScale);
                 }
                 ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
+                // S15b: glass off-screen reflections render into a glass G-buffer + glassReflection at
+                // this same reflection resolution and follow the reflection source below (RT/SSR/Off).
+                // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
+                ImGui::TextDisabled("Glass reflections share this target (active in SSR/RT; off in Off).");
 
                 float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
                 if (ImGui::SliderFloat("Ocean reflection resolution", &oceanReflectionScale, 0.25f, 1.0f, "%.2f"))

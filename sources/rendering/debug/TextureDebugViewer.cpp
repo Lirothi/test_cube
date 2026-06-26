@@ -163,6 +163,9 @@ namespace
         case TextureDebugViewer::Target::Reflection: return "Reflection";
         case TextureDebugViewer::Target::ReflectionScratch: return "Reflection Scratch";
         case TextureDebugViewer::Target::OceanReflection: return "Ocean Reflection";
+        case TextureDebugViewer::Target::GlassReflNormal: return "Glass Refl Normal";
+        case TextureDebugViewer::Target::GlassReflDepth: return "Glass Refl Depth";
+        case TextureDebugViewer::Target::GlassReflection: return "Glass Reflection";
         case TextureDebugViewer::Target::GBuffer0: return "GBuffer 0";
         case TextureDebugViewer::Target::GBuffer1: return "GBuffer 1";
         case TextureDebugViewer::Target::GBuffer2: return "GBuffer 2";
@@ -199,6 +202,9 @@ namespace
             MakeTarget(TextureDebugViewer::Target::Reflection, "Reflection", "Main reflection result consumed by compose.", D.reflection.Get(), renderer.GetReflectionFormat()),
             MakeTarget(TextureDebugViewer::Target::ReflectionScratch, "Reflection", "Scratch target used by reflection filtering and RT denoise.", D.reflectionScratch.Get(), renderer.GetReflectionScratchFormat()),
             MakeTarget(TextureDebugViewer::Target::OceanReflection, "Reflection", "Premultiplied ocean reflection generated before transparent ocean rendering.", D.oceanReflection.Get(), renderer.GetReflectionFormat()),
+            MakeTarget(TextureDebugViewer::Target::GlassReflNormal, "Reflection", "Glass G-buffer: front-face world normal (S15b prepass input).", D.glassReflNormal.Get(), renderer.GetGBuffer1Format()),
+            MakeTarget(TextureDebugViewer::Target::GlassReflDepth, "Reflection", "Glass G-buffer: front-face depth (S15b reflection ray origin).", D.glassReflDepth.Get(), renderer.GetDepthSrvFormat()),
+            MakeTarget(TextureDebugViewer::Target::GlassReflection, "Reflection", "Off-screen glass reflection (RT or SSR) sampled by the forward glass pass.", D.glassReflection.Get(), renderer.GetReflectionFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal and roughness.", D.gb1.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "Emissive.", D.gb2.Get(), renderer.GetGBuffer2Format()),

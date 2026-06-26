@@ -35,6 +35,9 @@ public:
     bool IsNormalMapRG() const { return normalMapIsRG_; }
 
     bool IsSimpleRender() const override { return false; }
+    // S15b: glass samples the off-screen glass reflection, so it (and only it, not the ocean
+    // or other transparent renderables) is rasterized into the glass-reflection G-buffer.
+    bool UsesGlassReflection() const override { return true; }
 
 protected:
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
