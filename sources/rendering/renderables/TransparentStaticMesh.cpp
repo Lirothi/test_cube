@@ -185,14 +185,23 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     lights.EnsurePointLightBuffer(renderer, std::max<size_t>(pointCount, size_t(1)));
     lights.EnsureSpotLightBuffer(renderer, std::max<size_t>(spotCount, size_t(1)));
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 7> srvs{
-        deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV,
+    const D3D12_CPU_DESCRIPTOR_HANDLE sceneColorSrv =
+        deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV;
+    // t7 = the off-screen RT glass reflection (S15b). A normal texture on all HW — the glass
+    // PS samples it only when rtEnabled (lightCounts.z in b1); fall back to scene color so the
+    // slot is always a valid SRV (it's unread when RT is off / on non-RT HW).
+    const D3D12_CPU_DESCRIPTOR_HANDLE glassReflSrv =
+        deferred.glassReflectionSRV.ptr != 0 ? deferred.glassReflectionSRV : sceneColorSrv;
+
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 8> srvs{
+        sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
         sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
         lights.GetPointLightSrv(),
         lights.GetSpotLightSrv(),
-        normalSrv
+        normalSrv,
+        glassReflSrv
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 
@@ -244,4 +253,6 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     {
         defs.emplace_back("NORMALMAP_IS_RG", "1");
     }
+    // S15b: glass samples the precomputed GlassReflection texture (t7) — no RayQuery in this
+    // shader, so the PSO is identical on RT and non-RT HW (one variant, 8-SRV table).
 }

@@ -44,10 +44,10 @@ struct GeometryInfoGPU
 class BindlessTable
 {
 public:
-    static constexpr UINT kScenePerFrame = 24; // per-frame scene descriptors, partitioned
+    static constexpr UINT kScenePerFrame = 32; // per-frame scene descriptors, partitioned
                                                // across the RT passes (reflections 0-7,
-                                               // denoise 8-12, debug 13-16) so passes in the
-                                               // same frame never alias slots
+                                               // denoise 8-12, debug 13-16, glass refl 17-25)
+                                               // so passes in the same frame never alias slots
     static constexpr UINT kDescPerGeom = 4;    // VB raw, IB raw, albedo texture, MR texture
     static constexpr UINT kGeomInfoSlot = 0;
     static constexpr UINT kSceneBase = 1;

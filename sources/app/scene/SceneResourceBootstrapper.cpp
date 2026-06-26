@@ -272,6 +272,25 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtDenoise_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // S15b: glass reflection G-buffer prepass PSO (front-face normal RTV + depth DSV). Built on
+    // all HW — glass off-screen reflections work in SSR mode too (ssr_cs), not just RT.
+    if (!matGlassReflPrepass_)
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/glass_refl_prepass.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "PosNormTanUV";
+        gd.numRT = 1;
+        gd.rtvFormats[0] = renderer->GetGBuffer1Format();
+        gd.dsvFormat = renderer->GetDsvFormat();
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL; // reverse-Z, front-most wins
+        gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+        matGlassReflPrepass_ = mm->GetOrCreateGraphics(renderer, gd);
+    }
+
     if (!matDebug_)
     {
         Material::GraphicsDesc gd{};

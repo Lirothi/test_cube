@@ -31,6 +31,11 @@ public:
     const LightManager& GetLightManager() const { return lightManager_; }
     Skybox* GetSkybox() const { return skyBox_.get(); }
 
+    // RT reflections for glass (S15): forwarded from the scene renderer so the
+    // transparent pass can bind the TLAS + gate ray tracing.
+    bool IsRtReflectActive() const { return sceneRenderer_.IsRtReflectActive(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetRtTlasSrv(UINT frameIndex) const { return sceneRenderer_.GetTlasSrvCpu(frameIndex); }
+
     const mat4& GetCascadeView(size_t index) const;
     const mat4& GetCascadeProj(size_t index) const;
     float2 GetCascadeScale(size_t index) const;

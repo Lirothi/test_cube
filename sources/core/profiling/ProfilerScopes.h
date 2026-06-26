@@ -44,6 +44,8 @@ extern const Profiler::ScopeNameKey kPassRTDenoise;
 extern const Profiler::ScopeNameKey kPassReflectionBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
 extern const Profiler::ScopeNameKey kPassRTDebug;
+extern const Profiler::ScopeNameKey kPassGlassReflGbuffer;
+extern const Profiler::ScopeNameKey kPassGlassReflections;
 extern const Profiler::ScopeNameKey kPassTransparent;
 extern const Profiler::ScopeNameKey kPassOceanReflection;
 extern const Profiler::ScopeNameKey kPassDebugDraw;

@@ -451,6 +451,28 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
+
+        // S15 off-screen glass reflections (reflection res): a glass G-buffer (front-face
+        // normal RTV + depth DSV) feeding a second rt_reflections_cs dispatch into glassReflection.
+        currentTargetWidth = std::max(1u, sizes.reflectionWidth);
+        currentTargetHeight = std::max(1u, sizes.reflectionHeight);
+        CreateRT(formats.gb1, DeferredRtvSlot::GlassReflNormal, DeferredSrvSlot::GlassReflNormal, DeferredSrvSlot::Count, f, D.glassReflNormal, D.glassReflNormalRTV, D.glassReflNormalSRV);
+        {
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.depth, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+            D3D12_CLEAR_VALUE cv{}; cv.Format = formats.depth; cv.DepthStencil.Depth = 0.0f; cv.DepthStencil.Stencil = 0;
+            ThrowIfFailed(dev->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&D.glassReflDepth)));
+            D.glassReflDepthDSV = DeferredDsvCPU(f, DeferredDsvSlot::GlassReflDepth);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dv{}; dv.Format = formats.depth; dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dev->CreateDepthStencilView(D.glassReflDepth.Get(), &dv, D.glassReflDepthDSV);
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = formats.depthSrv; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
+            D.glassReflDepthSRV = DeferredSrvCPU(f, DeferredSrvSlot::GlassReflDepth);
+            dev->CreateShaderResourceView(D.glassReflDepth.Get(), &sd, D.glassReflDepthSRV);
+            tracker.SetResourceState(D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        }
+        CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::GlassReflection, DeferredSrvSlot::GlassReflectionUAV, f, D.glassReflection, D.glassReflectionSRV, D.glassReflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
         CreateSrvUavTexture(formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
@@ -492,6 +514,9 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.shadow);
         collect(D.spotShadow);
         collect(D.dlssOutput);
+        collect(D.glassReflNormal);
+        collect(D.glassReflDepth);
+        collect(D.glassReflection);
     }
 
     tracker.ForgetResources(released);

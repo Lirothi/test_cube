@@ -48,6 +48,12 @@ public:
         Skybox* skybox);
     void Reset();
 
+    // RT reflections for glass (S15): whether RT reflections are active this frame
+    // (rtSupported && source==RT && AS not failed), and the current TLAS SRV — read
+    // by the transparent pass / glass renderable. {0} when no TLAS is built.
+    bool IsRtReflectActive() const { return rtReflectActive_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetTlasSrvCpu(UINT frameIndex) const { return asManager_.TlasSrvCpu(frameIndex); }
+
     // Renders one frame (main graph, overlay epilogue, EndFrame).
     // `frame` must stay valid for the duration of the call.
     void Render(Renderer* renderer, const SceneFrameData& frame);
@@ -84,6 +90,12 @@ private:
     void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_RTDenoise(Renderer* r, RenderGraphPassContext ctx); // S11 temporal accumulate
+    // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
+    // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
+    void Pass_GlassReflGbuffer(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, const SceneView& mainView);
+    void Pass_GlassReflections(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // RT mode
+    void Pass_GlassReflectionsSSR(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // SSR mode
     void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 "Off": zero the reflection target
     void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
@@ -113,6 +125,8 @@ private:
     uint64_t asScratchRetireFrame_ = 0;
     bool rtFailureLogged_ = false; // S13: one-time "AS alloc failed -> SSR fallback" log
     bool asVramLogged_ = false;    // S13: one-time AS VRAM accounting log
+    bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
+    bool glassReflActive_ = false; // S15b: glass reflections active (RT or SSR; source != Off)
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
 
     // Valid only during Render(); pass bodies (running on task threads) read it.

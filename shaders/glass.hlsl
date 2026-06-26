@@ -1,4 +1,7 @@
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+// t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
+// GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
+// (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -62,6 +65,7 @@ TextureCube SkyboxTex : register(t3);
 StructuredBuffer<PointLightData> PointLights : register(t4);
 StructuredBuffer<SpotLightData> SpotLights : register(t5);
 Texture2D NormalMap : register(t6);
+Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT glass reflection
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -352,7 +356,19 @@ PSOut PSMain(VSOut i)
     }
 
     float3 reflectionDir = reflect(-V, N);
-    float3 envRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+    float3 skyRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+    float3 envRefl = skyRefl;
+    // S15b off-screen RT reflection: the GlassReflGbuffer + GlassReflections passes traced this
+    // glass surface's reflection (on-screen AND off-screen recompute, via rt_reflections_cs) into
+    // GlassReflection, premultiplied (rgb = radiance, a = coverage). Composite the skybox where the
+    // ray missed (a < 1). Gated by rtEnabled (lightCounts.z = reflection source == RT); when off,
+    // GlassReflection is not produced this frame and is never read here.
+    if (lightCounts.z > 0.5f)
+    {
+        float2 reflUV = i.posH.xy * screenSizeInv.zw; // SV_POSITION pixel -> normalized screen UV
+        float4 gr = GlassReflection.SampleLevel(LinearSampler, reflUV, 0);
+        envRefl = gr.rgb + skyRefl * (1.0f - gr.a);
+    }
     //return float4(envRefl, 1.0f);
 
     //ior = 1.0f;
@@ -400,6 +416,7 @@ PSOut PSMain(VSOut i)
     color = lerp(refrColor, color, alpha);
     //color = alpha.xxx;
     //alpha = 1.0f;
+    //color = envRefl;
 
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPosH);

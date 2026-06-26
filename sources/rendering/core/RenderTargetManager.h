@@ -17,7 +17,7 @@ class RenderTargetManager
 {
 public:
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 18; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,dlssOutput
+        static constexpr size_t kResourceCount = 21; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
         // Resources
         Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
         Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // normalOcta+rough
@@ -37,6 +37,11 @@ public:
         Microsoft::WRL::ComPtr<ID3D12Resource> shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
         Microsoft::WRL::ComPtr<ID3D12Resource> spotShadow; // R16_TYPELESS array for spot lights
         Microsoft::WRL::ComPtr<ID3D12Resource> dlssOutput; // scene color format, upscaled
+        // S15 off-screen glass reflections: a reflection-res glass G-buffer (front-face
+        // normal + depth) feeding a second rt_reflections_cs dispatch into glassReflection.
+        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflNormal; // glass front-face world normal
+        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflDepth;  // glass front-face depth (R32 SRV)
+        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflection; // premultiplied glass reflection
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
@@ -58,6 +63,9 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE glassReflNormalRTV{}, glassReflNormalSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE glassReflDepthDSV{}, glassReflDepthSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE glassReflectionSRV{}, glassReflectionUAV{};
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -94,9 +102,9 @@ public:
     const DeferredTargets& Deferred(UINT frame) const { return deferred_[frame]; }
 
 private:
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, Count };
-    enum class DeferredDsvSlot : UINT { Depth, Shadow, Count };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, GlassReflNormal, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
+    enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
     static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;

@@ -136,7 +136,8 @@ namespace
         return UploadFrameCB(renderer, vc);
     }
 
-    D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame)
+    D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
+                                               bool glassReflActive)
     {
         GlassViewCB vc{};
         vc.view = camera.GetViewMatrix();
@@ -188,7 +189,9 @@ namespace
 
         const float pointCount = frame.lightManager ? static_cast<float>(frame.lightManager->PointLights().size()) : 0.0f;
         const float spotCount = frame.lightManager ? static_cast<float>(frame.lightManager->GetSpotLightCount()) : 0.0f;
-        vc.lightCounts = float4(pointCount, spotCount, 0.0f, 0.0f);
+        // z = glass-reflections-active flag: glass.hlsl samples GlassReflection when set (RT or
+        // SSR mode), else uses skybox.
+        vc.lightCounts = float4(pointCount, spotCount, glassReflActive ? 1.0f : 0.0f, 0.0f);
 
         return UploadFrameCB(renderer, vc);
     }
@@ -258,6 +261,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     const bool rtReflect = rtSupported && !rtFailed && frame.settings.reflectionSource == ReflectionSource::RT;
     const bool reflectionsOff = frame.settings.reflectionSource == ReflectionSource::Off;
     const bool rtBuildAS = rtReflect || rtDebugView;
+    rtReflectActive_ = rtReflect; // S15: RT reflections active this frame
+    // S15b: glass gets off-screen reflections whenever opaque reflections do (source != Off) —
+    // RT mode uses rt_reflections_cs, SSR mode (and RT's AS-failure fallback) uses ssr_cs. The
+    // forward glass samples glassReflection when this is set (b1 flag), else skybox.
+    glassReflActive_ = !reflectionsOff;
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -495,10 +503,57 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             });
     }
 
-    // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST
-    // flips mid-list) before rebinding the targets — inherently ordered work that
-    // first-use declarations cannot express.
-    auto pTransp = rg.AddPass(RenderPass::Main_Transparent, { pCompose },
+    // Off-screen glass reflections (S15b): render a glass front-face G-buffer (normal+depth)
+    // then compute reflections over it into glassReflection (sampled by the forward glass pass).
+    // Active in RT mode (rt_reflections_cs, incl. off-screen recompute) AND SSR mode (ssr_cs).
+    // Runs after Compose so the lit opaque `light` buffer is the on-screen color source. Off =>
+    // these passes are absent and glass falls back to skybox by construction (b1 flag is 0).
+    size_t pGlassReflect = (size_t)-1;
+    if (glassReflActive_)
+    {
+        size_t pGlassGbuf = rg.AddPass(RenderPass::Main_GlassReflGbuffer, { pCompose },
+            { { D.glassReflNormal.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+              { D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassGlassReflGbuffer);
+                Pass_GlassReflGbuffer(renderer, ctx, *frame_->camera, *frame_->mainView);
+            });
+        const std::initializer_list<ResourceStateDecl> glassReflDecls = {
+            { D.glassReflNormal.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.glassReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
+        if (useRtReflections && pBuildAS != (size_t)-1)
+        {
+            // RT mode: dispatch rt_reflections_cs (needs the TLAS, so mt-dep on pBuildAS).
+            pGlassReflect = rg.AddPassMT(RenderPass::Main_GlassReflections, { pGlassGbuf }, { pGlassGbuf, pBuildAS },
+                glassReflDecls,
+                [this, renderer](RenderGraphPassContext ctx) {
+                    CPU_SCOPE(ProfilerScopes::kPassGlassReflections);
+                    Pass_GlassReflections(renderer, ctx, *frame_->camera);
+                });
+        }
+        else
+        {
+            // SSR mode: dispatch ssr_cs over the glass G-buffer (no TLAS, works on all HW).
+            pGlassReflect = rg.AddPass(RenderPass::Main_GlassReflections, { pGlassGbuf },
+                glassReflDecls,
+                [this, renderer](RenderGraphPassContext ctx) {
+                    CPU_SCOPE(ProfilerScopes::kPassGlassReflections);
+                    Pass_GlassReflectionsSSR(renderer, ctx, *frame_->camera);
+                });
+        }
+    }
+
+    // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST flips mid-list)
+    // before rebinding the targets — inherently ordered work. When glass reflections are active,
+    // order the transparent pass after the glass-reflection compute (it samples glassReflection;
+    // pCompose + the AS build are covered transitively through it).
+    const std::initializer_list<size_t> transpDeps = glassReflActive_
+        ? std::initializer_list<size_t>{ pCompose, pGlassReflect }
+        : std::initializer_list<size_t>{ pCompose };
+    auto pTransp = rg.AddPass(RenderPass::Main_Transparent, transpDeps,
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
             Pass_Transparent(renderer, ctx, *frame_->camera, *frame_->mainView);
@@ -1356,7 +1411,7 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            { D.lightSRV, D.gbSRV[1], D.depthSRV }, // t0 Light, t1 GB1, t2 Depth
+            { D.lightSRV, D.gbSRV[1], D.depthSRV, D.depthSRV }, // t0 Light, t1 GB1, t2 march depth, t3 origin depth (== t2 for opaque)
             { D.reflectionUAV },                           // u0 output
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
@@ -1380,6 +1435,7 @@ struct RtReflectConstants
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
     uint32_t reflectionUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
     uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
+    uint32_t screenDepthIndex = 0; uint32_t _padS0 = 0; uint32_t _padS1 = 0; uint32_t _padS2 = 0;
 };
 
 // Matches the `Denoise` cbuffer in rt_reflection_denoise_cs.hlsl.
@@ -1464,6 +1520,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.lightIndex = bindless_.SceneIndex(frameIndex, 1);
         c.gb1Index = bindless_.SceneIndex(frameIndex, 2);
         c.depthIndex = bindless_.SceneIndex(frameIndex, 3);
+        c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth (no change)
         c.reflectionUavIndex = bindless_.SceneIndex(frameIndex, 4);
         c.skyboxIndex = bindless_.SceneIndex(frameIndex, 5);
         c.skyboxIntensity = skybox->GetExposure();
@@ -1493,6 +1550,204 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         // Restore the frame heap: this pass shares its command list with the
         // grouped blur + compose passes, which bind into the per-frame heap.
         renderer->BindDescriptorHeaps(t.cl);
+    }
+    ctx.EndCL(t);
+}
+
+// S15b: rasterize transparent (glass) front faces into a reflection-res G-buffer
+// (world normal RTV + depth DSV) so the next pass can ray-trace their reflections.
+void SceneRenderer::Pass_GlassReflGbuffer(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera, const SceneView& mainView)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflGbuffer);
+        const auto& D = renderer->GetDeferredForFrame();
+        auto prepassMat = resources_.GetGlassReflPrepassMaterial();
+        if (!prepassMat) { ctx.EndCL(t); return; }
+        ctx.ApplyDeclaredStates(t.cl); // glassReflNormal -> RTV, glassReflDepth -> DEPTH_WRITE
+
+        const UINT w = renderer->GetReflectionTextureWidth();
+        const UINT h = renderer->GetReflectionTextureHeight();
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = D.glassReflNormalRTV;
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv = D.glassReflDepthDSV;
+        t.cl->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        const float clearN[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // alpha 0 = "no glass" sentinel
+        t.cl->ClearRenderTargetView(rtv, clearN, 0, nullptr);
+        t.cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr); // reverse-Z far
+        D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f };
+        D3D12_RECT sr{ 0, 0, static_cast<LONG>(w), static_cast<LONG>(h) };
+        t.cl->RSSetViewports(1, &vp);
+        t.cl->RSSetScissorRects(1, &sr);
+
+        Math::mat4 viewProj = camera.GetViewProjMatrix();
+        auto vcb = renderer->GetFrameResource()->AllocDynamic(sizeof(viewProj), render::kConstantBufferAlignment);
+        std::memcpy(vcb.cpu, &viewProj, sizeof(viewProj));
+
+        t.cl->SetGraphicsRootSignature(prepassMat->GetRootSignature());
+        t.cl->SetPipelineState(prepassMat->GetPipelineState());
+        t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        t.cl->SetGraphicsRootConstantBufferView(1, vcb.gpu); // b1 = viewProj (shared)
+
+        auto drawBucket = [&](SceneRenderQueue::BucketType bt) {
+            const auto& bucket = mainView.queue.VisibleBuckets()[BucketIndex(bt)];
+            for (RenderableObjectBase* base : bucket)
+            {
+                auto* ro = dynamic_cast<RenderableObject*>(base);
+                if (!ro || !ro->GetMesh()) { continue; }
+                Math::mat4 world = ro->GetModelMatrix();
+                auto ocb = renderer->GetFrameResource()->AllocDynamic(sizeof(world), render::kConstantBufferAlignment);
+                std::memcpy(ocb.cpu, &world, sizeof(world));
+                t.cl->SetGraphicsRootConstantBufferView(0, ocb.gpu); // b0 = per-object world
+                ro->GetMesh()->Draw(t.cl, 0);
+            }
+        };
+        drawBucket(SceneRenderQueue::BucketType::TransparentSimple);
+        drawBucket(SceneRenderQueue::BucketType::TransparentComplex);
+    }
+    ctx.EndCL(t);
+}
+
+// S15b: dispatch rt_reflections_cs over the glass G-buffer -> glassReflection. Reuses the
+// opaque reflection shader (incl. its off-screen recompute); the on-screen color source is
+// the lit opaque buffer (lightIndex) and the depth-match uses the opaque depth (screenDepth).
+void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflections);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl); // glassReflNormal/Depth/light/depth -> NPS, glassReflection -> UAV
+
+        auto reflectMaterial = resources_.GetRtReflectMaterial();
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
+        Skybox* skybox = frame_->skybox;
+        if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
+            asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
+        {
+            ctx.EndCL(t);
+            return;
+        }
+
+        // Glass scene-descriptor range (17-25): distinct from reflections 0-7 / denoise 8-12
+        // / debug 13-16 so same-frame passes never alias bindless heap slots.
+        constexpr UINT B = 17;
+        bindless_.WriteSceneDescriptor(frameIndex, B + 0, tlasSrv);                          // TLAS
+        bindless_.WriteSceneDescriptor(frameIndex, B + 1, D.lightSRV);                        // on-screen lit (light buffer)
+        bindless_.WriteSceneDescriptor(frameIndex, B + 2, D.glassReflNormalSRV);              // glass normal (gb1)
+        bindless_.WriteSceneDescriptor(frameIndex, B + 3, D.glassReflDepthSRV);               // glass depth (primary)
+        bindless_.WriteSceneDescriptor(frameIndex, B + 4, D.glassReflectionUAV);              // output
+        bindless_.WriteSceneDescriptor(frameIndex, B + 5, skybox->GetTex()->GetSRVCPU());     // skybox
+        bindless_.WriteSceneDescriptor(frameIndex, B + 8, D.depthSRV);                        // screen (opaque) depth for the match
+
+        LightManager* lm = frame_->lightManager;
+        const UINT spotCount = lm ? static_cast<UINT>(lm->GetSpotLightCount()) : 0u;
+        const UINT pointCount = lm ? static_cast<UINT>(lm->PointLights().size()) : 0u;
+        const D3D12_CPU_DESCRIPTOR_HANDLE spotSrv = lm ? lm->GetSpotLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const D3D12_CPU_DESCRIPTOR_HANDLE pointSrv = lm ? lm->GetPointLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const bool haveSpots = spotCount > 0u && spotSrv.ptr != 0;
+        const bool havePoints = pointCount > 0u && pointSrv.ptr != 0;
+        if (haveSpots)  { bindless_.WriteSceneDescriptor(frameIndex, B + 6, spotSrv); }
+        if (havePoints) { bindless_.WriteSceneDescriptor(frameIndex, B + 7, pointSrv); }
+
+        RtReflectConstants c{};
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
+        c.view = camera.GetViewMatrix();
+        c.proj = camera.GetProjMatrix();
+        c.invView = camera.GetInvViewMatrix();
+        c.invProj = camera.GetInvProjMatrix();
+        const DirectionalLight& dl = *frame_->dirLight;
+        c.sunDirWS = dl.GetDirection();
+        c.ambientIntensity = dl.GetAmbient();
+        c.lightRgb = dl.GetColor();
+        c.exposure = dl.GetExposure();
+        c.depthA = zNear / (zNear - zFar);
+        c.depthB = (zNear * zFar) / (zFar - zNear);
+        c.outWidth = renderer->GetReflectionTextureWidth();
+        c.outHeight = renderer->GetReflectionTextureHeight();
+        c.tlasIndex = bindless_.SceneIndex(frameIndex, B + 0);
+        c.lightIndex = bindless_.SceneIndex(frameIndex, B + 1);
+        c.gb1Index = bindless_.SceneIndex(frameIndex, B + 2);
+        c.depthIndex = bindless_.SceneIndex(frameIndex, B + 3);        // primary = glass depth
+        c.screenDepthIndex = bindless_.SceneIndex(frameIndex, B + 8);  // visibility match = opaque depth
+        c.reflectionUavIndex = bindless_.SceneIndex(frameIndex, B + 4);
+        c.skyboxIndex = bindless_.SceneIndex(frameIndex, B + 5);
+        c.skyboxIntensity = skybox->GetExposure();
+        c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.spotLightIndex = bindless_.SceneIndex(frameIndex, B + 6);
+        c.spotCount = haveSpots ? spotCount : 0u;
+        c.pointLightIndex = bindless_.SceneIndex(frameIndex, B + 7);
+        c.pointCount = havePoints ? pointCount : 0u;
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
+        std::memcpy(cb.cpu, &c, sizeof(c));
+
+        ID3D12DescriptorHeap* heaps[] = { bindless_.Heap() };
+        t.cl->SetDescriptorHeaps(1, heaps);
+        t.cl->SetComputeRootSignature(reflectMaterial->GetRootSignature());
+        t.cl->SetPipelineState(reflectMaterial->GetPipelineState());
+        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+        const UINT gx = (c.outWidth + 7u) / 8u;
+        const UINT gy = (c.outHeight + 7u) / 8u;
+        if (gx > 0 && gy > 0)
+        {
+            t.cl->Dispatch(gx, gy, 1);
+        }
+        renderer->UAVBarrier(t.cl, D.glassReflection.Get());
+        renderer->BindDescriptorHeaps(t.cl); // restore the frame heap
+    }
+    ctx.EndCL(t);
+}
+
+// S15b (SSR mode): screen-space reflections for glass — reuse ssr_cs over the glass G-buffer.
+// Origin = glass front depth/normal (t3/t1); the ray marches against the opaque depth (t2) and
+// samples the lit opaque color (t0), writing into glassReflection (the forward glass samples it).
+void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflections);
+        const auto& D = renderer->GetDeferredForFrame();
+        ctx.ApplyDeclaredStates(t.cl);
+
+        auto ssrMaterial = resources_.GetSsrMaterial();
+        const UINT cbSize = resources_.GetSsrCBSizeBytes();
+        if (!ssrMaterial || cbSize == 0)
+        {
+            ctx.EndCL(t);
+            return;
+        }
+
+        SsrPassConstants constants{};
+        const float zNear = camera.GetZNear();
+        const float zFar = camera.GetZFar();
+        constants.view = camera.GetViewMatrix();
+        constants.proj = camera.GetProjMatrix();
+        constants.invView = camera.GetInvViewMatrix();
+        constants.invProj = camera.GetInvProjMatrix();
+        constants.depthA = zNear / (zNear - zFar);
+        constants.depthB = (zNear * zFar) / (zFar - zNear);
+        constants.zNear = zNear;
+        constants.zFar = zFar;
+        constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
+        constants.invScreenSize = float2(
+            constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+            constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+        constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
+            { D.lightSRV, D.glassReflNormalSRV, D.depthSRV, D.glassReflDepthSRV }, // t0 lit, t1 glass normal, t2 opaque(march), t3 glass(origin)
+            { D.glassReflectionUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
+            D.glassReflection.Get());
     }
     ctx.EndCL(t);
 }
@@ -1841,7 +2096,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     const Camera& camera, const SceneView& mainView)
 {
     // Shared per-view/per-frame CB (b1) for every transparent object in this pass.
-    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_);
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, glassReflActive_);
 
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
@@ -1877,6 +2132,12 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.dlssBias.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            // S15b: the glass refl (computed pre-transparent into UAV) is sampled by the forward
+            // glass PS at t7. No-op when already PIXEL (RT off / non-RT HW: glass.hlsl won't read it).
+            if (D.glassReflection.Get())
+            {
+                renderer->Transition(driver.cl, D.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
             const float clearBias[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
             driver.cl->ClearRenderTargetView(D.dlssBiasRTV, clearBias, 0, nullptr);
             renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);

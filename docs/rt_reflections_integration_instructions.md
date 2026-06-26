@@ -538,6 +538,56 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
   ray cost in a forward pass over many glass pixels (mitigate: trace only above a Fresnel/strength
   threshold); glass excluded from TLAS ⇒ no glass-self-reflection (documented).
 
+- **STATUS — DONE via a fast-path MVP (2026-06-25), uncommitted; awaiting user visual A/B.**
+  - **Key architecture change vs the plan above:** the original plan (bind the bindless heap in the
+    transparent pass + per-hit bindless shading via `rt_shade.hlsli`) was **not** taken — a graphics
+    pass can bind only one CBV_SRV_UAV heap, so it would conflict with glass's existing frame-heap
+    descriptor table. Instead glass uses the **Tier-1 fast path** (like S7): trace `reflect(-V,N)`
+    against the TLAS, reproject the hit to screen, depth-match against `depthCopy`, and sample the
+    already-bound `SceneOpaque` (the lit opaque scene). On miss / off-screen / occluded → skybox. No
+    bindless heap, no per-hit geometry fetch, no `rt_shade.hlsli` needed. Glass reflects the on-screen
+    dynamic world (the common case) + skybox elsewhere.
+  - **Non-RT-HW safety:** `GLASS_RT` define added (TransparentStaticMesh::ConfigureGraphicsPipeline)
+    only when `IsRaytracingSupported()`. Non-RT HW compiles a RayQuery-free, byte-identical 7-SRV
+    glass PSO. RT HW compiles the 9-SRV variant (adds TLAS @t7, depthCopy @t8) — **one** variant per
+    HW, no fragile per-frame material swap.
+  - **F5 coupling (user choice):** `rtEnabled` flag in b1 (`lightCounts.z`) = the S13-gated
+    `rtReflect` (rtSupported && source==RT && !AS-failed). When off, glass skips tracing → skybox-only
+    (byte-identical output); t7 binds a placeholder texture SRV (never read when rtEnabled==0 —
+    GPU-validation confirmed clean, so **no dummy TLAS needed**). The real TLAS only builds when
+    source==RT, so Off/SSR stays zero-AS-cost.
+  - **Files:** `glass.hlsl` (conditional root sig + t7/t8 + RayQuery fast path), `TransparentStaticMesh.cpp`
+    (GLASS_RT define, 9-SRV table), `SceneRenderer.{h,cpp}` (`rtReflectActive_` + `IsRtReflectActive`/
+    `GetTlasSrvCpu`, b1 flag, `Main_Transparent` dep on `Pass_BuildAS`), `Scene.h` (accessors).
+  - **Verified:** dxc (PS+RT, PS-plain, VS) clean; Debug+Release build clean; in-app GPU-based
+    validation + break-on-ERROR clean in **all three modes** — RT (glass traces, reads TLAS/depthCopy/
+    sceneOpaque in the PS), SSR, Off (placeholder t7 unread); rt-smoke PASS tier=12; both stress exit 0.
+    **User to A/B-confirm visually:** with F5=RT, the glass cube reflects the scene geometry (teapots/
+    boxes/floor), not just sky; F5=SSR/Off ⇒ glass back to skybox-only.
+  - **Deferred (follow-ons):** glass-in-TLAS (glass-reflects-glass) and RT refraction remain stretch goals.
+
+- **STATUS — S15b OFF-SCREEN glass reflections — DONE (2026-06-26), uncommitted; awaiting user A/B.**
+  The fast-path MVP's skybox fallback for off-screen/backside hits is replaced by a **deferred glass
+  reflection pass** (chosen over inline bindless to avoid the heap-binding rework + not touch the
+  forward draw path):
+  - **Pass_GlassReflGbuffer** rasterizes transparent front faces (reverse-Z, back-face cull = front-
+    most) into a reflection-res glass G-buffer — world normal (RTV) + depth (DSV) — via a tiny
+    `glass_refl_prepass.hlsl`.
+  - **Pass_GlassReflections** dispatches the **existing `rt_reflections_cs`** over that G-buffer (so
+    the opaque off-screen recompute is reused verbatim): on-screen color source = the lit `light`
+    buffer (`lightIndex`), visibility match = the opaque depth (new `screenDepthIndex`), primary
+    surface = the glass depth (`depthIndex`), output = `glassReflection`. Both passes run after
+    Compose, only when `reflectionSource == RT`.
+  - The forward `glass.hlsl` now **samples `glassReflection`** (premultiplied; skybox composited where
+    coverage < 1) instead of tracing inline — so the **inline RayQuery is removed** (one glass PSO on
+    all HW, no `GLASS_RT` define). New targets: `glassReflNormal`/`glassReflDepth`/`glassReflection`
+    (reflection res). `screenDepthIndex` added to `rt_reflections_cs` (opaque sets it == `depthIndex`).
+  - **Verified:** dxc (glass VS/PS, prepass VS/PS, rt_reflections_cs) clean; Debug+Release build clean;
+    in-app GPU-based validation + break-on-ERROR clean in all three modes (RT runs the prepass+compute
+    +forward-sample; SSR/Off skip the glass passes → skybox); rt-smoke PASS tier=12; stress exit 0.
+  - **Limitations:** half-res glass reflection; prepass uses the geometric normal (no normal-map
+    perturbation); glass still out of the TLAS (no glass-reflects-glass); RT refraction still SS.
+
 ---
 
 ### S16 — Glossy reflections via DLSS Ray Reconstruction *(the real denoiser; replaces S11(a))*

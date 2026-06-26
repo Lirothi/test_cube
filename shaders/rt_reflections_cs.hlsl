@@ -38,6 +38,11 @@ cbuffer Probe : register(b0)
     uint tlasIndex;      uint lightIndex;     uint gb1Index;        uint depthIndex;
     uint reflectionUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
     uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
+    // depthIndex reconstructs the PRIMARY surface (the reflector). screenDepthIndex is
+    // the on-screen opaque depth used only for the fast-path visibility/depth-match — the
+    // two differ for the glass reflection dispatch (primary = glass depth, screen = opaque
+    // depth); for opaque reflections screenDepthIndex == depthIndex.
+    uint screenDepthIndex; uint _padS0; uint _padS1; uint _padS2;
 }
 
 SamplerState gSmp      : register(s0);
@@ -109,7 +114,7 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
 
     // --- Direct lighting (matches the base pass / lighting_cs) ---
     float3 direct;
-    Texture2D depthT = ResourceDescriptorHeap[depthIndex];
+    Texture2D depthT = ResourceDescriptorHeap[screenDepthIndex]; // on-screen depth for the visibility match
     float4 hv = mul(float4(hitWS, 1.0f), view);
     float4 hc = mul(hv, proj);
     bool haveScreen = false;

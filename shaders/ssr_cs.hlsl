@@ -1,7 +1,10 @@
-#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
-// t0: LightTarget            (HDR color)
-// t1: GB1 (normal.xy in 0..1, rough in A)
-// t2: Depth (R32F SRV created from the DSV)
+#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+// t0: LightTarget            (HDR color sampled at the marched hit)
+// t1: GB1 (reflector normal.rgb, rough in A)
+// t2: Depth  (R32F) marched against in screen space (the OPAQUE scene depth)
+// t3: OriginDepth (R32F) reconstructs the reflector surface position. For opaque this is the
+//     same texture as t2; for glass it is the glass front-face depth (origin) while t2 stays
+//     the opaque depth (march), so glass rays reflect the opaque scene.
 // u0: SSR output (premultiplied RGBA)
 // s0: LinearClamp, s1: PointClamp
 
@@ -11,6 +14,7 @@
 Texture2D   LightTarget : register(t0);
 Texture2D   GB1         : register(t1);
 Texture2D   DepthT      : register(t2);
+Texture2D   OriginDepthT : register(t3);
 RWTexture2D<float4> SsrOut : register(u0);
 SamplerState gSmp       : register(s0);
 SamplerState gSmpPoint  : register(s1);
@@ -204,7 +208,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float2 pixel = (float2(dispatchThreadId.xy) + 0.5f) * pixelScale;
     float2 uv = pixel / fullRes;
 
-    float depth = ReadDepth(uv);
+    // Origin (reflector) depth: glass front-face depth for the glass pass, opaque depth for the
+    // opaque pass (where t3 == t2). Pixels with no reflector (cleared depth 0) are skipped.
+    float depth = OriginDepthT.SampleLevel(gSmpPoint, uv, 0).r;
     float4 result = float4(0, 0, 0, 0);
 
     if (depth > 1e-6f)
