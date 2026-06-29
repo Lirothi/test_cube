@@ -2,10 +2,13 @@
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/commands/EditorCommandStack.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/ContentBrowserPanel.h"
 
-struct EditorContext;
+class Renderer;
+class Scene;
+class LevelManager;
 
 // Minimal Level Editor shell: owns open/closed state and draws a placeholder
 // ImGui window. The content browser, outliner, and inspector panels arrive in
@@ -16,7 +19,7 @@ public:
     bool IsOpen() const { return open_; }
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
-    void Draw(EditorContext& ctx);
+    void Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager);
 
 private:
     bool open_ = false;
@@ -25,6 +28,8 @@ private:
     ContentBrowserPanel contentBrowser_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
+    EditorObjectId selectedObject_;
+    EditorCommandStack commandStack_;
 };
 
 #endif // WITH_EDITOR
