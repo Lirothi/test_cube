@@ -16,6 +16,9 @@
     <Filter Include="sources\editor\ui">
       <UniqueIdentifier>{80eb585e-fa71-4f41-8563-a63ff19b8672}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\scene">
+      <UniqueIdentifier>{f4c986b7-b075-4c6b-bb22-fd7c95e11e17}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
@@ -125,6 +128,9 @@
     </ClCompile>
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp">
       <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp">
+      <Filter>sources\editor\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
@@ -391,6 +397,9 @@
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
       <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">
+      <Filter>sources\editor\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>

@@ -159,6 +159,7 @@
     <ClCompile Include="sources/editor/EditorController.cpp" />
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
+    <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
@@ -269,6 +270,7 @@
     <ClInclude Include="sources/editor/EditorController.h" />
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
+    <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
     <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
