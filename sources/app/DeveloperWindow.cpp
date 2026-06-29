@@ -8,6 +8,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "editor/EditorController.h"
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
@@ -65,7 +66,7 @@ void DeveloperWindow::ToggleTextureInspector()
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
 }
 
-void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings)
+void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings, EditorController& editorController)
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
 
@@ -276,6 +277,11 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 if (ImGui::Checkbox("Ocean controls [F7]", &oceanControlsOpen))
                 {
                     oceanControlsWindow_.SetOpen(oceanControlsOpen);
+                }
+                bool levelEditorOpen = editorController.IsOpen();
+                if (ImGui::Checkbox("Level Editor", &levelEditorOpen))
+                {
+                    editorController.SetOpen(levelEditorOpen);
                 }
                 ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);

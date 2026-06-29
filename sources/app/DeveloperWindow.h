@@ -5,6 +5,7 @@
 #include "rendering/debug/TextureDebugViewer.h"
 #include "ui/ImGuiWindowUtils.h"
 
+class EditorController;
 class InputManager;
 class LevelManager;
 class Renderer;
@@ -19,7 +20,7 @@ public:
     void ToggleTextureInspector();
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
 
-    void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings);
+    void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings, EditorController& editorController);
 
 private:
     TextureDebugViewer textureDebugViewer_;

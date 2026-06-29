@@ -4,6 +4,7 @@
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "editor/EditorContext.h"
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
@@ -111,8 +112,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
     }
 
-    developerWindow_.Draw(renderer, scene, input, levelManager, settings_);
+    developerWindow_.Draw(renderer, scene, input, levelManager, settings_, editorController_);
     scene.SetRenderSettings(settings_);
+
+    EditorContext editorContext{ renderer, scene, levelManager };
+    editorController_.Draw(editorContext);
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (!uiCapturingInput)

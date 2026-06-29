@@ -7,6 +7,9 @@
     <Filter Include="sources\app">
       <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor">
+      <UniqueIdentifier>{16c05df7-1353-41a0-9a7e-e124edb0c1ab}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
@@ -107,6 +110,9 @@
   <ItemGroup>
     <ClCompile Include="sources/app/AppController.cpp">
       <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/EditorController.cpp">
+      <Filter>sources\editor</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
@@ -361,6 +367,12 @@
   <ItemGroup>
     <ClInclude Include="sources/app/AppController.h">
       <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/EditorContext.h">
+      <Filter>sources\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/EditorController.h">
+      <Filter>sources\editor</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>
