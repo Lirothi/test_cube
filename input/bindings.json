@@ -12,7 +12,8 @@
     { "name": "Sprint", "keys": ["LShift","RShift"] },
 
     { "name": "ToggleDeveloperPanel", "keys": ["F1"] },
-    { "name": "ToggleInstancing", "keys": ["F2"] },
+    { "name": "ToggleLevelEditor", "keys": ["F2"] },
+    { "name": "ToggleInstancing", "keys": ["F12"] },
     { "name": "ToggleLOD", "keys": ["F10"] },
     { "name": "CycleReflectionSource", "keys": ["F5"] },
     { "name": "ToggleRTDebugView", "keys": ["F6"] },

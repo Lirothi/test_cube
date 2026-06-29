@@ -279,13 +279,13 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     oceanControlsWindow_.SetOpen(oceanControlsOpen);
                 }
                 bool levelEditorOpen = editorController.IsOpen();
-                if (ImGui::Checkbox("Level Editor", &levelEditorOpen))
+                if (ImGui::Checkbox("Level Editor [F2]", &levelEditorOpen))
                 {
                     editorController.SetOpen(levelEditorOpen);
                 }
                 ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
-                ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
+                ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled);
 
                 ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled);
                 ImGui::BeginDisabled(!render::g_lodEnabled);

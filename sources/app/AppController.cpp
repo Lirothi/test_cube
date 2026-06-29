@@ -23,6 +23,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         input.WasActionPressed("ToggleDeveloperPanel") ||
         input.WasActionPressed("ToggleBindings") ||
         ImGui::IsKeyPressed(ImGuiKey_F1, false);
+    const bool toggleLevelEditor =
+        input.WasActionPressed("ToggleLevelEditor") ||
+        ImGui::IsKeyPressed(ImGuiKey_F2, false);
     const bool toggleTextureInspector =
         input.WasActionPressed("ToggleTextureInspector") ||
         ImGui::IsKeyPressed(ImGuiKey_F4, false);
@@ -33,6 +36,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (toggleDeveloperWindow)
     {
         developerWindow_.ToggleOpen();
+    }
+    if (toggleLevelEditor)
+    {
+        editorController_.ToggleOpen();
     }
     if (toggleTextureInspector)
     {
@@ -55,7 +62,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
         if (input.WasActionPressed("ToggleInstancing"))
         {
-            render::g_instancingEnabled = !render::g_instancingEnabled; // F2: A/B Step 4 auto-instancing
+            render::g_instancingEnabled = !render::g_instancingEnabled; // F12: A/B Step 4 auto-instancing
         }
         if (input.WasActionPressed("ToggleLOD"))
         {
