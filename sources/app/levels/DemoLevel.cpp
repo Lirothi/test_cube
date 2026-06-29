@@ -16,6 +16,7 @@
 
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
 #include "core/math/Math.h"
 #include "rendering/debug/DebugGrid.h"
 #include "rendering/RenderLayers.h"
@@ -78,91 +79,34 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
 }
 
-float4 ToFloat4(const json& j, const float4& def = float4(0.0f, 0.0f, 0.0f, 0.0f))
-{
-    if (!j.is_array() || j.size() < 4) { return def; }
-    return float4(j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>());
-}
-
-RenderLayer RenderLayerFromString(const std::string& s)
-{
-    if (s == "Terrain") { return RenderLayer::Terrain; }
-    if (s == "Transparent") { return RenderLayer::Transparent; }
-    if (s == "Sky") { return RenderLayer::Sky; }
-    if (s == "Lights") { return RenderLayer::Lights; }
-    if (s == "Gizmo") { return RenderLayer::Gizmo; }
-    if (s == "Debug") { return RenderLayer::Debug; }
-    return RenderLayer::Default;
-}
-
-void ApplyCommonMeshProperties(StaticMesh& mesh, const json& o)
-{
-    if (o.contains("rotationDeg"))
-    {
-        mesh.SetRotationEulerDeg(ToFloat3(o["rotationDeg"]));
-    }
-
-    auto& mp = mesh.MaterialParamsRef();
-    if (o.contains("texOffsScale")) { mp.texOffsScale = ToFloat4(o["texOffsScale"], mp.texOffsScale); }
-    if (o.contains("normalStrength")) { mp.texFlags.w = o["normalStrength"].get<float>(); }
-    if (o.contains("useMR")) { mp.SetUseMR(o["useMR"].get<bool>()); }
-    if (o.contains("metalRough"))
-    {
-        const json& mr = o["metalRough"];
-        if (mr.is_array() && mr.size() >= 2)
-        {
-            mp.metalRough = float2(mr[0].get<float>(), mr[1].get<float>());
-        }
-    }
-
-    if (o.contains("renderLayer"))
-    {
-        mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));
-    }
-}
-
 void SpawnStaticMesh(Scene& scene, const json& o)
 {
-    const std::string model = o.value("model", std::string{});
-    const std::string material = o.value("material", std::string{});
-    const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-    const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-    const float3 pos = ToFloat3(o.value("position", json::array()));
-    const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
-
-    std::unique_ptr<StaticMesh> mesh;
+    // RotatingObject is demo-specific: build it here, then apply the shared
+    // staticMesh JSON properties through the factory so behavior matches a plain
+    // staticMesh. Non-rotating meshes come straight from the factory.
     if (o.contains("rotateSpeedDeg"))
     {
-        mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
+        const std::string model = o.value("model", std::string{});
+        const std::string material = o.value("material", std::string{});
+        const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
+        const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
+        const float3 pos = ToFloat3(o.value("position", json::array()));
+        const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
+
+        auto mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
             o["rotateSpeedDeg"].get<float>() * DEG2RAD);
+        SceneObjectFactory::ApplyStaticMeshJsonProperties(*mesh, o);
+        scene.AddObject(std::move(mesh));
     }
     else
     {
-        mesh = std::make_unique<StaticMesh>(model, material, layout, shader);
-        mesh->SetPosition(pos);
-        mesh->SetScale(scale);
+        scene.AddObject(SceneObjectFactory::CreateStaticMeshFromJson(o));
     }
-
-    ApplyCommonMeshProperties(*mesh, o);
-    scene.AddObject(std::move(mesh));
 }
 
 void SpawnTransparentMesh(Scene& scene, const json& o)
 {
-    const std::string model = o.value("model", std::string{});
-    const float3 pos = ToFloat3(o.value("position", json::array()));
-    const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
-
-    auto glass = std::make_unique<TransparentStaticMesh>(&scene, model, pos, scale, 0.0f);
-    if (o.contains("tint")) { glass->SetTint(ToFloat3(o["tint"], float3(1.0f, 1.0f, 1.0f))); }
-    if (o.contains("absorption")) { glass->SetAbsorption(ToFloat3(o["absorption"])); }
-    if (o.contains("thickness")) { glass->SetThickness(o["thickness"].get<float>()); }
-    if (o.contains("reflectionStrength")) { glass->SetReflectionStrength(o["reflectionStrength"].get<float>()); }
-    if (o.contains("refractionDistortion")) { glass->SetRefractionDistortion(o["refractionDistortion"].get<float>()); }
-    if (o.contains("roughness")) { glass->SetRoughness(o["roughness"].get<float>()); }
-    if (o.contains("ior")) { glass->SetIor(o["ior"].get<float>()); }
-    if (o.contains("normalMap")) { glass->SetNormalMap(Widen(o["normalMap"].get<std::string>())); }
-    scene.AddObject(std::move(glass));
+    scene.AddObject(SceneObjectFactory::CreateTransparentMeshFromJson(scene, o));
 }
 
 // Generator: width x height grid of spheres sweeping metallic (rows) and
