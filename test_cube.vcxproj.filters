@@ -13,6 +13,9 @@
     <Filter Include="sources\editor\assets">
       <UniqueIdentifier>{630f4e65-3b13-49ff-b6ea-2c7ab1323bca}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\ui">
+      <UniqueIdentifier>{80eb585e-fa71-4f41-8563-a63ff19b8672}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
@@ -119,6 +122,9 @@
     </ClCompile>
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp">
       <Filter>sources\editor\assets</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
@@ -382,6 +388,9 @@
     </ClInclude>
     <ClInclude Include="sources/editor/assets/AssetRegistry.h">
       <Filter>sources\editor\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
+      <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/ui/ContentBrowserPanel.h"
 
 struct EditorContext;
 
@@ -19,4 +20,6 @@ private:
     bool open_ = false;
     bool assetsScanned_ = false;
     AssetRegistry assetRegistry_;
+    ContentBrowserPanel contentBrowser_;
+    EditorAssetId selectedAsset_;
 };
