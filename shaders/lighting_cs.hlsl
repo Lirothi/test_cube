@@ -40,6 +40,16 @@ cbuffer PerFrame : register(b0)
     float4 normalBiasWS;
     float2 screenSize;
     float2 invScreenSize;
+    // Configurable artist boost for the analytic sun specular on metals. The lobe is
+    // scaled by (1 + metal*sunMetalSpec): metal=0 is a no-op (dielectrics stay physical),
+    // metal=1 amplifies the sun highlight so it reads against the environment reflection
+    // that would otherwise swamp it. 0 = pure physical.
+    float sunMetalSpec;
+    // Sun angular size, added to the GGX alpha for the analytic sun only (see EvalBRDF).
+    // Floors the specular lobe width so a smooth surface shows a finite, bright,
+    // sample-able sun glint instead of a sub-pixel spike. 0 = punctual (no change).
+    float sunAngularSize;
+    float2 _padSun;
 }
 
 static const float pcfRadius = 1.0f;
@@ -186,7 +196,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float3 V = normalize(camPosWS - P);
     const float3 L = normalize(-sunDirWS);
 
-    const float3 ambient = albedo * ambientIntensity;
+    // Q2: diffuse ambient applies to the dielectric (non-metal) fraction only. Metals have
+    // no Lambertian response; their ambient arrives specularly via the env reflection in the
+    // compose pass. Without the (1-metal) gate, metals get a flat albedo floor that washes
+    // them out and kills highlight contrast.
+    const float3 ambient = albedo * (1.0 - metal) * ambientIntensity;
 
     BRDFInput bi;
     bi.albedo = albedo;
@@ -196,12 +210,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     bi.V = V;
     bi.L = L;
 
-    BRDFResult br = EvalBRDF(bi);
+    BRDFResult br = EvalBRDF(bi, sunAngularSize);
     float3 color = ambient * lightRgb;
     if (br.NdotL > 0.0)
     {
         float shadow = SampleShadowCSM(P, br.NdotL, N);
-        float3 direct = (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow;
+        // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
+        // highlight reads against the environment reflection. metal=0 -> no change.
+        const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);
+        float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow;
         color += direct;
     }
 

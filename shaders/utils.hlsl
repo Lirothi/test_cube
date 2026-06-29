@@ -228,7 +228,14 @@ struct BRDFResult
 	float NdotV;
 };
 
-inline BRDFResult EvalBRDF(BRDFInput bi)
+// lightAngularSize: GGX-alpha widening for the analytic light's finite angular size
+// (default 0 = punctual). It floors the NDF lobe width so a near-mirror surface produces
+// a finite, sample-able highlight disk instead of a sub-pixel spike whose bright peak
+// never lands on a pixel center. Widening only (no (a/aSpec)^2 energy renormalization):
+// with a dim punctual sun (radiance ~1) strict conservation would leave the glint
+// invisible, so we let the smooth-surface peak stay bright. Geometry/visibility (G) keeps
+// the true surface roughness; only the NDF is widened.
+inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
 {
 	BRDFResult o;
 	o.NdotL = saturate(dot(bi.N, bi.L));
@@ -242,10 +249,11 @@ inline BRDFResult EvalBRDF(BRDFInput bi)
 
 	float3 F0 = lerp(kF0Dielectric, bi.albedo, bi.metal);
 	float a = max(kMinAlpha, bi.rough * bi.rough);
+	float aSpec = saturate(a + lightAngularSize);
 	float kv = (a + 1.0f) * (a + 1.0f) * 0.125f; // (a+1)^2 / 8
 
 	float3 F = F_Schlick(VdotH, F0);
-	float D = D_GGX(NdotH, a);
+	float D = D_GGX(NdotH, aSpec);
 	float G = G_SchlickGGX(o.NdotV, kv) * G_SchlickGGX(o.NdotL, kv);
 
 	float3 kd = (1.0f - F) * (1.0f - bi.metal);

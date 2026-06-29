@@ -79,8 +79,9 @@ implementation. `S4` can be written against `S3`'s contract before `S3` lands.
 - **M2 (Tier-2, production):** + S9–S13. Shaded off-screen hits, perf-tuned, hardened.
 - **M3 (coverage — what reflects / what receives):** + S14 (GPU-instanced models reflect) +
   S15 (transparent/glass get their own RT reflections). Prioritized ahead of glossy.
-- **M4 (glossy):** + S16. Clean roughness-driven glossy via DLSS Ray Reconstruction (the
-  hand-rolled S11(a) denoiser proved inadequate; DLSS-RR is the real fix). Independent of M3.
+- **M4 (glossy):** + S16. Clean roughness-driven glossy reflections. **Done via a roughness-aware
+  blur of the sharp reflection** (no stochastic rays / no denoiser) rather than DLSS-RR — DLSS-RR is
+  a full upscaler-replacement, a misfit for this hybrid renderer (see S16 STATUS). Independent of M3.
 
 ---
 
@@ -632,6 +633,29 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Risks:** DLSS-RR ↔ existing DLSS-upscale ordering/interaction; RR availability + driver
   version; guide-buffer correctness (motion-vector + jitter conventions most error-prone); RR's
   expected buffer formats/resolutions/scales.
+
+- **STATUS — DONE via roughness-aware blur, NOT DLSS-RR (2026-06-26), uncommitted; awaiting user A/B.**
+  After confirming the vendored Streamline DLSS-RR (`sl.dlss_d`, `kFeatureDLSS_RR`) is a **unified
+  denoiser+upscaler that REPLACES DLSS Super-Resolution** (the plan's "denoise only the reflection
+  buffer" is impossible with it — it needs the whole noisy frame + extra guide buffers incl. specular
+  hit-distance, and is a misfit for this hybrid RT-reflections-only renderer), the user chose the
+  **roughness-aware blur** instead — the standard way to get glossy reflections in a hybrid pipeline.
+  - **No stochastic rays / no denoiser:** keep tracing the SHARP mirror ray; make the existing
+    `reflection_blur_cs` separable blur **roughness-driven** — per pixel, `blurRadius = radius +
+    roughness*glossyScale` from the reflector's roughness (gb0.a via `UnpackRM`). Mirror-smooth →
+    sharp; rough → wide blur = glossy. Sidesteps the S11(a) noise/dancing problem entirely (no noise
+    to denoise). Applies to **both RT and SSR** opaque reflections (shared blur pass); Off unaffected.
+  - **Tunable:** new `SceneRenderSettings::reflectionGlossyScale` (default 8, in reflection-res px) +
+    DeveloperWindow "Glossy blur" slider (0..24); 0 = sharp/mirror.
+  - **Files:** `reflection_blur_cs.hlsl` (gb0 @t1, UnpackRM roughness, per-pixel radius), blur CB +
+    `BlurPassConstants`/`SceneBlurCBHandles`/`WriteBlurConstants` (+`glossyScale`), `Pass_ReflectionBlur`
+    (gb0 in both H/V dispatches + glossyScale from settings, gb0→NPS declared), `SceneFrameData.h`,
+    `DeveloperWindow.cpp`.
+  - **Verified:** dxc; Debug+Release build clean; in-app GPU-validation+break-on-ERROR clean in RT +
+    SSR; rt-smoke PASS tier=12; stress green. **User A/B-confirm:** rough surfaces (e.g. the floor /
+    rough materials) now reflect blurry/glossy, mirrors stay sharp; tune via the "Glossy blur" slider.
+  - **DLSS-RR not taken (documented):** would require replacing the working upscaler + new guide
+    buffers + jittered glossy; reconsider only for a fully path-traced pipeline.
 
 ---
 

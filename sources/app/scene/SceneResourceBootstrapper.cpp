@@ -29,6 +29,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     normalBiasWS = material->ComputeCB0FieldHandle("normalBiasWS");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+    sunMetalSpec = material->ComputeCB0FieldHandle("sunMetalSpec");
+    sunAngularSize = material->ComputeCB0FieldHandle("sunAngularSize");
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -95,6 +97,7 @@ void SceneBlurCBHandles::Populate(Material* material)
 
     dir = material->ComputeCB0FieldHandle("dir");
     radius = material->ComputeCB0FieldHandle("radius");
+    glossyScale = material->ComputeCB0FieldHandle("glossyScale");
 }
 
 void SceneComposeCBHandles::Populate(Material* material)
@@ -407,6 +410,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.normalBiasWS, data.normalBiasWS, dest);
     matLighting_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matLighting_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
+    matLighting_->UpdateCBField(handles.sunMetalSpec, data.sunMetalSpec, dest);
+    matLighting_->UpdateCBField(handles.sunAngularSize, data.sunAngularSize, dest);
 }
 
 void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassConstants& data, uint8_t* dest) const
@@ -473,6 +478,7 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
     const auto& handles = blurHandles_;
     matBlur_->UpdateCBField(handles.dir, data.direction, dest);
     matBlur_->UpdateCBField(handles.radius, data.radius, dest);
+    matBlur_->UpdateCBField(handles.glossyScale, data.glossyScale, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

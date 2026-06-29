@@ -173,6 +173,16 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
                 ImGui::TextDisabled("Glass reflections share this target (active in SSR/RT; off in Off).");
 
+                // S16: glossy reflections — blur radius scales with surface roughness (0 = sharp mirror).
+                ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale, 0.0f, 24.0f, "%.1f");
+
+                // Analytic sun specular boost on metals: spec lobe *= (1 + metal*coef). 0 = physical.
+                ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence, 0.0f, 16.0f, "%.1f");
+
+                // Sun angular size: floors the analytic specular lobe width so smooth surfaces show
+                // a bright, sample-able sun glint instead of a sub-pixel spike. 0 = punctual.
+                ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize, 0.0f, 0.25f, "%.3f");
+
                 float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
                 if (ImGui::SliderFloat("Ocean reflection resolution", &oceanReflectionScale, 0.25f, 1.0f, "%.2f"))
                 {

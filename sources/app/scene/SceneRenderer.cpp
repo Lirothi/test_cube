@@ -467,7 +467,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // its two dispatches inside the pass body.
     auto pBlur = rg.AddPass(RenderPass::Main_ReflectionBlur, { pReflectionSource },
         { { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-          { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+          { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } }, // S16: roughness drives glossy blur
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassReflectionBlur); Pass_ReflectionBlur(renderer, ctx); });
 
     // First-use states only; Compose transitions scene back to RENDER_TARGET
@@ -1200,6 +1201,8 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+        constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
+        constants.sunAngularSize = frame_->settings.sunAngularSize;
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
@@ -1865,9 +1868,11 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
         BlurPassConstants blurConstants{};
         blurConstants.direction = float2(invSsrWidth, 0.0f);
         blurConstants.radius = 1.0f;
+        // S16 glossy: scale the per-pixel blur by the reflector's roughness (gb0). 0 = sharp.
+        blurConstants.glossyScale = std::max(0.0f, frame_->settings.reflectionGlossyScale);
         RecordComputeDispatch(renderer, t.cl, blurMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteBlurConstants(blurConstants, dest); },
-            { D.reflectionSRV }, { D.reflectionScratchUAV }, samplerTable,
+            { D.reflectionSRV, D.gbSRV[0] }, { D.reflectionScratchUAV }, samplerTable, // t0 reflection, t1 GB0 (roughness)
             ssrWidth, ssrHeight,
             D.reflectionScratch.Get());
 
@@ -1879,7 +1884,7 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
         blurConstants.direction = float2(0.0f, invSsrHeight);
         RecordComputeDispatch(renderer, t.cl, blurMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteBlurConstants(blurConstants, dest); },
-            { D.reflectionScratchSRV }, { D.reflectionUAV }, samplerTable,
+            { D.reflectionScratchSRV, D.gbSRV[0] }, { D.reflectionUAV }, samplerTable, // t0 reflection, t1 GB0
             ssrWidth, ssrHeight,
             D.reflection.Get());
     }

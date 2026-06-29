@@ -406,6 +406,13 @@
     <None Include="shaders\utils.hlsl" />
     <None Include="shaders\rt_geometry.hlsli" />
     <None Include="shaders\rt_lights.hlsli" />
+    <None Include="shaders\gbuffer_instcb.hlsl" />
+    <None Include="shaders\gbuffer_instcb_csm.hlsl" />
+    <None Include="shaders\glass_refl_prepass.hlsl" />
+    <None Include="shaders\rt_compile_probe.hlsl" />
+    <None Include="shaders\rt_debug_cs.hlsl" />
+    <None Include="shaders\rt_reflection_denoise_cs.hlsl" />
+    <None Include="shaders\rt_reflections_cs.hlsl" />
     <None Include="textures\ocean\ContactFoam.png" />
     <None Include="textures\ocean\FoamAlbedo.png" />
     <None Include="textures\ocean\FoamTrail.png" />

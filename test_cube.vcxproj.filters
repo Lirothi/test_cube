@@ -787,6 +787,33 @@
     <None Include="shaders\utils.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\rt_geometry.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_lights.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gbuffer_instcb.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gbuffer_instcb_csm.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\glass_refl_prepass.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_compile_probe.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_debug_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_reflection_denoise_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_reflections_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="textures\ocean\ContactFoam.png">
       <Filter>textures\ocean</Filter>
     </None>

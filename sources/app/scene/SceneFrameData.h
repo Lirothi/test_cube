@@ -48,6 +48,20 @@ struct SceneRenderSettings
     // pixel and writes a hit-distance/miss image into the reflection target (view via
     // the texture inspector -> Reflection). Builds the AS regardless of source.
     bool rtDebugView = false;
+    // S16: glossy reflections. The reflection blur radius scales with the reflector's
+    // roughness by this factor (in reflection-res pixels at full roughness); 0 = sharp
+    // mirror reflections. Applies to both RT and SSR. Tunable in the developer window.
+    float reflectionGlossyScale = 1.0f;
+    // Analytic sun specular boost on metals. The sun's specular lobe is scaled by
+    // (1 + metal*sunMetalSpecInfluence) in the lighting pass so a smooth metal shows a
+    // distinct sun highlight (which otherwise merges into the environment reflection,
+    // since the sun disk is not painted into the skybox). 0 = pure physical. Dev-tunable.
+    float sunMetalSpecInfluence = 0.0f;
+    // Analytic sun angular size (added to the GGX alpha for the sun only). Floors the
+    // specular lobe width so smooth surfaces show a finite, bright sun glint instead of a
+    // sub-pixel spike that never lands on a pixel. ~0.01 ≈ a few-pixel disk; 0 = punctual
+    // (vanishing highlight on mirrors). Dev-tunable.
+    float sunAngularSize = 0.01f;
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per

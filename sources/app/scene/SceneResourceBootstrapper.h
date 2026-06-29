@@ -34,6 +34,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle normalBiasWS;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
+    Material::CBFieldHandle sunMetalSpec;
+    Material::CBFieldHandle sunAngularSize;
 
     void Populate(Material* material);
 };
@@ -84,6 +86,7 @@ struct SceneBlurCBHandles
 {
     Material::CBFieldHandle dir;
     Material::CBFieldHandle radius;
+    Material::CBFieldHandle glossyScale;
 
     void Populate(Material* material);
 };
@@ -128,6 +131,8 @@ struct LightingPassConstants
     float4 normalBiasWS{};
     float2 screenSize{};
     float2 invScreenSize{};
+    float sunMetalSpec = 0.0f;
+    float sunAngularSize = 0.0f;
 };
 
 struct PointLightPassConstants
@@ -171,6 +176,7 @@ struct BlurPassConstants
 {
     float2 direction{};
     float radius = 1.0f;
+    float glossyScale = 0.0f; // extra blur radius at full roughness (0 = sharp); drives glossy reflections
 };
 
 struct ComposePassConstants

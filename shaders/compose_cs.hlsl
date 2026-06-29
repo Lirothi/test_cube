@@ -38,6 +38,10 @@ cbuffer PerFrame : register(b0)
 
 static const float kEps = 1e-6;
 
+// Roughness->mip scale for the skybox fallback. The cube has an 11-mip chain; this
+// matches glass.hlsl (rough*5) so opaque and glass sky reflections blur identically.
+static const float kSkyRoughMaxMip = 5.0;
+
 float3 FresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0.xxx - F0) * pow(1.0 - cosTheta, 5.0);
@@ -87,7 +91,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float reflectionA = reflectionT.a;
         float3 reflectionRGB = reflectionT.rgb;
 
-        float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, 0).rgb * skyboxIntensity;
+        // Q1: blur the sky fallback with roughness too — otherwise a rough surface shows a
+        // mirror-sharp horizon next to the roughness-blurred SSR/RT reflection. The `gloss`
+        // term below fades the reflection out as rough->1, so the very blurry upper mips are
+        // only lightly weighted.
+        float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, rough * kSkyRoughMaxMip).rgb * skyboxIntensity;
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α))
         float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);
