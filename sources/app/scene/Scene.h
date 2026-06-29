@@ -19,6 +19,9 @@
 #include "app/scene/SceneRenderer.h"
 
 class Renderer;
+#if WITH_EDITOR
+class UploadBatch;
+#endif
 
 class Scene {
 public:
@@ -49,6 +52,20 @@ public:
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
+
+#if WITH_EDITOR
+    // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
+    // object with no editor identity (what AddObject assigns). Editor code uses
+    // the same uint64 value for EditorObjectId and SceneObjectId. objectIds_ is
+    // kept in lockstep with objects_ on every add/remove/clear.
+    using SceneObjectId = std::uint64_t;
+    SceneObjectId AddEditorObject(std::unique_ptr<RenderableObjectBase> obj);
+    bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj);
+    bool RemoveEditorObject(SceneObjectId id);
+    RenderableObjectBase* FindEditorObject(SceneObjectId id);
+    const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
+#endif
+
     void Tick(float deltaTime);
     void Render(Renderer* renderer);
 
@@ -79,6 +96,12 @@ private:
     SceneFrameData frameData_{};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
+#if WITH_EDITOR
+    // Lockstep with objects_: objectIds_[i] is the editor id of objects_[i], or
+    // 0 for a non-editor (level-loaded) object.
+    std::vector<SceneObjectId> objectIds_;
+    SceneObjectId nextEditorId_ = 1;
+#endif
     std::array<SceneView, kCascades> cascadeViews_{};
     std::array<SceneView, LightManager::kMaxSpotLights> spotShadowViews_{};
     // Step 6e: the directional cascades + spot shadow views all bucketize the same

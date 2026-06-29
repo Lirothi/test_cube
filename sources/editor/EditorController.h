@@ -1,4 +1,5 @@
 #pragma once
+#if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/scene/EditorSceneDocument.h"
@@ -25,3 +26,5 @@ private:
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
 };
+
+#endif // WITH_EDITOR

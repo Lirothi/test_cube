@@ -3,7 +3,9 @@
 #include "app/DeveloperWindow.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
+#if WITH_EDITOR
 #include "editor/EditorController.h"
+#endif
 
 class InputManager;
 class LevelManager;
@@ -28,5 +30,7 @@ private:
     SceneRenderSettings settings_{};
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
     DeveloperWindow developerWindow_;
+#if WITH_EDITOR
     EditorController editorController_;
+#endif
 };

@@ -4,7 +4,9 @@
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
+#if WITH_EDITOR
 #include "editor/EditorContext.h"
+#endif
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
@@ -23,9 +25,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         input.WasActionPressed("ToggleDeveloperPanel") ||
         input.WasActionPressed("ToggleBindings") ||
         ImGui::IsKeyPressed(ImGuiKey_F1, false);
-    const bool toggleLevelEditor =
-        input.WasActionPressed("ToggleLevelEditor") ||
-        ImGui::IsKeyPressed(ImGuiKey_F2, false);
+#if WITH_EDITOR
+    const bool toggleLevelEditor = ImGui::IsKeyPressed(ImGuiKey_F2, false);
+#endif
     const bool toggleTextureInspector =
         input.WasActionPressed("ToggleTextureInspector") ||
         ImGui::IsKeyPressed(ImGuiKey_F4, false);
@@ -37,10 +39,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     {
         developerWindow_.ToggleOpen();
     }
+#if WITH_EDITOR
     if (toggleLevelEditor)
     {
         editorController_.ToggleOpen();
     }
+#endif
     if (toggleTextureInspector)
     {
         developerWindow_.ToggleTextureInspector();
@@ -60,10 +64,17 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             renderer.SetWireframeMode(!renderer.GetWireframeMode());
         }
+#if WITH_EDITOR
+        if (ImGui::IsKeyPressed(ImGuiKey_F12, false)) // editor build relocates instancing to F12 (F2 = Level Editor)
+        {
+            render::g_instancingEnabled = !render::g_instancingEnabled;
+        }
+#else
         if (input.WasActionPressed("ToggleInstancing"))
         {
-            render::g_instancingEnabled = !render::g_instancingEnabled; // F12: A/B Step 4 auto-instancing
+            render::g_instancingEnabled = !render::g_instancingEnabled; // F2: A/B Step 4 auto-instancing
         }
+#endif
         if (input.WasActionPressed("ToggleLOD"))
         {
             render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
@@ -119,11 +130,17 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
     }
 
-    developerWindow_.Draw(renderer, scene, input, levelManager, settings_, editorController_);
+    developerWindow_.Draw(renderer, scene, input, levelManager, settings_
+#if WITH_EDITOR
+        , editorController_
+#endif
+    );
     scene.SetRenderSettings(settings_);
 
+#if WITH_EDITOR
     EditorContext editorContext{ renderer, scene, levelManager };
     editorController_.Draw(editorContext);
+#endif
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (!uiCapturingInput)

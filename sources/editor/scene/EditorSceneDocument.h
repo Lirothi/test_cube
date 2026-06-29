@@ -1,4 +1,5 @@
 #pragma once
+#if WITH_EDITOR
 
 #include <cstdint>
 #include <string>
@@ -69,3 +70,5 @@ private:
     bool dirty_ = false;
     std::string levelPath_;
 };
+
+#endif // WITH_EDITOR

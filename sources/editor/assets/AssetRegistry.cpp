@@ -1,4 +1,5 @@
 #include "editor/assets/AssetRegistry.h"
+#if WITH_EDITOR
 
 #include <algorithm>
 #include <array>
@@ -237,3 +238,5 @@ const char* ToString(EditorAssetType type)
     }
     return "Unknown";
 }
+
+#endif // WITH_EDITOR

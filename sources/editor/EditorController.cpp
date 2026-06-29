@@ -1,4 +1,7 @@
 #include "editor/EditorController.h"
+#if WITH_EDITOR
+
+#include <string>
 
 #include "editor/EditorContext.h"
 #include "imgui.h"
@@ -36,3 +39,5 @@ void EditorController::Draw(EditorContext&)
 
     open_ = open;
 }
+
+#endif // WITH_EDITOR

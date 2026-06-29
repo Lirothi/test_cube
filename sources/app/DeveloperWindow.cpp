@@ -8,7 +8,9 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/profiling/ProfilerScopes.h"
+#if WITH_EDITOR
 #include "editor/EditorController.h"
+#endif
 #include "imgui.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
@@ -66,7 +68,11 @@ void DeveloperWindow::ToggleTextureInspector()
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
 }
 
-void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings, EditorController& editorController)
+void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
+#if WITH_EDITOR
+    , EditorController& editorController
+#endif
+)
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
 
@@ -278,14 +284,20 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 {
                     oceanControlsWindow_.SetOpen(oceanControlsOpen);
                 }
+#if WITH_EDITOR
                 bool levelEditorOpen = editorController.IsOpen();
                 if (ImGui::Checkbox("Level Editor [F2]", &levelEditorOpen))
                 {
                     editorController.SetOpen(levelEditorOpen);
                 }
+#endif
                 ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
+#if WITH_EDITOR
                 ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled);
+#else
+                ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
+#endif
 
                 ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled);
                 ImGui::BeginDisabled(!render::g_lodEnabled);

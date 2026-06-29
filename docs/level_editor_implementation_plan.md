@@ -18,6 +18,10 @@ leave the repository buildable.
 ## Global Rules For Every Step
 
 - Preserve existing behavior when the editor is closed.
+- Gate all editor code behind the `WITH_EDITOR` macro — every new editor file and
+  every edit to an existing engine file — so a build without `WITH_EDITOR`
+  compiles and behaves exactly as the original engine. See "Editor Compilation
+  Gating (WITH_EDITOR)".
 - Keep the project buildable at the end of every step.
 - Do not replace `Scene`, `LevelManager`, `DemoLevel`, or the render graph.
 - Do not introduce a full ECS.
@@ -52,6 +56,32 @@ scope honest and prevents an executor from assuming they exist.
   (Step 11); an ID buffer is a later upgrade.
 - No thumbnails (also a global rule).
 - No prefab or nested-object hierarchy.
+
+## Editor Compilation Gating (WITH_EDITOR)
+
+All editor code is compiled only when the `WITH_EDITOR` macro is defined. A build
+without it must be identical to the original engine.
+
+- `WITH_EDITOR=1` is defined in the `Debug|x64` configuration's
+  `PreprocessorDefinitions` in `test_cube.vcxproj`. It is NOT defined for
+  `Release|x64`. Use `#if WITH_EDITOR` (an undefined macro evaluates to off).
+- New editor source files wrap their entire body in the macro. Headers put
+  `#if WITH_EDITOR` immediately after `#pragma once` (so the includes and the
+  types are both gated) with `#endif` at end of file. `.cpp` files keep their own
+  `#include "...self.h"` first, then `#if WITH_EDITOR` ... `#endif` around
+  everything else, so they become empty translation units when the editor is off
+  (they remain listed in the project unconditionally).
+- Edits to existing engine files gate ONLY the editor-specific additions:
+  includes, members, methods, call sites, and any new function parameters. A
+  conditionally-present parameter uses `#if WITH_EDITOR` inside the parameter
+  list, and every call site must wrap the matching argument the same way.
+- Data files cannot be `#if`-gated. Keep shared engine data (e.g.
+  `input/bindings.json`) unchanged and drive editor-only input from gated code.
+  In this project the editor toggle is `F2` via `ImGui::IsKeyPressed` (gated), and
+  the GPU-instancing hotkey is relocated to `F12` only in editor builds; a
+  non-editor build keeps the original `F2 = instancing` binding.
+- Both configurations must build. Verify `WITH_EDITOR` on (the normal Debug
+  build) and off (see "Verify the non-editor build").
 
 ## Required Local Context
 
@@ -141,6 +171,17 @@ foreach ($f in $files) {
 
 Add touched `.h` and `.cpp` files to `$files`. Expected for C++ and project
 files is `loneLF=0 loneCR=0`.
+
+### Verify the non-editor build
+
+Editor changes must not break a build without `WITH_EDITOR`. After steps that add
+or gate editor code, temporarily remove `WITH_EDITOR=1;` from the `Debug|x64`
+`PreprocessorDefinitions`, run a Rebuild, confirm success, then restore the define
+and Rebuild again:
+
+```powershell
+& 'C:\Program Files\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe' test_cube.vcxproj /t:Rebuild /p:Configuration=Debug /p:Platform=x64 /m /v:minimal /nologo
+```
 
 ## Step 0: Orientation Only
 

@@ -1,4 +1,5 @@
 #include "editor/scene/EditorSceneDocument.h"
+#if WITH_EDITOR
 
 #include <exception>
 #include <filesystem>
@@ -172,3 +173,5 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
     dirty_ = false;
     return true;
 }
+
+#endif // WITH_EDITOR

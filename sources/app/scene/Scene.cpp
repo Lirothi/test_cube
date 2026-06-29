@@ -12,6 +12,9 @@
 #include "app/Systems.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
+#if WITH_EDITOR
+#include "rendering/core/UploadBatch.h"
+#endif
 #include "ocean/OceanSimulation.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
@@ -258,7 +261,91 @@ void Scene::SetSkybox(std::unique_ptr<Skybox> skybox)
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
     objects_.push_back(std::move(obj));
+#if WITH_EDITOR
+    objectIds_.push_back(0); // runtime object: no editor identity
+#endif
 }
+
+#if WITH_EDITOR
+Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase> obj)
+{
+    const SceneObjectId id = nextEditorId_++;
+    objects_.push_back(std::move(obj));
+    objectIds_.push_back(id);
+    return id;
+}
+
+bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj)
+{
+    if (!obj || !uploads.IsOpen())
+    {
+        return false;
+    }
+
+    obj->Init(&renderer, uploads.CommandList(), uploads.KeepAlive());
+
+    // Keep the auto-allocator ahead of editor-supplied ids so AddEditorObject
+    // never hands out a colliding id later.
+    if (id >= nextEditorId_)
+    {
+        nextEditorId_ = id + 1;
+    }
+
+    objects_.push_back(std::move(obj));
+    objectIds_.push_back(id);
+    return true;
+}
+
+bool Scene::RemoveEditorObject(SceneObjectId id)
+{
+    if (id == 0) // 0 is shared by all non-editor objects; never match on it
+    {
+        return false;
+    }
+    for (size_t i = 0; i < objectIds_.size(); ++i)
+    {
+        if (objectIds_[i] == id)
+        {
+            objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
+            objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
+            return true;
+        }
+    }
+    return false;
+}
+
+RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id)
+{
+    if (id == 0)
+    {
+        return nullptr;
+    }
+    for (size_t i = 0; i < objectIds_.size(); ++i)
+    {
+        if (objectIds_[i] == id)
+        {
+            return objects_[i].get();
+        }
+    }
+    return nullptr;
+}
+
+const RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id) const
+{
+    if (id == 0)
+    {
+        return nullptr;
+    }
+    for (size_t i = 0; i < objectIds_.size(); ++i)
+    {
+        if (objectIds_[i] == id)
+        {
+            return objects_[i].get();
+        }
+    }
+    return nullptr;
+}
+#endif // WITH_EDITOR
 
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
@@ -470,6 +557,9 @@ void Scene::Clear()
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
     objects_.clear();
+#if WITH_EDITOR
+    objectIds_.clear();
+#endif
     camera_.GetView().queue.Clear();
     for (auto& view : cascadeViews_)
     {

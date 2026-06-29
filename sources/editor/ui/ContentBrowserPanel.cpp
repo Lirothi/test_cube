@@ -1,4 +1,5 @@
 #include "editor/ui/ContentBrowserPanel.h"
+#if WITH_EDITOR
 
 #include "imgui.h"
 
@@ -147,3 +148,5 @@ void ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedA
         ImGui::TextDisabled("No asset selected.");
     }
 }
+
+#endif // WITH_EDITOR

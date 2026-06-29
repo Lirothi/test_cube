@@ -1,4 +1,5 @@
 #pragma once
+#if WITH_EDITOR
 
 #include <cstdint>
 #include <string>
@@ -57,3 +58,5 @@ public:
 private:
     std::vector<EditorAssetRecord> assets_;
 };
+
+#endif // WITH_EDITOR

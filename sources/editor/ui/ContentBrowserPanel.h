@@ -1,4 +1,5 @@
 #pragma once
+#if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
 
@@ -17,3 +18,5 @@ private:
     char searchBuffer_[256] = {};
     int typeFilterIndex_ = 0; // index into the type-filter combo (0 = All)
 };
+
+#endif // WITH_EDITOR

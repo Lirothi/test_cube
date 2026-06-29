@@ -1,4 +1,5 @@
 #pragma once
+#if WITH_EDITOR
 
 class Renderer;
 class Scene;
@@ -12,3 +13,5 @@ struct EditorContext
     Scene& scene;
     LevelManager& levelManager;
 };
+
+#endif // WITH_EDITOR
