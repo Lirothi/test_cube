@@ -157,6 +157,7 @@
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/editor/EditorController.cpp" />
+    <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
@@ -265,6 +266,7 @@
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
+    <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
     <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />

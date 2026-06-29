@@ -1,5 +1,7 @@
 #pragma once
 
+#include "editor/assets/AssetRegistry.h"
+
 struct EditorContext;
 
 // Minimal Level Editor shell: owns open/closed state and draws a placeholder
@@ -15,4 +17,6 @@ public:
 
 private:
     bool open_ = false;
+    bool assetsScanned_ = false;
+    AssetRegistry assetRegistry_;
 };

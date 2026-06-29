@@ -10,6 +10,9 @@
     <Filter Include="sources\editor">
       <UniqueIdentifier>{16c05df7-1353-41a0-9a7e-e124edb0c1ab}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\assets">
+      <UniqueIdentifier>{630f4e65-3b13-49ff-b6ea-2c7ab1323bca}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
@@ -113,6 +116,9 @@
     </ClCompile>
     <ClCompile Include="sources/editor/EditorController.cpp">
       <Filter>sources\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/assets/AssetRegistry.cpp">
+      <Filter>sources\editor\assets</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
@@ -373,6 +379,9 @@
     </ClInclude>
     <ClInclude Include="sources/editor/EditorController.h">
       <Filter>sources\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/assets/AssetRegistry.h">
+      <Filter>sources\editor\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>
