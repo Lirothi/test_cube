@@ -1,10 +1,37 @@
 #include "editor/EditorController.h"
 #if WITH_EDITOR
 
+#include <memory>
 #include <string>
 
 #include "editor/EditorContext.h"
+#include "editor/commands/SpawnMeshCommand.h"
 #include "imgui.h"
+
+namespace
+{
+    // damaged_plaster if present, else the first material preset, else "".
+    std::string PickDefaultStaticMaterial(const AssetRegistry& registry)
+    {
+        const EditorAssetRecord* first = nullptr;
+        for (const EditorAssetRecord& rec : registry.Assets())
+        {
+            if (rec.id.type != EditorAssetType::MaterialPreset)
+            {
+                continue;
+            }
+            if (rec.id.key == "damaged_plaster")
+            {
+                return "damaged_plaster";
+            }
+            if (!first)
+            {
+                first = &rec;
+            }
+        }
+        return first ? first->id.key : std::string{};
+    }
+}
 
 void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager)
 {
@@ -46,7 +73,17 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
         ImGui::Separator();
 
-        contentBrowser_.Draw(assetRegistry_, selectedAsset_);
+        const ContentBrowserAction action = contentBrowser_.Draw(assetRegistry_, selectedAsset_);
+        if (action.type == ContentBrowserAction::Type::SpawnStaticMesh)
+        {
+            commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
+                SpawnMeshCommand::Kind::StaticMesh, action.asset.key, PickDefaultStaticMaterial(assetRegistry_)));
+        }
+        else if (action.type == ContentBrowserAction::Type::SpawnTransparentMesh)
+        {
+            commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
+                SpawnMeshCommand::Kind::TransparentMesh, action.asset.key, std::string{}));
+        }
     }
     ImGui::End();
 

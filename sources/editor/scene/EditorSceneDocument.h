@@ -62,6 +62,11 @@ public:
     // `properties`. Leaves the document not-dirty.
     bool LoadFromLevelFile(const std::string& path);
 
+    // Build an EditorObject from a level/editor object JSON entry: lifts the
+    // common fields (name/type/enabled/position/rotationDeg/scale) and keeps the
+    // rest in `properties`. Does not allocate an id or modify the document.
+    static EditorObject ObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson);
+
     const std::string& LevelPath() const { return levelPath_; }
 
 private:

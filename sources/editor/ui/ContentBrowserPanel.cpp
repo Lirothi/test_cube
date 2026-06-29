@@ -40,8 +40,10 @@ namespace
     }
 }
 
-void ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedAsset)
+ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedAsset)
 {
+    ContentBrowserAction action;
+
     // Toolbar: refresh, search, type filter.
     if (ImGui::Button("Refresh"))
     {
@@ -106,16 +108,27 @@ void ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedA
                 selectedAsset = record->id;
             }
 
-            // Placeholder context menu (actions become live in later steps).
+            // Context menu. Spawn actions are live for meshes; material assign
+            // arrives in a later step.
             if (ImGui::BeginPopupContextItem())
             {
                 selectedAsset = record->id; // right-click also selects the row
-                ImGui::BeginDisabled();
-                ImGui::MenuItem("Spawn Static Mesh");
-                ImGui::MenuItem("Spawn Transparent Mesh");
+                const bool isMesh = (record->id.type == EditorAssetType::Mesh);
+                ImGui::BeginDisabled(!isMesh);
+                if (ImGui::MenuItem("Spawn Static Mesh"))
+                {
+                    action.type = ContentBrowserAction::Type::SpawnStaticMesh;
+                    action.asset = record->id;
+                }
+                if (ImGui::MenuItem("Spawn Transparent Mesh"))
+                {
+                    action.type = ContentBrowserAction::Type::SpawnTransparentMesh;
+                    action.asset = record->id;
+                }
+                ImGui::EndDisabled();
+                ImGui::BeginDisabled(true);
                 ImGui::MenuItem("Assign Material to Selected");
                 ImGui::EndDisabled();
-                ImGui::TextDisabled("(available in later steps)");
                 ImGui::EndPopup();
             }
             ImGui::PopID();
@@ -147,6 +160,8 @@ void ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedA
     {
         ImGui::TextDisabled("No asset selected.");
     }
+
+    return action;
 }
 
 #endif // WITH_EDITOR

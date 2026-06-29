@@ -161,6 +161,7 @@
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp" />
+    <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
@@ -275,6 +276,7 @@
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
     <ClInclude Include="sources/editor/commands/EditorCommand.h" />
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h" />
+    <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
     <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />

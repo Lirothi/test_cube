@@ -138,6 +138,9 @@
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -414,6 +417,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
