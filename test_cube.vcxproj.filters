@@ -141,6 +141,12 @@
     <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -421,6 +427,12 @@
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h">
       <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h">
+      <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>

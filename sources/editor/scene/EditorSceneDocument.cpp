@@ -101,6 +101,19 @@ EditorObject EditorSceneDocument::ObjectFromJson(EditorObjectId id, const nlohma
     return obj;
 }
 
+nlohmann::json EditorSceneDocument::ObjectToJson(const EditorObject& obj)
+{
+    nlohmann::json o = obj.properties;
+    o["id"] = obj.id.value;
+    o["name"] = obj.name;
+    o["type"] = obj.type;
+    o["enabled"] = obj.enabled;
+    o["position"] = { obj.transform.position.x, obj.transform.position.y, obj.transform.position.z };
+    o["rotationDeg"] = { obj.transform.rotationDeg.x, obj.transform.rotationDeg.y, obj.transform.rotationDeg.z };
+    o["scale"] = { obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z };
+    return o;
+}
+
 bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
 {
     objects_.clear();

@@ -18,10 +18,11 @@ struct ContentBrowserAction
 class ContentBrowserPanel
 {
 public:
-    // `selectedAsset` is owned by the editor (editor state); the panel reads it
-    // to highlight the active row and writes it when the user clicks a row.
-    // Returns the action the user requested this frame (Type::None if nothing).
-    ContentBrowserAction Draw(AssetRegistry& registry, EditorAssetId& selectedAsset);
+    // Draws the panel as its own ImGui window. `open` backs the window's close
+    // button (the editor owns it). `selectedAsset` is owned by the editor; the
+    // panel highlights it and writes it when the user clicks a row. Returns the
+    // action the user requested this frame (Type::None if nothing).
+    ContentBrowserAction Draw(AssetRegistry& registry, EditorAssetId& selectedAsset, bool* open);
 
 private:
     char searchBuffer_[256] = {};

@@ -67,6 +67,11 @@ public:
     // rest in `properties`. Does not allocate an id or modify the document.
     static EditorObject ObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson);
 
+    // Serialize an EditorObject back to a level/editor object JSON entry: merges
+    // id/name/type/enabled and the transform back onto `properties`. Inverse of
+    // ObjectFromJson; used by delete-undo and (later) save.
+    static nlohmann::json ObjectToJson(const EditorObject& object);
+
     const std::string& LevelPath() const { return levelPath_; }
 
 private:

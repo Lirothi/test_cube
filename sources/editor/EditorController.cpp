@@ -5,6 +5,7 @@
 #include <string>
 
 #include "editor/EditorContext.h"
+#include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "imgui.h"
 
@@ -49,20 +50,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         firstOpenInitialized_ = true;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_FirstUseEver);
+    EditorContext ctx{ renderer, scene, levelManager, document_, selectedObject_ };
 
+    // Main editor window: status, undo/redo, and per-window visibility toggles.
+    // Closing it (its X) closes the whole editor interface.
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 180.0f), ImGuiCond_FirstUseEver);
     bool open = open_;
     if (ImGui::Begin("Level Editor###LevelEditor", &open))
     {
-        EditorContext ctx{ renderer, scene, levelManager, document_, selectedObject_ };
-
         const std::string& levelPath = document_.LevelPath();
-        ImGui::Text("Level: %s | Document objects: %d",
-            levelPath.empty() ? "(none)" : levelPath.c_str(),
-            static_cast<int>(document_.Objects().size()));
+        ImGui::Text("Level: %s", levelPath.empty() ? "(none)" : levelPath.c_str());
+        ImGui::Text("Document objects: %d", static_cast<int>(document_.Objects().size()));
 
-        // Undo/redo are wired to the command stack now; commands that fill it
-        // arrive in later steps, so these stay disabled until then.
         ImGui::BeginDisabled(!commandStack_.CanUndo());
         if (ImGui::Button("Undo")) { commandStack_.Undo(ctx); }
         ImGui::EndDisabled();
@@ -72,8 +71,27 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::EndDisabled();
 
         ImGui::Separator();
+        ImGui::TextUnformatted("Windows");
+        ImGui::Checkbox("Content Browser", &showContentBrowser_);
+        ImGui::Checkbox("Scene Outliner", &showOutliner_);
+    }
+    ImGui::End();
+    open_ = open;
 
-        const ContentBrowserAction action = contentBrowser_.Draw(assetRegistry_, selectedAsset_);
+    // Each panel is its own window, drawn only while the editor is open and its
+    // visibility toggle is on. Panels draw their own window and return an action.
+    if (showOutliner_)
+    {
+        const OutlinerAction outlinerAction = outliner_.Draw(document_, selectedObject_, &showOutliner_);
+        if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
+        {
+            commandStack_.Execute(ctx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
+        }
+    }
+
+    if (showContentBrowser_)
+    {
+        const ContentBrowserAction action = contentBrowser_.Draw(assetRegistry_, selectedAsset_, &showContentBrowser_);
         if (action.type == ContentBrowserAction::Type::SpawnStaticMesh)
         {
             commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
@@ -85,9 +103,6 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 SpawnMeshCommand::Kind::TransparentMesh, action.asset.key, std::string{}));
         }
     }
-    ImGui::End();
-
-    open_ = open;
 }
 
 #endif // WITH_EDITOR

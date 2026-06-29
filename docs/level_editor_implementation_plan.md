@@ -77,11 +77,32 @@ without it must be identical to the original engine.
   list, and every call site must wrap the matching argument the same way.
 - Data files cannot be `#if`-gated. Keep shared engine data (e.g.
   `input/bindings.json`) unchanged and drive editor-only input from gated code.
-  In this project the editor toggle is `F2` via `ImGui::IsKeyPressed` (gated), and
+  In this project `F2` toggles the whole editor interface (all windows) via
+`ImGui::IsKeyPressed` (gated), and
   the GPU-instancing hotkey is relocated to `F12` only in editor builds; a
   non-editor build keeps the original `F2 = instancing` binding.
 - Both configurations must build. Verify `WITH_EDITOR` on (the normal Debug
   build) and off (see "Verify the non-editor build").
+
+## Editor Windowing
+
+Editor panels are independent ImGui windows, not sections of one window:
+
+- A small **Level Editor** window holds the status line, Undo/Redo, and
+  checkboxes that show/hide the other windows. Closing it (its `X`) closes the
+  whole editor.
+- **Content Browser**, **Scene Outliner**, and **Inspector** are each their own
+  `ImGui::Begin`/`End` window backed by a visibility bool owned by
+  `EditorController`.
+- `EditorController` owns the overall open state and the per-window visibility
+  bools, builds the `EditorContext` once per frame, and draws each visible
+  window. A panel draws its own window and returns an action; the controller
+  turns actions into commands.
+- The whole interface is shown or hidden together by the editor open state,
+  toggled by `F2` (and the developer-window checkbox). When the editor is closed,
+  no editor window draws and engine input is unaffected.
+- Adding a future panel is additive: a new window, a visibility bool, and a
+  toggle checkbox — existing panels do not change.
 
 ## Required Local Context
 
@@ -405,7 +426,8 @@ Display searchable/filterable asset records in a real panel.
 
 ### UI Requirements
 
-Draw:
+Draw the content browser as its own ImGui window (`Content Browser`, see
+"Editor Windowing") containing:
 
 - search text input
 - asset type filter combo
@@ -862,7 +884,8 @@ Select and delete editor-owned objects by ID.
 
 ### Outliner Requirements
 
-Draw a table from `EditorSceneDocument::Objects()`:
+Draw the outliner as its own ImGui window (`Scene Outliner`, see "Editor
+Windowing"), containing a table from `EditorSceneDocument::Objects()`:
 
 - selected state
 - enabled checkbox
@@ -873,7 +896,8 @@ Draw a table from `EditorSceneDocument::Objects()`:
 Actions:
 
 - select object
-- delete selected object through `DeleteObjectCommand`
+- delete an object via a right-click context menu entry, through
+  `DeleteObjectCommand`
 
 ### Delete Command
 
@@ -930,6 +954,9 @@ Edit selected object's name, enabled state, and transform.
 - `test_cube.vcxproj.filters`
 
 ### UI Fields
+
+Draw the inspector as its own ImGui window (`Inspector`, see "Editor Windowing")
+with:
 
 - ID read-only
 - name
@@ -1211,12 +1238,99 @@ Do not save generated runtime-only objects such as `DebugGrid`.
   still rotate and the metal-rough grid and instanced models remain.
 - Original `data/levels/demo.json` still loads.
 
-## Step 14: Extensibility Cleanup
+## Step 14: Editor Hotkeys
 
 ### Prompt
 
 ```text
 Now implement Step 14 from docs/level_editor_implementation_plan.md.
+Add an editor hotkey layer using the common Unreal Editor shortcuts, wired to the
+editor actions built in earlier steps. Do not add new actions beyond those.
+```
+
+### Goal
+
+Drive the existing editor actions (gizmo mode, selection, delete, undo/redo, save,
+focus) from keyboard shortcuts matching Unreal Engine conventions.
+
+### Add Files
+
+- `sources/editor/EditorHotkeys.h`
+- `sources/editor/EditorHotkeys.cpp`
+
+May instead live inside `EditorController` if include dependencies are trivial,
+but a small separate translation unit keeps the shortcut table easy to extend.
+
+### Modify Files
+
+- `sources/editor/EditorController.h`
+- `sources/editor/EditorController.cpp`
+- `sources/editor/ui/ViewportGizmo.*` (set the gizmo mode from hotkeys)
+- `test_cube.vcxproj`
+- `test_cube.vcxproj.filters`
+
+### Hotkey Map (Unreal conventions)
+
+Transform-mode keys (apply only when the camera is not being flown — see Input
+Rules):
+
+- `Q` — Select mode (gizmo hidden / select only)
+- `W` — Translate (move) gizmo
+- `E` — Rotate gizmo
+- `R` — Scale gizmo
+- `Spacebar` — cycle Translate → Rotate → Scale
+
+Action keys:
+
+- `Delete` — delete the selected object (`DeleteObjectCommand`, Step 9)
+- `Ctrl+Z` — Undo
+- `Ctrl+Y` and `Ctrl+Shift+Z` — Redo
+- `Ctrl+S` — Save the current level (Step 13)
+- `F` — focus / frame the camera on the selected object
+- `Esc` — clear the selection
+
+### Input Rules
+
+- Hotkeys run only while the editor window is open; closing it restores original
+  input behavior.
+- Suppress all hotkeys when ImGui is capturing text input
+  (`ImGui::GetIO().WantTextInput`) so typing in the search box or inspector
+  fields never triggers a shortcut.
+- `Q/W/E/R/Spacebar` collide with the engine's WASD/QE fly-camera movement.
+  Mirror Unreal: apply them only when the camera is NOT in fly mode (the
+  look-toggle / right mouse button is not held). While flying, those keys move
+  the camera as before.
+- Use `ImGui::GetIO().KeyCtrl` / `KeyShift` plus `ImGui::IsKeyPressed` for the
+  chorded shortcuts.
+- All of this is `WITH_EDITOR`-gated.
+
+### Tasks
+
+- Route `Q/W/E/R/Spacebar` to the viewport gizmo mode (Step 11).
+- Route `Delete` through the command stack as a `DeleteObjectCommand` (Step 9).
+- Route `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` to `EditorCommandStack::Undo`/`Redo`.
+- Route `Ctrl+S` to the level save path (Step 13).
+- `F` moves the camera to frame the selected object's transform; `Esc` clears the
+  selection.
+- Show the active transform mode and the key hints in the editor UI.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- With the editor open and no text field focused: `W/E/R/Q` change the transform
+  mode, `Spacebar` cycles it, `Delete` removes the selected object, `Ctrl+Z` /
+  `Ctrl+Y` undo/redo, `Ctrl+S` saves, `F` frames the selection, `Esc` deselects.
+- Typing in the content browser search box does not trigger shortcuts.
+- Holding the fly-camera button still moves with WASD/QE; releasing it restores
+  the transform-mode keys.
+- Closing the editor restores original input behavior.
+
+## Step 15: Extensibility Cleanup
+
+### Prompt
+
+```text
+Now implement Step 15 from docs/level_editor_implementation_plan.md.
 Refactor editor panels and object/property behavior into small registries.
 Do not change user-visible behavior.
 ```
@@ -1296,6 +1410,11 @@ Run this after the last implemented step in a session:
   rotate and the metal-rough grid and instanced models remain
 - reload original demo level through existing UI
 - toggle wireframe, reflections, instancing, and LOD after spawning
+- with the editor open and no text field focused: W/E/R/Q switch transform mode,
+  Spacebar cycles it, Delete removes the selection, Ctrl+Z/Ctrl+Y undo/redo,
+  Ctrl+S saves, F frames the selection, Esc deselects
+- typing in the content browser search box does not trigger shortcuts
+- holding the fly-camera button still moves with WASD/QE
 - close editor and verify camera input still works
 
 ## Stop Conditions

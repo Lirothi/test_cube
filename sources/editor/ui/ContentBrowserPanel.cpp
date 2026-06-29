@@ -40,9 +40,16 @@ namespace
     }
 }
 
-ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedAsset)
+ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedAsset, bool* open)
 {
     ContentBrowserAction action;
+
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 420.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Content Browser", open))
+    {
+        ImGui::End();
+        return action;
+    }
 
     // Toolbar: refresh, search, type filter.
     if (ImGui::Button("Refresh"))
@@ -161,6 +168,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAs
         ImGui::TextDisabled("No asset selected.");
     }
 
+    ImGui::End();
     return action;
 }
 
