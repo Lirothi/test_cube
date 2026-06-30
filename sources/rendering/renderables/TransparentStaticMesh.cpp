@@ -182,8 +182,11 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     auto& lights = scene_->GetLightManager();
     const size_t pointCount = lights.PointLights().size();
     const size_t spotCount = lights.GetSpotLightCount();
-    lights.EnsurePointLightBuffer(renderer, std::max<size_t>(pointCount, size_t(1)));
-    lights.EnsureSpotLightBuffer(renderer, std::max<size_t>(spotCount, size_t(1)));
+    if (!lights.EnsurePointLightBuffer(renderer, std::max<size_t>(pointCount, size_t(1))) ||
+        !lights.EnsureSpotLightBuffer(renderer, std::max<size_t>(spotCount, size_t(1))))
+    {
+        return;
+    }
 
     const D3D12_CPU_DESCRIPTOR_HANDLE sceneColorSrv =
         deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV;

@@ -20,6 +20,11 @@ CameraTransformSnapshot CaptureCameraTransform(const Camera& camera)
     return { camera.GetPosition(), camera.GetYaw(), camera.GetPitch() };
 }
 
+CameraTransformSnapshot ToSnapshot(const LevelCameraOverride& cameraOverride)
+{
+    return { cameraOverride.position, cameraOverride.yaw, cameraOverride.pitch };
+}
+
 void RestoreCameraTransform(Camera& camera, const CameraTransformSnapshot& snapshot)
 {
     camera.SetPosition(snapshot.position);
@@ -78,7 +83,11 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx,
     pendingLevelRequest_.reset();
 
     activeLevel_->Load(ctx);
-    if (preservedCameraTransform)
+    if (options.cameraOverride)
+    {
+        RestoreCameraTransform(scene.CameraRef(), ToSnapshot(*options.cameraOverride));
+    }
+    else if (preservedCameraTransform)
     {
         RestoreCameraTransform(scene.CameraRef(), *preservedCameraTransform);
     }
@@ -114,7 +123,12 @@ void LevelManager::Tick(float deltaTime)
 
 void LevelManager::RequestLevelChange(std::string levelName, const LevelLoadOptions& options)
 {
-    pendingLevelRequest_ = LevelChangeRequest{ std::move(levelName), options };
+    pendingLevelRequest_ = LevelChangeRequest{ std::move(levelName), std::string(), false, options };
+}
+
+void LevelManager::RequestLevelPathChange(std::string path, const LevelLoadOptions& options)
+{
+    pendingLevelRequest_ = LevelChangeRequest{ std::string(), std::move(path), true, options };
 }
 
 std::optional<LevelChangeRequest> LevelManager::ConsumePendingLevelRequest()

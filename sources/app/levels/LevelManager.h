@@ -9,10 +9,19 @@
 #include <utility>
 
 #include "app/levels/Level.h"
+#include "core/math/Math.h"
+
+struct LevelCameraOverride
+{
+    Math::float3 position{ 0.0f, 0.0f, 0.0f };
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
 
 struct LevelLoadOptions
 {
     bool preserveCameraTransform = false;
+    std::optional<LevelCameraOverride> cameraOverride;
 #if WITH_EDITOR
     EditorSceneDocument* editorDocument = nullptr;
 #endif
@@ -21,6 +30,8 @@ struct LevelLoadOptions
 struct LevelChangeRequest
 {
     std::string levelName;
+    std::string sourcePath;
+    bool loadFromPath = false;
     LevelLoadOptions options;
 };
 
@@ -44,6 +55,7 @@ public:
     void Tick(float deltaTime);
 
     void RequestLevelChange(std::string levelName, const LevelLoadOptions& options = {});
+    void RequestLevelPathChange(std::string path, const LevelLoadOptions& options = {});
     std::optional<LevelChangeRequest> ConsumePendingLevelRequest();
 
     Level* GetActiveLevel() const { return activeLevel_; }

@@ -11,6 +11,7 @@ class InputManager;
 class LevelManager;
 class Renderer;
 class Scene;
+struct LevelChangeRequest;
 
 // App-level debug controls: maps input actions to render/debug settings
 // (SSR technique, FXAA, DLSS, wireframe, profiler/debug overlays) and builds
@@ -21,6 +22,13 @@ public:
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene) const;
     void WaitForHudBuild();
+#if WITH_EDITOR
+    void OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
+        bool loaded,
+        Renderer& renderer,
+        Scene& scene,
+        LevelManager& levelManager);
+#endif
 
     const SceneRenderSettings& Settings() const { return settings_; }
 

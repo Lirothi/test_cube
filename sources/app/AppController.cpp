@@ -179,6 +179,17 @@ void AppController::WaitForHudBuild()
     TaskSystem::Get().Release(hudBuildTask_);
 }
 
+#if WITH_EDITOR
+void AppController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
+    bool loaded,
+    Renderer& renderer,
+    Scene& scene,
+    LevelManager& levelManager)
+{
+    editorController_.OnLevelChangeRequestCompleted(request, loaded, renderer, scene, levelManager);
+}
+#endif
+
 void AppController::ScheduleHudBuild(Renderer& renderer, const Scene& scene)
 {
     WaitForHudBuild();

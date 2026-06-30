@@ -5,6 +5,7 @@
 
 # User-specific files
 imgui.ini
+editor_state.json
 rt_smoke.txt
 *.rsuser
 *.suo

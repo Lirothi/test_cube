@@ -829,6 +829,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassShoreDepth);
         ID3D12Resource* shoreDepth = oceanSimulation->GetShoreDepthResource();
@@ -840,8 +841,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
         const D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv = oceanSimulation->GetShoreDepthDsv();
         if (shoreDepthDsv.ptr == 0)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
-            return;
+            break;
         }
 
         t.cl->OMSetRenderTargets(0, nullptr, FALSE, &shoreDepthDsv);
@@ -885,7 +885,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
             renderer->Transition(t.cl, shoreDepth,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
-    }
+    } while (false);
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1226,7 +1226,10 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         return;
     }
 
-    lightManager.EnsureSpotLightBuffer(renderer, spotLightCount);
+    if (!lightManager.EnsureSpotLightBuffer(renderer, spotLightCount))
+    {
+        return;
+    }
     auto* spotLightBufferCPU = lightManager.GetSpotLightBufferCPU();
     const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager.GetSpotLightSrv();
     if (!spotLightBufferCPU || spotLightSrvHandle.ptr == 0)
@@ -1236,6 +1239,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotLights);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1261,8 +1265,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         const UINT cbSize = resources_.GetSpotLightCBSizeBytes();
         if (!spotMaterial || cbSize == 0)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
-            return;
+            break;
         }
 
         SpotLightPassConstants constants{};
@@ -1286,7 +1289,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
             D.light.Get());
-    }
+    } while (false);
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1298,13 +1301,17 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     auto& pointLights = lightManager.PointLights();
     if (pointLights.empty()) { return; }
 
-    lightManager.EnsurePointLightBuffer(renderer, pointLights.size());
+    if (!lightManager.EnsurePointLightBuffer(renderer, pointLights.size()))
+    {
+        return;
+    }
     auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU();
     const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv();
     if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPointLights);
 
@@ -1324,8 +1331,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         const UINT cbSize = resources_.GetPointLightCBSizeBytes();
         if (!pointMaterial || cbSize == 0)
         {
-            renderer->EndThreadCommandList(t, ctx.batchIndex);
-            return;
+            break;
         }
 
         PointLightPassConstants constants{};
@@ -1346,7 +1352,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
             D.light.Get());
-    }
+    } while (false);
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
@@ -1377,6 +1383,7 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
     //return;
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassReflectionSource);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1386,8 +1393,7 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
         const UINT cbSize = resources_.GetSsrCBSizeBytes();
         if (!ssrMaterial || cbSize == 0)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         SsrPassConstants constants{};
@@ -1419,7 +1425,7 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
             D.reflection.Get());
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1460,6 +1466,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassRTReflections);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1473,8 +1480,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
             asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
             // No usable TLAS/bindless/light/skybox this frame: leave reflection as is.
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         // Per-frame scene descriptors into the bindless heap (geometry VB/IB +
@@ -1553,7 +1559,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         // Restore the frame heap: this pass shares its command list with the
         // grouped blur + compose passes, which bind into the per-frame heap.
         renderer->BindDescriptorHeaps(t.cl);
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1564,11 +1570,12 @@ void SceneRenderer::Pass_GlassReflGbuffer(Renderer* renderer, RenderGraphPassCon
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflGbuffer);
         const auto& D = renderer->GetDeferredForFrame();
         auto prepassMat = resources_.GetGlassReflPrepassMaterial();
-        if (!prepassMat) { ctx.EndCL(t); return; }
+        if (!prepassMat) { break; }
         ctx.ApplyDeclaredStates(t.cl); // glassReflNormal -> RTV, glassReflDepth -> DEPTH_WRITE
 
         const UINT w = renderer->GetReflectionTextureWidth();
@@ -1611,7 +1618,7 @@ void SceneRenderer::Pass_GlassReflGbuffer(Renderer* renderer, RenderGraphPassCon
         };
         drawBucket(SceneRenderQueue::BucketType::TransparentSimple);
         drawBucket(SceneRenderQueue::BucketType::TransparentComplex);
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1622,6 +1629,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflections);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1634,8 +1642,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         // Glass scene-descriptor range (17-25): distinct from reflections 0-7 / denoise 8-12
@@ -1705,7 +1712,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         }
         renderer->UAVBarrier(t.cl, D.glassReflection.Get());
         renderer->BindDescriptorHeaps(t.cl); // restore the frame heap
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1716,6 +1723,7 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassGlassReflections);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1725,8 +1733,7 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
         const UINT cbSize = resources_.GetSsrCBSizeBytes();
         if (!ssrMaterial || cbSize == 0)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         SsrPassConstants constants{};
@@ -1754,7 +1761,7 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
             D.glassReflection.Get());
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1762,6 +1769,7 @@ void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ct
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDenoise);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1771,8 +1779,7 @@ void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ct
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         if (!denoiseMaterial || !bindless_.Ready() || !reflectionHistory_.Ready())
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         const uint64_t parity = renderer->GetTotalFrameNumber();
@@ -1815,7 +1822,7 @@ void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ct
 
         // Restore the frame heap for the grouped blur + compose passes.
         renderer->BindDescriptorHeaps(t.cl);
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1844,6 +1851,7 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
     //return;
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassReflectionBlur);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1857,8 +1865,7 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
         const UINT cbSize = resources_.GetBlurCBSizeBytes();
         if (!blurMaterial || cbSize == 0)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
@@ -1887,7 +1894,7 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
             { D.reflectionScratchSRV, D.gbSRV[0] }, { D.reflectionUAV }, samplerTable, // t0 reflection, t1 GB0
             ssrWidth, ssrHeight,
             D.reflection.Get());
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -1896,6 +1903,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassCompose);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1906,8 +1914,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         if (width <= 0.0f || height <= 0.0f)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         auto composeMaterial = resources_.GetComposeMaterial();
@@ -1916,8 +1923,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         if (!composeMaterial || cbSize == 0 || !skybox)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         ComposePassConstants constants{};
@@ -1938,7 +1944,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             D.scene.Get());
 
         renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-    }
+    } while (false);
 
     ctx.EndCL(t);
 }
@@ -1965,6 +1971,7 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDebug);
         const auto& D = renderer->GetDeferredForFrame();
@@ -1976,8 +1983,7 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         if (!debugMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0)
         {
-            ctx.EndCL(t);
-            return; // no TLAS / bindless table this frame — leave reflection as compose left it
+            break; // no TLAS / bindless table this frame - leave reflection as compose left it
         }
 
         // Copy this frame's scene descriptors into the persistent bindless heap so
@@ -2024,7 +2030,7 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         // Leave reflection in the same frame-end state compose does, so the texture
         // inspector reads it exactly as it would the normal SSR result.
         renderer->Transition(t.cl, D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    }
+    } while (false);
     ctx.EndCL(t);
 }
 
@@ -2205,6 +2211,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
@@ -2228,8 +2235,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         auto tonemapMaterial = resources_.GetTonemapMaterial();
         if (!tonemapMaterial)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
@@ -2286,7 +2292,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         }
 
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
+    } while (false);
 
     ctx.EndCL(t);
 }
@@ -2300,6 +2306,7 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
     const auto& D = renderer->GetDeferredForFrame();
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
+    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebug);
         renderer->RecordBindDefaultsNoClear(t.cl);
@@ -2316,14 +2323,13 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         auto debugMaterial = resources_.GetDebugMaterial();
         if (!debugMaterial)
         {
-            ctx.EndCL(t);
-            return;
+            break;
         }
 
         debugMaterial->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
-    }
+    } while (false);
 
     ctx.EndCL(t);
 }

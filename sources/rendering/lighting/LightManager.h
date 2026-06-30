@@ -46,8 +46,8 @@ public:
     void UpdateSpotLightCache();
 
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
-    void EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
-    void EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
+    bool EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
+    bool EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
     PointLightGpu* GetPointLightBufferCPU() const { return pointLightBufferCPU_; }
     SpotLightGpu* GetSpotLightBufferCPU() const { return spotLightBufferCPU_; }
@@ -59,6 +59,9 @@ public:
 
 private:
     using ComPtr = Microsoft::WRL::ComPtr<ID3D12Resource>;
+
+    void ReleasePointLightBuffer(Renderer* renderer = nullptr);
+    void ReleaseSpotLightBuffer(Renderer* renderer = nullptr);
 
     std::vector<PointLight> pointLights_;
     std::vector<SpotLight>  spotLights_;

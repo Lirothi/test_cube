@@ -477,6 +477,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 {
                     renderer.WaitForPreviousFrame();
 
+                    bool levelLoaded = false;
                     UploadBatch levelBatch;
                     if (levelBatch.Begin(&renderer))
                     {
@@ -486,11 +487,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #endif
                         };
 
-                        if (levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options))
+                        levelLoaded = pendingLevel->loadFromPath
+                            ? levelManager.LoadLevelFromPath(pendingLevel->sourcePath, levelCtx, pendingLevel->options)
+                            : levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
+                        if (levelLoaded)
                         {
                             levelBatch.SubmitAndWait(&renderer);
                         }
                     }
+#if WITH_EDITOR
+                    appController_.OnLevelChangeRequestCompleted(*pendingLevel, levelLoaded, renderer, scene, levelManager);
+#endif
                 }
 
                 appController_.WaitForHudBuild();
