@@ -60,6 +60,7 @@ public:
     // kept in lockstep with objects_ on every add/remove/clear.
     using SceneObjectId = std::uint64_t;
     SceneObjectId AddEditorObject(std::unique_ptr<RenderableObjectBase> obj);
+    void AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id);
     bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj);
     bool RemoveEditorObject(SceneObjectId id);
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
@@ -102,7 +103,7 @@ private:
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
 #if WITH_EDITOR
     // Lockstep with objects_: objectIds_[i] is the editor id of objects_[i], or
-    // 0 for a non-editor (level-loaded) object.
+    // 0 for a runtime object with no editor identity.
     std::vector<SceneObjectId> objectIds_;
     SceneObjectId nextEditorId_ = 1;
 #endif

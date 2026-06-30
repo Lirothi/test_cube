@@ -15,6 +15,11 @@ created by earlier steps, but the executor should not jump ahead. If a step
 cannot be completed cleanly, the executor should stop, explain the blocker, and
 leave the repository buildable.
 
+**Before your first step, read [`docs/level_editor_HANDOFF.md`](level_editor_HANDOFF.md).**
+It carries the cross-cutting build/gating discipline, engine conventions (the ID
+model, no `dynamic_cast`, safe scene mutation), and the per-step landmines that this
+plan assumes but does not repeat. Steps 1–13 are already done; you start at Step 14.
+
 ## Global Rules For Every Step
 
 - Preserve existing behavior when the editor is closed.
@@ -46,16 +51,21 @@ leave the repository buildable.
 
 ## Non-Goals (First Pass)
 
-The first editor pass deliberately excludes the following. Calling them out keeps
-scope honest and prevents an executor from assuming they exist.
+These bounded the **first pass (Steps 1–13)**. Several were **superseded on
+2026-06-30** — see "Data-Driven, Fully Editable Editor (Scope Change 2026-06-30)"
+below. The first pass deliberately excluded:
 
-- No editing of lights, camera, skybox, or ocean as selectable objects. These
-  top-level JSON sections are preserved verbatim on save but are not editable.
-- No copy/paste, duplicate, or multi-select.
-- No GPU ID-buffer picking. Viewport selection uses CPU ray-vs-bounds picking
-  (Step 11); an ID buffer is a later upgrade.
-- No thumbnails (also a global rule).
-- No prefab or nested-object hierarchy.
+- ~~No editing of lights, camera, skybox, or ocean as selectable objects.~~ **Now in
+  scope** (Steps 22–24). Until implemented they remain preserved verbatim on save.
+- No copy/paste, duplicate, or multi-select. (Still out of scope.)
+- ~~No GPU ID-buffer picking.~~ **Now the chosen picking path** (Step 20); CPU
+  ray-vs-bounds picking (Step 11) was only the first-pass placeholder.
+- No thumbnails (also a global rule). (Still out of scope.)
+- No prefab or nested-object hierarchy. (Still out of scope.)
+
+Also newly in scope: a fully data-driven loader that replaces the hardcoded
+`DemoLevel` (Steps 16–17), load/save of any level file through a File menu
+(Steps 18–19), and a selection outline (Step 21).
 
 ## Editor Compilation Gating (WITH_EDITOR)
 
@@ -1238,12 +1248,455 @@ Do not save generated runtime-only objects such as `DebugGrid`.
   still rotate and the metal-rough grid and instanced models remain.
 - Original `data/levels/demo.json` still loads.
 
-## Step 14: Editor Hotkeys
+## Data-Driven, Fully Editable Editor (Scope Change 2026-06-30)
+
+Steps 1–13 produced a working editor **for objects spawned in-editor**. Three of the
+first-pass Non-Goals are exactly what make it feel unfinished: loaded objects can't
+be edited, there's no load/save of arbitrary levels (the hardcoded `DemoLevel` is the
+only loader), and selection is CPU bounding-box picking with no outline. Steps 14–24
+remove those limits, one separable step at a time; Steps 25–26 (Hotkeys, Extensibility
+Cleanup) follow last.
+
+### Locked Decisions
+
+1. **Loader rewrite — full data-driven.** All object creation moves into a type
+   registry; a generic `JsonLevel` loads/saves any file; `metalRoughGrid` and
+   `instancedModels` become registered generator types; `DemoLevel` is **deleted**.
+2. **Picking — GPU object-ID buffer.** Pixel-accurate selection via an `R32_UINT`
+   G-buffer target plus a one-pixel readback on click.
+3. **Environment editable.** Lights, camera, skybox, and ocean become
+   selectable/editable entities (Steps 22–24).
+
+### Root-Cause Diagnosis (carry into every step below)
+
+The editor today has **two parallel worlds that only connect for spawned objects**:
+
+- The runtime scene is built by `DemoLevel::Load()`, which calls `Scene::AddObject`.
+  That path hard-codes the object's editor id to **0** (`Scene.cpp:262`,
+  `objectIds_.push_back(0)`). Id `0` means "no editor identity"; picking, find,
+  inspector, and delete all skip id `0` (`Scene.cpp:358`).
+- The `EditorSceneDocument` is a *separate* mirror parsed from the same JSON with its
+  own ids, never linked back to the id-0 runtime objects.
+- Only `SpawnMeshCommand` allocates one id and gives the **same** id to both the
+  document and `Scene::AddInitializedEditorObject` — which is why only spawned objects
+  are editable. Reload routes back through `DemoLevel`, so even a saved object returns
+  with id `0` and goes un-editable.
+
+Most of `demo.json` is **already** data-driven (camera, lights, skybox, ocean,
+static/transparent meshes). The genuinely hardcoded pieces are the `type` dispatch
+in `DemoLevel`, `RotatingObject`, the `metalRoughGrid`/`instancedModels` generators,
+and the always-on `DebugGrid`.
+
+The fix is one object lifecycle: **every object in a loaded level carries a live
+editor id, and the document and runtime stay 1:1 by that id.**
+
+### Additional Global Rules
+
+- Every object in a loaded level gets a live editor id; the document mirrors the
+  runtime 1:1; ids are stable across save/load.
+- Everything else from "Global Rules For Every Step" still holds — `WITH_EDITOR`
+  gating, build on/off, CRLF for C++/project files, command-pattern + undo, mutate
+  `Scene` only in the editor window after `WaitForPreviousFrame()`, no
+  `dynamic_cast` (internal-RTTI `AsX()` accessors), round-trip unmodeled data.
+
+## Step 14: Scene Add Object With Editor Id
 
 ### Prompt
 
 ```text
 Now implement Step 14 from docs/level_editor_implementation_plan.md.
+Only add Scene::AddObjectWithEditorId (explicit id, deferred init). Do not change
+level loading yet.
+```
+
+### Goal
+
+Let level loading give a runtime object a real editor id without initializing it
+immediately, so loaded objects can become editor-linked in Step 15. No renderer
+changes; this is the keystone — it is what finally makes loaded objects editable.
+
+### Modify Files
+
+- `sources/app/scene/Scene.h`
+- `sources/app/scene/Scene.cpp`
+
+### Required API
+
+```cpp
+void AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id);
+```
+
+### Tasks
+
+- Append to `objects_`, push `id` (not `0`) to `objectIds_`, and bump `nextEditorId_`
+  past `id`. Defer `Init` to `FinalizeLevelLoad`, exactly like `AddObject`.
+- Keep `AddObject` (id `0`) for truly anonymous runtime-only objects (`DebugGrid`), or
+  give them an id flagged non-serialized.
+- Re-audit every `objects_` mutation site for `objectIds_` lockstep.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Demo level loads and renders unchanged.
+- No editor UI uses the new API yet.
+
+## Step 15: Load-Time ID Assignment And Document Mirror
+
+### Prompt
+
+```text
+Now implement Step 15 from docs/level_editor_implementation_plan.md.
+Make every loaded level object editor-linked and mirrored into the document, so
+loaded objects are editable like spawned ones and survive reload.
+```
+
+### Goal
+
+Every object in a loaded level gets a live editor id and a matching `EditorObject`.
+
+### Modify Files
+
+- `sources/app/levels/DemoLevel.cpp` (still the loader at this step)
+- `sources/editor/EditorController.*` / `sources/editor/scene/EditorSceneDocument.*`
+
+### Tasks
+
+- During load, allocate one id per object in stable order and add via
+  `AddObjectWithEditorId`.
+- Under `WITH_EDITOR`, add a matching `EditorObject` to the document (lift common
+  fields; rest into `properties`) so the document is a true mirror of the runtime,
+  loaded objects included.
+- Drive the editor document from the same JSON the runtime used; reload reuses this
+  path so editability survives a reload.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Every demo object appears in the outliner with a non-zero id.
+- Clicking and editing a **loaded** box works live (transform / material).
+- Reload keeps loaded objects editable. *(Resolves the primary complaint.)*
+
+## Step 16: Scene Object Type Registry
+
+### Prompt
+
+```text
+Now implement Step 16 from docs/level_editor_implementation_plan.md.
+Replace DemoLevel's hardcoded type dispatch with a registry of type -> creator. Keep
+demo behavior identical.
+```
+
+### Goal
+
+A data-driven object-type registry so new types are additive, not code edits.
+
+### Add Files
+
+- `sources/app/scene/SceneObjectRegistry.h`
+- `sources/app/scene/SceneObjectRegistry.cpp` (ungated engine code)
+
+### Modify Files
+
+- `sources/app/levels/DemoLevel.cpp`
+- `test_cube.vcxproj` / `test_cube.vcxproj.filters`
+
+### Tasks
+
+- The registry maps a `type` string to a creator that returns the runtime object(s).
+  Register `staticMesh`, `transparentMesh`, rotating mesh (`staticMesh` +
+  `rotateSpeedDeg`), `metalRoughGrid`, `instancedModels`, `ocean`, `debugGrid`.
+- Move the per-type creation bodies out of `DemoLevel` into creators; reuse
+  `SceneObjectFactory`.
+- Generators emit their runtime objects all tagged with the generator's single editor
+  id, so picking any child selects the one generator entity.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- A loader driven by the registry reproduces the demo scene identically.
+
+## Step 17: Generic JsonLevel And Delete DemoLevel
+
+### Prompt
+
+```text
+Now implement Step 17 from docs/level_editor_implementation_plan.md.
+Add a generic path-parameterized JsonLevel that loads any level file through the
+registry, make it the default, and delete DemoLevel.
+```
+
+### Goal
+
+Load any level file by path; remove the hardcoded loader.
+
+### Add Files
+
+- `sources/app/levels/JsonLevel.h`
+- `sources/app/levels/JsonLevel.cpp`
+
+### Modify Files
+
+- `sources/app/levels/LevelManager.h` / `LevelManager.cpp`
+- `sources/app/App.cpp`
+- delete `sources/app/levels/DemoLevel.h` / `DemoLevel.cpp`
+- `test_cube.vcxproj` / `test_cube.vcxproj.filters`
+
+### Tasks
+
+- `JsonLevel : Level` holds a file path; `Load` parses camera/lights/skybox/ocean and
+  `objects[]` via the registry (Step 16), using the id assignment from Steps 14–15.
+- Add `LevelManager::LoadLevelFromPath(path)`.
+- `App` registers `JsonLevel("data/levels/demo.json")` as the default level; remove
+  `DemoLevel` and its registration.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- App starts on `demo.json` via `JsonLevel`; demo is visually identical.
+- `DemoLevel` is gone from the project.
+
+## Step 18: Save Document To Any Path
+
+### Prompt
+
+```text
+Now implement Step 18 from docs/level_editor_implementation_plan.md.
+Save the full editor document (loaded + edited objects) to an arbitrary path and
+reload it through JsonLevel.
+```
+
+### Goal
+
+Round-trip any level to and from disk through the editor.
+
+### Modify Files
+
+- `sources/editor/serialization/LevelDocumentSerializer.*`
+- `sources/editor/EditorController.*`
+
+### Tasks
+
+- The serializer writes the full document (loaded objects with ids included) plus the
+  preserved top-level sections, to an arbitrary path; reload via `JsonLevel`.
+- Stable object order, stable ids, consistent indentation; unmodeled fields and types
+  written back from `properties` verbatim.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Load demo, save a copy, and the diff is stable (ids added, order preserved,
+  generators and unmodeled fields verbatim).
+- Reload the copy and all objects remain fully editable.
+
+## Step 19: Level File Menu
+
+### Prompt
+
+```text
+Now implement Step 19 from docs/level_editor_implementation_plan.md.
+Add a File menu (New / Open / Save / Save As / Recent) with a file picker over the
+JsonLevel load/save path.
+```
+
+### Goal
+
+A real load/save UI for any level file, replacing the temporary path text box.
+
+### Modify Files
+
+- `sources/editor/EditorController.*`
+- small UI/serialization helpers as needed; `test_cube.vcxproj` / `.filters`
+
+### Tasks
+
+- Menu bar: **New / Open / Save / Save As / Recent** with a file picker over
+  `data/levels` (and arbitrary paths). New = empty document with default
+  camera/lights. Open/Reload route through `JsonLevel` so everything stays editable.
+- Remove the Step 13 path text box.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Open a second level file, edit it, Save As, and reopen it.
+- New gives an empty editable scene.
+
+## Step 20: GPU Object-ID Picking
+
+### Prompt
+
+```text
+Now implement Step 20 from docs/level_editor_implementation_plan.md.
+Add an R32_UINT object-id render target and a one-pixel readback so viewport
+selection is pixel-accurate. Replace the CPU ray-vs-bounds picking.
+```
+
+### Goal
+
+Pixel-accurate selection of any object under the cursor.
+
+### Modify Files
+
+- `sources/rendering/core/RenderTargetManager.*` (objectID target)
+- `shaders/gbuffer_common.hlsl`, `shaders/gbuffer*.hlsl` (write the id)
+- `sources/rendering/renderables/RenderableObject.cpp` (set the id per draw)
+- the scene renderer (bind the target, issue the readback)
+- `sources/rendering/core/Renderer.*` (readback buffer)
+- `sources/editor/ui/ViewportGizmo.*` (use the readback id)
+
+### Tasks
+
+- Add an `R32_UINT` `objectID` target to `DeferredTargets` at **render** resolution;
+  clear to a sentinel = "none".
+- Add `uint objectId` to the PerObject CBV; set it per draw in
+  `RenderableObject::Render` from `objectIds_`; the GBuffer pixel shader (and the
+  instanced path) writes it.
+- On click, copy the 1×1 region at the cursor (scaled to render res:
+  `cursorX * renderW/displayW`) into a readback buffer (reuse the `OceanSimulation`
+  readback pattern), fence, map, then set selection from the id. Jitter is irrelevant
+  for discrete ids.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Clicking any pixel of any object (loaded or spawned, overlapping, concave) selects
+  exactly that object.
+
+## Step 21: Selection Outline
+
+### Prompt
+
+```text
+Now implement Step 21 from docs/level_editor_implementation_plan.md.
+Add a stencil-based outline pass that highlights the selected object.
+```
+
+### Goal
+
+A visible outline around the selected object.
+
+### Modify Files
+
+- the scene renderer (new `Pass_SelectionOutline`)
+- selected-object stencil marking in the GBuffer draw path
+- a fullscreen outline shader under `shaders/`
+
+### Tasks
+
+- Mark the selected object's draws with a stencil bit during GBuffer (depth is
+  `D32_FLOAT_S8X24_UINT`, so stencil is available).
+- After Compose / before Tonemap, a fullscreen pass writes an outline where a selected
+  texel borders a non-selected one. Insert `Pass_SelectionOutline` between DebugDraw
+  and Tonemap; gate `WITH_EDITOR`.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- The selected object shows a crisp outline; deselecting removes it; works with DLSS
+  on.
+
+## Step 22: Environment Entities And Serialization
+
+### Prompt
+
+```text
+Now implement Step 22 from docs/level_editor_implementation_plan.md.
+Represent lights, camera, skybox, and ocean as document entities with ids and
+round-trip them on save. Do not add editing UI yet.
+```
+
+### Goal
+
+Make the top-level JSON sections first-class document entities.
+
+### Modify Files
+
+- `sources/editor/scene/EditorSceneDocument.*`
+- `sources/editor/serialization/LevelDocumentSerializer.*`
+- `sources/editor/ui/SceneOutlinerPanel.*`
+
+### Tasks
+
+- Represent each light, the camera, the skybox, and the ocean as document entities
+  with ids; serialize them back to their JSON sections on save.
+- Show them in the outliner alongside mesh objects.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- The environment sections appear as entities in the outliner.
+- Save and reload round-trip them unchanged.
+
+## Step 23: Editor Icon Billboards And Picking
+
+### Prompt
+
+```text
+Now implement Step 23 from docs/level_editor_implementation_plan.md.
+Draw editor icon billboards for non-mesh entities (lights, camera) and make them
+pickable via the object-id buffer.
+```
+
+### Goal
+
+Select lights and the camera by clicking their viewport icons.
+
+### Modify Files
+
+- the editor overlay draw path; an icon shader under `shaders/`
+- the scene renderer
+- `sources/editor/ui/ViewportGizmo.*`
+
+### Tasks
+
+- Draw editor icon billboards for non-mesh entities in an editor overlay, writing their
+  id into the object-ID buffer (Step 20) so they pick.
+- All gated `WITH_EDITOR`.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Clicking a light's icon selects that light.
+
+## Step 24: Environment Gizmos And Inspectors
+
+### Prompt
+
+```text
+Now implement Step 24 from docs/level_editor_implementation_plan.md.
+Add gizmos and inspector fields for lights, camera, skybox, and ocean, with undoable
+live edits.
+```
+
+### Goal
+
+Edit environment entities live.
+
+### Modify Files
+
+- `sources/editor/ui/ViewportGizmo.*`
+- `sources/editor/ui/InspectorPanel.*`
+- new commands as needed
+
+### Tasks
+
+- Gizmos: translate for point lights; translate+rotate for spot/directional; camera
+  transform.
+- Inspectors: light color / intensity / range / angles / shadow bias; camera fov and
+  clip; skybox texture; ocean preset/params. Live patch into `LightManager`/`Scene`;
+  undoable.
+
+### Acceptance
+
+- Debug build succeeds (editor on and off).
+- Select a light by its icon, move and recolor it live, save, reload — it persists.
+- Same round-trip for the camera, skybox, and ocean.
+
+## Step 25: Editor Hotkeys
+
+### Prompt
+
+```text
+Now implement Step 25 from docs/level_editor_implementation_plan.md.
 Add an editor hotkey layer using the common Unreal Editor shortcuts, wired to the
 editor actions built in earlier steps. Do not add new actions beyond those.
 ```
@@ -1325,15 +1778,18 @@ Action keys:
   the transform-mode keys.
 - Closing the editor restores original input behavior.
 
-## Step 15: Extensibility Cleanup
+## Step 26: Extensibility Cleanup
 
 ### Prompt
 
 ```text
-Now implement Step 15 from docs/level_editor_implementation_plan.md.
+Now implement Step 26 from docs/level_editor_implementation_plan.md.
 Refactor editor panels and object/property behavior into small registries.
 Do not change user-visible behavior.
 ```
+
+This step is largely subsumed by the Step 16 type registry; the remaining work is the
+editor panel and property-drawer registries below.
 
 ### Goal
 

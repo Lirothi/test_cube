@@ -275,6 +275,21 @@ Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase
     return id;
 }
 
+void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id)
+{
+    assert(id != 0 && "AddObjectWithEditorId requires a non-zero editor id");
+
+    objects_.push_back(std::move(obj));
+    objectIds_.push_back(id);
+
+    // Keep the auto-allocator ahead of level-supplied ids so AddEditorObject
+    // never hands out a colliding id later.
+    if (id >= nextEditorId_)
+    {
+        nextEditorId_ = id + 1;
+    }
+}
+
 bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj)
 {
     if (!obj || !uploads.IsOpen())
