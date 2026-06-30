@@ -33,7 +33,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
 
             ImGui::TableNextColumn();
             const bool isSelected = (selectedObject.value == obj.id.value);
-            if (ImGui::Selectable(obj.name.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns))
+            // AllowOverlap so the "On" checkbox in a later column stays clickable
+            // instead of being covered by this row-spanning selectable.
+            if (ImGui::Selectable(obj.name.c_str(), isSelected,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
             {
                 selectedObject = obj.id;
             }
@@ -60,8 +63,9 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             bool enabled = obj.enabled;
             if (ImGui::Checkbox("##enabled", &enabled))
             {
-                obj.enabled = enabled;
-                document.SetDirty(true);
+                action.type = OutlinerAction::Type::SetEnabled;
+                action.target = obj.id;
+                action.enabledValue = enabled;
             }
 
             ImGui::PopID();

@@ -59,6 +59,11 @@ void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObj
             continue;
         }
 
+        if (!obj->IsVisible())
+        {
+            continue;
+        }
+
         if ((obj->GetRenderLayerMask() & renderLayerMask) == 0)
         {
             continue;

@@ -5,6 +5,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/ContentBrowserPanel.h"
+#include "editor/ui/InspectorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
 
 class Renderer;
@@ -27,9 +28,11 @@ private:
     bool firstOpenInitialized_ = false;
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
+    bool showInspector_ = true;
     AssetRegistry assetRegistry_;
     ContentBrowserPanel contentBrowser_;
     SceneOutlinerPanel outliner_;
+    InspectorPanel inspector_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
     EditorObjectId selectedObject_;

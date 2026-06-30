@@ -6,6 +6,7 @@
 
 #include "editor/EditorContext.h"
 #include "editor/commands/DeleteObjectCommand.h"
+#include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "imgui.h"
 
@@ -74,6 +75,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::TextUnformatted("Windows");
         ImGui::Checkbox("Content Browser", &showContentBrowser_);
         ImGui::Checkbox("Scene Outliner", &showOutliner_);
+        ImGui::Checkbox("Inspector", &showInspector_);
     }
     ImGui::End();
     open_ = open;
@@ -86,6 +88,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
         {
             commandStack_.Execute(ctx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
+        }
+        else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)
+        {
+            commandStack_.Execute(ctx, std::make_unique<SetEnabledCommand>(outlinerAction.target, outlinerAction.enabledValue));
         }
     }
 
@@ -102,6 +108,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
                 SpawnMeshCommand::Kind::TransparentMesh, action.asset.key, std::string{}));
         }
+    }
+
+    if (showInspector_)
+    {
+        inspector_.Draw(ctx, commandStack_, &showInspector_);
     }
 }
 

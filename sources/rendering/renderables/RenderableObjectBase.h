@@ -30,6 +30,7 @@ class Material;
 class MaterialData;
 class Mesh;
 class IInstanceable;
+class RenderableObject;
 
 // A renderable's "draw identity": two OPAQUE draws with the same key are interchangeable —
 // same geometry (mesh), pipeline state (material = PSO + root sig, 1:1 with the PSO here),
@@ -97,6 +98,12 @@ public:
     // renderable; valid for the object's lifetime. See IInstanceable.
     virtual const IInstanceable* AsInstanceable() const { return nullptr; }
 
+    // Internal RTTI: checked downcast to RenderableObject without C++ runtime
+    // type info (mirrors AsInstanceable). Null for renderables not derived from
+    // RenderableObject.
+    virtual RenderableObject* AsRenderableObject() { return nullptr; }
+    virtual const RenderableObject* AsRenderableObject() const { return nullptr; }
+
     virtual const AABB& GetWorldBounds() const
     {
         static const AABB kInvalidBounds = AABB::Empty();
@@ -130,6 +137,13 @@ public:
     void AddRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
     void RemoveRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
 
+    // Visibility: hidden objects are skipped during bucketization (not drawn in
+    // any view) but stay in the scene. Default visible. Used by the editor's
+    // "enabled" toggle.
+    bool IsVisible() const { return visible_; }
+    void SetVisible(bool visible) { visible_ = visible; }
+
 protected:
     uint32_t renderLayerMask_ = RenderLayerMask(RenderLayer::Default);
+    bool visible_ = true;
 };

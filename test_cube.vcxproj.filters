@@ -144,7 +144,16 @@
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
@@ -431,7 +440,16 @@
     <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/commands/TransformObjectCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetEnabledCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/InspectorPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">

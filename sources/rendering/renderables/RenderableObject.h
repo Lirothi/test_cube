@@ -46,6 +46,9 @@ public:
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
 
+    RenderableObject* AsRenderableObject() override { return this; }
+    const RenderableObject* AsRenderableObject() const override { return this; }
+
     // Lifecycle
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     virtual void Tick(float /*dt*/) {}

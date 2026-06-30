@@ -6,9 +6,10 @@
 // A delete request raised by the outliner; the editor turns it into a command.
 struct OutlinerAction
 {
-    enum class Type { None, DeleteObject };
+    enum class Type { None, DeleteObject, SetEnabled };
     Type type = Type::None;
     EditorObjectId target;
+    bool enabledValue = false; // for SetEnabled
 };
 
 // Lists the document's objects in a table. Selecting a row writes the editor's
