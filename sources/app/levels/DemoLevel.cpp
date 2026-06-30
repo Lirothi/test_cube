@@ -6,6 +6,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include <DirectXMath.h>
 
@@ -17,19 +18,13 @@
 
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
-#include "app/scene/SceneObjectFactory.h"
+#include "app/scene/SceneObjectRegistry.h"
 #include "core/math/Math.h"
-#include "rendering/debug/DebugGrid.h"
-#include "rendering/RenderLayers.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/SpotLight.h"
 #include "rendering/core/UploadBatch.h"
-#include "rendering/meshes/GpuInstancedModels.h"
-#include "rendering/meshes/StaticMesh.h"
-#include "rendering/renderables/TransparentStaticMesh.h"
 #include "app/Systems.h"
-#include "ocean/OceanRenderable.h"
 #if WITH_EDITOR
 #include "editor/scene/EditorSceneDocument.h"
 #endif
@@ -39,39 +34,6 @@ using nlohmann::json;
 
 namespace
 {
-class RotatingObject : public StaticMesh
-{
-public:
-    RotatingObject(const std::string& modelName,
-        const std::string& matPreset,
-        const std::string& inputLayout,
-        const std::wstring& graphicsShader,
-        float3 pos,
-        float3 scale,
-        float angSpeed = 10.0f * DEG2RAD)
-        : StaticMesh(modelName, matPreset, inputLayout, graphicsShader)
-        , angularSpeed_(angSpeed)
-    {
-        SetPosition(pos);
-        SetScale(scale);
-    }
-
-    void Tick(float deltaTime) override
-    {
-        rotationY_ += angularSpeed_ * deltaTime;
-        if (rotationY_ > XM_2PI)
-        {
-            rotationY_ -= XM_2PI;
-        }
-
-        SetRotationEulerRad({ 0.0f, rotationY_, 0.0f });
-    }
-
-private:
-    float rotationY_ = 0.0f;
-    float angularSpeed_ = 10.0f * Math::DEG2RAD;
-};
-
 std::wstring Widen(const std::string& s)
 {
     return std::wstring(s.begin(), s.end());
@@ -116,187 +78,43 @@ Scene::SceneObjectId ReadOrAllocateEditorObjectId(const json& o, Scene::SceneObj
     return nextId++;
 }
 
-void AddLoadedObject(Scene& scene, std::unique_ptr<RenderableObjectBase> obj, Scene::SceneObjectId editorId, bool enabled)
+void AddLoadedObjects(Scene& scene, SceneObjectRegistry::ObjectList objects, Scene::SceneObjectId editorId, bool enabled)
 {
-    if (!obj)
+    for (std::unique_ptr<RenderableObjectBase>& obj : objects)
     {
-        return;
-    }
+        if (!obj)
+        {
+            continue;
+        }
 
-    obj->SetVisible(enabled);
-    scene.AddObjectWithEditorId(std::move(obj), editorId);
+        obj->SetVisible(enabled);
+        scene.AddObjectWithEditorId(std::move(obj), editorId);
+    }
 }
 #else
-void AddLoadedObject(Scene& scene, std::unique_ptr<RenderableObjectBase> obj)
+void AddLoadedObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
 {
-    scene.AddObject(std::move(obj));
-}
-#endif
-
-void SpawnStaticMesh(Scene& scene, const json& o
-#if WITH_EDITOR
-    , Scene::SceneObjectId editorId, bool enabled
-#endif
-)
-{
-    // RotatingObject is demo-specific: build it here, then apply the shared
-    // staticMesh JSON properties through the factory so behavior matches a plain
-    // staticMesh. Non-rotating meshes come straight from the factory.
-    if (o.contains("rotateSpeedDeg"))
+    for (std::unique_ptr<RenderableObjectBase>& obj : objects)
     {
-        const std::string model = o.value("model", std::string{});
-        const std::string material = o.value("material", std::string{});
-        const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-        const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-        const float3 pos = ToFloat3(o.value("position", json::array()));
-        const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
-
-        auto mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
-            o["rotateSpeedDeg"].get<float>() * DEG2RAD);
-        SceneObjectFactory::ApplyStaticMeshJsonProperties(*mesh, o);
-        AddLoadedObject(scene, std::move(mesh)
-#if WITH_EDITOR
-            , editorId, enabled
-#endif
-        );
-    }
-    else
-    {
-        AddLoadedObject(scene, SceneObjectFactory::CreateStaticMeshFromJson(o)
-#if WITH_EDITOR
-            , editorId, enabled
-#endif
-        );
-    }
-}
-
-void SpawnTransparentMesh(Scene& scene, const json& o
-#if WITH_EDITOR
-    , Scene::SceneObjectId editorId, bool enabled
-#endif
-)
-{
-    AddLoadedObject(scene, SceneObjectFactory::CreateTransparentMeshFromJson(scene, o)
-#if WITH_EDITOR
-        , editorId, enabled
-#endif
-    );
-}
-
-// Generator: width x height grid of spheres sweeping metallic (rows) and
-// roughness (columns), used as a PBR calibration wall.
-void SpawnMetalRoughGrid(Scene& scene, const json& o
-#if WITH_EDITOR
-    , Scene::SceneObjectId editorId, bool enabled
-#endif
-)
-{
-    const std::string model = o.value("model", std::string("models/sphere.obj"));
-    const std::string material = o.value("material", std::string("bronze"));
-    const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-    const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-    const int width = o.value("width", 10);
-    const int height = o.value("height", 5);
-
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < width; ++x)
+        if (!obj)
         {
-            auto sphere = std::make_unique<StaticMesh>(model, material, layout, shader);
-            sphere->MaterialParamsRef().SetUseMR(false);
-            sphere->MaterialParamsRef().metalRough = float2(static_cast<float>(y) / (height - 1), static_cast<float>(x) / (width - 1));
-            sphere->SetPosition(float3(static_cast<float>(x) + x * 0.2f, static_cast<float>(y) + y * 0.2f + 1.0f, -static_cast<float>(x) + x * 0.2f - 12.0f));
-            AddLoadedObject(scene, std::move(sphere)
-#if WITH_EDITOR
-                , editorId, enabled
-#endif
-            );
-        }
-    }
-}
-
-void SpawnInstancedModels(Scene& scene, const json& o
-#if WITH_EDITOR
-    , Scene::SceneObjectId editorId, bool enabled
-#endif
-)
-{
-    const std::string model = o.value("model", std::string{});
-    const std::string material = o.value("material", std::string{});
-    const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-    const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer_inst.hlsl")));
-    const std::wstring computeShader = Widen(o.value("computeShader", std::string("shaders/instance_anim.hlsl")));
-    const UINT count = o.value("count", 1u);
-
-    AddLoadedObject(scene, std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader)
-#if WITH_EDITOR
-        , editorId, enabled
-#endif
-    );
-}
-
-std::string ReadOceanPresetPath(const json& ocean)
-{
-    if (ocean.is_string())
-    {
-        return ocean.get<std::string>();
-    }
-    if (!ocean.is_object())
-    {
-        return {};
-    }
-
-    constexpr const char* kPathKeys[] = { "preset", "presetFile", "config", "configFile" };
-    for (const char* key : kPathKeys)
-    {
-        if (ocean.contains(key) && ocean[key].is_string())
-        {
-            return ocean[key].get<std::string>();
-        }
-    }
-    return {};
-}
-
-void LoadOceanFromLevel(Scene& scene, const json& j)
-{
-    if (!j.contains("ocean"))
-    {
-        Systems::DestroyOceanSimulation();
-        return;
-    }
-
-    const json& ocean = j["ocean"];
-    if (ocean.is_boolean())
-    {
-        if (!ocean.get<bool>())
-        {
-            Systems::DestroyOceanSimulation();
-            return;
+            continue;
         }
 
-        assert(false && "Level ocean requires a preset file path");
-        Systems::DestroyOceanSimulation();
-        return;
+        scene.AddObject(std::move(obj));
     }
+}
+#endif
 
-    if (ocean.is_object() && !ocean.value("enabled", true))
+void AddAnonymousObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
+{
+    for (std::unique_ptr<RenderableObjectBase>& obj : objects)
     {
-        Systems::DestroyOceanSimulation();
-        return;
-    }
-
-    const std::string presetPath = ReadOceanPresetPath(ocean);
-    if (presetPath.empty())
-    {
-        assert(false && "Level ocean requires preset/config path");
-        Systems::DestroyOceanSimulation();
-        return;
-    }
-
-    OceanSimulation* oceanSimulation = Systems::CreateOceanSimulation(Widen(presetPath));
-    if (oceanSimulation)
-    {
-        scene.AddObject(std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene, oceanSimulation));
+        if (!obj)
+        {
+            continue;
+        }
+        scene.AddObject(std::move(obj));
     }
 }
 } // namespace
@@ -311,6 +129,8 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 #endif
 
     lightManager.Reset();
+    SceneObjectRegistry objectRegistry = SceneObjectRegistry::CreateWithBuiltins();
+    SceneObjectRegistry::CreationContext creationCtx{ scene };
 
     json j;
     {
@@ -408,71 +228,32 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
             const bool enabled = o.value("enabled", true);
 #if !WITH_EDITOR
-            if (!o.value("enabled", true))
+            if (!enabled)
             {
                 continue;
             }
 #endif
             const std::string type = o.value("type", std::string{});
+            const bool objectTypeRegistered = objectRegistry.Has(type);
+            if (!objectTypeRegistered)
+            {
+                assert(false && "Unknown object type in level JSON");
+                continue;
+            }
 #if WITH_EDITOR
             const EditorObjectId editorObjectId =
                 ctx.editorDocument
                     ? ctx.editorDocument->ReadOrAllocateObjectId(o)
                     : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
 #endif
+            SceneObjectRegistry::ObjectList objects = objectRegistry.Create(type, creationCtx, o);
+            AddLoadedObjects(scene, std::move(objects)
 #if WITH_EDITOR
-            bool objectLoaded = false;
+                , editorObjectId.value, enabled
 #endif
-            if (type == "staticMesh")
-            {
-                SpawnStaticMesh(scene, o
+            );
 #if WITH_EDITOR
-                    , editorObjectId.value, enabled
-#endif
-                );
-#if WITH_EDITOR
-                objectLoaded = true;
-#endif
-            }
-            else if (type == "transparentMesh")
-            {
-                SpawnTransparentMesh(scene, o
-#if WITH_EDITOR
-                    , editorObjectId.value, enabled
-#endif
-                );
-#if WITH_EDITOR
-                objectLoaded = true;
-#endif
-            }
-            else if (type == "metalRoughGrid")
-            {
-                SpawnMetalRoughGrid(scene, o
-#if WITH_EDITOR
-                    , editorObjectId.value, enabled
-#endif
-                );
-#if WITH_EDITOR
-                objectLoaded = true;
-#endif
-            }
-            else if (type == "instancedModels")
-            {
-                SpawnInstancedModels(scene, o
-#if WITH_EDITOR
-                    , editorObjectId.value, enabled
-#endif
-                );
-#if WITH_EDITOR
-                objectLoaded = true;
-#endif
-            }
-            else
-            {
-                assert(false && "Unknown object type in level JSON");
-            }
-#if WITH_EDITOR
-            if (objectLoaded && ctx.editorDocument)
+            if (ctx.editorDocument)
             {
                 ctx.editorDocument->AddObjectFromJson(editorObjectId, o);
             }
@@ -480,8 +261,16 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
         }
     }
 
-    LoadOceanFromLevel(scene, j);
-    scene.AddObject(std::make_unique<DebugGrid>(100.0f));
+    if (j.contains("ocean"))
+    {
+        AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, j["ocean"]));
+    }
+    else
+    {
+        Systems::DestroyOceanSimulation();
+    }
+
+    AddAnonymousObjects(scene, objectRegistry.Create("debugGrid", creationCtx, json::object()));
 
     if (j.contains("camera"))
     {

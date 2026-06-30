@@ -17,7 +17,7 @@ class Scene;
 // Shared creation of the data-driven mesh object types (staticMesh,
 // transparentMesh) used by both level loading and (later) the editor. Demo- or
 // generator-specific types (RotatingObject, metalRoughGrid, instancedModels,
-// ocean) stay in their own level code.
+// ocean) live in SceneObjectRegistry creators.
 namespace SceneObjectFactory
 {
     // Apply the shared staticMesh JSON fields to an already-created StaticMesh
