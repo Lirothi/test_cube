@@ -83,7 +83,19 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     EditorObject* obj = ctx.document.Find(ctx.selectedObject);
     RenderableObjectBase* base = obj ? ctx.scene.FindEditorObject(ctx.selectedObject.value) : nullptr;
     RenderableObject* ro = base ? base->AsRenderableObject() : nullptr;
+
+    // Only when the object is in front of the camera. ImGuizmo's own behind-camera
+    // cull misfires under our reverse-Z projection (the gizmo would appear mirrored
+    // in front when you look away), so gate on the camera-forward dot instead.
+    bool inFront = false;
     if (obj && ro)
+    {
+        const Math::float3 forward = camera.GetDirection();
+        const Math::float3 toObj = ro->GetPosition() - camera.GetPosition();
+        inFront = (toObj.x * forward.x + toObj.y * forward.y + toObj.z * forward.z) > 0.0f;
+    }
+
+    if (obj && ro && inFront)
     {
         float model[16];
         ToFloat16(ro->GetModelMatrix(), model);

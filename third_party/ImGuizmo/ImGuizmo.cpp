@@ -34,6 +34,14 @@
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h>
 #endif
+
+// LOCAL PATCH (test_cube): when 1, the axis-flip in ComputeTripodAxisAndVisibility
+// flips each handle toward the screen center (stays inside the viewport) instead
+// of stock ImGuizmo's screen-projection-length method (which points handles out of
+// the viewport near borders). Set to 0 to restore stock ImGuizmo behavior.
+#ifndef TEST_CUBE_IMGUIZMO_CENTER_FLIP
+#define TEST_CUBE_IMGUIZMO_CENTER_FLIP 1
+#endif
 #if !defined(_MSC_VER) && !defined(__MINGW64_VERSION_MAJOR)
 #define _malloca(x) alloca(x)
 #define _freea(x)
@@ -1210,6 +1218,30 @@ namespace IMGUIZMO_NAMESPACE
       else
       {
          // new method
+#if TEST_CUBE_IMGUIZMO_CENTER_FLIP
+         // LOCAL PATCH (test_cube): flip each axis toward the SCREEN CENTER so the
+         // handle stays inside the frustum / viewport. Stock ImGuizmo (the #else
+         // branch) flips toward whichever direction projects LONGER in screen space,
+         // which makes the arrows point OUT of the viewport when the object is near
+         // a border. This keeps the view-direction dependence but picks the
+         // on-screen direction.
+         bool & allowFlip = gContext.mAllowAxisFlip;
+         const ImVec2 viewportCenter(gContext.mX + gContext.mWidth * 0.5f, gContext.mY + gContext.mHeight * 0.5f);
+         auto towardCenterFactor = [&](const vec_t& localDir) -> float
+         {
+            if (!allowFlip) { return 1.f; }
+            vec_t world = localDir;
+            world.TransformVector(gContext.mModel);
+            const ImVec2 plus = worldToPos(gContext.mModel.v.position + world * gContext.mScreenFactor, gContext.mViewProjection);
+            const ImVec2 minus = worldToPos(gContext.mModel.v.position - world * gContext.mScreenFactor, gContext.mViewProjection);
+            const float distPlus = (plus.x - viewportCenter.x) * (plus.x - viewportCenter.x) + (plus.y - viewportCenter.y) * (plus.y - viewportCenter.y);
+            const float distMinus = (minus.x - viewportCenter.x) * (minus.x - viewportCenter.x) + (minus.y - viewportCenter.y) * (minus.y - viewportCenter.y);
+            return (distMinus < distPlus) ? -1.f : 1.f;
+         };
+         float mulAxis = towardCenterFactor(dirAxis);
+         float mulAxisX = towardCenterFactor(dirPlaneX);
+         float mulAxisY = towardCenterFactor(dirPlaneY);
+#else
          float lenDir = GetSegmentLengthClipSpace(makeVect(0.f, 0.f, 0.f), dirAxis, localCoordinates);
          float lenDirMinus = GetSegmentLengthClipSpace(makeVect(0.f, 0.f, 0.f), -dirAxis, localCoordinates);
 
@@ -1224,6 +1256,7 @@ namespace IMGUIZMO_NAMESPACE
          float mulAxis = (allowFlip && lenDir < lenDirMinus&& fabsf(lenDir - lenDirMinus) > FLT_EPSILON) ? -1.f : 1.f;
          float mulAxisX = (allowFlip && lenDirPlaneX < lenDirMinusPlaneX&& fabsf(lenDirPlaneX - lenDirMinusPlaneX) > FLT_EPSILON) ? -1.f : 1.f;
          float mulAxisY = (allowFlip && lenDirPlaneY < lenDirMinusPlaneY&& fabsf(lenDirPlaneY - lenDirMinusPlaneY) > FLT_EPSILON) ? -1.f : 1.f;
+#endif // TEST_CUBE_IMGUIZMO_CENTER_FLIP
          dirAxis *= mulAxis;
          dirPlaneX *= mulAxisX;
          dirPlaneY *= mulAxisY;
