@@ -7,6 +7,7 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
+#include "editor/ui/ViewportGizmo.h"
 
 class Renderer;
 class Scene;
@@ -33,6 +34,7 @@ private:
     ContentBrowserPanel contentBrowser_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
+    ViewportGizmo viewportGizmo_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
     EditorObjectId selectedObject_;

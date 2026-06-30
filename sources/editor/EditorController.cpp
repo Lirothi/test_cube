@@ -76,6 +76,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::Checkbox("Content Browser", &showContentBrowser_);
         ImGui::Checkbox("Scene Outliner", &showOutliner_);
         ImGui::Checkbox("Inspector", &showInspector_);
+
+        ImGui::Separator();
+        viewportGizmo_.DrawModeButtons();
     }
     ImGui::End();
     open_ = open;
@@ -114,6 +117,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     {
         inspector_.Draw(ctx, commandStack_, &showInspector_);
     }
+
+    // Viewport gizmo + click-to-select (after panels so ImGui knows whether the
+    // mouse is over an editor window this frame).
+    viewportGizmo_.Update(ctx, commandStack_);
 }
 
 #endif // WITH_EDITOR

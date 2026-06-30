@@ -345,6 +345,63 @@ const RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id) const
     }
     return nullptr;
 }
+
+Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin, const Math::float3& dir) const
+{
+    SceneObjectId best = 0;
+    float bestT = FLT_MAX;
+    const float o[3] = { origin.x, origin.y, origin.z };
+    const float d[3] = { dir.x, dir.y, dir.z };
+
+    for (size_t i = 0; i < objects_.size(); ++i)
+    {
+        if (objectIds_[i] == 0 || !objects_[i] || !objects_[i]->IsVisible())
+        {
+            continue; // editor-owned + visible only
+        }
+
+        const AABB& bounds = objects_[i]->GetWorldBounds();
+        if (!bounds.IsValid())
+        {
+            continue;
+        }
+
+        const Math::float3 mn = bounds.GetMin();
+        const Math::float3 mx = bounds.GetMax();
+        const float lo[3] = { mn.x, mn.y, mn.z };
+        const float hi[3] = { mx.x, mx.y, mx.z };
+
+        // Slab test.
+        float tmin = 0.0f;
+        float tmax = FLT_MAX;
+        bool hit = true;
+        for (int a = 0; a < 3; ++a)
+        {
+            if (std::fabs(d[a]) < 1e-8f)
+            {
+                if (o[a] < lo[a] || o[a] > hi[a]) { hit = false; break; }
+            }
+            else
+            {
+                float inv = 1.0f / d[a];
+                float t1 = (lo[a] - o[a]) * inv;
+                float t2 = (hi[a] - o[a]) * inv;
+                if (t1 > t2) { std::swap(t1, t2); }
+                tmin = std::max(tmin, t1);
+                tmax = std::min(tmax, t2);
+                if (tmin > tmax) { hit = false; break; }
+            }
+        }
+
+        if (hit && tmin < bestT)
+        {
+            bestT = tmin;
+            best = objectIds_[i];
+        }
+    }
+
+    return best;
+}
 #endif // WITH_EDITOR
 
 void Scene::Tick(float deltaTime) {

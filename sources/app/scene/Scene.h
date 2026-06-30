@@ -64,6 +64,10 @@ public:
     bool RemoveEditorObject(SceneObjectId id);
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
     const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
+
+    // Nearest editor-owned, visible object hit by the ray (CPU ray vs world AABB),
+    // or 0 if none. For viewport click-to-select.
+    SceneObjectId RaycastEditorObject(const Math::float3& origin, const Math::float3& dir) const;
 #endif
 
     void Tick(float deltaTime);

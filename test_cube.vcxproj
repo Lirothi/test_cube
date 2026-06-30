@@ -167,6 +167,7 @@
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
@@ -250,6 +251,7 @@
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
     <ClCompile Include="third_party\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="third_party\ImGuizmo\ImGuizmo.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
     <ClCompile Include="third_party\meshoptimizer\src\allocator.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
     <ClCompile Include="third_party\meshoptimizer\src\clusterizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
     <ClCompile Include="third_party\meshoptimizer\src\indexanalyzer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
@@ -287,6 +289,7 @@
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h" />
     <ClInclude Include="sources/editor/ui/InspectorPanel.h" />
+    <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
     <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />

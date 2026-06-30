@@ -94,6 +94,9 @@
     <Filter Include="third_party\imgui\backends">
       <UniqueIdentifier>{32c7f7c2-32a5-407c-aa81-1e55761ba075}</UniqueIdentifier>
     </Filter>
+    <Filter Include="third_party\ImGuizmo">
+      <UniqueIdentifier>{da78fd0e-0c5e-4b68-804b-b4c0c3311840}</UniqueIdentifier>
+    </Filter>
     <Filter Include="input">
       <UniqueIdentifier>{09b469f3-2854-440a-8b45-695e11cfe0e6}</UniqueIdentifier>
     </Filter>
@@ -154,6 +157,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
@@ -408,6 +414,9 @@
     <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
       <Filter>third_party\imgui</Filter>
     </ClCompile>
+    <ClCompile Include="third_party\ImGuizmo\ImGuizmo.cpp">
+      <Filter>third_party\ImGuizmo</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/app/AppController.h">
@@ -450,6 +459,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/InspectorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/ViewportGizmo.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/DeveloperWindow.h">
