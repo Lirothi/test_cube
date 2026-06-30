@@ -22,6 +22,8 @@ public:
 
     void Tick(float deltaTime) override;
 
+    TransparentStaticMesh* AsTransparentStaticMesh() override { return this; }
+
     void SetTint(const float3& tint) { tint_ = tint; }
     void SetAbsorption(const float3& absorption) { absorption_ = absorption; }
     void SetThickness(float thickness) { thickness_ = thickness; }

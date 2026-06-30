@@ -165,6 +165,7 @@
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp" />
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
@@ -287,6 +288,7 @@
     <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetMaterialCommand.h" />
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h" />
     <ClInclude Include="sources/editor/ui/InspectorPanel.h" />
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />

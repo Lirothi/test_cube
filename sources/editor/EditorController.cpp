@@ -115,7 +115,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
     if (showInspector_)
     {
-        inspector_.Draw(ctx, commandStack_, &showInspector_);
+        inspector_.Draw(ctx, commandStack_, assetRegistry_, &showInspector_);
     }
 
     // Viewport gizmo + click-to-select (after panels so ImGui knows whether the

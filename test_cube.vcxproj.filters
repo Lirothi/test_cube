@@ -153,6 +153,9 @@
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -453,6 +456,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetMaterialCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h">

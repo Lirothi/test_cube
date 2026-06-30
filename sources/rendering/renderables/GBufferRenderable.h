@@ -15,6 +15,8 @@ public:
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
+    GBufferRenderable* AsGBufferRenderable() override { return this; }
+
     MaterialParams& MaterialParamsRef() { return matParams_; }
     const MaterialParams& MaterialParamsRef() const { return matParams_; }
 

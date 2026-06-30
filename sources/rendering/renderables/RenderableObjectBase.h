@@ -31,6 +31,8 @@ class MaterialData;
 class Mesh;
 class IInstanceable;
 class RenderableObject;
+class GBufferRenderable;
+class TransparentStaticMesh;
 
 // A renderable's "draw identity": two OPAQUE draws with the same key are interchangeable —
 // same geometry (mesh), pipeline state (material = PSO + root sig, 1:1 with the PSO here),
@@ -103,6 +105,8 @@ public:
     // RenderableObject.
     virtual RenderableObject* AsRenderableObject() { return nullptr; }
     virtual const RenderableObject* AsRenderableObject() const { return nullptr; }
+    virtual GBufferRenderable* AsGBufferRenderable() { return nullptr; }
+    virtual TransparentStaticMesh* AsTransparentStaticMesh() { return nullptr; }
 
     virtual const AABB& GetWorldBounds() const
     {
