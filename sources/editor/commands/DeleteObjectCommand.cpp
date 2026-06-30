@@ -48,9 +48,7 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
 {
     ctx.document.Add(object_);
 
-    // Recreate the runtime object only if Execute actually removed one. Demo
-    // objects loaded at level load have no editor-owned runtime (SceneObjectId 0),
-    // so spawning one here would duplicate the still-present runtime object.
+    // Recreate the runtime object only if Execute actually removed one.
     if (runtimeRemoved_)
     {
         const nlohmann::json o = EditorSceneDocument::ObjectToJson(object_);

@@ -13,6 +13,9 @@
 struct LevelLoadOptions
 {
     bool preserveCameraTransform = false;
+#if WITH_EDITOR
+    EditorSceneDocument* editorDocument = nullptr;
+#endif
 };
 
 struct LevelChangeRequest

@@ -18,9 +18,7 @@ void SetEnabledCommand::Apply(EditorContext& ctx, bool enabled)
         obj->enabled = enabled;
     }
 
-    // Runtime visibility (skipped during bucketization when hidden). Demo objects
-    // loaded at level load have no editor-owned runtime, so only the document
-    // updates for them.
+    // Runtime visibility (skipped during bucketization when hidden).
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id_.value))
     {
         base->SetVisible(enabled);

@@ -97,10 +97,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 level->SetSourcePath(levelPathBuffer_);
                 LevelLoadOptions reloadOptions;
                 reloadOptions.preserveCameraTransform = true;
+                reloadOptions.editorDocument = &document_;
                 levelManager.RequestLevelChange(std::string(levelManager.GetActiveLevelName()), reloadOptions);
             }
-            document_.LoadFromLevelFile(levelPathBuffer_);
-            if (!document_.Find(selectedObject_)) { selectedObject_ = EditorObjectId{}; }
+            commandStack_.Clear();
+            selectedObject_ = EditorObjectId{};
         }
 
         ImGui::Separator();

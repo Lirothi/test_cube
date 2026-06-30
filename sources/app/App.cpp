@@ -480,7 +480,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     UploadBatch levelBatch;
                     if (levelBatch.Begin(&renderer))
                     {
-                        LevelLoadContext levelCtx{ levelBatch, renderer, scene };
+                        LevelLoadContext levelCtx{ levelBatch, renderer, scene
+#if WITH_EDITOR
+                            , pendingLevel->options.editorDocument
+#endif
+                        };
 
                         if (levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options))
                         {

@@ -317,16 +317,19 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
     {
         return false;
     }
-    for (size_t i = 0; i < objectIds_.size(); ++i)
+    bool removed = false;
+    for (size_t i = 0; i < objectIds_.size();)
     {
         if (objectIds_[i] == id)
         {
             objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
             objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
-            return true;
+            removed = true;
+            continue;
         }
+        ++i;
     }
-    return false;
+    return removed;
 }
 
 RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id)

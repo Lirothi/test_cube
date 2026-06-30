@@ -4,6 +4,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -24,6 +25,30 @@ namespace
     const char* const kCommonKeys[] = {
         "id", "name", "type", "enabled", "position", "rotationDeg", "scale"
     };
+
+    bool TryReadObjectId(const nlohmann::json& objectJson, uint64_t& outId)
+    {
+        const auto idIt = objectJson.find("id");
+        if (idIt == objectJson.end() || !idIt->is_number_integer())
+        {
+            return false;
+        }
+
+        if (idIt->is_number_unsigned())
+        {
+            outId = idIt->get<uint64_t>();
+            return outId != 0;
+        }
+
+        const int64_t signedId = idIt->get<int64_t>();
+        if (signedId <= 0)
+        {
+            return false;
+        }
+
+        outId = static_cast<uint64_t>(signedId);
+        return true;
+    }
 }
 
 EditorObjectId EditorSceneDocument::AllocateId()
@@ -57,6 +82,10 @@ const EditorObject* EditorSceneDocument::Find(EditorObjectId id) const
 
 void EditorSceneDocument::Add(EditorObject object)
 {
+    if (object.id.value >= nextId_)
+    {
+        nextId_ = object.id.value + 1;
+    }
     objects_.push_back(std::move(object));
 }
 
@@ -116,12 +145,6 @@ nlohmann::json EditorSceneDocument::ObjectToJson(const EditorObject& obj)
 
 bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
 {
-    objects_.clear();
-    nextId_ = 1;
-    dirty_ = false;
-    levelPath_ = path;
-    rootJson_ = nlohmann::json::object();
-
     std::error_code ec;
     if (!std::filesystem::exists(path, ec))
     {
@@ -134,17 +157,15 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
         return false;
     }
 
-    nlohmann::json doc;
-    try
-    {
-        file >> doc;
-    }
-    catch (const std::exception&)
+    std::stringstream ss;
+    ss << file.rdbuf();
+    nlohmann::json doc = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
+    if (doc.is_discarded())
     {
         return false;
     }
 
-    rootJson_ = doc; // preserve top-level sections (camera/skybox/ocean/lights) for save
+    ResetFromLevelJson(path, doc);
 
     const auto objectsIt = doc.find("objects");
     if (objectsIt == doc.end() || !objectsIt->is_array())
@@ -159,27 +180,40 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
             continue;
         }
 
-        // Stable ID: reuse an explicit id when present, otherwise allocate. Keep
-        // the allocator ahead of any explicit id so later allocations never clash.
-        EditorObjectId id;
-        if (o.contains("id") && o["id"].is_number_unsigned())
-        {
-            id.value = o["id"].get<uint64_t>();
-            if (id.value >= nextId_)
-            {
-                nextId_ = id.value + 1;
-            }
-        }
-        else
-        {
-            id = AllocateId();
-        }
-
-        Add(ObjectFromJson(id, o));
+        AddObjectFromJson(ReadOrAllocateObjectId(o), o);
     }
 
     dirty_ = false;
     return true;
+}
+
+void EditorSceneDocument::ResetFromLevelJson(const std::string& path, const nlohmann::json& levelJson)
+{
+    objects_.clear();
+    nextId_ = 1;
+    dirty_ = false;
+    levelPath_ = path;
+    rootJson_ = levelJson; // preserve top-level sections (camera/skybox/ocean/lights) for save
+}
+
+EditorObjectId EditorSceneDocument::ReadOrAllocateObjectId(const nlohmann::json& objectJson)
+{
+    uint64_t explicitId = 0;
+    if (TryReadObjectId(objectJson, explicitId))
+    {
+        if (explicitId >= nextId_)
+        {
+            nextId_ = explicitId + 1;
+        }
+        return EditorObjectId{ explicitId };
+    }
+
+    return AllocateId();
+}
+
+void EditorSceneDocument::AddObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson)
+{
+    Add(ObjectFromJson(id, objectJson));
 }
 
 #endif // WITH_EDITOR

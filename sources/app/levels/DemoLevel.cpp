@@ -1,6 +1,7 @@
 #include "app/levels/DemoLevel.h"
 
 #include <cassert>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -29,6 +30,9 @@
 #include "rendering/renderables/TransparentStaticMesh.h"
 #include "app/Systems.h"
 #include "ocean/OceanRenderable.h"
+#if WITH_EDITOR
+#include "editor/scene/EditorSceneDocument.h"
+#endif
 
 using namespace Math;
 using nlohmann::json;
@@ -79,7 +83,61 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
 }
 
-void SpawnStaticMesh(Scene& scene, const json& o)
+#if WITH_EDITOR
+Scene::SceneObjectId ReadOrAllocateEditorObjectId(const json& o, Scene::SceneObjectId& nextId)
+{
+    const auto idIt = o.find("id");
+    if (idIt != o.end() && idIt->is_number_integer())
+    {
+        Scene::SceneObjectId id = 0;
+        if (idIt->is_number_unsigned())
+        {
+            id = idIt->get<Scene::SceneObjectId>();
+        }
+        else
+        {
+            const int64_t signedId = idIt->get<int64_t>();
+            if (signedId > 0)
+            {
+                id = static_cast<Scene::SceneObjectId>(signedId);
+            }
+        }
+
+        if (id != 0)
+        {
+            if (id >= nextId)
+            {
+                nextId = id + 1;
+            }
+            return id;
+        }
+    }
+
+    return nextId++;
+}
+
+void AddLoadedObject(Scene& scene, std::unique_ptr<RenderableObjectBase> obj, Scene::SceneObjectId editorId, bool enabled)
+{
+    if (!obj)
+    {
+        return;
+    }
+
+    obj->SetVisible(enabled);
+    scene.AddObjectWithEditorId(std::move(obj), editorId);
+}
+#else
+void AddLoadedObject(Scene& scene, std::unique_ptr<RenderableObjectBase> obj)
+{
+    scene.AddObject(std::move(obj));
+}
+#endif
+
+void SpawnStaticMesh(Scene& scene, const json& o
+#if WITH_EDITOR
+    , Scene::SceneObjectId editorId, bool enabled
+#endif
+)
 {
     // RotatingObject is demo-specific: build it here, then apply the shared
     // staticMesh JSON properties through the factory so behavior matches a plain
@@ -96,22 +154,42 @@ void SpawnStaticMesh(Scene& scene, const json& o)
         auto mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
             o["rotateSpeedDeg"].get<float>() * DEG2RAD);
         SceneObjectFactory::ApplyStaticMeshJsonProperties(*mesh, o);
-        scene.AddObject(std::move(mesh));
+        AddLoadedObject(scene, std::move(mesh)
+#if WITH_EDITOR
+            , editorId, enabled
+#endif
+        );
     }
     else
     {
-        scene.AddObject(SceneObjectFactory::CreateStaticMeshFromJson(o));
+        AddLoadedObject(scene, SceneObjectFactory::CreateStaticMeshFromJson(o)
+#if WITH_EDITOR
+            , editorId, enabled
+#endif
+        );
     }
 }
 
-void SpawnTransparentMesh(Scene& scene, const json& o)
+void SpawnTransparentMesh(Scene& scene, const json& o
+#if WITH_EDITOR
+    , Scene::SceneObjectId editorId, bool enabled
+#endif
+)
 {
-    scene.AddObject(SceneObjectFactory::CreateTransparentMeshFromJson(scene, o));
+    AddLoadedObject(scene, SceneObjectFactory::CreateTransparentMeshFromJson(scene, o)
+#if WITH_EDITOR
+        , editorId, enabled
+#endif
+    );
 }
 
 // Generator: width x height grid of spheres sweeping metallic (rows) and
 // roughness (columns), used as a PBR calibration wall.
-void SpawnMetalRoughGrid(Scene& scene, const json& o)
+void SpawnMetalRoughGrid(Scene& scene, const json& o
+#if WITH_EDITOR
+    , Scene::SceneObjectId editorId, bool enabled
+#endif
+)
 {
     const std::string model = o.value("model", std::string("models/sphere.obj"));
     const std::string material = o.value("material", std::string("bronze"));
@@ -128,12 +206,20 @@ void SpawnMetalRoughGrid(Scene& scene, const json& o)
             sphere->MaterialParamsRef().SetUseMR(false);
             sphere->MaterialParamsRef().metalRough = float2(static_cast<float>(y) / (height - 1), static_cast<float>(x) / (width - 1));
             sphere->SetPosition(float3(static_cast<float>(x) + x * 0.2f, static_cast<float>(y) + y * 0.2f + 1.0f, -static_cast<float>(x) + x * 0.2f - 12.0f));
-            scene.AddObject(std::move(sphere));
+            AddLoadedObject(scene, std::move(sphere)
+#if WITH_EDITOR
+                , editorId, enabled
+#endif
+            );
         }
     }
 }
 
-void SpawnInstancedModels(Scene& scene, const json& o)
+void SpawnInstancedModels(Scene& scene, const json& o
+#if WITH_EDITOR
+    , Scene::SceneObjectId editorId, bool enabled
+#endif
+)
 {
     const std::string model = o.value("model", std::string{});
     const std::string material = o.value("material", std::string{});
@@ -142,7 +228,11 @@ void SpawnInstancedModels(Scene& scene, const json& o)
     const std::wstring computeShader = Widen(o.value("computeShader", std::string("shaders/instance_anim.hlsl")));
     const UINT count = o.value("count", 1u);
 
-    scene.AddObject(std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader));
+    AddLoadedObject(scene, std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader)
+#if WITH_EDITOR
+        , editorId, enabled
+#endif
+    );
 }
 
 std::string ReadOceanPresetPath(const json& ocean)
@@ -216,6 +306,9 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     auto& renderer = ctx.renderer;
     auto& scene = ctx.scene;
     auto& lightManager = scene.GetLightManager();
+#if WITH_EDITOR
+    Scene::SceneObjectId nextEditorObjectId = 1;
+#endif
 
     lightManager.Reset();
 
@@ -236,6 +329,13 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
             return;
         }
     }
+
+#if WITH_EDITOR
+    if (ctx.editorDocument)
+    {
+        ctx.editorDocument->ResetFromLevelJson(sourcePath_, j);
+    }
+#endif
 
     if (j.contains("skybox") && j["skybox"].contains("texture"))
     {
@@ -301,31 +401,82 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     {
         for (const json& o : j["objects"])
         {
+            if (!o.is_object())
+            {
+                continue;
+            }
+
+            const bool enabled = o.value("enabled", true);
+#if !WITH_EDITOR
             if (!o.value("enabled", true))
             {
                 continue;
             }
+#endif
             const std::string type = o.value("type", std::string{});
+#if WITH_EDITOR
+            const EditorObjectId editorObjectId =
+                ctx.editorDocument
+                    ? ctx.editorDocument->ReadOrAllocateObjectId(o)
+                    : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
+#endif
+#if WITH_EDITOR
+            bool objectLoaded = false;
+#endif
             if (type == "staticMesh")
             {
-                SpawnStaticMesh(scene, o);
+                SpawnStaticMesh(scene, o
+#if WITH_EDITOR
+                    , editorObjectId.value, enabled
+#endif
+                );
+#if WITH_EDITOR
+                objectLoaded = true;
+#endif
             }
             else if (type == "transparentMesh")
             {
-                SpawnTransparentMesh(scene, o);
+                SpawnTransparentMesh(scene, o
+#if WITH_EDITOR
+                    , editorObjectId.value, enabled
+#endif
+                );
+#if WITH_EDITOR
+                objectLoaded = true;
+#endif
             }
             else if (type == "metalRoughGrid")
             {
-                SpawnMetalRoughGrid(scene, o);
+                SpawnMetalRoughGrid(scene, o
+#if WITH_EDITOR
+                    , editorObjectId.value, enabled
+#endif
+                );
+#if WITH_EDITOR
+                objectLoaded = true;
+#endif
             }
             else if (type == "instancedModels")
             {
-                SpawnInstancedModels(scene, o);
+                SpawnInstancedModels(scene, o
+#if WITH_EDITOR
+                    , editorObjectId.value, enabled
+#endif
+                );
+#if WITH_EDITOR
+                objectLoaded = true;
+#endif
             }
             else
             {
                 assert(false && "Unknown object type in level JSON");
             }
+#if WITH_EDITOR
+            if (objectLoaded && ctx.editorDocument)
+            {
+                ctx.editorDocument->AddObjectFromJson(editorObjectId, o);
+            }
+#endif
         }
     }
 

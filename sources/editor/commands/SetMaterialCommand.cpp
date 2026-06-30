@@ -28,8 +28,7 @@ bool SetMaterialCommand::Apply(EditorContext& ctx, const std::string& material)
     obj->properties["material"] = material;
     ctx.document.SetDirty(true);
 
-    // Respawn only if this object has a live editor-owned runtime (spawned). Demo
-    // objects have none, so changing their material is document-only here.
+    // Respawn only if this object has a live editor-owned runtime.
     if (ctx.scene.FindEditorObject(id_.value) != nullptr)
     {
         const nlohmann::json json = EditorSceneDocument::ObjectToJson(*obj);

@@ -62,6 +62,18 @@ public:
     // `properties`. Leaves the document not-dirty.
     bool LoadFromLevelFile(const std::string& path);
 
+    // Begin a document rebuild from a level loader that already parsed the JSON.
+    // Runtime loaders call this once, then add objects in the same order they
+    // create runtime objects so ids stay in sync.
+    void ResetFromLevelJson(const std::string& path, const nlohmann::json& levelJson);
+
+    // Read an explicit non-zero id from JSON when present, otherwise allocate a
+    // new id. The allocator is kept past explicit ids.
+    EditorObjectId ReadOrAllocateObjectId(const nlohmann::json& objectJson);
+
+    // Add the editor mirror for one JSON object using a preselected id.
+    void AddObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson);
+
     // Build an EditorObject from a level/editor object JSON entry: lifts the
     // common fields (name/type/enabled/position/rotationDeg/scale) and keeps the
     // rest in `properties`. Does not allocate an id or modify the document.

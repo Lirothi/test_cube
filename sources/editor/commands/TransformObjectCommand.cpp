@@ -19,9 +19,8 @@ void TransformObjectCommand::ApplyTransform(EditorContext& ctx, EditorObjectId i
         obj->transform = t;
     }
 
-    // Runtime objects derived from RenderableObject get the live transform. Demo
-    // objects loaded at level load have no editor-owned runtime (SceneObjectId 0),
-    // so FindEditorObject returns null and only the document is updated.
+    // Runtime objects derived from RenderableObject get the live transform.
+    // Non-mesh document entries may still have no RenderableObject runtime.
     RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
     if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
     {

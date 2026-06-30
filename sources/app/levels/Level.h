@@ -6,6 +6,9 @@
 class Renderer;
 class Scene;
 class UploadBatch;
+#if WITH_EDITOR
+class EditorSceneDocument;
+#endif
 
 // Everything a level needs to load/unload, passed explicitly instead of being
 // fetched through Systems::Get*().
@@ -16,6 +19,9 @@ struct LevelLoadContext
     UploadBatch& uploads;
     Renderer& renderer;
     Scene& scene;
+#if WITH_EDITOR
+    EditorSceneDocument* editorDocument = nullptr;
+#endif
 };
 
 class Level
