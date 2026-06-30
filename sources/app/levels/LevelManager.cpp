@@ -2,6 +2,7 @@
 
 #include <cassert>
 
+#include "app/levels/JsonLevel.h"
 #include "app/scene/Scene.h"
 #include "rendering/core/UploadBatch.h"
 
@@ -85,6 +86,22 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx,
     scene.FinalizeLevelLoad(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
 
     return true;
+}
+
+bool LevelManager::LoadLevelFromPath(std::string path, const LevelLoadContext& ctx, const LevelLoadOptions& options)
+{
+    const std::string key(JsonLevel::kName);
+    auto it = levels_.find(key);
+    if (it == levels_.end())
+    {
+        RegisterLevel<JsonLevel>(path);
+    }
+    else
+    {
+        it->second->SetSourcePath(std::move(path));
+    }
+
+    return LoadLevel(JsonLevel::kName, ctx, options);
 }
 
 void LevelManager::Tick(float deltaTime)

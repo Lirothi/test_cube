@@ -10,7 +10,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
-#include "app/levels/DemoLevel.h"
+#include "app/levels/JsonLevel.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
 
@@ -303,12 +303,12 @@ void App::InitScene()
 
     LevelLoadContext loadCtx{ uploadBatch, renderer, scene };
 
-    if (!levelManager.HasLevel(DemoLevel::kName))
+    if (!levelManager.HasLevel(JsonLevel::kName))
     {
-        levelManager.RegisterLevel<DemoLevel>();
+        levelManager.RegisterLevel<JsonLevel>("data/levels/demo.json");
     }
 
-    const bool levelLoaded = levelManager.LoadLevel(DemoLevel::kName, loadCtx);
+    const bool levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);
     assert(levelLoaded && "Failed to load initial level");
 
     uploadBatch.SubmitAndWait(&renderer);

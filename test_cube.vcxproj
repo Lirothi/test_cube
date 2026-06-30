@@ -174,7 +174,7 @@
     <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
-    <ClCompile Include="sources/app/levels/DemoLevel.cpp" />
+    <ClCompile Include="sources/app/levels/JsonLevel.cpp" />
     <ClCompile Include="sources/app/levels/Level.cpp" />
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/scene/Scene.cpp" />
@@ -299,7 +299,7 @@
     <ClInclude Include="sources/app/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
-    <ClInclude Include="sources/app/levels/DemoLevel.h" />
+    <ClInclude Include="sources/app/levels/JsonLevel.h" />
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />

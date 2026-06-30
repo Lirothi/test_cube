@@ -39,6 +39,7 @@ public:
     }
 
     bool LoadLevel(std::string_view name, const LevelLoadContext& ctx, const LevelLoadOptions& options = {});
+    bool LoadLevelFromPath(std::string path, const LevelLoadContext& ctx, const LevelLoadOptions& options = {});
 
     void Tick(float deltaTime);
 

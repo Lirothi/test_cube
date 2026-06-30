@@ -6,10 +6,15 @@
 
 #include "app/levels/Level.h"
 
-class DemoLevel final : public Level
+class JsonLevel final : public Level
 {
 public:
-    static constexpr std::string_view kName = "DemoLevel";
+    static constexpr std::string_view kName = "JsonLevel";
+
+    explicit JsonLevel(std::string sourcePath = "data/levels/demo.json")
+        : sourcePath_(std::move(sourcePath))
+    {
+    }
 
     std::string_view GetName() const override { return kName; }
 
@@ -18,6 +23,5 @@ public:
     void SetSourcePath(std::string path) override { sourcePath_ = std::move(path); }
 
 private:
-    std::string sourcePath_ = "data/levels/demo.json";
+    std::string sourcePath_;
 };
-

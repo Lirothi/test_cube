@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "app/Systems.h"
-#include "app/levels/DemoLevel.h"
+#include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -258,12 +258,12 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
             {
                 const std::string_view activeLevelName = levelManager.GetActiveLevelName();
                 ImGui::Text("Active level: %.*s", static_cast<int>(activeLevelName.size()), activeLevelName.data());
-                ImGui::BeginDisabled(!levelManager.HasLevel(DemoLevel::kName));
-                if (ImGui::Button("Reload Demo Level"))
+                ImGui::BeginDisabled(!levelManager.HasLevel(JsonLevel::kName));
+                if (ImGui::Button("Reload JSON Level"))
                 {
                     LevelLoadOptions reloadOptions;
                     reloadOptions.preserveCameraTransform = true;
-                    levelManager.RequestLevelChange(std::string(DemoLevel::kName), reloadOptions);
+                    levelManager.RequestLevelChange(std::string(JsonLevel::kName), reloadOptions);
                 }
                 ImGui::EndDisabled();
 

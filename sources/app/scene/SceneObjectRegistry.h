@@ -8,7 +8,7 @@
 #include <vector>
 
 // nlohmann/json - single header. The registry is runtime code, but its creators
-// are JSON-driven so DemoLevel and the future JsonLevel can share object creation.
+// are JSON-driven so JsonLevel can keep object creation data-driven.
 #pragma warning(push)
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"

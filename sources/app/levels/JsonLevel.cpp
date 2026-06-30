@@ -1,4 +1,4 @@
-#include "app/levels/DemoLevel.h"
+#include "app/levels/JsonLevel.h"
 
 #include <cassert>
 #include <cstdint>
@@ -10,7 +10,7 @@
 
 #include <DirectXMath.h>
 
-// nlohmann/json — single header
+// nlohmann/json - single header
 #pragma warning(push)
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
@@ -119,7 +119,7 @@ void AddAnonymousObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
 }
 } // namespace
 
-void DemoLevel::Load(const LevelLoadContext& ctx)
+void JsonLevel::Load(const LevelLoadContext& ctx)
 {
     auto& renderer = ctx.renderer;
     auto& scene = ctx.scene;
@@ -145,7 +145,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
         j = json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
         if (j.is_discarded())
         {
-            assert(false && "data/levels/demo.json is not valid JSON");
+            assert(false && "Level source file is not valid JSON");
             return;
         }
     }
@@ -291,7 +291,7 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
     }
 }
 
-void DemoLevel::Unload(const LevelLoadContext& ctx)
+void JsonLevel::Unload(const LevelLoadContext& ctx)
 {
     Level::Unload(ctx);
     Systems::DestroyOceanSimulation();

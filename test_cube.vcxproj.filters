@@ -186,7 +186,7 @@
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/levels/DemoLevel.cpp">
+    <ClCompile Include="sources/app/levels/JsonLevel.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/levels/Level.cpp">
@@ -497,7 +497,7 @@
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/levels/DemoLevel.h">
+    <ClInclude Include="sources/app/levels/JsonLevel.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/Level.h">
