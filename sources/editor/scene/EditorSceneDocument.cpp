@@ -120,6 +120,7 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
     nextId_ = 1;
     dirty_ = false;
     levelPath_ = path;
+    rootJson_ = nlohmann::json::object();
 
     std::error_code ec;
     if (!std::filesystem::exists(path, ec))
@@ -142,6 +143,8 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
     {
         return false;
     }
+
+    rootJson_ = doc; // preserve top-level sections (camera/skybox/ocean/lights) for save
 
     const auto objectsIt = doc.find("objects");
     if (objectsIt == doc.end() || !objectsIt->is_array())

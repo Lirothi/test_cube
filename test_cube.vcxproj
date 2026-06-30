@@ -160,6 +160,7 @@
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
+    <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp" />
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp" />
     <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp" />
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp" />
@@ -282,6 +283,7 @@
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
+    <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />
     <ClInclude Include="sources/editor/commands/EditorCommand.h" />
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h" />
     <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h" />

@@ -19,6 +19,9 @@
     <Filter Include="sources\editor\scene">
       <UniqueIdentifier>{f4c986b7-b075-4c6b-bb22-fd7c95e11e17}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\serialization">
+      <UniqueIdentifier>{b385a8cd-a83a-4c6c-9a37-de2e7c059df2}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\editor\commands">
       <UniqueIdentifier>{d9cb89dc-091f-4d5d-8eb4-c21e21a65eed}</UniqueIdentifier>
     </Filter>
@@ -137,6 +140,9 @@
     </ClCompile>
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp">
       <Filter>sources\editor\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp">
+      <Filter>sources\editor\serialization</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp">
       <Filter>sources\editor\commands</Filter>
@@ -439,6 +445,9 @@
     </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">
       <Filter>sources\editor\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h">
+      <Filter>sources\editor\serialization</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditorCommand.h">
       <Filter>sources\editor\commands</Filter>

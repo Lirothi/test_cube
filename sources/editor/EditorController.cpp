@@ -1,13 +1,17 @@
 #include "editor/EditorController.h"
 #if WITH_EDITOR
 
+#include <cstdio>
 #include <memory>
 #include <string>
 
+#include "app/levels/Level.h"
+#include "app/levels/LevelManager.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
+#include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
 
 namespace
@@ -48,6 +52,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     {
         assetRegistry_.Refresh();
         document_.LoadFromLevelFile("data/levels/demo.json");
+        std::snprintf(levelPathBuffer_, sizeof(levelPathBuffer_), "%s", document_.LevelPath().c_str());
         firstOpenInitialized_ = true;
     }
 
@@ -70,6 +75,33 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::BeginDisabled(!commandStack_.CanRedo());
         if (ImGui::Button("Redo")) { commandStack_.Redo(ctx); }
         ImGui::EndDisabled();
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Level File");
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputText("##levelpath", levelPathBuffer_, sizeof(levelPathBuffer_));
+        if (ImGui::Button("Save"))
+        {
+            if (LevelDocumentSerializer::SaveToFile(document_, levelPathBuffer_))
+            {
+                document_.SetDirty(false);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reload"))
+        {
+            // Rebuild the runtime through the existing loader (re-parses the file,
+            // so special types are recreated correctly), then resync the document.
+            if (Level* level = levelManager.GetActiveLevel())
+            {
+                level->SetSourcePath(levelPathBuffer_);
+                LevelLoadOptions reloadOptions;
+                reloadOptions.preserveCameraTransform = true;
+                levelManager.RequestLevelChange(std::string(levelManager.GetActiveLevelName()), reloadOptions);
+            }
+            document_.LoadFromLevelFile(levelPathBuffer_);
+            if (!document_.Find(selectedObject_)) { selectedObject_ = EditorObjectId{}; }
+        }
 
         ImGui::Separator();
         ImGui::TextUnformatted("Windows");

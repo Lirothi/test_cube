@@ -74,11 +74,17 @@ public:
 
     const std::string& LevelPath() const { return levelPath_; }
 
+    // The full parsed level JSON from the last load (camera/skybox/ocean/lights/
+    // objects). Save re-emits these top-level sections verbatim, replacing only
+    // "objects" with the current EditorObjects.
+    const nlohmann::json& RootJson() const { return rootJson_; }
+
 private:
     std::vector<EditorObject> objects_;
     uint64_t nextId_ = 1;
     bool dirty_ = false;
     std::string levelPath_;
+    nlohmann::json rootJson_;
 };
 
 #endif // WITH_EDITOR

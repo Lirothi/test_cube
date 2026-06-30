@@ -221,10 +221,10 @@ void DemoLevel::Load(const LevelLoadContext& ctx)
 
     json j;
     {
-        std::ifstream f("data/levels/demo.json");
+        std::ifstream f(sourcePath_);
         if (!f)
         {
-            assert(false && "No data/levels/demo.json found!");
+            assert(false && "Level source file not found!");
             return;
         }
         std::stringstream ss;

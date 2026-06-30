@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <string_view>
 
 class Renderer;
@@ -26,4 +27,8 @@ public:
     virtual void Load(const LevelLoadContext& ctx) = 0;
     virtual void Unload(const LevelLoadContext& ctx);
     virtual void Tick(float deltaTime) { (void)deltaTime; }
+
+    // Optional: override the JSON file a data-driven level loads from. Used by the
+    // editor to reload a saved copy through the normal load path. Default: no-op.
+    virtual void SetSourcePath(std::string /*path*/) {}
 };

@@ -39,6 +39,7 @@ private:
     EditorSceneDocument document_;
     EditorObjectId selectedObject_;
     EditorCommandStack commandStack_;
+    char levelPathBuffer_[260] = {};
 };
 
 #endif // WITH_EDITOR
