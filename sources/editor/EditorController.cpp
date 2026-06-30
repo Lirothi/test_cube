@@ -5,7 +5,6 @@
 #include <memory>
 #include <string>
 
-#include "app/levels/Level.h"
 #include "app/levels/LevelManager.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/DeleteObjectCommand.h"
@@ -13,6 +12,8 @@
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
+#include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
 
 namespace
 {
@@ -36,6 +37,39 @@ namespace
             }
         }
         return first ? first->id.key : std::string{};
+    }
+
+    bool ReloadLevelFromPath(Renderer& renderer,
+        Scene& scene,
+        LevelManager& levelManager,
+        EditorSceneDocument& document,
+        const std::string& path,
+        bool preserveCameraTransform)
+    {
+        if (path.empty())
+        {
+            return false;
+        }
+
+        renderer.WaitForPreviousFrame();
+
+        UploadBatch uploads;
+        if (!uploads.Begin(&renderer))
+        {
+            return false;
+        }
+
+        LevelLoadOptions options;
+        options.preserveCameraTransform = preserveCameraTransform;
+        options.editorDocument = &document;
+
+        LevelLoadContext loadCtx{ uploads, renderer, scene, &document };
+        const bool loaded = levelManager.LoadLevelFromPath(path, loadCtx, options);
+        if (loaded)
+        {
+            uploads.SubmitAndWait(&renderer);
+        }
+        return loaded;
     }
 }
 
@@ -82,26 +116,27 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::InputText("##levelpath", levelPathBuffer_, sizeof(levelPathBuffer_));
         if (ImGui::Button("Save"))
         {
-            if (LevelDocumentSerializer::SaveToFile(document_, levelPathBuffer_))
+            const std::string path(levelPathBuffer_);
+            if (LevelDocumentSerializer::SaveToFile(document_, path) &&
+                ReloadLevelFromPath(renderer, scene, levelManager, document_, path, true))
             {
-                document_.SetDirty(false);
+                commandStack_.Clear();
+                selectedObject_ = EditorObjectId{};
+                std::snprintf(levelPathBuffer_, sizeof(levelPathBuffer_), "%s", document_.LevelPath().c_str());
             }
         }
         ImGui::SameLine();
         if (ImGui::Button("Reload"))
         {
-            // Rebuild the runtime through the existing loader (re-parses the file,
-            // so special types are recreated correctly), then resync the document.
-            if (Level* level = levelManager.GetActiveLevel())
+            // Rebuild the runtime through JsonLevel (re-parses the file, so
+            // special types are recreated correctly), then resync the document.
+            const std::string path(levelPathBuffer_);
+            if (ReloadLevelFromPath(renderer, scene, levelManager, document_, path, true))
             {
-                level->SetSourcePath(levelPathBuffer_);
-                LevelLoadOptions reloadOptions;
-                reloadOptions.preserveCameraTransform = true;
-                reloadOptions.editorDocument = &document_;
-                levelManager.RequestLevelChange(std::string(levelManager.GetActiveLevelName()), reloadOptions);
+                commandStack_.Clear();
+                selectedObject_ = EditorObjectId{};
+                std::snprintf(levelPathBuffer_, sizeof(levelPathBuffer_), "%s", document_.LevelPath().c_str());
             }
-            commandStack_.Clear();
-            selectedObject_ = EditorObjectId{};
         }
 
         ImGui::Separator();
