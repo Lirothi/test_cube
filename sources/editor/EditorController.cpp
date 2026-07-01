@@ -24,6 +24,8 @@
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
 #include "rendering/core/Renderer.h"
+#include <ocean/OceanSimulation.h>
+#include <app/Systems.h>
 
 namespace
 {
@@ -209,6 +211,8 @@ namespace
             oceanPreset = DefaultOceanPresetPath();
         }
 
+        OceanSimulation* ocean = Systems::GetOceanSimulation();
+
         bool changed = false;
         if (ImGui::Checkbox("Enabled##OceanEnabled", &oceanEnabled))
         {
@@ -268,6 +272,11 @@ namespace
         {
             WriteOceanSettings(document, oceanEnabled, oceanPreset);
             levelStatus = oceanEnabled ? "Ocean: " + NormalizeLevelPath(oceanPreset) : "Ocean disabled";
+
+            if (ocean)
+            {
+                ocean->LoadConfig(&Systems::GetRenderer(), std::wstring(oceanPreset.begin(), oceanPreset.end()));
+            }
         }
     }
 
