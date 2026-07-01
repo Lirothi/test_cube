@@ -66,6 +66,13 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
 }
 
+bool TryFloat3(const json& j, float3& out)
+{
+    if (!j.is_array() || j.size() < 3) { return false; }
+    out = float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+    return true;
+}
+
 SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationContext& ctx, const json& o)
 {
     (void)ctx;
@@ -104,33 +111,6 @@ SceneObjectRegistry::ObjectList CreateTransparentMesh(SceneObjectRegistry::Creat
     return objects;
 }
 
-SceneObjectRegistry::ObjectList CreateMetalRoughGrid(SceneObjectRegistry::CreationContext& ctx, const json& o)
-{
-    (void)ctx;
-
-    SceneObjectRegistry::ObjectList objects;
-    const std::string model = o.value("model", std::string("models/sphere.obj"));
-    const std::string material = o.value("material", std::string("bronze"));
-    const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-    const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-    const int width = o.value("width", 10);
-    const int height = o.value("height", 5);
-
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < width; ++x)
-        {
-            auto sphere = std::make_unique<StaticMesh>(model, material, layout, shader);
-            sphere->MaterialParamsRef().SetUseMR(false);
-            sphere->MaterialParamsRef().metalRough = float2(static_cast<float>(y) / (height - 1), static_cast<float>(x) / (width - 1));
-            sphere->SetPosition(float3(static_cast<float>(x) + x * 0.2f, static_cast<float>(y) + y * 0.2f + 1.0f, -static_cast<float>(x) + x * 0.2f - 12.0f));
-            objects.push_back(std::move(sphere));
-        }
-    }
-
-    return objects;
-}
-
 SceneObjectRegistry::ObjectList CreateInstancedModels(SceneObjectRegistry::CreationContext& ctx, const json& o)
 {
     (void)ctx;
@@ -143,7 +123,30 @@ SceneObjectRegistry::ObjectList CreateInstancedModels(SceneObjectRegistry::Creat
     const std::wstring computeShader = Widen(o.value("computeShader", std::string("shaders/instance_anim.hlsl")));
     const unsigned int count = o.value("count", 1u);
 
-    objects.push_back(std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader));
+    auto instances = std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader);
+
+    float3 position = instances->GetPosition();
+    float3 rotationRad = instances->GetRotationEulerRad();
+    float3 scale = instances->GetScale();
+    float3 value{};
+    if (o.contains("position") && TryFloat3(o["position"], value))
+    {
+        position = value;
+        instances->SetPosition(position);
+    }
+    if (o.contains("rotationDeg") && TryFloat3(o["rotationDeg"], value))
+    {
+        rotationRad = float3(value.x * DEG2RAD, value.y * DEG2RAD, value.z * DEG2RAD);
+        instances->SetRotationEulerRad(rotationRad);
+    }
+    if (o.contains("scale") && TryFloat3(o["scale"], value))
+    {
+        scale = value;
+        instances->SetScale(scale);
+    }
+
+    instances->SetModelMatrix(mat4::Scaling(scale) * mat4::RotationFromEulerXYZRad(rotationRad) * mat4::Translation(position));
+    objects.push_back(std::move(instances));
     return objects;
 }
 
@@ -250,7 +253,6 @@ SceneObjectRegistry SceneObjectRegistry::CreateWithBuiltins()
     SceneObjectRegistry registry;
     registry.Register("staticMesh", CreateStaticMesh);
     registry.Register("transparentMesh", CreateTransparentMesh);
-    registry.Register("metalRoughGrid", CreateMetalRoughGrid);
     registry.Register("instancedModels", CreateInstancedModels);
     registry.Register("ocean", CreateOcean);
     registry.Register("debugGrid", CreateDebugGrid);

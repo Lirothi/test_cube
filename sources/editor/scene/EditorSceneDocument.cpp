@@ -20,8 +20,8 @@ namespace
     }
 
     // Keys lifted into EditorObject; everything else stays in `properties` so it
-    // round-trips unchanged (rotateSpeedDeg, material, texOffsScale, the
-    // metalRoughGrid/instancedModels parameters, transparent-mesh fields, ...).
+    // round-trips unchanged (rotateSpeedDeg, material, texOffsScale,
+    // instancedModels parameters, transparent-mesh fields, ...).
     const char* const kCommonKeys[] = {
         "id", "name", "type", "enabled", "position", "rotationDeg", "scale"
     };

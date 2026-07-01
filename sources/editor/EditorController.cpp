@@ -70,6 +70,11 @@ namespace
         return "data/levels";
     }
 
+    std::string DefaultOceanPresetPath()
+    {
+        return "data/ocean/default.json";
+    }
+
     std::string NormalizeLevelPath(std::string path)
     {
         std::replace(path.begin(), path.end(), '\\', '/');
@@ -79,6 +84,191 @@ namespace
     std::string LevelPathString(const std::filesystem::path& path)
     {
         return NormalizeLevelPath(path.string());
+    }
+
+    std::string FileNameLabel(const std::string& path)
+    {
+        const std::filesystem::path fsPath(path);
+        const std::filesystem::path fileName = fsPath.filename();
+        return fileName.empty() ? NormalizeLevelPath(path) : NormalizeLevelPath(fileName.string());
+    }
+
+    std::vector<std::string> ReadOceanPresetFiles()
+    {
+        std::vector<std::string> presets;
+        const std::filesystem::path configDir("data/ocean");
+        std::error_code ec;
+        if (!std::filesystem::exists(configDir, ec))
+        {
+            return presets;
+        }
+
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(configDir, ec))
+        {
+            if (ec)
+            {
+                break;
+            }
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".json")
+            {
+                presets.push_back(LevelPathString(entry.path()));
+            }
+        }
+
+        std::sort(presets.begin(), presets.end());
+        return presets;
+    }
+
+    bool ReadOceanEnabled(const nlohmann::json& root)
+    {
+        if (!root.is_object())
+        {
+            return false;
+        }
+
+        const auto oceanIt = root.find("ocean");
+        if (oceanIt == root.end())
+        {
+            return false;
+        }
+        if (oceanIt->is_boolean())
+        {
+            return oceanIt->get<bool>();
+        }
+        if (oceanIt->is_string())
+        {
+            return !oceanIt->get<std::string>().empty();
+        }
+        if (oceanIt->is_object())
+        {
+            return oceanIt->value("enabled", true);
+        }
+        return false;
+    }
+
+    std::string ReadOceanPresetPath(const nlohmann::json& root)
+    {
+        if (!root.is_object())
+        {
+            return {};
+        }
+
+        const auto oceanIt = root.find("ocean");
+        if (oceanIt == root.end())
+        {
+            return {};
+        }
+        if (oceanIt->is_string())
+        {
+            return NormalizeLevelPath(oceanIt->get<std::string>());
+        }
+        if (!oceanIt->is_object())
+        {
+            return {};
+        }
+
+        constexpr const char* kPathKeys[] = { "preset", "presetFile", "config", "configFile" };
+        for (const char* key : kPathKeys)
+        {
+            const auto it = oceanIt->find(key);
+            if (it != oceanIt->end() && it->is_string())
+            {
+                return NormalizeLevelPath(it->get<std::string>());
+            }
+        }
+        return {};
+    }
+
+    void WriteOceanSettings(EditorSceneDocument& document, bool enabled, const std::string& presetPath)
+    {
+        nlohmann::json& root = document.RootJson();
+        if (!root.is_object())
+        {
+            root = nlohmann::json::object();
+        }
+
+        nlohmann::json ocean = nlohmann::json::object();
+        const auto existingOceanIt = root.find("ocean");
+        if (existingOceanIt != root.end() && existingOceanIt->is_object())
+        {
+            ocean = *existingOceanIt;
+        }
+
+        ocean["enabled"] = enabled;
+        ocean["preset"] = NormalizeLevelPath(presetPath.empty() ? DefaultOceanPresetPath() : presetPath);
+        root["ocean"] = std::move(ocean);
+        document.SetDirty(true);
+    }
+
+    void DrawOceanSection(EditorSceneDocument& document, std::string& levelStatus)
+    {
+        bool oceanEnabled = ReadOceanEnabled(document.RootJson());
+        std::string oceanPreset = ReadOceanPresetPath(document.RootJson());
+        if (oceanPreset.empty())
+        {
+            oceanPreset = DefaultOceanPresetPath();
+        }
+
+        bool changed = false;
+        if (ImGui::Checkbox("Enabled##OceanEnabled", &oceanEnabled))
+        {
+            changed = true;
+        }
+
+        const std::vector<std::string> presets = ReadOceanPresetFiles();
+        const std::string currentPreset = NormalizeLevelPath(oceanPreset);
+        bool currentPresetListed = false;
+        for (const std::string& preset : presets)
+        {
+            if (NormalizeLevelPath(preset) == currentPreset)
+            {
+                currentPresetListed = true;
+                break;
+            }
+        }
+
+        ImGui::SetNextItemWidth(-1.0f);
+        const std::string currentLabel = FileNameLabel(oceanPreset);
+        if (ImGui::BeginCombo("Preset##OceanPreset", currentLabel.empty() ? "(none)" : currentLabel.c_str()))
+        {
+            for (const std::string& preset : presets)
+            {
+                const std::string normalizedPreset = NormalizeLevelPath(preset);
+                const bool selected = normalizedPreset == currentPreset;
+                const std::string label = FileNameLabel(preset);
+                if (ImGui::Selectable(label.c_str(), selected) && !selected)
+                {
+                    oceanPreset = normalizedPreset;
+                    changed = true;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+
+            if (!currentPresetListed && !currentPreset.empty())
+            {
+                if (!presets.empty())
+                {
+                    ImGui::Separator();
+                }
+                if (ImGui::Selectable(currentPreset.c_str(), true))
+                {
+                    oceanPreset = currentPreset;
+                }
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::TextDisabled("Path: %s", NormalizeLevelPath(oceanPreset).c_str());
+
+        if (changed)
+        {
+            WriteOceanSettings(document, oceanEnabled, oceanPreset);
+            levelStatus = oceanEnabled ? "Ocean: " + NormalizeLevelPath(oceanPreset) : "Ocean disabled";
+        }
     }
 
     bool TryReadFloat(const nlohmann::json& value, float& out)
@@ -604,6 +794,34 @@ namespace
         }
         return recentLevelPaths != oldRecentLevelPaths;
     }
+
+    bool ForgetRecentLevel(std::vector<std::string>& recentLevelPaths, const std::string& path)
+    {
+        const std::string normalizedPath = NormalizeLevelPath(path);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+
+        const auto oldSize = recentLevelPaths.size();
+        recentLevelPaths.erase(std::remove(recentLevelPaths.begin(), recentLevelPaths.end(), normalizedPath), recentLevelPaths.end());
+        return recentLevelPaths.size() != oldSize;
+    }
+
+    bool LevelFileExists(const std::string& path)
+    {
+        const std::string normalizedPath = NormalizeLevelPath(path);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+
+        std::error_code ec;
+        const std::filesystem::path fsPath(normalizedPath);
+        const bool exists = std::filesystem::exists(fsPath, ec);
+        const bool regularFile = exists && std::filesystem::is_regular_file(fsPath, ec);
+        return !ec && regularFile;
+    }
 }
 
 void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
@@ -786,8 +1004,22 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     };
     const auto openLevel = [&](const std::string& path) -> bool
     {
-        saveCurrentLevelCameraState(true);
         const std::string normalizedPath = NormalizeLevelPath(path);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+        if (!LevelFileExists(normalizedPath))
+        {
+            if (ForgetRecentLevel(recentLevelPaths_, normalizedPath))
+            {
+                SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+            }
+            levelStatus_ = "Level file not found: " + normalizedPath;
+            return false;
+        }
+
+        saveCurrentLevelCameraState(true);
         return queueLevelPathLoad(normalizedPath, false, PendingLevelAction::Open, "Opening " + normalizedPath);
     };
     const auto saveLevel = [&](const std::string& path) -> bool
@@ -905,6 +1137,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             ImGui::TextDisabled("%s", levelStatus_.c_str());
         }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Ocean");
+        DrawOceanSection(document_, levelStatus_);
 
         if (levelFileDialogMode_ != LevelFileDialogMode::None)
         {

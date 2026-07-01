@@ -37,6 +37,11 @@ GpuInstancedModels::GpuInstancedModels(
     , modelName_(std::move(modelName))
     , instanceCount_(numInstances)
 {
+    const Math::float3 defaultPosition(0.0f, 6.0f, 10.0f);
+    const Math::float3 defaultRotation(0.0f, 45.0f * DEG2RAD, 0.0f);
+    SetPosition(defaultPosition);
+    SetRotationEulerRad(defaultRotation);
+    SetModelMatrix(Math::mat4::RotationFromEulerXYZRad(defaultRotation) * Math::mat4::Translation(defaultPosition));
 }
 
 void GpuInstancedModels::Init(Renderer* renderer,
@@ -67,9 +72,6 @@ void GpuInstancedModels::Init(Renderer* renderer,
     renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     instanceRotations_.assign(instanceCount_, 0.0f);
-    MarkInstanceBoundsDirty();
-
-    SetModelMatrix(mat4::RotationY(45.0f * DEG2RAD) * mat4::Translation({0.0f, 6.0f, 10.0f}));
     MarkInstanceBoundsDirty();
 }
 

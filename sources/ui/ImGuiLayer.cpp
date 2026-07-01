@@ -52,6 +52,7 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
     //io.IniFilename = nullptr;
 
     ImGuiStyle& style = ImGui::GetStyle();

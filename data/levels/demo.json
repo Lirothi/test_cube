@@ -243,11 +243,453 @@
     },
 
     {
-      "type": "metalRoughGrid",
+      "type": "staticMesh",
       "model": "models/sphere.obj",
       "material": "bronze",
-      "width": 10,
-      "height": 5
+      "position": [ 0.0, 1.0, -12.0 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 1.2, 1.0, -12.8 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.11111111 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 2.4, 1.0, -13.6 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.22222222 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 3.6, 1.0, -14.4 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.33333334 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 4.8, 1.0, -15.2 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.44444445 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 6.0, 1.0, -16.0 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.55555558 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 7.2, 1.0, -16.8 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.66666669 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 8.4, 1.0, -17.6 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.77777779 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 9.6, 1.0, -18.4 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 0.8888889 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 10.8, 1.0, -19.2 ],
+      "useMR": false,
+      "metalRough": [ 0.0, 1.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 0.0, 2.2, -12.0 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 1.2, 2.2, -12.8 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.11111111 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 2.4, 2.2, -13.6 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.22222222 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 3.6, 2.2, -14.4 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.33333334 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 4.8, 2.2, -15.2 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.44444445 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 6.0, 2.2, -16.0 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.55555558 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 7.2, 2.2, -16.8 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.66666669 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 8.4, 2.2, -17.6 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.77777779 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 9.6, 2.2, -18.4 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 0.8888889 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 10.8, 2.2, -19.2 ],
+      "useMR": false,
+      "metalRough": [ 0.25, 1.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 0.0, 3.4, -12.0 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 1.2, 3.4, -12.8 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.11111111 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 2.4, 3.4, -13.6 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.22222222 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 3.6, 3.4, -14.4 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.33333334 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 4.8, 3.4, -15.2 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.44444445 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 6.0, 3.4, -16.0 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.55555558 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 7.2, 3.4, -16.8 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.66666669 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 8.4, 3.4, -17.6 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.77777779 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 9.6, 3.4, -18.4 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 0.8888889 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 10.8, 3.4, -19.2 ],
+      "useMR": false,
+      "metalRough": [ 0.5, 1.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 0.0, 4.6, -12.0 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 1.2, 4.6, -12.8 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.11111111 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 2.4, 4.6, -13.6 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.22222222 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 3.6, 4.6, -14.4 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.33333334 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 4.8, 4.6, -15.2 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.44444445 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 6.0, 4.6, -16.0 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.55555558 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 7.2, 4.6, -16.8 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.66666669 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 8.4, 4.6, -17.6 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.77777779 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 9.6, 4.6, -18.4 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 0.8888889 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 10.8, 4.6, -19.2 ],
+      "useMR": false,
+      "metalRough": [ 0.75, 1.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 0.0, 5.8, -12.0 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.0 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 1.2, 5.8, -12.8 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.11111111 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 2.4, 5.8, -13.6 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.22222222 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 3.6, 5.8, -14.4 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.33333334 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 4.8, 5.8, -15.2 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.44444445 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 6.0, 5.8, -16.0 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.55555558 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 7.2, 5.8, -16.8 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.66666669 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 8.4, 5.8, -17.6 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.77777779 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 9.6, 5.8, -18.4 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 0.8888889 ]
+    },
+
+    {
+      "type": "staticMesh",
+      "model": "models/sphere.obj",
+      "material": "bronze",
+      "position": [ 10.8, 5.8, -19.2 ],
+      "useMR": false,
+      "metalRough": [ 1.0, 1.0 ]
     },
 
     {
@@ -255,6 +697,8 @@
       "model": "models/teapot.obj",
       "count": 100,
       "material": "bronze",
+      "position": [ 0.0, 6.0, 10.0 ],
+      "rotationDeg": [ 0.0, 45.0, 0.0 ],
       "shader": "shaders/gbuffer_inst.hlsl",
       "computeShader": "shaders/instance_anim.hlsl"
     }

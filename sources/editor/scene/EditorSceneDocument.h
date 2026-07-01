@@ -89,6 +89,7 @@ public:
     // The full parsed level JSON from the last load (camera/skybox/ocean/lights/
     // objects). Save re-emits these top-level sections verbatim, replacing only
     // "objects" with the current EditorObjects.
+    nlohmann::json& RootJson() { return rootJson_; }
     const nlohmann::json& RootJson() const { return rootJson_; }
 
 private:
