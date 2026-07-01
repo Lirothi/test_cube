@@ -272,21 +272,24 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     AddAnonymousObjects(scene, objectRegistry.Create("debugGrid", creationCtx, json::object()));
 
-    if (j.contains("camera"))
+    // Camera position is no longer stored in the level file. Baseline it to the
+    // origin; in editor builds EditorController restores a per-level camera from
+    // editor_state.json when a record exists, otherwise the camera stays at zero.
+    // Only the projection (fov / near / far) comes from the level.
     {
-        const json& cam = j["camera"];
         Camera& camera = scene.CameraRef();
-        if (cam.contains("position"))
+        camera.SetPosition(float3(0.0f, 0.0f, 0.0f));
+        if (j.contains("camera"))
         {
-            camera.SetPosition(ToFloat3(cam["position"], float3(0.0f, 1.0f, -10.0f)));
-        }
-        if (cam.contains("hfovDeg"))
-        {
-            camera.SetHFov(DirectX::XMConvertToRadians(cam["hfovDeg"].get<float>()));
-        }
-        if (cam.contains("zNear") || cam.contains("zFar"))
-        {
-            camera.SetZNearFar(cam.value("zNear", camera.GetZNear()), cam.value("zFar", camera.GetZFar()));
+            const json& cam = j["camera"];
+            if (cam.contains("hfovDeg"))
+            {
+                camera.SetHFov(DirectX::XMConvertToRadians(cam["hfovDeg"].get<float>()));
+            }
+            if (cam.contains("zNear") || cam.contains("zFar"))
+            {
+                camera.SetZNearFar(cam.value("zNear", camera.GetZNear()), cam.value("zFar", camera.GetZFar()));
+            }
         }
     }
 }

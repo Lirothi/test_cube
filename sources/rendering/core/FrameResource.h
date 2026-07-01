@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl.h>
 #include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 #include <atomic>
 #include <mutex>
@@ -167,8 +168,18 @@ private:
             }
 
             ID3D12GraphicsCommandList* cl = vec[index].Get();
-            if (FAILED(cl->Reset(alloc, initialPSO))) {
-                throw std::runtime_error("CommandList Reset failed");
+            const HRESULT resetHr = cl->Reset(alloc, initialPSO);
+            if (FAILED(resetHr)) {
+                // Reset fails on (a) device removal (a GPU fault upstream — then
+                // every later D3D12 call fails) or (b) a command list left in the
+                // recording state (a pass opened it but didn't close it). Surface
+                // both so this is diagnosable instead of an opaque "Reset failed".
+                const HRESULT removedReason = dev->GetDeviceRemovedReason();
+                char msg[192];
+                std::snprintf(msg, sizeof(msg),
+                    "CommandList Reset failed: hr=0x%08X deviceRemovedReason=0x%08X",
+                    static_cast<unsigned int>(resetHr), static_cast<unsigned int>(removedReason));
+                throw std::runtime_error(msg);
             }
             return cl;
         }

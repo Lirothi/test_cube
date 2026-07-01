@@ -321,7 +321,6 @@ namespace
     {
         nlohmann::json root = nlohmann::json::object();
         root["camera"] = {
-            { "position", nlohmann::json::array({ 0.0f, 1.0f, -10.0f }) },
             { "hfovDeg", 90.0f },
             { "zNear", 0.01f },
             { "zFar", 10000.0f }
@@ -683,11 +682,6 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
 
 void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager)
 {
-    if (!open_)
-    {
-        return;
-    }
-
     const auto markCameraStateSaved = [this](const std::string& levelPath, const LevelCameraState& cameraState)
     {
         lastSavedCameraLevelPath_ = NormalizeLevelPath(levelPath);
@@ -728,8 +722,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         return true;
     };
 
-    // Lazy first-open init: scan assets and load the active level's object
-    // metadata once. Neither touches the runtime scene.
+    // First-frame init, run even while the editor UI is closed: scan assets, load
+    // the active level's object metadata, and restore the per-level camera from
+    // editor_state.json. Doing this before the open_ check below means the camera
+    // is restored at startup, not only after the editor is first opened with F2.
+    // If there is no saved record, the camera keeps the loader's zero baseline.
     if (!firstOpenInitialized_)
     {
         assetRegistry_.Refresh();
@@ -743,6 +740,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             levelStatus_ = "Loaded " + NormalizeLevelPath(document_.LevelPath());
         }
         firstOpenInitialized_ = true;
+    }
+
+    if (!open_)
+    {
+        return;
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selectedObject_ };

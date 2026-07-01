@@ -26,6 +26,13 @@ namespace LevelDocumentSerializer
             out = nlohmann::json::object();
         }
 
+        // Camera position is intentionally not persisted in level files; it lives
+        // per-level in editor_state.json. Keep projection settings (fov/near/far).
+        if (out.contains("camera") && out["camera"].is_object())
+        {
+            out["camera"].erase("position");
+        }
+
         nlohmann::json objects = nlohmann::json::array();
         for (const EditorObject& obj : document.Objects())
         {

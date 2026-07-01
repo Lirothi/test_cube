@@ -1165,6 +1165,18 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         return;
     }
 
+    // Defensive: skip the frame if a deferred SRV handle staged below is null
+    // (see Pass_SpotLights note); avoids a null CopyDescriptorsSimple source.
+    {
+        const auto& deferred = renderer->GetDeferredForFrame();
+        if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
+            deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
+            deferred.depthSRV.ptr == 0 || deferred.shadowSRV.ptr == 0)
+        {
+            return;
+        }
+    }
+
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
     {
@@ -1235,6 +1247,19 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
     if (!spotLightBufferCPU || spotLightSrvHandle.ptr == 0)
     {
         return;
+    }
+
+    // Defensive: if any deferred-target SRV handle staged below is still null
+    // (observed at startup; CopyDescriptorsSimple rejects a null source and trips
+    // the D3D12 debug layer), skip this pass for the frame. It recovers next frame.
+    {
+        const auto& deferred = renderer->GetDeferredForFrame();
+        if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
+            deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
+            deferred.depthSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0)
+        {
+            return;
+        }
     }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -1308,6 +1333,18 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU();
     const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv();
     if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
+
+    // Defensive: skip the frame if a deferred SRV handle staged below is null
+    // (see Pass_SpotLights note); avoids a null CopyDescriptorsSimple source.
+    {
+        const auto& deferred = renderer->GetDeferredForFrame();
+        if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
+            deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
+            deferred.depthSRV.ptr == 0)
+        {
+            return;
+        }
+    }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);

@@ -188,6 +188,13 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         return;
     }
 
+    // Defensive: the deferred shadow SRVs staged below must be valid (see the
+    // SceneRenderer Pass_SpotLights note); skip this draw for the frame if not.
+    if (deferred.shadowSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0)
+    {
+        return;
+    }
+
     const D3D12_CPU_DESCRIPTOR_HANDLE sceneColorSrv =
         deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV;
     // t7 = the off-screen RT glass reflection (S15b). A normal texture on all HW — the glass
