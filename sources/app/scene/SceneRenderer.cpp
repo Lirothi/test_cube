@@ -40,6 +40,7 @@ namespace
 #if WITH_EDITOR
     constexpr UINT kSelectionStencilBit = 0x80u;
     constexpr uint32_t kSelectionStencilGBufferLocalOrder = 0xfffffffeu;
+    constexpr uint32_t kSelectionStencilTransparentLocalOrder = 0xfffffffeu;
 #endif
 
     constexpr size_t BucketIndex(SceneRenderQueue::BucketType type)
@@ -48,7 +49,7 @@ namespace
     }
 
 #if WITH_EDITOR
-    RenderableObjectBase* FindSelectedOpaqueObject(const SceneFrameData& frame, const SceneView& view)
+    RenderableObjectBase* FindSelectedObject(const SceneFrameData& frame, const SceneView& view, bool transparent)
     {
         if (frame.selectedEditorObjectId == 0 || !frame.objects)
         {
@@ -63,7 +64,7 @@ namespace
                 continue;
             }
 
-            if (!obj->IsVisible() || obj->IsTransparent())
+            if (!obj->IsVisible() || obj->IsTransparent() != transparent)
             {
                 return nullptr;
             }
@@ -1230,7 +1231,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         selectedDeps.push_back(pOpaqueSimple);
         selectedDeps.push_back(pOpaqueComplex);
         rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
-            RenderableObjectBase* selected = FindSelectedOpaqueObject(*frame_, mainView);
+            RenderableObjectBase* selected = FindSelectedObject(*frame_, mainView, false);
             if (!selected)
             {
                 return;
@@ -2299,7 +2300,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+    [[maybe_unused]] const size_t pTransparentSimple = rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
@@ -2308,7 +2309,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         }
         });
 
-    rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+    [[maybe_unused]] const size_t pTransparentComplex = rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
@@ -2316,6 +2317,43 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, true, 32, viewCB);
         }
         });
+
+#if WITH_EDITOR
+    if (frame_ && frame_->selectedEditorObjectId != 0)
+    {
+        RenderGraph<kTransparentRenderGraphPassCount>::DependencyList selectedDeps;
+        selectedDeps.push_back(pTransparentSimple);
+        selectedDeps.push_back(pTransparentComplex);
+        rgTr.AddPass(RenderPass::Transparent_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+            RenderableObjectBase* selected = FindSelectedObject(*frame_, mainView, true);
+            auto material = resources_.GetSelectionStencilMaterial();
+            if (!selected || !material)
+            {
+                return;
+            }
+
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            SetCommandListName(t.cl, sub.pass);
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
+
+                const auto& D = renderer->GetDeferredForFrame();
+                renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                t.cl->OMSetRenderTargets(0, nullptr, FALSE, &D.dsv);
+
+                const D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()), 0.0f, 1.0f };
+                const D3D12_RECT sr{ 0, 0, static_cast<LONG>(renderer->GetRenderWidth()), static_cast<LONG>(renderer->GetRenderHeight()) };
+                t.cl->RSSetViewports(1, &vp);
+                t.cl->RSSetScissorRects(1, &sr);
+
+                t.cl->OMSetStencilRef(kSelectionStencilBit);
+                selected->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
+                t.cl->OMSetStencilRef(0);
+            }
+            renderer->EndThreadCommandList(t, sub.batchIndex, kSelectionStencilTransparentLocalOrder);
+            });
+    }
+#endif
 
     rgTr.Execute(renderer);
 }

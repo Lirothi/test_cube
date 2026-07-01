@@ -160,6 +160,39 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     DrawGeometry(cl, cameraLod_);
 }
 
+#if WITH_EDITOR
+void RenderableObject::RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera)
+{
+    if (!renderer) { return; }
+    if (cl == nullptr) { return; }
+    if (!material) { return; }
+    if (!GetMesh()) { return; }
+
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+    const UINT cbSizeBytes = material->GetCBSizeBytesAligned(0, kAlign);
+    if (cbSizeBytes == 0)
+    {
+        return;
+    }
+
+    auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
+    uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+    std::memset(cbData, 0, cbSizeBytes);
+
+    const Material::CBFieldHandle world = material->ComputeCBFieldHandle(0, "world");
+    const Material::CBFieldHandle viewProj = material->ComputeCBFieldHandle(0, "viewProj");
+    material->UpdateCBField(world, GetModelMatrix(), cbData);
+    material->UpdateCBField(viewProj, camera.GetViewProjMatrix(), cbData);
+
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
+    ctx.cbv[0] = alloc.gpu;
+
+    material->Bind(cl, ctx, false);
+    DrawGeometry(cl, cameraLod_);
+}
+#endif
+
 void RenderableObject::SelectLod(const Camera& camera)
 {
     // Hysteresis off the current tier; per-instance radius (GetLodRadius) so cloud/instanced

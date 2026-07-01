@@ -5,6 +5,13 @@
 #include "rendering/lighting/Skybox.h"
 #include "rendering/renderables/RenderableObject.h"
 
+namespace
+{
+#if WITH_EDITOR
+    constexpr UINT kEditorSelectionStencilBit = 0x80u;
+#endif
+}
+
 void SceneLightingCBHandles::Populate(Material* material)
 {
     *this = {};
@@ -271,6 +278,30 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/selection_outline_cs.hlsl";
         cd.csEntry = "CSMain";
         matSelectionOutlineCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matSelectionStencil_)
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/selection_stencil.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "PosNormTanUV";
+        gd.numRT = 0;
+        gd.dsvFormat = renderer->GetDsvFormat();
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        gd.depth.StencilEnable = TRUE;
+        gd.depth.StencilReadMask = 0xff;
+        gd.depth.StencilWriteMask = kEditorSelectionStencilBit;
+        gd.depth.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+        gd.depth.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+        gd.depth.FrontFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
+        gd.depth.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+        gd.depth.BackFace = gd.depth.FrontFace;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        matSelectionStencil_ = mm->GetOrCreateGraphics(renderer, gd);
     }
 #endif
 

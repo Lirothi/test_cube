@@ -252,6 +252,7 @@ public:
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> GetSelectionOutlineMaterial() const { return matSelectionOutlineCS_; }
+    std::shared_ptr<Material> GetSelectionStencilMaterial() const { return matSelectionStencil_; }
 #endif
 
     const SceneLightingCBHandles& LightingHandles() const { return lightingHandles_; }
@@ -311,6 +312,7 @@ private:
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> matSelectionOutlineCS_;
+    std::shared_ptr<Material> matSelectionStencil_;
 #endif
 
     SceneLightingCBHandles lightingHandles_{};

@@ -817,6 +817,9 @@
     <None Include="shaders\selection_outline_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\selection_stencil.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\compose_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

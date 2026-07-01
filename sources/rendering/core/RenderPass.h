@@ -43,6 +43,7 @@ enum class RenderPass : uint16_t {
     Transparent_Driver = GBuffer_Count,
     Transparent_Simple,
     Transparent_Complex,
+    Transparent_Selected,
     Transparent_Count,
 
     Count = Transparent_Count
@@ -85,6 +86,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Transparent_Driver: return L"Transparent.Driver";
     case RenderPass::Transparent_Simple: return L"Transparent.Simple";
     case RenderPass::Transparent_Complex: return L"Transparent.Complex";
+    case RenderPass::Transparent_Selected: return L"Transparent.Selected";
     default: return {};
     }
 }

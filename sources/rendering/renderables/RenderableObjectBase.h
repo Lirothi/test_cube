@@ -71,6 +71,15 @@ public:
     // viewCB: GPU VA of the per-pass shared view/frame constant buffer bound at b1
     // (camera matrices for the gbuffer/transparent pass, light viewProj for shadows).
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) = 0;
+#if WITH_EDITOR
+    virtual void RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera)
+    {
+        (void)renderer;
+        (void)cl;
+        (void)material;
+        (void)camera;
+    }
+#endif
     virtual void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) { (void)renderer; (void)cl; }
     // lod: per-pass LOD floor (Step 6 — e.g. the shadow cascade index); clamped to available LODs.
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0) = 0;
