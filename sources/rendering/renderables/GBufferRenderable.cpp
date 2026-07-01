@@ -1,11 +1,18 @@
 #include "rendering/renderables/GBufferRenderable.h"
 
+#include <cstdint>
+
 #include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "materials/MaterialDataManager.h"
 
 namespace
 {
+uint32_t ToObjectId32(std::uint64_t id)
+{
+    return id > 0xffffffffull ? 0xffffffffu : static_cast<uint32_t>(id);
+}
+
 class GBufferUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
@@ -26,6 +33,7 @@ public:
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
+            cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
         }
 
         if (Material* shadowMaterial = owner.GetShadowMaterial())
@@ -48,6 +56,7 @@ public:
         UpdateUniform(owner, cbHandles_.metalRough, material, p.metalRough, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
+        UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
     }
 
     void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* cbData) override
@@ -68,6 +77,7 @@ private:
         Material::CBFieldHandle metalRough;
         Material::CBFieldHandle texOffsScale;
         Material::CBFieldHandle texFlags;
+        Material::CBFieldHandle objectId;
     } cbHandles_{};
 
     struct ShadowCBHandles
@@ -147,6 +157,10 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out._pad0[1] = 0.0f;
     out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
     out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
+    out.objectId = ToObjectId32(GetEditorObjectId());
+    out._pad1[0] = 0;
+    out._pad1[1] = 0;
+    out._pad1[2] = 0;
 }
 
 void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
@@ -168,13 +182,14 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 4;
+    desc.numRT = 5;
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetGBuffer0Format();
         desc.rtvFormats[1] = renderer->GetGBuffer1Format();
         desc.rtvFormats[2] = renderer->GetGBuffer2Format();
         desc.rtvFormats[3] = renderer->GetGBufferVelocityFormat();
+        desc.rtvFormats[4] = renderer->GetObjectIdFormat();
         desc.dsvFormat = renderer->GetDeferredDepthFormat();
     }
 

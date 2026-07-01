@@ -30,7 +30,7 @@ VSOut VSMain(VSInInst i)
     const uint ri = gRemap[slot >> 2u][slot & 3u];
     float4x4 w = mul(gInstances[ri].world, world);
     float4x4 pw = mul(gInstances[ri].prevWorld, prevWorld);
-    return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV);
+    return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV, objectId);
 }
 
 [RootSignature(GBUFFER_INST_RS)]
@@ -54,5 +54,5 @@ PSOut PSMain(VSOut i)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion, i.objectId);
 }

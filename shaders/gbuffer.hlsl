@@ -16,7 +16,7 @@ SamplerState gSmp : register(s0);
 [RootSignature(GBUFFER_RS)]
 VSOut VSMain(VSIn i)
 {
-    return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV);
+    return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV, objectId);
 }
 
 [RootSignature(GBUFFER_RS)]
@@ -40,5 +40,5 @@ PSOut PSMain(VSOut i)
     float2 motion = currUv - prevUv;
 
     //albedo = N * 0.5 + 0.5;
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion, i.objectId);
 }

@@ -27,13 +27,14 @@ struct VSOutInst
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
     float2 UV : TEXCOORD0;
     nointerpolation uint IID : TEXCOORD5;
+    nointerpolation uint objectId : TEXCOORD6;
 };
 
 [RootSignature(GBUFFER_INSTCB_RS)]
 VSOutInst VSMain(VSInInst i)
 {
     InstancePerObject d = inst[i.IID];
-    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV);
+    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId);
 
     VSOutInst o;
     o.H = b.H;
@@ -43,6 +44,7 @@ VSOutInst VSMain(VSInInst i)
     o.TWS = b.TWS;
     o.UV = b.UV;
     o.IID = i.IID;
+    o.objectId = b.objectId;
     return o;
 }
 
@@ -68,5 +70,5 @@ PSOut PSMain(VSOutInst i)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion);
+    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion, i.objectId);
 }

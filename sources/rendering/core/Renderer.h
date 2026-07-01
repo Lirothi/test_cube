@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -102,10 +103,17 @@ public:
     DXGI_FORMAT GetDsvFormat() const { return render::kDeferredDepthFormat; }
     DXGI_FORMAT GetDepthSrvFormat() const { return render::kDeferredDepthSrvFormat; }
     DXGI_FORMAT GetGBufferVelocityFormat() const { return render::kGBufferVelocityFormat; }
+    DXGI_FORMAT GetObjectIdFormat() const { return render::kObjectIdFormat; }
     DXGI_FORMAT GetReflectionFormat() const { return render::kReflectionFormat; }
     DXGI_FORMAT GetReflectionScratchFormat() const { return render::kReflectionScratchFormat; }
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
+
+    bool RequestObjectIdPick(float displayX, float displayY);
+    bool HasPendingObjectIdPick() const { return objectIdPickRequested_; }
+    void RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl);
+    void ResolveObjectIdPickReadback();
+    bool ConsumeObjectIdPick(uint32_t& outObjectId);
 
     // Utility functions
     void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
@@ -274,6 +282,7 @@ private:
     void RefreshCurrentFrameCaches();
     std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
+    void ResetObjectIdPickState();
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
 
@@ -294,6 +303,14 @@ private:
     float renderResolutionScale_ = 1.0f;
     UINT  renderWidth_ = width_;
     UINT  renderHeight_ = height_;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> objectIdReadback_;
+    UINT objectIdPickX_ = 0;
+    UINT objectIdPickY_ = 0;
+    uint32_t objectIdPickResult_ = 0;
+    bool objectIdPickRequested_ = false;
+    bool objectIdPickInFlight_ = false;
+    bool objectIdPickResultValid_ = false;
 
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT reflectionTextureWidth_ = 1;

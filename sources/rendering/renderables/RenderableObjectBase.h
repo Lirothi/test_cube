@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include <d3d12.h>
 
@@ -141,6 +142,18 @@ public:
     void AddRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
     void RemoveRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
 
+#if WITH_EDITOR
+    void SetEditorObjectId(std::uint64_t id) { editorObjectId_ = id; }
+#endif
+    std::uint64_t GetEditorObjectId() const
+    {
+#if WITH_EDITOR
+        return editorObjectId_;
+#else
+        return 0;
+#endif
+    }
+
     // Visibility: hidden objects are skipped during bucketization (not drawn in
     // any view) but stay in the scene. Default visible. Used by the editor's
     // "enabled" toggle.
@@ -149,5 +162,8 @@ public:
 
 protected:
     uint32_t renderLayerMask_ = RenderLayerMask(RenderLayer::Default);
+#if WITH_EDITOR
+    std::uint64_t editorObjectId_ = 0;
+#endif
     bool visible_ = true;
 };

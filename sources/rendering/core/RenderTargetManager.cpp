@@ -55,7 +55,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = render::kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,Light,Scene,DLSS bias
+        desc.NumDescriptors = render::kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,ObjectID,Light,Scene,DLSS bias
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
     }
     {
@@ -155,6 +155,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredRtvSlot::GB1:        D.gbRTV[1] = outRTV; break;
             case DeferredRtvSlot::GB2:        D.gbRTV[2] = outRTV; break;
             case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
+            case DeferredRtvSlot::ObjectID:   D.objectIDRTV = outRTV; break;
             case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
             case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
             case DeferredRtvSlot::DlssBias:   D.dlssBiasRTV = outRTV; break;
@@ -182,6 +183,31 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             }
 
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        };
+
+    auto CreateObjectIdTarget = [&](UINT f)
+        {
+            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.objectID, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+            D3D12_CLEAR_VALUE cv{};
+            cv.Format = formats.objectID;
+            cv.Color[0] = 0.0f;
+            cv.Color[1] = 0.0f;
+            cv.Color[2] = 0.0f;
+            cv.Color[3] = 0.0f;
+
+            auto& D = deferred_[f];
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.objectID)));
+
+            D.objectIDRTV = DeferredRtvCPU(f, DeferredRtvSlot::ObjectID);
+            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+            rtvDesc.Format = formats.objectID;
+            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            dev->CreateRenderTargetView(D.objectID.Get(), &rtvDesc, D.objectIDRTV);
+
+            tracker.SetResourceState(D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         };
 
     auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
@@ -435,6 +461,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.gb1, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(formats.gb2, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
         CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
+        CreateObjectIdTarget(f);
 
         CreateDepth(formats.depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
         CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
@@ -494,6 +521,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gb1.Get(), L"GB1");
         nameRes(D.gb2.Get(), L"GB2");
         nameRes(D.gbVelocity.Get(), L"GBVelocity");
+        nameRes(D.objectID.Get(), L"ObjectID");
         nameRes(D.depth.Get(), L"Depth");
         nameRes(D.depthCopy.Get(), L"DepthCopy");
         nameRes(D.shadow.Get(), L"CascadeShadow");
@@ -533,6 +561,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.gb1);
         collect(D.gb2);
         collect(D.gbVelocity);
+        collect(D.objectID);
         collect(D.depth);
         collect(D.depthCopy);
         collect(D.light);

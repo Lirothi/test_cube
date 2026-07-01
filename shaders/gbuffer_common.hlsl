@@ -19,6 +19,8 @@ struct InstancePerObject
     float2 _instPad0;
     float4 texOffsScale;
     float4 texFlags;
+    uint objectId;
+    uint3 _instPad1;
 };
 
 #ifndef GBUFFER_SKIP_PEROBJECT
@@ -31,6 +33,8 @@ cbuffer PerObject : register(b0)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
+    uint objectId;
+    uint3 _objectIdPad;
 };
 #else
 // Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).
@@ -91,6 +95,7 @@ struct VSOut
     float3 NWS : TEXCOORD1;
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
     float2 UV : TEXCOORD0;
+    nointerpolation uint objectId : TEXCOORD5;
 };
 
 struct PSOut
@@ -99,6 +104,7 @@ struct PSOut
     float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + A=1
     float4 RT2 : SV_Target2; // Emissive.rgb
     float2 RT3 : SV_Target3; // Motion vector (UV delta)
+    uint RT4 : SV_Target4; // Editor object id (0 = none)
 };
 
 inline VSOut BaseVS(float3 pos,
@@ -107,7 +113,8 @@ inline VSOut BaseVS(float3 pos,
                     float4x4 viewProj,
                     float3 norm,
                     float4 tangent,
-                    float2 uv)
+                    float2 uv,
+                    uint objectIdValue)
 {
     VSOut o;
     float4 posH = float4(pos, 1.0f);
@@ -122,11 +129,12 @@ inline VSOut BaseVS(float3 pos,
     o.TWS = float4(T, tangent.w);
     o.NWS = N;
     o.UV = uv;
+    o.objectId = objectIdValue;
     return o;
 }
 
 // Final MRT output using prepared values
-inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss, float2 motion)
+inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss, float2 motion, uint objectIdValue)
 {
     PSOut o;
     float metal = mr.x;
@@ -138,6 +146,7 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss,
     o.RT1 = float4(NrmTo01(NWS), 1.0);
     o.RT2 = emiss;
     o.RT3 = motion;
+    o.RT4 = objectIdValue;
     return o;
 }
 

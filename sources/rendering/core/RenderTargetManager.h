@@ -17,12 +17,13 @@ class RenderTargetManager
 {
 public:
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 21; // gb0,gb1,gb2,gbVelocity,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
+        static constexpr size_t kResourceCount = 22; // gb0,gb1,gb2,gbVelocity,objectID,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
         // Resources
         Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
         Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // normalOcta+rough
         Microsoft::WRL::ComPtr<ID3D12Resource> gb2;   // emissive
         Microsoft::WRL::ComPtr<ID3D12Resource> gbVelocity; // motion vectors
+        Microsoft::WRL::ComPtr<ID3D12Resource> objectID; // editor object id (0 = none)
         Microsoft::WRL::ComPtr<ID3D12Resource> depth;
         Microsoft::WRL::ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
         Microsoft::WRL::ComPtr<ID3D12Resource> light;
@@ -45,6 +46,7 @@ public:
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
+        D3D12_CPU_DESCRIPTOR_HANDLE objectIDRTV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,GBVelocity
         D3D12_CPU_DESCRIPTOR_HANDLE depthSRV{};  // Depth(R32F)
@@ -76,6 +78,7 @@ public:
         DXGI_FORMAT gb1;
         DXGI_FORMAT gb2;
         DXGI_FORMAT velocity;
+        DXGI_FORMAT objectID;
         DXGI_FORMAT depth;
         DXGI_FORMAT depthSrv;
         DXGI_FORMAT light;
@@ -102,7 +105,7 @@ public:
     const DeferredTargets& Deferred(UINT frame) const { return deferred_[frame]; }
 
 private:
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, Light, Scene, DlssBias, GlassReflNormal, Count };
+    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, ObjectID, Light, Scene, DlssBias, GlassReflNormal, Count };
     enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

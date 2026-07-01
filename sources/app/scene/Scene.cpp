@@ -260,6 +260,12 @@ void Scene::SetSkybox(std::unique_ptr<Skybox> skybox)
 }
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
+#if WITH_EDITOR
+    if (obj)
+    {
+        obj->SetEditorObjectId(0);
+    }
+#endif
     objects_.push_back(std::move(obj));
 #if WITH_EDITOR
     objectIds_.push_back(0); // runtime object: no editor identity
@@ -270,6 +276,10 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase> obj)
 {
     const SceneObjectId id = nextEditorId_++;
+    if (obj)
+    {
+        obj->SetEditorObjectId(id);
+    }
     objects_.push_back(std::move(obj));
     objectIds_.push_back(id);
     return id;
@@ -279,6 +289,10 @@ void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, Sce
 {
     assert(id != 0 && "AddObjectWithEditorId requires a non-zero editor id");
 
+    if (obj)
+    {
+        obj->SetEditorObjectId(id);
+    }
     objects_.push_back(std::move(obj));
     objectIds_.push_back(id);
 
@@ -298,6 +312,7 @@ bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads,
     }
 
     obj->Init(&renderer, uploads.CommandList(), uploads.KeepAlive());
+    obj->SetEditorObjectId(id);
 
     // Keep the auto-allocator ahead of editor-supplied ids so AddEditorObject
     // never hands out a colliding id later.

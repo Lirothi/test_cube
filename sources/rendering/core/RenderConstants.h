@@ -37,6 +37,7 @@ inline constexpr DXGI_FORMAT kGBuffer0Format         = DXGI_FORMAT_R8G8B8A8_UNOR
 inline constexpr DXGI_FORMAT kGBuffer1Format         = DXGI_FORMAT_R10G10B10A2_UNORM;
 inline constexpr DXGI_FORMAT kGBuffer2Format         = DXGI_FORMAT_R11G11B10_FLOAT;
 inline constexpr DXGI_FORMAT kGBufferVelocityFormat  = DXGI_FORMAT_R16G16_FLOAT;
+inline constexpr DXGI_FORMAT kObjectIdFormat         = DXGI_FORMAT_R32_UINT;
 inline constexpr DXGI_FORMAT kLightTargetFormat      = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kDlssBiasFormat         = DXGI_FORMAT_R8_UNORM;

@@ -655,12 +655,13 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 3;
+    desc.numRT = 4;
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetSceneColorFormat();
         desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
         desc.rtvFormats[2] = renderer->GetDlssBiasFormat();
+        desc.rtvFormats[3] = renderer->GetObjectIdFormat();
         desc.dsvFormat = renderer->GetDsvFormat();
     }
     desc.depth.DepthEnable = TRUE;
@@ -670,6 +671,8 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
     desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.blend.RenderTarget[3].BlendEnable = FALSE;
+    desc.blend.RenderTarget[3].RenderTargetWriteMask = 0;
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

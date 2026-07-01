@@ -560,7 +560,21 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_Transparent(renderer, ctx, *frame_->camera, *frame_->mainView);
         });
 
-    auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pTransp },
+    size_t pObjectIdReadback = pTransp;
+    if (renderer->HasPendingObjectIdPick())
+    {
+        pObjectIdReadback = rg.AddPass(RenderPass::Main_ObjectIdReadback, { pTransp },
+            { { D.objectID.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE } },
+            [renderer](RenderGraphPassContext ctx) {
+                auto t = ctx.BeginCL();
+                SetCommandListName(t.cl, ctx.pass);
+                ctx.ApplyDeclaredStates(t.cl);
+                renderer->RecordObjectIdPickReadback(t.cl);
+                ctx.EndCL(t);
+            });
+    }
+
+    auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pObjectIdReadback },
         { { D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext ctx) {
@@ -600,6 +614,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         [this, renderer, &overlayPrepTask](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx, overlayPrepTask); });
     epilogueRG.Execute(renderer);
     renderer->EndFrame();
+    renderer->ResolveObjectIdPickReadback();
 
     frame_ = nullptr;
 }
@@ -654,6 +669,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     {
                         const auto& D = renderer->GetDeferredForFrame();
                         renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->Transition(t.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
                         renderer->BindSceneColorWithVelocity(t.cl, Renderer::ClearMode::None, true);
                     }
                     else
@@ -1116,6 +1132,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
           { D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -2183,6 +2200,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.dlssBias.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            renderer->Transition(driver.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             // S15b: the glass refl (computed pre-transparent into UAV) is sampled by the forward
             // glass PS at t7. No-op when already PIXEL (RT off / non-RT HW: glass.hlsl won't read it).
             if (D.glassReflection.Get())

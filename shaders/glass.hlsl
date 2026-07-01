@@ -31,6 +31,8 @@ cbuffer GlassParams : register(b0)
     float4 absorptionThickness;   // xyz = absorption, w = thickness
     float4 tintRoughness;         // xyz = tint color, w = roughness
     float4 matExtra;              // x = IOR, y = reflection strength, z = refraction distortion, w = normal map enabled (0=disabled, 1=enabled)
+    uint objectId;
+    uint3 _objectIdPad;
 };
 
 // Per-view/per-frame data shared by every glass object in the pass. Filled once.
@@ -213,6 +215,7 @@ struct PSOut
     float4 color : SV_Target0;
     float2 velocity : SV_Target1;
     float bias : SV_Target2;
+    uint objectId : SV_Target3;
 };
 
 [RootSignature(GLASS_RS)]
@@ -426,5 +429,6 @@ PSOut PSMain(VSOut i)
     o.color = float4(color, 1.0f);
     o.velocity = motion;
     o.bias = 0.0f;
+    o.objectId = objectId;
     return o;
 }

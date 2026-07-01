@@ -1,6 +1,7 @@
 #include "editor/ui/ViewportGizmo.h"
 #if WITH_EDITOR
 
+#include <cstdint>
 #include <cstring>
 
 #include <DirectXMath.h>
@@ -58,6 +59,16 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     const float width = static_cast<float>(ctx.renderer.GetWidth());
     const float height = static_cast<float>(ctx.renderer.GetHeight());
     if (width <= 0.0f || height <= 0.0f) { return; }
+
+    uint32_t pickedObjectId = 0;
+    if (ctx.renderer.ConsumeObjectIdPick(pickedObjectId) && pickedObjectId != 0)
+    {
+        EditorObjectId id{ static_cast<std::uint64_t>(pickedObjectId) };
+        if (ctx.document.Find(id) && ctx.scene.FindEditorObject(id.value))
+        {
+            ctx.selectedObject = id;
+        }
+    }
 
     // Right mouse = camera look (LookToggle). While flying, keep DRAWING the gizmo
     // but disable its mouse handling (ImGuizmo::Enable(false) still renders it,
@@ -134,6 +145,11 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     // Click-to-select: only over the 3D view, not on the gizmo, not while flying.
     if (flying || io.WantCaptureMouse || gizmoBusy) { return; }
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { return; }
+
+    if (ctx.renderer.RequestObjectIdPick(io.MousePos.x, io.MousePos.y))
+    {
+        return;
+    }
 
     const float ndcX = 2.0f * (io.MousePos.x / width) - 1.0f;
     const float ndcY = 1.0f - 2.0f * (io.MousePos.y / height);

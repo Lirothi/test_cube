@@ -320,6 +320,148 @@ void Renderer::EndFrame() {
     ExecuteTimelineAndPresent();
 }
 
+bool Renderer::RequestObjectIdPick(float displayX, float displayY)
+{
+    if (!GetDevice() || !rtManager_.IsCreated() || objectIdPickRequested_ || objectIdPickInFlight_)
+    {
+        return false;
+    }
+    if (width_ == 0 || height_ == 0 || renderWidth_ == 0 || renderHeight_ == 0)
+    {
+        return false;
+    }
+    if (!std::isfinite(displayX) || !std::isfinite(displayY))
+    {
+        return false;
+    }
+    if (displayX < 0.0f || displayY < 0.0f ||
+        displayX >= static_cast<float>(width_) || displayY >= static_cast<float>(height_))
+    {
+        return false;
+    }
+
+    const float renderX = displayX * static_cast<float>(renderWidth_) / static_cast<float>(width_);
+    const float renderY = displayY * static_cast<float>(renderHeight_) / static_cast<float>(height_);
+    objectIdPickX_ = std::min(renderWidth_ - 1u, static_cast<UINT>(std::max(renderX, 0.0f)));
+    objectIdPickY_ = std::min(renderHeight_ - 1u, static_cast<UINT>(std::max(renderY, 0.0f)));
+    objectIdPickRequested_ = true;
+    objectIdPickResultValid_ = false;
+    objectIdPickResult_ = 0;
+    return true;
+}
+
+void Renderer::RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl)
+{
+    if (!cl || !objectIdPickRequested_ || objectIdPickInFlight_ || !GetDevice())
+    {
+        return;
+    }
+
+    const auto& D = rtManager_.Deferred(currentFrameIndex_);
+    if (!D.objectID.Get())
+    {
+        objectIdPickRequested_ = false;
+        return;
+    }
+
+    if (!objectIdReadback_)
+    {
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_READBACK;
+        heapProps.CreationNodeMask = 1;
+        heapProps.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ThrowIfFailed(GetDevice()->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&objectIdReadback_)));
+        objectIdReadback_->SetName(L"Editor.ObjectIdReadback");
+    }
+
+    Transition(cl, D.objectID.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = objectIdReadback_.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint.Offset = 0;
+    dst.PlacedFootprint.Footprint.Format = render::kObjectIdFormat;
+    dst.PlacedFootprint.Footprint.Width = 1;
+    dst.PlacedFootprint.Footprint.Height = 1;
+    dst.PlacedFootprint.Footprint.Depth = 1;
+    dst.PlacedFootprint.Footprint.RowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = D.objectID.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+
+    const UINT x = std::min(objectIdPickX_, renderWidth_ - 1u);
+    const UINT y = std::min(objectIdPickY_, renderHeight_ - 1u);
+    D3D12_BOX srcBox{ x, y, 0, x + 1u, y + 1u, 1 };
+    cl->CopyTextureRegion(&dst, 0, 0, 0, &src, &srcBox);
+
+    objectIdPickRequested_ = false;
+    objectIdPickInFlight_ = true;
+}
+
+void Renderer::ResolveObjectIdPickReadback()
+{
+    if (!objectIdPickInFlight_)
+    {
+        return;
+    }
+
+    WaitForPreviousFrame();
+
+    objectIdPickResult_ = 0;
+    if (objectIdReadback_)
+    {
+        D3D12_RANGE readRange{ 0, sizeof(uint32_t) };
+        void* mapped = nullptr;
+        if (SUCCEEDED(objectIdReadback_->Map(0, &readRange, &mapped)) && mapped)
+        {
+            objectIdPickResult_ = *static_cast<const uint32_t*>(mapped);
+            D3D12_RANGE writtenRange{ 0, 0 };
+            objectIdReadback_->Unmap(0, &writtenRange);
+            objectIdPickResultValid_ = true;
+        }
+    }
+
+    objectIdPickInFlight_ = false;
+}
+
+bool Renderer::ConsumeObjectIdPick(uint32_t& outObjectId)
+{
+    if (!objectIdPickResultValid_)
+    {
+        return false;
+    }
+    outObjectId = objectIdPickResult_;
+    objectIdPickResult_ = 0;
+    objectIdPickResultValid_ = false;
+    return true;
+}
+
+void Renderer::ResetObjectIdPickState()
+{
+    objectIdReadback_.Reset();
+    objectIdPickX_ = 0;
+    objectIdPickY_ = 0;
+    objectIdPickResult_ = 0;
+    objectIdPickRequested_ = false;
+    objectIdPickInFlight_ = false;
+    objectIdPickResultValid_ = false;
+}
+
 void Renderer::InitImGui()
 {
     if (imguiLayer_.IsInitialized())
@@ -789,6 +931,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.gb1 = render::kGBuffer1Format;
     formats.gb2 = render::kGBuffer2Format;
     formats.velocity = render::kGBufferVelocityFormat;
+    formats.objectID = render::kObjectIdFormat;
     formats.depth = render::kDeferredDepthFormat;
     formats.depthSrv = render::kDeferredDepthSrvFormat;
     formats.light = render::kLightTargetFormat;
@@ -814,6 +957,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
 void Renderer::DestroyDeferredTargets() {
     rtManager_.Destroy(stateTracker_);
+    ResetObjectIdPickState();
 
     reflectionTextureWidth_ = 1;
     reflectionTextureHeight_ = 1;
@@ -1076,8 +1220,8 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3] };
-    cl->OMSetRenderTargets(4, rtvs, FALSE, &D.dsv);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[5] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3], D.objectIDRTV };
+    cl->OMSetRenderTargets(5, rtvs, FALSE, &D.dsv);
 
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
@@ -1085,7 +1229,7 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
         }
         if (mode == ClearMode::ColorDepth)
@@ -1146,8 +1290,8 @@ void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearM
 
 void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.sceneRTV, D.gbRTV[3], D.dlssBiasRTV };
-    cl->OMSetRenderTargets(3, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.sceneRTV, D.gbRTV[3], D.dlssBiasRTV, D.objectIDRTV };
+    cl->OMSetRenderTargets(4, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
@@ -1156,6 +1300,7 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
         cl->ClearRenderTargetView(rtvs[0], c, 0, nullptr);
         cl->ClearRenderTargetView(rtvs[1], c, 0, nullptr);
         cl->ClearRenderTargetView(rtvs[2], c, 0, nullptr);
+        cl->ClearRenderTargetView(rtvs[3], c, 0, nullptr);
         if (mode == ClearMode::ColorDepth && withDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);

@@ -6,7 +6,7 @@ namespace render
 {
 // CPU mirror of HLSL `InstancePerObject` in shaders/gbuffer_common.hlsl. Field order and
 // padding must match the cbuffer layout exactly (constant-buffer packing rules put
-// metalRough at offset 144 and texOffsScale at 160 — hence the explicit pad). Filled per
+// metalRough at offset 144, texOffsScale at 160, and objectId at 192. Filled per
 // visible instance and uploaded as a root-CBV array (b0) indexed by SV_InstanceID.
 struct alignas(16) InstancePerObject
 {
@@ -17,9 +17,11 @@ struct alignas(16) InstancePerObject
     float               _pad0[2];     // 152
     DirectX::XMFLOAT4   texOffsScale; // 160
     DirectX::XMFLOAT4   texFlags;     // 176
-};                                    // 192
-static_assert(sizeof(InstancePerObject) == 192,
-    "InstancePerObject must match the HLSL cbuffer layout (192 bytes)");
+    uint32_t            objectId;     // 192
+    uint32_t            _pad1[3];     // 196
+};                                    // 208
+static_assert(sizeof(InstancePerObject) == 208,
+    "InstancePerObject must match the HLSL cbuffer layout (208 bytes)");
 
 // Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsl. Runs larger than this
 // are split across multiple instanced draws.

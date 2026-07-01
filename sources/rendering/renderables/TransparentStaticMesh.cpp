@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 
 #include "app/scene/Scene.h"
 #include "app/camera/Camera.h"
@@ -16,6 +17,11 @@ using namespace Math;
 namespace
 {
     constexpr size_t kCascadeCount = 4;
+
+    uint32_t ToObjectId32(std::uint64_t id)
+    {
+        return id > 0xffffffffull ? 0xffffffffu : static_cast<uint32_t>(id);
+    }
 }
 
 class TransparentStaticMesh::TransparentUniformBinder final : public RenderableObject::UniformBinder
@@ -40,6 +46,7 @@ public:
             cb_.absorptionThickness = material->ComputeCBFieldHandle(0, "absorptionThickness");
             cb_.tintRoughness = material->ComputeCBFieldHandle(0, "tintRoughness");
             cb_.matExtra = material->ComputeCBFieldHandle(0, "matExtra");
+            cb_.objectId = material->ComputeCBFieldHandle(0, "objectId");
         }
 
         if (Material* shadowMaterial = obj.GetShadowMaterial())
@@ -72,6 +79,7 @@ public:
         UpdateUniform(obj, cb_.tintRoughness, material, float4(owner_->tint_, owner_->roughness_), cbData);
         UpdateUniform(obj, cb_.matExtra, material,
             float4(owner_->ior_, owner_->reflectionStrength_, owner_->refractionDistortion_, normalInfo), cbData);
+        UpdateUniform(obj, cb_.objectId, material, ToObjectId32(obj.GetEditorObjectId()), cbData);
     }
 
     void UpdateShadowCB(RenderableObject& obj, Renderer* /*renderer*/, const mat4& lightView, const mat4& lightProj, uint8_t* cbData) override
@@ -95,6 +103,7 @@ private:
         Material::CBFieldHandle absorptionThickness;
         Material::CBFieldHandle tintRoughness;
         Material::CBFieldHandle matExtra;
+        Material::CBFieldHandle objectId;
     } cb_{};
 
     struct ShadowHandles
@@ -236,14 +245,16 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 3;
+    desc.numRT = 4;
     desc.rtvFormats[0] = renderer->GetSceneColorFormat();
     desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
     desc.rtvFormats[2] = renderer->GetDlssBiasFormat();
+    desc.rtvFormats[3] = renderer->GetObjectIdFormat();
     desc.dsvFormat = renderer->GetDsvFormat();
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+    desc.blend.IndependentBlendEnable = TRUE;
     desc.blend.RenderTarget[0].BlendEnable = TRUE;
     desc.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
     desc.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -255,6 +266,8 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
     desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.blend.RenderTarget[3].BlendEnable = FALSE;
+    desc.blend.RenderTarget[3].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
 
     auto& defs = desc.defines;
