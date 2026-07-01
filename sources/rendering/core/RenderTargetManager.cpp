@@ -1,6 +1,7 @@
 #include "rendering/core/RenderTargetManager.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <vector>
 
 #include "core/Helpers.h"
@@ -478,6 +479,38 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvUavTexture(formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
         CreateSrvUavTexture(formats.backbufferResource, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
         CreateSrvUavTexture(formats.backbufferResource, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
+
+        // Debug names so DRED / the debug layer print readable resource names in
+        // page-fault reports (these are the prime use-after-free suspects during
+        // the deferred-target recreate races the --scene-stress harness hunts).
+        auto nameRes = [f](ID3D12Resource* res, const wchar_t* base) {
+            if (res) {
+                wchar_t nm[96];
+                swprintf_s(nm, L"Deferred[%u].%s", f, base);
+                res->SetName(nm);
+            }
+        };
+        nameRes(D.gb0.Get(), L"GB0");
+        nameRes(D.gb1.Get(), L"GB1");
+        nameRes(D.gb2.Get(), L"GB2");
+        nameRes(D.gbVelocity.Get(), L"GBVelocity");
+        nameRes(D.depth.Get(), L"Depth");
+        nameRes(D.depthCopy.Get(), L"DepthCopy");
+        nameRes(D.shadow.Get(), L"CascadeShadow");
+        nameRes(D.spotShadow.Get(), L"SpotShadow");
+        nameRes(D.light.Get(), L"Light");
+        nameRes(D.scene.Get(), L"Scene");
+        nameRes(D.sceneOpaque.Get(), L"SceneOpaque");
+        nameRes(D.dlssBias.Get(), L"DlssBias");
+        nameRes(D.dlssOutput.Get(), L"DlssOutput");
+        nameRes(D.reflection.Get(), L"Reflection");
+        nameRes(D.reflectionScratch.Get(), L"ReflectionScratch");
+        nameRes(D.oceanReflection.Get(), L"OceanReflection");
+        nameRes(D.glassReflNormal.Get(), L"GlassReflNormal");
+        nameRes(D.glassReflDepth.Get(), L"GlassReflDepth");
+        nameRes(D.glassReflection.Get(), L"GlassReflection");
+        nameRes(D.tonemap.Get(), L"Tonemap");
+        nameRes(D.fxaa.Get(), L"Fxaa");
     }
 }
 
@@ -520,4 +553,8 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
     }
 
     tracker.ForgetResources(released);
+
+    for (DeferredTargets& D : deferred_) {
+        D = DeferredTargets{};
+    }
 }

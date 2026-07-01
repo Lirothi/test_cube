@@ -132,6 +132,7 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
     renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, srvHandle);
 
     renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
+    if (buffer) { buffer->SetName(L"LightManager.PointLightBuffer"); }
     pointLightCapacity_ = newCapacity;
     pointLightBuffer_ = buffer;
     pointLightBufferCPU_ = static_cast<PointLightGpu*>(mapped);
@@ -217,6 +218,7 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
     renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, srvHandle);
 
     renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
+    if (buffer) { buffer->SetName(L"LightManager.SpotLightBuffer"); }
     spotLightCapacity_ = newCapacity;
     spotLightBuffer_ = buffer;
     spotLightBufferCPU_ = static_cast<SpotLightGpu*>(mapped);
@@ -227,12 +229,23 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
 
 void LightManager::Reset()
 {
-    ReleasePointLightBuffer();
-    ReleaseSpotLightBuffer();
-
+    // Clear the CPU-side light lists, but DELIBERATELY retain the GPU light
+    // buffers + their SRV descriptors. Reset() runs on every level load/switch
+    // (JsonLevel::Load) and unload (Scene::Clear). Releasing the spot/point
+    // light buffers here dangles their SRV descriptor: the spot-lights compute
+    // dispatch (Pass_SpotLights) reads the spot-light structured buffer via a
+    // staged SRV (table index 6), and freeing + recreating that buffer across a
+    // level change left the descriptor pointing at a destroyed resource
+    // (GPU-based validation: "Invalid resource pointed to by descriptor ...
+    // resource has been destroyed", spotlight_cs.hlsl(120)), which manifested as
+    // an intermittent DXGI_ERROR_DEVICE_HUNG on the spot-lights dispatch during
+    // scene-lifecycle churn. The buffers are fully rewritten from the CPU every
+    // frame (EnsureSpotLightBuffer keeps them when capacity suffices; the pass
+    // repopulates the contents), so retaining them across a level change is
+    // correct and avoids the use-after-free. The buffers are still released
+    // normally by the destructor (member ComPtr teardown).
     pointLights_.clear();
     spotLights_.clear();
     cachedSpotLightCount_ = 0;
-
 }
 

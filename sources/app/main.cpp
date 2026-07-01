@@ -5,12 +5,15 @@
 #include "mimalloc-new-delete.h"
 #pragma warning(pop)
 #include "app/App.h"
+#include "app/SceneStress.h"
 #include "core/task/TaskSystemStress.h"
+#include "rendering/core/GraphicsDevice.h"
 #include "rendering/core/RendererSubmissionStress.h"
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "text/TextManager.h"
 
+#include <cstdlib>
 #include <cstring>
 
 #pragma comment(lib, "d3d12.lib")
@@ -114,6 +117,34 @@ int WINAPI WinMain(
     }
 
     EnableDpiAwareness();
+
+    // "--scene-stress" (optionally "--scene-stress=<iterations>") boots the real
+    // renderer/device/scene and then autonomously hammers the scene-lifecycle
+    // churn operations (level reload/switch, window resize, DLSS mode, render/
+    // reflection scale, editor spawn/delete) to reproduce the intermittent
+    // launch/render crash. Verdict in scene_stress.log; exit 0 = clean through
+    // all iterations, nonzero = a fault was caught (the log names the op).
+    if (lpCmdLine) {
+        if (const char* flag = std::strstr(lpCmdLine, "scene-stress")) {
+            int iterations = 0; // 0 => driver default
+            if (const char* eq = std::strchr(flag, '=')) {
+                iterations = std::atoi(eq + 1);
+            }
+            // DRED before device creation so the driver can name the faulting
+            // op/resource on a device removal (cheap; does not perturb the race).
+            GraphicsDevice::EnableDredForStress(true);
+            // GPU-based validation is a heavier, opt-in second signal
+            // (--scene-stress-gbv); it perturbs timing so it's off by default.
+            // In GBV mode, InfoQueue errors are logged-but-not-fatal so the run
+            // reaches the actual device-removal with GBV annotating each frame.
+            const bool gbv = std::strstr(lpCmdLine, "scene-stress-gbv") != nullptr;
+            if (gbv) {
+                GraphicsDevice::EnableGbvForStress(true);
+            }
+            return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv);
+        }
+    }
+
     App app;
     app.Run(hInstance, nShowCmd);
     return 0;

@@ -180,6 +180,9 @@
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/SceneStress.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/camera/Camera.cpp">
       <Filter>sources\app\camera</Filter>
     </ClCompile>
@@ -489,6 +492,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/App.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/SceneStress.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/camera/Camera.h">

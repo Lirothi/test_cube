@@ -15,6 +15,17 @@ public:
     void SetupDebugBreaks();
     void InitQueue();
 
+    // Diagnostics hooks (mirror the rt-force-as-fail static-flag pattern): set
+    // BEFORE device creation. DRED (auto-breadcrumbs + page-fault + breadcrumb
+    // context) names the faulting op/resource on a device removal; it is cheap
+    // and does not perturb the race, so the --scene-stress harness turns it on.
+    // GPU-based validation is a heavier second signal that can catch a bad
+    // access at the exact dispatch, but it also perturbs timing and can fire on
+    // the first frame — kept OFF by default (opt in with --scene-stress-gbv) so
+    // it doesn't hide the device-hang race DRED is meant to catch.
+    static void EnableDredForStress(bool enable);
+    static void EnableGbvForStress(bool enable);
+
     void ReportLiveObjects();
 
     // Shutdown is staged to preserve the original release order

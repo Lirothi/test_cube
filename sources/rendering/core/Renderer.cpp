@@ -858,6 +858,7 @@ void Renderer::RecreateDeferredTargets()
     WaitForPreviousFrame();
     DestroyDeferredTargets();
     CreateDeferredTargets(width_, height_);
+    RefreshCurrentFrameCaches();
 }
 
 void Renderer::SetReflectionTextureScale(Math::float2 scale)
