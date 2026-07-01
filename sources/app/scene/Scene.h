@@ -19,9 +19,7 @@
 #include "app/scene/SceneRenderer.h"
 
 class Renderer;
-#if WITH_EDITOR
 class UploadBatch;
-#endif
 
 class Scene {
 public:
@@ -52,6 +50,8 @@ public:
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
+    bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
+    bool RemoveOceanObjects();
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
@@ -94,6 +94,7 @@ private:
     void UpdateCascades(const Camera& camera, Renderer* renderer);
 
     void PrepareViews(Renderer* renderer);
+    void SyncObjectsForRender(SceneObjectSyncReason reason);
 
     SceneRenderer sceneRenderer_{};
     CascadeShadowConfig cascadeConfig_{};

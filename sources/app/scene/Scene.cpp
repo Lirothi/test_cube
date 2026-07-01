@@ -12,9 +12,7 @@
 #include "app/Systems.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
-#if WITH_EDITOR
 #include "rendering/core/UploadBatch.h"
-#endif
 #include "ocean/OceanSimulation.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
@@ -92,6 +90,18 @@ void Scene::InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandL
 void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
+    SyncObjectsForRender(SceneObjectSyncReason::LevelLoad);
+}
+
+void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
+{
+    for (const auto& obj : objects_)
+    {
+        if (obj)
+        {
+            obj->SyncSceneState(reason);
+        }
+    }
 }
 
 void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
@@ -272,6 +282,44 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 #endif
 }
 
+bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj)
+{
+    if (!obj || !uploads.IsOpen())
+    {
+        return false;
+    }
+
+    obj->Init(&renderer, uploads.CommandList(), uploads.KeepAlive());
+    obj->SyncSceneState(SceneObjectSyncReason::RuntimeSpawn);
+#if WITH_EDITOR
+    obj->SetEditorObjectId(0);
+#endif
+    objects_.push_back(std::move(obj));
+#if WITH_EDITOR
+    objectIds_.push_back(0);
+#endif
+    return true;
+}
+
+bool Scene::RemoveOceanObjects()
+{
+    bool removed = false;
+    for (size_t i = 0; i < objects_.size();)
+    {
+        if (objects_[i] && objects_[i]->AsOceanRenderable())
+        {
+            objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
+#if WITH_EDITOR
+            objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
+#endif
+            removed = true;
+            continue;
+        }
+        ++i;
+    }
+    return removed;
+}
+
 #if WITH_EDITOR
 Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase> obj)
 {
@@ -313,6 +361,7 @@ bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads,
 
     obj->Init(&renderer, uploads.CommandList(), uploads.KeepAlive());
     obj->SetEditorObjectId(id);
+    obj->SyncSceneState(SceneObjectSyncReason::EditorSpawn);
 
     // Keep the auto-allocator ahead of editor-supplied ids so AddEditorObject
     // never hands out a colliding id later.

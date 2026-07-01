@@ -34,6 +34,15 @@ class IInstanceable;
 class RenderableObject;
 class GBufferRenderable;
 class TransparentStaticMesh;
+class OceanRenderable;
+
+enum class SceneObjectSyncReason
+{
+    Frame,
+    LevelLoad,
+    RuntimeSpawn,
+    EditorSpawn,
+};
 
 // A renderable's "draw identity": two OPAQUE draws with the same key are interchangeable —
 // same geometry (mesh), pipeline state (material = PSO + root sig, 1:1 with the PSO here),
@@ -68,6 +77,7 @@ public:
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) = 0;
     virtual void Tick(float /*dt*/) = 0;
     virtual void PostTick(float /*dt*/) {}
+    virtual void SyncSceneState(SceneObjectSyncReason reason) { (void)reason; }
     // viewCB: GPU VA of the per-pass shared view/frame constant buffer bound at b1
     // (camera matrices for the gbuffer/transparent pass, light viewProj for shadows).
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) = 0;
@@ -117,6 +127,7 @@ public:
     virtual const RenderableObject* AsRenderableObject() const { return nullptr; }
     virtual GBufferRenderable* AsGBufferRenderable() { return nullptr; }
     virtual TransparentStaticMesh* AsTransparentStaticMesh() { return nullptr; }
+    virtual OceanRenderable* AsOceanRenderable() { return nullptr; }
 
     virtual const AABB& GetWorldBounds() const
     {

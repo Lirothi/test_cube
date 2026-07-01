@@ -34,6 +34,7 @@ public:
     bool CastsShadow() const override { return false; }
 
     void OnMaterialHotReload(Renderer* renderer) override;
+    OceanRenderable* AsOceanRenderable() override { return this; }
 
     OceanSimulation* GetSimulation() { return simulation_; }
     const OceanSimulation* GetSimulation() const { return simulation_; }

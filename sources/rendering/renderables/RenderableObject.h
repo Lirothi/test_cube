@@ -53,6 +53,7 @@ public:
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     virtual void Tick(float /*dt*/) {}
     virtual void PostTick(float /*dt*/) override;
+    void SyncSceneState(SceneObjectSyncReason reason) override;
 
     // Base renderer: Compute -> Graphics
     virtual void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB);

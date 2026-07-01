@@ -244,6 +244,12 @@ void GpuInstancedModels::Tick(float deltaTime)
     }
 }
 
+void GpuInstancedModels::SyncSceneState(SceneObjectSyncReason reason)
+{
+    GBufferRenderable::SyncSceneState(reason);
+    (void)GetWorldBounds();
+}
+
 const AABB& GpuInstancedModels::GetWorldBounds() const
 {
     const Mesh* currentMesh = GetMesh();

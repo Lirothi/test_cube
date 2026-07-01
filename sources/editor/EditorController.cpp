@@ -23,9 +23,11 @@
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
+#include "ocean/OceanRenderable.h"
 #include "rendering/core/Renderer.h"
-#include <ocean/OceanSimulation.h>
-#include <app/Systems.h>
+#include "rendering/core/UploadBatch.h"
+#include "ocean/OceanSimulation.h"
+#include "app/Systems.h"
 
 namespace
 {
@@ -202,7 +204,50 @@ namespace
         document.SetDirty(true);
     }
 
-    void DrawOceanSection(EditorSceneDocument& document, std::string& levelStatus)
+    void DestroyLiveOcean(Renderer& renderer, Scene& scene)
+    {
+        renderer.WaitForPreviousFrame();
+        scene.RemoveOceanObjects();
+        Systems::DestroyOceanSimulation();
+    }
+
+    bool CreateLiveOcean(Renderer& renderer, Scene& scene, const std::string& presetPath, std::string& levelStatus)
+    {
+        const std::string normalizedPreset = NormalizeLevelPath(presetPath.empty() ? DefaultOceanPresetPath() : presetPath);
+
+        renderer.WaitForPreviousFrame();
+        scene.RemoveOceanObjects();
+        Systems::DestroyOceanSimulation();
+
+        OceanSimulation* ocean = Systems::CreateOceanSimulation(std::wstring(normalizedPreset.begin(), normalizedPreset.end()));
+        if (!ocean)
+        {
+            levelStatus = "Ocean create failed";
+            return false;
+        }
+
+        auto renderable = std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene, ocean);
+        UploadBatch uploads;
+        if (!uploads.Begin(&renderer))
+        {
+            Systems::DestroyOceanSimulation();
+            levelStatus = "Ocean upload batch failed";
+            return false;
+        }
+
+        if (!scene.AddInitializedObject(renderer, uploads, std::move(renderable)))
+        {
+            Systems::DestroyOceanSimulation();
+            levelStatus = "Ocean scene add failed";
+            return false;
+        }
+
+        uploads.SubmitAndWait(&renderer);
+        levelStatus = "Ocean: " + normalizedPreset;
+        return true;
+    }
+
+    void DrawOceanSection(EditorSceneDocument& document, Renderer& renderer, Scene& scene, std::string& levelStatus)
     {
         bool oceanEnabled = ReadOceanEnabled(document.RootJson());
         std::string oceanPreset = ReadOceanPresetPath(document.RootJson());
@@ -210,8 +255,6 @@ namespace
         {
             oceanPreset = DefaultOceanPresetPath();
         }
-
-        OceanSimulation* ocean = Systems::GetOceanSimulation();
 
         bool changed = false;
         if (ImGui::Checkbox("Enabled##OceanEnabled", &oceanEnabled))
@@ -273,9 +316,21 @@ namespace
             WriteOceanSettings(document, oceanEnabled, oceanPreset);
             levelStatus = oceanEnabled ? "Ocean: " + NormalizeLevelPath(oceanPreset) : "Ocean disabled";
 
-            if (ocean)
+            if (!oceanEnabled)
             {
-                ocean->LoadConfig(&Systems::GetRenderer(), std::wstring(oceanPreset.begin(), oceanPreset.end()));
+                DestroyLiveOcean(renderer, scene);
+            }
+            else if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                const std::string normalizedPreset = NormalizeLevelPath(oceanPreset);
+                if (!ocean->LoadConfig(&renderer, std::wstring(normalizedPreset.begin(), normalizedPreset.end())))
+                {
+                    levelStatus = "Ocean load failed: " + normalizedPreset;
+                }
+            }
+            else
+            {
+                CreateLiveOcean(renderer, scene, oceanPreset, levelStatus);
             }
         }
     }
@@ -1149,7 +1204,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
         ImGui::Separator();
         ImGui::TextUnformatted("Ocean");
-        DrawOceanSection(document_, levelStatus_);
+        DrawOceanSection(document_, renderer, scene, levelStatus_);
 
         if (levelFileDialogMode_ != LevelFileDialogMode::None)
         {

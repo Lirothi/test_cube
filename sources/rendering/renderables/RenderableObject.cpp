@@ -296,8 +296,10 @@ const AABB& RenderableObject::GetWorldBounds() const
     return worldBoundsCache_;
 }
 
-void RenderableObject::PostTick(float dt)
+void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
 {
+    const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame;
+
     if (!prevModelMatrixValid_)
     {
         prevModelMatrix_ = modelMatrix_;
@@ -306,13 +308,20 @@ void RenderableObject::PostTick(float dt)
 
     if (transformDirty_)
     {
-        prevModelMatrix_ = modelMatrix_;
+        if (!resetMotionHistory)
+        {
+            prevModelMatrix_ = modelMatrix_;
+        }
         RebuildModelMatrix();
         transformDirty_ = false;
         modelMatrixChangedThisTick_ = true;
     }
 
-    if (!modelMatrixChangedThisTick_)
+    if (resetMotionHistory)
+    {
+        ResetMotionHistory();
+    }
+    else if (!modelMatrixChangedThisTick_)
     {
         prevModelMatrix_ = modelMatrix_;
     }
@@ -322,9 +331,14 @@ void RenderableObject::PostTick(float dt)
         UpdateWorldBoundsCache();
     }
 
-    RenderableObjectBase::PostTick(dt);
-
     modelMatrixChangedThisTick_ = false;
+}
+
+void RenderableObject::PostTick(float dt)
+{
+    SyncSceneState(SceneObjectSyncReason::Frame);
+
+    RenderableObjectBase::PostTick(dt);
 
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(pos_ + GetLocalBounds().GetCenter(), GetLocalBounds().GetHalfExtents() * scale_, rotEuler_, { 0.0f, 1.0f, 0.0f, 0.7f }, true);

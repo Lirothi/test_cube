@@ -26,6 +26,7 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
+    void SyncSceneState(SceneObjectSyncReason reason) override;
     // Step 6: override the camera draw to issue one instanced draw per LOD tier (per-instance
     // LOD) — the base path would draw the whole cloud at one LOD.
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;

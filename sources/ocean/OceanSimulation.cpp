@@ -313,6 +313,8 @@ void OceanSimulation::ApplyConfigInternal(Renderer* renderer, const OceanSimulat
     {
         ResetGpuResources(renderer, settingsChanged);
     }
+
+    prevShoreDepthPos_ = { FLT_MAX, FLT_MAX };
 }
 
 OceanSimulationInputs OceanSimulation::EvaluateInputs() const
