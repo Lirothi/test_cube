@@ -108,6 +108,9 @@ private:
         const Camera& camera, const SceneView& mainView);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+#if WITH_EDITOR
+    void Pass_SelectionOutline(Renderer* r, RenderGraphPassContext ctx);
+#endif
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);

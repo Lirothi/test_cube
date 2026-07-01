@@ -167,6 +167,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredSrvSlot::GB2:        D.gbSRV[2] = outSRV; break;
             case DeferredSrvSlot::GBVelocity: D.gbSRV[3] = outSRV; break;
             case DeferredSrvSlot::Depth:      D.depthSRV = outSRV; break;
+            case DeferredSrvSlot::Stencil:    D.stencilSRV = outSRV; break;
             case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
             case DeferredSrvSlot::Scene:      D.sceneSRV = outSRV; break;
             case DeferredSrvSlot::DlssBias:   D.dlssBiasSRV = outSRV; break;
@@ -318,7 +319,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
         D3D12_CPU_DESCRIPTOR_HANDLE& outDepthSRV,
         float clearDepth = 0.0f,
-        DXGI_FORMAT srvFmt = DXGI_FORMAT_UNKNOWN)
+        DXGI_FORMAT srvFmt = DXGI_FORMAT_UNKNOWN,
+        DeferredSrvSlot stencilSrvSlot = DeferredSrvSlot::Count,
+        D3D12_CPU_DESCRIPTOR_HANDLE* outStencilSRV = nullptr,
+        DXGI_FORMAT stencilSrvFmt = DXGI_FORMAT_UNKNOWN)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
@@ -342,6 +346,19 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             sd.Texture2D.MipLevels = 1;
             outDepthSRV = DeferredSrvCPU(f, srvSlot);
             dev->CreateShaderResourceView(outRes.Get(), &sd, outDepthSRV);
+
+            if (stencilSrvSlot != DeferredSrvSlot::Count && outStencilSRV)
+            {
+                D3D12_SHADER_RESOURCE_VIEW_DESC stencilDesc{};
+                stencilDesc.Format = stencilSrvFmt == DXGI_FORMAT_UNKNOWN ? render::kDeferredStencilSrvFormat : stencilSrvFmt;
+                stencilDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                stencilDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                stencilDesc.Texture2D.MipLevels = 1;
+                stencilDesc.Texture2D.PlaneSlice = 1;
+
+                *outStencilSRV = DeferredSrvCPU(f, stencilSrvSlot);
+                dev->CreateShaderResourceView(outRes.Get(), &stencilDesc, *outStencilSRV);
+            }
 
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
@@ -463,7 +480,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
         CreateObjectIdTarget(f);
 
-        CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
+        CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV,
+            0.0f, DXGI_FORMAT_UNKNOWN, DeferredSrvSlot::Stencil, &D.stencilSRV, render::kDeferredStencilSrvFormat);
         CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
         D.shadowRes = 4096; // could be driven by config/parameter

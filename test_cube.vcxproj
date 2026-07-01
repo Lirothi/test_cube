@@ -406,6 +406,7 @@
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
     <None Include="shaders\reflection_blur_cs.hlsl" />
+    <None Include="shaders\selection_outline_cs.hlsl" />
     <None Include="shaders\compose_cs.hlsl" />
     <None Include="shaders\debug_texture.hlsl" />
     <None Include="shaders\debug_draw.hlsl" />

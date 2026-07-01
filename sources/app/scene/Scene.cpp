@@ -493,6 +493,13 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.objects = &objects_;
     frameData_.dirLight = &dirLight_;
     frameData_.settings = renderSettings_;
+#if WITH_EDITOR
+    frameData_.selectedEditorObjectId = selectedEditorObjectId_;
+    frameData_.selectionOutlineRadius = std::clamp<std::uint32_t>(selectionOutlineRadius_, 1u, 8u);
+#else
+    frameData_.selectedEditorObjectId = 0;
+    frameData_.selectionOutlineRadius = 1;
+#endif
 
     SceneView& mainView = camera_.GetView();
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
@@ -649,6 +656,8 @@ void Scene::Clear()
     objects_.clear();
 #if WITH_EDITOR
     objectIds_.clear();
+    selectedEditorObjectId_ = 0;
+    selectionOutlineRadius_ = 1;
 #endif
     camera_.GetView().queue.Clear();
     for (auto& view : cascadeViews_)

@@ -93,6 +93,8 @@ struct SceneFrameData
     const DirectionalLight* dirLight = nullptr;
 
     CascadeData cascades{};
+    std::uint64_t selectedEditorObjectId = 0;
+    std::uint32_t selectionOutlineRadius = 1;
 
     SceneRenderSettings settings{};
 };

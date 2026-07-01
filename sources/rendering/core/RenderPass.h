@@ -26,6 +26,7 @@ enum class RenderPass : uint16_t {
     Main_GlassReflections,
     Main_Transparent,
     Main_DebugDraw,
+    Main_SelectionOutline,
     Main_Tonemap,
     Main_Debug,
     Main_Count,
@@ -36,6 +37,7 @@ enum class RenderPass : uint16_t {
     GBuffer_Driver = Epilogue_Count,
     GBuffer_OpaqueSimple,
     GBuffer_OpaqueComplex,
+    GBuffer_Selected,
     GBuffer_Count,
 
     Transparent_Driver = GBuffer_Count,
@@ -72,12 +74,14 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_RTDebug: return L"RTDebug";
     case RenderPass::Main_Transparent: return L"Transparent";
     case RenderPass::Main_DebugDraw: return L"DebugDraw";
+    case RenderPass::Main_SelectionOutline: return L"SelectionOutline";
     case RenderPass::Main_Tonemap: return L"Tonemap";
     case RenderPass::Main_Debug: return L"Debug";
     case RenderPass::Epilogue_Overlay: return L"Overlay";
     case RenderPass::GBuffer_Driver: return L"GBuffer.Driver";
     case RenderPass::GBuffer_OpaqueSimple: return L"GBuffer.OpaqueSimple";
     case RenderPass::GBuffer_OpaqueComplex: return L"GBuffer.OpaqueComplex";
+    case RenderPass::GBuffer_Selected: return L"GBuffer.Selected";
     case RenderPass::Transparent_Driver: return L"Transparent.Driver";
     case RenderPass::Transparent_Simple: return L"Transparent.Simple";
     case RenderPass::Transparent_Complex: return L"Transparent.Complex";

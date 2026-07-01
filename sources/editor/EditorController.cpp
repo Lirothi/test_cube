@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -508,7 +509,7 @@ namespace
         return true;
     }
 
-    void LoadEditorState(std::vector<std::string>& recentLevelPaths)
+    void LoadEditorState(std::vector<std::string>& recentLevelPaths, int& selectionOutlineRadius)
     {
         recentLevelPaths.clear();
         const nlohmann::json root = LoadEditorStateJson();
@@ -516,6 +517,12 @@ namespace
         if (levelEditorIt == root.end() || !levelEditorIt->is_object())
         {
             return;
+        }
+
+        const auto outlineRadiusIt = levelEditorIt->find("selectionOutlineRadius");
+        if (outlineRadiusIt != levelEditorIt->end() && outlineRadiusIt->is_number_integer())
+        {
+            selectionOutlineRadius = std::clamp(outlineRadiusIt->get<int>(), 1, 8);
         }
 
         const auto recentIt = levelEditorIt->find("recentLevels");
@@ -546,7 +553,7 @@ namespace
         }
     }
 
-    bool SaveEditorState(const std::vector<std::string>& recentLevelPaths)
+    bool SaveEditorState(const std::vector<std::string>& recentLevelPaths, int selectionOutlineRadius)
     {
         nlohmann::json root = LoadEditorStateJson();
         nlohmann::json recent = nlohmann::json::array();
@@ -564,6 +571,7 @@ namespace
             root["levelEditor"] = nlohmann::json::object();
         }
         root["levelEditor"]["recentLevels"] = std::move(recent);
+        root["levelEditor"]["selectionOutlineRadius"] = std::clamp(selectionOutlineRadius, 1, 8);
         return SaveEditorStateJson(root);
     }
 
@@ -652,7 +660,7 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     const std::string levelPath = NormalizeLevelPath(document_.LevelPath());
     if (RememberRecentLevel(recentLevelPaths_, levelPath))
     {
-        SaveEditorState(recentLevelPaths_);
+        SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
     }
 
     if (SaveLevelCameraState(levelPath, scene.CameraRef()))
@@ -730,7 +738,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     if (!firstOpenInitialized_)
     {
         assetRegistry_.Refresh();
-        LoadEditorState(recentLevelPaths_);
+        LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         if (document_.LoadFromLevelFile("data/levels/demo.json"))
         {
             if (RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
@@ -742,6 +750,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         firstOpenInitialized_ = true;
     }
 
+    selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
+    scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
+    scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
     if (!open_)
     {
         return;
@@ -1075,6 +1086,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::Checkbox("Inspector", &showInspector_);
 
         ImGui::Separator();
+        ImGui::TextUnformatted("Selection");
+        ImGui::SetNextItemWidth(160.0f);
+        if (ImGui::SliderInt("Outline width", &selectionOutlineRadius_, 1, 8))
+        {
+            selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
+            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+        }
+
+        ImGui::Separator();
         viewportGizmo_.DrawModeButtons();
     }
     ImGui::End();
@@ -1118,6 +1138,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     // Viewport gizmo + click-to-select (after panels so ImGui knows whether the
     // mouse is over an editor window this frame).
     viewportGizmo_.Update(ctx, commandStack_);
+    selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
+    scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
+    scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
     saveCurrentLevelCameraState(false);
 }
 

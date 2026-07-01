@@ -130,6 +130,22 @@ void SceneFxaaCBHandles::Populate(Material* material)
     edgeThresholdMin = material->ComputeCB0FieldHandle("edgeThresholdMin");
 }
 
+#if WITH_EDITOR
+void SceneSelectionOutlineCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+
+    screenSize = material->ComputeCB0FieldHandle("screenSize");
+    selectedBit = material->ComputeCB0FieldHandle("selectedBit");
+    outlineRadius = material->ComputeCB0FieldHandle("outlineRadius");
+    outlineColor = material->ComputeCB0FieldHandle("outlineColor");
+}
+#endif
+
 void SceneResourceBootstrapper::Initialize(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, UploadList* uploadKeepAlive)
 {
     if (!renderer)
@@ -248,6 +264,16 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matBlur_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+#if WITH_EDITOR
+    if (!matSelectionOutlineCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/selection_outline_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSelectionOutlineCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+#endif
+
     // S6 RT debug viz: a cs_6_5 RayQuery shader. Only built on RT-capable
     // hardware (else the cs_6_5 compile would fail / fall back); the debug pass
     // is gated on the same support, so it stays null otherwise.
@@ -336,6 +362,9 @@ void SceneResourceBootstrapper::RefreshHandles()
     fxaaHandles_.Populate(matFxaaCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
+#if WITH_EDITOR
+    selectionOutlineHandles_.Populate(matSelectionOutlineCS_.get());
+#endif
 }
 
 UINT SceneResourceBootstrapper::GetLightingCBSizeBytes() const
@@ -377,6 +406,13 @@ UINT SceneResourceBootstrapper::GetFxaaCBSizeBytes() const
 {
     return matFxaaCS_ ? matFxaaCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
+
+#if WITH_EDITOR
+UINT SceneResourceBootstrapper::GetSelectionOutlineCBSizeBytes() const
+{
+    return matSelectionOutlineCS_ ? matSelectionOutlineCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+#endif
 
 void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstants& data, uint8_t* dest) const
 {
@@ -510,3 +546,19 @@ void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data
     matFxaaCS_->UpdateCBField(handles.edgeThreshold, data.edgeThreshold, dest);
     matFxaaCS_->UpdateCBField(handles.edgeThresholdMin, data.edgeThresholdMin, dest);
 }
+
+#if WITH_EDITOR
+void SceneResourceBootstrapper::WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const
+{
+    if (!matSelectionOutlineCS_ || !dest)
+    {
+        return;
+    }
+
+    const auto& handles = selectionOutlineHandles_;
+    matSelectionOutlineCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
+    matSelectionOutlineCS_->UpdateCBField(handles.selectedBit, data.selectedBit, dest);
+    matSelectionOutlineCS_->UpdateCBField(handles.outlineRadius, data.outlineRadius, dest);
+    matSelectionOutlineCS_->UpdateCBField(handles.outlineColor, data.outlineColor, dest);
+}
+#endif

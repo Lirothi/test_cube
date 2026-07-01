@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -36,10 +37,54 @@ static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
 
 namespace
 {
+#if WITH_EDITOR
+    constexpr UINT kSelectionStencilBit = 0x80u;
+    constexpr uint32_t kSelectionStencilGBufferLocalOrder = 0xfffffffeu;
+#endif
+
     constexpr size_t BucketIndex(SceneRenderQueue::BucketType type)
     {
         return static_cast<size_t>(type);
     }
+
+#if WITH_EDITOR
+    RenderableObjectBase* FindSelectedOpaqueObject(const SceneFrameData& frame, const SceneView& view)
+    {
+        if (frame.selectedEditorObjectId == 0 || !frame.objects)
+        {
+            return nullptr;
+        }
+
+        for (const auto& owned : *frame.objects)
+        {
+            RenderableObjectBase* obj = owned.get();
+            if (!obj || obj->GetEditorObjectId() != frame.selectedEditorObjectId)
+            {
+                continue;
+            }
+
+            if (!obj->IsVisible() || obj->IsTransparent())
+            {
+                return nullptr;
+            }
+
+            if ((obj->GetRenderLayerMask() & view.renderLayerMask) == 0)
+            {
+                return nullptr;
+            }
+
+            const AABB& bounds = obj->GetWorldBounds();
+            if (view.frustum.IsValid() && bounds.IsValid() && !view.frustum.Intersects(bounds))
+            {
+                return nullptr;
+            }
+
+            return obj;
+        }
+
+        return nullptr;
+    }
+#endif
 
     void FilterShadowCasters(SceneRenderQueue& queue)
     {
@@ -582,6 +627,19 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_DebugDraw(renderer, ctx, *frame_->camera);
         });
 
+    size_t pSelectionOutline = pDebugDraw;
+#if WITH_EDITOR
+    if (frame_->selectedEditorObjectId != 0)
+    {
+        pSelectionOutline = rg.AddPass(RenderPass::Main_SelectionOutline, { pDebugDraw },
+            { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                Pass_SelectionOutline(renderer, ctx);
+            });
+    }
+#endif
+
     // Ensure tonemapping runs after the debug draw pass so the resolved backbuffer
     // always includes any debug geometry submitted during rendering.
     // Only the unconditional outputs are declared; the tonemap source (scene or
@@ -589,7 +647,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // CL group (step 5): the optional debug-texture draw follows tonemap on the
     // same target with no mtDeps; share one command list (Debug usually early-outs).
     rg.BeginCLGroup();
-    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pDebugDraw },
+    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pSelectionOutline },
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
@@ -1127,7 +1185,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera);
 
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
-    rgGB.AddPass(RenderPass::GBuffer_Driver, {},
+    const size_t pDriver = rgGB.AddPass(RenderPass::GBuffer_Driver, {},
         { { D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1146,7 +1204,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.2 Opaque simple → bundles
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+    const size_t pOpaqueSimple = rgGB.AddPass(RenderPass::GBuffer_OpaqueSimple, { pDriver }, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
@@ -1156,7 +1214,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
     // 1.3 Opaque complex → direct command list, no clears
-    rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+    const size_t pOpaqueComplex = rgGB.AddPass(RenderPass::GBuffer_OpaqueComplex, { pDriver }, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
@@ -1164,6 +1222,33 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
             RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, camera, /*useBundles=*/false, true, true, 32, viewCB);
         }
         });
+
+#if WITH_EDITOR
+    if (frame_->selectedEditorObjectId != 0)
+    {
+        RenderGraph<kGBufferRenderGraphPassCount>::DependencyList selectedDeps;
+        selectedDeps.push_back(pOpaqueSimple);
+        selectedDeps.push_back(pOpaqueComplex);
+        rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+            RenderableObjectBase* selected = FindSelectedOpaqueObject(*frame_, mainView);
+            if (!selected)
+            {
+                return;
+            }
+
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            SetCommandListName(t.cl, sub.pass);
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
+                renderer->BindGBuffer(t.cl, Renderer::ClearMode::None);
+                t.cl->OMSetStencilRef(kSelectionStencilBit);
+                selected->Render(renderer, t.cl, camera, viewCB);
+                t.cl->OMSetStencilRef(0);
+            }
+            renderer->EndThreadCommandList(t, sub.batchIndex, kSelectionStencilGBufferLocalOrder);
+            });
+    }
+#endif
 
     rgGB.Execute(renderer);
 }
@@ -2261,6 +2346,52 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
+
+#if WITH_EDITOR
+void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    if (!renderer || !frame_ || frame_->selectedEditorObjectId == 0)
+    {
+        return;
+    }
+
+    auto material = resources_.GetSelectionOutlineMaterial();
+    const UINT cbSize = resources_.GetSelectionOutlineCBSizeBytes();
+    if (!material || cbSize == 0)
+    {
+        return;
+    }
+
+    const auto& D = renderer->GetDeferredForFrame();
+    if (D.stencilSRV.ptr == 0 || D.sceneUAV.ptr == 0)
+    {
+        return;
+    }
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        ctx.ApplyDeclaredStates(t.cl);
+
+        SelectionOutlinePassConstants constants{};
+        constants.screenSize = float2(
+            static_cast<float>(std::max(renderer->GetRenderWidth(), 1u)),
+            static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)));
+        constants.selectedBit = kSelectionStencilBit;
+        constants.outlineRadius = std::clamp<std::uint32_t>(frame_->selectionOutlineRadius, 1u, 8u);
+        constants.outlineColor = float4(1.0f, 0.82f, 0.12f, 0.92f);
+
+        RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSelectionOutlineConstants(constants, dest); },
+            { D.stencilSRV },
+            { D.sceneUAV },
+            {},
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.scene.Get());
+    }
+    ctx.EndCL(t);
+}
+#endif
 
 void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {

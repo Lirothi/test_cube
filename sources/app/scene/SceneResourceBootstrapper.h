@@ -113,6 +113,18 @@ struct SceneFxaaCBHandles
     void Populate(Material* material);
 };
 
+#if WITH_EDITOR
+struct SceneSelectionOutlineCBHandles
+{
+    Material::CBFieldHandle screenSize;
+    Material::CBFieldHandle selectedBit;
+    Material::CBFieldHandle outlineRadius;
+    Material::CBFieldHandle outlineColor;
+
+    void Populate(Material* material);
+};
+#endif
+
 struct LightingPassConstants
 {
     float3 sunDir{};
@@ -197,6 +209,16 @@ struct FxaaPassConstants
     float edgeThresholdMin = 0.0625f;
 };
 
+#if WITH_EDITOR
+struct SelectionOutlinePassConstants
+{
+    float2 screenSize{};
+    uint32_t selectedBit = 0;
+    uint32_t outlineRadius = 1;
+    float4 outlineColor{};
+};
+#endif
+
 class SceneResourceBootstrapper
 {
 public:
@@ -228,6 +250,9 @@ public:
     std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
     std::shared_ptr<Material> GetRtDenoiseMaterial() const { return matRtDenoise_; } // S11, null on non-RT HW
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
+#if WITH_EDITOR
+    std::shared_ptr<Material> GetSelectionOutlineMaterial() const { return matSelectionOutlineCS_; }
+#endif
 
     const SceneLightingCBHandles& LightingHandles() const { return lightingHandles_; }
     const ScenePointLightCBHandles& PointHandles() const { return pointHandles_; }
@@ -236,6 +261,9 @@ public:
     const SceneBlurCBHandles& BlurHandles() const { return blurHandles_; }
     const SceneComposeCBHandles& ComposeHandles() const { return composeHandles_; }
     const SceneFxaaCBHandles& FxaaHandles() const { return fxaaHandles_; }
+#if WITH_EDITOR
+    const SceneSelectionOutlineCBHandles& SelectionOutlineHandles() const { return selectionOutlineHandles_; }
+#endif
 
     UINT GetLightingCBSizeBytes() const;
     UINT GetPointLightCBSizeBytes() const;
@@ -245,6 +273,9 @@ public:
     UINT GetBlurCBSizeBytes() const;
     UINT GetComposeCBSizeBytes() const;
     UINT GetFxaaCBSizeBytes() const;
+#if WITH_EDITOR
+    UINT GetSelectionOutlineCBSizeBytes() const;
+#endif
 
     void WriteLightingConstants(const LightingPassConstants& data, uint8_t* dest) const;
     void WritePointLightConstants(const PointLightPassConstants& data, uint8_t* dest) const;
@@ -253,6 +284,9 @@ public:
     void WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const;
     void WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const;
     void WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const;
+#if WITH_EDITOR
+    void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;
+#endif
 
 private:
     void RefreshObjectMaterials(Renderer* renderer,
@@ -275,6 +309,9 @@ private:
     std::shared_ptr<Material> matRtReflect_;  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matRtDenoise_;  // S11 temporal reflection denoise; only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW
+#if WITH_EDITOR
+    std::shared_ptr<Material> matSelectionOutlineCS_;
+#endif
 
     SceneLightingCBHandles lightingHandles_{};
     ScenePointLightCBHandles pointHandles_{};
@@ -283,4 +320,7 @@ private:
     SceneBlurCBHandles blurHandles_{};
     SceneComposeCBHandles composeHandles_{};
     SceneFxaaCBHandles fxaaHandles_{};
+#if WITH_EDITOR
+    SceneSelectionOutlineCBHandles selectionOutlineHandles_{};
+#endif
 };

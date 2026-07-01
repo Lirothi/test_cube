@@ -197,4 +197,13 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
     {
         matData_->ConfigureDefinesForGBuffer(desc);
     }
+
+    desc.depth.StencilEnable = TRUE;
+    desc.depth.StencilReadMask = 0x80;
+    desc.depth.StencilWriteMask = 0x80;
+    desc.depth.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    desc.depth.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    desc.depth.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    desc.depth.FrontFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
+    desc.depth.BackFace = desc.depth.FrontFace;
 }

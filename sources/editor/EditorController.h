@@ -55,6 +55,7 @@ private:
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
     bool showInspector_ = true;
+    int selectionOutlineRadius_ = 1;
     AssetRegistry assetRegistry_;
     ContentBrowserPanel contentBrowser_;
     SceneOutlinerPanel outliner_;
