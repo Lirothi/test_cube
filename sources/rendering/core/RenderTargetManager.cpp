@@ -311,37 +311,37 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         };
 
     auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
+        DeferredDsvSlot dsvSlot,
+        DeferredSrvSlot srvSlot,
         UINT f,
         ComPtr<ID3D12Resource>& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outDepthSRV)
+        D3D12_CPU_DESCRIPTOR_HANDLE& outDepthSRV,
+        float clearDepth = 0.0f,
+        DXGI_FORMAT srvFmt = DXGI_FORMAT_UNKNOWN)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
-            D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = 0.0f; cv.DepthStencil.Stencil = 0;
+            D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = clearDepth; cv.DepthStencil.Stencil = 0;
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
                 D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
 
-            auto& D = deferred_[f];
-
             // DSV
-            outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Depth);
+            outDSV = DeferredDsvCPU(f, dsvSlot);
             D3D12_DEPTH_STENCIL_VIEW_DESC dv{};
             dv.Format = dsvFmt;
             dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
             dev->CreateDepthStencilView(outRes.Get(), &dv, outDSV);
-            D.dsv = outDSV;
 
             // Create an SRV for depth as R32_FLOAT
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = formats.depthSrv;
+            sd.Format = srvFmt == DXGI_FORMAT_UNKNOWN ? formats.depthSrv : srvFmt;
             sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels = 1;
-            outDepthSRV = DeferredSrvCPU(f, DeferredSrvSlot::Depth);
+            outDepthSRV = DeferredSrvCPU(f, srvSlot);
             dev->CreateShaderResourceView(outRes.Get(), &sd, outDepthSRV);
-            D.depthSRV = outDepthSRV;
 
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
@@ -463,7 +463,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
         CreateObjectIdTarget(f);
 
-        CreateDepth(formats.depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
+        CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV);
         CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
         D.shadowRes = 4096; // could be driven by config/parameter
@@ -485,20 +485,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         currentTargetWidth = std::max(1u, sizes.reflectionWidth);
         currentTargetHeight = std::max(1u, sizes.reflectionHeight);
         CreateRT(formats.gb1, DeferredRtvSlot::GlassReflNormal, DeferredSrvSlot::GlassReflNormal, DeferredSrvSlot::Count, f, D.glassReflNormal, D.glassReflNormalRTV, D.glassReflNormalSRV);
-        {
-            D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.depth, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-            D3D12_CLEAR_VALUE cv{}; cv.Format = formats.depth; cv.DepthStencil.Depth = 0.0f; cv.DepthStencil.Stencil = 0;
-            ThrowIfFailed(dev->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&D.glassReflDepth)));
-            D.glassReflDepthDSV = DeferredDsvCPU(f, DeferredDsvSlot::GlassReflDepth);
-            D3D12_DEPTH_STENCIL_VIEW_DESC dv{}; dv.Format = formats.depth; dv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dev->CreateDepthStencilView(D.glassReflDepth.Get(), &dv, D.glassReflDepthDSV);
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = formats.depthSrv; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
-            D.glassReflDepthSRV = DeferredSrvCPU(f, DeferredSrvSlot::GlassReflDepth);
-            dev->CreateShaderResourceView(D.glassReflDepth.Get(), &sd, D.glassReflDepthSRV);
-            tracker.SetResourceState(D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        }
+        CreateDepth(formats.depth, DeferredDsvSlot::GlassReflDepth, DeferredSrvSlot::GlassReflDepth, f, D.glassReflDepth, D.glassReflDepthDSV, D.glassReflDepthSRV);
         CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::GlassReflection, DeferredSrvSlot::GlassReflectionUAV, f, D.glassReflection, D.glassReflectionSRV, D.glassReflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
 
         currentTargetWidth = displayWidthClamped;
