@@ -2035,6 +2035,54 @@
         1.0
       ],
       "type": "transparentMesh"
+    },
+    {
+      "enabled": true,
+      "id": 98,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy",
+      "position": [
+        -6.335277080535889,
+        0.5,
+        -0.42332398891448975
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 99,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -5.667100429534912,
+        0.5,
+        4.373011589050293
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -2173,6 +2221,148 @@
         -11.386822700500488
       ],
       "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        -0.679000973701477,
+        -0.7071066498756409,
+        0.19737772643566132
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        15.123939514160156,
+        4.000000953674316,
+        -21.882057189941406
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        -0.16713084280490875,
+        -0.7071064710617065,
+        0.6870718002319336
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        7.972054481506348,
+        4.0,
+        -29.544557571411133
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.33899492025375366,
+        -0.7071065902709961,
+        0.6205503344535828
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -0.44199180603027344,
+        4.0,
+        -28.846826553344727
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.5790231823921204,
+        -0.7071065306663513,
+        0.40587273240089417
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -7.328818321228027,
+        4.000000953674316,
+        -23.961156845092773
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "direction": [
+        0.4364357888698578,
+        -0.8728715777397156,
+        0.2182178944349289
+      ],
+      "innerAngleDeg": 20.0,
+      "intensity": 18.0,
+      "outerAngleDeg": 32.0,
+      "position": [
+        -9.30030345916748,
+        5.000000953674316,
+        -2.8949360847473145
+      ],
+      "range": 25.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "direction": [
+        0.4364357888698578,
+        -0.8728715777397156,
+        0.2182178944349289
+      ],
+      "innerAngleDeg": 20.0,
+      "intensity": 18.0,
+      "outerAngleDeg": 32.0,
+      "position": [
+        -8.668525695800781,
+        5.000000953674316,
+        2.4951677322387695
+      ],
+      "range": 25.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05
     }
