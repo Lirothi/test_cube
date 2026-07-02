@@ -8,12 +8,18 @@
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
+#include "editor/scene/EnvironmentRuntime.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "app/camera/Camera.h"
 #include "rendering/RenderLayers.h"
+#include "rendering/lighting/DirectionalLight.h"
+#include "rendering/lighting/LightManager.h"
+#include "rendering/lighting/PointLight.h"
+#include "rendering/lighting/SpotLight.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
@@ -195,6 +201,97 @@ namespace
         const std::string normalMap = obj.properties.value("normalMap", std::string());
         ImGui::Text("Normal Map: %s", normalMap.empty() ? "(none)" : normalMap.c_str());
     }
+
+    // Inspector for the top-level environment sections (Step 24). Edits write the
+    // entity's `properties` (round-tripped on save via the entity-driven
+    // serializer) and patch the live runtime; lights/camera update instantly,
+    // skybox/ocean apply on the next level load.
+    void DrawEnvironmentInspector(EditorContext& ctx, EditorObject& env)
+    {
+        nlohmann::json& p = env.properties;
+
+        auto colorEdit = [&]()
+        {
+            const Math::float3 c = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));
+            float cv[3] = { c.x, c.y, c.z };
+            if (ImGui::ColorEdit3("Color", cv)) { p["color"] = { cv[0], cv[1], cv[2] }; return true; }
+            return false;
+        };
+        auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi)
+        {
+            float v = JsonFloat(p, key, def);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi)) { p[key] = v; return true; }
+            return false;
+        };
+        auto dragF3 = [&](const char* label, const char* key, const Math::float3& def, float speed)
+        {
+            const Math::float3 d3 = JsonFloat3(p, key, def);
+            float v[3] = { d3.x, d3.y, d3.z };
+            if (ImGui::DragFloat3(label, v, speed)) { p[key] = { v[0], v[1], v[2] }; return true; }
+            return false;
+        };
+
+        bool changed = false;
+        if (env.type == "pointLight")
+        {
+            changed |= colorEdit();
+            changed |= dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
+            changed |= dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
+            changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+        }
+        else if (env.type == "spotLight")
+        {
+            changed |= colorEdit();
+            changed |= dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
+            changed |= dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
+            changed |= dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
+            changed |= dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
+            changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            changed |= dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
+            changed |= dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f);
+            changed |= dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f);
+            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+        }
+        else if (env.type == "directionalLight")
+        {
+            changed |= colorEdit();
+            changed |= dragF("Exposure", "exposure", 1.0f, 0.05f, 0.0f, 100.0f);
+            changed |= dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
+            changed |= dragF3("Direction", "direction", Math::float3(-1.0f, -1.0f, -1.0f), 0.01f);
+            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+        }
+        else if (env.type == "camera")
+        {
+            const bool camChanged =
+                dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f) |
+                dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f) |
+                dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
+            if (camChanged)
+            {
+                EnvironmentRuntime::Apply(ctx, env);
+                ctx.document.SetDirty(true);
+            }
+        }
+        else if (env.type == "skybox")
+        {
+            char buf[260];
+            std::snprintf(buf, sizeof(buf), "%s", p.value("texture", std::string()).c_str());
+            if (ImGui::InputText("Texture", buf, sizeof(buf))) { p["texture"] = std::string(buf); ctx.document.SetDirty(true); }
+            ImGui::TextDisabled("Applies on reload.");
+        }
+        else if (env.type == "ocean")
+        {
+            char buf[260];
+            std::snprintf(buf, sizeof(buf), "%s", p.value("preset", std::string()).c_str());
+            if (ImGui::InputText("Preset", buf, sizeof(buf))) { p["preset"] = std::string(buf); ctx.document.SetDirty(true); }
+            ImGui::TextDisabled("Applies on reload.");
+        }
+        else
+        {
+            ImGui::TextDisabled("No editable properties.");
+        }
+    }
 }
 
 void InspectorPanel::Draw(EditorContext& ctx, EditorCommandStack& commandStack, const AssetRegistry& registry, bool* open)
@@ -209,6 +306,19 @@ void InspectorPanel::Draw(EditorContext& ctx, EditorCommandStack& commandStack, 
     EditorObject* obj = ctx.document.Find(ctx.selectedObject);
     if (!obj)
     {
+        // Environment entities (camera/lights/skybox/ocean) live in a separate list.
+        for (EditorObject& env : ctx.document.Environment())
+        {
+            if (env.id.value != ctx.selectedObject.value) { continue; }
+            ImGui::Text("ID: %llu", static_cast<unsigned long long>(env.id.value));
+            ImGui::Text("Type: %s", env.type.c_str());
+            ImGui::TextUnformatted(env.name.c_str());
+            ImGui::Separator();
+            DrawEnvironmentInspector(ctx, env);
+            ImGui::End();
+            return;
+        }
+
         ImGui::TextDisabled("No object selected.");
         ImGui::End();
         return;

@@ -141,6 +141,9 @@
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp">
       <Filter>sources\editor\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp">
+      <Filter>sources\editor\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp">
       <Filter>sources\editor\serialization</Filter>
     </ClCompile>
@@ -450,6 +453,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">
+      <Filter>sources\editor\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/scene/EnvironmentRuntime.h">
       <Filter>sources\editor\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h">

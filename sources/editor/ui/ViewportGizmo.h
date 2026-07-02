@@ -25,6 +25,7 @@ private:
     Op op_ = Op::Translate;
     bool wasUsing_ = false;
     EditorTransform transformBeforeDrag_;
+    float envGizmoMatrix_[16] = {}; // persistent model matrix while dragging an env light
 
     // Editor icon billboards for world-positioned environment entities (point /
     // spot lights): screen-space, always-on-top ImGui overlay images drawn from

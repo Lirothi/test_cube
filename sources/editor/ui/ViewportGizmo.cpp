@@ -12,6 +12,7 @@
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
+#include "editor/scene/EnvironmentRuntime.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "rendering/core/Renderer.h"
@@ -40,6 +41,38 @@ namespace
         case ViewportGizmo::Op::Scale:  return ImGuizmo::SCALE;
         default:                        return ImGuizmo::TRANSLATE;
         }
+    }
+
+    Math::float3 ReadFloat3(const nlohmann::json& p, const char* key, const Math::float3& def)
+    {
+        const auto it = p.find(key);
+        if (it != p.end() && it->is_array() && it->size() >= 3u)
+        {
+            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+        }
+        return def;
+    }
+
+    // Build a row-major model matrix for a light: translation = pos, row2 (Z) =
+    // the light direction (so ROTATE edits direction, extracted back from row2).
+    void BuildLightMatrix(const Math::float3& pos, const Math::float3& dir, float out[16])
+    {
+        using namespace DirectX;
+        XMVECTOR fwd = XMVector3Normalize(XMVectorSet(dir.x, dir.y, dir.z, 0.0f));
+        if (XMVector3Equal(fwd, XMVectorZero())) { fwd = XMVectorSet(0.0f, -1.0f, 0.0f, 0.0f); }
+        const XMVECTOR up0 = (std::fabs(XMVectorGetY(fwd)) > 0.99f)
+            ? XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+            : XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        const XMVECTOR right = XMVector3Normalize(XMVector3Cross(up0, fwd));
+        const XMVECTOR up = XMVector3Cross(fwd, right);
+        XMFLOAT3 r, u, f;
+        XMStoreFloat3(&r, right);
+        XMStoreFloat3(&u, up);
+        XMStoreFloat3(&f, fwd);
+        out[0] = r.x;  out[1] = r.y;  out[2] = r.z;  out[3] = 0.0f;
+        out[4] = u.x;  out[5] = u.y;  out[6] = u.z;  out[7] = 0.0f;
+        out[8] = f.x;  out[9] = f.y;  out[10] = f.z; out[11] = 0.0f;
+        out[12] = pos.x; out[13] = pos.y; out[14] = pos.z; out[15] = 1.0f;
     }
 }
 
@@ -273,6 +306,71 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     else
     {
         wasUsing_ = false;
+    }
+
+    // Env light gizmo: translate point/spot position, rotate spot/directional
+    // direction. Env entities have no RenderableObject, so drive a synthetic matrix
+    // (persisted across the drag) and write the result back to the entity's
+    // properties, patching the live runtime via the shared helper. Non-undoable
+    // (like the env inspector edits).
+    if (!obj)
+    {
+        EditorObject* light = nullptr;
+        for (EditorObject& e : ctx.document.Environment())
+        {
+            if (e.id.value == ctx.selectedObject.value &&
+                (e.type == "pointLight" || e.type == "spotLight" || e.type == "directionalLight"))
+            {
+                light = &e;
+                break;
+            }
+        }
+
+        if (light)
+        {
+            const bool hasPos = (light->type != "directionalLight");
+            const bool hasDir = (light->type != "pointLight");
+            const Math::float3 camPos = camera.GetPosition();
+            const Math::float3 camFwd = camera.GetDirection();
+            const Math::float3 pos = hasPos
+                ? ReadFloat3(light->properties, "position", Math::float3(0.0f, 0.0f, 0.0f))
+                : camPos + camFwd * 8.0f; // directional has no position: anchor in front of the camera
+            const Math::float3 dir = hasDir
+                ? ReadFloat3(light->properties, "direction", Math::float3(0.0f, -1.0f, 0.0f))
+                : Math::float3(0.0f, -1.0f, 0.0f);
+
+            const Math::float3 toLight = pos - camPos;
+            const bool inFrontLight =
+                (toLight.x * camFwd.x + toLight.y * camFwd.y + toLight.z * camFwd.z) > 0.0f;
+
+            if (inFrontLight)
+            {
+                if (!ImGuizmo::IsUsing()) { BuildLightMatrix(pos, dir, envGizmoMatrix_); }
+
+                ImGuizmo::OPERATION giz = ToImGuizmo(op_);
+                if (giz == ImGuizmo::SCALE) { giz = ImGuizmo::TRANSLATE; }
+                if (!hasDir && giz == ImGuizmo::ROTATE) { giz = ImGuizmo::TRANSLATE; }
+                if (!hasPos && giz == ImGuizmo::TRANSLATE) { giz = ImGuizmo::ROTATE; }
+
+                ImGuizmo::Manipulate(view, proj, giz, ImGuizmo::WORLD, envGizmoMatrix_);
+                if (ImGuizmo::IsUsing())
+                {
+                    if (hasPos)
+                    {
+                        light->properties["position"] = { envGizmoMatrix_[12], envGizmoMatrix_[13], envGizmoMatrix_[14] };
+                    }
+                    if (hasDir)
+                    {
+                        const Math::float3 nd =
+                            Math::float3(envGizmoMatrix_[8], envGizmoMatrix_[9], envGizmoMatrix_[10]).Normalized();
+                        light->properties["direction"] = { nd.x, nd.y, nd.z };
+                    }
+                    EnvironmentRuntime::Apply(ctx, *light);
+                    ctx.document.SetDirty(true);
+                }
+                gizmoBusy = gizmoBusy || ImGuizmo::IsUsing() || ImGuizmo::IsOver();
+            }
+        }
     }
 
     // Click-to-select: only over the 3D view, not on the gizmo, not while flying.

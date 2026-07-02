@@ -1,0 +1,101 @@
+#include "editor/scene/EnvironmentRuntime.h"
+#if WITH_EDITOR
+
+#include "app/camera/Camera.h"
+#include "app/scene/Scene.h"
+#include "core/math/Math.h"
+#include "editor/EditorContext.h"
+#include "editor/scene/EditorSceneDocument.h"
+#include "rendering/lighting/DirectionalLight.h"
+#include "rendering/lighting/LightManager.h"
+#include "rendering/lighting/PointLight.h"
+#include "rendering/lighting/SpotLight.h"
+
+namespace
+{
+    constexpr float kDeg2Rad = 0.01745329252f;
+
+    float JF(const nlohmann::json& p, const char* key, float def)
+    {
+        const auto it = p.find(key);
+        return (it != p.end() && it->is_number()) ? it->get<float>() : def;
+    }
+
+    Math::float3 JF3(const nlohmann::json& p, const char* key, const Math::float3& def)
+    {
+        const auto it = p.find(key);
+        if (it != p.end() && it->is_array() && it->size() >= 3)
+        {
+            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+        }
+        return def;
+    }
+
+    // Map an env light entity to its LightManager index. JsonLevel skips disabled
+    // lights, so count only enabled same-type entities before the target; -1 if the
+    // target is disabled / absent (then it is saved but has no live runtime light).
+    int LightManagerIndexFor(EditorSceneDocument& doc, const EditorObject& target)
+    {
+        int idx = 0;
+        for (const EditorObject& e : doc.Environment())
+        {
+            if (e.type != target.type) { continue; }
+            const bool enabled = e.properties.value("enabled", true);
+            if (e.id.value == target.id.value) { return enabled ? idx : -1; }
+            if (enabled) { ++idx; }
+        }
+        return -1;
+    }
+}
+
+void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
+{
+    const nlohmann::json& p = env.properties;
+
+    if (env.type == "pointLight")
+    {
+        const int i = LightManagerIndexFor(ctx.document, env);
+        auto& points = ctx.scene.GetLightManager().PointLights();
+        if (i < 0 || i >= static_cast<int>(points.size())) { return; }
+        PointLightDesc d;
+        d.position = JF3(p, "position", d.position);
+        d.radius = JF(p, "radius", d.radius);
+        d.color = JF3(p, "color", d.color);
+        d.intensity = JF(p, "intensity", d.intensity);
+        points[i].SetDesc(d);
+    }
+    else if (env.type == "spotLight")
+    {
+        const int i = LightManagerIndexFor(ctx.document, env);
+        auto& spots = ctx.scene.GetLightManager().SpotLights();
+        if (i < 0 || i >= static_cast<int>(spots.size())) { return; }
+        SpotLightDesc d;
+        d.position = JF3(p, "position", d.position);
+        d.direction = JF3(p, "direction", d.direction).Normalized();
+        d.range = JF(p, "range", d.range);
+        d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
+        d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
+        d.color = JF3(p, "color", d.color);
+        d.intensity = JF(p, "intensity", d.intensity);
+        d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
+        d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+        spots[i].SetDesc(d);
+    }
+    else if (env.type == "directionalLight")
+    {
+        DirectionalLight dl;
+        dl.SetDirection(JF3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)).Normalized());
+        dl.SetColor(JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)));
+        dl.SetExposure(JF(p, "exposure", 1.0f));
+        dl.SetAmbient(JF(p, "ambient", 0.05f));
+        ctx.scene.SetDirectionalLight(dl);
+    }
+    else if (env.type == "camera")
+    {
+        Camera& cam = ctx.scene.CameraRef();
+        cam.SetHFov(JF(p, "hfovDeg", 90.0f) * kDeg2Rad);
+        cam.SetZNearFar(JF(p, "zNear", 0.01f), JF(p, "zFar", 10000.0f));
+    }
+}
+
+#endif // WITH_EDITOR
