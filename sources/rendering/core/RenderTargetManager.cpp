@@ -411,7 +411,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
     auto CreateSpotShadow = [&](UINT frameIndex,
         ComPtr<ID3D12Resource>& outRes,
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights>& outDSV,
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights>& outDSV,
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
         UINT resolution)
         {
@@ -427,7 +427,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             desc.Alignment = 0;
             desc.Width = resolution;
             desc.Height = resolution;
-            desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxSpotLights);
+            desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxShadowedSpotLights);
             desc.MipLevels = 1;
             desc.Format = DXGI_FORMAT_R16_TYPELESS;
             desc.SampleDesc.Count = 1;
@@ -446,13 +446,13 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2DArray.MipLevels = 1;
             srvDesc.Texture2DArray.FirstArraySlice = 0;
-            srvDesc.Texture2DArray.ArraySize = LightManager::kMaxSpotLights;
+            srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
             srvDesc.Texture2DArray.MostDetailedMip = 0;
             srvDesc.Texture2DArray.PlaneSlice = 0;
             srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
             dev->CreateShaderResourceView(outRes.Get(), &srvDesc, outSRV);
 
-            for (UINT i = 0; i < LightManager::kMaxSpotLights; ++i)
+            for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
             {
                 outDSV[i] = DeferredSpotShadowDsvCPU(frameIndex, i);
                 D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};

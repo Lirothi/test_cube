@@ -62,7 +62,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionScratchSRV{}, reflectionScratchUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxSpotLights> spotShadowDSV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
@@ -112,7 +112,7 @@ private:
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
     static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
-    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxSpotLights;
+    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxShadowedSpotLights;
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;

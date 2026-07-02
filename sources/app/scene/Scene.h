@@ -114,7 +114,7 @@ private:
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};
-    std::array<SceneView, LightManager::kMaxSpotLights> spotShadowViews_{};
+    std::array<SceneView, LightManager::kMaxShadowedSpotLights> spotShadowViews_{};
     // Step 6e: the directional cascades + spot shadow views all bucketize the same
     // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
     // shared — each shadow view only runs its own per-frustum Cull against it.

@@ -1340,9 +1340,9 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth)
 {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    if (lightIndex >= LightManager::kMaxSpotLights)
+    if (lightIndex >= LightManager::kMaxShadowedSpotLights)
     {
-        lightIndex = LightManager::kMaxSpotLights - 1;
+        lightIndex = LightManager::kMaxShadowedSpotLights - 1;
     }
 
     cl->OMSetRenderTargets(0, nullptr, FALSE, &D.spotShadowDSV[lightIndex]);

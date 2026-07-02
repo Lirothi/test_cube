@@ -575,12 +575,17 @@ void Scene::PrepareViews(Renderer* renderer)
     }
     UpdateCascades(camera_, renderer);
 
-    const size_t spotLightCount = lightManager_.GetSpotLightCount();
+    // Choose which lit spots cast shadows this frame (closest to camera) and
+    // their atlas slots, then build one shadow view per slot from its owning
+    // light. Must precede the view build and the Pass_SpotLights buffer fill.
+    lightManager_.SelectShadowedSpots(camera_.GetPosition());
+    const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
-    for (size_t i = 0; i < spotLightCount; ++i)
+    for (size_t s = 0; s < shadowedSpotCount; ++s)
     {
-        const auto& light = spotLights[i];
-        SceneView& view = spotShadowViews_[i];
+        const size_t lightIndex = lightManager_.GetShadowedSpotLightIndex(s);
+        const auto& light = spotLights[lightIndex];
+        SceneView& view = spotShadowViews_[s];
         view.type = SceneView::Type::Shadow;
         view.view = light.GetViewMatrix();
         view.proj = light.GetProjMatrix();
@@ -671,9 +676,9 @@ void Scene::PrepareViews(Renderer* renderer)
     {
         enqueueView(cascadeView);
     }
-    for (int i = 0; i < lightManager_.GetSpotLightCount(); ++i)
+    for (size_t s = 0; s < lightManager_.GetShadowedSpotCount(); ++s)
     {
-        enqueueView(spotShadowViews_[i]);
+        enqueueView(spotShadowViews_[s]);
     }
 
     if (!viewsToCull.empty())

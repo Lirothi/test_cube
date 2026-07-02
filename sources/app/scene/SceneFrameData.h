@@ -86,7 +86,7 @@ struct SceneFrameData
     const Camera* camera = nullptr;
     SceneView* mainView = nullptr;
     std::array<SceneView, kCascades>* cascadeViews = nullptr;
-    std::array<SceneView, LightManager::kMaxSpotLights>* spotShadowViews = nullptr;
+    std::array<SceneView, LightManager::kMaxShadowedSpotLights>* spotShadowViews = nullptr;
     LightManager* lightManager = nullptr;
     Skybox* skybox = nullptr;
     const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;

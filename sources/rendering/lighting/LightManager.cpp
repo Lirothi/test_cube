@@ -21,6 +21,44 @@ void LightManager::UpdateSpotLightCache()
     }
 }
 
+void LightManager::SelectShadowedSpots(const Math::float3& cameraPos)
+{
+    // Reset every spot to "unshadowed"; sized to the full spot list so
+    // GetSpotShadowSlot is safe for any lit index.
+    spotShadowSlot_.assign(spotLights_.size(), -1);
+    shadowedSpotLightIndices_.clear();
+
+    // Candidates are the lit (cached) spots. Pick the closest
+    // min(count, kMaxShadowedSpotLights) by squared distance to the camera and
+    // assign each an atlas slot in ascending-distance order.
+    const size_t candidateCount = cachedSpotLightCount_;
+    if (candidateCount == 0)
+    {
+        return;
+    }
+
+    struct Candidate { std::uint32_t index; float distSq; };
+    std::vector<Candidate> candidates;
+    candidates.reserve(candidateCount);
+    for (size_t i = 0; i < candidateCount; ++i)
+    {
+        const Math::float3 d = spotLights_[i].GetDesc().position - cameraPos;
+        candidates.push_back({ static_cast<std::uint32_t>(i), d.Dot(d) });
+    }
+
+    const size_t shadowCount = std::min<size_t>(candidateCount, kMaxShadowedSpotLights);
+    std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
+        [](const Candidate& a, const Candidate& b) { return a.distSq < b.distSq; });
+
+    shadowedSpotLightIndices_.reserve(shadowCount);
+    for (size_t s = 0; s < shadowCount; ++s)
+    {
+        const std::uint32_t lightIndex = candidates[s].index;
+        shadowedSpotLightIndices_.push_back(lightIndex);
+        spotShadowSlot_[lightIndex] = static_cast<int>(s);
+    }
+}
+
 void LightManager::ReleasePointLightBuffer(Renderer* renderer)
 {
     if (pointLightBuffer_)
@@ -247,5 +285,7 @@ void LightManager::Reset()
     pointLights_.clear();
     spotLights_.clear();
     cachedSpotLightCount_ = 0;
+    spotShadowSlot_.clear();
+    shadowedSpotLightIndices_.clear();
 }
 

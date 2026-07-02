@@ -192,6 +192,12 @@ float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 te
 
 float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
 {
+    // shadowParams.y < 0 => this spot has no shadow slot this frame (unshadowed).
+    if (light.shadowParams.y < 0.0f)
+    {
+        return 1.0f;
+    }
+
     float normalBias = light.shadowParams2.x;
     float depthBias = light.shadowParams.w;
 

@@ -15,6 +15,10 @@ class Renderer;
 class LightManager {
 public:
     static constexpr std::uint32_t kMaxSpotLights = 4;
+    // Max spot lights that can cast a shadow in one frame (shadow-atlas slices /
+    // shadow-view count / DSV reservation). Decoupled from the total spot cap so
+    // the total can be uncapped while shadow casters stay bounded.
+    static constexpr std::uint32_t kMaxShadowedSpotLights = 8;
 
     struct alignas(16) PointLightGpu
     {
@@ -45,7 +49,27 @@ public:
 
     void UpdateSpotLightCache();
 
+    // Per-frame: choose the closest (by squared distance to the camera) up to
+    // kMaxShadowedSpotLights lit spots to cast shadows, and assign each a shadow
+    // slot in [0, GetShadowedSpotCount()) in ascending-distance order. Must run
+    // after UpdateSpotLightCache and before the spot shadow views are built /
+    // the spot-light buffer is filled.
+    void SelectShadowedSpots(const Math::float3& cameraPos);
+
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
+
+    // Number of spots casting a shadow this frame (<= kMaxShadowedSpotLights).
+    size_t GetShadowedSpotCount() const { return shadowedSpotLightIndices_.size(); }
+    // Shadow-atlas slot for a spot-light index, or -1 if it is not shadowed.
+    int GetSpotShadowSlot(size_t lightIndex) const
+    {
+        return lightIndex < spotShadowSlot_.size() ? spotShadowSlot_[lightIndex] : -1;
+    }
+    // Inverse of the slot map: which spot-light index owns a given shadow slot.
+    size_t GetShadowedSpotLightIndex(size_t slot) const
+    {
+        return slot < shadowedSpotLightIndices_.size() ? shadowedSpotLightIndices_[slot] : 0;
+    }
     bool EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
     bool EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
@@ -67,6 +91,9 @@ private:
     std::vector<SpotLight>  spotLights_;
 
     size_t cachedSpotLightCount_ = 0;
+    // Per-frame shadow-slot mapping (see SelectShadowedSpots).
+    std::vector<int> spotShadowSlot_;                       // parallel to spotLights_; -1 = unshadowed
+    std::vector<std::uint32_t> shadowedSpotLightIndices_;   // slot -> spot-light index
     Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
     PointLightGpu* pointLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;

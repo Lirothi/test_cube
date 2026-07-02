@@ -76,7 +76,7 @@ private:
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxSpotLights>& views);
+        const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& views);
     void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,

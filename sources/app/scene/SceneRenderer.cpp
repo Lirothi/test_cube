@@ -1083,15 +1083,15 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
 void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
-    const std::array<SceneView, LightManager::kMaxSpotLights>& spotViews)
+    const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& spotViews)
 {
     if (!renderer)
     {
         return;
     }
 
-    const size_t availableLights = frame_->lightManager->GetSpotLightCount();
-    const size_t viewCount = std::min(spotViews.size(), availableLights);
+    const size_t shadowedLights = frame_->lightManager->GetShadowedSpotCount();
+    const size_t viewCount = std::min(spotViews.size(), shadowedLights);
     if (viewCount == 0)
     {
         return;
@@ -1384,7 +1384,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
             spotLightBufferCPU[i].positionRange = float4(desc.position, desc.range);
             spotLightBufferCPU[i].directionCosOuter = float4(dir, light.GetCosOuter());
             spotLightBufferCPU[i].colorIntensity = float4(desc.color, desc.intensity);
-            spotLightBufferCPU[i].shadowParams = float4(light.GetCosInner(), static_cast<float>(i), light.GetInvAngleRange(), light.GetShadowDepthBias());
+            spotLightBufferCPU[i].shadowParams = float4(light.GetCosInner(), static_cast<float>(lightManager.GetSpotShadowSlot(i)), light.GetInvAngleRange(), light.GetShadowDepthBias());
             spotLightBufferCPU[i].shadowParams2 = float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
             spotLightBufferCPU[i].viewProj = viewProj;
         }
