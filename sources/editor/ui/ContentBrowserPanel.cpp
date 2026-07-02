@@ -1,6 +1,9 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #if WITH_EDITOR
 
+#include <string>
+
+#include "editor/EditorExtensionRegistry.h"
 #include "imgui.h"
 
 namespace
@@ -40,7 +43,10 @@ namespace
     }
 }
 
-ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAssetId& selectedAsset, bool* open)
+ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
+    EditorAssetId& selectedAsset,
+    const EditorExtensionRegistry& extensions,
+    bool* open)
 {
     ContentBrowserAction action;
 
@@ -115,24 +121,28 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry, EditorAs
                 selectedAsset = record->id;
             }
 
-            // Context menu. Spawn actions are live for meshes; material assign
-            // arrives in a later step.
+            // Context menu. Spawn actions come from registered object factories;
+            // material assign remains disabled until multi-target editing exists.
             if (ImGui::BeginPopupContextItem())
             {
                 selectedAsset = record->id; // right-click also selects the row
-                const bool isMesh = (record->id.type == EditorAssetType::Mesh);
-                ImGui::BeginDisabled(!isMesh);
-                if (ImGui::MenuItem("Spawn Static Mesh"))
+                for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
                 {
-                    action.type = ContentBrowserAction::Type::SpawnStaticMesh;
-                    action.asset = record->id;
+                    if (!factory)
+                    {
+                        continue;
+                    }
+
+                    const std::string label(factory->MenuLabel());
+                    const bool enabled = factory->CanBuildFromAsset(record);
+                    ImGui::BeginDisabled(!enabled);
+                    if (ImGui::MenuItem(label.c_str()))
+                    {
+                        action.objectFactoryType = std::string(factory->Type());
+                        action.asset = record->id;
+                    }
+                    ImGui::EndDisabled();
                 }
-                if (ImGui::MenuItem("Spawn Transparent Mesh"))
-                {
-                    action.type = ContentBrowserAction::Type::SpawnTransparentMesh;
-                    action.asset = record->id;
-                }
-                ImGui::EndDisabled();
                 ImGui::BeginDisabled(true);
                 ImGui::MenuItem("Assign Material to Selected");
                 ImGui::EndDisabled();

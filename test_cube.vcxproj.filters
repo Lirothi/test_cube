@@ -132,6 +132,9 @@
     <ClCompile Include="sources/editor/EditorController.cpp">
       <Filter>sources\editor</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp">
+      <Filter>sources\editor</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/EditorHotkeys.cpp">
       <Filter>sources\editor</Filter>
     </ClCompile>
@@ -447,6 +450,9 @@
       <Filter>sources\editor</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/EditorController.h">
+      <Filter>sources\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/EditorExtensionRegistry.h">
       <Filter>sources\editor</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/EditorHotkeys.h">

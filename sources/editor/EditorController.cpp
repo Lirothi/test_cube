@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "app/camera/Camera.h"
@@ -47,28 +48,6 @@ namespace
         float yaw = 0.0f;
         float pitch = 0.0f;
     };
-
-    // damaged_plaster if present, else the first material preset, else "".
-    std::string PickDefaultStaticMaterial(const AssetRegistry& registry)
-    {
-        const EditorAssetRecord* first = nullptr;
-        for (const EditorAssetRecord& rec : registry.Assets())
-        {
-            if (rec.id.type != EditorAssetType::MaterialPreset)
-            {
-                continue;
-            }
-            if (rec.id.key == "damaged_plaster")
-            {
-                return "damaged_plaster";
-            }
-            if (!first)
-            {
-                first = &rec;
-            }
-        }
-        return first ? first->id.key : std::string{};
-    }
 
     std::string DefaultLevelsDirectory()
     {
@@ -924,6 +903,90 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selectedObject_ };
+    if (!extensionsRegistered_)
+    {
+        EditorExtensionRegistry::RegisterBuiltins(extensions_);
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "contentBrowser",
+            "Content Browser",
+            &showContentBrowser_,
+            true,
+            [this](EditorContext& panelCtx)
+            {
+                const ContentBrowserAction action =
+                    contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_, &showContentBrowser_);
+                if (!action.HasAction())
+                {
+                    return;
+                }
+
+                const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
+                const EditorAssetRecord* asset = assetRegistry_.FindById(action.asset);
+                if (!factory || !asset || !factory->CanBuildFromAsset(asset))
+                {
+                    return;
+                }
+
+                nlohmann::json objectJson = factory->BuildDefaultJson(asset, panelCtx, assetRegistry_);
+                commandStack_.Execute(panelCtx, std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "sceneOutliner",
+            "Scene Outliner",
+            &showOutliner_,
+            true,
+            [this](EditorContext& panelCtx)
+            {
+                const OutlinerAction outlinerAction = outliner_.Draw(document_, selectedObject_, &showOutliner_);
+                if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
+                {
+                    commandStack_.Execute(panelCtx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
+                }
+                else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)
+                {
+                    commandStack_.Execute(panelCtx, std::make_unique<SetEnabledCommand>(outlinerAction.target, outlinerAction.enabledValue));
+                }
+                else if (outlinerAction.type == OutlinerAction::Type::SetEnvEnabled)
+                {
+                    // Environment entities live in document_.Environment(), not objects_,
+                    // so this is a direct live-patch (non-undoable, like other env edits)
+                    // rather than a SetEnabledCommand.
+                    for (EditorObject& env : document_.Environment())
+                    {
+                        if (env.id.value == outlinerAction.target.value)
+                        {
+                            EnvironmentRuntime::SetEnabled(panelCtx, env, outlinerAction.enabledValue);
+                            break;
+                        }
+                    }
+                }
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "inspector",
+            "Inspector",
+            &showInspector_,
+            true,
+            [this](EditorContext& panelCtx)
+            {
+                inspector_.Draw(panelCtx, commandStack_, assetRegistry_, extensions_, &showInspector_);
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "viewportGizmo",
+            "Viewport/Gizmo",
+            nullptr,
+            false,
+            [this](EditorContext& panelCtx)
+            {
+                viewportGizmo_.Update(panelCtx, commandStack_);
+            }));
+
+        extensionsRegistered_ = true;
+    }
+
     const auto queueLevelPathLoad = [&](const std::string& path,
         bool preserveCameraTransform,
         PendingLevelAction action,
@@ -978,8 +1041,20 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             return false;
         }
 
-        saveCurrentLevelCameraState(true);
-        return queueLevelPathLoad(normalizedPath, true, PendingLevelAction::Save, "Saving " + normalizedPath);
+        document_.SetLevelPath(normalizedPath);
+        document_.SetDirty(false);
+        if (RememberRecentLevel(recentLevelPaths_, normalizedPath))
+        {
+            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+        }
+
+        if (SaveLevelCameraState(normalizedPath, scene.CameraRef()))
+        {
+            markCameraStateSaved(normalizedPath, CaptureLevelCameraState(scene.CameraRef()));
+        }
+
+        levelStatus_ = "Saved " + normalizedPath;
+        return true;
     };
     bool requestOpenLevelDialog = false;
     bool requestSaveLevelAsDialog = false;
@@ -1342,9 +1417,24 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
         ImGui::Separator();
         ImGui::TextUnformatted("Windows");
-        ImGui::Checkbox("Content Browser", &showContentBrowser_);
-        ImGui::Checkbox("Scene Outliner", &showOutliner_);
-        ImGui::Checkbox("Inspector", &showInspector_);
+        const auto drawPanelToggle = [this](const char* panelId)
+        {
+            IEditorPanel* panel = extensions_.FindPanel(panelId);
+            if (!panel || !panel->ShowInWindowList())
+            {
+                return;
+            }
+
+            bool visible = panel->IsVisible();
+            const std::string label(panel->Label());
+            if (ImGui::Checkbox(label.c_str(), &visible))
+            {
+                panel->SetVisible(visible);
+            }
+        };
+        drawPanelToggle("contentBrowser");
+        drawPanelToggle("sceneOutliner");
+        drawPanelToggle("inspector");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Selection");
@@ -1361,58 +1451,21 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     ImGui::End();
     open_ = open;
 
-    // Each panel is its own window, drawn only while the editor is open and its
-    // visibility toggle is on. Panels draw their own window and return an action.
-    if (showOutliner_)
+    const auto drawPanel = [this, &ctx](const char* panelId)
     {
-        const OutlinerAction outlinerAction = outliner_.Draw(document_, selectedObject_, &showOutliner_);
-        if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
+        IEditorPanel* panel = extensions_.FindPanel(panelId);
+        if (panel && panel->IsVisible())
         {
-            commandStack_.Execute(ctx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
+            panel->Draw(ctx);
         }
-        else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)
-        {
-            commandStack_.Execute(ctx, std::make_unique<SetEnabledCommand>(outlinerAction.target, outlinerAction.enabledValue));
-        }
-        else if (outlinerAction.type == OutlinerAction::Type::SetEnvEnabled)
-        {
-            // Environment entities live in document_.Environment(), not objects_,
-            // so this is a direct live-patch (non-undoable, like other env edits)
-            // rather than a SetEnabledCommand.
-            for (EditorObject& env : document_.Environment())
-            {
-                if (env.id.value == outlinerAction.target.value)
-                {
-                    EnvironmentRuntime::SetEnabled(ctx, env, outlinerAction.enabledValue);
-                    break;
-                }
-            }
-        }
-    }
+    };
 
-    if (showContentBrowser_)
-    {
-        const ContentBrowserAction action = contentBrowser_.Draw(assetRegistry_, selectedAsset_, &showContentBrowser_);
-        if (action.type == ContentBrowserAction::Type::SpawnStaticMesh)
-        {
-            commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
-                SpawnMeshCommand::Kind::StaticMesh, action.asset.key, PickDefaultStaticMaterial(assetRegistry_)));
-        }
-        else if (action.type == ContentBrowserAction::Type::SpawnTransparentMesh)
-        {
-            commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
-                SpawnMeshCommand::Kind::TransparentMesh, action.asset.key, std::string{}));
-        }
-    }
-
-    if (showInspector_)
-    {
-        inspector_.Draw(ctx, commandStack_, assetRegistry_, &showInspector_);
-    }
-
-    // Viewport gizmo + click-to-select (after panels so ImGui knows whether the
-    // mouse is over an editor window this frame).
-    viewportGizmo_.Update(ctx, commandStack_);
+    // Each panel is registered, then drawn in the same order as before. The
+    // viewport/gizmo panel runs after ImGui windows so mouse capture is current.
+    drawPanel("sceneOutliner");
+    drawPanel("contentBrowser");
+    drawPanel("inspector");
+    drawPanel("viewportGizmo");
     selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
     scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);

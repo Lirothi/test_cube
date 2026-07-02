@@ -6,27 +6,20 @@
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h" // EditorObject, EditorObjectId, nlohmann::json
 
-// Spawns a mesh asset into the live scene as an initialized runtime object,
-// mirrored by an EditorObject in the document. Undo removes both; redo restores
-// the same object with the same id. The object's JSON and id are built once on
-// the first Execute and reused on redo so the object is identical.
+// Spawns a factory-built mesh object into the live scene as an initialized
+// runtime object, mirrored by an EditorObject in the document. Undo removes both;
+// redo restores the same object with the same id.
 class SpawnMeshCommand : public EditorCommand
 {
 public:
-    enum class Kind { StaticMesh, TransparentMesh };
-
-    SpawnMeshCommand(Kind kind, std::string modelPath, std::string staticMaterial);
+    explicit SpawnMeshCommand(nlohmann::json objectJson);
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
 
 private:
-    Kind kind_;
-    std::string modelPath_;
-    std::string staticMaterial_;
-
     bool built_ = false;
-    nlohmann::json objectJson_;   // factory-shape JSON, built once
+    nlohmann::json objectJson_;   // factory-shape JSON
     EditorObject object_;         // document mirror, built once (stable id)
     EditorObjectId previousSelection_{};
 };

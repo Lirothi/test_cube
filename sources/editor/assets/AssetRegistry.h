@@ -51,6 +51,7 @@ public:
     std::vector<const EditorAssetRecord*> Search(std::string_view text,
         EditorAssetType typeFilter) const;
 
+    const EditorAssetRecord* FindById(const EditorAssetId& id) const;
     const EditorAssetRecord* FindByPath(std::string_view path) const;
 
     size_t CountByType(EditorAssetType type) const;

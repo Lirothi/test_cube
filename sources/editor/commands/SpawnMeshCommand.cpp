@@ -2,12 +2,11 @@
 #if WITH_EDITOR
 
 #include <memory>
+#include <string>
 #include <utility>
 
-#include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
-#include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -15,22 +14,23 @@
 
 namespace
 {
-    // A position 5 units in front of the camera, as a JSON [x, y, z] array.
-    nlohmann::json SpawnPositionJson(const Scene& scene)
+    std::unique_ptr<RenderableObjectBase> CreateRuntime(EditorContext& ctx, const nlohmann::json& objectJson)
     {
-        const Math::float3& camPos = scene.CameraRef().GetPosition();
-        const Math::float3& camDir = scene.CameraRef().GetDirection();
-        return nlohmann::json::array({
-            camPos.x + camDir.x * 5.0f,
-            camPos.y + camDir.y * 5.0f,
-            camPos.z + camDir.z * 5.0f });
+        const std::string type = objectJson.value("type", std::string());
+        if (type == "transparentMesh")
+        {
+            return SceneObjectFactory::CreateTransparentMeshFromJson(ctx.scene, objectJson);
+        }
+        if (type == "staticMesh")
+        {
+            return SceneObjectFactory::CreateStaticMeshFromJson(objectJson);
+        }
+        return nullptr;
     }
 }
 
-SpawnMeshCommand::SpawnMeshCommand(Kind kind, std::string modelPath, std::string staticMaterial)
-    : kind_(kind)
-    , modelPath_(std::move(modelPath))
-    , staticMaterial_(std::move(staticMaterial))
+SpawnMeshCommand::SpawnMeshCommand(nlohmann::json objectJson)
+    : objectJson_(std::move(objectJson))
 {
 }
 
@@ -40,40 +40,6 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
     // restored object is identical (same id, same params).
     if (!built_)
     {
-        nlohmann::json o = nlohmann::json::object();
-        o["model"] = modelPath_;
-        o["position"] = SpawnPositionJson(ctx.scene);
-        o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
-
-        if (kind_ == Kind::TransparentMesh)
-        {
-            o["type"] = "transparentMesh";
-            // Default glass params: copy from an existing transparentMesh in the
-            // document if one exists (keeping our own model).
-            for (const EditorObject& existing : ctx.document.Objects())
-            {
-                if (existing.type == "transparentMesh")
-                {
-                    for (auto it = existing.properties.begin(); it != existing.properties.end(); ++it)
-                    {
-                        if (it.key() != "model")
-                        {
-                            o[it.key()] = it.value();
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        else
-        {
-            o["type"] = "staticMesh";
-            o["material"] = staticMaterial_;
-            o["shader"] = "shaders/gbuffer.hlsl";
-            o["inputLayout"] = "PosNormTanUV";
-        }
-
-        objectJson_ = std::move(o);
         object_ = EditorSceneDocument::ObjectFromJson(ctx.document.AllocateId(), objectJson_);
         built_ = true;
     }
@@ -84,10 +50,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
     ctx.document.Add(object_);
 
     // Build the runtime renderable from the same JSON via the shared factory.
-    std::unique_ptr<RenderableObjectBase> runtime =
-        (kind_ == Kind::TransparentMesh)
-            ? SceneObjectFactory::CreateTransparentMeshFromJson(ctx.scene, objectJson_)
-            : SceneObjectFactory::CreateStaticMeshFromJson(objectJson_);
+    std::unique_ptr<RenderableObjectBase> runtime = CreateRuntime(ctx, objectJson_);
     if (!runtime)
     {
         ctx.document.Remove(object_.id);

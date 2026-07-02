@@ -96,6 +96,7 @@ public:
     static nlohmann::json ObjectToJson(const EditorObject& object);
 
     const std::string& LevelPath() const { return levelPath_; }
+    void SetLevelPath(const std::string& path) { levelPath_ = path; }
 
     // The full parsed level JSON from the last load (camera/skybox/ocean/lights/
     // objects). Save re-emits these top-level sections verbatim, replacing only

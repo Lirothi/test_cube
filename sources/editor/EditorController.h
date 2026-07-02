@@ -7,6 +7,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/EditorHotkeys.h"
+#include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/InspectorPanel.h"
@@ -62,6 +63,7 @@ private:
 
     bool open_ = false;
     bool firstOpenInitialized_ = false;
+    bool extensionsRegistered_ = false;
     bool openOceanPresetEditorRequested_ = false;
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
@@ -73,6 +75,7 @@ private:
     InspectorPanel inspector_;
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
+    EditorExtensionRegistry extensions_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
     EditorObjectId selectedObject_;

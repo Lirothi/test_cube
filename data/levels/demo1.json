@@ -1956,7 +1956,7 @@
         0.0,
         0.0
       ],
-      "enabled": false,
+      "enabled": true,
       "intensity": 15.0,
       "position": [
         2.4,
@@ -2009,7 +2009,7 @@
         -0.7071067094802856,
         -0.6298420429229736
       ],
-      "enabled": false,
+      "enabled": true,
       "innerAngleDeg": 29.799999237060547,
       "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,

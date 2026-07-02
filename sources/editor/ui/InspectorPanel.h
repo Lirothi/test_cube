@@ -6,6 +6,7 @@
 struct EditorContext;
 class EditorCommandStack;
 class AssetRegistry;
+class EditorExtensionRegistry;
 
 // Inspector window for the selected object. Edits name/enabled and transform
 // (transform is undoable), plus mesh setup fields (material preset/params for
@@ -15,7 +16,11 @@ class InspectorPanel
 {
 public:
     // Draws as its own ImGui window. `open` backs the close button.
-    void Draw(EditorContext& ctx, EditorCommandStack& commandStack, const AssetRegistry& registry, bool* open);
+    void Draw(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        const EditorExtensionRegistry& extensions,
+        bool* open);
 
 private:
     void DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);

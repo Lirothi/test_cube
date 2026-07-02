@@ -212,6 +212,18 @@ const EditorAssetRecord* AssetRegistry::FindByPath(std::string_view path) const
     return nullptr;
 }
 
+const EditorAssetRecord* AssetRegistry::FindById(const EditorAssetId& id) const
+{
+    for (const EditorAssetRecord& record : assets_)
+    {
+        if (record.id.type == id.type && record.id.key == id.key)
+        {
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
 size_t AssetRegistry::CountByType(EditorAssetType type) const
 {
     size_t count = 0;
