@@ -20,6 +20,7 @@
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/DeleteObjectCommand.h"
+#include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/scene/EnvironmentRuntime.h"
@@ -1102,6 +1103,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             saveLevel(document_.LevelPath());
         }
+    }
+    if (hotkeyActions.duplicateSelection)
+    {
+        commandStack_.Execute(ctx, std::make_unique<DuplicateObjectCommand>(selectedObject_));
     }
     if (hotkeyActions.deleteSelection)
     {

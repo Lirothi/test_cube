@@ -23,6 +23,7 @@ namespace
         ScaleMode,
         CycleTransformMode,
         DeleteSelection,
+        DuplicateSelection,
         Undo,
         Redo,
         Save,
@@ -49,6 +50,7 @@ namespace
         { "R Scale",               ImGuiKey_R,      ShortcutModifiers::Plain,     ShortcutAction::ScaleMode,          true },
         { "Space Cycle",           ImGuiKey_Space,  ShortcutModifiers::Plain,     ShortcutAction::CycleTransformMode, true },
         { "Delete Delete",         ImGuiKey_Delete, ShortcutModifiers::Plain,     ShortcutAction::DeleteSelection },
+        { "Ctrl+D Duplicate",      ImGuiKey_D,      ShortcutModifiers::Ctrl,      ShortcutAction::DuplicateSelection },
         { "Ctrl+Z Undo",           ImGuiKey_Z,      ShortcutModifiers::Ctrl,      ShortcutAction::Undo },
         { "Ctrl+Y Redo",           ImGuiKey_Y,      ShortcutModifiers::Ctrl,      ShortcutAction::Redo },
         { "Ctrl+Shift+Z Redo",     ImGuiKey_Z,      ShortcutModifiers::CtrlShift, ShortcutAction::Redo },
@@ -101,6 +103,9 @@ namespace
             break;
         case ShortcutAction::DeleteSelection:
             actions.deleteSelection = true;
+            break;
+        case ShortcutAction::DuplicateSelection:
+            actions.duplicateSelection = true;
             break;
         case ShortcutAction::Undo:
             actions.undo = true;

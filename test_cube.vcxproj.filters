@@ -162,6 +162,9 @@
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/DuplicateObjectCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -483,6 +486,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/DuplicateObjectCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h">

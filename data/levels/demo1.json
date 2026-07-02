@@ -1943,6 +1943,98 @@
       ],
       "shader": "shaders/gbuffer_inst.hlsl",
       "type": "instancedModels"
+    },
+    {
+      "enabled": true,
+      "id": 78,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #58 Copy",
+      "position": [
+        -6.52510404586792,
+        5.800000190734863,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "computeShader": "shaders/instance_anim.hlsl",
+      "count": 100,
+      "enabled": true,
+      "id": 79,
+      "material": "bronze",
+      "model": "models/teapot.obj",
+      "name": "instancedModels #68 Copy",
+      "position": [
+        0.0,
+        6.0,
+        16.18000030517578
+      ],
+      "rotationDeg": [
+        0.0,
+        -5.702901363372803,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer_inst.hlsl",
+      "type": "instancedModels"
+    },
+    {
+      "absorption": [
+        0.16,
+        0.07,
+        0.03
+      ],
+      "enabled": true,
+      "id": 80,
+      "ior": 1.1,
+      "model": "models/sphere.obj",
+      "name": "transparentMesh #7 111",
+      "normalMap": "textures/damaged_plaster_normal.dds",
+      "position": [
+        1.6497071981430054,
+        0.5,
+        4.739502429962158
+      ],
+      "reflectionStrength": 4.25,
+      "refractionDistortion": 1.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "roughness": 0.05,
+      "scale": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929
+      ],
+      "thickness": 0.65,
+      "tint": [
+        0.78,
+        0.9,
+        1.0
+      ],
+      "type": "transparentMesh"
     }
   ],
   "ocean": {
@@ -2014,7 +2106,7 @@
       "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
-        -0.9760912656784058,
+        -0.549543023109436,
         4.0,
         -8.257765769958496
       ],

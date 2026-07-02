@@ -6,6 +6,7 @@ class ViewportGizmo;
 struct EditorHotkeyActions
 {
     bool deleteSelection = false;
+    bool duplicateSelection = false;
     bool undo = false;
     bool redo = false;
     bool save = false;
