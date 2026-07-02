@@ -14,10 +14,11 @@ class Renderer;
 
 class LightManager {
 public:
-    static constexpr std::uint32_t kMaxSpotLights = 4;
-    // Max spot lights that can cast a shadow in one frame (shadow-atlas slices /
-    // shadow-view count / DSV reservation). Decoupled from the total spot cap so
-    // the total can be uncapped while shadow casters stay bounded.
+    // The total spot-light count is unbounded (the structured buffer grows on
+    // demand). Only shadow CASTERS are capped per frame — the closest
+    // kMaxShadowedSpotLights to the camera — which sizes the shadow atlas /
+    // shadow-view array / DSV reservation. Distant spots still light the scene,
+    // just without a shadow.
     static constexpr std::uint32_t kMaxShadowedSpotLights = 8;
 
     struct alignas(16) PointLightGpu
