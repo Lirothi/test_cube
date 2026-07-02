@@ -12,8 +12,11 @@ LightManager::~LightManager()
 
 void LightManager::UpdateSpotLightCache()
 {
-    const size_t maxLights = static_cast<size_t>(kMaxSpotLights);
-    cachedSpotLightCount_ = std::min(spotLights_.size(), maxLights);
+    // Step A3: the total spot-light count is uncapped — every spot lights the
+    // scene. Shadow casting is separately capped per frame by SelectShadowedSpots
+    // (kMaxShadowedSpotLights, closest to the camera); spots outside that set
+    // render shadowless via the shadowParams.y = -1 sentinel.
+    cachedSpotLightCount_ = spotLights_.size();
 
     for (size_t i = 0; i < cachedSpotLightCount_; ++i)
     {
