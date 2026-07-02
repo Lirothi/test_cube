@@ -853,7 +853,7 @@ private:
 #endif
 
     static constexpr const char* kLevels_[3] = {
-        "data/levels/demo.json", "data/levels/demo1.json", "data/levels/demo2.json" };
+        "data/levels/demo.json", "data/levels/demo1.json", "data/levels/new1.json" };
 };
 
 constexpr const char* SceneStressDriver::kLevels_[3];
