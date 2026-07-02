@@ -20,7 +20,10 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
+#include <dbghelp.h>        // StackWalk64 / SymFromAddr (crash-stack logger)
 #include <wrl/client.h>
+
+#pragma comment(lib, "dbghelp.lib")
 
 #include <cstdarg>
 #include <cstdint>
@@ -49,6 +52,102 @@ void Log(const char* fmt, ...)
     vfprintf(gLog, fmt, args);
     va_end(args);
     fflush(gLog);
+}
+
+// Last-chance crash-stack logger for the stress harness. The driver's
+// __try/__except (RunStep_) only covers a MAIN-THREAD fault during a churn step.
+// A fault on a TaskSystem worker thread, during teardown, or a C++ throw that
+// unwinds through a Win32 WndProc (it cannot cross the KiUserCallbackDispatcher
+// kernel-callback boundary, so it becomes a fatal STATUS_FATAL_USER_CALLBACK_
+// EXCEPTION) all bypass that guard and kill the process with an opaque OS code
+// and no diagnostics. This SetUnhandledExceptionFilter callback fires for exactly
+// those cases: it symbolizes the faulting thread's stack via dbghelp (PDBs sit
+// next to the exe) and writes it to crash_stack.txt + scene_stress.log before the
+// process dies. Complements the driver's DRED dump (which covers GPU faults on
+// the normal fault path).
+LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
+{
+    const DWORD code = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionCode : 0;
+
+    FILE* cf = nullptr;
+    fopen_s(&cf, "crash_stack.txt", "w");
+    auto emit = [&](const char* fmt, ...)
+    {
+        char line[1024];
+        va_list a; va_start(a, fmt);
+        std::vsnprintf(line, sizeof(line), fmt, a);
+        va_end(a);
+        if (cf) { std::fputs(line, cf); std::fflush(cf); }
+        Log("%s", line);
+    };
+
+    emit("==== UNHANDLED EXCEPTION code=0x%08lX tid=%lu ====\n", code, GetCurrentThreadId());
+    if (ep && ep->ExceptionRecord && code == EXCEPTION_ACCESS_VIOLATION &&
+        ep->ExceptionRecord->NumberParameters >= 2)
+    {
+        emit("access-violation %s VA=0x%llX\n",
+             ep->ExceptionRecord->ExceptionInformation[0] ? "WRITE" : "READ",
+             static_cast<unsigned long long>(ep->ExceptionRecord->ExceptionInformation[1]));
+    }
+
+    if (!ep || !ep->ContextRecord) { if (cf) { std::fclose(cf); } return EXCEPTION_EXECUTE_HANDLER; }
+
+    HANDLE proc = GetCurrentProcess();
+    HANDLE thread = GetCurrentThread();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
+    SymInitialize(proc, nullptr, TRUE);
+
+    CONTEXT ctx = *ep->ContextRecord;
+    STACKFRAME64 sf{};
+    sf.AddrPC.Offset = ctx.Rip;      sf.AddrPC.Mode = AddrModeFlat;
+    sf.AddrFrame.Offset = ctx.Rbp;   sf.AddrFrame.Mode = AddrModeFlat;
+    sf.AddrStack.Offset = ctx.Rsp;   sf.AddrStack.Mode = AddrModeFlat;
+
+    for (int i = 0; i < 64; ++i)
+    {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, thread, &sf, &ctx,
+                         nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
+        {
+            break;
+        }
+        const DWORD64 addr = sf.AddrPC.Offset;
+        if (addr == 0) { break; }
+
+        char modname[64] = "?";
+        const DWORD64 modbase = SymGetModuleBase64(proc, addr);
+        if (modbase)
+        {
+            IMAGEHLP_MODULE64 mi{}; mi.SizeOfStruct = sizeof(mi);
+            if (SymGetModuleInfo64(proc, modbase, &mi)) { std::snprintf(modname, sizeof(modname), "%s", mi.ModuleName); }
+        }
+
+        char symbuf[sizeof(SYMBOL_INFO) + 512] = {};
+        auto* sym = reinterpret_cast<SYMBOL_INFO*>(symbuf);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 512;
+        DWORD64 disp = 0;
+        if (SymFromAddr(proc, addr, &disp, sym))
+        {
+            IMAGEHLP_LINE64 ln{}; ln.SizeOfStruct = sizeof(ln); DWORD lnDisp = 0;
+            if (SymGetLineFromAddr64(proc, addr, &lnDisp, &ln))
+            {
+                emit("  #%02d %s!%s+0x%llX  (%s:%lu)\n", i, modname, sym->Name,
+                     static_cast<unsigned long long>(disp), ln.FileName, ln.LineNumber);
+            }
+            else
+            {
+                emit("  #%02d %s!%s+0x%llX\n", i, modname, sym->Name, static_cast<unsigned long long>(disp));
+            }
+        }
+        else
+        {
+            emit("  #%02d %s!0x%llX\n", i, modname, static_cast<unsigned long long>(addr));
+        }
+    }
+    emit("==== end stack ====\n");
+    if (cf) { std::fclose(cf); }
+    if (gLog) { std::fflush(gLog); }
+    return EXCEPTION_EXECUTE_HANDLER; // log, then let the process terminate
 }
 
 // The churn operation performed at a given step. Named so a caught fault can be
@@ -868,6 +967,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
     }
 
     fopen_s(&gLog, "scene_stress.log", "w");
+    SetUnhandledExceptionFilter(StressCrashFilter); // symbolize worker-thread/teardown/WndProc faults
     Log("scene lifecycle stress harness\n");
     Log("gbvContinue=%d\n", gbvContinue ? 1 : 0);
     Log("iterations=%d WITH_EDITOR=%d\n", iterations,

@@ -207,6 +207,26 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         }
     }
 
+    // Pre-grow the GPU light buffers now, at load time (the caller holds the GPU
+    // idle via WaitForPreviousFrame before LoadLevel). The per-frame render path
+    // (Pass_SpotLights / Pass_PointLights / TransparentStaticMesh) otherwise grows
+    // a light buffer lazily by FREEING the old resource and allocating a bigger
+    // one; doing that during parallel pass recording — or while a pipelined frame
+    // still references the old buffer — frees a resource the GPU is using and
+    // intermittently hangs the device (DXGI_ERROR_DEVICE_HUNG on the SpotLights/
+    // PointLights compute dispatch). Growing here, before any pass runs, means the
+    // render path always sees sufficient capacity and never reallocates in flight.
+    // Mirrors EnvironmentRuntime::RebuildLights (the editor light-mutation path).
+    lightManager.UpdateSpotLightCache();
+    if (!lightManager.PointLights().empty())
+    {
+        lightManager.EnsurePointLightBuffer(&renderer, lightManager.PointLights().size());
+    }
+    if (lightManager.GetSpotLightCount() > 0)
+    {
+        lightManager.EnsureSpotLightBuffer(&renderer, lightManager.GetSpotLightCount());
+    }
+
     if (j.contains("directionalLight"))
     {
         const json& dl = j["directionalLight"];
