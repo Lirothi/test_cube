@@ -11,6 +11,7 @@
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "rendering/core/Renderer.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/PointLight.h"
@@ -122,8 +123,18 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
 void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
 {
     // Repopulate the LightManager from the enabled light entities, in document
-    // order, exactly like JsonLevel does at load. Only the CPU light vectors are
-    // touched; the GPU buffers/SRVs are refilled by the normal per-frame path.
+    // order, exactly like JsonLevel does at load.
+    //
+    // Adding a light (duplicate, or re-enabling a loaded-disabled one) can push the
+    // light count past the GPU buffer capacity. The per-frame render path grows a
+    // light buffer by FREEING the old resource and allocating a bigger one; doing
+    // that while a frame is still in flight frees a resource the GPU is using ->
+    // DXGI_ERROR_DEVICE_HUNG. So idle the GPU and pre-grow the buffers here, while
+    // nothing references them; the render path then sees sufficient capacity and
+    // never reallocates mid-flight. (Ensure*Buffer only grows, so disabling a light
+    // keeps the existing buffer.)
+    ctx.renderer.WaitForPreviousFrame();
+
     LightManager& lm = ctx.scene.GetLightManager();
     lm.SpotLights().clear();
     lm.PointLights().clear();
@@ -158,6 +169,15 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
         }
     }
     lm.UpdateSpotLightCache();
+
+    if (!lm.PointLights().empty())
+    {
+        lm.EnsurePointLightBuffer(&ctx.renderer, lm.PointLights().size());
+    }
+    if (lm.GetSpotLightCount() > 0)
+    {
+        lm.EnsureSpotLightBuffer(&ctx.renderer, lm.GetSpotLightCount());
+    }
 }
 
 void EnvironmentRuntime::SetEnabled(EditorContext& ctx, EditorObject& env, bool enabled)

@@ -2084,6 +2084,21 @@
         -12.0
       ],
       "radius": 2.0
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        9.178237915039063,
+        5.5,
+        -16.005956649780273
+      ],
+      "radius": 2.0
     }
   ],
   "skybox": {
@@ -2134,6 +2149,30 @@
         -6.0
       ],
       "range": 25.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        -0.2503381371498108,
+        -0.7071066498756409,
+        -0.6613101363182068
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        11.870731353759766,
+        4.0,
+        -11.386822700500488
+      ],
+      "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05
     }

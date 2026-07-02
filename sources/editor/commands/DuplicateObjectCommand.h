@@ -4,9 +4,10 @@
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h"
 
-// Duplicates one serialized level object into the live editor scene. Environment
-// entities such as the top-level ocean are not document objects, so they are not
-// duplicable through this command.
+// Duplicates one editor entity into the live scene. Document objects (meshes) are
+// recreated via the object registry; environment point/spot lights are duplicated
+// as new environment entities and folded into the LightManager. Singletons with no
+// meaningful copy -- camera, skybox, directional light, ocean -- are rejected.
 class DuplicateObjectCommand : public EditorCommand
 {
 public:
@@ -18,6 +19,7 @@ public:
 private:
     EditorObjectId sourceId_;
     bool built_ = false;
+    bool isEnvironment_ = false; // source was an environment light, not a document object
     EditorObject object_;
     EditorObjectId previousSelection_{};
 };
