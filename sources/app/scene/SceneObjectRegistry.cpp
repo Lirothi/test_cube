@@ -189,12 +189,6 @@ SceneObjectRegistry::ObjectList CreateOcean(SceneObjectRegistry::CreationContext
         return objects;
     }
 
-    if (ocean.is_object() && !ocean.value("enabled", true))
-    {
-        Systems::DestroyOceanSimulation();
-        return objects;
-    }
-
     const std::string presetPath = ReadOceanPresetPath(ocean);
     if (presetPath.empty())
     {

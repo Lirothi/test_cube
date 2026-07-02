@@ -1946,7 +1946,7 @@
     }
   ],
   "ocean": {
-    "enabled": false,
+    "enabled": true,
     "preset": "data/ocean/default.json"
   },
   "pointLights": [

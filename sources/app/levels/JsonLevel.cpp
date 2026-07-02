@@ -277,18 +277,11 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     {
         const json& oceanJson = j["ocean"];
         const bool oceanEnabled = !oceanJson.is_object() || oceanJson.value("enabled", true);
-#if WITH_EDITOR
-        // Editor: always create the ocean so its "enabled" toggle can show/hide it
-        // live (no sim recreation); a disabled ocean is simply created hidden.
+        // Always create the ocean simulation when the level has an ocean preset.
+        // The enabled flag only controls render visibility; the system stays
+        // available for controls, config edits, and live re-enable without reload.
         AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, oceanJson));
         scene.SetOceanVisible(oceanEnabled);
-#else
-        // Runtime: a disabled ocean is not created at all (matches disabled objects).
-        if (oceanEnabled)
-        {
-            AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, oceanJson));
-        }
-#endif
 
         // Apply the level's inline wind overrides (the "scene" block) on top of the
         // preset, so editor-saved wind settings survive reload. No-op if no sim.
