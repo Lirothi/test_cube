@@ -88,11 +88,14 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     }
     else if (env.type == "directionalLight")
     {
+        // A disabled sun contributes nothing: zero both its direct color and its
+        // ambient term (the real values stay in `properties` for re-enable).
+        const bool enabled = p.value("enabled", true);
         DirectionalLight dl;
         dl.SetDirection(JF3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)).Normalized());
-        dl.SetColor(JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)));
+        dl.SetColor(enabled ? JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)) : Math::float3(0.0f, 0.0f, 0.0f));
         dl.SetExposure(JF(p, "exposure", 1.0f));
-        dl.SetAmbient(JF(p, "ambient", 0.05f));
+        dl.SetAmbient(enabled ? JF(p, "ambient", 0.05f) : 0.0f);
         ctx.scene.SetDirectionalLight(dl);
     }
     else if (env.type == "camera")
@@ -114,6 +117,65 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
         }
     }
+}
+
+void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
+{
+    // Repopulate the LightManager from the enabled light entities, in document
+    // order, exactly like JsonLevel does at load. Only the CPU light vectors are
+    // touched; the GPU buffers/SRVs are refilled by the normal per-frame path.
+    LightManager& lm = ctx.scene.GetLightManager();
+    lm.SpotLights().clear();
+    lm.PointLights().clear();
+    for (const EditorObject& e : ctx.document.Environment())
+    {
+        const nlohmann::json& p = e.properties;
+        if (!p.value("enabled", true)) { continue; }
+        if (e.type == "spotLight")
+        {
+            SpotLightDesc d;
+            d.position = JF3(p, "position", d.position);
+            d.direction = JF3(p, "direction", d.direction).Normalized();
+            d.range = JF(p, "range", d.range);
+            d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
+            d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
+            d.color = JF3(p, "color", d.color);
+            d.intensity = JF(p, "intensity", d.intensity);
+            d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
+            d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+            lm.SpotLights().push_back({});
+            lm.SpotLights().back().SetDesc(d);
+        }
+        else if (e.type == "pointLight")
+        {
+            PointLightDesc d;
+            d.position = JF3(p, "position", d.position);
+            d.radius = JF(p, "radius", d.radius);
+            d.color = JF3(p, "color", d.color);
+            d.intensity = JF(p, "intensity", d.intensity);
+            lm.PointLights().push_back({});
+            lm.PointLights().back().SetDesc(d);
+        }
+    }
+    lm.UpdateSpotLightCache();
+}
+
+void EnvironmentRuntime::SetEnabled(EditorContext& ctx, EditorObject& env, bool enabled)
+{
+    env.properties["enabled"] = enabled;
+    if (env.type == "spotLight" || env.type == "pointLight")
+    {
+        RebuildLights(ctx);
+    }
+    else if (env.type == "directionalLight")
+    {
+        Apply(ctx, env);
+    }
+    else if (env.type == "ocean")
+    {
+        ctx.scene.SetOceanVisible(enabled);
+    }
+    ctx.document.SetDirty(true);
 }
 
 std::vector<std::string> EnvironmentRuntime::OceanPresets()

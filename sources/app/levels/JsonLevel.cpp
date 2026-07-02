@@ -210,11 +210,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     if (j.contains("directionalLight"))
     {
         const json& dl = j["directionalLight"];
+        const bool enabled = dl.value("enabled", true);
         DirectionalLight dirLight;
         dirLight.SetDirection(ToFloat3(dl.value("direction", json::array()), float3(0.0f, -1.0f, 0.0f)).Normalized());
-        dirLight.SetColor(ToFloat3(dl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f)));
+        // A disabled sun contributes nothing (direct color + ambient zeroed).
+        dirLight.SetColor(enabled ? ToFloat3(dl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f)) : float3(0.0f, 0.0f, 0.0f));
         dirLight.SetExposure(dl.value("exposure", 1.0f));
-        dirLight.SetAmbient(dl.value("ambient", 0.05f));
+        dirLight.SetAmbient(enabled ? dl.value("ambient", 0.05f) : 0.0f);
         scene.SetDirectionalLight(dirLight);
     }
 
@@ -273,11 +275,23 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     if (j.contains("ocean"))
     {
-        AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, j["ocean"]));
+        const json& oceanJson = j["ocean"];
+        const bool oceanEnabled = !oceanJson.is_object() || oceanJson.value("enabled", true);
+#if WITH_EDITOR
+        // Editor: always create the ocean so its "enabled" toggle can show/hide it
+        // live (no sim recreation); a disabled ocean is simply created hidden.
+        AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, oceanJson));
+        scene.SetOceanVisible(oceanEnabled);
+#else
+        // Runtime: a disabled ocean is not created at all (matches disabled objects).
+        if (oceanEnabled)
+        {
+            AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, oceanJson));
+        }
+#endif
 
         // Apply the level's inline wind overrides (the "scene" block) on top of the
-        // preset, so editor-saved wind settings survive reload.
-        const json& oceanJson = j["ocean"];
+        // preset, so editor-saved wind settings survive reload. No-op if no sim.
         if (oceanJson.is_object() &&
             (oceanJson.contains("windForce") || oceanJson.contains("windDirectionDeg") || oceanJson.contains("swellDirectionDeg")))
         {

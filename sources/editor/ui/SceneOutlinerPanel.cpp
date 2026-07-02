@@ -89,7 +89,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
 
                 ImGui::TableNextColumn();
                 const bool isSelected = (selectedObject.value == env.id.value);
-                if (ImGui::Selectable(env.name.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns))
+                // AllowOverlap so the enable checkbox stays clickable under the
+                // row-spanning selectable (same as object rows).
+                if (ImGui::Selectable(env.name.c_str(), isSelected,
+                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
                 {
                     selectedObject = env.id;
                 }
@@ -101,7 +104,20 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                 ImGui::Text("%llu", static_cast<unsigned long long>(env.id.value));
 
                 ImGui::TableNextColumn();
-                // No enable toggle for environment entities yet.
+                // Enable toggle for lights + ocean (camera/skybox have none).
+                const bool supportsEnable =
+                    env.type == "pointLight" || env.type == "spotLight" ||
+                    env.type == "directionalLight" || env.type == "ocean";
+                if (supportsEnable)
+                {
+                    bool enabled = env.properties.value("enabled", true);
+                    if (ImGui::Checkbox("##enabled", &enabled))
+                    {
+                        action.type = OutlinerAction::Type::SetEnvEnabled;
+                        action.target = env.id;
+                        action.enabledValue = enabled;
+                    }
+                }
 
                 ImGui::PopID();
             }

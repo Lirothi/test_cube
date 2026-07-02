@@ -213,6 +213,22 @@ namespace
     {
         nlohmann::json& p = env.properties;
 
+        // Enable toggle for lights + ocean. A disabled entity does not render (a
+        // disabled light also frees its runtime slot); the entity still persists
+        // in the document so it saves and can be re-enabled. Applied live.
+        const bool supportsEnable =
+            env.type == "pointLight" || env.type == "spotLight" ||
+            env.type == "directionalLight" || env.type == "ocean";
+        if (supportsEnable)
+        {
+            bool enabled = p.value("enabled", true);
+            if (ImGui::Checkbox("Enabled", &enabled))
+            {
+                EnvironmentRuntime::SetEnabled(ctx, env, enabled);
+            }
+            ImGui::Separator();
+        }
+
         auto colorEdit = [&]()
         {
             const Math::float3 c = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));

@@ -320,6 +320,17 @@ bool Scene::RemoveOceanObjects()
     return removed;
 }
 
+void Scene::SetOceanVisible(bool visible)
+{
+    for (std::unique_ptr<RenderableObjectBase>& obj : objects_)
+    {
+        if (obj && obj->AsOceanRenderable())
+        {
+            obj->SetVisible(visible);
+        }
+    }
+}
+
 #if WITH_EDITOR
 Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase> obj)
 {

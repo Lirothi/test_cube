@@ -52,6 +52,7 @@ public:
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
     bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
     bool RemoveOceanObjects();
+    void SetOceanVisible(bool visible);
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
