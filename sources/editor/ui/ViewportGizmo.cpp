@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
+#include <cmath>
 
 #include <DirectXMath.h>
 
@@ -13,6 +15,8 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
+#include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "imgui.h"
 #include "ImGuizmo/ImGuizmo.h"
@@ -60,6 +64,9 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     const float height = static_cast<float>(ctx.renderer.GetHeight());
     if (width <= 0.0f || height <= 0.0f) { return; }
 
+    struct IconHit { ImVec2 mn; ImVec2 mx; EditorObjectId id; };
+    std::vector<IconHit> iconHits;
+
     uint32_t pickedObjectId = 0;
     if (ctx.renderer.ConsumeObjectIdPick(pickedObjectId) && pickedObjectId != 0)
     {
@@ -87,6 +94,132 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     float proj[16];
     ToFloat16(camera.GetViewMatrix(), view);
     ToFloat16(camera.GetProjMatrixNoJitter(), proj);
+
+    // --- Editor icon billboards for world-positioned environment entities ---
+    // (point / spot lights). Screen-space, always-on-top ImGui overlay images from
+    // the icon atlas; clickable to select the entity. Directional/camera have no
+    // world position, so they get no billboard here.
+    if (!iconAtlasTried_)
+    {
+        iconAtlasTried_ = true;
+        ctx.renderer.WaitForPreviousFrame();
+        UploadBatch up;
+        if (up.Begin(&ctx.renderer))
+        {
+            Texture2D::CreateDesc desc;
+            desc.path = L"textures/editor/editor_icons.png";
+            desc.usage = Texture2D::Usage::LinearData;
+            iconAtlasReady_ = iconAtlas_.CreateFromFile(&ctx.renderer, up.CommandList(), desc, up.KeepAlive());
+            up.SubmitAndWait(&ctx.renderer);
+        }
+    }
+
+    if (iconAtlasReady_)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = iconAtlas_.GetSrvFormat();
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        const ImTextureID iconTex = ctx.renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
+        if (iconTex != ImTextureID_Invalid)
+        {
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            const Math::mat4& vp = camera.GetViewProjMatrixNoJitter();
+            constexpr float kIconHalf = 15.0f;
+            for (EditorObject& env : ctx.document.Environment())
+            {
+                // Atlas cells: [dirlight | point] top row, [spot | camera] bottom row.
+                ImVec2 uv0, uv1;
+                if (env.type == "pointLight")     { uv0 = ImVec2(0.5f, 0.0f); uv1 = ImVec2(1.0f, 0.5f); }
+                else if (env.type == "spotLight") { uv0 = ImVec2(0.0f, 0.5f); uv1 = ImVec2(0.5f, 1.0f); }
+                else                              { continue; }
+
+                const auto posIt = env.properties.find("position");
+                if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { continue; }
+                const float px = (*posIt)[0].get<float>();
+                const float py = (*posIt)[1].get<float>();
+                const float pz = (*posIt)[2].get<float>();
+
+                const DirectX::XMVECTOR clip =
+                    DirectX::XMVector4Transform(DirectX::XMVectorSet(px, py, pz, 1.0f), vp.xm());
+                const float w = DirectX::XMVectorGetW(clip);
+                if (w <= 1e-3f) { continue; } // behind the camera
+                const float ndcX = DirectX::XMVectorGetX(clip) / w;
+                const float ndcY = DirectX::XMVectorGetY(clip) / w;
+                if (ndcX < -1.5f || ndcX > 1.5f || ndcY < -1.5f || ndcY > 1.5f) { continue; }
+                const float sx = (ndcX * 0.5f + 0.5f) * width;
+                const float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * height;
+
+                // Tint by the light color (icons are white; RGB carries the tint).
+                ImU32 tint = IM_COL32(255, 255, 255, 255);
+                const auto colIt = env.properties.find("color");
+                if (colIt != env.properties.end() && colIt->is_array() && colIt->size() >= 3u)
+                {
+                    auto ch = [&](int i)
+                    {
+                        float v = (*colIt)[i].get<float>();
+                        v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+                        return static_cast<int>(v * 255.0f + 0.5f);
+                    };
+                    tint = IM_COL32(ch(0), ch(1), ch(2), 255);
+                }
+
+                const ImVec2 mn(sx - kIconHalf, sy - kIconHalf);
+                const ImVec2 mx(sx + kIconHalf, sy + kIconHalf);
+                if (ctx.selectedObject.value == env.id.value)
+                {
+                    dl->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f), ImVec2(mx.x + 2.0f, mx.y + 2.0f),
+                                IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
+                }
+                dl->AddImage(iconTex, mn, mx, uv0, uv1, tint);
+                iconHits.push_back({ mn, mx, env.id });
+            }
+        }
+    }
+
+    // Wireframe shape for the SELECTED light (point = sphere at radius, spot =
+    // cone at range/outer-angle), via the debug-draw system. Independent of the
+    // icon atlas and of on-screen culling; the debug-draw pass clips it in 3D.
+    if (DebugDrawSystem* dd = ctx.renderer.GetDebugDrawSystem())
+    {
+        for (EditorObject& env : ctx.document.Environment())
+        {
+            if (ctx.selectedObject.value != env.id.value) { continue; }
+
+            const auto posIt = env.properties.find("position");
+            if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { break; }
+            const Math::float3 pos((*posIt)[0].get<float>(), (*posIt)[1].get<float>(), (*posIt)[2].get<float>());
+
+            Math::float4 col(1.0f, 0.85f, 0.25f, 1.0f);
+            const auto colIt = env.properties.find("color");
+            if (colIt != env.properties.end() && colIt->is_array() && colIt->size() >= 3u)
+            {
+                col = Math::float4((*colIt)[0].get<float>(), (*colIt)[1].get<float>(), (*colIt)[2].get<float>(), 1.0f);
+            }
+
+            if (env.type == "pointLight")
+            {
+                const float radius = env.properties.value("radius", 1.0f);
+                dd->AddSphere(pos, radius, col, /*wireframe=*/true);
+            }
+            else if (env.type == "spotLight")
+            {
+                Math::float3 dir(0.0f, -1.0f, 0.0f);
+                const auto dirIt = env.properties.find("direction");
+                if (dirIt != env.properties.end() && dirIt->is_array() && dirIt->size() >= 3u)
+                {
+                    dir = Math::float3((*dirIt)[0].get<float>(), (*dirIt)[1].get<float>(), (*dirIt)[2].get<float>());
+                }
+                dir = dir.Normalized();
+                const float range = env.properties.value("range", 10.0f);
+                const float outerDeg = env.properties.value("outerAngleDeg", 25.0f);
+                const float coneR = range * std::tan(outerDeg * 0.01745329252f); // deg->rad
+                dd->AddCone(pos, dir, range, coneR, col, /*wireframe=*/true);
+            }
+            break;
+        }
+    }
 
     bool gizmoBusy = false;
 
@@ -145,6 +278,17 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     // Click-to-select: only over the 3D view, not on the gizmo, not while flying.
     if (flying || io.WantCaptureMouse || gizmoBusy) { return; }
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { return; }
+
+    // Editor icon billboards (lights) take click priority over mesh id-buffer picking.
+    for (auto it = iconHits.rbegin(); it != iconHits.rend(); ++it)
+    {
+        if (io.MousePos.x >= it->mn.x && io.MousePos.x <= it->mx.x &&
+            io.MousePos.y >= it->mn.y && io.MousePos.y <= it->mx.y)
+        {
+            ctx.selectedObject = it->id;
+            return;
+        }
+    }
 
     if (ctx.renderer.RequestObjectIdPick(io.MousePos.x, io.MousePos.y))
     {

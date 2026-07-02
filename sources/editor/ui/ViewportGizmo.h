@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include "editor/scene/EditorSceneDocument.h" // EditorTransform
+#include "materials/Texture2D.h"
 
 struct EditorContext;
 class EditorCommandStack;
@@ -24,6 +25,13 @@ private:
     Op op_ = Op::Translate;
     bool wasUsing_ = false;
     EditorTransform transformBeforeDrag_;
+
+    // Editor icon billboards for world-positioned environment entities (point /
+    // spot lights): screen-space, always-on-top ImGui overlay images drawn from
+    // the icon atlas, clickable to select the entity. Loaded lazily on first use.
+    Texture2D iconAtlas_;
+    bool iconAtlasTried_ = false;
+    bool iconAtlasReady_ = false;
 };
 
 #endif // WITH_EDITOR
