@@ -13,13 +13,19 @@ class EditorCommandStack;
 class ViewportGizmo
 {
 public:
-    enum class Op { Translate, Rotate, Scale };
+    enum class Op { Select, Translate, Rotate, Scale };
 
-    // Draw the Translate/Rotate/Scale mode buttons (call from the editor toolbar).
-    void DrawModeButtons();
+    // Draw the Select/Translate/Rotate/Scale mode buttons (call from the editor toolbar).
+    void DrawModeButtons(const char* hotkeyHintText);
 
     // Per-frame: draw + handle the gizmo for the selection, then click-to-pick.
     void Update(EditorContext& ctx, EditorCommandStack& commandStack);
+
+    void SetMode(Op op) { op_ = op; }
+    Op GetMode() const { return op_; }
+    void CycleTransformMode();
+    const char* ModeLabel() const;
+    static const char* ModeLabel(Op op);
 
 private:
     Op op_ = Op::Translate;

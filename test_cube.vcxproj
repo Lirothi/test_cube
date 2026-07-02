@@ -158,6 +158,7 @@
     <ClCompile Include="sources/app/SceneStress.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/editor/EditorController.cpp" />
+    <ClCompile Include="sources/editor/EditorHotkeys.cpp" />
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
@@ -284,6 +285,7 @@
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
+    <ClInclude Include="sources/editor/EditorHotkeys.h" />
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />

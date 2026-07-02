@@ -685,6 +685,90 @@ namespace
         const bool regularFile = exists && std::filesystem::is_regular_file(fsPath, ec);
         return !ec && regularFile;
     }
+
+    bool TryGetSelectionFrameTarget(
+        const Scene& scene,
+        const EditorSceneDocument& document,
+        EditorObjectId id,
+        Math::float3& outCenter,
+        float& outRadius)
+    {
+        if (id.value == 0)
+        {
+            return false;
+        }
+
+        if (const RenderableObjectBase* runtime = scene.FindEditorObject(id.value))
+        {
+            const AABB& bounds = runtime->GetWorldBounds();
+            if (bounds.IsValid())
+            {
+                outCenter = bounds.GetCenter();
+                outRadius = std::max(bounds.GetRadius(), 1.0f);
+                return true;
+            }
+        }
+
+        if (const EditorObject* object = document.Find(id))
+        {
+            outCenter = object->transform.position;
+            outRadius = std::max(object->transform.scale.Length(), 1.0f);
+            return true;
+        }
+
+        for (const EditorObject& env : document.Environment())
+        {
+            if (env.id.value != id.value)
+            {
+                continue;
+            }
+
+            const auto positionIt = env.properties.find("position");
+            if (positionIt == env.properties.end() || !TryReadFloat3(*positionIt, outCenter))
+            {
+                return false;
+            }
+
+            if (env.type == "pointLight")
+            {
+                outRadius = std::max(env.properties.value("radius", 1.0f), 1.0f);
+            }
+            else if (env.type == "spotLight")
+            {
+                outRadius = std::max(env.properties.value("range", 4.0f) * 0.25f, 1.0f);
+            }
+            else
+            {
+                outRadius = 1.0f;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    bool FrameSelection(Renderer& renderer, Scene& scene, const EditorSceneDocument& document, EditorObjectId id)
+    {
+        Math::float3 center;
+        float radius = 1.0f;
+        if (!TryGetSelectionFrameTarget(scene, document, id, center, radius))
+        {
+            return false;
+        }
+
+        Camera& camera = scene.CameraRef();
+        Math::float3 forward = camera.GetDirection();
+        if (forward.Length() <= Math::EPS)
+        {
+            forward = Math::float3(0.0f, 0.0f, 1.0f);
+        }
+
+        const float distance = std::max(radius * 2.5f, 3.0f);
+        camera.SetPosition(center - forward.Normalized() * distance);
+        camera.CalcMatrices(&renderer);
+        camera.ResetHistory();
+        return true;
+    }
 }
 
 void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
@@ -923,6 +1007,42 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         pendingNewLevelJson_ = root;
         return queueLevelPathLoad(scratchPath, false, PendingLevelAction::New, "Creating new level");
     };
+
+    const EditorHotkeyActions hotkeyActions = hotkeys_.Poll(viewportGizmo_);
+    if (hotkeyActions.undo)
+    {
+        commandStack_.Undo(ctx);
+    }
+    if (hotkeyActions.redo)
+    {
+        commandStack_.Redo(ctx);
+    }
+    if (hotkeyActions.save)
+    {
+        if (document_.LevelPath().empty())
+        {
+            beginSaveLevelAsDialog();
+        }
+        else
+        {
+            saveLevel(document_.LevelPath());
+        }
+    }
+    if (hotkeyActions.deleteSelection)
+    {
+        commandStack_.Execute(ctx, std::make_unique<DeleteObjectCommand>(selectedObject_));
+    }
+    if (hotkeyActions.focusSelection)
+    {
+        if (!FrameSelection(renderer, scene, document_, selectedObject_))
+        {
+            levelStatus_ = "Nothing to frame";
+        }
+    }
+    if (hotkeyActions.clearSelection)
+    {
+        selectedObject_ = EditorObjectId{};
+    }
 
     // Main editor window: status, undo/redo, and per-window visibility toggles.
     // Closing it (its X) closes the whole editor interface.
@@ -1236,7 +1356,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         }
 
         ImGui::Separator();
-        viewportGizmo_.DrawModeButtons();
+        viewportGizmo_.DrawModeButtons(EditorHotkeys::HintText());
     }
     ImGui::End();
     open_ = open;

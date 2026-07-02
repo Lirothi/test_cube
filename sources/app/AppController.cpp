@@ -143,7 +143,14 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #endif
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
-    if (!uiCapturingInput)
+    bool allowCameraInput = !uiCapturingInput;
+#if WITH_EDITOR
+    if (allowCameraInput && editorController_.IsOpen())
+    {
+        allowCameraInput = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
+    }
+#endif
+    if (allowCameraInput)
     {
         scene.CameraRef().UpdateFromInput(input, deltaTime);
     }

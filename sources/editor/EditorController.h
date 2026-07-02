@@ -6,6 +6,7 @@
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/EditorHotkeys.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/InspectorPanel.h"
@@ -71,6 +72,7 @@ private:
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     ViewportGizmo viewportGizmo_;
+    EditorHotkeys hotkeys_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
     EditorObjectId selectedObject_;

@@ -37,6 +37,8 @@ namespace
     {
         switch (op)
         {
+        case ViewportGizmo::Op::Select:
+        case ViewportGizmo::Op::Translate: return ImGuizmo::TRANSLATE;
         case ViewportGizmo::Op::Rotate: return ImGuizmo::ROTATE;
         case ViewportGizmo::Op::Scale:  return ImGuizmo::SCALE;
         default:                        return ImGuizmo::TRANSLATE;
@@ -76,17 +78,58 @@ namespace
     }
 }
 
-void ViewportGizmo::DrawModeButtons()
+const char* ViewportGizmo::ModeLabel(Op op)
+{
+    switch (op)
+    {
+    case Op::Select:    return "Select";
+    case Op::Translate: return "Translate";
+    case Op::Rotate:    return "Rotate";
+    case Op::Scale:     return "Scale";
+    default:            return "Unknown";
+    }
+}
+
+const char* ViewportGizmo::ModeLabel() const
+{
+    return ModeLabel(op_);
+}
+
+void ViewportGizmo::CycleTransformMode()
+{
+    switch (op_)
+    {
+    case Op::Translate: op_ = Op::Rotate; break;
+    case Op::Rotate:    op_ = Op::Scale; break;
+    case Op::Scale:     op_ = Op::Translate; break;
+    case Op::Select:
+    default:            op_ = Op::Translate; break;
+    }
+}
+
+void ViewportGizmo::DrawModeButtons(const char* hotkeyHintText)
 {
     int mode = static_cast<int>(op_);
+    ImGui::Text("Transform mode: %s", ModeLabel());
+    if (hotkeyHintText && hotkeyHintText[0] != '\0')
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", hotkeyHintText);
+        ImGui::PopStyleColor();
+    }
     ImGui::TextUnformatted("Gizmo:");
     ImGui::SameLine();
-    ImGui::RadioButton("Translate", &mode, 0);
+    ImGui::RadioButton("Select", &mode, 0);
     ImGui::SameLine();
-    ImGui::RadioButton("Rotate", &mode, 1);
+    ImGui::RadioButton("Translate", &mode, 1);
     ImGui::SameLine();
-    ImGui::RadioButton("Scale", &mode, 2);
-    op_ = static_cast<Op>(mode);
+    ImGui::RadioButton("Rotate", &mode, 2);
+    ImGui::SameLine();
+    ImGui::RadioButton("Scale", &mode, 3);
+    if (mode >= static_cast<int>(Op::Select) && mode <= static_cast<int>(Op::Scale))
+    {
+        op_ = static_cast<Op>(mode);
+    }
 }
 
 void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
@@ -110,17 +153,17 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
         }
     }
 
-    // Right mouse = camera look (LookToggle). While flying, keep DRAWING the gizmo
-    // but disable its mouse handling (ImGuizmo::Enable(false) still renders it,
-    // grayed, but skips hit-testing) so it can't grab the frozen cursor and set
-    // WantCaptureMouse, which would interrupt the camera look.
+    // Right mouse = camera look (LookToggle). While flying, keep drawing active
+    // gizmos but disable their mouse handling so they cannot grab the frozen
+    // cursor and interrupt camera look.
     const bool flying = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    const bool gizmoVisible = op_ != Op::Select;
 
     ImGuizmo::BeginFrame();
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
     ImGuizmo::SetRect(0.0f, 0.0f, width, height);
-    ImGuizmo::Enable(!flying);
+    ImGuizmo::Enable(!flying && gizmoVisible);
 
     const Camera& camera = ctx.scene.CameraRef();
     float view[16];
@@ -272,7 +315,7 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
         inFront = (toObj.x * forward.x + toObj.y * forward.y + toObj.z * forward.z) > 0.0f;
     }
 
-    if (obj && ro && inFront)
+    if (gizmoVisible && obj && ro && inFront)
     {
         float model[16];
         ToFloat16(ro->GetModelMatrix(), model);
@@ -313,7 +356,7 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     // (persisted across the drag) and write the result back to the entity's
     // properties, patching the live runtime via the shared helper. Non-undoable
     // (like the env inspector edits).
-    if (!obj)
+    if (gizmoVisible && !obj)
     {
         EditorObject* light = nullptr;
         for (EditorObject& e : ctx.document.Environment())
