@@ -170,7 +170,8 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
     const auto objectsIt = doc.find("objects");
     if (objectsIt == doc.end() || !objectsIt->is_array())
     {
-        return true; // a valid level may simply have no objects
+        RebuildEnvironmentEntities(); // a valid level may simply have no objects
+        return true;
     }
 
     for (const nlohmann::json& o : *objectsIt)
@@ -183,6 +184,8 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
         AddObjectFromJson(ReadOrAllocateObjectId(o), o);
     }
 
+    RebuildEnvironmentEntities();
+
     dirty_ = false;
     return true;
 }
@@ -190,6 +193,7 @@ bool EditorSceneDocument::LoadFromLevelFile(const std::string& path)
 void EditorSceneDocument::ResetFromLevelJson(const std::string& path, const nlohmann::json& levelJson)
 {
     objects_.clear();
+    environment_.clear();
     nextId_ = 1;
     dirty_ = false;
     levelPath_ = path;
@@ -214,6 +218,63 @@ EditorObjectId EditorSceneDocument::ReadOrAllocateObjectId(const nlohmann::json&
 void EditorSceneDocument::AddObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson)
 {
     Add(ObjectFromJson(id, objectJson));
+}
+
+void EditorSceneDocument::RebuildEnvironmentEntities()
+{
+    environment_.clear();
+    if (!rootJson_.is_object())
+    {
+        return;
+    }
+
+    // Singleton section (camera/directionalLight/skybox/ocean) -> one entity that
+    // holds the raw section JSON verbatim in `properties`.
+    auto addSingleton = [this](const char* key, const char* type, const char* name)
+    {
+        const auto it = rootJson_.find(key);
+        if (it == rootJson_.end() || !it->is_object())
+        {
+            return;
+        }
+        EditorObject e;
+        e.id = AllocateId();
+        e.type = type;
+        e.name = name;
+        e.properties = *it;
+        environment_.push_back(std::move(e));
+    };
+
+    // Array section (spotLights/pointLights) -> one entity per element, in order.
+    auto addArray = [this](const char* key, const char* type, const char* labelPrefix)
+    {
+        const auto it = rootJson_.find(key);
+        if (it == rootJson_.end() || !it->is_array())
+        {
+            return;
+        }
+        int index = 0;
+        for (const nlohmann::json& element : *it)
+        {
+            if (element.is_object())
+            {
+                EditorObject e;
+                e.id = AllocateId();
+                e.type = type;
+                e.name = std::string(labelPrefix) + " " + std::to_string(index);
+                e.properties = element;
+                environment_.push_back(std::move(e));
+            }
+            ++index;
+        }
+    };
+
+    addSingleton("camera", "camera", "Camera");
+    addSingleton("directionalLight", "directionalLight", "Directional Light");
+    addArray("spotLights", "spotLight", "Spot Light");
+    addArray("pointLights", "pointLight", "Point Light");
+    addSingleton("skybox", "skybox", "Skybox");
+    addSingleton("ocean", "ocean", "Ocean");
 }
 
 #endif // WITH_EDITOR

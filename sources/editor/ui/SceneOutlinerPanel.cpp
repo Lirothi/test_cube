@@ -71,6 +71,42 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             ImGui::PopID();
         }
 
+        // Environment entities (camera/lights/skybox/ocean): selectable but
+        // read-only for now (no enable toggle, no delete). Shown under a label.
+        if (!document.Environment().empty())
+        {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("Environment");
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+
+            for (EditorObject& env : document.Environment())
+            {
+                ImGui::TableNextRow();
+                ImGui::PushID(static_cast<int>(env.id.value));
+
+                ImGui::TableNextColumn();
+                const bool isSelected = (selectedObject.value == env.id.value);
+                if (ImGui::Selectable(env.name.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns))
+                {
+                    selectedObject = env.id;
+                }
+
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(env.type.c_str());
+
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", static_cast<unsigned long long>(env.id.value));
+
+                ImGui::TableNextColumn();
+                // No enable toggle for environment entities yet.
+
+                ImGui::PopID();
+            }
+        }
+
         ImGui::EndTable();
     }
 

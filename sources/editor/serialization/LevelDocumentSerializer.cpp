@@ -26,6 +26,27 @@ namespace LevelDocumentSerializer
             out = nlohmann::json::object();
         }
 
+        // Rebuild the environment sections from the document's environment entities
+        // so future edits flow to save; with unmodified data this reproduces each
+        // section verbatim. Unknown top-level sections are preserved from RootJson().
+        {
+            nlohmann::json spotLights = nlohmann::json::array();
+            nlohmann::json pointLights = nlohmann::json::array();
+            bool haveSpot = false;
+            bool havePoint = false;
+            for (const EditorObject& env : document.Environment())
+            {
+                if (env.type == "camera") { out["camera"] = env.properties; }
+                else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
+                else if (env.type == "skybox") { out["skybox"] = env.properties; }
+                else if (env.type == "ocean") { out["ocean"] = env.properties; }
+                else if (env.type == "spotLight") { spotLights.push_back(env.properties); haveSpot = true; }
+                else if (env.type == "pointLight") { pointLights.push_back(env.properties); havePoint = true; }
+            }
+            if (haveSpot) { out["spotLights"] = std::move(spotLights); }
+            if (havePoint) { out["pointLights"] = std::move(pointLights); }
+        }
+
         // Camera position is intentionally not persisted in level files; it lives
         // per-level in editor_state.json. Keep projection settings (fov/near/far).
         if (out.contains("camera") && out["camera"].is_object())

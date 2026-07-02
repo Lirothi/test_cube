@@ -53,6 +53,12 @@ public:
     std::vector<EditorObject>& Objects() { return objects_; }
     const std::vector<EditorObject>& Objects() const { return objects_; }
 
+    // Environment entities (camera, directional/spot/point lights, skybox, ocean)
+    // parsed from the level's top-level sections. They carry ids so the outliner
+    // can select them, but are display-only for now (editing arrives later).
+    std::vector<EditorObject>& Environment() { return environment_; }
+    const std::vector<EditorObject>& Environment() const { return environment_; }
+
     bool IsDirty() const { return dirty_; }
     void SetDirty(bool dirty) { dirty_ = dirty; }
 
@@ -74,6 +80,11 @@ public:
     // Add the editor mirror for one JSON object using a preselected id.
     void AddObjectFromJson(EditorObjectId id, const nlohmann::json& objectJson);
 
+    // Rebuild the environment entity list (camera/lights/skybox/ocean) from the
+    // current RootJson() top-level sections. Call AFTER objects are loaded so the
+    // freshly allocated environment ids never collide with object ids.
+    void RebuildEnvironmentEntities();
+
     // Build an EditorObject from a level/editor object JSON entry: lifts the
     // common fields (name/type/enabled/position/rotationDeg/scale) and keeps the
     // rest in `properties`. Does not allocate an id or modify the document.
@@ -94,6 +105,7 @@ public:
 
 private:
     std::vector<EditorObject> objects_;
+    std::vector<EditorObject> environment_;
     uint64_t nextId_ = 1;
     bool dirty_ = false;
     std::string levelPath_;

@@ -261,6 +261,15 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         }
     }
 
+#if WITH_EDITOR
+    if (ctx.editorDocument)
+    {
+        // Build environment entities after the object loop so their allocated ids
+        // never collide with object ids (see EditorSceneDocument).
+        ctx.editorDocument->RebuildEnvironmentEntities();
+    }
+#endif
+
     if (j.contains("ocean"))
     {
         AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, j["ocean"]));
