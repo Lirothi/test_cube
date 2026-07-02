@@ -136,6 +136,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 
 #if WITH_EDITOR
     editorController_.Draw(renderer, scene, levelManager);
+    if (editorController_.ConsumeOpenOceanPresetEditorRequest())
+    {
+        developerWindow_.OpenOceanControls();
+    }
 #endif
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.

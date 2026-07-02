@@ -1,8 +1,13 @@
 #include "editor/scene/EnvironmentRuntime.h"
 #if WITH_EDITOR
 
+#include <algorithm>
+#include <filesystem>
+
+#include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
+#include "ocean/OceanSimulation.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
@@ -96,6 +101,37 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         cam.SetHFov(JF(p, "hfovDeg", 90.0f) * kDeg2Rad);
         cam.SetZNearFar(JF(p, "zNear", 0.01f), JF(p, "zFar", 10000.0f));
     }
+    else if (env.type == "ocean")
+    {
+        // Live wind overrides (the "scene" block). Defaults are the sim's current
+        // values, so an absent override key is a no-op. Preset/enable are handled
+        // by the ocean inspector + the Ocean menu, not here (they are discrete).
+        if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+        {
+            const float windDir = JF(p, "windDirectionDeg", ocean->GetLocalWindDirectionDegrees());
+            const float swellDir = JF(p, "swellDirectionDeg", ocean->GetSwellDirectionDegrees());
+            const float windForce = JF(p, "windForce", ocean->GetWindForce01());
+            ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
+        }
+    }
+}
+
+std::vector<std::string> EnvironmentRuntime::OceanPresets()
+{
+    std::vector<std::string> presets;
+    const std::filesystem::path dir("data/ocean");
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec)) { return presets; }
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(dir, ec))
+    {
+        if (ec) { break; }
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".json")
+        {
+            presets.push_back(entry.path().generic_string());
+        }
+    }
+    std::sort(presets.begin(), presets.end());
+    return presets;
 }
 
 #endif // WITH_EDITOR

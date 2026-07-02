@@ -90,120 +90,6 @@ namespace
         return NormalizeLevelPath(path.string());
     }
 
-    std::string FileNameLabel(const std::string& path)
-    {
-        const std::filesystem::path fsPath(path);
-        const std::filesystem::path fileName = fsPath.filename();
-        return fileName.empty() ? NormalizeLevelPath(path) : NormalizeLevelPath(fileName.string());
-    }
-
-    std::vector<std::string> ReadOceanPresetFiles()
-    {
-        std::vector<std::string> presets;
-        const std::filesystem::path configDir("data/ocean");
-        std::error_code ec;
-        if (!std::filesystem::exists(configDir, ec))
-        {
-            return presets;
-        }
-
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(configDir, ec))
-        {
-            if (ec)
-            {
-                break;
-            }
-            if (entry.is_regular_file(ec) && entry.path().extension() == ".json")
-            {
-                presets.push_back(LevelPathString(entry.path()));
-            }
-        }
-
-        std::sort(presets.begin(), presets.end());
-        return presets;
-    }
-
-    bool ReadOceanEnabled(const nlohmann::json& root)
-    {
-        if (!root.is_object())
-        {
-            return false;
-        }
-
-        const auto oceanIt = root.find("ocean");
-        if (oceanIt == root.end())
-        {
-            return false;
-        }
-        if (oceanIt->is_boolean())
-        {
-            return oceanIt->get<bool>();
-        }
-        if (oceanIt->is_string())
-        {
-            return !oceanIt->get<std::string>().empty();
-        }
-        if (oceanIt->is_object())
-        {
-            return oceanIt->value("enabled", true);
-        }
-        return false;
-    }
-
-    std::string ReadOceanPresetPath(const nlohmann::json& root)
-    {
-        if (!root.is_object())
-        {
-            return {};
-        }
-
-        const auto oceanIt = root.find("ocean");
-        if (oceanIt == root.end())
-        {
-            return {};
-        }
-        if (oceanIt->is_string())
-        {
-            return NormalizeLevelPath(oceanIt->get<std::string>());
-        }
-        if (!oceanIt->is_object())
-        {
-            return {};
-        }
-
-        constexpr const char* kPathKeys[] = { "preset", "presetFile", "config", "configFile" };
-        for (const char* key : kPathKeys)
-        {
-            const auto it = oceanIt->find(key);
-            if (it != oceanIt->end() && it->is_string())
-            {
-                return NormalizeLevelPath(it->get<std::string>());
-            }
-        }
-        return {};
-    }
-
-    void WriteOceanSettings(EditorSceneDocument& document, bool enabled, const std::string& presetPath)
-    {
-        nlohmann::json& root = document.RootJson();
-        if (!root.is_object())
-        {
-            root = nlohmann::json::object();
-        }
-
-        nlohmann::json ocean = nlohmann::json::object();
-        const auto existingOceanIt = root.find("ocean");
-        if (existingOceanIt != root.end() && existingOceanIt->is_object())
-        {
-            ocean = *existingOceanIt;
-        }
-
-        ocean["enabled"] = enabled;
-        ocean["preset"] = NormalizeLevelPath(presetPath.empty() ? DefaultOceanPresetPath() : presetPath);
-        root["ocean"] = std::move(ocean);
-        document.SetDirty(true);
-    }
-
     void DestroyLiveOcean(Renderer& renderer, Scene& scene)
     {
         renderer.WaitForPreviousFrame();
@@ -245,94 +131,6 @@ namespace
         uploads.SubmitAndWait(&renderer);
         levelStatus = "Ocean: " + normalizedPreset;
         return true;
-    }
-
-    void DrawOceanSection(EditorSceneDocument& document, Renderer& renderer, Scene& scene, std::string& levelStatus)
-    {
-        bool oceanEnabled = ReadOceanEnabled(document.RootJson());
-        std::string oceanPreset = ReadOceanPresetPath(document.RootJson());
-        if (oceanPreset.empty())
-        {
-            oceanPreset = DefaultOceanPresetPath();
-        }
-
-        bool changed = false;
-        if (ImGui::Checkbox("Enabled##OceanEnabled", &oceanEnabled))
-        {
-            changed = true;
-        }
-
-        const std::vector<std::string> presets = ReadOceanPresetFiles();
-        const std::string currentPreset = NormalizeLevelPath(oceanPreset);
-        bool currentPresetListed = false;
-        for (const std::string& preset : presets)
-        {
-            if (NormalizeLevelPath(preset) == currentPreset)
-            {
-                currentPresetListed = true;
-                break;
-            }
-        }
-
-        ImGui::SetNextItemWidth(-1.0f);
-        const std::string currentLabel = FileNameLabel(oceanPreset);
-        if (ImGui::BeginCombo("Preset##OceanPreset", currentLabel.empty() ? "(none)" : currentLabel.c_str()))
-        {
-            for (const std::string& preset : presets)
-            {
-                const std::string normalizedPreset = NormalizeLevelPath(preset);
-                const bool selected = normalizedPreset == currentPreset;
-                const std::string label = FileNameLabel(preset);
-                if (ImGui::Selectable(label.c_str(), selected) && !selected)
-                {
-                    oceanPreset = normalizedPreset;
-                    changed = true;
-                }
-                if (selected)
-                {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-
-            if (!currentPresetListed && !currentPreset.empty())
-            {
-                if (!presets.empty())
-                {
-                    ImGui::Separator();
-                }
-                if (ImGui::Selectable(currentPreset.c_str(), true))
-                {
-                    oceanPreset = currentPreset;
-                }
-                ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-
-        ImGui::TextDisabled("Path: %s", NormalizeLevelPath(oceanPreset).c_str());
-
-        if (changed)
-        {
-            WriteOceanSettings(document, oceanEnabled, oceanPreset);
-            levelStatus = oceanEnabled ? "Ocean: " + NormalizeLevelPath(oceanPreset) : "Ocean disabled";
-
-            if (!oceanEnabled)
-            {
-                DestroyLiveOcean(renderer, scene);
-            }
-            else if (OceanSimulation* ocean = Systems::GetOceanSimulation())
-            {
-                const std::string normalizedPreset = NormalizeLevelPath(oceanPreset);
-                if (!ocean->LoadConfig(&renderer, std::wstring(normalizedPreset.begin(), normalizedPreset.end())))
-                {
-                    levelStatus = "Ocean load failed: " + normalizedPreset;
-                }
-            }
-            else
-            {
-                CreateLiveOcean(renderer, scene, oceanPreset, levelStatus);
-            }
-        }
     }
 
     bool TryReadFloat(const nlohmann::json& value, float& out)
@@ -1183,6 +981,51 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 }
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Ocean"))
+            {
+                bool hasOcean = false;
+                for (const EditorObject& e : document_.Environment())
+                {
+                    if (e.type == "ocean") { hasOcean = true; break; }
+                }
+                if (ImGui::MenuItem("Create Ocean", nullptr, false, !hasOcean))
+                {
+                    const std::string preset = DefaultOceanPresetPath();
+                    if (CreateLiveOcean(renderer, scene, preset, levelStatus_))
+                    {
+                        EditorObject oceanEntity;
+                        oceanEntity.id = document_.AllocateId();
+                        oceanEntity.type = "ocean";
+                        oceanEntity.name = "Ocean";
+                        oceanEntity.properties = nlohmann::json::object();
+                        oceanEntity.properties["enabled"] = true;
+                        oceanEntity.properties["preset"] = preset;
+                        document_.Environment().push_back(std::move(oceanEntity));
+                        document_.SetDirty(true);
+                    }
+                }
+                if (ImGui::MenuItem("Remove Ocean", nullptr, false, hasOcean))
+                {
+                    DestroyLiveOcean(renderer, scene);
+                    std::vector<EditorObject>& env = document_.Environment();
+                    for (auto it = env.begin(); it != env.end(); ++it)
+                    {
+                        if (it->type == "ocean")
+                        {
+                            if (selectedObject_.value == it->id.value) { selectedObject_ = EditorObjectId{}; }
+                            env.erase(it);
+                            break;
+                        }
+                    }
+                    document_.SetDirty(true);
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Preset Editor...", nullptr, false, hasOcean))
+                {
+                    openOceanPresetEditorRequested_ = true;
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenuBar();
         }
 
@@ -1202,9 +1045,6 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             ImGui::TextDisabled("%s", levelStatus_.c_str());
         }
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("Ocean");
-        DrawOceanSection(document_, renderer, scene, levelStatus_);
 
         if (levelFileDialogMode_ != LevelFileDialogMode::None)
         {

@@ -1,6 +1,9 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <string>
+#include <vector>
+
 struct EditorContext;
 struct EditorObject;
 
@@ -14,6 +17,10 @@ struct EditorObject;
 namespace EnvironmentRuntime
 {
     void Apply(EditorContext& ctx, const EditorObject& env);
+
+    // Ocean preset files under data/ocean (forward-slash paths), for the ocean
+    // inspector's preset combo.
+    std::vector<std::string> OceanPresets();
 }
 
 #endif // WITH_EDITOR

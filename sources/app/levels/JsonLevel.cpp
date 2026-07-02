@@ -25,6 +25,7 @@
 #include "rendering/lighting/SpotLight.h"
 #include "rendering/core/UploadBatch.h"
 #include "app/Systems.h"
+#include "ocean/OceanSimulation.h"
 #if WITH_EDITOR
 #include "editor/scene/EditorSceneDocument.h"
 #endif
@@ -273,6 +274,21 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     if (j.contains("ocean"))
     {
         AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, j["ocean"]));
+
+        // Apply the level's inline wind overrides (the "scene" block) on top of the
+        // preset, so editor-saved wind settings survive reload.
+        const json& oceanJson = j["ocean"];
+        if (oceanJson.is_object() &&
+            (oceanJson.contains("windForce") || oceanJson.contains("windDirectionDeg") || oceanJson.contains("swellDirectionDeg")))
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                const float windDir = oceanJson.value("windDirectionDeg", ocean->GetLocalWindDirectionDegrees());
+                const float swellDir = oceanJson.value("swellDirectionDeg", ocean->GetSwellDirectionDegrees());
+                const float windForce = oceanJson.value("windForce", ocean->GetWindForce01());
+                ocean->SetSceneVariables(&renderer, windDir, swellDir, windForce);
+            }
+        }
     }
     else
     {

@@ -34,17 +34,21 @@ namespace LevelDocumentSerializer
             nlohmann::json pointLights = nlohmann::json::array();
             bool haveSpot = false;
             bool havePoint = false;
+            bool haveOcean = false;
             for (const EditorObject& env : document.Environment())
             {
                 if (env.type == "camera") { out["camera"] = env.properties; }
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
-                else if (env.type == "ocean") { out["ocean"] = env.properties; }
+                else if (env.type == "ocean") { out["ocean"] = env.properties; haveOcean = true; }
                 else if (env.type == "spotLight") { spotLights.push_back(env.properties); haveSpot = true; }
                 else if (env.type == "pointLight") { pointLights.push_back(env.properties); havePoint = true; }
             }
             if (haveSpot) { out["spotLights"] = std::move(spotLights); }
             if (havePoint) { out["pointLights"] = std::move(pointLights); }
+            // Ocean can be removed via the Ocean menu; if there's no ocean entity,
+            // drop any stale section carried over from the loaded header.
+            if (!haveOcean && out.contains("ocean")) { out.erase("ocean"); }
         }
 
         // Camera position is intentionally not persisted in level files; it lives

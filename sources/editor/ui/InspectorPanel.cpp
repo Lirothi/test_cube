@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -14,7 +15,9 @@
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "app/Systems.h"
 #include "app/camera/Camera.h"
+#include "ocean/OceanSimulation.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/LightManager.h"
@@ -282,10 +285,50 @@ namespace
         }
         else if (env.type == "ocean")
         {
-            char buf[260];
-            std::snprintf(buf, sizeof(buf), "%s", p.value("preset", std::string()).c_str());
-            if (ImGui::InputText("Preset", buf, sizeof(buf))) { p["preset"] = std::string(buf); ctx.document.SetDirty(true); }
-            ImGui::TextDisabled("Applies on reload.");
+            OceanSimulation* ocean = Systems::GetOceanSimulation();
+            if (!ocean)
+            {
+                ImGui::TextDisabled("No ocean in this level.");
+                ImGui::TextDisabled("Use the Ocean menu to create one.");
+            }
+            else
+            {
+                // Preset (reference): changing it reloads the sim live.
+                const std::string curPreset = p.value("preset", std::string());
+                const std::string curLabel = std::filesystem::path(curPreset).filename().string();
+                if (ImGui::BeginCombo("Preset", curLabel.empty() ? "(none)" : curLabel.c_str()))
+                {
+                    for (const std::string& pr : EnvironmentRuntime::OceanPresets())
+                    {
+                        const bool sel = (pr == curPreset);
+                        const std::string label = std::filesystem::path(pr).filename().string();
+                        if (ImGui::Selectable(label.c_str(), sel) && !sel)
+                        {
+                            p["preset"] = pr;
+                            ocean->LoadConfig(&ctx.renderer, std::wstring(pr.begin(), pr.end()));
+                            ctx.document.SetDirty(true);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                // Inline wind overrides (live). Show the sim's current values.
+                float windForce = ocean->GetWindForce01();
+                float windDir = ocean->GetLocalWindDirectionDegrees();
+                float swellDir = ocean->GetSwellDirectionDegrees();
+                bool windChanged = false;
+                windChanged |= ImGui::SliderFloat("Wind Force", &windForce, 0.0f, 1.0f);
+                windChanged |= ImGui::DragFloat("Wind Direction", &windDir, 0.5f, -360.0f, 360.0f, "%.1f deg");
+                windChanged |= ImGui::DragFloat("Swell Direction", &swellDir, 0.5f, -360.0f, 360.0f, "%.1f deg");
+                if (windChanged)
+                {
+                    p["windForce"] = windForce;
+                    p["windDirectionDeg"] = windDir;
+                    p["swellDirectionDeg"] = swellDir;
+                    EnvironmentRuntime::Apply(ctx, env);
+                    ctx.document.SetDirty(true);
+                }
+            }
         }
         else
         {

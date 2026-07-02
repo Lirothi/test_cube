@@ -33,6 +33,15 @@ public:
         Scene& scene,
         LevelManager& levelManager);
 
+    // The Ocean menu's "Preset Editor" item requests opening the F7 ocean controls
+    // window (owned by DeveloperWindow). AppController routes this after Draw.
+    bool ConsumeOpenOceanPresetEditorRequest()
+    {
+        const bool requested = openOceanPresetEditorRequested_;
+        openOceanPresetEditorRequested_ = false;
+        return requested;
+    }
+
 private:
     enum class LevelFileDialogMode
     {
@@ -52,6 +61,7 @@ private:
 
     bool open_ = false;
     bool firstOpenInitialized_ = false;
+    bool openOceanPresetEditorRequested_ = false;
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
     bool showInspector_ = true;

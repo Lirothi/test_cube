@@ -21,6 +21,7 @@ public:
     void ToggleOpen() { open_ = !open_; }
     void ToggleTextureInspector();
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
+    void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
 
     void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
 #if WITH_EDITOR
