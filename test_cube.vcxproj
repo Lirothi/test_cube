@@ -172,7 +172,7 @@
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
     <ClCompile Include="sources/app/DeveloperWindow.cpp" />
-    <ClCompile Include="sources/app/OceanControlsWindow.cpp" />
+    <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/app/levels/JsonLevel.cpp" />
@@ -298,7 +298,7 @@
     <ClInclude Include="sources/editor/ui/InspectorPanel.h" />
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />
     <ClInclude Include="sources/app/DeveloperWindow.h" />
-    <ClInclude Include="sources/app/OceanControlsWindow.h" />
+    <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/app/levels/JsonLevel.h" />

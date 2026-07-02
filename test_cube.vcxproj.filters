@@ -174,8 +174,8 @@
     <ClCompile Include="sources/app/DeveloperWindow.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/OceanControlsWindow.cpp">
-      <Filter>sources\app</Filter>
+    <ClCompile Include="sources/ocean/OceanControlsWindow.cpp">
+      <Filter>sources\ocean</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
@@ -488,8 +488,8 @@
     <ClInclude Include="sources/app/DeveloperWindow.h">
       <Filter>sources\app</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/OceanControlsWindow.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/ocean/OceanControlsWindow.h">
+      <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>

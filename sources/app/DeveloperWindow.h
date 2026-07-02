@@ -1,7 +1,7 @@
 #pragma once
 
 #include "app/scene/SceneFrameData.h"
-#include "app/OceanControlsWindow.h"
+#include "ocean/OceanControlsWindow.h"
 #include "rendering/debug/TextureDebugViewer.h"
 #include "ui/ImGuiWindowUtils.h"
 
