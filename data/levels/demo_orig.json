@@ -16,7 +16,6 @@
       -0.7,
       -0.5
     ],
-    "enabled": true,
     "exposure": 1.0
   },
   "objects": [
@@ -1929,11 +1928,11 @@
       "position": [
         0.0,
         6.0,
-        24.711637496948242
+        10.0
       ],
       "rotationDeg": [
         0.0,
-        -5.702901363372803,
+        45.0,
         0.0
       ],
       "scale": [
@@ -1943,146 +1942,6 @@
       ],
       "shader": "shaders/gbuffer_inst.hlsl",
       "type": "instancedModels"
-    },
-    {
-      "enabled": true,
-      "id": 78,
-      "material": "bronze",
-      "metalRough": [
-        1.0,
-        0.0
-      ],
-      "model": "models/sphere.obj",
-      "name": "staticMesh #58 Copy",
-      "position": [
-        -6.52510404586792,
-        5.800000190734863,
-        -12.0
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh",
-      "useMR": false
-    },
-    {
-      "computeShader": "shaders/instance_anim.hlsl",
-      "count": 100,
-      "enabled": true,
-      "id": 79,
-      "material": "bronze",
-      "model": "models/teapot.obj",
-      "name": "instancedModels #68 Copy",
-      "position": [
-        0.0,
-        6.0,
-        16.18000030517578
-      ],
-      "rotationDeg": [
-        0.0,
-        -5.702901363372803,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer_inst.hlsl",
-      "type": "instancedModels"
-    },
-    {
-      "absorption": [
-        0.16,
-        0.07,
-        0.03
-      ],
-      "enabled": true,
-      "id": 80,
-      "ior": 1.1,
-      "model": "models/sphere.obj",
-      "name": "transparentMesh #7 111",
-      "normalMap": "textures/damaged_plaster_normal.dds",
-      "position": [
-        1.6497071981430054,
-        0.5,
-        4.739502429962158
-      ],
-      "reflectionStrength": 4.25,
-      "refractionDistortion": 1.0,
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "roughness": 0.05,
-      "scale": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929
-      ],
-      "thickness": 0.65,
-      "tint": [
-        0.78,
-        0.9,
-        1.0
-      ],
-      "type": "transparentMesh"
-    },
-    {
-      "enabled": true,
-      "id": 98,
-      "material": "damaged_plaster",
-      "model": "models/box.obj",
-      "name": "staticMesh #2 Copy",
-      "position": [
-        -6.335277080535889,
-        0.5,
-        -0.42332398891448975
-      ],
-      "rotateSpeedDeg": 0.0,
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 99,
-      "material": "damaged_plaster",
-      "model": "models/box.obj",
-      "name": "staticMesh #2 Copy Copy",
-      "position": [
-        -5.667100429534912,
-        0.5,
-        4.373011589050293
-      ],
-      "rotateSpeedDeg": 0.0,
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -2112,9 +1971,10 @@
         1.0,
         0.0
       ],
+      "enabled": true,
       "intensity": 15.0,
       "position": [
-        2.4,
+        2.4000000953674316,
         3.5,
         -12.0
       ],
@@ -2135,22 +1995,6 @@
       ],
       "radius": 2.0,
       "shadowsEnabled": false
-    },
-    {
-      "color": [
-        1.0,
-        0.0,
-        0.0
-      ],
-      "enabled": true,
-      "intensity": 15.0,
-      "position": [
-        9.178237915039063,
-        5.5,
-        -16.005956649780273
-      ],
-      "radius": 2.0,
-      "shadowsEnabled": false
     }
   ],
   "skybox": {
@@ -2164,20 +2008,19 @@
         0.6
       ],
       "direction": [
-        0.3214018940925598,
-        -0.7071067094802856,
-        -0.6298420429229736
+        -1.0,
+        -1.0,
+        0.0
       ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
+      "innerAngleDeg": 18.0,
       "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
+      "outerAngleDeg": 28.0,
       "position": [
-        -0.549543023109436,
         4.0,
-        -8.257765769958496
+        4.0,
+        -3.0
       ],
-      "range": 23.299999237060547,
+      "range": 20.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
       "shadowsEnabled": true
@@ -2200,179 +2043,6 @@
         -5.0,
         5.0,
         -6.0
-      ],
-      "range": 25.0,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        1.0,
-        0.85,
-        0.6
-      ],
-      "direction": [
-        -0.2503381371498108,
-        -0.7071066498756409,
-        -0.6613101363182068
-      ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
-      "position": [
-        11.870731353759766,
-        4.0,
-        -11.386822700500488
-      ],
-      "range": 23.299999237060547,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        1.0,
-        0.85,
-        0.6
-      ],
-      "direction": [
-        -0.679000973701477,
-        -0.7071066498756409,
-        0.19737772643566132
-      ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
-      "position": [
-        15.123939514160156,
-        4.000000953674316,
-        -21.882057189941406
-      ],
-      "range": 23.299999237060547,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        1.0,
-        0.85,
-        0.6
-      ],
-      "direction": [
-        0.2589053511619568,
-        -0.7071068286895752,
-        0.6580030918121338
-      ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
-      "position": [
-        -0.7361001968383789,
-        4.000001907348633,
-        -18.953529357910156
-      ],
-      "range": 23.299999237060547,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        1.0,
-        0.85,
-        0.6
-      ],
-      "direction": [
-        0.6469802260398865,
-        -0.7071068286895752,
-        -0.2853359580039978
-      ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
-      "position": [
-        -8.480936050415039,
-        4.000002384185791,
-        27.386228561401367
-      ],
-      "range": 23.299999237060547,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        1.0,
-        0.85,
-        0.6
-      ],
-      "direction": [
-        0.5790231823921204,
-        -0.7071065306663513,
-        0.40587273240089417
-      ],
-      "enabled": true,
-      "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
-      "outerAngleDeg": 40.599998474121094,
-      "position": [
-        -8.931707382202148,
-        4.000000953674316,
-        12.121796607971191
-      ],
-      "range": 23.299999237060547,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        0.6,
-        0.8,
-        1.0
-      ],
-      "direction": [
-        0.4364357888698578,
-        -0.8728715777397156,
-        0.2182178944349289
-      ],
-      "innerAngleDeg": 20.0,
-      "intensity": 18.0,
-      "outerAngleDeg": 32.0,
-      "position": [
-        -9.30030345916748,
-        5.000000953674316,
-        -2.8949360847473145
-      ],
-      "range": 25.0,
-      "shadowDepthBias": 0.0001,
-      "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
-    },
-    {
-      "color": [
-        0.6,
-        0.8,
-        1.0
-      ],
-      "direction": [
-        0.4364357888698578,
-        -0.8728715777397156,
-        0.2182178944349289
-      ],
-      "innerAngleDeg": 20.0,
-      "intensity": 18.0,
-      "outerAngleDeg": 32.0,
-      "position": [
-        -8.668525695800781,
-        5.000000953674316,
-        2.2497804164886475
       ],
       "range": 25.0,
       "shadowDepthBias": 0.0001,

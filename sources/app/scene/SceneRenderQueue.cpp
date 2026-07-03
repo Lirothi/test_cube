@@ -50,6 +50,8 @@ void SceneRenderQueue::Clear()
 
 void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster)
 {
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueBucketize);
+
     Clear();
 
     for (const auto& obj : objects)

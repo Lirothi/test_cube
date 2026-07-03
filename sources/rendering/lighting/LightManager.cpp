@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "core/math/Frustum.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/Renderer.h"
 
 LightManager::~LightManager()
@@ -27,6 +28,8 @@ void LightManager::UpdateSpotLightCache()
 
 void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum)
 {
+    CPU_SCOPE(ProfilerScopes::kSelectShadowedSpots);
+
     // Reset every spot to "unshadowed"; sized to the full spot list so
     // GetSpotShadowSlot is safe for any lit index.
     spotShadowSlot_.assign(spotLights_.size(), -1);
@@ -112,6 +115,8 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
 
 void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum)
 {
+    CPU_SCOPE(ProfilerScopes::kSelectShadowedPoints);
+
     // Point-light analog of SelectShadowedSpots (see that function for the rationale
     // on frustum-cull-then-projected-size and the stable index-order slot assignment).
     // The only difference: a point light is omnidirectional, so its influence bound is

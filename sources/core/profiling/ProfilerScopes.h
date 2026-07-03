@@ -65,6 +65,9 @@ extern const Profiler::ScopeNameKey kAddPass;
 extern const Profiler::ScopeNameKey kPrepareViews;
 extern const Profiler::ScopeNameKey kPrepareQueue;
 extern const Profiler::ScopeNameKey kUpdateCascades;
+extern const Profiler::ScopeNameKey kSelectShadowedSpots;
+extern const Profiler::ScopeNameKey kSelectShadowedPoints;
+extern const Profiler::ScopeNameKey kSceneRenderQueueBucketize;
 
 // TextManager
 extern const Profiler::ScopeNameKey kTextManagerBuild;
