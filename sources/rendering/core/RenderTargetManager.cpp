@@ -559,7 +559,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         D.spotShadowRes = 512;
         CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);
 
-        D.pointShadowRes = 512;
+        D.pointShadowRes = 256;
         CreatePointShadow(f, D.pointShadow, D.pointShadowDSV, D.pointShadowSRV, D.pointShadowRes);
 
         CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);

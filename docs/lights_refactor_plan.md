@@ -403,18 +403,30 @@ distant point lights are shadowless; the shadowed set updates as the camera move
 deferred and transparent (glass) point lighting agree. Tune bias to kill acne without
 peter-panning. `--scene-stress` exit 0.
 
-### Step B4 — Polish
+### Step B4 — Polish — DONE
 
-Bias model FIXED (first B4 pass, awaiting visual confirm): the initial B3 used a **constant
-NDC bias (0.05)**, which is unusable — with near=0.05/far=radius the perspective depth is
-crushed into ~[0.95,1] at any real distance, so a fixed NDC bias is enormous up close (no
-shadow) and vanishes far away → "shadows only when the light is nearly touching the object."
-Three changes: (1) **world-space depth bias** — subtract a world amount from the compare
-distance `m` BEFORE projecting (`mBiased = max(m − bias, near)`), uniform at all distances;
-(2) **near bumped to `max(0.2, radius·0.05)`** (both Scene.cpp render + shadowParams.z) so
-far/near ~20 not ~200 → usable D16 precision; (3) **normal-offset bias** (`P + N·0.05`, like
-the spot path) for grazing-angle acne. Current constants: worldDepthBias=0.10, normalBias=0.05.
-Remaining: PCF on the cube sample; final bias tuning against the visual; confirm both builds.
+**Bias model** (user-confirmed fixed): the initial B3 used a **constant NDC bias (0.05)**,
+which is unusable — with near=0.05/far=radius the perspective depth is crushed into ~[0.95,1]
+at any real distance, so a fixed NDC bias is enormous up close (no shadow) and vanishes far
+away → "shadows only when the light is nearly touching the object." Three changes: (1)
+**world-space depth bias** — subtract a world amount from the compare distance `m` BEFORE
+projecting (`mBiased = max(m − bias, near)`), uniform at all distances; (2) **near bumped to
+`max(0.2, radius·0.05)`** (both Scene.cpp render + shadowParams.z) so far/near ~20 not ~200 →
+usable D16 precision; (3) **normal-offset bias** (`P + N·0.05`, like the spot path) for
+grazing-angle acne. Constants: worldDepthBias=0.10, normalBias=0.05.
+
+**PCF**: `PointShadowFactor` (both `pointlight_cs.hlsl` + `glass.hlsl`) now averages **8
+cube-corner comparison taps** (each SampleCmpLevelZero is itself 2×2 HW PCF via the linear
+comparison sampler). Offset radius = `m · 0.015` (scales with light distance so the
+world-space filter footprint stays ~constant). Shader-only (no C++), runtime-compiled.
+
+Verified: `--scene-stress` on the **Debug** build (debug layer active) = exit 0, `verdict:
+CLEAN after 300 iterations` (PCF shaders compile + render across all levels incl. demo1's
+shadowed point lights). PCF adds no new resource/barrier/descriptor → no new GBV surface.
+Both builds already 0/0 from B3. Remaining knobs if visual tuning wanted: kPointPcfRadius
+(softness), worldDepthBias/normalBias (acne↔peter-panning).
+
+**PART B COMPLETE — point lights cast soft omnidirectional shadows (cap 4, frustum+projected-size selection).**
 
 ---
 

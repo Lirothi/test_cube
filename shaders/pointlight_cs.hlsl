@@ -38,7 +38,13 @@ SamplerComparisonState gSmpShadowCmp : register(s2);
 // standard-projection compare depth from the world offset (matches the render:
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far — NOT reverse-Z), then
 // SampleCmpLevelZero on the cube-array slice. Returns 1 (lit) .. 0 (fully shadowed).
-static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+static const float kPointNormalBias = 0.05f;  // world units, along the surface normal (B4)
+static const float kPointPcfRadius  = 0.015f; // PCF disk radius as a fraction of the light distance
+// 8 cube-corner offset directions for the PCF kernel (each SampleCmp is itself 2x2 HW PCF).
+static const float3 kPointPcfOffsets[8] = {
+    float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
+    float3( 1,  1, -1), float3( 1, -1, -1), float3(-1, -1, -1), float3(-1,  1, -1)
+};
 float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
@@ -51,8 +57,18 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
     // real distance, so a fixed NDC bias is huge up close (no shadow) and nil far away.
     float mBiased = max(m - Ld.shadowParams.y, nearP);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
-    return PointShadowCube.SampleCmpLevelZero(gSmpShadowCmp,
-        float4(d, Ld.shadowParams.x), zc); // .w = CUBE INDEX (slot)
+    // PCF: average 8 comparison taps on the cube. The offset scales with m so the world-space
+    // filter footprint stays ~constant with distance (a fixed dir offset blurs near, sharpens far).
+    float radius = m * kPointPcfRadius;
+    float shadow = 0.0f;
+    [unroll]
+    for (int i = 0; i < 8; ++i)
+    {
+        float3 sd = d + kPointPcfOffsets[i] * radius;
+        shadow += PointShadowCube.SampleCmpLevelZero(gSmpShadowCmp,
+            float4(sd, Ld.shadowParams.x), zc); // .w = CUBE INDEX (slot)
+    }
+    return shadow * 0.125f;
 }
 
 cbuffer PointLightFrame : register(b0)

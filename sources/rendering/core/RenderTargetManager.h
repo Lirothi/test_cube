@@ -76,7 +76,7 @@ public:
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
-        UINT pointShadowRes = 512; // per cube face
+        UINT pointShadowRes = 256; // per cube face
     };
 
     struct Formats {

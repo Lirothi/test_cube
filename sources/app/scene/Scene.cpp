@@ -637,10 +637,10 @@ void Scene::PrepareViews(Renderer* renderer)
         const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
         const auto& desc = pointLights[lightIndex].GetDesc();
         const float3 P = desc.position;
-        // near = 5% of radius (min 0.2) so far/near stays ~20 (not ~200) for usable D16
+        // near = 2% of radius (min 0.2) so far/near stays ~20 (not ~200) for usable D16
         // precision. MUST equal Pass_PointLights' shadowParams.z — the sampler reconstructs
         // the compare depth with this exact near/far (see PointShadowFactor).
-        const float nearPlane = std::max(0.2f, desc.radius * 0.05f);
+        const float nearPlane = std::max(0.2f, desc.radius * 0.02f);
         const float farPlane = std::max(desc.radius, nearPlane + 0.1f);
         const mat4 proj = mat4::PerspectiveFovLH(kHalfPi, 1.0f, nearPlane, farPlane);
         for (int face = 0; face < 6; ++face)

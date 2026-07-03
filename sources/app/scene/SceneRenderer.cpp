@@ -1584,7 +1584,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             // reconstructs the compare depth from it. Bias is WORLD-space (subtracted from the
             // compare distance before projecting); a constant NDC bias is unusable in the
             // crushed far region of a perspective depth buffer (B4 tuning).
-            const float pointShadowNear = std::max(0.2f, desc.radius * 0.05f);
+            const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
             constexpr float kPointShadowBias = 0.10f; // world units
             pointLightBufferCPU[i].shadowParams = float4(
                 static_cast<float>(lightManager.GetPointShadowSlot(i)),

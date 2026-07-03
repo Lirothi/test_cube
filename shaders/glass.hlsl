@@ -80,7 +80,12 @@ SamplerState EnvSampler : register(s2);
 // compare distance before projecting to the standard-projection depth (render is
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far), then SampleCmpLevelZero on
 // the cube-array slice (.w = cube index/slot). 1 = lit, 0 = shadowed.
-static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+static const float kPointNormalBias = 0.05f;  // world units, along the surface normal (B4)
+static const float kPointPcfRadius  = 0.015f; // PCF disk radius as a fraction of the light distance
+static const float3 kPointPcfOffsets[8] = {
+    float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
+    float3( 1,  1, -1), float3( 1, -1, -1), float3(-1, -1, -1), float3(-1,  1, -1)
+};
 float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
@@ -90,8 +95,18 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
     float mBiased = max(m - Ld.shadowParams.y, nearP);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
-    return PointShadowCube.SampleCmpLevelZero(ShadowSampler,
-        float4(d, Ld.shadowParams.x), zc);
+    // PCF: 8 cube taps, offset scaled by m for a ~constant world-space footprint (mirrors
+    // PointShadowFactor in pointlight_cs.hlsl).
+    float radius = m * kPointPcfRadius;
+    float shadow = 0.0f;
+    [unroll]
+    for (int i = 0; i < 8; ++i)
+    {
+        float3 sd = d + kPointPcfOffsets[i] * radius;
+        shadow += PointShadowCube.SampleCmpLevelZero(ShadowSampler,
+            float4(sd, Ld.shadowParams.x), zc);
+    }
+    return shadow * 0.125f;
 }
 
 struct VSIn
