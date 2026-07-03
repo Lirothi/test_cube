@@ -68,6 +68,8 @@ extern const Profiler::ScopeNameKey kUpdateCascades;
 extern const Profiler::ScopeNameKey kSelectShadowedSpots;
 extern const Profiler::ScopeNameKey kSelectShadowedPoints;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketize;
+extern const Profiler::ScopeNameKey kSceneRenderQueueCull;
+extern const Profiler::ScopeNameKey kSceneRenderQueueBuildInstancedBatchesForBucket;
 
 // TextManager
 extern const Profiler::ScopeNameKey kTextManagerBuild;

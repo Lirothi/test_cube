@@ -184,6 +184,8 @@ void SceneRenderQueue::SelectLods(const Camera& camera)
 
 void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor, bool computeLodBuckets)
 {
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueBuildInstancedBatchesForBucket);
+
     ObjectBucket& bucket = visibleBuckets_[ToIndex(type)];
     if (bucket.size() < render::kInstancingThreshold)
     {
@@ -264,7 +266,8 @@ void SceneRenderQueue::Cull(const Frustum& frustum)
 
 void SceneRenderQueue::Cull(const Frustum& frustum, const SceneRenderQueue& source)
 {
-    //CPU_SCOPE(ProfilerScopes::kService3);
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueCull);
+
     for (auto& bucket : visibleBuckets_)
     {
         bucket.clear();
