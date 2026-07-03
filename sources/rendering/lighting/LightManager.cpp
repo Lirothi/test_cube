@@ -110,6 +110,69 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     }
 }
 
+void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum)
+{
+    // Point-light analog of SelectShadowedSpots (see that function for the rationale
+    // on frustum-cull-then-projected-size and the stable index-order slot assignment).
+    // The only difference: a point light is omnidirectional, so its influence bound is
+    // exactly a sphere (position, radius) rather than a cone AABB.
+    pointShadowSlot_.assign(pointLights_.size(), -1);
+    shadowedPointLightIndices_.clear();
+
+    const size_t candidateCount = pointLights_.size();
+    if (candidateCount == 0)
+    {
+        return;
+    }
+
+    struct Candidate { std::uint32_t index; float score; };
+    std::vector<Candidate> candidates;
+    candidates.reserve(candidateCount);
+    constexpr float kMinPriorityDistance = 0.25f;
+    for (size_t i = 0; i < candidateCount; ++i)
+    {
+        const PointLightDesc& desc = pointLights_[i].GetDesc();
+        if (!desc.shadowsEnabled || desc.radius <= 0.0f)
+        {
+            continue; // lights the scene, but never a cube-shadow caster
+        }
+        if (!cameraFrustum.Intersects(desc.position, desc.radius))
+        {
+            continue; // reach never touches the view -> no visible shadow
+        }
+
+        const Math::float3 toCenter = desc.position - cameraPos;
+        const float centerDistance = std::sqrt(toCenter.Dot(toCenter));
+        const float priorityDistance = std::max(centerDistance - desc.radius, kMinPriorityDistance);
+        const float projectedSize = desc.radius / priorityDistance;
+        const float score = projectedSize * projectedSize;
+        candidates.push_back({ static_cast<std::uint32_t>(i), score });
+    }
+
+    // Select WHICH points are shadowed by projected size, then assign slots in stable
+    // ascending-index order (see SelectShadowedSpots for why slot order must be stable).
+    const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedPointLights);
+    std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
+        [](const Candidate& a, const Candidate& b)
+        {
+            if (a.score == b.score)
+            {
+                return a.index < b.index;
+            }
+            return a.score > b.score;
+        });
+    std::sort(candidates.begin(), candidates.begin() + shadowCount,
+        [](const Candidate& a, const Candidate& b) { return a.index < b.index; });
+
+    shadowedPointLightIndices_.reserve(shadowCount);
+    for (size_t s = 0; s < shadowCount; ++s)
+    {
+        const std::uint32_t lightIndex = candidates[s].index;
+        shadowedPointLightIndices_.push_back(lightIndex);
+        pointShadowSlot_[lightIndex] = static_cast<int>(s);
+    }
+}
+
 void LightManager::ReleasePointLightBuffer(Renderer* renderer)
 {
     if (pointLightBuffer_)
@@ -352,5 +415,7 @@ void LightManager::Reset()
     cachedSpotLightCount_ = 0;
     spotShadowSlot_.clear();
     shadowedSpotLightIndices_.clear();
+    pointShadowSlot_.clear();
+    shadowedPointLightIndices_.clear();
 }
 

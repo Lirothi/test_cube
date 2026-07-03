@@ -286,42 +286,72 @@ renders identically to today.
 
 ### Step B2 — Selection + cube shadow views + shadow render pass
 
-Renders shadows but nothing samples them yet → behavior identical.
+B2 is the largest step of Part B, so it is split into **B2a (CPU: selection + buffer
+wiring)** and **B2b (GPU: cube views, the distance shader, and the render pass)**. Both
+leave behavior identical (nothing samples the atlas until B3). B2a is small, safe, and the
+direct analog of the spot-light Step A2 selection; B2b holds all the view/shader/render-graph
+complexity and the runtime (run + GPU-capture) verification.
 
-- `LightManager.{h,cpp}` — mirror Part A's **frustum-cull + projected-size** selection
-  (NOT closest-by-distance): `SelectShadowedPoints(const Math::float3& cameraPos, const
-  Frustum& cameraFrustum)`, `pointShadowSlot_` (`-1` sentinel), `shadowedPointLightIndices_`,
+#### Step B2a — Point shadow selection + `Pass_PointLights` slot fill (CPU only)
+
+Mirror the spot selection exactly; no views, no render pass, no shader yet. Inert until
+B2b renders the atlas and B3 samples it, so the scene is unchanged.
+
+- `LightManager.{h,cpp}` — add `SelectShadowedPoints(const Math::float3& cameraPos, const
+  Frustum& cameraFrustum)` mirroring `SelectShadowedSpots`: `pointShadowSlot_` (`-1`
+  sentinel, parallel to `pointLights_`), `shadowedPointLightIndices_` (slot → light index),
   and accessors `GetShadowedPointCount()`, `GetPointShadowSlot(size_t)`,
   `GetShadowedPointLightIndex(size_t)`. A point light is a candidate only if (a) its
-  `PointLightDesc::shadowsEnabled` flag is set and (b) its influence intersects the camera
-  frustum. Point lights are omnidirectional, so the influence bound is exactly a **sphere**
-  `(position, radius)` — simpler than the spot cone AABB; call
-  `cameraFrustum.Intersects(position, radius)` (the sphere overload added for Part A).
-  Score survivors by projected size `(radius / max(distToCenter − radius, ε))²` and take the
-  top `min(count, kMaxShadowedPointLights)` (descending, ties by index), assigning cube slots
-  in that order. Optionally fold in `intensity × luminance` like the spot path. Call it from
-  `Scene::PrepareViews` passing `mainView.frustum` (already computed there), right after
-  `SelectShadowedSpots`.
+  `PointLightDesc::shadowsEnabled` is set, (b) `radius > 0`, and (c) its influence intersects
+  the camera frustum. Point lights are omnidirectional, so the influence bound is exactly a
+  **sphere** `(position, radius)` — call `cameraFrustum.Intersects(position, radius)` (the
+  sphere overload). Score survivors by projected size `(radius / max(distToCenter − radius,
+  ε))²`; `partial_sort` the top `min(count, kMaxShadowedPointLights)` by score, then — as with
+  spots — **`std::sort` the selected set by ascending light index** so slot assignment is
+  temporally stable (avoids per-frame reshuffle; the ring-buffered light buffer already makes
+  the cross-frame read safe, this keeps the atlas slice per light steady). Clear both vectors
+  in `Reset()`.
+- `Scene.cpp` (`PrepareViews`) — call `SelectShadowedPoints(camera_.GetPosition(),
+  shadowSelectFrustum)` right after `SelectShadowedSpots`, passing the **same non-jittered
+  `shadowSelectFrustum`** (never `mainView.frustum` — the DLSS jitter would flicker the
+  selection; this is why the spot version was changed).
+- `Pass_PointLights` fill — replace the B1 `shadowParams = float4(-1,0,0,0)` with
+  `shadowParams = float4((float)GetPointShadowSlot(i), bias, nearPlane, desc.radius)`
+  (bias/near are small constants for now, tuned in B4; slot is `-1` for unshadowed points).
+
+Acceptance: both builds `0/0`; `--scene-stress` exit 0; **run** — no visual change (the slot
+is written but nothing renders/samples the atlas yet). Optionally log the selected point set
+to confirm selection engages (mirror the spot diagnostic).
+
+#### Step B2b — Cube views + distance shader + `Pass_PointShadows` (GPU)
+
+Renders shadows into the atlas but nothing samples them yet → behavior identical.
+
 - `Scene.h` / `SceneFrameData.h` — add `pointShadowViews_[kMaxShadowedPointLights * 6]`
-  (6 cube-face views per shadowed light).
+  (6 cube-face views per shadowed light) + the `SceneFrameData` pointer.
 - `Scene.cpp` (`PrepareViews`) — after `SelectShadowedPoints`, build the 6 face views per
-  shadowed light: light position, 90° FOV, near/far, the 6 standard cube orientations
-  (±X, ±Y, ±Z). Enqueue them for culling like spot views (each face frustum-culls the
-  shared `shadowCasterSource_`). Reuse the same ordering discipline as Part A.
+  shadowed light: light position, **90° FOV**, near = small const, far = radius, the 6
+  standard cube orientations (±X, ±Y, ±Z — use the correct per-face up vectors; ±Y faces must
+  use a Z up or the `LookAt` is degenerate). Enqueue them for culling like spot views (each
+  face frustum-culls the shared `shadowCasterSource_`). **Bump the `viewsToCull` inl_vector
+  capacity** (main + shore + cascades + ≤8 spots + ≤24 point faces > 32).
+- New **linear-distance shadow shader + material/PSO**: a tiny pixel shader that writes
+  `length(worldPos − lightPos)` (or `/radius`, matching B1's normalized-distance choice) into
+  the `R16_FLOAT` face RTV. Objects render into it via a **distance-output variant of
+  `RenderShadow`** — the current shadow path (`gbuffer_instcb_csm.hlsl`, depth-only) is
+  implemented in `RenderableObject::RenderShadow` and `InstancedDrawBatch::RenderShadow`; both
+  need a mode/PSO that binds the distance shader and passes `lightPos`. This is the crux of B2b.
 - `SceneRenderer.{h,cpp}` — add `Pass_PointShadows` mirroring `Pass_SpotShadows`: for each
-  shadowed light × 6 faces, `BindPointShadowTarget(slot, face, clear)` then render the
-  face's visible opaque buckets. Linear-distance approach: use the new distance-output
-  shadow shader (a variant `RenderShadow` path, or a dedicated material) so faces store
-  world distance; depth approach: reuse the existing depth `RenderShadow`. Register the
-  pass in the render graph with correct resource-state transitions (the atlas → render
-  target/depth-write during the pass, → SRV-read before the lighting passes), mirroring
-  the spot atlas transitions.
-- `Pass_PointLights` fill — set `shadowParams.x = (float)GetPointShadowSlot(i)`,
-  `shadowParams.y = bias`, `.z = near`, `.w = radius` (far).
+  shadowed light × 6 faces, `BindPointShadowTarget(slot, face, clear)` then render the face's
+  visible opaque buckets with the distance material. The shared `D16` scratch depth (B1) means
+  the 24 faces render **serially** (each `BindPointShadowTarget` clears the shared depth) — do
+  NOT parallelize faces onto one depth buffer. Register the pass in the render graph with
+  correct resource-state transitions (atlas → RENDER_TARGET during the pass, → SRV-read before
+  the lighting passes), mirroring the spot atlas transitions.
 
 Acceptance: both builds `0/0`; `--scene-stress` exit 0; **run** — no visual change yet
 (shadows render into the atlas but the lighting shaders ignore them). If you have a
-GPU capture tool, confirm the atlas is populated.
+GPU capture tool (PIX), confirm the atlas is populated with plausible distances.
 
 ### Step B3 — Sample point shadows in the lighting shaders (behavioral flip)
 

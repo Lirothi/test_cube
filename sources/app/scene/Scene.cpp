@@ -589,6 +589,10 @@ void Scene::PrepareViews(Renderer* renderer)
     const Frustum shadowSelectFrustum = Frustum::FromInvViewProj(
         mainView.invView, camera_.GetProjMatrixNoJitter(), camera_.GetZNear(), camera_.GetZFar());
     lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum);
+    // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
+    // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
+    // B2b, sampling is B3, so this is inert (no visual change) until those land.
+    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum);
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)

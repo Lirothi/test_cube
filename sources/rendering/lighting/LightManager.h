@@ -83,6 +83,29 @@ public:
     {
         return slot < shadowedSpotLightIndices_.size() ? shadowedSpotLightIndices_[slot] : 0;
     }
+
+    // Per-frame point-light equivalent of SelectShadowedSpots. Among point lights
+    // whose influence sphere (position, radius) intersects the camera frustum and
+    // which have shadows enabled, choose the highest projected-size up to
+    // kMaxShadowedPointLights to cast (cube) shadows, assigning each a cube slot in
+    // [0, GetShadowedPointCount()). Pass the SAME non-jittered frustum used for
+    // spots. Must run before the point cube views are built / the point-light buffer
+    // is filled.
+    void SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum);
+
+    // Number of point lights casting a shadow this frame (<= kMaxShadowedPointLights).
+    size_t GetShadowedPointCount() const { return shadowedPointLightIndices_.size(); }
+    // Cube-atlas slot for a point-light index, or -1 if it is not shadowed.
+    int GetPointShadowSlot(size_t lightIndex) const
+    {
+        return lightIndex < pointShadowSlot_.size() ? pointShadowSlot_[lightIndex] : -1;
+    }
+    // Inverse of the slot map: which point-light index owns a given cube slot.
+    size_t GetShadowedPointLightIndex(size_t slot) const
+    {
+        return slot < shadowedPointLightIndices_.size() ? shadowedPointLightIndices_[slot] : 0;
+    }
+
     bool EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
     bool EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
@@ -117,6 +140,9 @@ private:
     // Per-frame shadow-slot mapping (see SelectShadowedSpots).
     std::vector<int> spotShadowSlot_;                       // parallel to spotLights_; -1 = unshadowed
     std::vector<std::uint32_t> shadowedSpotLightIndices_;   // slot -> spot-light index
+    // Per-frame point cube-shadow-slot mapping (see SelectShadowedPoints).
+    std::vector<int> pointShadowSlot_;                      // parallel to pointLights_; -1 = unshadowed
+    std::vector<std::uint32_t> shadowedPointLightIndices_;  // slot -> point-light index
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
     // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
     // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.

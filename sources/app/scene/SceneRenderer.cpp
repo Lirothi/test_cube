@@ -1467,9 +1467,14 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             pointLightBufferCPU[i].radius = desc.radius;
             pointLightBufferCPU[i].color = desc.color;
             pointLightBufferCPU[i].intensity = desc.intensity;
-            // B1: point shadows not selected/sampled yet — mark every light unshadowed.
-            // (B2 fills the slot from GetPointShadowSlot(i); B3 samples it.)
-            pointLightBufferCPU[i].shadowParams = float4(-1.0f, 0.0f, 0.0f, 0.0f);
+            // B2a: write the per-light cube-shadow slot (-1 = unshadowed) chosen by
+            // SelectShadowedPoints, plus bias/near/far(=radius). Inert until B2b renders
+            // the atlas and B3 samples it; bias/near are placeholders tuned in B4.
+            constexpr float kPointShadowBias = 0.05f;
+            constexpr float kPointShadowNear = 0.05f;
+            pointLightBufferCPU[i].shadowParams = float4(
+                static_cast<float>(lightManager.GetPointShadowSlot(i)),
+                kPointShadowBias, kPointShadowNear, desc.radius);
         }
 
         auto pointMaterial = resources_.GetPointLightMaterial();
