@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cmath>
 
+#include "core/math/Frustum.h"
 #include "rendering/core/Renderer.h"
 
 LightManager::~LightManager()
@@ -14,7 +15,7 @@ void LightManager::UpdateSpotLightCache()
 {
     // Step A3: the total spot-light count is uncapped — every spot lights the
     // scene. Shadow casting is separately capped per frame by SelectShadowedSpots
-    // (kMaxShadowedSpotLights, closest to the camera); spots outside that set
+    // (kMaxShadowedSpotLights, highest projected importance); spots outside that set
     // render shadowless via the shadowParams.y = -1 sentinel.
     cachedSpotLightCount_ = spotLights_.size();
 
@@ -24,34 +25,66 @@ void LightManager::UpdateSpotLightCache()
     }
 }
 
-void LightManager::SelectShadowedSpots(const Math::float3& cameraPos)
+void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum)
 {
     // Reset every spot to "unshadowed"; sized to the full spot list so
     // GetSpotShadowSlot is safe for any lit index.
     spotShadowSlot_.assign(spotLights_.size(), -1);
     shadowedSpotLightIndices_.clear();
 
-    // Candidates are the lit (cached) spots. Pick the closest
-    // min(count, kMaxShadowedSpotLights) by squared distance to the camera and
-    // assign each an atlas slot in ascending-distance order.
     const size_t candidateCount = cachedSpotLightCount_;
     if (candidateCount == 0)
     {
         return;
     }
 
-    struct Candidate { std::uint32_t index; float distSq; };
+    // Candidates = lit spots whose influence intersects the camera frustum. A spot
+    // whose reach never touches the view cannot cast a visible shadow, so it never
+    // consumes a scarce shadow slot even if it is physically close to the camera
+    // (e.g. behind it). Among the survivors, pick the most important
+    // min(count, kMaxShadowedSpotLights) by projected cone-bound size and brightness.
+    //
+    // Influence bound: the cached world-space AABB of the finite outer cone. It
+    // encloses the real cone, so this remains conservative, while rejecting many
+    // false positives from the previous apex-centered sphere.
+    struct Candidate { std::uint32_t index; float score; };
     std::vector<Candidate> candidates;
     candidates.reserve(candidateCount);
+    constexpr float kMinPriorityDistance = 0.25f;
     for (size_t i = 0; i < candidateCount; ++i)
     {
-        const Math::float3 d = spotLights_[i].GetDesc().position - cameraPos;
-        candidates.push_back({ static_cast<std::uint32_t>(i), d.Dot(d) });
+        const SpotLight& spot = spotLights_[i];
+        const SpotLightDesc& desc = spot.GetDesc();
+        const AABB& influenceBounds = spot.GetConeBounds();
+        if (!cameraFrustum.Intersects(influenceBounds))
+        {
+            continue;
+        }
+
+        const Math::float3 boundsCenter = influenceBounds.GetCenter();
+        const float boundsRadius = influenceBounds.GetRadius();
+        const Math::float3 toBounds = boundsCenter - cameraPos;
+        const float centerDistance = std::sqrt(toBounds.Dot(toBounds));
+        const float priorityDistance = std::max(centerDistance - boundsRadius, kMinPriorityDistance);
+        const float projectedSize = boundsRadius / priorityDistance;
+
+        const float luminance = std::max(0.0f,
+            desc.color.x * 0.2126f + desc.color.y * 0.7152f + desc.color.z * 0.0722f);
+        const float brightness = std::max(desc.intensity, 0.0f) * luminance;
+        const float score = projectedSize * projectedSize;// *brightness;
+        candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
-    const size_t shadowCount = std::min<size_t>(candidateCount, kMaxShadowedSpotLights);
+    const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedSpotLights);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
-        [](const Candidate& a, const Candidate& b) { return a.distSq < b.distSq; });
+        [](const Candidate& a, const Candidate& b)
+        {
+            if (a.score == b.score)
+            {
+                return a.index < b.index;
+            }
+            return a.score > b.score;
+        });
 
     shadowedSpotLightIndices_.reserve(shadowCount);
     for (size_t s = 0; s < shadowCount; ++s)

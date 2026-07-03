@@ -575,10 +575,11 @@ void Scene::PrepareViews(Renderer* renderer)
     }
     UpdateCascades(camera_, renderer);
 
-    // Choose which lit spots cast shadows this frame (closest to camera) and
-    // their atlas slots, then build one shadow view per slot from its owning
-    // light. Must precede the view build and the Pass_SpotLights buffer fill.
-    lightManager_.SelectShadowedSpots(camera_.GetPosition());
+    // Choose which lit spots cast shadows this frame (closest to camera, among
+    // those whose influence intersects the view frustum) and their atlas slots,
+    // then build one shadow view per slot from its owning light. Must precede the
+    // view build and the Pass_SpotLights buffer fill.
+    lightManager_.SelectShadowedSpots(camera_.GetPosition(), mainView.frustum);
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)

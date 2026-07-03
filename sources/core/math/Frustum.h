@@ -120,6 +120,30 @@ public:
         return true;
     }
 
+    // Sphere-vs-frustum test. Used to cull a light's influence volume: a light
+    // whose reach sphere does not touch the view frustum cannot affect any visible
+    // pixel, so it never needs a shadow. An invalid frustum conservatively passes.
+    bool Intersects(const Math::float3& center, float radius) const
+    {
+        if (!valid_)
+        {
+            return true;
+        }
+
+        DirectX::BoundingSphere sphere{ center.xf(), radius };
+        if (type_ == Type::Perspective)
+        {
+            return frustum_.Intersects(sphere);
+        }
+
+        if (type_ == Type::OrthoBox)
+        {
+            return orthoBox_.Intersects(sphere);
+        }
+
+        return true;
+    }
+
 private:
     enum class Type
     {

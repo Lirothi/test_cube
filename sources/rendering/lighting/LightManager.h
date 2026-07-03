@@ -11,12 +11,13 @@
 #include "rendering/lighting/SpotLight.h"
 
 class Renderer;
+class Frustum;
 
 class LightManager {
 public:
     // The total spot-light count is unbounded (the structured buffer grows on
-    // demand). Only shadow CASTERS are capped per frame — the closest
-    // kMaxShadowedSpotLights to the camera — which sizes the shadow atlas /
+    // demand). Only shadow CASTERS are capped per frame - the highest-priority
+    // kMaxShadowedSpotLights for the camera - which sizes the shadow atlas /
     // shadow-view array / DSV reservation. Distant spots still light the scene,
     // just without a shadow.
     static constexpr std::uint32_t kMaxShadowedSpotLights = 8;
@@ -50,12 +51,15 @@ public:
 
     void UpdateSpotLightCache();
 
-    // Per-frame: choose the closest (by squared distance to the camera) up to
-    // kMaxShadowedSpotLights lit spots to cast shadows, and assign each a shadow
-    // slot in [0, GetShadowedSpotCount()) in ascending-distance order. Must run
+    // Per-frame: among lit spots whose influence intersects the camera frustum,
+    // choose the highest-priority projected/bright spots up to
+    // kMaxShadowedSpotLights to cast shadows, and assign each a shadow slot in
+    // [0, GetShadowedSpotCount()) in descending-priority order. Frustum-culling
+    // first means a nearby spot that can't affect any visible pixel (e.g. behind
+    // the camera, out of reach) never consumes a scarce shadow slot. Must run
     // after UpdateSpotLightCache and before the spot shadow views are built /
     // the spot-light buffer is filled.
-    void SelectShadowedSpots(const Math::float3& cameraPos);
+    void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum);
 
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
 
