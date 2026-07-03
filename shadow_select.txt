@@ -1,0 +1,2 @@
+lit=2 candidates=1 shadowed=1
+lit=9 candidates=7 shadowed=7

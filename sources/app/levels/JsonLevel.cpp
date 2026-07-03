@@ -183,6 +183,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.intensity = sl.value("intensity", desc.intensity);
             desc.shadowNormalBias = sl.value("shadowNormalBias", desc.shadowNormalBias);
             desc.shadowDepthBias = sl.value("shadowDepthBias", desc.shadowDepthBias);
+            desc.shadowsEnabled = sl.value("shadowsEnabled", desc.shadowsEnabled);
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
         }
@@ -202,6 +203,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.radius = pl.value("radius", desc.radius);
             desc.color = ToFloat3(pl.value("color", json::array()), desc.color);
             desc.intensity = pl.value("intensity", desc.intensity);
+            desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }

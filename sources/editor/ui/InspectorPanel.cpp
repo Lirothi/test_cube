@@ -91,6 +91,12 @@ namespace
             if (ImGui::DragFloat3(label, v, speed)) { p[key] = { v[0], v[1], v[2] }; return true; }
             return false;
         };
+        auto checkB = [&](const char* label, const char* key, bool def)
+        {
+            bool v = p.value(key, def);
+            if (ImGui::Checkbox(label, &v)) { p[key] = v; return true; }
+            return false;
+        };
 
         bool changed = false;
         if (env.type == "pointLight")
@@ -99,6 +105,7 @@ namespace
             changed |= dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
             changed |= dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            changed |= checkB("Cast Shadows", "shadowsEnabled", false);
             if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
         }
         else if (env.type == "spotLight")
@@ -110,6 +117,7 @@ namespace
             changed |= dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
             changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             changed |= dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
+            changed |= checkB("Cast Shadows", "shadowsEnabled", false);
             changed |= dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f);
             changed |= dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f);
             if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }

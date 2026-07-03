@@ -55,6 +55,10 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     {
         const SpotLight& spot = spotLights_[i];
         const SpotLightDesc& desc = spot.GetDesc();
+        if (!desc.shadowsEnabled)
+        {
+            continue; // lights the scene, but opted out of casting shadows
+        }
         const AABB& influenceBounds = spot.GetConeBounds();
         if (!cameraFrustum.Intersects(influenceBounds))
         {

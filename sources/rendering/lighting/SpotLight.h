@@ -15,6 +15,7 @@ struct SpotLightDesc {
     float        shadowNormalBias = 0.01f;
     float        shadowDepthBias = 0.001f;
     float        nearPlane = 0.1f;
+    bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
 };
 
 class SpotLight {

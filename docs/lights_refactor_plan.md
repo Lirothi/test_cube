@@ -113,8 +113,8 @@ Split the fused constant: delete `kMaxSpotLights` (total cap) by the end; add
 `kMaxShadowedSpotLights = 8` for shadow-atlas size / shadow-view count / DSV reservation
 / `BindSpotShadowTarget` clamp.
 
-Each frame `LightManager` selects the closest ≤ `kMaxShadowedSpotLights` spots to the
-camera and assigns each a **shadow slot** in `[0, N)`, exposing:
+Each frame `LightManager` selects the ≤ `kMaxShadowedSpotLights` highest-priority
+frustum-visible spots and assigns each a **shadow slot** in `[0, N)`, exposing:
 - `GetSpotLightCount()` — all spots (drives lighting + buffer size), no longer capped.
 - `GetShadowedSpotCount()` — N ≤ 8 (drives shadow views + atlas slices rendered).
 - `GetSpotShadowSlot(lightIndex)` — atlas slice for that light, or `-1` if unshadowed.
@@ -126,7 +126,17 @@ unshadowed). Both spot shaders early-out (`return 1.0`) when `shadowParams.y < 0
 Slot/view/buffer stay coherent per frame even though the slot↔light mapping changes as
 the camera moves.
 
-**Selection metric:** distance² from camera position to spot-light position, ascending.
+**Selection metric (as implemented):** frustum-cull first, then rank by projected size —
+matching how Unreal/Unity pick shadow casters (frustum visibility + screen-space footprint,
+*not* raw distance). A spot is a candidate only if (a) its `shadowsEnabled` flag is set and
+(b) its cached world-space cone AABB (`SpotLight::GetConeBounds()`) intersects the camera
+frustum (a spot whose reach never touches the view — behind the camera, out of range — can't
+cast a visible shadow, so it never burns a slot). Survivors are scored by projected size
+`(boundsRadius / max(distToBoundsCenter − boundsRadius, ε))²` and the top N by score win
+slots (descending, ties broken by index). (Brightness — `intensity × luminance` — is computed
+and available to fold into the score but currently commented out; enable it to bias toward
+brighter lights.) Slot order is by score, not distance, but every light still renders into
+and samples *its own* slot, so the mapping stays coherent as the camera moves.
 
 ### Step A1 — Add `kMaxShadowedSpotLights`; resize the spot shadow atlas to it
 
@@ -144,8 +154,9 @@ Modify:
   (`.h:79`, `.cpp:1086`).
 
 Acceptance: both builds `0/0`; run — scene renders identically (4 spots, 4 shadows).
-**VRAM:** the atlas doubles (4→8 slices × `spotShadowRes²` × D32); confirm it fits at the
-configured resolution.
+**VRAM:** the atlas doubles (4→8 slices × `spotShadowRes²` × 2 bytes — the spot atlas is
+`R16_TYPELESS`/`D16`, 16-bit, per `CreateSpotShadow`); confirm it fits at the configured
+resolution.
 
 ### Step A2 — Per-frame shadow selection + slot mapping + shader sentinel
 
@@ -216,21 +227,30 @@ light. This is heavier than Part A — budget for it. Cap the shadowed set at
 `kMaxShadowedPointLights` (default **4**) → up to 24 face-renders/frame and a 24-slice
 shadow atlas. Non-shadowed point lights light the scene exactly as today.
 
+**Use 16-bit shadow targets** for the point atlas (`R16_FLOAT` for the linear-distance
+approach, or `D16` for the depth approach) — matching the spot shadow atlas (`R16`) and
+halving VRAM. This matters more than for spots because the cube array is **6× the slices**
+(24 vs 8 at the same tile resolution), so bit depth is the dominant VRAM lever.
+
 ### Approach decision (make this first)
 
 Two ways to store/compare cube shadow depth. Pick one before Step B1:
 
-- **(Recommended) Linear-distance cube.** Render each face storing the linear
-  world-space distance from the light into an `R32_FLOAT` cube-array color target (tiny
-  pixel shader: `output = length(worldPos - lightPos)`). Runtime sampling is trivial and
-  reverse-Z-independent: sample the cube by direction `(P - lightPos)`, compare
-  `length(P - lightPos) - bias > storedDist` ⇒ in shadow. Robust; costs one small new
-  shadow shader + an R32 cube atlas.
-- **(Alternative) Depth cube.** Reuse the existing depth `RenderShadow` for all 6 faces
-  into a `TextureCubeArray` D32 atlas; sample with `SampleCmpLevelZero(float4(dir,slice),
-  cmpDepth)`. Saves the new shadow shader but the runtime `cmpDepth` must be reconstructed
-  from the major-axis magnitude through the **reverse-Z** perspective the engine uses —
-  error-prone. Only choose this if you're confident with the reverse-Z depth math.
+- **(Recommended) Linear-distance cube.** Render each face storing the linear world-space
+  distance from the light into an **`R16_FLOAT`** cube-array color target (tiny pixel shader:
+  `output = length(worldPos - lightPos)`). Use **16-bit** (see above). To keep half-float
+  precision high across the whole range, store the **normalized** distance
+  `length(worldPos - lightPos) / radius` in `[0,1]` (`R16_FLOAT` resolves ~0.0005 near 1.0),
+  and compare in the same normalized space: `length(P - lightPos)/radius - bias > storedDist`
+  ⇒ in shadow. Runtime sampling is trivial and reverse-Z-independent: sample the cube by
+  direction `(P - lightPos)`. Robust; costs one small new shadow shader + an `R16` cube atlas.
+- **(Alternative) Depth cube.** Reuse the existing depth `RenderShadow` for all 6 faces into a
+  **`D16`** `TextureCubeArray` atlas (16-bit, like the spot atlas); sample with
+  `SampleCmpLevelZero(float4(dir,slice), cmpDepth)`. Saves the new shadow shader but the
+  runtime `cmpDepth` must be reconstructed from the major-axis magnitude through the
+  **reverse-Z** perspective the engine uses — error-prone, and `D16` gives less depth
+  precision than the linear-distance option. Only choose this if you're confident with the
+  reverse-Z depth math.
 
 The steps below assume the **linear-distance** approach; adapt names if you choose depth.
 All faces share one 90° FOV perspective (only orientation differs), near = small
@@ -247,10 +267,14 @@ No shadows rendered or sampled yet (slots all `-1`), so behavior is identical.
   `glass.hlsl`, and update the `StructureByteStride` in `EnsurePointLightBuffer`
   (`LightManager.cpp` — it's `sizeof(PointLightGpu)` there and in the SRV desc, so it
   tracks automatically; confirm). Keep 16-byte alignment.
-- `RenderTargetManager.{h,cpp}` — create the point shadow atlas: an `R32_FLOAT`
-  `TextureCubeArray` (or `Texture2DArray` with `6 * kMaxShadowedPointLights` slices), an
-  RTV per face (`6 * kMaxShadowedPointLights` RTVs) + a matching depth buffer for the
-  render, and one SRV (`TextureCubeArray`). Add its handles to the `Deferred` struct
+- `RenderTargetManager.{h,cpp}` — create the point shadow atlas: an **`R16_FLOAT`**
+  `TextureCubeArray` (or `Texture2DArray` with `6 * kMaxShadowedPointLights` slices) — 16-bit
+  to match the spot atlas (`R16`) and keep the 24-slice cube array's VRAM in check (mirror the
+  spot atlas's `R16_TYPELESS`/`R16` view pattern in `CreateSpotShadow`), an RTV per face
+  (`6 * kMaxShadowedPointLights` RTVs) + a small shared depth buffer for the render (a plain
+  `D16` scratch is fine — depth is only needed to rasterize each face, the distance goes to the
+  `R16_FLOAT` color target), and one SRV (`TextureCubeArray`). Add its handles to the `Deferred`
+  struct
   alongside `spotShadow*`, and grow the RTV/DSV heap reservations. Mirror the spot
   atlas's lifecycle (created with the deferred targets, recreated on resize).
 - `Renderer` — add `BindPointShadowTarget(UINT cubeSlot, UINT face, bool clear)` mirroring
@@ -264,10 +288,20 @@ renders identically to today.
 
 Renders shadows but nothing samples them yet → behavior identical.
 
-- `LightManager.{h,cpp}` — mirror Part A: `SelectShadowedPoints(const Math::float3&
-  cameraPos)` (closest ≤ `kMaxShadowedPointLights` by distance²), `pointShadowSlot_`
-  (`-1` sentinel), `shadowedPointLightIndices_`, and accessors `GetShadowedPointCount()`,
-  `GetPointShadowSlot(size_t)`, `GetShadowedPointLightIndex(size_t)`.
+- `LightManager.{h,cpp}` — mirror Part A's **frustum-cull + projected-size** selection
+  (NOT closest-by-distance): `SelectShadowedPoints(const Math::float3& cameraPos, const
+  Frustum& cameraFrustum)`, `pointShadowSlot_` (`-1` sentinel), `shadowedPointLightIndices_`,
+  and accessors `GetShadowedPointCount()`, `GetPointShadowSlot(size_t)`,
+  `GetShadowedPointLightIndex(size_t)`. A point light is a candidate only if (a) its
+  `PointLightDesc::shadowsEnabled` flag is set and (b) its influence intersects the camera
+  frustum. Point lights are omnidirectional, so the influence bound is exactly a **sphere**
+  `(position, radius)` — simpler than the spot cone AABB; call
+  `cameraFrustum.Intersects(position, radius)` (the sphere overload added for Part A).
+  Score survivors by projected size `(radius / max(distToCenter − radius, ε))²` and take the
+  top `min(count, kMaxShadowedPointLights)` (descending, ties by index), assigning cube slots
+  in that order. Optionally fold in `intensity × luminance` like the spot path. Call it from
+  `Scene::PrepareViews` passing `mainView.frustum` (already computed there), right after
+  `SelectShadowedSpots`.
 - `Scene.h` / `SceneFrameData.h` — add `pointShadowViews_[kMaxShadowedPointLights * 6]`
   (6 cube-face views per shadowed light).
 - `Scene.cpp` (`PrepareViews`) — after `SelectShadowedPoints`, build the 6 face views per
@@ -326,15 +360,25 @@ builds. Update the memory file.
   `Ensure*Buffer`; the editor path pre-grows at GPU-idle. The shadow *atlases* are
   fixed-size (allocated with the deferred targets), so they never grow at runtime — no
   hang risk there. Keep the "free/realloc only at idle" rule for anything you add.
-- **Serialization unchanged:** lights are JSON arrays; shadow-casting is a per-frame
-  runtime decision, nothing new is persisted.
+- **Serialization:** lights are JSON arrays. The shadow-caster *selection* is a per-frame
+  runtime decision (not persisted), but there is now one persisted per-light field:
+  `shadowsEnabled` (bool). Parsed in `JsonLevel::Load` (runtime) and
+  `EnvironmentRuntime::RebuildLights` + `::Apply` (editor), edited via the Inspector
+  "Cast Shadows" checkbox, round-tripped by `LevelDocumentSerializer` (raw `env.properties`).
+  Absent ⇒ the desc default (`SpotLightDesc`/`PointLightDesc::shadowsEnabled`, currently
+  **`false`** — shadows are opt-in), so a light must explicitly set `"shadowsEnabled": true`
+  to cast one. A light with `shadowsEnabled=false` still lights the scene but is excluded from
+  `SelectShadowedSpots` candidates. Point lights carry the same flag (plumbed now; it takes
+  effect once Part B point shadows land).
 - **Both-config parity:** all engine code; verify Release each step.
 
 ## Non-Goals / Future Refinements
 
-- **Better shadow-caster metric.** Distance-to-position ignores cone direction, range,
-  intensity, and frustum visibility. Could score by screen footprint / distance-to-cone /
-  frustum cull, and skip lights whose influence never intersects the view.
+- **Better shadow-caster metric — DONE for spots (Part A); mirror for points (Part B).**
+  Selection now frustum-culls (spot cone AABB / point sphere), honors `shadowsEnabled`, and
+  ranks by projected size instead of raw distance. Remaining polish: enable the brightness
+  term (`intensity × luminance`, computed but commented out in `SelectShadowedSpots`); a
+  tighter cone-vs-frustum test than the cone AABB; and temporal hysteresis (below).
 - **Temporal stability.** A light entering/leaving the shadowed set pops its shadow on/off
   as the camera moves; hysteresis or a fade could smooth it.
 - **Runtime-adjustable shadow counts / per-light resolution / atlas packing.** Kept

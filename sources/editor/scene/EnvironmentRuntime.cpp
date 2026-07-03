@@ -68,6 +68,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.radius = JF(p, "radius", d.radius);
         d.color = JF3(p, "color", d.color);
         d.intensity = JF(p, "intensity", d.intensity);
+        d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -85,6 +86,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.intensity = JF(p, "intensity", d.intensity);
         d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
         d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+        d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         spots[i].SetDesc(d);
     }
     else if (env.type == "directionalLight")
@@ -154,6 +156,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.intensity = JF(p, "intensity", d.intensity);
             d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
             d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+            d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
         }
@@ -164,6 +167,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.radius = JF(p, "radius", d.radius);
             d.color = JF3(p, "color", d.color);
             d.intensity = JF(p, "intensity", d.intensity);
+            d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }

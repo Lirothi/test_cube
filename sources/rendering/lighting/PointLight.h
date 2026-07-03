@@ -10,6 +10,7 @@ struct PointLightDesc {
     float        radius   = 1.0f;
     Math::float3 color    = Math::float3(1, 1, 1);
     float        intensity= 1.0f;
+    bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
 };
 
 class PointLight {
