@@ -575,11 +575,20 @@ void Scene::PrepareViews(Renderer* renderer)
     }
     UpdateCascades(camera_, renderer);
 
-    // Choose which lit spots cast shadows this frame (closest to camera, among
+    // Choose which lit spots cast shadows this frame (highest projected size among
     // those whose influence intersects the view frustum) and their atlas slots,
     // then build one shadow view per slot from its owning light. Must precede the
     // view build and the Pass_SpotLights buffer fill.
-    lightManager_.SelectShadowedSpots(camera_.GetPosition(), mainView.frustum);
+    //
+    // Use a NON-JITTERED frustum: mainView.frustum is built from the DLSS-jittered
+    // projection, whose sub-pixel offset changes every frame. Feeding that into a
+    // discrete per-frame selection makes a spot sitting near the frustum edge flip
+    // in/out of the shadowed set as the jitter oscillates the planes — its shadow
+    // flickers (Release-only, since jitter is active there). Shadow-caster
+    // selection must be temporally stable, so cull against the un-jittered frustum.
+    const Frustum shadowSelectFrustum = Frustum::FromInvViewProj(
+        mainView.invView, camera_.GetProjMatrixNoJitter(), camera_.GetZNear(), camera_.GetZFar());
+    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum);
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)

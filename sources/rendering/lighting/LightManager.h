@@ -2,11 +2,13 @@
 
 #include <vector>
 #include <algorithm>
+#include <array>
 
 #include <d3d12.h>
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
+#include "rendering/core/RenderConstants.h"
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/SpotLight.h"
 
@@ -84,11 +86,21 @@ public:
     bool EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
     bool EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
-    PointLightGpu* GetPointLightBufferCPU() const { return pointLightBufferCPU_; }
-    SpotLightGpu* GetSpotLightBufferCPU() const { return spotLightBufferCPU_; }
+    // The light buffers are ring-buffered per in-flight frame (kFrameCount regions
+    // in one resource): the CPU rewrites the buffer every frame while up to
+    // kFrameCount frames are still being read by the GPU, so each frame must
+    // read/write its OWN region. Pass the renderer's current frame index. Writing
+    // or reading a shared region would be a cross-frame WAR hazard (an in-flight
+    // frame reading a newer frame's data — e.g. a stale shadow-slot index).
+    PointLightGpu* GetPointLightBufferCPU(UINT frame) const {
+        return pointLightBufferCPU_ ? pointLightBufferCPU_ + frame * pointLightCapacity_ : nullptr;
+    }
+    SpotLightGpu* GetSpotLightBufferCPU(UINT frame) const {
+        return spotLightBufferCPU_ ? spotLightBufferCPU_ + frame * spotLightCapacity_ : nullptr;
+    }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE GetPointLightSrv() const { return pointLightSrvHandle_; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetSpotLightSrv() const { return spotLightSrvHandle_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetPointLightSrv(UINT frame) const { return pointLightSrvHandles_[frame]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetSpotLightSrv(UINT frame) const { return spotLightSrvHandles_[frame]; }
 
     void Reset();
 
@@ -105,16 +117,19 @@ private:
     // Per-frame shadow-slot mapping (see SelectShadowedSpots).
     std::vector<int> spotShadowSlot_;                       // parallel to spotLights_; -1 = unshadowed
     std::vector<std::uint32_t> shadowedSpotLightIndices_;   // slot -> spot-light index
+    // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
+    // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
+    // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.
     Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
     PointLightGpu* pointLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;
-    D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> pointLightSrvHandles_{};
     size_t pointLightCapacity_ = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> spotLightBuffer_;
     SpotLightGpu* spotLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> spotLightSrvHeap_;
-    D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> spotLightSrvHandles_{};
     size_t spotLightCapacity_ = 0;
 };
 

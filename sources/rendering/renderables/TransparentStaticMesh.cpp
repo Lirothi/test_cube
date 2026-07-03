@@ -217,8 +217,8 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         deferred.shadowSRV,
         deferred.spotShadowSRV,
         sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
-        lights.GetPointLightSrv(),
-        lights.GetSpotLightSrv(),
+        lights.GetPointLightSrv(renderer->GetCurrentFrameIndex()),
+        lights.GetSpotLightSrv(renderer->GetCurrentFrameIndex()),
         normalSrv,
         glassReflSrv
     };

@@ -1345,8 +1345,9 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
     {
         return;
     }
-    auto* spotLightBufferCPU = lightManager.GetSpotLightBufferCPU();
-    const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager.GetSpotLightSrv();
+    const UINT frameIdx = renderer->GetCurrentFrameIndex();
+    auto* spotLightBufferCPU = lightManager.GetSpotLightBufferCPU(frameIdx);
+    const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager.GetSpotLightSrv(frameIdx);
     if (!spotLightBufferCPU || spotLightSrvHandle.ptr == 0)
     {
         return;
@@ -1433,8 +1434,9 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     {
         return;
     }
-    auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU();
-    const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv();
+    const UINT frameIdx = renderer->GetCurrentFrameIndex();
+    auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU(frameIdx);
+    const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv(frameIdx);
     if (!pointLightBufferCPU || pointLightSrvHandle.ptr == 0) { return; }
 
     // Defensive: skip the frame if a deferred SRV handle staged below is null
@@ -1645,8 +1647,8 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         LightManager* lm = frame_->lightManager;
         const UINT spotCount = lm ? static_cast<UINT>(lm->GetSpotLightCount()) : 0u;
         const UINT pointCount = lm ? static_cast<UINT>(lm->PointLights().size()) : 0u;
-        const D3D12_CPU_DESCRIPTOR_HANDLE spotSrv = lm ? lm->GetSpotLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
-        const D3D12_CPU_DESCRIPTOR_HANDLE pointSrv = lm ? lm->GetPointLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const D3D12_CPU_DESCRIPTOR_HANDLE spotSrv = lm ? lm->GetSpotLightSrv(frameIndex) : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const D3D12_CPU_DESCRIPTOR_HANDLE pointSrv = lm ? lm->GetPointLightSrv(frameIndex) : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
         const bool haveSpots = spotCount > 0u && spotSrv.ptr != 0;
         const bool havePoints = pointCount > 0u && pointSrv.ptr != 0;
         if (haveSpots)  { bindless_.WriteSceneDescriptor(frameIndex, 6, spotSrv); }
@@ -1802,8 +1804,8 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         LightManager* lm = frame_->lightManager;
         const UINT spotCount = lm ? static_cast<UINT>(lm->GetSpotLightCount()) : 0u;
         const UINT pointCount = lm ? static_cast<UINT>(lm->PointLights().size()) : 0u;
-        const D3D12_CPU_DESCRIPTOR_HANDLE spotSrv = lm ? lm->GetSpotLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
-        const D3D12_CPU_DESCRIPTOR_HANDLE pointSrv = lm ? lm->GetPointLightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const D3D12_CPU_DESCRIPTOR_HANDLE spotSrv = lm ? lm->GetSpotLightSrv(frameIndex) : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
+        const D3D12_CPU_DESCRIPTOR_HANDLE pointSrv = lm ? lm->GetPointLightSrv(frameIndex) : D3D12_CPU_DESCRIPTOR_HANDLE{ 0 };
         const bool haveSpots = spotCount > 0u && spotSrv.ptr != 0;
         const bool havePoints = pointCount > 0u && pointSrv.ptr != 0;
         if (haveSpots)  { bindless_.WriteSceneDescriptor(frameIndex, B + 6, spotSrv); }

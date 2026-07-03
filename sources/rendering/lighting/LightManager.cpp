@@ -79,6 +79,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
+    // Select WHICH spots are shadowed by projected size (most important first).
     const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedSpotLights);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
@@ -89,6 +90,16 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
             }
             return a.score > b.score;
         });
+
+    // Assign atlas SLOTS to the selected set in a STABLE order (ascending light
+    // index), NOT in score order, so an unchanged shadowed set keeps the same
+    // per-light slice every frame instead of reshuffling as scores drift. This is
+    // a stability/coherence nicety (steady atlas contents, friendlier to any
+    // temporal reuse); cross-frame correctness of `shadowParams.y` is guaranteed
+    // by the per-frame ring buffering of the spot-light buffer (see
+    // EnsureSpotLightBuffer), not by this ordering.
+    std::sort(candidates.begin(), candidates.begin() + shadowCount,
+        [](const Candidate& a, const Candidate& b) { return a.index < b.index; });
 
     shadowedSpotLightIndices_.reserve(shadowCount);
     for (size_t s = 0; s < shadowCount; ++s)
@@ -113,7 +124,7 @@ void LightManager::ReleasePointLightBuffer(Renderer* renderer)
     pointLightBufferCPU_ = nullptr;
     pointLightCapacity_ = 0;
     pointLightSrvHeap_.Reset();
-    pointLightSrvHandle_ = {};
+    pointLightSrvHandles_.fill({});
 }
 
 void LightManager::ReleaseSpotLightBuffer(Renderer* renderer)
@@ -130,7 +141,7 @@ void LightManager::ReleaseSpotLightBuffer(Renderer* renderer)
     spotLightBufferCPU_ = nullptr;
     spotLightCapacity_ = 0;
     spotLightSrvHeap_.Reset();
-    spotLightSrvHandle_ = {};
+    spotLightSrvHandles_.fill({});
 }
 
 bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights)
@@ -140,20 +151,22 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
         return false;
     }
 
-    if (pointLightBuffer_ && pointLightBufferCPU_ && pointLightSrvHandle_.ptr != 0 && pointLightCapacity_ >= requiredLights)
+    if (pointLightBuffer_ && pointLightBufferCPU_ && pointLightSrvHandles_[0].ptr != 0 && pointLightCapacity_ >= requiredLights)
     {
         return true;
     }
 
     ReleasePointLightBuffer(renderer);
     const size_t newCapacity = std::max<size_t>(requiredLights, 1);
+    // Ring buffer: render::kFrameCount contiguous regions of newCapacity elements.
+    const size_t totalElements = newCapacity * render::kFrameCount;
 
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_UPLOAD;
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = static_cast<UINT64>(newCapacity * sizeof(PointLightGpu));
+    desc.Width = static_cast<UINT64>(totalElements * sizeof(PointLightGpu));
     desc.Height = 1;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
@@ -181,7 +194,7 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 1;
+    heapDesc.NumDescriptors = render::kFrameCount; // one SRV per ring region
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
@@ -192,22 +205,28 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
         return false;
     }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
-    if (srvHandle.ptr == 0)
+    const D3D12_CPU_DESCRIPTOR_HANDLE srvBase = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    if (srvBase.ptr == 0)
     {
         buffer->Unmap(0, nullptr);
         return false;
     }
+    const UINT srvIncr = renderer->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Buffer.FirstElement = 0;
-    srvDesc.Buffer.NumElements = static_cast<UINT>(newCapacity);
-    srvDesc.Buffer.StructureByteStride = sizeof(PointLightGpu);
-    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-    renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, srvHandle);
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement = static_cast<UINT64>(f) * newCapacity; // region f
+        srvDesc.Buffer.NumElements = static_cast<UINT>(newCapacity);
+        srvDesc.Buffer.StructureByteStride = sizeof(PointLightGpu);
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        D3D12_CPU_DESCRIPTOR_HANDLE h{ srvBase.ptr + static_cast<SIZE_T>(f) * srvIncr };
+        renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, h);
+        pointLightSrvHandles_[f] = h;
+    }
 
     renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
     if (buffer) { buffer->SetName(L"LightManager.PointLightBuffer"); }
@@ -215,7 +234,6 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
     pointLightBuffer_ = buffer;
     pointLightBufferCPU_ = static_cast<PointLightGpu*>(mapped);
     pointLightSrvHeap_ = srvHeap;
-    pointLightSrvHandle_ = srvHandle;
     return true;
 }
 
@@ -226,20 +244,22 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
         return false;
     }
 
-    if (spotLightBuffer_ && spotLightBufferCPU_ && spotLightSrvHandle_.ptr != 0 && spotLightCapacity_ >= requiredLights)
+    if (spotLightBuffer_ && spotLightBufferCPU_ && spotLightSrvHandles_[0].ptr != 0 && spotLightCapacity_ >= requiredLights)
     {
         return true;
     }
 
     ReleaseSpotLightBuffer(renderer);
     const size_t newCapacity = std::max<size_t>(requiredLights, 1);
+    // Ring buffer: render::kFrameCount contiguous regions of newCapacity elements.
+    const size_t totalElements = newCapacity * render::kFrameCount;
 
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_UPLOAD;
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = static_cast<UINT64>(newCapacity * sizeof(SpotLightGpu));
+    desc.Width = static_cast<UINT64>(totalElements * sizeof(SpotLightGpu));
     desc.Height = 1;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
@@ -267,7 +287,7 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 1;
+    heapDesc.NumDescriptors = render::kFrameCount; // one SRV per ring region
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
@@ -278,22 +298,28 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
         return false;
     }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
-    if (srvHandle.ptr == 0)
+    const D3D12_CPU_DESCRIPTOR_HANDLE srvBase = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    if (srvBase.ptr == 0)
     {
         buffer->Unmap(0, nullptr);
         return false;
     }
+    const UINT srvIncr = renderer->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Buffer.FirstElement = 0;
-    srvDesc.Buffer.NumElements = static_cast<UINT>(newCapacity);
-    srvDesc.Buffer.StructureByteStride = sizeof(SpotLightGpu);
-    srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-    renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, srvHandle);
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement = static_cast<UINT64>(f) * newCapacity; // region f
+        srvDesc.Buffer.NumElements = static_cast<UINT>(newCapacity);
+        srvDesc.Buffer.StructureByteStride = sizeof(SpotLightGpu);
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        D3D12_CPU_DESCRIPTOR_HANDLE h{ srvBase.ptr + static_cast<SIZE_T>(f) * srvIncr };
+        renderer->GetDevice()->CreateShaderResourceView(buffer.Get(), &srvDesc, h);
+        spotLightSrvHandles_[f] = h;
+    }
 
     renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
     if (buffer) { buffer->SetName(L"LightManager.SpotLightBuffer"); }
@@ -301,7 +327,6 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
     spotLightBuffer_ = buffer;
     spotLightBufferCPU_ = static_cast<SpotLightGpu*>(mapped);
     spotLightSrvHeap_ = srvHeap;
-    spotLightSrvHandle_ = srvHandle;
     return true;
 }
 
