@@ -5,6 +5,8 @@
 
 #include "rendering/core/Renderer.h"
 #include "app/camera/Camera.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "streamline/include/sl.h"
 
 namespace
@@ -306,6 +308,7 @@ void DlssHandler::UpdateCameraData(const Camera& camera)
 
 bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
 {
+    CPU_SCOPE(ProfilerScopes::kDlssEvaluate);
     outputValid_ = false;
     if (!IsActive() || cl == nullptr || frameToken_ == nullptr)
     {
@@ -363,30 +366,36 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
         sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent)
     };
 
-    if (slSetTagForFrame(*frameToken_, viewport_, tags.data(), static_cast<uint32_t>(tags.size()),
-        reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
     {
-        return false;
+        CPU_SCOPE(ProfilerScopes::kDlssSetTagsOptions);
+        if (slSetTagForFrame(*frameToken_, viewport_, tags.data(), static_cast<uint32_t>(tags.size()),
+            reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
+        {
+            return false;
+        }
+
+        options_.mode = renderer_.dlssMode_;
+        options_.outputWidth = renderer_.width_;
+        options_.outputHeight = renderer_.height_;
+
+        if (slDLSSSetOptions(viewport_, options_) != sl::Result::eOk)
+        {
+            return false;
+        }
+
+        if (slSetConstants(constants_, *frameToken_, viewport_) != sl::Result::eOk)
+        {
+            return false;
+        }
     }
 
-    options_.mode = renderer_.dlssMode_;
-    options_.outputWidth = renderer_.width_;
-    options_.outputHeight = renderer_.height_;
-
-    if (slDLSSSetOptions(viewport_, options_) != sl::Result::eOk)
     {
-        return false;
-    }
-
-    if (slSetConstants(constants_, *frameToken_, viewport_) != sl::Result::eOk)
-    {
-        return false;
-    }
-
-    const sl::BaseStructure* inputs[] = { &viewport_ };
-    if (slEvaluateFeature(sl::kFeatureDLSS, *frameToken_, inputs, _countof(inputs), reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
-    {
-        return false;
+        CPU_SCOPE(ProfilerScopes::kDlssEvaluateFeature);
+        const sl::BaseStructure* inputs[] = { &viewport_ };
+        if (slEvaluateFeature(sl::kFeatureDLSS, *frameToken_, inputs, _countof(inputs), reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
+        {
+            return false;
+        }
     }
 
     outputValid_ = true;

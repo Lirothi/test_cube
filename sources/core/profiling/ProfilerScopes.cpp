@@ -64,6 +64,9 @@ const Profiler::ScopeNameKey kSelectShadowedPoints = Profiler::RegisterTraceLite
 const Profiler::ScopeNameKey kSceneRenderQueueBucketize = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::Bucketize");
 const Profiler::ScopeNameKey kSceneRenderQueueBucketizeCull = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::BucketizeCull");
 const Profiler::ScopeNameKey kSceneRenderQueueCull = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::Cull");
+const Profiler::ScopeNameKey kDlssEvaluate = Profiler::RegisterTraceLiteral(L"DLSS::Evaluate");
+const Profiler::ScopeNameKey kDlssSetTagsOptions = Profiler::RegisterTraceLiteral(L"DLSS::SetTagsOptions");
+const Profiler::ScopeNameKey kDlssEvaluateFeature = Profiler::RegisterTraceLiteral(L"DLSS::slEvaluateFeature");
 const Profiler::ScopeNameKey kSceneRenderQueueBuildInstancedBatchesForBucket = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::BuildInstancedBatchesForBucket");
 
 const Profiler::ScopeNameKey kTextManagerBuild = Profiler::RegisterTraceLiteral(L"TextManager::Build");

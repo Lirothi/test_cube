@@ -70,6 +70,11 @@ extern const Profiler::ScopeNameKey kSelectShadowedPoints;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketize;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketizeCull;
 extern const Profiler::ScopeNameKey kSceneRenderQueueCull;
+
+// DLSS/Streamline evaluate breakdown (diagnostic).
+extern const Profiler::ScopeNameKey kDlssEvaluate;
+extern const Profiler::ScopeNameKey kDlssSetTagsOptions;
+extern const Profiler::ScopeNameKey kDlssEvaluateFeature;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBuildInstancedBatchesForBucket;
 
 // TextManager

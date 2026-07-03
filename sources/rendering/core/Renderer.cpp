@@ -135,9 +135,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.logLevel = sl::LogLevel::eDefault;
 #else
     pref.showConsole = false;
-    pref.logMessageCallback = &logFunctionCallback;
-    pref.logLevel = sl::LogLevel::eDefault;
-	//pref.logLevel = sl::LogLevel::eOff;
+    // Perf: in release keep Streamline silent. eDefault makes slEvaluateFeature format log
+    // strings and invoke the callback (which calls OutputDebugStringA — a global-locked syscall)
+    // every frame; measured ~80us/frame inside Pass_Tonemap. eOff + no callback removes it.
+    pref.logMessageCallback = nullptr;
+    pref.logLevel = sl::LogLevel::eOff;
 #endif
 
     pref.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
