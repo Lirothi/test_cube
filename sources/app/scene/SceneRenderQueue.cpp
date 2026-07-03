@@ -46,6 +46,10 @@ void SceneRenderQueue::Clear()
     {
         entries.clear();
     }
+    for (auto& bucket : instancingRewriteBuckets_)
+    {
+        bucket.clear();
+    }
 }
 
 void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster)
@@ -187,7 +191,8 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
     }
 
     const bool simple = (type == BucketType::OpaqueSimple);
-    ObjectBucket rewritten;
+    ObjectBucket& rewritten = instancingRewriteBuckets_[OpaqueRewriteIndex(type)];
+    rewritten.clear();
     rewritten.reserve(bucket.size());
 
     size_t i = 0;
@@ -217,9 +222,9 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
         const size_t runLen = j - i;
         if (leadInst && runLen >= render::kInstancingThreshold)
         {
-            std::vector<RenderableObjectBase*> members(bucket.begin() + i, bucket.begin() + j);
             InstancedDrawBatch* batch = AcquireBatch(batchCursor);
-            batch->Configure(std::move(members),
+            batch->Configure(bucket.begin() + i,
+                             bucket.begin() + j,
                              leadInst->InstancedGraphicsMaterial(),
                              leadInst->InstancedShadowMaterial(),
                              leadKey.materialData,

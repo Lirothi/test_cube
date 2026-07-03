@@ -18,7 +18,8 @@ class InstancedDrawBatch final : public RenderableObjectBase
 public:
     // gfx/shadow are the instanced (cbuffer-array) materials; matData supplies the shared
     // GBuffer textures; mesh is the shared geometry. `simple` mirrors the run's bucket.
-    void Configure(std::vector<RenderableObjectBase*> members,
+    void Configure(std::vector<RenderableObjectBase*>::const_iterator first,
+                   std::vector<RenderableObjectBase*>::const_iterator last,
                    Material* gfx, Material* shadow, MaterialData* matData, Mesh* mesh,
                    bool simple);
 

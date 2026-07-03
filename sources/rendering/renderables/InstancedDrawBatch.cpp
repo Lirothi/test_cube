@@ -1,7 +1,6 @@
 #include "rendering/renderables/InstancedDrawBatch.h"
 
 #include <algorithm>
-#include <utility>
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
@@ -12,11 +11,12 @@
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
 
-void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*> members,
+void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_iterator first,
+                                   std::vector<RenderableObjectBase*>::const_iterator last,
                                    Material* gfx, Material* shadow, MaterialData* matData, Mesh* mesh,
                                    bool simple)
 {
-    members_ = std::move(members);
+    members_.assign(first, last);
     gfxMat_ = gfx;
     shadowMat_ = shadow;
     matData_ = matData;

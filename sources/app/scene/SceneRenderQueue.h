@@ -56,6 +56,7 @@ private:
     };
 
     static size_t ToIndex(BucketType type) { return static_cast<size_t>(type); }
+    static size_t OpaqueRewriteIndex(BucketType type) { return type == BucketType::OpaqueSimple ? 0u : 1u; }
 
     float ComputeDepth(const mat4& view, const TransparentEntry& entry) const;
 
@@ -67,6 +68,7 @@ private:
     std::array<ObjectBucket, 4> buckets_{};
     std::array<ObjectBucket, 4> visibleBuckets_{};
     std::array<std::vector<TransparentEntry>, 2> transparentEntries_{};
+    std::array<ObjectBucket, 2> instancingRewriteBuckets_{};
 
     // Pooled per-frame instanced batches (reused across frames; one queue per view).
     std::vector<std::unique_ptr<InstancedDrawBatch>> instancedBatches_;
