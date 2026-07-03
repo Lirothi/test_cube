@@ -11,6 +11,7 @@ struct PointLightData
     float radius;
     float3 color;
     float intensity;
+    float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
 };
 
 struct SpotLightData

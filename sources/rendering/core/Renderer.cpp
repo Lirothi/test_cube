@@ -1359,6 +1359,33 @@ void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightInd
     }
 }
 
+void Renderer::BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlot, UINT face, bool clear)
+{
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
+    if (cubeSlot >= LightManager::kMaxShadowedPointLights)
+    {
+        cubeSlot = LightManager::kMaxShadowedPointLights - 1;
+    }
+    if (face >= 6) { face = 5; }
+    const UINT faceIndex = cubeSlot * 6u + face;
+
+    cl->OMSetRenderTargets(1, &D.pointShadowRTV[faceIndex], FALSE, &D.pointShadowDSV);
+
+    const float res = static_cast<float>(std::max(D.pointShadowRes, 1u));
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, res, res, 0.0f, 1.0f };
+    D3D12_RECT sc{ 0, 0, static_cast<LONG>(res), static_cast<LONG>(res) };
+    cl->RSSetViewports(1, &vp);
+    cl->RSSetScissorRects(1, &sc);
+
+    if (clear)
+    {
+        // Clear the face to "far" (1.0 = unshadowed in normalized distance) and reset depth.
+        const float farClear[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        cl->ClearRenderTargetView(D.pointShadowRTV[faceIndex], farClear, 0, nullptr);
+        cl->ClearDepthStencilView(D.pointShadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    }
+}
+
 D3D12_GPU_DESCRIPTOR_HANDLE Renderer::StageGBufferSrvTable() {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
     auto tbl = StageSrvUavTable({ D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.depthSRV });

@@ -85,6 +85,10 @@ public:
     void BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
     void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth);
+    // Bind one cube face (cubeSlot in [0,kMaxShadowedPointLights), face in [0,6)) of the
+    // point shadow atlas as the color render target, with the shared scratch depth. When
+    // clear=true, clears the face to "far" (1.0) and resets the shared depth.
+    void BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlot, UINT face, bool clear);
     // Prebuilt SRV tables (in the frame's shader-visible heap)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
     D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2

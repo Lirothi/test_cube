@@ -21,6 +21,11 @@ public:
     // shadow-view array / DSV reservation. Distant spots still light the scene,
     // just without a shadow.
     static constexpr std::uint32_t kMaxShadowedSpotLights = 8;
+    // Max point lights that can cast (omnidirectional cube) shadows in one frame.
+    // Each shadowed point uses 6 cube faces, so this sizes the point shadow atlas
+    // at 6 * kMaxShadowedPointLights slices. Chosen per frame by projected size,
+    // like the spot casters. Distant/opted-out points still light, just no shadow.
+    static constexpr std::uint32_t kMaxShadowedPointLights = 4;
 
     struct alignas(16) PointLightGpu
     {
@@ -28,6 +33,7 @@ public:
         float radius;
         Math::float3 color;
         float intensity;
+        Math::float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
     };
 
     struct alignas(16) SpotLightGpu

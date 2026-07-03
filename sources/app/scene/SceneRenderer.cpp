@@ -1465,6 +1465,9 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             pointLightBufferCPU[i].radius = desc.radius;
             pointLightBufferCPU[i].color = desc.color;
             pointLightBufferCPU[i].intensity = desc.intensity;
+            // B1: point shadows not selected/sampled yet — mark every light unshadowed.
+            // (B2 fills the slot from GetPointShadowSlot(i); B3 samples it.)
+            pointLightBufferCPU[i].shadowParams = float4(-1.0f, 0.0f, 0.0f, 0.0f);
         }
 
         auto pointMaterial = resources_.GetPointLightMaterial();

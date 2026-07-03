@@ -38,6 +38,10 @@ D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredSpotShadowDsvCPU(UINT f
     const UINT base = frame * kDeferredDsvPerFrame + static_cast<UINT>(DeferredDsvSlot::Count);
     return DeferredDsvAt(base + lightIndex);
 }
+D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredPointShadowRtvCPU(UINT frame, UINT faceIndex) const {
+    const UINT base = frame * kDeferredRtvPerFrame + static_cast<UINT>(DeferredRtvSlot::Count);
+    return DeferredRtvAt(base + faceIndex);
+}
 
 void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceStateTracker& tracker)
 {
@@ -468,6 +472,100 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
+    // Point shadows (Part B): an R16_FLOAT 2D-array of 6*N slices viewed as a cube
+    // array (linear normalized distance), one RTV per face + one shared D16 scratch
+    // depth for rasterization. Mirrors CreateSpotShadow but color-target instead of
+    // depth-target (see docs/lights_refactor_plan.md Part B).
+    auto CreatePointShadow = [&](UINT frameIndex,
+        ComPtr<ID3D12Resource>& outColor,
+        ComPtr<ID3D12Resource>& outDepth,
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6 * LightManager::kMaxShadowedPointLights>& outRTV,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
+        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
+        UINT resolution)
+        {
+            if (resolution == 0) { resolution = 512; }
+            constexpr UINT kFaces = 6 * LightManager::kMaxShadowedPointLights;
+
+            // Color: cleared to 1.0 (far / "unshadowed" in normalized [0,1] distance).
+            D3D12_CLEAR_VALUE colorClear{};
+            colorClear.Format = DXGI_FORMAT_R16_FLOAT;
+            colorClear.Color[0] = 1.0f; colorClear.Color[1] = 1.0f;
+            colorClear.Color[2] = 1.0f; colorClear.Color[3] = 1.0f;
+
+            D3D12_RESOURCE_DESC colorDesc{};
+            colorDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            colorDesc.Width = resolution;
+            colorDesc.Height = resolution;
+            colorDesc.DepthOrArraySize = static_cast<UINT16>(kFaces);
+            colorDesc.MipLevels = 1;
+            colorDesc.Format = DXGI_FORMAT_R16_FLOAT;
+            colorDesc.SampleDesc.Count = 1;
+            colorDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            colorDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &colorDesc,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &colorClear, IID_PPV_ARGS(outColor.ReleaseAndGetAddressOf())));
+
+            outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::PointShadow);
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.TextureCubeArray.MostDetailedMip = 0;
+            srvDesc.TextureCubeArray.MipLevels = 1;
+            srvDesc.TextureCubeArray.First2DArrayFace = 0;
+            srvDesc.TextureCubeArray.NumCubes = LightManager::kMaxShadowedPointLights;
+            srvDesc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
+            dev->CreateShaderResourceView(outColor.Get(), &srvDesc, outSRV);
+
+            for (UINT face = 0; face < kFaces; ++face)
+            {
+                outRTV[face] = DeferredPointShadowRtvCPU(frameIndex, face);
+                D3D12_RENDER_TARGET_VIEW_DESC rtv{};
+                rtv.Format = DXGI_FORMAT_R16_FLOAT;
+                rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+                rtv.Texture2DArray.MipSlice = 0;
+                rtv.Texture2DArray.FirstArraySlice = face;
+                rtv.Texture2DArray.ArraySize = 1;
+                rtv.Texture2DArray.PlaneSlice = 0;
+                dev->CreateRenderTargetView(outColor.Get(), &rtv, outRTV[face]);
+            }
+
+            // Shared scratch depth (D16) — only for rasterizing each face; cleared per
+            // face at bind time. Faces render one at a time into it.
+            D3D12_CLEAR_VALUE depthClear{};
+            depthClear.Format = DXGI_FORMAT_D16_UNORM;
+            depthClear.DepthStencil.Depth = 1.0f;
+            depthClear.DepthStencil.Stencil = 0;
+
+            D3D12_RESOURCE_DESC depthDesc{};
+            depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            depthDesc.Width = resolution;
+            depthDesc.Height = resolution;
+            depthDesc.DepthOrArraySize = 1;
+            depthDesc.MipLevels = 1;
+            depthDesc.Format = DXGI_FORMAT_D16_UNORM;
+            depthDesc.SampleDesc.Count = 1;
+            depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+            ThrowIfFailed(dev->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &depthDesc,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear, IID_PPV_ARGS(outDepth.ReleaseAndGetAddressOf())));
+
+            outDSV = DeferredDsvCPU(frameIndex, DeferredDsvSlot::PointShadowDepth);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+            dsv.Format = DXGI_FORMAT_D16_UNORM;
+            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dsv.Flags = D3D12_DSV_FLAG_NONE;
+            dev->CreateDepthStencilView(outDepth.Get(), &dsv, outDSV);
+
+            tracker.SetResourceState(outColor.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            tracker.SetResourceState(outDepth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        };
+
     for (UINT f = 0; f < render::kFrameCount; ++f)
     {
         auto& D = deferred_[f];
@@ -489,6 +587,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
         D.spotShadowRes = 512;
         CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);
+
+        D.pointShadowRes = 512;
+        CreatePointShadow(f, D.pointShadow, D.pointShadowDepth, D.pointShadowRTV, D.pointShadowDSV, D.pointShadowSRV, D.pointShadowRes);
 
         CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
@@ -531,6 +632,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.depthCopy.Get(), L"DepthCopy");
         nameRes(D.shadow.Get(), L"CascadeShadow");
         nameRes(D.spotShadow.Get(), L"SpotShadow");
+        nameRes(D.pointShadow.Get(), L"PointShadow");
+        nameRes(D.pointShadowDepth.Get(), L"PointShadowDepth");
         nameRes(D.light.Get(), L"Light");
         nameRes(D.scene.Get(), L"Scene");
         nameRes(D.sceneOpaque.Get(), L"SceneOpaque");
@@ -580,6 +683,8 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.oceanReflection);
         collect(D.shadow);
         collect(D.spotShadow);
+        collect(D.pointShadow);
+        collect(D.pointShadowDepth);
         collect(D.dlssOutput);
         collect(D.glassReflNormal);
         collect(D.glassReflDepth);
