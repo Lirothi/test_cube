@@ -548,6 +548,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.mainView = &camera_.GetView();
     frameData_.cascadeViews = &cascadeViews_;
     frameData_.spotShadowViews = &spotShadowViews_;
+    frameData_.pointShadowViews = &pointShadowViews_;
     frameData_.lightManager = &lightManager_;
     frameData_.skybox = skyBox_.get();
     frameData_.objects = &objects_;
@@ -617,6 +618,46 @@ void Scene::PrepareViews(Renderer* renderer)
         view.requiresDepthCheck = false;
     }
 
+    // B2b: point-light cube shadow views — 6 faces per shadowed point light. Face order
+    // is the D3D cube-map convention (+X,-X,+Y,-Y,+Z,-Z) so a runtime TextureCubeArray
+    // sample by direction (P - lightPos) selects the matching slice (rendered into
+    // pointShadowViews_[slot*6 + face], matching BindPointShadowTarget's faceIndex). All
+    // faces share one 90° FOV perspective; only orientation differs.
+    static const Math::float3 kCubeDir[6] = {
+        { 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f }, { 0.0f,  1.0f, 0.0f },
+        { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, -1.0f } };
+    static const Math::float3 kCubeUp[6] = {
+        { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, -1.0f },
+        { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } };
+    constexpr float kHalfPi = 1.57079632679f; // 90deg FOV per cube face
+    const size_t shadowedPointCount = lightManager_.GetShadowedPointCount();
+    const auto& pointLights = lightManager_.PointLights();
+    for (size_t s = 0; s < shadowedPointCount; ++s)
+    {
+        const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
+        const auto& desc = pointLights[lightIndex].GetDesc();
+        const float3 P = desc.position;
+        const float nearPlane = 0.05f;
+        const float farPlane = std::max(desc.radius, nearPlane + 0.1f);
+        const mat4 proj = mat4::PerspectiveFovLH(kHalfPi, 1.0f, nearPlane, farPlane);
+        for (int face = 0; face < 6; ++face)
+        {
+            SceneView& view = pointShadowViews_[s * 6 + static_cast<size_t>(face)];
+            view.type = SceneView::Type::Shadow;
+            view.view = mat4::LookAtLH(P, P + kCubeDir[face], kCubeUp[face]);
+            view.proj = proj;
+            view.invView = mat4::Inverse(view.view);
+            view.invProj = mat4::Inverse(view.proj);
+            view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
+            view.renderLayerMask = camera_.GetRenderLayerMask();
+            view.position = P;
+            view.zNear = nearPlane;
+            view.zFar = farPlane;
+            view.hfov = 0.0f;
+            view.requiresDepthCheck = false;
+        }
+    }
+
     // Step 6e: bucketize the shared shadow-caster set ONCE — every directional cascade and
     // spot view uses identical inputs (same objects, camera layer mask, shadow-caster
     // filter), so re-bucketizing per view was ~5 redundant passes/frame. Each shadow view
@@ -668,7 +709,9 @@ void Scene::PrepareViews(Renderer* renderer)
         view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
     };
 
-    tc::inl_vector<SceneView*, 32> viewsToCull;
+    // main + shore + cascades + up to kMaxShadowedSpotLights spot views + up to
+    // 6*kMaxShadowedPointLights point cube-face views.
+    tc::inl_vector<SceneView*, 48> viewsToCull;
     auto enqueueView = [&viewsToCull, &prepareQueue](SceneView& view)
     {
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
@@ -699,6 +742,10 @@ void Scene::PrepareViews(Renderer* renderer)
     for (size_t s = 0; s < lightManager_.GetShadowedSpotCount(); ++s)
     {
         enqueueView(spotShadowViews_[s]);
+    }
+    for (size_t v = 0; v < lightManager_.GetShadowedPointCount() * 6; ++v)
+    {
+        enqueueView(pointShadowViews_[v]);
     }
 
     if (!viewsToCull.empty())

@@ -10,6 +10,7 @@ enum class RenderPass : uint16_t {
     Main_TerrainDepth,
     Main_CSM,
     Main_SpotShadows,
+    Main_PointShadows,
     Main_GBuffer,
     Main_ObjectIdReadback,
     Main_Lighting,
@@ -59,6 +60,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_TerrainDepth: return L"TerrainDepth";
     case RenderPass::Main_CSM: return L"CSM";
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
+    case RenderPass::Main_PointShadows: return L"PointShadows";
     case RenderPass::Main_GBuffer: return L"GBuffer";
     case RenderPass::Main_ObjectIdReadback: return L"ObjectIdReadback";
     case RenderPass::Main_Lighting: return L"Lighting";

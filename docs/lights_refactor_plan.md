@@ -252,7 +252,13 @@ Two ways to store/compare cube shadow depth. Pick one before Step B1:
   precision than the linear-distance option. Only choose this if you're confident with the
   reverse-Z depth math.
 
-The steps below assume the **linear-distance** approach; adapt names if you choose depth.
+**CHOSEN (2026-07-04): the DEPTH-cube approach** — it reuses the entire existing depth-shadow
+rendering (same `RenderShadow` + `_csm` PSOs as spot/CSM), so zero new shaders/materials, at
+the cost of a standard-projection depth reconstruction when sampling (B3). The "reverse-Z
+error-prone" caveat does NOT apply here: the shadow passes use STANDARD depth (`LESS_EQUAL`,
+clear 1.0), not the camera's reverse-Z — the same math the spot atlas already uses. B1's atlas
+was consequently built (redone) as a `D16`/`R16_TYPELESS` cube array, not an `R16_FLOAT` color
+target. (The linear-distance notes below are kept for context but were NOT taken.)
 All faces share one 90° FOV perspective (only orientation differs), near = small
 constant, far = light radius.
 
@@ -335,35 +341,51 @@ Renders shadows into the atlas but nothing samples them yet → behavior identic
   use a Z up or the `LookAt` is degenerate). Enqueue them for culling like spot views (each
   face frustum-culls the shared `shadowCasterSource_`). **Bump the `viewsToCull` inl_vector
   capacity** (main + shore + cascades + ≤8 spots + ≤24 point faces > 32).
-- New **linear-distance shadow shader + material/PSO**: a tiny pixel shader that writes
-  `length(worldPos − lightPos)` (or `/radius`, matching B1's normalized-distance choice) into
-  the `R16_FLOAT` face RTV. Objects render into it via a **distance-output variant of
-  `RenderShadow`** — the current shadow path (`gbuffer_instcb_csm.hlsl`, depth-only) is
-  implemented in `RenderableObject::RenderShadow` and `InstancedDrawBatch::RenderShadow`; both
-  need a mode/PSO that binds the distance shader and passes `lightPos`. This is the crux of B2b.
-- `SceneRenderer.{h,cpp}` — add `Pass_PointShadows` mirroring `Pass_SpotShadows`: for each
-  shadowed light × 6 faces, `BindPointShadowTarget(slot, face, clear)` then render the face's
-  visible opaque buckets with the distance material. The shared `D16` scratch depth (B1) means
-  the 24 faces render **serially** (each `BindPointShadowTarget` clears the shared depth) — do
-  NOT parallelize faces onto one depth buffer. Register the pass in the render graph with
-  correct resource-state transitions (atlas → RENDER_TARGET during the pass, → SRV-read before
-  the lighting passes), mirroring the spot atlas transitions.
+- **DEPTH-CUBE (chosen over linear-distance) — reuses ALL existing depth-shadow rendering,
+  so NO new shader, NO new material, NO `RenderShadow` variant.** The atlas is a `D16`
+  (`R16_TYPELESS`) cube array (redone in B1 → see the Approach note), each cube face is a
+  depth-array slice with its own DSV. Objects render into a face with the **existing**
+  depth-only `RenderShadow` (`gbuffer_*_csm.hlsl`) — the same path spot/CSM use — because the
+  shadow PSO's DSV format is already `D16`. `BindPointShadowTarget(slot, face, clear)` binds
+  the face's DSV (no RTV). B3 reconstructs the compare depth from `(P − lightPos)`.
+- `SceneRenderer.{h,cpp}` — add `Pass_PointShadows` mirroring `Pass_SpotShadows`: flatten the
+  faces (`idx∈[0, GetShadowedPointCount()*6)`, `cubeSlot = idx/6`, `face = idx%6`), bind each
+  face DSV + render its visible opaque buckets with the depth `RenderShadow`. Faces have their
+  own DSV slices, so they render **in parallel** like spot slices (no shared scratch depth).
+  Register the pass in the render graph (before `Pass_PointLights`) with the same per-CL
+  atlas-state registration as spot shadows.
 
-Acceptance: both builds `0/0`; `--scene-stress` exit 0; **run** — no visual change yet
-(shadows render into the atlas but the lighting shaders ignore them). If you have a
-GPU capture tool (PIX), confirm the atlas is populated with plausible distances.
+Acceptance: both builds `0/0`; `--scene-stress` exit 0; GBV verdict CLEAN with no NEW errors;
+**run** — no visual change yet (shadows render into the atlas but the lighting shaders ignore
+them). If you have a GPU capture tool (PIX), confirm the cube atlas is populated with depth.
+
+**DONE (2026-07-04).** Depth-cube implemented: atlas D16 cube (RenderTargetManager
+`CreatePointShadow` + `DeferredPointShadowDsvCPU`, per-face DSVs + cube SRV), `BindPointShadowTarget`
+→ DSV, `pointShadowViews_[24]` cube-face views in `Scene::PrepareViews` (built with the
+non-jittered frustum via B2a's `SelectShadowedPoints`), `Pass_PointShadows` + render-graph
+`Main_PointShadows`. Verified: both builds 0/0, scene-stress 5/5, GBV CLEAN (no new errors).
 
 ### Step B3 — Sample point shadows in the lighting shaders (behavioral flip)
 
 - Add the point shadow atlas SRV to the point-light SRV tables: `pointlight_cs.hlsl`
-  root signature `numDescriptors` +1 and a new `TextureCubeArray` register; stage
-  `D.pointShadowSRV` in the `Pass_PointLights` `RecordComputeDispatch` SRV list
-  (`SceneRenderer.cpp:1490`). Do the same for `glass.hlsl` (its transparent SRV table in
-  `TransparentStaticMesh.cpp:215-224`) and a comparison/linear sampler as needed.
+  root signature `numDescriptors` +1 and a new `TextureCubeArray` register (`R16` depth) +
+  a **comparison** sampler; stage `D.pointShadowSRV` in the `Pass_PointLights`
+  `RecordComputeDispatch` SRV list. Do the same for `glass.hlsl`
+  (`TransparentStaticMesh.cpp` SRV table). NOTE the point atlas is now a **D16 depth cube**
+  (B2b), not an R16 distance color target — sample it exactly like the spot atlas, just cube.
 - In both shaders' point-light loop, after computing `L`/`dist`, add a shadow term:
-  `if (Ld.shadowParams.x < 0) shadow = 1;` else sample the cube by `(P - Ld.position)` and
-  compare (linear-distance: `shadow = (dist - Ld.shadowParams.y) <= sampledDist ? 1 : 0`,
-  with PCF if desired). Multiply the point light's contribution by `shadow`.
+  `if (Ld.shadowParams.x < 0) shadow = 1;` else **reconstruct the standard-projection compare
+  depth** for `P` and `SampleCmpLevelZero` the cube by direction `(P − Ld.position)`:
+  - Pick the major axis magnitude `m = max(|d.x|,|d.y|,|d.z|)` where `d = P − Ld.position`.
+    That `m` is the view-space Z on the face the hardware will sample.
+  - Convert to the face's clip depth with the SAME `PerspectiveFovLH(90°, 1, near, far)` used
+    to render (near = `Ld.shadowParams.z`, far = `Ld.shadowParams.w` = radius). Standard LH
+    depth: `zc = far/(far−near) * (1 − near/m)` (NOT reverse-Z — the shadow pass uses standard
+    depth, `LESS_EQUAL`, clear 1.0, exactly like spot).
+  - `shadow = PointShadowCube.SampleCmpLevelZero(cmpSampler, float4(d, slot), zc − bias)` with
+    `slot = Ld.shadowParams.x`, `bias = Ld.shadowParams.y`. Cube-array sample: the 4th
+    component of the coord is the CUBE index (slot), not a face — hardware picks the face from
+    `d`. PCF optional (B4). Multiply the point contribution by `shadow`.
 
 Acceptance: **run** — the closest ≤4 point lights now cast omnidirectional shadows;
 distant point lights are shadowless; the shadowed set updates as the camera moves;

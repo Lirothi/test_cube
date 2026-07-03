@@ -1371,7 +1371,9 @@ void Renderer::BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlo
     if (face >= 6) { face = 5; }
     const UINT faceIndex = cubeSlot * 6u + face;
 
-    cl->OMSetRenderTargets(1, &D.pointShadowRTV[faceIndex], FALSE, &D.pointShadowDSV);
+    // Depth-cube: this cube face IS a depth slice — bind it as the DSV (no color RT),
+    // exactly like BindSpotShadowTarget binds a spot atlas slice.
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.pointShadowDSV[faceIndex]);
 
     const float res = static_cast<float>(std::max(D.pointShadowRes, 1u));
     D3D12_VIEWPORT vp{ 0.0f, 0.0f, res, res, 0.0f, 1.0f };
@@ -1381,10 +1383,7 @@ void Renderer::BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlo
 
     if (clear)
     {
-        // Clear the face to "far" (1.0 = unshadowed in normalized distance) and reset depth.
-        const float farClear[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-        cl->ClearRenderTargetView(D.pointShadowRTV[faceIndex], farClear, 0, nullptr);
-        cl->ClearDepthStencilView(D.pointShadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        cl->ClearDepthStencilView(D.pointShadowDSV[faceIndex], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
 }
 

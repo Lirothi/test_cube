@@ -115,6 +115,7 @@ private:
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};
     std::array<SceneView, LightManager::kMaxShadowedSpotLights> spotShadowViews_{};
+    std::array<SceneView, LightManager::kMaxShadowedPointLights * 6> pointShadowViews_{}; // 6 cube faces per shadowed point light
     // Step 6e: the directional cascades + spot shadow views all bucketize the same
     // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
     // shared — each shadow view only runs its own per-frustum Cull against it.

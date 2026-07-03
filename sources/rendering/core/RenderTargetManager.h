@@ -17,7 +17,7 @@ class RenderTargetManager
 {
 public:
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 24; // gb0,gb1,gb2,gbVelocity,objectID,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,pointShadow,pointShadowDepth,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
+        static constexpr size_t kResourceCount = 23; // gb0,gb1,gb2,gbVelocity,objectID,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,pointShadow,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
         // Resources
         Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
         Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // normalOcta+rough
@@ -37,8 +37,7 @@ public:
         Microsoft::WRL::ComPtr<ID3D12Resource> oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
         Microsoft::WRL::ComPtr<ID3D12Resource> shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
         Microsoft::WRL::ComPtr<ID3D12Resource> spotShadow; // R16_TYPELESS array for spot lights
-        Microsoft::WRL::ComPtr<ID3D12Resource> pointShadow;      // R16_FLOAT cube array (6*kMaxShadowedPointLights slices): linear-distance point shadows
-        Microsoft::WRL::ComPtr<ID3D12Resource> pointShadowDepth; // D16 scratch depth shared across cube faces (rasterization only)
+        Microsoft::WRL::ComPtr<ID3D12Resource> pointShadow; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
         Microsoft::WRL::ComPtr<ID3D12Resource> dlssOutput; // scene color format, upscaled
         // S15 off-screen glass reflections: a reflection-res glass G-buffer (front-face
         // normal + depth) feeding a second rt_reflections_cs dispatch into glassReflection.
@@ -66,9 +65,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
-        // One RTV per cube face (6 * kMaxShadowedPointLights); one shared depth DSV; one cube-array SRV.
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6 * LightManager::kMaxShadowedPointLights> pointShadowRTV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE pointShadowDSV{};
+        // One DSV per cube face (6 * kMaxShadowedPointLights); one cube-array depth SRV.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6 * LightManager::kMaxShadowedPointLights> pointShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE pointShadowSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
@@ -115,13 +113,15 @@ public:
 private:
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, ObjectID, Light, Scene, DlssBias, GlassReflNormal, Count };
     enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
-    enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, PointShadowDepth, Count };
+    enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
-    // The point shadow atlas needs one RTV per cube face; reserve that block after the
-    // named RTV slots (mirrors how the spot shadow DSVs sit after the named DSV slots).
-    static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count + 6 * LightManager::kMaxShadowedPointLights;
+    static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
     static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
-    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count + LightManager::kMaxShadowedSpotLights;
+    // DSV heap per frame: named slots, then the spot-shadow DSV block, then the
+    // point-shadow cube DSV block (one DSV per cube face).
+    static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count
+        + LightManager::kMaxShadowedSpotLights
+        + 6 * LightManager::kMaxShadowedPointLights;
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
@@ -130,7 +130,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredPointShadowRtvCPU(UINT frame, UINT faceIndex) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredPointShadowDsvCPU(UINT frame, UINT faceIndex) const;
 
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames

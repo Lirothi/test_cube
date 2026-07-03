@@ -405,7 +405,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_SpotShadows(renderer, ctx, *frame_->spotShadowViews);
         });
 
-    auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pSpotShadow },
+    // B2b: point cube shadows. Same per-CL atlas-state registration story as spot
+    // shadows (parallel per-face lists, no declared states). Runs before Pass_PointLights
+    // (which samples the cube atlas in B3).
+    auto pPointShadow = rg.AddPass(RenderPass::Main_PointShadows, { pSpotShadow },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
+            Pass_PointShadows(renderer, ctx, *frame_->pointShadowViews);
+        });
+
+    auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pPointShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
             Pass_GBuffer(renderer, ctx, *frame_->camera, *frame_->mainView);
@@ -1152,6 +1161,105 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const auto& visibleBuckets = view.queue.VisibleBuckets();
+            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                }
+            }
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                }
+            }
+        }
+    }
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
+#endif
+}
+
+void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext ctx,
+    const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& pointViews)
+{
+    if (!renderer)
+    {
+        return;
+    }
+
+    // 6 cube faces per shadowed point light; each face is its own depth-array slice
+    // (its own DSV), so faces render independently — mirror Pass_SpotShadows exactly,
+    // treating the flattened face index as the "slice" (cubeSlot = idx/6, face = idx%6).
+    const size_t viewCount = std::min(pointViews.size(),
+        frame_->lightManager->GetShadowedPointCount() * 6);
+    if (viewCount == 0)
+    {
+        return;
+    }
+
+    const auto& D = renderer->GetDeferredForFrame();
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex](std::size_t faceIndex)
+    {
+        if (faceIndex >= pointViews.size())
+        {
+            return;
+        }
+
+        CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
+        auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
+            renderer->Transition(t.cl, D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
+                static_cast<UINT>(faceIndex % 6), /*clear=*/true);
+
+            const SceneView& view = pointViews[faceIndex];
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const auto& visibleBuckets = view.queue.VisibleBuckets();
+            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+
+            for (auto* obj : opaqueSimple)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                }
+            }
+            for (auto* obj : opaqueComplex)
+            {
+                if (obj)
+                {
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                }
+            }
+        }
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(faceIndex));
+    };
+
+    TaskSystem::Get().DispatchWait(viewCount, renderPointShadow, 1);
+#else
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
+        renderer->Transition(t.cl, D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+        for (size_t faceIndex = 0; faceIndex < viewCount; ++faceIndex)
+        {
+            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
+                static_cast<UINT>(faceIndex % 6), /*clear=*/true);
+
+            const SceneView& view = pointViews[faceIndex];
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
