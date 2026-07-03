@@ -2083,6 +2083,78 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 117,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy",
+      "position": [
+        13.404454231262207,
+        0.5000002384185791,
+        3.784367561340332
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 118,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        10.22157096862793,
+        0.5000002384185791,
+        4.845297336578369
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 119,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        12.503339767456055,
+        0.5000002384185791,
+        6.580242156982422
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -2145,12 +2217,12 @@
       "enabled": true,
       "intensity": 15.0,
       "position": [
-        9.178237915039063,
-        5.5,
-        -16.005956649780273
+        13.023500442504883,
+        1.4116368293762207,
+        5.238928318023682
       ],
-      "radius": 2.0,
-      "shadowsEnabled": false
+      "radius": 6.75,
+      "shadowsEnabled": true
     }
   ],
   "skybox": {
@@ -2193,6 +2265,7 @@
         -1.0,
         0.25
       ],
+      "enabled": true,
       "innerAngleDeg": 20.0,
       "intensity": 18.0,
       "outerAngleDeg": 32.0,
@@ -2342,6 +2415,7 @@
         -0.8728715777397156,
         0.2182178944349289
       ],
+      "enabled": true,
       "innerAngleDeg": 20.0,
       "intensity": 18.0,
       "outerAngleDeg": 32.0,

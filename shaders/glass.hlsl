@@ -1,7 +1,7 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
 
@@ -69,10 +69,30 @@ StructuredBuffer<PointLightData> PointLights : register(t4);
 StructuredBuffer<SpotLightData> SpotLights : register(t5);
 Texture2D NormalMap : register(t6);
 Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT glass reflection
+TextureCubeArray PointShadowCube : register(t8); // B3: omnidirectional point shadow depth cube (D16 -> R16)
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
 SamplerState EnvSampler : register(s2);
+
+// Omnidirectional (cube) point shadow, depth-cube approach (B3). Mirrors PointShadowFactor
+// in pointlight_cs.hlsl: normal-offset receiver, WORLD-space depth bias subtracted from the
+// compare distance before projecting to the standard-projection depth (render is
+// PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far), then SampleCmpLevelZero on
+// the cube-array slice (.w = cube index/slot). 1 = lit, 0 = shadowed.
+static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+{
+    if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
+    float3 d = (P + N * kPointNormalBias) - Ld.position;
+    float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
+    float nearP = Ld.shadowParams.z;
+    float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
+    float mBiased = max(m - Ld.shadowParams.y, nearP);
+    float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
+    return PointShadowCube.SampleCmpLevelZero(ShadowSampler,
+        float4(d, Ld.shadowParams.x), zc);
+}
 
 struct VSIn
 {
@@ -316,9 +336,15 @@ PSOut PSMain(VSOut i)
             continue;
         }
 
+        float shadow = PointShadowFactor(light, i.posWS, N);
+        if (shadow <= 0.0f)
+        {
+            continue;
+        }
+
         float3 radiance = light.color * light.intensity * atten;
-        diffuseAccum += br.diffBRDF * br.NdotL * radiance;
-        specAccum += br.specBRDF * br.NdotL * radiance;
+        diffuseAccum += br.diffBRDF * br.NdotL * radiance * shadow;
+        specAccum += br.specBRDF * br.NdotL * radiance * shadow;
     }
 
     uint spotCount = (uint)lightCounts.y;

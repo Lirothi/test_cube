@@ -1,10 +1,12 @@
-#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : StructuredBuffer<PointLightData>
+// t6     : TextureCubeArray point shadow depth cube (D16 -> R16), B2b
 // u0     : Light accumulation RWTexture2D
 // s0     : LinearClamp
 // s1     : PointClamp
+// s2     : ComparisonLinearClamp (shadow compare)
 
 #pragma pack_matrix(row_major)
 
@@ -25,10 +27,33 @@ Texture2D GB2 : register(t2);
 Texture2D GBVelocity : register(t3);
 Texture2D DepthT : register(t4);
 StructuredBuffer<PointLightData> PointLights : register(t5);
+TextureCubeArray PointShadowCube : register(t6);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
 SamplerState gSmpPoint : register(s1);
+SamplerComparisonState gSmpShadowCmp : register(s2);
+
+// Omnidirectional (cube) point shadow, depth-cube approach (B3). Reconstructs the
+// standard-projection compare depth from the world offset (matches the render:
+// PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far — NOT reverse-Z), then
+// SampleCmpLevelZero on the cube-array slice. Returns 1 (lit) .. 0 (fully shadowed).
+static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+{
+    if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
+    float3 d = (P + N * kPointNormalBias) - Ld.position; // normal-offset receiver; HW picks the face from d
+    float m = max(abs(d.x), max(abs(d.y), abs(d.z)));     // view-space Z on the selected face
+    float nearP = Ld.shadowParams.z;
+    float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
+    // WORLD-space depth bias: pull the compare distance toward the light BEFORE projecting.
+    // A constant NDC bias is unusable — perspective depth is crushed into [~0.95,1] at any
+    // real distance, so a fixed NDC bias is huge up close (no shadow) and nil far away.
+    float mBiased = max(m - Ld.shadowParams.y, nearP);
+    float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
+    return PointShadowCube.SampleCmpLevelZero(gSmpShadowCmp,
+        float4(d, Ld.shadowParams.x), zc); // .w = CUBE INDEX (slot)
+}
 
 cbuffer PointLightFrame : register(b0)
 {
@@ -101,8 +126,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             continue;
         }
 
+        float shadow = PointShadowFactor(Ld, P, N);
+        if (shadow <= 0.0f)
+        {
+            continue;
+        }
+
         float3 radiance = Ld.color * Ld.intensity * atten;
-        accum += (br.diffBRDF + br.specBRDF) * br.NdotL * radiance;
+        accum += (br.diffBRDF + br.specBRDF) * br.NdotL * radiance * shadow;
     }
 
     LightTarget[dispatchThreadId.xy] = float4(accum, base.a);

@@ -446,13 +446,17 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_SpotLights(renderer, ctx, *frame_->camera);
         });
 
-    auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights },
+    // Depends on pPointShadow too: the cube must be rendered + transitioned to a
+    // shader-readable state before this pass samples it (B3). kSrvAll keeps it readable
+    // by both this compute pass and the later transparent (glass) pixel pass.
+    auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
         { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.gb0.Get(), kSrvAll },
           { D.gb1.Get(), kSrvAll },
           { D.gb2.Get(), kSrvAll },
           { D.gbVelocity.Get(), kSrvAll },
-          { D.depth.Get(), kSrvAll } },
+          { D.depth.Get(), kSrvAll },
+          { D.pointShadow.Get(), kSrvAll } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
             Pass_PointLights(renderer, ctx, *frame_->camera);
@@ -1575,14 +1579,16 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             pointLightBufferCPU[i].radius = desc.radius;
             pointLightBufferCPU[i].color = desc.color;
             pointLightBufferCPU[i].intensity = desc.intensity;
-            // B2a: write the per-light cube-shadow slot (-1 = unshadowed) chosen by
-            // SelectShadowedPoints, plus bias/near/far(=radius). Inert until B2b renders
-            // the atlas and B3 samples it; bias/near are placeholders tuned in B4.
-            constexpr float kPointShadowBias = 0.05f;
-            constexpr float kPointShadowNear = 0.05f;
+            // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
+            // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
+            // reconstructs the compare depth from it. Bias is WORLD-space (subtracted from the
+            // compare distance before projecting); a constant NDC bias is unusable in the
+            // crushed far region of a perspective depth buffer (B4 tuning).
+            const float pointShadowNear = std::max(0.2f, desc.radius * 0.05f);
+            constexpr float kPointShadowBias = 0.10f; // world units
             pointLightBufferCPU[i].shadowParams = float4(
                 static_cast<float>(lightManager.GetPointShadowSlot(i)),
-                kPointShadowBias, kPointShadowNear, desc.radius);
+                kPointShadowBias, pointShadowNear, desc.radius);
         }
 
         auto pointMaterial = resources_.GetPointLightMaterial();
@@ -1602,10 +1608,12 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         constants.lightCount = static_cast<uint32_t>(pointLights.size());
 
-        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        // s2 = comparison sampler for the point shadow cube (B3).
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, pointMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WritePointLightConstants(constants, dest); },
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle },
+            // t0-t5 as before; t6 = point shadow depth cube (B3).
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

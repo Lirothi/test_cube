@@ -199,7 +199,8 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
 
     // Defensive: the deferred shadow SRVs staged below must be valid (see the
     // SceneRenderer Pass_SpotLights note); skip this draw for the frame if not.
-    if (deferred.shadowSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0)
+    if (deferred.shadowSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0 ||
+        deferred.pointShadowSRV.ptr == 0)
     {
         return;
     }
@@ -212,7 +213,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     const D3D12_CPU_DESCRIPTOR_HANDLE glassReflSrv =
         deferred.glassReflectionSRV.ptr != 0 ? deferred.glassReflectionSRV : sceneColorSrv;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 8> srvs{
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 9> srvs{
         sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
@@ -220,7 +221,8 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         lights.GetPointLightSrv(renderer->GetCurrentFrameIndex()),
         lights.GetSpotLightSrv(renderer->GetCurrentFrameIndex()),
         normalSrv,
-        glassReflSrv
+        glassReflSrv,
+        deferred.pointShadowSRV // t8: omnidirectional point shadow cube (B3)
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

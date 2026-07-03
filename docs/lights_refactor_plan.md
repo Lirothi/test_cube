@@ -365,7 +365,18 @@ them). If you have a GPU capture tool (PIX), confirm the cube atlas is populated
 non-jittered frustum via B2a's `SelectShadowedPoints`), `Pass_PointShadows` + render-graph
 `Main_PointShadows`. Verified: both builds 0/0, scene-stress 5/5, GBV CLEAN (no new errors).
 
-### Step B3 — Sample point shadows in the lighting shaders (behavioral flip)
+### Step B3 — Sample point shadows in the lighting shaders (behavioral flip) — DONE
+
+Implemented & verified: `pointlight_cs.hlsl` (deferred) gains `TextureCubeArray PointShadowCube`
+at `t6` + `SamplerComparisonState` at `s2` (RS SRV `numDescriptors` 6→7, Sampler 2→3);
+`glass.hlsl` gains `PointShadowCube` at `t8` (RS SRV 8→9) and **reuses** the existing
+`ShadowSampler` comparison sampler (`s1`). Both use the shared `PointShadowFactor()` helper
+(standard-projection depth reconstruction, `SampleCmpLevelZero(float4(d, slot), zc − bias)`).
+C++ staging: `Pass_PointLights` adds `D.pointShadowSRV` (t6) + `ComparisonLinearClamp` (s2) and
+now depends on `pPointShadow` with the cube declared `kSrvAll` (readable by this compute pass
+AND the later glass pixel pass); `TransparentStaticMesh` glass SRV table 8→9 (t8) + null-guard.
+Both configs build 0/0, CRLF preserved, `--scene-stress` exit 0, `--scene-stress-gbv` exit 0
+(no new GBV IDs). **Bias tuning + visual confirmation of the shadows deferred to B4.**
 
 - Add the point shadow atlas SRV to the point-light SRV tables: `pointlight_cs.hlsl`
   root signature `numDescriptors` +1 and a new `TextureCubeArray` register (`R16` depth) +
@@ -394,8 +405,16 @@ peter-panning. `--scene-stress` exit 0.
 
 ### Step B4 — Polish
 
-PCF filtering on the cube sample; bias/near tuning; confirm `--scene-stress` and both
-builds. Update the memory file.
+Bias model FIXED (first B4 pass, awaiting visual confirm): the initial B3 used a **constant
+NDC bias (0.05)**, which is unusable — with near=0.05/far=radius the perspective depth is
+crushed into ~[0.95,1] at any real distance, so a fixed NDC bias is enormous up close (no
+shadow) and vanishes far away → "shadows only when the light is nearly touching the object."
+Three changes: (1) **world-space depth bias** — subtract a world amount from the compare
+distance `m` BEFORE projecting (`mBiased = max(m − bias, near)`), uniform at all distances;
+(2) **near bumped to `max(0.2, radius·0.05)`** (both Scene.cpp render + shadowParams.z) so
+far/near ~20 not ~200 → usable D16 precision; (3) **normal-offset bias** (`P + N·0.05`, like
+the spot path) for grazing-angle acne. Current constants: worldDepthBias=0.10, normalBias=0.05.
+Remaining: PCF on the cube sample; final bias tuning against the visual; confirm both builds.
 
 ---
 
