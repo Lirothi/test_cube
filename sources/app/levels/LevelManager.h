@@ -60,6 +60,7 @@ public:
 
     Level* GetActiveLevel() const { return activeLevel_; }
     std::string_view GetActiveLevelName() const { return activeLevelName_; }
+    std::string_view GetActiveLevelSourcePath() const { return activeLevel_ ? activeLevel_->GetSourcePath() : std::string_view{}; }
 
     bool HasLevel(std::string_view name) const;
 

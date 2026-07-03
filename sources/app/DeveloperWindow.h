@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "app/scene/SceneFrameData.h"
 #include "ocean/OceanControlsWindow.h"
 #include "rendering/debug/TextureDebugViewer.h"
@@ -30,8 +33,15 @@ public:
     );
 
 private:
+    void RefreshLevelList();
+
     TextureDebugViewer textureDebugViewer_;
     OceanControlsWindow oceanControlsWindow_;
     ui::ImGuiWindowMaximizeState windowMaximize_;
+    std::vector<std::string> availableLevelPaths_;
+    std::string levelChangeStatus_;
+    char levelPathBuffer_[1024] = "data/levels/demo.json";
+    bool levelListScanned_ = false;
+    bool preserveCameraOnLevelChange_ = true;
     bool open_ = false;
 };

@@ -1,7 +1,11 @@
 #include "app/DeveloperWindow.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #include "app/Systems.h"
 #include "app/levels/JsonLevel.h"
@@ -22,6 +26,39 @@
 
 namespace
 {
+    std::string NormalizeLevelPath(std::string path)
+    {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        return path;
+    }
+
+    std::string LevelPathString(const std::filesystem::path& path)
+    {
+        return NormalizeLevelPath(path.string());
+    }
+
+    template <size_t N>
+    void SetTextBuffer(char (&buffer)[N], const std::string& text)
+    {
+        const std::string normalized = NormalizeLevelPath(text);
+        std::snprintf(buffer, N, "%s", normalized.c_str());
+    }
+
+    bool LevelFileExists(const std::string& path)
+    {
+        const std::string normalizedPath = NormalizeLevelPath(path);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+
+        std::error_code ec;
+        const std::filesystem::path fsPath(normalizedPath);
+        const bool exists = std::filesystem::exists(fsPath, ec);
+        const bool regularFile = exists && std::filesystem::is_regular_file(fsPath, ec);
+        return !ec && regularFile;
+    }
+
     struct DlssModeOption
     {
         sl::DLSSMode mode;
@@ -61,6 +98,45 @@ namespace
         return oceanSimulation ? oceanSimulation->GetShoreDepthResource() : nullptr;
     }
 
+}
+
+void DeveloperWindow::RefreshLevelList()
+{
+    availableLevelPaths_.clear();
+    levelChangeStatus_.clear();
+    levelListScanned_ = true;
+
+    std::error_code ec;
+    std::filesystem::directory_iterator it("data/levels", ec);
+    if (ec)
+    {
+        levelChangeStatus_ = "Cannot scan data/levels";
+        return;
+    }
+
+    const std::filesystem::directory_iterator end;
+    while (it != end)
+    {
+        const std::filesystem::directory_entry& entry = *it;
+        std::error_code entryEc;
+        if (entry.is_regular_file(entryEc) && !entryEc && entry.path().extension() == ".json")
+        {
+            availableLevelPaths_.push_back(LevelPathString(entry.path()));
+        }
+
+        it.increment(ec);
+        if (ec)
+        {
+            levelChangeStatus_ = "Cannot scan all level files";
+            break;
+        }
+    }
+
+    std::sort(availableLevelPaths_.begin(), availableLevelPaths_.end());
+    if (availableLevelPaths_.empty())
+    {
+        levelChangeStatus_ = "No JSON levels found in data/levels";
+    }
 }
 
 void DeveloperWindow::ToggleTextureInspector()
@@ -258,14 +334,85 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
             {
                 const std::string_view activeLevelName = levelManager.GetActiveLevelName();
                 ImGui::Text("Active level: %.*s", static_cast<int>(activeLevelName.size()), activeLevelName.data());
-                ImGui::BeginDisabled(!levelManager.HasLevel(JsonLevel::kName));
+                const std::string_view activeLevelPath = levelManager.GetActiveLevelSourcePath();
+                if (!activeLevelPath.empty())
+                {
+                    ImGui::Text("Active path: %.*s", static_cast<int>(activeLevelPath.size()), activeLevelPath.data());
+                }
+
+                if (!levelListScanned_)
+                {
+                    RefreshLevelList();
+                }
+
+                const auto requestLevelPathChange = [&](const std::string& path)
+                {
+                    const std::string normalizedPath = NormalizeLevelPath(path);
+                    if (normalizedPath.empty())
+                    {
+                        levelChangeStatus_ = "Level path is empty";
+                        return;
+                    }
+                    if (!LevelFileExists(normalizedPath))
+                    {
+                        levelChangeStatus_ = "Level file not found: " + normalizedPath;
+                        return;
+                    }
+
+                    SetTextBuffer(levelPathBuffer_, normalizedPath);
+#if WITH_EDITOR
+                    if (editorController.RequestOpenLevelPath(levelManager, normalizedPath, preserveCameraOnLevelChange_))
+                    {
+                        levelChangeStatus_ = "Queued " + normalizedPath;
+                    }
+                    else
+                    {
+                        levelChangeStatus_ = "Could not queue " + normalizedPath;
+                    }
+#else
+                    LevelLoadOptions loadOptions;
+                    loadOptions.preserveCameraTransform = preserveCameraOnLevelChange_;
+                    levelManager.RequestLevelPathChange(normalizedPath, loadOptions);
+                    levelChangeStatus_ = "Queued " + normalizedPath;
+#endif
+                };
+
+                const char* preview = levelPathBuffer_[0] ? levelPathBuffer_ : "Select level";
+                if (ImGui::BeginCombo("JSON level", preview))
+                {
+                    for (const std::string& levelPath : availableLevelPaths_)
+                    {
+                        const bool selected = NormalizeLevelPath(levelPathBuffer_) == levelPath;
+                        if (ImGui::Selectable(levelPath.c_str(), selected))
+                        {
+                            SetTextBuffer(levelPathBuffer_, levelPath);
+                        }
+                        if (selected)
+                        {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Refresh levels"))
+                {
+                    RefreshLevelList();
+                }
+                if (ImGui::Button("Load JSON Level"))
+                {
+                    requestLevelPathChange(levelPathBuffer_);
+                }
+                ImGui::SameLine();
                 if (ImGui::Button("Reload JSON Level"))
                 {
-                    LevelLoadOptions reloadOptions;
-                    reloadOptions.preserveCameraTransform = true;
-                    levelManager.RequestLevelChange(std::string(JsonLevel::kName), reloadOptions);
+                    requestLevelPathChange(levelPathBuffer_);
                 }
-                ImGui::EndDisabled();
+                ImGui::Checkbox("Preserve camera transform", &preserveCameraOnLevelChange_);
+                if (!levelChangeStatus_.empty())
+                {
+                    ImGui::TextDisabled("%s", levelChangeStatus_.c_str());
+                }
 
                 ImGui::Separator();
 

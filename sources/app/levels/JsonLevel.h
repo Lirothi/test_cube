@@ -17,6 +17,7 @@ public:
     }
 
     std::string_view GetName() const override { return kName; }
+    std::string_view GetSourcePath() const override { return sourcePath_; }
 
     void Load(const LevelLoadContext& ctx) override;
     void Unload(const LevelLoadContext& ctx) override;

@@ -833,6 +833,31 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     }
 }
 
+bool EditorController::RequestOpenLevelPath(LevelManager& levelManager,
+    const std::string& path,
+    bool preserveCameraTransform)
+{
+    const std::string normalizedPath = NormalizeLevelPath(path);
+    if (normalizedPath.empty())
+    {
+        return false;
+    }
+    if (!LevelFileExists(normalizedPath))
+    {
+        levelStatus_ = "Level file not found: " + normalizedPath;
+        return false;
+    }
+
+    LevelLoadOptions options;
+    options.preserveCameraTransform = preserveCameraTransform;
+    options.editorDocument = &document_;
+    levelManager.RequestLevelPathChange(normalizedPath, options);
+    pendingLevelAction_ = PendingLevelAction::Open;
+    pendingLevelPath_ = normalizedPath;
+    levelStatus_ = "Opening " + normalizedPath;
+    return true;
+}
+
 void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager)
 {
     const auto markCameraStateSaved = [this](const std::string& levelPath, const LevelCameraState& cameraState)

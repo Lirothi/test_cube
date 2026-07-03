@@ -30,6 +30,7 @@ public:
     virtual ~Level() = default;
 
     virtual std::string_view GetName() const = 0;
+    virtual std::string_view GetSourcePath() const { return {}; }
     virtual void Load(const LevelLoadContext& ctx) = 0;
     virtual void Unload(const LevelLoadContext& ctx);
     virtual void Tick(float deltaTime) { (void)deltaTime; }

@@ -29,6 +29,7 @@ public:
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
     void Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager);
+    bool RequestOpenLevelPath(LevelManager& levelManager, const std::string& path, bool preserveCameraTransform);
     void OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
         bool loaded,
         Renderer& renderer,
