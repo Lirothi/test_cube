@@ -62,6 +62,7 @@ const Profiler::ScopeNameKey kUpdateCascades = Profiler::RegisterTraceLiteral(L"
 const Profiler::ScopeNameKey kSelectShadowedSpots = Profiler::RegisterTraceLiteral(L"LightManager::SelectShadowedSpots");
 const Profiler::ScopeNameKey kSelectShadowedPoints = Profiler::RegisterTraceLiteral(L"LightManager::SelectShadowedPoints");
 const Profiler::ScopeNameKey kSceneRenderQueueBucketize = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::Bucketize");
+const Profiler::ScopeNameKey kSceneRenderQueueBucketizeCull = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::BucketizeCull");
 const Profiler::ScopeNameKey kSceneRenderQueueCull = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::Cull");
 const Profiler::ScopeNameKey kSceneRenderQueueBuildInstancedBatchesForBucket = Profiler::RegisterTraceLiteral(L"SceneRenderQueue::BuildInstancedBatchesForBucket");
 

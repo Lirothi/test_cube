@@ -5,7 +5,9 @@
 #include "mimalloc-new-delete.h"
 #pragma warning(pop)
 #include "app/App.h"
+#include "app/CullBenchmark.h"
 #include "app/SceneStress.h"
+#include "app/scene/SceneRenderQueue.h"
 #include "core/task/TaskSystemStress.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/core/RendererSubmissionStress.h"
@@ -100,6 +102,18 @@ int WINAPI WinMain(
 
     if (lpCmdLine && std::strstr(lpCmdLine, "textmanager-benchmark") != nullptr) {
         return RunTextManagerBenchmark("textmanager_benchmark.csv");
+    }
+
+    // "--cull-benchmark" times the per-object frustum intersect (legacy DirectXMath vs the
+    // precomputed-plane path) over a fixed AABB set; results in cull_benchmark.txt.
+    if (lpCmdLine && std::strstr(lpCmdLine, "cull-benchmark") != nullptr) {
+        return RunCullBenchmark("cull_benchmark.txt");
+    }
+
+    // "--cull-nofuse" forces the split Bucketize()+Cull() path for self-culling views, for an
+    // in-engine A/B against the default fused BucketizeCull. Benchmark-only.
+    if (lpCmdLine && std::strstr(lpCmdLine, "cull-nofuse") != nullptr) {
+        g_useFusedBucketizeCull = false;
     }
 
     // "--rt-smoke" runs the headless DXR smoke harness (device + RT caps + a

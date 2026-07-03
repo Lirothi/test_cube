@@ -92,6 +92,54 @@ void SceneRenderQueue::Bucketize(const std::vector<std::unique_ptr<RenderableObj
     }
 }
 
+void SceneRenderQueue::BucketizeCull(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster, const Frustum& frustum)
+{
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueBucketizeCull);
+
+    Clear();
+
+    const bool frustumValid = frustum.IsValid();
+    for (const auto& objPtr : objects)
+    {
+        RenderableObjectBase* obj = objPtr.get();
+        if (!obj || !obj->IsVisible())
+        {
+            continue;
+        }
+
+        if ((obj->GetRenderLayerMask() & renderLayerMask) == 0)
+        {
+            continue;
+        }
+
+        if (filterShadowCaster && !obj->CastsShadow())
+        {
+            continue;
+        }
+
+        // Frustum cull in the same pass (matches Cull's predicate exactly): keep if the frustum
+        // is absent, the bounds are absent, or the bounds intersect. Only survivors are stored,
+        // so the culled-away majority never hits a bucket.
+        const AABB& bounds = obj->GetWorldBounds();
+        if (frustumValid && bounds.IsValid() && !frustum.Intersects(bounds))
+        {
+            continue;
+        }
+
+        const bool transparent = obj->IsTransparent();
+        const bool simple = obj->IsSimpleRender();
+        const BucketType type = transparent
+            ? (simple ? BucketType::TransparentSimple : BucketType::TransparentComplex)
+            : (simple ? BucketType::OpaqueSimple : BucketType::OpaqueComplex);
+
+        visibleBuckets_[ToIndex(type)].push_back(obj);
+        if (IsTransparentBucket(type))
+        {
+            transparentEntries_[TransparentIndex(type)].push_back({ obj, 0.0f });
+        }
+    }
+}
+
 float SceneRenderQueue::ComputeDepth(const mat4& view, const TransparentEntry& entry) const
 {
     if (!entry.base)

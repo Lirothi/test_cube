@@ -11,6 +11,10 @@
 
 class InstancedDrawBatch;
 
+// Benchmark toggle (cleared via the "cull-nofuse" command line): when true, self-culling views
+// use the fused BucketizeCull; when false, the split Bucketize()+Cull() path. For a live A/B.
+inline bool g_useFusedBucketizeCull = true;
+
 class SceneRenderQueue
 {
 public:
@@ -23,6 +27,12 @@ public:
 
     void Clear();
     void Bucketize(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster);
+    // Fused bucketize+cull for the self-culling views (camera/shore): one pass over `objects`
+    // that classifies AND frustum-tests, writing only frustum-visible objects straight into the
+    // visible buckets. Skips the intermediate pre-cull buckets_ (nothing reads them for these
+    // views), avoiding a whole extra pass plus the push_backs of the culled-away objects — the
+    // dominant cost of the camera view's prepare. Equivalent to Bucketize(...) + Cull(frustum).
+    void BucketizeCull(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, uint32_t renderLayerMask, bool filterShadowCaster, const Frustum& frustum);
     void SortTransparent(const mat4& view);
     // Step 6: choose each visible object's camera LOD (PrepareViews, camera view only) so it's
     // ready before batching + recording. Call AFTER Cull, BEFORE BuildInstancedBatches.

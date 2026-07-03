@@ -641,6 +641,12 @@ void Scene::PrepareViews(Renderer* renderer)
         {
             view.queue.Cull(view.frustum, shadowCasterSource_);
         }
+        else if (g_useFusedBucketizeCull)
+        {
+            // Fused single pass — the camera view's dominant cost was bucketizing all visible
+            // objects and then culling them in a second pass; this stores only survivors.
+            view.queue.BucketizeCull(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow, view.frustum);
+        }
         else
         {
             view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
