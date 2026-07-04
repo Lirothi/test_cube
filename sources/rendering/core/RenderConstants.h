@@ -22,6 +22,13 @@ inline constexpr unsigned kFrameCount = 3;
 // D3D12 constant-buffer placement alignment (CBV size/offset must be a multiple).
 inline constexpr unsigned kConstantBufferAlignment = 256u;
 
+// Rung 0 GPU-driven shadows: the fixed number of shadow-view slots the per-view cull
+// inputs (frustum planes) + indirect buffers are sized for. Layout is
+// [4 CSM cascades | kMaxShadowedSpotLights | kMaxShadowedPointLights*6 point cube faces].
+// Kept here (below the light subsystem in the include graph) as a plain value; Scene.cpp
+// static_asserts it equals the sum of the actual LightManager caps so the two can't drift.
+inline constexpr unsigned kMaxShadowViews = 36; // 4 + 8 + 4*6
+
 // --- Swapchain / backbuffer formats ---
 inline constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 inline constexpr DXGI_FORMAT kBackbufferFormat         = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;

@@ -796,6 +796,10 @@ void Scene::Render(Renderer* renderer) {
         constexpr size_t kCascadeSlots = static_cast<size_t>(kCascades);
         constexpr size_t kSpotSlots = LightManager::kMaxShadowedSpotLights;
         constexpr size_t kPointFaceSlots = LightManager::kMaxShadowedPointLights * 6;
+        // Single source of truth: the indirect buffers (ShadowGpuData) size per view against
+        // render::kMaxShadowViews; keep it equal to the real cap sum so they can't drift.
+        static_assert(kCascadeSlots + kSpotSlots + kPointFaceSlots == render::kMaxShadowViews,
+                      "render::kMaxShadowViews must equal the shadow-view slot layout");
         // Direct constant base offsets (not a running index) so the array writes are
         // provably in-bounds — [0,kCascadeSlots) | [kCascadeSlots,+kSpotSlots) | rest.
         std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots> frustums{};

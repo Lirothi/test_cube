@@ -63,12 +63,24 @@ public:
 
     std::uint32_t CasterCount() const { return count_; }
     std::uint32_t ViewFrustumCount() const { return viewFrustumCount_; }
+    std::uint32_t MeshGroupCount() const { return numMeshGroups_; }
 
     // SRVs for ring region `frameIndex` (0..kFrameCount-1); {0} if not built. For the future
     // cull compute (Step 4) / indirect VS (Step 5); unused in Steps 1-2.
     D3D12_CPU_DESCRIPTOR_HANDLE InstanceSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE BoundsSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE ViewFrustumSrv(UINT frameIndex) const;
+
+    // Rung 0 (Step 3): the GPU-driven indirect-execution buffers, produced by the Step 4 cull
+    // compute (UAV) and consumed by ExecuteIndirect (Step 6) / the indirect VS (Step 5).
+    // DEFAULT-heap, kFrameCount-region rings; unused (no descriptors) until Step 4. Region f
+    // occupies [f*RegionBytes, (f+1)*RegionBytes). Getters return null / 0 until Rebuild.
+    ID3D12Resource* IndirectArgsBuffer() const { return indirectArgs_.buffer.Get(); }     // D3D12_DRAW_INDEXED_ARGUMENTS[view*group]
+    ID3D12Resource* VisibleListBuffer() const { return visibleList_.buffer.Get(); }       // uint32 caster ids
+    ID3D12Resource* IndirectCountsBuffer() const { return indirectCounts_.buffer.Get(); } // uint32 per-view draw count
+    size_t IndirectArgsRegionBytes() const { return indirectArgs_.regionBytes; }
+    size_t VisibleListRegionBytes() const { return visibleList_.regionBytes; }
+    size_t IndirectCountsRegionBytes() const { return indirectCounts_.regionBytes; }
 
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
@@ -94,6 +106,23 @@ private:
                            const wchar_t* name);
     static void ReleaseRing(Renderer* renderer, Ring& ring);
 
+    // A DEFAULT-heap UAV buffer of kFrameCount regions of `regionBytes` each (the GPU cull
+    // writes these, so they are GPU-local + UAV, not CPU-mapped like Ring). No descriptors
+    // here — the cull (Step 4) creates the UAVs, ExecuteIndirect (Step 6) reads by address.
+    struct UavRing
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+        size_t regionBytes = 0; // bytes per region; region f base offset = f * regionBytes
+
+        bool Valid() const { return buffer != nullptr; }
+    };
+
+    // Ensure `ring` holds >= `regionBytes` per region; (re)allocate on growth. Registers the
+    // resource state (COMMON) with the tracker. Returns false on allocation failure.
+    static bool EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regionBytes,
+                              const wchar_t* name);
+    static void ReleaseUavRing(Renderer* renderer, UavRing& ring);
+
     static bool IsCaster(const RenderableObjectBase* obj);
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
@@ -102,8 +131,13 @@ private:
     Ring bounds_;        // per-caster CasterBounds
     Ring viewFrustums_;  // per-view ShadowViewFrustum
 
+    UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
+    UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
+    UavRing indirectCounts_; // per view draw count (uint32)
+
     std::uint32_t count_ = 0;            // live caster count
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
+    std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 
     // Authoritative current per-caster values (change-detection reference) + a per-entry
     // "frames remaining to propagate a change into all regions" counter (drives both the

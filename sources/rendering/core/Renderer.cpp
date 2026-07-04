@@ -865,6 +865,39 @@ void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
     cl->ResourceBarrier(1, &b);
 }
 
+ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
+    if (drawIndexedCmdSig_) {
+        return drawIndexedCmdSig_.Get();
+    }
+    ID3D12Device* device = GetDevice();
+    if (!device) {
+        return nullptr;
+    }
+    // One DRAW_INDEXED argument, no per-draw root-argument changes -> pRootSignature = nullptr.
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawIndexedCmdSig_.GetAddressOf())))) {
+        drawIndexedCmdSig_.Reset();
+        return nullptr;
+    }
+    drawIndexedCmdSig_->SetName(L"Renderer.DrawIndexedIndirectSig");
+    return drawIndexedCmdSig_.Get();
+}
+
+void Renderer::ExecuteIndirect(ID3D12GraphicsCommandList* cl, ID3D12CommandSignature* sig,
+                               UINT maxCommandCount, ID3D12Resource* argBuffer, UINT64 argOffset,
+                               ID3D12Resource* countBuffer, UINT64 countOffset) {
+    if (cl == nullptr || sig == nullptr || argBuffer == nullptr) {
+        return;
+    }
+    cl->ExecuteIndirect(sig, maxCommandCount, argBuffer, argOffset, countBuffer, countOffset);
+}
+
 void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     // Barrier: Present -> RenderTarget (for the current back buffer)
     D3D12_RESOURCE_BARRIER b{};

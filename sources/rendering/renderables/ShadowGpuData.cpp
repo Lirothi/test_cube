@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <unordered_set>
 
 #include "core/math/Frustum.h"
 #include "rendering/core/Renderer.h"
@@ -136,6 +137,65 @@ bool ShadowGpuData::EnsureRing(Renderer* renderer, Ring& ring, size_t elements, 
     return true;
 }
 
+// ---- UavRing: default-heap UAV kFrameCount-region buffer -------------------
+
+void ShadowGpuData::ReleaseUavRing(Renderer* renderer, UavRing& ring)
+{
+    if (ring.buffer)
+    {
+        if (renderer) { renderer->ClearResourceState(ring.buffer.Get()); }
+        ring.buffer.Reset();
+    }
+    ring.regionBytes = 0;
+}
+
+bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regionBytes,
+                                  const wchar_t* name)
+{
+    if (!renderer || !renderer->GetDevice())
+    {
+        return false;
+    }
+
+    regionBytes = std::max<size_t>(regionBytes, 16); // never a zero-size region
+    if (ring.buffer && ring.regionBytes >= regionBytes)
+    {
+        return true; // existing allocation fits — reuse (consumers index via regionBytes getter)
+    }
+
+    ReleaseUavRing(renderer, ring);
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = static_cast<UINT64>(regionBytes) * render::kFrameCount;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(buffer.GetAddressOf()));
+    if (FAILED(hr) || !buffer)
+    {
+        return false;
+    }
+
+    renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_COMMON);
+    buffer->SetName(name);
+    ring.buffer = buffer;
+    ring.regionBytes = regionBytes;
+    return true;
+}
+
 // ---- Caster filtering + fills ----------------------------------------------
 
 bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
@@ -217,6 +277,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     cpuBounds_.assign(casterCount, render::CasterBounds{});
     pending_.assign(casterCount, 0);
 
+    // Fill per-caster data + tally distinct meshes (= mesh-groups: the cull groups draws by
+    // mesh, so the indirect arg/count buffers are sized per (view, mesh-group)).
+    std::unordered_set<const void*> distinctMeshes;
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
@@ -224,8 +287,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (!IsCaster(obj)) { continue; }
         FillInstance(obj, cpuInstances_[idx]);
         FillBounds(obj, cpuBounds_[idx]);
+        if (const RenderableObject* ro = obj->AsRenderableObject())
+        {
+            if (const void* mesh = ro->GetMesh()) { distinctMeshes.insert(mesh); }
+        }
         ++idx;
     }
+    numMeshGroups_ = static_cast<std::uint32_t>(distinctMeshes.size());
 
     // Prime ALL ring regions — after this a static scene re-uploads nothing.
     if (casterCount > 0)
@@ -237,10 +305,22 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
     }
 
-    char buf[192];
+    // Step 3: allocate the GPU-driven indirect-execution buffers, sized per (view, mesh-group).
+    // Worst case: every caster visible in every view (visible list) and one draw per
+    // (view, mesh-group) (args), one draw count per view. Still unused (no descriptors).
+    const size_t numViews = render::kMaxShadowViews;
+    const size_t groups = std::max<size_t>(numMeshGroups_, 1);
+    const size_t casters = std::max<size_t>(casterCount, 1);
+    EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), L"ShadowGpuData.IndirectArgs");
+    EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), L"ShadowGpuData.VisibleList");
+    EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), L"ShadowGpuData.IndirectCounts");
+    // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
+    renderer->GetDrawIndexedCommandSignature();
+
+    char buf[224];
     std::snprintf(buf, sizeof(buf),
-        "[ShadowGpuData] rebuilt: %u casters, %.2f KB instance + %.2f KB bounds x%u regions.\n",
-        count_,
+        "[ShadowGpuData] rebuilt: %u casters, %u mesh-groups; %.2f KB instance + %.2f KB bounds x%u regions.\n",
+        count_, numMeshGroups_,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);
@@ -361,6 +441,7 @@ void ShadowGpuData::Reset()
     // the allocations when their capacity still suffices.
     count_ = 0;
     viewFrustumCount_ = 0;
+    numMeshGroups_ = 0;
     cpuInstances_.clear();
     cpuBounds_.clear();
     pending_.clear();

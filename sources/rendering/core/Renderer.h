@@ -191,6 +191,18 @@ public:
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
+    // Rung 0 GPU-driven shadows (Step 3): a shared, lazily-created command signature for a
+    // single DRAW_INDEXED indirect argument with no per-draw root arguments (instance data
+    // comes from a bound SRV indexed by SV_InstanceID + the arg's StartInstanceLocation).
+    // Independent of any root signature (pRootSignature = nullptr at creation). Null on
+    // failure. Owned by the Renderer for the lifetime of the device.
+    ID3D12CommandSignature* GetDrawIndexedCommandSignature();
+    // Thin ExecuteIndirect wrapper. countBuffer may be null (then all maxCommandCount commands
+    // execute). No-op if cl/sig/argBuffer are null.
+    void ExecuteIndirect(ID3D12GraphicsCommandList* cl, ID3D12CommandSignature* sig,
+                         UINT maxCommandCount, ID3D12Resource* argBuffer, UINT64 argOffset,
+                         ID3D12Resource* countBuffer = nullptr, UINT64 countOffset = 0);
+
     void SetReflectionTextureScale(Math::float2 scale);
     void SetReflectionTextureScale(float scale) { SetReflectionTextureScale(Math::float2(scale, scale)); }
     Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
@@ -348,6 +360,9 @@ private:
 
     // Resource-state tracking across parallel command-list recording
     ResourceStateTracker stateTracker_;
+
+    // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
+    ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
 
     // Streamline / DLSS integration
     sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
