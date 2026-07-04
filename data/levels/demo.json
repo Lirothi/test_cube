@@ -2176,6 +2176,198 @@
         1.0
       ],
       "type": "freeCameraStart"
+    },
+    {
+      "enabled": true,
+      "id": 155,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -15.132826805114746,
+        0.4999983012676239,
+        -13.892179489135742
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 156,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        -16.41788101196289,
+        0.4999983310699463,
+        -9.588846206665039
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 157,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -19.434654235839844,
+        0.5000002384185791,
+        2.52286696434021
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 158,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        -18.003875732421875,
+        0.5000002384185791,
+        7.411252975463867
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 159,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        21.04509925842285,
+        0.5000001788139343,
+        -12.603367805480957
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 160,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        17.35663414001465,
+        0.5000001788139343,
+        -12.685556411743164
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 161,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy Copy",
+      "position": [
+        12.4303560256958,
+        1.102173924446106,
+        22.27199935913086
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 162,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy Copy Copy",
+      "position": [
+        15.982893943786621,
+        1.102173924446106,
+        24.046802520751953
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -2242,7 +2434,71 @@
         1.411637306213379,
         2.977060079574585
       ],
-      "radius": 13.850000381469727,
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        14.47765064239502,
+        1.411636471748352,
+        23.231470108032227
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        19.5179386138916,
+        1.4116406440734863,
+        -13.622770309448242
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        -15.793497085571289,
+        1.5545227527618408,
+        -11.830423355102539
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        -19.369644165039063,
+        1.554520845413208,
+        5.129709243774414
+      ],
+      "radius": 10.0,
       "shadowsEnabled": true
     }
   ],

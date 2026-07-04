@@ -72,6 +72,15 @@ void InputLayoutManager::InitBuiltins() {
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Build(*this, "PosOnly");
 
+    // pos (slot 0) + per-instance caster id (slot 1) — Rung 0 indirect shadow VS. POSITION is
+    // at offset 0 in every mesh vertex format, so one layout serves all shadow-caster meshes;
+    // slot 1 is the visible-list stream (uint caster id), stepped once per instance.
+    Builder()
+        .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
+             D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
+        .Build(*this, "PosOnly_InstCasterId");
+
     // pos+color (slot 0) + instance matrix 4x4 in slot 1 (TEXCOORD4..7)
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,     0, 0)

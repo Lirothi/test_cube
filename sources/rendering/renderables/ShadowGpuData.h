@@ -95,6 +95,10 @@ public:
     size_t VisibleListRegionBytes() const { return visibleList_.regionBytes; }
     size_t IndirectCountsRegionBytes() const { return indirectCounts_.regionBytes; }
 
+    // The depth-only indirect shadow PSO (Step 5); the ExecuteIndirect draws bind it in Step 6.
+    // Null until the shader resources are created (first RecordCull). Unused in Step 5.
+    Material* IndirectShadowMaterial() const { return indirectShadowMat_.get(); }
+
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
     // `stride` bytes, persistently mapped, with one SRV per region. The shared boilerplate
@@ -140,7 +144,7 @@ private:
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
 
-    void EnsureCullMaterials(Renderer* renderer);           // lazily create the two compute PSOs
+    void EnsureShaderResources(Renderer* renderer);         // lazily create cull compute + indirect-draw PSOs
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
     void EnsureReadback(Renderer* renderer, size_t bytes);  // validation readback buffer (READBACK heap)
 
@@ -159,9 +163,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3 * render::kFrameCount> cullUav_{};
 
-    std::shared_ptr<Material> cullClearMat_; // shadow_cull_clear_cs.hlsl
-    std::shared_ptr<Material> cullMat_;      // shadow_cull_cs.hlsl
-    bool cullMatsTried_ = false;             // one-shot creation attempt (avoid re-log on failure)
+    std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
+    std::shared_ptr<Material> cullMat_;          // shadow_cull_cs.hlsl
+    std::shared_ptr<Material> indirectShadowMat_; // shadow_indirect_csm.hlsl (Step 5; used in Step 6)
+    bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 
     std::uint32_t count_ = 0;            // live caster count
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count

@@ -499,10 +499,10 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
 
 // ---- Step 4: GPU cull dispatch + validation --------------------------------
 
-void ShadowGpuData::EnsureCullMaterials(Renderer* renderer)
+void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
 {
-    if (cullMatsTried_) { return; }
-    cullMatsTried_ = true;
+    if (shaderResourcesTried_) { return; }
+    shaderResourcesTried_ = true;
     if (!renderer || !renderer->GetMaterialManager()) { return; }
 
     auto* mm = renderer->GetMaterialManager();
@@ -518,12 +518,43 @@ void ShadowGpuData::EnsureCullMaterials(Renderer* renderer)
         cd.csEntry = "CSMain";
         cullMat_ = mm->GetOrCreateCompute(renderer, cd);
     }
-    if (!cullClearMat_ || !cullClearMat_->GetPipelineState() ||
-        !cullMat_ || !cullMat_->GetPipelineState())
+    // Step 5: the indirect depth-only shadow PSO. Depth-only (numRT 0, D16, LESS_EQUAL) mirroring
+    // ConfigureShadowPipeline; the PosOnly_InstCasterId layout binds the mesh vertex stream (slot
+    // 0) + the visible-list caster-id stream (slot 1, per-instance). Compiled now; drawn in Step 6.
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/shadow_indirect_csm.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "PosOnly_InstCasterId";
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.numRT = 0;
+        gd.dsvFormat = DXGI_FORMAT_D16_UNORM;
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+        gd.blend.RenderTarget[0].BlendEnable = FALSE;
+        indirectShadowMat_ = mm->GetOrCreateGraphics(renderer, gd);
+    }
+
+    const bool cullOk = cullClearMat_ && cullClearMat_->GetPipelineState() &&
+                        cullMat_ && cullMat_->GetPipelineState();
+    const bool drawOk = indirectShadowMat_ && indirectShadowMat_->GetPipelineState();
+    if (!cullOk)
     {
         OutputDebugStringA("[ShadowGpuData] cull compute PSO creation FAILED (shader compile?).\n");
         cullClearMat_.reset();
         cullMat_.reset();
+    }
+    if (!drawOk)
+    {
+        OutputDebugStringA("[ShadowGpuData] indirect shadow PSO creation FAILED (shader compile?).\n");
+        indirectShadowMat_.reset();
+    }
+    if (cullOk && drawOk)
+    {
+        OutputDebugStringA("[ShadowGpuData] shaders ready: cull (clear+cull) + indirect-shadow PSOs created.\n");
     }
 }
 
@@ -616,7 +647,7 @@ void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
 void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
     if (!renderer || !cl) { return; }
-    EnsureCullMaterials(renderer);
+    EnsureShaderResources(renderer);
     if (!cullClearMat_ || !cullMat_) { return; }
     if (count_ == 0 || numMeshGroups_ == 0) { return; }
     if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
