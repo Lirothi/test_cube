@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/renderables/ShadowInstanceBuffer.h"
 #include "app/camera/Camera.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
@@ -120,6 +121,9 @@ private:
     // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
     // shared — each shadow view only runs its own per-frustum Cull against it.
     SceneRenderQueue shadowCasterSource_{};
+    // Rung 0 / Step 1: persistent per-caster shadow-instance data on the GPU.
+    // Built at level load, maintained per frame; not yet consumed by any pass.
+    ShadowInstanceBuffer shadowInstances_{};
     LightManager lightManager_{};
     Camera camera_;
 

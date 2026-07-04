@@ -91,6 +91,10 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
 {
     sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
     SyncObjectsForRender(SceneObjectSyncReason::LevelLoad);
+    // Rung 0 / Step 1: build the persistent per-caster shadow-instance buffer once
+    // the object transforms are finalized (SyncSceneState above resets motion
+    // history so prevWorld == world). Level load is GPU-idle, safe for the alloc.
+    shadowInstances_.Rebuild(renderer, objects_);
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
@@ -778,6 +782,11 @@ void Scene::Render(Renderer* renderer) {
 
     lightManager_.UpdateSpotLightCache();
 
+    // Rung 0 / Step 1: refresh the persistent per-caster shadow-instance buffer,
+    // re-uploading only the movers' entries into this frame's ring region. Pure
+    // CPU write into mapped upload memory; no consumer yet.
+    shadowInstances_.UpdateForFrame(renderer, objects_);
+
     PrepareViews(renderer);
 
     sceneRenderer_.Render(renderer, frameData_);
@@ -788,6 +797,7 @@ void Scene::Clear()
     sceneRenderer_.Reset();
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
+    shadowInstances_.Reset(); // drop CPU caster state; GPU buffer retained
     objects_.clear();
 #if WITH_EDITOR
     objectIds_.clear();
