@@ -13,6 +13,7 @@
 class Renderer;
 class RenderableObjectBase;
 class Frustum;
+class Material;
 
 // Rung 0 (Steps 1-2): the GPU-side data the future GPU-driven shadow pipeline consumes.
 // All buffers are ALLOCATED + MAINTAINED here but NOT yet read by any pass (add-dormant).
@@ -53,9 +54,21 @@ public:
                                  const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
 
     // Per-frame upload of the active shadow views' frustum planes into this frame's region.
-    // `frustums[i]` may be null (inactive view slot → zeroed planes). `count` is the fixed
-    // view-slot count (stable view->slot mapping for the future cull).
+    // `frustums[i]` may be null (inactive view slot → reject-all sentinel so the cull emits
+    // zero for it). `count` is the fixed view-slot count (stable view->slot mapping for the cull).
     void UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count);
+
+    // Rung 0 / Step 4: record the GPU cull for this frame — a clear dispatch (init the per-
+    // (view, mesh-group) indirect args) + a cull dispatch (frustum-test every caster into the
+    // visible list + InstanceCounts). Writes the current frame's ring region. Produces the
+    // indirect args; NOTHING draws from them yet. Call from a render-graph pass before shadows.
+    void RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+
+    // Step 4 (temporary): once, a few frames after the cull first runs, read back the GPU
+    // InstanceCounts and compare per-view totals against a CPU frustum cull of the same
+    // snapshot; log PASS/FAIL. Pure CPU + deferred (uses the natural per-frame fence), so no
+    // mid-frame stall. Call once per frame (main thread) from Scene::Render.
+    void PollValidation(Renderer* renderer);
 
     // Drop CPU-side state on level unload; RETAINS the GPU buffers + SRVs (the LightManager
     // lesson: a pass may reference an SRV while frames are in flight). Next Rebuild reuses them.
@@ -127,17 +140,42 @@ private:
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
 
+    void EnsureCullMaterials(Renderer* renderer);           // lazily create the two compute PSOs
+    void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
+    void EnsureReadback(Renderer* renderer, size_t bytes);  // validation readback buffer (READBACK heap)
+
     Ring instances_;     // per-caster InstancePerObject
     Ring bounds_;        // per-caster CasterBounds
     Ring viewFrustums_;  // per-view ShadowViewFrustum
+    Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
+    Ring perGroup_;      // per-group {base, indexCount} (uint2); static, region 0 only
 
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
     UavRing indirectCounts_; // per view draw count (uint32)
 
+    // Non-shader-visible UAVs for the cull outputs, one per ring region:
+    // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts.
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3 * render::kFrameCount> cullUav_{};
+
+    std::shared_ptr<Material> cullClearMat_; // shadow_cull_clear_cs.hlsl
+    std::shared_ptr<Material> cullMat_;      // shadow_cull_cs.hlsl
+    bool cullMatsTried_ = false;             // one-shot creation attempt (avoid re-log on failure)
+
     std::uint32_t count_ = 0;            // live caster count
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
+
+    std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
+
+    // Step 4 validation: deferred readback of the args region + a snapshot to compare against.
+    Microsoft::WRL::ComPtr<ID3D12Resource> valReadback_; // READBACK heap
+    std::vector<render::CasterBounds>      valBounds_;
+    std::vector<render::ShadowViewFrustum> valFrustums_;
+    std::uint32_t valCasters_ = 0, valViews_ = 0, valGroups_ = 0;
+    std::uint64_t valFrame_ = 0;
+    int           valState_ = 0; // 0 = not started, 1 = readback pending, 2 = done
 
     // Authoritative current per-caster values (change-detection reference) + a per-entry
     // "frames remaining to propagate a change into all regions" counter (drives both the

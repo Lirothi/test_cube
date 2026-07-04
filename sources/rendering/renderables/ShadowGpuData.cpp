@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <unordered_set>
+#include <unordered_map>
+#include <vector>
 
 #include "core/math/Frustum.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/ComputeDispatch.h"
+#include "rendering/meshes/Mesh.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
 
@@ -202,8 +205,11 @@ bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
 {
     // Mirror the CastsShadow() filter shadowCasterSource_.Bucketize uses. NOT filtered by
     // IsVisible()/layer mask: the caster id must be STABLE across frames, and per-view
-    // visibility is the job of the future GPU cull pass (Step 4), not of this buffer.
-    return obj && obj->CastsShadow() && obj->AsRenderableObject() != nullptr;
+    // visibility is the job of the GPU cull pass (Step 4), not of this buffer. Requires a
+    // mesh: a mesh-less "caster" draws nothing and has no mesh-group to slot into.
+    if (!obj || !obj->CastsShadow()) { return false; }
+    const RenderableObject* ro = obj->AsRenderableObject();
+    return ro && ro->GetMesh() != nullptr;
 }
 
 void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out)
@@ -277,9 +283,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     cpuBounds_.assign(casterCount, render::CasterBounds{});
     pending_.assign(casterCount, 0);
 
-    // Fill per-caster data + tally distinct meshes (= mesh-groups: the cull groups draws by
-    // mesh, so the indirect arg/count buffers are sized per (view, mesh-group)).
-    std::unordered_set<const void*> distinctMeshes;
+    // Fill per-caster data + assign mesh-groups (the cull groups draws by mesh, so the indirect
+    // arg/count buffers are sized per (view, mesh-group)). Group ids are dense, first-seen order.
+    std::unordered_map<const Mesh*, std::uint32_t> meshToGroup;
+    std::vector<const Mesh*> casterMesh(casterCount, nullptr);
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
@@ -287,13 +294,56 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (!IsCaster(obj)) { continue; }
         FillInstance(obj, cpuInstances_[idx]);
         FillBounds(obj, cpuBounds_[idx]);
-        if (const RenderableObject* ro = obj->AsRenderableObject())
+        const RenderableObject* ro = obj->AsRenderableObject();
+        const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsCaster requires it
+        casterMesh[idx] = mesh;
+        if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
-            if (const void* mesh = ro->GetMesh()) { distinctMeshes.insert(mesh); }
+            meshToGroup.emplace(mesh, static_cast<std::uint32_t>(meshToGroup.size()));
         }
         ++idx;
     }
-    numMeshGroups_ = static_cast<std::uint32_t>(distinctMeshes.size());
+    numMeshGroups_ = static_cast<std::uint32_t>(meshToGroup.size());
+
+    // Per-group caster count + index count, and per-caster group id.
+    std::vector<std::uint32_t> groupCount(numMeshGroups_, 0);
+    std::vector<std::uint32_t> groupIndexCount(numMeshGroups_, 0);
+    std::vector<std::uint32_t> casterGroupId(casterCount, 0);
+    for (size_t i = 0; i < casterCount; ++i)
+    {
+        const Mesh* mesh = casterMesh[i];
+        const std::uint32_t g = mesh ? meshToGroup[mesh] : 0u;
+        casterGroupId[i] = g;
+        if (g < numMeshGroups_)
+        {
+            ++groupCount[g];
+            if (mesh) { groupIndexCount[g] = static_cast<std::uint32_t>(mesh->GetIndexCount()); }
+        }
+    }
+    // Prefix-sum group caster counts -> each group's base slice offset within a view's region
+    // (sum of counts == casterCount, so a group's visible run never overflows its slice).
+    std::vector<std::uint32_t> groupBase(numMeshGroups_, 0);
+    for (std::uint32_t g = 1; g < numMeshGroups_; ++g)
+    {
+        groupBase[g] = groupBase[g - 1] + groupCount[g - 1];
+    }
+
+    // Upload the static cull inputs (region 0; never rewritten after Rebuild).
+    if (EnsureRing(renderer, casterGroup_, casterCount, sizeof(std::uint32_t), L"ShadowGpuData.CasterGroup") &&
+        casterCount > 0)
+    {
+        std::memcpy(casterGroup_.Region(0), casterGroupId.data(), casterCount * sizeof(std::uint32_t));
+    }
+    if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 2 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
+        numMeshGroups_ > 0)
+    {
+        auto* pg = reinterpret_cast<std::uint32_t*>(perGroup_.Region(0));
+        for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+        {
+            pg[g * 2 + 0] = groupBase[g];
+            pg[g * 2 + 1] = groupIndexCount[g];
+        }
+    }
 
     // Prime ALL ring regions — after this a static scene re-uploads nothing.
     if (casterCount > 0)
@@ -316,6 +366,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), L"ShadowGpuData.IndirectCounts");
     // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
     renderer->GetDrawIndexedCommandSignature();
+    // Step 4: per-region UAVs for the cull outputs (depend on the just-decided sizes).
+    RebuildCullDescriptors(renderer);
+    valState_ = 0; // re-validate after a caster-set change
 
     char buf[224];
     std::snprintf(buf, sizeof(buf),
@@ -412,12 +465,11 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
     }
     viewFrustumCount_ = static_cast<std::uint32_t>(count);
 
-    const UINT region = renderer->GetCurrentFrameIndex();
-    if (region >= render::kFrameCount) { return; }
-    auto* base = reinterpret_cast<render::ShadowViewFrustum*>(viewFrustums_.Region(region));
-
-    // The frustum buffer is fully rewritten each frame (views move every frame); an inactive
-    // slot (null / invalid frustum) is zeroed so its stable index still exists for the cull.
+    // Build into a CPU mirror (kept for Step 4 validation), then upload to this frame's region.
+    // The frustum buffer is fully rewritten each frame (views move every frame). An inactive/
+    // invalid slot gets a reject-all sentinel plane (0,0,0,-1): signedDist=-1, projRadius=0 ->
+    // culled, so the cull emits zero for that slot (matches a cleared shadow view).
+    cpuViewFrustums_.assign(count, render::ShadowViewFrustum{});
     for (size_t i = 0; i < count; ++i)
     {
         render::ShadowViewFrustum vf{};
@@ -430,8 +482,271 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
                 vf.planes[j] = DirectX::XMFLOAT4(p[j].x, p[j].y, p[j].z, p[j].w);
             }
         }
-        base[i] = vf;
+        else
+        {
+            vf.planes[0] = DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, -1.0f);
+        }
+        cpuViewFrustums_[i] = vf;
     }
+
+    const UINT region = renderer->GetCurrentFrameIndex();
+    if (region < render::kFrameCount)
+    {
+        auto* base = reinterpret_cast<render::ShadowViewFrustum*>(viewFrustums_.Region(region));
+        std::memcpy(base, cpuViewFrustums_.data(), count * sizeof(render::ShadowViewFrustum));
+    }
+}
+
+// ---- Step 4: GPU cull dispatch + validation --------------------------------
+
+void ShadowGpuData::EnsureCullMaterials(Renderer* renderer)
+{
+    if (cullMatsTried_) { return; }
+    cullMatsTried_ = true;
+    if (!renderer || !renderer->GetMaterialManager()) { return; }
+
+    auto* mm = renderer->GetMaterialManager();
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/shadow_cull_clear_cs.hlsl";
+        cd.csEntry = "CSMain";
+        cullClearMat_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/shadow_cull_cs.hlsl";
+        cd.csEntry = "CSMain";
+        cullMat_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!cullClearMat_ || !cullClearMat_->GetPipelineState() ||
+        !cullMat_ || !cullMat_->GetPipelineState())
+    {
+        OutputDebugStringA("[ShadowGpuData] cull compute PSO creation FAILED (shader compile?).\n");
+        cullClearMat_.reset();
+        cullMat_.reset();
+    }
+}
+
+void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
+{
+    cullUav_.fill({});
+    cullUavHeap_.Reset();
+    if (!renderer || !renderer->GetDevice()) { return; }
+    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
+
+    ID3D12Device* dev = renderer->GetDevice();
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.NumDescriptors = 3 * render::kFrameCount;
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(cullUavHeap_.GetAddressOf()))) || !cullUavHeap_)
+    {
+        cullUavHeap_.Reset();
+        return;
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = cullUavHeap_->GetCPUDescriptorHandleForHeapStart();
+    auto slotHandle = [&](UINT slot) { D3D12_CPU_DESCRIPTOR_HANDLE h{ base.ptr + static_cast<SIZE_T>(slot) * incr }; return h; };
+
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        // args: RAW UAV covering region f (byte-addressable for InterlockedAdd + Store).
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_R32_TYPELESS;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Buffer.FirstElement = static_cast<UINT64>(f) * (indirectArgs_.regionBytes / 4);
+            ud.Buffer.NumElements = static_cast<UINT>(indirectArgs_.regionBytes / 4);
+            ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(f);
+            dev->CreateUnorderedAccessView(indirectArgs_.buffer.Get(), nullptr, &ud, h);
+            cullUav_[f] = h;
+        }
+        // visibleList: structured uint UAV, region f.
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_UNKNOWN;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Buffer.FirstElement = static_cast<UINT64>(f) * (visibleList_.regionBytes / 4);
+            ud.Buffer.NumElements = static_cast<UINT>(visibleList_.regionBytes / 4);
+            ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(render::kFrameCount + f);
+            dev->CreateUnorderedAccessView(visibleList_.buffer.Get(), nullptr, &ud, h);
+            cullUav_[render::kFrameCount + f] = h;
+        }
+        // counts: structured uint UAV, region f.
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_UNKNOWN;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Buffer.FirstElement = static_cast<UINT64>(f) * (indirectCounts_.regionBytes / 4);
+            ud.Buffer.NumElements = static_cast<UINT>(indirectCounts_.regionBytes / 4);
+            ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(2 * render::kFrameCount + f);
+            dev->CreateUnorderedAccessView(indirectCounts_.buffer.Get(), nullptr, &ud, h);
+            cullUav_[2 * render::kFrameCount + f] = h;
+        }
+    }
+}
+
+void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
+{
+    if (!renderer || !renderer->GetDevice() || bytes == 0) { return; }
+    if (valReadback_ && valReadback_->GetDesc().Width >= bytes) { return; }
+    valReadback_.Reset();
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = bytes;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    renderer->GetDevice()->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(valReadback_.GetAddressOf()));
+}
+
+void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer || !cl) { return; }
+    EnsureCullMaterials(renderer);
+    if (!cullClearMat_ || !cullMat_) { return; }
+    if (count_ == 0 || numMeshGroups_ == 0) { return; }
+    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
+    if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid()) { return; }
+    if (!cullUavHeap_) { return; }
+
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+
+    const std::uint32_t numViews = render::kMaxShadowViews;
+    const std::uint32_t numGroups = numMeshGroups_;
+    const std::uint32_t numCasters = count_;
+
+    // The cull outputs must be UNORDERED_ACCESS before the dispatches (created COMMON, or left
+    // COPY_SOURCE by a prior validation frame). This pass declares no states -> transition here.
+    renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    struct CullCB { std::uint32_t numCasters, numViews, numGroups, pad; };
+    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, 0u }; std::memcpy(dst, &c, sizeof(c)); };
+    const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
+    const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
+
+    // Clear/init the per-(view, mesh-group) indirect args + per-view draw counts.
+    RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCB,
+        { perGroup_.Srv(0) },
+        { cullUav_[f], cullUav_[2 * render::kFrameCount + f] },
+        noSampler,
+        numViews * numGroups, 1,
+        indirectArgs_.buffer.Get()); // UAV barrier: args init visible to the cull's InterlockedAdd
+
+    // Cull: frustum-test every caster into the visible list + InstanceCounts.
+    RecordComputeDispatch(renderer, cl, cullMat_.get(), cbSize, writeCB,
+        { bounds_.Srv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroup_.Srv(0) },
+        { cullUav_[f], cullUav_[render::kFrameCount + f] },
+        noSampler,
+        numCasters, 1,
+        indirectArgs_.buffer.Get());
+
+    // Step 4 validation (temporary, one-shot after warmup): snapshot the inputs + read back
+    // this region's args to compare against a CPU cull kFrameCount frames later.
+    if (valState_ == 0 && renderer->GetTotalFrameNumber() > render::kFrameCount)
+    {
+        valBounds_ = cpuBounds_;
+        valFrustums_ = cpuViewFrustums_;
+        valCasters_ = numCasters;
+        valViews_ = numViews;
+        valGroups_ = numGroups;
+        EnsureReadback(renderer, indirectArgs_.regionBytes);
+        if (valReadback_)
+        {
+            renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            cl->CopyBufferRegion(valReadback_.Get(), 0, indirectArgs_.buffer.Get(),
+                                 static_cast<UINT64>(f) * indirectArgs_.regionBytes, indirectArgs_.regionBytes);
+            valFrame_ = renderer->GetTotalFrameNumber();
+            valState_ = 1;
+        }
+    }
+}
+
+void ShadowGpuData::PollValidation(Renderer* renderer)
+{
+    if (valState_ != 1 || !renderer || !valReadback_) { return; }
+    // Wait until the fence for the readback frame has surely passed (BeginFrame waits on the
+    // slot's fence kFrameCount frames later), so the copy has completed on the GPU.
+    if (renderer->GetTotalFrameNumber() < valFrame_ + render::kFrameCount) { return; }
+
+    const size_t argBytes = static_cast<size_t>(valViews_) * valGroups_ * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    D3D12_RANGE readRange{ 0, argBytes };
+    void* mapped = nullptr;
+    if (FAILED(valReadback_->Map(0, &readRange, &mapped)) || !mapped)
+    {
+        valState_ = 2;
+        return;
+    }
+    const auto* args = reinterpret_cast<const D3D12_DRAW_INDEXED_ARGUMENTS*>(mapped);
+
+    std::vector<std::uint32_t> gpuTotal(valViews_, 0);
+    for (std::uint32_t v = 0; v < valViews_; ++v)
+    {
+        for (std::uint32_t g = 0; g < valGroups_; ++g)
+        {
+            gpuTotal[v] += args[v * valGroups_ + g].InstanceCount;
+        }
+    }
+    const D3D12_RANGE noWrite{ 0, 0 };
+    valReadback_->Unmap(0, &noWrite);
+
+    // CPU per-view totals from the snapshot (same positive-vertex test as shadow_cull_cs.hlsl).
+    std::uint32_t mismatchViews = 0, firstView = 0, firstCpu = 0, firstGpu = 0;
+    for (std::uint32_t v = 0; v < valViews_; ++v)
+    {
+        const render::ShadowViewFrustum& vf = valFrustums_[v];
+        std::uint32_t cpu = 0;
+        for (std::uint32_t c = 0; c < valCasters_; ++c)
+        {
+            const render::CasterBounds& b = valBounds_[c];
+            bool visible = true;
+            for (int i = 0; i < 6; ++i)
+            {
+                const DirectX::XMFLOAT4& p = vf.planes[i];
+                const float signedDist = p.x * b.center.x + p.y * b.center.y + p.z * b.center.z + p.w;
+                const float projRadius = std::abs(p.x) * b.halfExtents.x + std::abs(p.y) * b.halfExtents.y + std::abs(p.z) * b.halfExtents.z;
+                if (signedDist + projRadius < 0.0f) { visible = false; break; }
+            }
+            if (visible) { ++cpu; }
+        }
+        if (cpu != gpuTotal[v])
+        {
+            if (mismatchViews == 0) { firstView = v; firstCpu = cpu; firstGpu = gpuTotal[v]; }
+            ++mismatchViews;
+        }
+    }
+
+    char buf[256];
+    if (mismatchViews == 0)
+    {
+        std::snprintf(buf, sizeof(buf),
+            "[ShadowGpuData] cull validation PASS: %u views match CPU (%u casters, %u groups).\n",
+            valViews_, valCasters_, valGroups_);
+    }
+    else
+    {
+        std::snprintf(buf, sizeof(buf),
+            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).\n",
+            mismatchViews, valViews_, firstView, firstCpu, firstGpu);
+    }
+    OutputDebugStringA(buf);
+    valState_ = 2;
 }
 
 void ShadowGpuData::Reset()
@@ -445,5 +760,7 @@ void ShadowGpuData::Reset()
     cpuInstances_.clear();
     cpuBounds_.clear();
     pending_.clear();
+    cpuViewFrustums_.clear();
+    valState_ = 0;
     logFramesRemaining_ = 5;
 }

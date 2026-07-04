@@ -13,6 +13,7 @@ class Camera;
 class DirectionalLight;
 class RenderableObjectBase;
 class Skybox;
+class ShadowGpuData;
 
 enum class SsrTechnique : uint32_t
 {
@@ -92,6 +93,7 @@ struct SceneFrameData
     Skybox* skybox = nullptr;
     const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;
     const DirectionalLight* dirLight = nullptr;
+    ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
 
     CascadeData cascades{};
     std::uint64_t selectedEditorObjectId = 0;

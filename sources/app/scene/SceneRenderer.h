@@ -69,6 +69,7 @@ private:
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
 
+    void Pass_ShadowCull(Renderer* r, RenderGraphPassContext ctx);
     void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
         const std::array<SceneView, kCascades>& cascadeViews);
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,

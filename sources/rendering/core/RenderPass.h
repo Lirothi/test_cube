@@ -8,6 +8,7 @@ enum class RenderPass : uint16_t {
     Main_PrologueClear,
     Main_ObjectCompute,
     Main_TerrainDepth,
+    Main_ShadowCull,
     Main_CSM,
     Main_SpotShadows,
     Main_PointShadows,
@@ -58,6 +59,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_PrologueClear: return L"PrologueClear";
     case RenderPass::Main_ObjectCompute: return L"ObjectCompute";
     case RenderPass::Main_TerrainDepth: return L"TerrainDepth";
+    case RenderPass::Main_ShadowCull: return L"ShadowCull";
     case RenderPass::Main_CSM: return L"CSM";
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
     case RenderPass::Main_PointShadows: return L"PointShadows";

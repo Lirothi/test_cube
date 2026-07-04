@@ -19,6 +19,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/renderables/ShadowGpuData.h"
 #include "ocean/OceanSimulation.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
@@ -389,7 +390,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_ShoreDepth(renderer, ctx, shoreView);
         });
 
-    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShoreDepth },
+    // Rung 0 / Step 4: GPU cull -> indirect shadow args, before the shadow passes (its output
+    // is not consumed yet). Manages its own UAV states (declares none). Placed in the chain so
+    // Step 6's ExecuteIndirect can consume it.
+    auto pShadowCull = rg.AddPass(RenderPass::Main_ShadowCull, { pShoreDepth },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassShadowCull);
+            Pass_ShadowCull(renderer, ctx);
+        });
+
+    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShadowCull },
         { { D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCSM);
@@ -868,6 +878,21 @@ void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPrologueClear);
         r->RecordBindAndClear(t.cl);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    // Rung 0 / Step 4: GPU cull of shadow casters -> indirect draw args. Produced here but not
+    // yet consumed by any draw. ShadowGpuData manages its own UAV state transitions (this pass
+    // declares none), mirroring the ComputeDispatch "transitions at the call site" convention.
+    if (!renderer || !frame_->shadowGpu) { return; }
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassShadowCull);
+        frame_->shadowGpu->RecordCull(renderer, t.cl);
     }
     ctx.EndCL(t);
 }

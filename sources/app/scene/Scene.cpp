@@ -557,6 +557,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.skybox = skyBox_.get();
     frameData_.objects = &objects_;
     frameData_.dirLight = &dirLight_;
+    frameData_.shadowGpu = &shadowGpu_;
     frameData_.settings = renderSettings_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectId = selectedEditorObjectId_;
@@ -786,6 +787,7 @@ void Scene::Render(Renderer* renderer) {
     // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into
     // mapped upload memory; no consumer yet.
     shadowGpu_.UpdateForFrame(renderer, objects_);
+    shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
 
     PrepareViews(renderer);
 
