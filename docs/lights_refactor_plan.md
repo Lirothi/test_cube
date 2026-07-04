@@ -415,16 +415,20 @@ projecting (`mBiased = max(m − bias, near)`), uniform at all distances; (2) **
 usable D16 precision; (3) **normal-offset bias** (`P + N·0.05`, like the spot path) for
 grazing-angle acne. Constants: worldDepthBias=0.10, normalBias=0.05.
 
-**PCF**: `PointShadowFactor` (both `pointlight_cs.hlsl` + `glass.hlsl`) now averages **8
-cube-corner comparison taps** (each SampleCmpLevelZero is itself 2×2 HW PCF via the linear
-comparison sampler). Offset radius = `m · 0.015` (scales with light distance so the
-world-space filter footprint stays ~constant). Shader-only (no C++), runtime-compiled.
+**PCF** (mirrors the spot path exactly — `spotlight_cs.hlsl SampleShadowPCF`): a **3×3 texel
+grid, /9**. Spot offsets the UV by `invShadowSize`; the cube coord is a direction, so
+`PointShadowFactor` builds a tangent basis ⊥ d and steps by one texel = `2·m·invRes` world
+units (a 90° face spans 2·m at view depth m across `res` texels; UV[0,1]↔tangent[-1,1] = the
+2×). `invRes = 1/pointShadowRes` is passed via the `PointLightFrame` cbuffer field
+`invPointShadowSize` (plumbed through ScenePointLightCBHandles / PointLightPassConstants /
+`Pass_PointLights` from `D.pointShadowRes`) — NOT an invented magic constant. Deferred path
+(`pointlight_cs.hlsl`) done; `glass.hlsl` still uses the earlier 8-tap form — mirror pending.
 
 Verified: `--scene-stress` on the **Debug** build (debug layer active) = exit 0, `verdict:
-CLEAN after 300 iterations` (PCF shaders compile + render across all levels incl. demo1's
-shadowed point lights). PCF adds no new resource/barrier/descriptor → no new GBV surface.
-Both builds already 0/0 from B3. Remaining knobs if visual tuning wanted: kPointPcfRadius
-(softness), worldDepthBias/normalBias (acne↔peter-panning).
+CLEAN after 300 iterations` (shaders compile + render across all levels incl. demo1's
+shadowed point lights; new cbuffer field reflects). PCF adds no new resource/barrier/descriptor
+→ no new GBV surface. Both builds 0/0. Remaining knobs: worldDepthBias/normalBias
+(acne↔peter-panning); PCF footprint is now the shadow texel (no magic radius).
 
 **PART B COMPLETE — point lights cast soft omnidirectional shadows (cap 4, frustum+projected-size selection).**
 

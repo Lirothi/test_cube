@@ -54,6 +54,7 @@ void ScenePointLightCBHandles::Populate(Material* material)
     lightCount = material->ComputeCB0FieldHandle("lightCount");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+    invPointShadowSize = material->ComputeCB0FieldHandle("invPointShadowSize");
 }
 
 void SceneSpotLightCBHandles::Populate(Material* material)
@@ -495,6 +496,7 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.lightCount, data.lightCount, dest);
     matPointLightCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matPointLightCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
+    matPointLightCS_->UpdateCBField(handles.invPointShadowSize, data.invPointShadowSize, dest);
 }
 
 void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConstants& data, uint8_t* dest) const

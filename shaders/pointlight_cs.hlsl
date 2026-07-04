@@ -38,14 +38,12 @@ SamplerComparisonState gSmpShadowCmp : register(s2);
 // standard-projection compare depth from the world offset (matches the render:
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far — NOT reverse-Z), then
 // SampleCmpLevelZero on the cube-array slice. Returns 1 (lit) .. 0 (fully shadowed).
-static const float kPointNormalBias = 0.05f;  // world units, along the surface normal (B4)
-static const float kPointPcfRadius  = 0.015f; // PCF disk radius as a fraction of the light distance
-// 8 cube-corner offset directions for the PCF kernel (each SampleCmp is itself 2x2 HW PCF).
-static const float3 kPointPcfOffsets[8] = {
-    float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
-    float3( 1,  1, -1), float3( 1, -1, -1), float3(-1, -1, -1), float3(-1,  1, -1)
-};
-float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+// PCF mirrors the spot path (spotlight_cs.hlsl SampleShadowPCF): a 3x3 texel grid, /9. Spot
+// offsets the UV by `invShadowSize`; here the coord is a direction, so we step in the tangent
+// plane of d by one texel = 2*m*invRes world units — a 90-deg cube face spans 2*m at view
+// depth m across `res` texels, and UV[0,1] <-> tangent[-1,1] gives the 2x. invRes = 1/pointShadowRes.
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
     float3 d = (P + N * kPointNormalBias) - Ld.position; // normal-offset receiver; HW picks the face from d
@@ -57,18 +55,29 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
     // real distance, so a fixed NDC bias is huge up close (no shadow) and nil far away.
     float mBiased = max(m - Ld.shadowParams.y, nearP);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
-    // PCF: average 8 comparison taps on the cube. The offset scales with m so the world-space
-    // filter footprint stays ~constant with distance (a fixed dir offset blurs near, sharpens far).
-    float radius = m * kPointPcfRadius;
+
+    // Tangent basis perpendicular to d (seed with the smallest-magnitude axis to avoid a
+    // degenerate cross product), then a 3x3 grid stepped by one texel in world units.
+    float3 ad = abs(d);
+    float3 seed = (ad.x < ad.y && ad.x < ad.z) ? float3(1, 0, 0)
+                : (ad.y < ad.z)                ? float3(0, 1, 0) : float3(0, 0, 1);
+    float3 t1 = normalize(cross(seed, d));
+    float3 t2 = normalize(cross(d, t1));
+    float texel = 2.0f * m * invRes;
+
     float shadow = 0.0f;
     [unroll]
-    for (int i = 0; i < 8; ++i)
+    for (int y = -1; y <= 1; ++y)
     {
-        float3 sd = d + kPointPcfOffsets[i] * radius;
-        shadow += PointShadowCube.SampleCmpLevelZero(gSmpShadowCmp,
-            float4(sd, Ld.shadowParams.x), zc); // .w = CUBE INDEX (slot)
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float3 sd = d + (t1 * x + t2 * y) * texel;
+            shadow += PointShadowCube.SampleCmpLevelZero(gSmpShadowCmp,
+                float4(sd, Ld.shadowParams.x), zc); // .w = CUBE INDEX (slot)
+        }
     }
-    return shadow * 0.125f;
+    return shadow / 9.0f;
 }
 
 cbuffer PointLightFrame : register(b0)
@@ -79,6 +88,7 @@ cbuffer PointLightFrame : register(b0)
     uint lightCount;
     float2 screenSize;
     float2 invScreenSize;
+    float invPointShadowSize; // 1 / pointShadowRes (cube face texel, for PCF)
 }
 
 [numthreads(8,8,1)]
@@ -142,7 +152,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             continue;
         }
 
-        float shadow = PointShadowFactor(Ld, P, N);
+        float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
         if (shadow <= 0.0f)
         {
             continue;

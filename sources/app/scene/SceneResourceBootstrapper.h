@@ -48,6 +48,7 @@ struct ScenePointLightCBHandles
     Material::CBFieldHandle lightCount;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
+    Material::CBFieldHandle invPointShadowSize;
 
     void Populate(Material* material);
 };
@@ -155,6 +156,7 @@ struct PointLightPassConstants
     uint32_t lightCount = 0;
     float2 screenSize{};
     float2 invScreenSize{};
+    float invPointShadowSize = 0.0f; // 1 / pointShadowRes (cube face texel, for PCF)
 };
 
 struct SpotLightPassConstants
