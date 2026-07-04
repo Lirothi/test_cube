@@ -402,7 +402,7 @@
     <ClCompile Include="sources/rendering/renderables/InstancedDrawBatch.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/ShadowInstanceBuffer.cpp">
+    <ClCompile Include="sources/rendering/renderables/ShadowGpuData.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
@@ -773,7 +773,7 @@
     <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/ShadowInstanceBuffer.h">
+    <ClInclude Include="sources/rendering/renderables/ShadowGpuData.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/InstanceTypes.h">

@@ -63,6 +63,11 @@ public:
 
     bool IsValid() const { return valid_; }
 
+    // The 6 precomputed inward-facing planes (unit normal, inside == n·p + d >= 0), valid
+    // only when IsValid(). Exposed for GPU shadow culling (the cull compute uploads these
+    // per view); the same data Intersects() uses.
+    const Math::float4* Planes() const { return planes_; }
+
     bool GetCorners(Math::float3 outCorners[8]) const
     {
         if (!outCorners || !valid_)

@@ -317,7 +317,7 @@
     <ClCompile Include="sources/rendering/renderables/InstancedDrawBatch.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp" />
-    <ClCompile Include="sources/rendering/renderables/ShadowInstanceBuffer.cpp" />
+    <ClCompile Include="sources/rendering/renderables/ShadowGpuData.cpp" />
     <ClCompile Include="sources/text/FontAtlas.cpp" />
     <ClCompile Include="sources/text/FontGenerator.cpp" />
     <ClCompile Include="sources/text/FontManager.cpp" />
@@ -467,7 +467,7 @@
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
-    <ClInclude Include="sources/rendering/renderables/ShadowInstanceBuffer.h" />
+    <ClInclude Include="sources/rendering/renderables/ShadowGpuData.h" />
     <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />
     <ClInclude Include="sources/text/FontGenerator.h" />

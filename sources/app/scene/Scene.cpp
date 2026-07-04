@@ -91,10 +91,10 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
 {
     sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
     SyncObjectsForRender(SceneObjectSyncReason::LevelLoad);
-    // Rung 0 / Step 1: build the persistent per-caster shadow-instance buffer once
-    // the object transforms are finalized (SyncSceneState above resets motion
-    // history so prevWorld == world). Level load is GPU-idle, safe for the alloc.
-    shadowInstances_.Rebuild(renderer, objects_);
+    // Rung 0 / Steps 1-2: build the persistent per-caster shadow buffers (instance + bounds)
+    // once the object transforms are finalized (SyncSceneState above resets motion history so
+    // prevWorld == world). Level load is GPU-idle, safe for the alloc.
+    shadowGpu_.Rebuild(renderer, objects_);
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
@@ -782,12 +782,39 @@ void Scene::Render(Renderer* renderer) {
 
     lightManager_.UpdateSpotLightCache();
 
-    // Rung 0 / Step 1: refresh the persistent per-caster shadow-instance buffer,
-    // re-uploading only the movers' entries into this frame's ring region. Pure
-    // CPU write into mapped upload memory; no consumer yet.
-    shadowInstances_.UpdateForFrame(renderer, objects_);
+    // Rung 0 / Steps 1-2: refresh the persistent per-caster shadow buffers (instance + bounds),
+    // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into
+    // mapped upload memory; no consumer yet.
+    shadowGpu_.UpdateForFrame(renderer, objects_);
 
     PrepareViews(renderer);
+
+    // Rung 0 / Step 2: upload the active shadow views' frustum planes (the per-view cull input)
+    // into this frame's ring region. Fixed slot layout [cascades | spots | point-faces] so a
+    // view's slot index is stable for the future cull; inactive slots pass null → zeroed.
+    {
+        constexpr size_t kCascadeSlots = static_cast<size_t>(kCascades);
+        constexpr size_t kSpotSlots = LightManager::kMaxShadowedSpotLights;
+        constexpr size_t kPointFaceSlots = LightManager::kMaxShadowedPointLights * 6;
+        // Direct constant base offsets (not a running index) so the array writes are
+        // provably in-bounds — [0,kCascadeSlots) | [kCascadeSlots,+kSpotSlots) | rest.
+        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots> frustums{};
+        for (size_t i = 0; i < kCascadeSlots; ++i)
+        {
+            frustums[i] = &cascadeViews_[i].frustum;
+        }
+        const size_t spotCount = lightManager_.GetShadowedSpotCount();
+        for (size_t i = 0; i < kSpotSlots; ++i)
+        {
+            frustums[kCascadeSlots + i] = (i < spotCount) ? &spotShadowViews_[i].frustum : nullptr;
+        }
+        const size_t pointFaceCount = lightManager_.GetShadowedPointCount() * 6;
+        for (size_t i = 0; i < kPointFaceSlots; ++i)
+        {
+            frustums[kCascadeSlots + kSpotSlots + i] = (i < pointFaceCount) ? &pointShadowViews_[i].frustum : nullptr;
+        }
+        shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
+    }
 
     sceneRenderer_.Render(renderer, frameData_);
 }
@@ -797,7 +824,7 @@ void Scene::Clear()
     sceneRenderer_.Reset();
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
-    shadowInstances_.Reset(); // drop CPU caster state; GPU buffer retained
+    shadowGpu_.Reset(); // drop CPU caster state; GPU buffers retained
     objects_.clear();
 #if WITH_EDITOR
     objectIds_.clear();
