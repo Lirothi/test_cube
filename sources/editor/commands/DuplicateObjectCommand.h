@@ -4,10 +4,11 @@
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h"
 
-// Duplicates one editor entity into the live scene. Document objects (meshes) are
-// recreated via the object registry; environment point/spot lights are duplicated
-// as new environment entities and folded into the LightManager. Singletons with no
-// meaningful copy -- camera, skybox, directional light, ocean -- are rejected.
+// Duplicates one editor entity. Runtime document objects are recreated via the
+// object registry; document-only markers are copied in the document; environment
+// point/spot lights are duplicated as new environment entities and folded into
+// the LightManager. Singletons with no meaningful copy -- camera, skybox,
+// directional light, ocean -- are rejected.
 class DuplicateObjectCommand : public EditorCommand
 {
 public:

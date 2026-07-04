@@ -156,6 +156,9 @@
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/CreateDocumentObjectCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/CreateEnvironmentCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -486,6 +489,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/CreateDocumentObjectCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/CreateEnvironmentCommand.h">

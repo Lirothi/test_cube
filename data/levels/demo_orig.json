@@ -1942,6 +1942,27 @@
       ],
       "shader": "shaders/gbuffer_inst.hlsl",
       "type": "instancedModels"
+    },
+    {
+      "enabled": true,
+      "id": 78,
+      "name": "FreeCameraStart",
+      "position": [
+        -26.146047592163086,
+        15.737337112426758,
+        5.503988742828369
+      ],
+      "rotationDeg": [
+        34.950408935546875,
+        94.53795623779297,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
     }
   ],
   "ocean": {

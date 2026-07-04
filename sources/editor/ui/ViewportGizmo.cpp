@@ -171,10 +171,10 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     ToFloat16(camera.GetViewMatrix(), view);
     ToFloat16(camera.GetProjMatrixNoJitter(), proj);
 
-    // --- Editor icon billboards for world-positioned environment entities ---
-    // (point / spot lights). Screen-space, always-on-top ImGui overlay images from
-    // the icon atlas; clickable to select the entity. Directional/camera have no
-    // world position, so they get no billboard here.
+    // --- Editor icon billboards for world-positioned editor entities ---
+    // Screen-space, always-on-top ImGui overlay images from the icon atlas;
+    // clickable to select the entity. Directional/camera have no world position,
+    // so they get no billboard here.
     if (!iconAtlasTried_)
     {
         iconAtlasTried_ = true;
@@ -203,6 +203,34 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
             ImDrawList* dl = ImGui::GetBackgroundDrawList();
             const Math::mat4& vp = camera.GetViewProjMatrixNoJitter();
             constexpr float kIconHalf = 15.0f;
+
+            auto drawWorldIcon = [&](const Math::float3& pos,
+                EditorObjectId id,
+                ImVec2 uv0,
+                ImVec2 uv1,
+                ImU32 tint)
+            {
+                const DirectX::XMVECTOR clip =
+                    DirectX::XMVector4Transform(DirectX::XMVectorSet(pos.x, pos.y, pos.z, 1.0f), vp.xm());
+                const float w = DirectX::XMVectorGetW(clip);
+                if (w <= 1e-3f) { return; } // behind the camera
+                const float ndcX = DirectX::XMVectorGetX(clip) / w;
+                const float ndcY = DirectX::XMVectorGetY(clip) / w;
+                if (ndcX < -1.5f || ndcX > 1.5f || ndcY < -1.5f || ndcY > 1.5f) { return; }
+                const float sx = (ndcX * 0.5f + 0.5f) * width;
+                const float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * height;
+
+                const ImVec2 mn(sx - kIconHalf, sy - kIconHalf);
+                const ImVec2 mx(sx + kIconHalf, sy + kIconHalf);
+                if (ctx.selectedObject.value == id.value)
+                {
+                    dl->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f), ImVec2(mx.x + 2.0f, mx.y + 2.0f),
+                                IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
+                }
+                dl->AddImage(iconTex, mn, mx, uv0, uv1, tint);
+                iconHits.push_back({ mn, mx, id });
+            };
+
             for (EditorObject& env : ctx.document.Environment())
             {
                 // Atlas cells: [dirlight | point] top row, [spot | camera] bottom row.
@@ -216,16 +244,6 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
                 const float px = (*posIt)[0].get<float>();
                 const float py = (*posIt)[1].get<float>();
                 const float pz = (*posIt)[2].get<float>();
-
-                const DirectX::XMVECTOR clip =
-                    DirectX::XMVector4Transform(DirectX::XMVectorSet(px, py, pz, 1.0f), vp.xm());
-                const float w = DirectX::XMVectorGetW(clip);
-                if (w <= 1e-3f) { continue; } // behind the camera
-                const float ndcX = DirectX::XMVectorGetX(clip) / w;
-                const float ndcY = DirectX::XMVectorGetY(clip) / w;
-                if (ndcX < -1.5f || ndcX > 1.5f || ndcY < -1.5f || ndcY > 1.5f) { continue; }
-                const float sx = (ndcX * 0.5f + 0.5f) * width;
-                const float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * height;
 
                 // Tint by the light color (icons are white; RGB carries the tint).
                 ImU32 tint = IM_COL32(255, 255, 255, 255);
@@ -241,15 +259,25 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
                     tint = IM_COL32(ch(0), ch(1), ch(2), 255);
                 }
 
-                const ImVec2 mn(sx - kIconHalf, sy - kIconHalf);
-                const ImVec2 mx(sx + kIconHalf, sy + kIconHalf);
-                if (ctx.selectedObject.value == env.id.value)
+                drawWorldIcon(Math::float3(px, py, pz), env.id, uv0, uv1, tint);
+            }
+
+            for (EditorObject& obj : ctx.document.Objects())
+            {
+                if (obj.type != "freeCameraStart")
                 {
-                    dl->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f), ImVec2(mx.x + 2.0f, mx.y + 2.0f),
-                                IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
+                    continue;
                 }
-                dl->AddImage(iconTex, mn, mx, uv0, uv1, tint);
-                iconHits.push_back({ mn, mx, env.id });
+
+                const ImU32 tint = obj.enabled
+                    ? IM_COL32(255, 255, 255, 255)
+                    : IM_COL32(180, 180, 180, 160);
+                drawWorldIcon(
+                    obj.transform.position,
+                    obj.id,
+                    ImVec2(0.5f, 0.5f),
+                    ImVec2(1.0f, 1.0f),
+                    tint);
             }
         }
     }
@@ -420,7 +448,7 @@ void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
     if (flying || io.WantCaptureMouse || gizmoBusy) { return; }
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { return; }
 
-    // Editor icon billboards (lights) take click priority over mesh id-buffer picking.
+    // Editor icon billboards take click priority over mesh id-buffer picking.
     for (auto it = iconHits.rbegin(); it != iconHits.rend(); ++it)
     {
         if (io.MousePos.x >= it->mn.x && io.MousePos.x <= it->mx.x &&

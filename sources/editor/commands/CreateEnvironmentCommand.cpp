@@ -14,6 +14,25 @@ namespace
     {
         return object.type == "pointLight" || object.type == "spotLight";
     }
+
+    bool IsSingletonEnvironment(const EditorObject& object)
+    {
+        return object.type == "directionalLight" ||
+            object.type == "skybox" ||
+            object.type == "camera";
+    }
+
+    bool DocumentHasOtherOfType(const EditorSceneDocument& document, const EditorObject& object)
+    {
+        for (const EditorObject& env : document.Environment())
+        {
+            if (env.type == object.type && env.id.value != object.id.value)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 CreateEnvironmentCommand::CreateEnvironmentCommand(EditorObject object)
@@ -32,6 +51,10 @@ bool CreateEnvironmentCommand::Execute(EditorContext& ctx)
     {
         object_.id = ctx.document.AllocateId();
         built_ = true;
+    }
+    if (IsSingletonEnvironment(object_) && DocumentHasOtherOfType(ctx.document, object_))
+    {
+        return false;
     }
 
     previousSelection_ = ctx.selectedObject;
@@ -66,10 +89,7 @@ void CreateEnvironmentCommand::Undo(EditorContext& ctx)
         }
     }
 
-    if (IsLight(object_))
-    {
-        EnvironmentRuntime::RebuildLights(ctx);
-    }
+    EnvironmentRuntime::Remove(ctx, object_);
 
     ctx.selectedObject = previousSelection_;
     ctx.document.SetDirty(true);

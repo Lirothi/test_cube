@@ -12,12 +12,14 @@ struct EditorObject;
 //   pointLight / spotLight  -> LightManager light SetDesc
 //   directionalLight        -> Scene::SetDirectionalLight
 //   camera                  -> Scene camera (fov / near / far)
+//   skybox                  -> rebuild Scene skybox texture
 //   ocean                   -> Simulation wind overrides
-// No-op for skybox. The renderer
-// re-reads these each frame, so no dirty flag is needed for the runtime.
+// The renderer re-reads these each frame, so no dirty flag is needed for the
+// runtime.
 namespace EnvironmentRuntime
 {
     void Apply(EditorContext& ctx, const EditorObject& env);
+    void Remove(EditorContext& ctx, const EditorObject& env);
 
     // Rebuild the LightManager's spot/point light lists from the document's
     // environment entities, keeping only enabled ones (mirrors JsonLevel's

@@ -1,11 +1,6 @@
 {
   "camera": {
     "hfovDeg": 90.0,
-    "position": [
-      0.0,
-      1.0,
-      -10.0
-    ],
     "zFar": 10000.0,
     "zNear": 0.009999999776482582
   },
@@ -105,6 +100,27 @@
       ],
       "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 7,
+      "name": "FreeCameraStart",
+      "position": [
+        -21.330015182495117,
+        10.810644149780273,
+        0.7756994962692261
+      ],
+      "rotationDeg": [
+        35.52336883544922,
+        91.10021209716797,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
     }
   ],
   "pointLights": [],

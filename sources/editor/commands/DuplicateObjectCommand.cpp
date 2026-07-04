@@ -20,6 +20,11 @@ namespace
     {
         return name.empty() ? std::string("Copy") : name + " Copy";
     }
+
+    bool IsDocumentOnlyObject(const EditorObject& object)
+    {
+        return object.type == "freeCameraStart";
+    }
 }
 
 DuplicateObjectCommand::DuplicateObjectCommand(EditorObjectId sourceId)
@@ -93,7 +98,16 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
     SceneObjectRegistry objectRegistry = SceneObjectRegistry::CreateWithBuiltins();
     if (!objectRegistry.Has(object_.type))
     {
-        return false;
+        if (!IsDocumentOnlyObject(object_))
+        {
+            return false;
+        }
+
+        previousSelection_ = ctx.selectedObject;
+        ctx.document.Add(object_);
+        ctx.selectedObject = object_.id;
+        ctx.document.SetDirty(true);
+        return true;
     }
 
     SceneObjectRegistry::CreationContext creationCtx{ ctx.scene };

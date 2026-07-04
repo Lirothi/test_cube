@@ -42,6 +42,6 @@ private:
     std::string levelChangeStatus_;
     char levelPathBuffer_[1024] = "data/levels/demo.json";
     bool levelListScanned_ = false;
-    bool preserveCameraOnLevelChange_ = true;
+    bool preserveCameraOnLevelChange_ = false;
     bool open_ = false;
 };

@@ -1,6 +1,7 @@
 #include "editor/ui/InspectorPanel.h"
 #if WITH_EDITOR
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -47,11 +48,17 @@ namespace
         return def;
     }
 
+    std::string NormalizePath(std::string path)
+    {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        return path;
+    }
+
     // Inspector for the top-level environment sections (Step 24). Edits write the
     // entity's `properties` (round-tripped on save via the entity-driven
     // serializer) and patch the live runtime; lights/camera update instantly,
-    // skybox/ocean apply on the next level load.
-    void DrawEnvironmentInspector(EditorContext& ctx, EditorObject& env)
+    // skybox texture edits rebuild the live skybox.
+    void DrawEnvironmentInspector(EditorContext& ctx, const AssetRegistry& registry, EditorObject& env)
     {
         nlohmann::json& p = env.properties;
 
@@ -144,10 +151,52 @@ namespace
         }
         else if (env.type == "skybox")
         {
-            char buf[260];
+            const std::string current = p.value("texture", std::string());
+            const std::string currentLabel = current.empty()
+                ? std::string("(none)")
+                : std::filesystem::path(current).filename().string();
+
+            if (ImGui::BeginCombo("Texture Asset", currentLabel.c_str()))
+            {
+                for (const EditorAssetRecord& rec : registry.Assets())
+                {
+                    if (rec.id.type != EditorAssetType::Texture || rec.extension != ".dds")
+                    {
+                        continue;
+                    }
+
+                    const bool selected = rec.id.key == current;
+                    if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                    {
+                        p["texture"] = NormalizePath(rec.id.key);
+                        EnvironmentRuntime::Apply(ctx, env);
+                        ctx.document.SetDirty(true);
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            char buf[512];
             std::snprintf(buf, sizeof(buf), "%s", p.value("texture", std::string()).c_str());
-            if (ImGui::InputText("Texture", buf, sizeof(buf))) { p["texture"] = std::string(buf); ctx.document.SetDirty(true); }
-            ImGui::TextDisabled("Applies on reload.");
+            ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 72.0f));
+            if (ImGui::InputText("Texture", buf, sizeof(buf)))
+            {
+                p["texture"] = NormalizePath(buf);
+                ctx.document.SetDirty(true);
+            }
+
+            bool applyTexture = ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::SameLine();
+            applyTexture |= ImGui::Button("Apply");
+            if (applyTexture)
+            {
+                EnvironmentRuntime::Apply(ctx, env);
+                ctx.document.SetDirty(true);
+            }
         }
         else if (env.type == "ocean")
         {
@@ -227,7 +276,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
             ImGui::Text("Type: %s", env.type.c_str());
             ImGui::TextUnformatted(env.name.c_str());
             ImGui::Separator();
-            DrawEnvironmentInspector(ctx, env);
+            DrawEnvironmentInspector(ctx, registry, env);
             ImGui::End();
             return;
         }

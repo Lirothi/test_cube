@@ -33,9 +33,9 @@ private:
     EditorTransform transformBeforeDrag_;
     float envGizmoMatrix_[16] = {}; // persistent model matrix while dragging an env light
 
-    // Editor icon billboards for world-positioned environment entities (point /
-    // spot lights): screen-space, always-on-top ImGui overlay images drawn from
-    // the icon atlas, clickable to select the entity. Loaded lazily on first use.
+    // Editor icon billboards for world-positioned editor entities: screen-space,
+    // always-on-top ImGui overlay images drawn from the icon atlas, clickable to
+    // select the entity. Loaded lazily on first use.
     Texture2D iconAtlas_;
     bool iconAtlasTried_ = false;
     bool iconAtlasReady_ = false;

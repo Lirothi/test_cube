@@ -4,9 +4,10 @@
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h"
 
-// Creates one top-level environment entity, currently used by the editor's
-// Create menu for point/spot lights. Ocean is intentionally rejected; it has
-// dedicated simulation lifetime handling in the Ocean menu.
+// Creates one top-level environment entity. Point/spot lights may have many
+// instances; singleton environment sections such as directionalLight and skybox
+// are rejected when the document already has one. Ocean is intentionally rejected;
+// it has dedicated simulation lifetime handling in the Ocean menu.
 class CreateEnvironmentCommand : public EditorCommand
 {
 public:

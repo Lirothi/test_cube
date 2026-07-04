@@ -2083,6 +2083,27 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 117,
+      "name": "FreeCameraStart",
+      "position": [
+        -31.889984130859375,
+        17.594932556152344,
+        2.516758441925049
+      ],
+      "rotationDeg": [
+        34.42314147949219,
+        86.17545318603516,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
     }
   ],
   "ocean": {

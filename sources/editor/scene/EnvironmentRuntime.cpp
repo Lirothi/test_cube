@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
+#include <string>
 
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
@@ -12,9 +14,11 @@
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/PointLight.h"
+#include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/SpotLight.h"
 
 namespace
@@ -51,6 +55,34 @@ namespace
             if (enabled) { ++idx; }
         }
         return -1;
+    }
+
+    std::wstring Widen(const std::string& s)
+    {
+        return std::wstring(s.begin(), s.end());
+    }
+
+    void ApplySkybox(EditorContext& ctx, const nlohmann::json& p)
+    {
+        const std::string texture = p.value("texture", std::string());
+
+        ctx.renderer.WaitForPreviousFrame();
+        if (texture.empty())
+        {
+            ctx.scene.SetSkybox(nullptr);
+            return;
+        }
+
+        UploadBatch uploads;
+        if (!uploads.Begin(&ctx.renderer))
+        {
+            return;
+        }
+
+        auto skybox = std::make_unique<Skybox>(Widen(texture));
+        skybox->Init(&ctx.renderer, uploads.CommandList(), uploads.KeepAlive());
+        uploads.SubmitAndWait(&ctx.renderer);
+        ctx.scene.SetSkybox(std::move(skybox));
     }
 }
 
@@ -107,6 +139,10 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         cam.SetHFov(JF(p, "hfovDeg", 90.0f) * kDeg2Rad);
         cam.SetZNearFar(JF(p, "zNear", 0.01f), JF(p, "zFar", 10000.0f));
     }
+    else if (env.type == "skybox")
+    {
+        ApplySkybox(ctx, p);
+    }
     else if (env.type == "ocean")
     {
         // Live wind overrides (the "scene" block). Defaults are the sim's current
@@ -119,6 +155,28 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             const float windForce = JF(p, "windForce", ocean->GetWindForce01());
             ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
         }
+    }
+}
+
+void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
+{
+    if (env.type == "pointLight" || env.type == "spotLight")
+    {
+        RebuildLights(ctx);
+    }
+    else if (env.type == "directionalLight")
+    {
+        DirectionalLight dl;
+        dl.SetDirection(JF3(env.properties, "direction", Math::float3(0.0f, -1.0f, 0.0f)).Normalized());
+        dl.SetColor(Math::float3(0.0f, 0.0f, 0.0f));
+        dl.SetExposure(1.0f);
+        dl.SetAmbient(0.0f);
+        ctx.scene.SetDirectionalLight(dl);
+    }
+    else if (env.type == "skybox")
+    {
+        ctx.renderer.WaitForPreviousFrame();
+        ctx.scene.SetSkybox(nullptr);
     }
 }
 

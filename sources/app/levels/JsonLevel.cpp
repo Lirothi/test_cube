@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@
 #include "third_party/json/json.hpp"
 #pragma warning(pop)
 
+#include "app/camera/Camera.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
@@ -44,6 +46,23 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
 {
     if (!j.is_array() || j.size() < 3) { return def; }
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+}
+
+bool IsFreeCameraStart(const json& o)
+{
+    return o.value("type", std::string()) == "freeCameraStart";
+}
+
+void ApplyFreeCameraStart(const json& o, Camera& camera)
+{
+    camera.SetPosition(ToFloat3(o.value("position", json::array()), camera.GetPosition()));
+
+    const float3 currentRotationDeg(
+        camera.GetPitch() * RAD2DEG,
+        camera.GetYaw() * RAD2DEG,
+        0.0f);
+    const float3 rotationDeg = ToFloat3(o.value("rotationDeg", json::array()), currentRotationDeg);
+    camera.SetYawPitch(rotationDeg.y * DEG2RAD, rotationDeg.x * DEG2RAD);
 }
 
 #if WITH_EDITOR
@@ -242,6 +261,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         scene.SetDirectionalLight(dirLight);
     }
 
+    std::optional<json> freeCameraStart;
     if (j.contains("objects") && j["objects"].is_array())
     {
         for (const json& o : j["objects"])
@@ -259,6 +279,25 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             }
 #endif
             const std::string type = o.value("type", std::string{});
+            if (IsFreeCameraStart(o))
+            {
+#if WITH_EDITOR
+                const EditorObjectId editorObjectId =
+                    ctx.editorDocument
+                        ? ctx.editorDocument->ReadOrAllocateObjectId(o)
+                        : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
+                if (ctx.editorDocument)
+                {
+                    ctx.editorDocument->AddObjectFromJson(editorObjectId, o);
+                }
+#endif
+                if (enabled)
+                {
+                    freeCameraStart = o;
+                }
+                continue;
+            }
+
             const bool objectTypeRegistered = objectRegistry.Has(type);
             if (!objectTypeRegistered)
             {
@@ -284,6 +323,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             }
 #endif
         }
+
     }
 
 #if WITH_EDITOR
@@ -326,10 +366,9 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     AddAnonymousObjects(scene, objectRegistry.Create("debugGrid", creationCtx, json::object()));
 
-    // Camera position is no longer stored in the level file. Baseline it to the
-    // origin; in editor builds EditorController restores a per-level camera from
-    // editor_state.json when a record exists, otherwise the camera stays at zero.
-    // Only the projection (fov / near / far) comes from the level.
+    // The top-level camera section stores projection only. Baseline position to
+    // origin, then let a FreeCameraStart object provide a level default transform.
+    // EditorController may still override this from editor_state.json.
     {
         Camera& camera = scene.CameraRef();
         camera.SetPosition(float3(0.0f, 0.0f, 0.0f));
@@ -344,6 +383,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             {
                 camera.SetZNearFar(cam.value("zNear", camera.GetZNear()), cam.value("zFar", camera.GetZFar()));
             }
+        }
+        // The top-level camera block only stores projection. A level may define
+        // an explicit default editor/gameplay transform with FreeCameraStart.
+        // LevelLoadOptions camera overrides still win after JsonLevel::Load.
+        if (freeCameraStart)
+        {
+            ApplyFreeCameraStart(*freeCameraStart, camera);
         }
     }
 }

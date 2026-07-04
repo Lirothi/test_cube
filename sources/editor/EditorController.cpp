@@ -19,6 +19,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
+#include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
@@ -130,6 +131,44 @@ namespace
         return first ? first->id.key : std::string{};
     }
 
+    std::string PickDefaultSkyboxTexture(const AssetRegistry& registry)
+    {
+        const EditorAssetRecord* firstDds = nullptr;
+        const EditorAssetRecord* first = nullptr;
+        for (const EditorAssetRecord& rec : registry.Assets())
+        {
+            if (rec.id.type != EditorAssetType::Texture)
+            {
+                continue;
+            }
+            if (rec.id.key == "textures/skybox.dds")
+            {
+                return rec.id.key;
+            }
+            if (!firstDds && rec.extension == ".dds")
+            {
+                firstDds = &rec;
+            }
+            if (!first)
+            {
+                first = &rec;
+            }
+        }
+        return firstDds ? firstDds->id.key : (first ? first->id.key : std::string("textures/skybox.dds"));
+    }
+
+    bool HasEnvironmentObject(const EditorSceneDocument& document, const char* type)
+    {
+        for (const EditorObject& env : document.Environment())
+        {
+            if (env.type == type)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     nlohmann::json BuildStaticMeshObjectJson(const Scene& scene, const AssetRegistry& registry)
     {
         nlohmann::json o = nlohmann::json::object();
@@ -197,6 +236,50 @@ namespace
             { "shadowsEnabled", true }
         };
         return light;
+    }
+
+    EditorObject BuildDirectionalLightObject()
+    {
+        EditorObject light;
+        light.name = "Directional Light";
+        light.type = "directionalLight";
+        light.properties = {
+            { "enabled", true },
+            { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
+            { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
+            { "exposure", 1.0f },
+            { "ambient", 0.05f }
+        };
+        return light;
+    }
+
+    EditorObject BuildSkyboxObject(const AssetRegistry& registry)
+    {
+        EditorObject skybox;
+        skybox.name = "Skybox";
+        skybox.type = "skybox";
+        skybox.properties = {
+            { "texture", PickDefaultSkyboxTexture(registry) }
+        };
+        return skybox;
+    }
+
+    EditorObject BuildFreeCameraStartObject(const Scene& scene)
+    {
+        const Camera& camera = scene.CameraRef();
+
+        EditorObject object;
+        object.name = "FreeCameraStart";
+        object.type = "freeCameraStart";
+        object.enabled = true;
+        object.transform.position = camera.GetPosition();
+        object.transform.rotationDeg = Math::float3(
+            camera.GetPitch() * Math::RAD2DEG,
+            camera.GetYaw() * Math::RAD2DEG,
+            0.0f);
+        object.transform.scale = Math::float3(1.0f, 1.0f, 1.0f);
+        object.properties = nlohmann::json::object();
+        return object;
     }
 
     void DestroyLiveOcean(Renderer& renderer, Scene& scene)
@@ -1337,6 +1420,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }
             if (ImGui::BeginMenu("Create"))
             {
+                if (ImGui::BeginMenu("Camera"))
+                {
+                    if (ImGui::MenuItem("FreeCameraStart"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<CreateDocumentObjectCommand>(
+                            BuildFreeCameraStartObject(scene)));
+                    }
+                    ImGui::EndMenu();
+                }
                 if (ImGui::BeginMenu("Mesh"))
                 {
                     const std::string defaultMesh = PickDefaultMesh(assetRegistry_);
@@ -1360,6 +1452,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 }
                 if (ImGui::BeginMenu("Light"))
                 {
+                    const bool hasDirectionalLight = HasEnvironmentObject(document_, "directionalLight");
                     if (ImGui::MenuItem("Point Light"))
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
@@ -1370,7 +1463,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                             BuildSpotLightObject(scene)));
                     }
+                    if (ImGui::MenuItem("Directional Light", nullptr, false, !hasDirectionalLight))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                            BuildDirectionalLightObject()));
+                    }
                     ImGui::EndMenu();
+                }
+                const bool hasSkybox = HasEnvironmentObject(document_, "skybox");
+                if (ImGui::MenuItem("Skybox", nullptr, false, !hasSkybox))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildSkyboxObject(assetRegistry_)));
                 }
                 ImGui::EndMenu();
             }

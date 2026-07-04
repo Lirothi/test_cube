@@ -14,6 +14,7 @@
 #include "editor/EditorContext.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
+#include "editor/commands/TransformObjectCommand.h"
 #include "imgui.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/renderables/GBufferRenderable.h"
@@ -317,6 +318,33 @@ namespace
             ImGui::Text("Normal Map: %s", normalMap.empty() ? "(none)" : normalMap.c_str());
         }
     };
+
+    class FreeCameraStartPropertyDrawer final : public IEditorPropertyDrawer
+    {
+    public:
+        std::string_view Type() const override { return "freeCameraStart"; }
+
+        void Draw(EditorContext& ctx,
+            EditorCommandStack& commandStack,
+            const AssetRegistry& registry,
+            EditorObject& obj) const override
+        {
+            (void)registry;
+
+            if (ImGui::Button("Copy camera params"))
+            {
+                EditorTransform after = obj.transform;
+                const Camera& camera = ctx.scene.CameraRef();
+                after.position = camera.GetPosition();
+                after.rotationDeg = Math::float3(
+                    camera.GetPitch() * Math::RAD2DEG,
+                    camera.GetYaw() * Math::RAD2DEG,
+                    0.0f);
+                commandStack.Execute(ctx, std::make_unique<TransformObjectCommand>(
+                    obj.id, obj.transform, after));
+            }
+        }
+    };
 }
 
 EditorLambdaPanel::EditorLambdaPanel(std::string id,
@@ -431,6 +459,7 @@ void EditorExtensionRegistry::RegisterBuiltins(EditorExtensionRegistry& registry
     registry.RegisterObjectFactory(std::make_unique<TransparentMeshObjectFactory>());
     registry.RegisterPropertyDrawer(std::make_unique<StaticMeshPropertyDrawer>());
     registry.RegisterPropertyDrawer(std::make_unique<TransparentMeshPropertyDrawer>());
+    registry.RegisterPropertyDrawer(std::make_unique<FreeCameraStartPropertyDrawer>());
 }
 
 #endif // WITH_EDITOR
