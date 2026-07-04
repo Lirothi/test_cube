@@ -235,6 +235,7 @@
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
     <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp" />
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp" />
+    <ClCompile Include="sources/editor/commands/CreateEnvironmentCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp" />
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/DuplicateObjectCommand.cpp" />
@@ -366,6 +367,7 @@
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />
     <ClInclude Include="sources/editor/commands/EditorCommand.h" />
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h" />
+    <ClInclude Include="sources/editor/commands/CreateEnvironmentCommand.h" />
     <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h" />
     <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/DuplicateObjectCommand.h" />

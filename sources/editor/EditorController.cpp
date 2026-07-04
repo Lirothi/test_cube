@@ -19,6 +19,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
+#include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
@@ -69,6 +70,133 @@ namespace
     std::string LevelPathString(const std::filesystem::path& path)
     {
         return NormalizeLevelPath(path.string());
+    }
+
+    nlohmann::json SpawnPositionJson(const Scene& scene)
+    {
+        const Math::float3& camPos = scene.CameraRef().GetPosition();
+        const Math::float3& camDir = scene.CameraRef().GetDirection();
+        return nlohmann::json::array({
+            camPos.x + camDir.x * 5.0f,
+            camPos.y + camDir.y * 5.0f,
+            camPos.z + camDir.z * 5.0f });
+    }
+
+    nlohmann::json CameraDirectionJson(const Scene& scene)
+    {
+        const Math::float3& camDir = scene.CameraRef().GetDirection();
+        return nlohmann::json::array({ camDir.x, camDir.y, camDir.z });
+    }
+
+    std::string PickDefaultMesh(const AssetRegistry& registry)
+    {
+        const EditorAssetRecord* first = nullptr;
+        for (const EditorAssetRecord& rec : registry.Assets())
+        {
+            if (rec.id.type != EditorAssetType::Mesh)
+            {
+                continue;
+            }
+            if (rec.id.key == "models/box.obj")
+            {
+                return rec.id.key;
+            }
+            if (!first)
+            {
+                first = &rec;
+            }
+        }
+        return first ? first->id.key : std::string{};
+    }
+
+    std::string PickDefaultStaticMaterial(const AssetRegistry& registry)
+    {
+        const EditorAssetRecord* first = nullptr;
+        for (const EditorAssetRecord& rec : registry.Assets())
+        {
+            if (rec.id.type != EditorAssetType::MaterialPreset)
+            {
+                continue;
+            }
+            if (rec.id.key == "damaged_plaster")
+            {
+                return rec.id.key;
+            }
+            if (!first)
+            {
+                first = &rec;
+            }
+        }
+        return first ? first->id.key : std::string{};
+    }
+
+    nlohmann::json BuildStaticMeshObjectJson(const Scene& scene, const AssetRegistry& registry)
+    {
+        nlohmann::json o = nlohmann::json::object();
+        o["name"] = "Static Mesh";
+        o["type"] = "staticMesh";
+        o["model"] = PickDefaultMesh(registry);
+        o["position"] = SpawnPositionJson(scene);
+        o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
+        o["material"] = PickDefaultStaticMaterial(registry);
+        o["shader"] = "shaders/gbuffer.hlsl";
+        o["inputLayout"] = "PosNormTanUV";
+        return o;
+    }
+
+    nlohmann::json BuildTransparentMeshObjectJson(const Scene& scene, const AssetRegistry& registry)
+    {
+        nlohmann::json o = nlohmann::json::object();
+        o["name"] = "Transparent Mesh";
+        o["type"] = "transparentMesh";
+        o["model"] = PickDefaultMesh(registry);
+        o["position"] = SpawnPositionJson(scene);
+        o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
+        o["tint"] = nlohmann::json::array({ 0.8f, 0.95f, 1.0f });
+        o["absorption"] = nlohmann::json::array({ 0.15f, 0.06f, 0.02f });
+        o["thickness"] = 0.15f;
+        o["reflectionStrength"] = 0.35f;
+        o["refractionDistortion"] = 0.03f;
+        o["roughness"] = 0.04f;
+        o["ior"] = 1.45f;
+        return o;
+    }
+
+    EditorObject BuildPointLightObject(const Scene& scene)
+    {
+        EditorObject light;
+        light.name = "Point Light";
+        light.type = "pointLight";
+        light.properties = {
+            { "enabled", true },
+            { "position", SpawnPositionJson(scene) },
+            { "radius", 6.0f },
+            { "color", nlohmann::json::array({ 1.0f, 0.92f, 0.78f }) },
+            { "intensity", 8.0f },
+            { "shadowsEnabled", false }
+        };
+        return light;
+    }
+
+    EditorObject BuildSpotLightObject(const Scene& scene)
+    {
+        EditorObject light;
+        light.name = "Spot Light";
+        light.type = "spotLight";
+        light.properties = {
+            { "enabled", true },
+            { "position", SpawnPositionJson(scene) },
+            { "direction", CameraDirectionJson(scene) },
+            { "range", 14.0f },
+            { "innerAngleDeg", 15.0f },
+            { "outerAngleDeg", 28.0f },
+            { "color", nlohmann::json::array({ 1.0f, 0.92f, 0.78f }) },
+            { "intensity", 12.0f },
+            { "shadowNormalBias", 0.05f },
+            { "shadowDepthBias", 0.0001f },
+            { "shadowsEnabled", true }
+        };
+        return light;
     }
 
     void DestroyLiveOcean(Renderer& renderer, Scene& scene)
@@ -1202,6 +1330,45 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         {
                             openLevel(recentPath);
                         }
+                    }
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Create"))
+            {
+                if (ImGui::BeginMenu("Mesh"))
+                {
+                    const std::string defaultMesh = PickDefaultMesh(assetRegistry_);
+                    ImGui::BeginDisabled(defaultMesh.empty());
+                    if (ImGui::MenuItem("Static Mesh"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
+                            BuildStaticMeshObjectJson(scene, assetRegistry_)));
+                    }
+                    if (ImGui::MenuItem("Transparent Mesh"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
+                            BuildTransparentMeshObjectJson(scene, assetRegistry_)));
+                    }
+                    ImGui::EndDisabled();
+                    if (defaultMesh.empty())
+                    {
+                        ImGui::TextDisabled("No mesh assets found.");
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Light"))
+                {
+                    if (ImGui::MenuItem("Point Light"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                            BuildPointLightObject(scene)));
+                    }
+                    if (ImGui::MenuItem("Spot Light"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                            BuildSpotLightObject(scene)));
                     }
                     ImGui::EndMenu();
                 }
