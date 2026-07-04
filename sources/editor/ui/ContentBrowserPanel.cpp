@@ -167,7 +167,29 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImGui::Text("Type: %s", ToString(selected->id.type));
         ImGui::Text("Name: %s", selected->displayName.c_str());
         ImGui::Text("Path: %s", selected->path.c_str());
-        if (!selected->extension.empty())
+        if (selected->id.type == EditorAssetType::Texture)
+        {
+            const EditorTextureInfo& tex = selected->texture;
+            if (tex.valid)
+            {
+                ImGui::Text("Texture: %s | %s", ToString(tex.kind), tex.format.c_str());
+                if (tex.depth > 1)
+                {
+                    ImGui::Text("Size: %u x %u x %u | Mips: %u | Array: %u",
+                        tex.width, tex.height, tex.depth, tex.mipLevels, tex.arraySize);
+                }
+                else
+                {
+                    ImGui::Text("Size: %u x %u | Mips: %u | Array: %u",
+                        tex.width, tex.height, tex.mipLevels, tex.arraySize);
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Texture metadata unavailable.");
+            }
+        }
+        else if (!selected->extension.empty())
         {
             ImGui::Text("Extension: %s", selected->extension.c_str());
         }

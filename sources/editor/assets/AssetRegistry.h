@@ -7,9 +7,9 @@
 #include <vector>
 
 // Metadata-only asset discovery for the level editor. Scans known asset roots
-// and records cheap file metadata (path, name, extension, write time). It never
-// loads mesh/texture data or touches the GPU; loading happens only when an asset
-// is spawned or previewed in later steps.
+// and records cheap file metadata plus texture header metadata where available.
+// It never creates runtime assets or touches the GPU; loading happens only when
+// an asset is spawned or previewed in later steps.
 
 enum class EditorAssetType
 {
@@ -22,6 +22,28 @@ enum class EditorAssetType
 };
 
 const char* ToString(EditorAssetType type);
+
+enum class EditorTextureKind
+{
+    Unknown,
+    Texture2D,
+    TextureCube
+};
+
+const char* ToString(EditorTextureKind kind);
+
+struct EditorTextureInfo
+{
+    bool scanned = false;
+    bool valid = false;
+    EditorTextureKind kind = EditorTextureKind::Unknown;
+    std::string format;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 1;
+    uint32_t mipLevels = 0;
+    uint32_t arraySize = 1;
+};
 
 struct EditorAssetId
 {
@@ -36,6 +58,7 @@ struct EditorAssetRecord
     std::string displayName;
     std::string extension;
     uint64_t fileWriteTime = 0;
+    EditorTextureInfo texture;
 };
 
 class AssetRegistry

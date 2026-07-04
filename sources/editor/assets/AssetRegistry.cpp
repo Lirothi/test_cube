@@ -4,10 +4,14 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <vector>
+
+#include <dxgiformat.h>
 
 // nlohmann/json — single header
 #pragma warning(push)
@@ -55,6 +59,289 @@ namespace
             }
         }
         return best;
+    }
+
+    constexpr uint32_t MakeFourCC(char a, char b, char c, char d)
+    {
+        return static_cast<uint32_t>(static_cast<unsigned char>(a)) |
+            (static_cast<uint32_t>(static_cast<unsigned char>(b)) << 8) |
+            (static_cast<uint32_t>(static_cast<unsigned char>(c)) << 16) |
+            (static_cast<uint32_t>(static_cast<unsigned char>(d)) << 24);
+    }
+
+    template <size_t N>
+    uint32_t ReadLe32(const std::array<uint8_t, N>& bytes, size_t offset)
+    {
+        return static_cast<uint32_t>(bytes[offset]) |
+            (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
+            (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
+            (static_cast<uint32_t>(bytes[offset + 3]) << 24);
+    }
+
+    template <size_t N>
+    uint32_t ReadBe32(const std::array<uint8_t, N>& bytes, size_t offset)
+    {
+        return (static_cast<uint32_t>(bytes[offset]) << 24) |
+            (static_cast<uint32_t>(bytes[offset + 1]) << 16) |
+            (static_cast<uint32_t>(bytes[offset + 2]) << 8) |
+            static_cast<uint32_t>(bytes[offset + 3]);
+    }
+
+    std::string DxgiFormatName(uint32_t format)
+    {
+        switch (static_cast<DXGI_FORMAT>(format))
+        {
+        case DXGI_FORMAT_UNKNOWN:               return "DXGI_FORMAT_UNKNOWN";
+        case DXGI_FORMAT_R32G32B32A32_FLOAT:   return "DXGI_FORMAT_R32G32B32A32_FLOAT";
+        case DXGI_FORMAT_R16G16B16A16_FLOAT:   return "DXGI_FORMAT_R16G16B16A16_FLOAT";
+        case DXGI_FORMAT_R16G16B16A16_UNORM:   return "DXGI_FORMAT_R16G16B16A16_UNORM";
+        case DXGI_FORMAT_R10G10B10A2_UNORM:    return "DXGI_FORMAT_R10G10B10A2_UNORM";
+        case DXGI_FORMAT_R11G11B10_FLOAT:      return "DXGI_FORMAT_R11G11B10_FLOAT";
+        case DXGI_FORMAT_R8G8B8A8_UNORM:       return "DXGI_FORMAT_R8G8B8A8_UNORM";
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:  return "DXGI_FORMAT_R8G8B8A8_UNORM_SRGB";
+        case DXGI_FORMAT_R16_FLOAT:            return "DXGI_FORMAT_R16_FLOAT";
+        case DXGI_FORMAT_R16_UNORM:            return "DXGI_FORMAT_R16_UNORM";
+        case DXGI_FORMAT_R8_UNORM:             return "DXGI_FORMAT_R8_UNORM";
+        case DXGI_FORMAT_R32_FLOAT:            return "DXGI_FORMAT_R32_FLOAT";
+        case DXGI_FORMAT_BC1_UNORM:            return "DXGI_FORMAT_BC1_UNORM";
+        case DXGI_FORMAT_BC1_UNORM_SRGB:       return "DXGI_FORMAT_BC1_UNORM_SRGB";
+        case DXGI_FORMAT_BC2_UNORM:            return "DXGI_FORMAT_BC2_UNORM";
+        case DXGI_FORMAT_BC2_UNORM_SRGB:       return "DXGI_FORMAT_BC2_UNORM_SRGB";
+        case DXGI_FORMAT_BC3_UNORM:            return "DXGI_FORMAT_BC3_UNORM";
+        case DXGI_FORMAT_BC3_UNORM_SRGB:       return "DXGI_FORMAT_BC3_UNORM_SRGB";
+        case DXGI_FORMAT_BC4_UNORM:            return "DXGI_FORMAT_BC4_UNORM";
+        case DXGI_FORMAT_BC4_SNORM:            return "DXGI_FORMAT_BC4_SNORM";
+        case DXGI_FORMAT_BC5_UNORM:            return "DXGI_FORMAT_BC5_UNORM";
+        case DXGI_FORMAT_BC5_SNORM:            return "DXGI_FORMAT_BC5_SNORM";
+        case DXGI_FORMAT_B8G8R8A8_UNORM:       return "DXGI_FORMAT_B8G8R8A8_UNORM";
+        case DXGI_FORMAT_B8G8R8X8_UNORM:       return "DXGI_FORMAT_B8G8R8X8_UNORM";
+        case DXGI_FORMAT_BC6H_UF16:            return "DXGI_FORMAT_BC6H_UF16";
+        case DXGI_FORMAT_BC6H_SF16:            return "DXGI_FORMAT_BC6H_SF16";
+        case DXGI_FORMAT_BC7_UNORM:            return "DXGI_FORMAT_BC7_UNORM";
+        case DXGI_FORMAT_BC7_UNORM_SRGB:       return "DXGI_FORMAT_BC7_UNORM_SRGB";
+        default:                               return "DXGI_FORMAT_" + std::to_string(format);
+        }
+    }
+
+    std::string DdsLegacyFormatName(uint32_t fourCC, uint32_t flags,
+        uint32_t rgbBitCount, uint32_t rMask, uint32_t gMask, uint32_t bMask,
+        uint32_t aMask)
+    {
+        constexpr uint32_t kDdsPfAlphaPixels = 0x1;
+        constexpr uint32_t kDdsPfFourCC = 0x4;
+        constexpr uint32_t kDdsPfRgb = 0x40;
+        constexpr uint32_t kDdsPfLuminance = 0x20000;
+
+        if ((flags & kDdsPfFourCC) != 0)
+        {
+            switch (fourCC)
+            {
+            case MakeFourCC('D', 'X', 'T', '1'): return "DXGI_FORMAT_BC1_UNORM";
+            case MakeFourCC('D', 'X', 'T', '3'): return "DXGI_FORMAT_BC2_UNORM";
+            case MakeFourCC('D', 'X', 'T', '5'): return "DXGI_FORMAT_BC3_UNORM";
+            case MakeFourCC('A', 'T', 'I', '1'): return "DXGI_FORMAT_BC4_UNORM";
+            case MakeFourCC('B', 'C', '4', 'U'): return "DXGI_FORMAT_BC4_UNORM";
+            case MakeFourCC('B', 'C', '4', 'S'): return "DXGI_FORMAT_BC4_SNORM";
+            case MakeFourCC('A', 'T', 'I', '2'): return "DXGI_FORMAT_BC5_UNORM";
+            case MakeFourCC('B', 'C', '5', 'U'): return "DXGI_FORMAT_BC5_UNORM";
+            case MakeFourCC('B', 'C', '5', 'S'): return "DXGI_FORMAT_BC5_SNORM";
+            default:                             return "DDS fourCC";
+            }
+        }
+
+        if ((flags & kDdsPfRgb) != 0)
+        {
+            if (rgbBitCount == 32 && rMask == 0x000000ff && gMask == 0x0000ff00 &&
+                bMask == 0x00ff0000 && aMask == 0xff000000)
+            {
+                return "DXGI_FORMAT_R8G8B8A8_UNORM";
+            }
+            if (rgbBitCount == 32 && rMask == 0x00ff0000 && gMask == 0x0000ff00 &&
+                bMask == 0x000000ff && aMask == 0xff000000)
+            {
+                return "DXGI_FORMAT_B8G8R8A8_UNORM";
+            }
+            if (rgbBitCount == 32 && rMask == 0x00ff0000 && gMask == 0x0000ff00 &&
+                bMask == 0x000000ff && aMask == 0x00000000)
+            {
+                return "DXGI_FORMAT_B8G8R8X8_UNORM";
+            }
+            if (rgbBitCount == 16 && rMask == 0x0000ffff && gMask == 0x00000000 &&
+                bMask == 0x00000000 && aMask == 0x00000000)
+            {
+                return "DXGI_FORMAT_R16_UNORM";
+            }
+            if (rgbBitCount == 8 && rMask == 0x000000ff && gMask == 0x00000000 &&
+                bMask == 0x00000000 && aMask == 0x00000000)
+            {
+                return "DXGI_FORMAT_R8_UNORM";
+            }
+
+            const bool hasAlpha = (flags & kDdsPfAlphaPixels) != 0;
+            return hasAlpha ? "DDS RGB+A" : "DDS RGB";
+        }
+
+        if ((flags & kDdsPfLuminance) != 0)
+        {
+            return rgbBitCount == 16 ? "DXGI_FORMAT_R16_UNORM" : "DXGI_FORMAT_R8_UNORM";
+        }
+
+        return "DDS legacy";
+    }
+
+    const char* PngColorTypeName(uint8_t colorType)
+    {
+        switch (colorType)
+        {
+        case 0: return "grayscale";
+        case 2: return "RGB";
+        case 3: return "indexed";
+        case 4: return "grayscale+alpha";
+        case 6: return "RGBA";
+        default: return "unknown";
+        }
+    }
+
+    EditorTextureInfo ReadDdsTextureInfo(const fs::path& path)
+    {
+        constexpr uint32_t kDdsMagic = MakeFourCC('D', 'D', 'S', ' ');
+        constexpr uint32_t kDdsPfDx10 = MakeFourCC('D', 'X', '1', '0');
+        constexpr uint32_t kDdsCaps2Cubemap = 0x00000200;
+        constexpr uint32_t kD3D11ResourceMiscTextureCube = 0x4;
+
+        EditorTextureInfo info;
+        info.scanned = true;
+
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return info;
+        }
+
+        std::array<uint8_t, 148> bytes{};
+        file.read(reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+        const size_t readSize = static_cast<size_t>(file.gcount());
+        if (readSize < 128 || ReadLe32(bytes, 0) != kDdsMagic ||
+            ReadLe32(bytes, 4) != 124)
+        {
+            return info;
+        }
+
+        const uint32_t height = ReadLe32(bytes, 12);
+        const uint32_t width = ReadLe32(bytes, 16);
+        const uint32_t depth = ReadLe32(bytes, 24);
+        const uint32_t mipLevels = ReadLe32(bytes, 28);
+        const uint32_t pfFlags = ReadLe32(bytes, 80);
+        const uint32_t fourCC = ReadLe32(bytes, 84);
+        const uint32_t rgbBitCount = ReadLe32(bytes, 88);
+        const uint32_t rMask = ReadLe32(bytes, 92);
+        const uint32_t gMask = ReadLe32(bytes, 96);
+        const uint32_t bMask = ReadLe32(bytes, 100);
+        const uint32_t aMask = ReadLe32(bytes, 104);
+        const uint32_t caps2 = ReadLe32(bytes, 112);
+
+        if (width == 0 || height == 0)
+        {
+            return info;
+        }
+
+        bool isCube = (caps2 & kDdsCaps2Cubemap) != 0;
+        uint32_t arraySize = isCube ? 6u : 1u;
+        std::string format;
+
+        if (fourCC == kDdsPfDx10)
+        {
+            if (readSize < 148)
+            {
+                return info;
+            }
+
+            const uint32_t dxgiFormat = ReadLe32(bytes, 128);
+            const uint32_t miscFlag = ReadLe32(bytes, 136);
+            const uint32_t dxArraySize = ReadLe32(bytes, 140);
+            isCube = isCube || ((miscFlag & kD3D11ResourceMiscTextureCube) != 0);
+            arraySize = dxArraySize != 0 ? dxArraySize : (isCube ? 6u : 1u);
+            format = DxgiFormatName(dxgiFormat);
+        }
+        else
+        {
+            format = DdsLegacyFormatName(fourCC, pfFlags, rgbBitCount,
+                rMask, gMask, bMask, aMask);
+        }
+
+        info.valid = true;
+        info.kind = isCube ? EditorTextureKind::TextureCube : EditorTextureKind::Texture2D;
+        info.format = std::move(format);
+        info.width = width;
+        info.height = height;
+        info.depth = depth != 0 ? depth : 1u;
+        info.mipLevels = mipLevels != 0 ? mipLevels : 1u;
+        info.arraySize = arraySize != 0 ? arraySize : 1u;
+        return info;
+    }
+
+    EditorTextureInfo ReadPngTextureInfo(const fs::path& path)
+    {
+        EditorTextureInfo info;
+        info.scanned = true;
+
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return info;
+        }
+
+        std::array<uint8_t, 33> bytes{};
+        file.read(reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+        if (file.gcount() < static_cast<std::streamsize>(bytes.size()))
+        {
+            return info;
+        }
+
+        constexpr uint8_t kPngSignature[8] = {
+            0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a
+        };
+        if (std::memcmp(bytes.data(), kPngSignature, sizeof(kPngSignature)) != 0 ||
+            std::memcmp(bytes.data() + 12, "IHDR", 4) != 0)
+        {
+            return info;
+        }
+
+        const uint32_t width = ReadBe32(bytes, 16);
+        const uint32_t height = ReadBe32(bytes, 20);
+        if (width == 0 || height == 0)
+        {
+            return info;
+        }
+
+        const uint8_t bitDepth = bytes[24];
+        const uint8_t colorType = bytes[25];
+
+        info.valid = true;
+        info.kind = EditorTextureKind::Texture2D;
+        info.format = "PNG " + std::to_string(static_cast<int>(bitDepth)) +
+            "-bit " + PngColorTypeName(colorType);
+        info.width = width;
+        info.height = height;
+        info.depth = 1;
+        info.mipLevels = 1;
+        info.arraySize = 1;
+        return info;
+    }
+
+    EditorTextureInfo ReadTextureInfo(const fs::path& path, const std::string& ext)
+    {
+        if (ext == ".dds")
+        {
+            return ReadDdsTextureInfo(path);
+        }
+        if (ext == ".png")
+        {
+            return ReadPngTextureInfo(path);
+        }
+        return {};
     }
 
     struct DirRoot
@@ -114,6 +401,10 @@ void AssetRegistry::Refresh()
             record.displayName = p.filename().string();
             record.extension = ext;
             record.fileWriteTime = WriteTimeOf(p);
+            if (record.id.type == EditorAssetType::Texture)
+            {
+                record.texture = ReadTextureInfo(p, ext);
+            }
             assets_.push_back(std::move(record));
         }
     }
@@ -247,6 +538,17 @@ const char* ToString(EditorAssetType type)
     case EditorAssetType::Level:          return "Level";
     case EditorAssetType::Shader:         return "Shader";
     case EditorAssetType::Unknown:        return "Unknown";
+    }
+    return "Unknown";
+}
+
+const char* ToString(EditorTextureKind kind)
+{
+    switch (kind)
+    {
+    case EditorTextureKind::Texture2D:   return "Texture2D";
+    case EditorTextureKind::TextureCube: return "TextureCube";
+    case EditorTextureKind::Unknown:     return "Unknown";
     }
     return "Unknown";
 }

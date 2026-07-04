@@ -158,15 +158,26 @@ namespace
 
             if (ImGui::BeginCombo("Texture Asset", currentLabel.c_str()))
             {
+                int visibleTextures = 0;
                 for (const EditorAssetRecord& rec : registry.Assets())
                 {
-                    if (rec.id.type != EditorAssetType::Texture || rec.extension != ".dds")
+                    if (rec.id.type != EditorAssetType::Texture ||
+                        !rec.texture.valid ||
+                        rec.texture.kind != EditorTextureKind::TextureCube)
                     {
                         continue;
                     }
 
                     const bool selected = rec.id.key == current;
-                    if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                    std::string label = rec.id.key;
+                    if (!rec.texture.format.empty())
+                    {
+                        label += "  [";
+                        label += rec.texture.format;
+                        label += "]";
+                    }
+                    ++visibleTextures;
+                    if (ImGui::Selectable(label.c_str(), selected) && !selected)
                     {
                         p["texture"] = NormalizePath(rec.id.key);
                         EnvironmentRuntime::Apply(ctx, env);
@@ -176,6 +187,10 @@ namespace
                     {
                         ImGui::SetItemDefaultFocus();
                     }
+                }
+                if (visibleTextures == 0)
+                {
+                    ImGui::TextDisabled("No cubemap textures found.");
                 }
                 ImGui::EndCombo();
             }

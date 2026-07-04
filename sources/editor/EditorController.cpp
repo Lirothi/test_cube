@@ -133,28 +133,34 @@ namespace
 
     std::string PickDefaultSkyboxTexture(const AssetRegistry& registry)
     {
-        const EditorAssetRecord* firstDds = nullptr;
-        const EditorAssetRecord* first = nullptr;
+        const EditorAssetRecord* preferredSkybox = nullptr;
+        const EditorAssetRecord* firstCube = nullptr;
         for (const EditorAssetRecord& rec : registry.Assets())
         {
             if (rec.id.type != EditorAssetType::Texture)
             {
                 continue;
             }
+            const bool isCube = rec.texture.valid &&
+                rec.texture.kind == EditorTextureKind::TextureCube;
             if (rec.id.key == "textures/skybox.dds")
             {
-                return rec.id.key;
+                if (isCube)
+                {
+                    return rec.id.key;
+                }
+                preferredSkybox = &rec;
             }
-            if (!firstDds && rec.extension == ".dds")
+            if (!firstCube && isCube)
             {
-                firstDds = &rec;
-            }
-            if (!first)
-            {
-                first = &rec;
+                firstCube = &rec;
             }
         }
-        return firstDds ? firstDds->id.key : (first ? first->id.key : std::string("textures/skybox.dds"));
+        if (firstCube)
+        {
+            return firstCube->id.key;
+        }
+        return preferredSkybox ? preferredSkybox->id.key : std::string("textures/skybox.dds");
     }
 
     bool HasEnvironmentObject(const EditorSceneDocument& document, const char* type)
