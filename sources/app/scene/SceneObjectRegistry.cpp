@@ -50,6 +50,10 @@ public:
         SetRotationEulerRad({ 0.0f, rotationY_, 0.0f });
     }
 
+    // Rung 1 (Step 10): spins every frame -> dynamic caster (this is the "moved-but-static"
+    // demo type the classification was otherwise missing).
+    bool IsDynamicCaster() const override { return angularSpeed_ != 0.0f; }
+
 private:
     float rotationY_ = 0.0f;
     float angularSpeed_ = 10.0f * Math::DEG2RAD;
