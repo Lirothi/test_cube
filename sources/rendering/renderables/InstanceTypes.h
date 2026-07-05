@@ -54,8 +54,9 @@ inline constexpr uint32_t kInstancingThreshold = 8;
 // before/after measurement; when off, BuildInstancedBatches is a no-op (per-object path).
 inline bool g_instancingEnabled = true;
 
-// Rung 0 / Step 6 runtime toggle (default OFF): when on, the shadow passes draw via GPU cull +
-// ExecuteIndirect (ShadowGpuData) instead of the per-object CPU RenderShadow loop. A/B fallback
-// for the behavioral flip — flipped by the "ToggleIndirectShadows" action (Ctrl+I).
-inline bool g_indirectShadowsEnabled = false;
+// Rung 0 runtime toggle (default ON): the shadow passes draw via GPU cull + ExecuteIndirect
+// (ShadowGpuData) instead of the per-object CPU RenderShadow loop — the CPU-submission win.
+// Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to
+// build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
+inline bool g_indirectShadowsEnabled = true;
 } // namespace render
