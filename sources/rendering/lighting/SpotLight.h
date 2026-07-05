@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 #include "core/math/OBB.h"
@@ -68,6 +70,11 @@ public:
 
     void UpdateCachedData();
 
+    // Rung 1 (Step 11) foundation: monotonic version bumped whenever the light's cached
+    // (shadow-relevant) transform is rebuilt — a shadow cache compares it to detect a moved
+    // light. No consumer yet.
+    std::uint32_t GetTransformVersion() const { return transformVersion_; }
+
 private:
     SpotLightDesc desc_{};
     Math::float3 direction_ = Math::float3(0.0f, -1.0f, 0.0f);
@@ -81,5 +88,6 @@ private:
     AABB  coneBounds_{};
     OBB   coneObb_{};
     bool         dirty_ = true;
+    std::uint32_t transformVersion_ = 0; // bumped in UpdateCachedData on an actual change (Step 11)
 };
 

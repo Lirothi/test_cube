@@ -32,6 +32,9 @@ public:
     bool IsTransparent() const override { return true; }
     bool IsSimpleRender() const override { return false; }
     bool CastsShadow() const override { return false; }
+    // Rung 1 (Step 10): the surface is compute-simulated every frame — dynamic (moot while it
+    // isn't a shadow caster, but correct if that ever changes).
+    bool IsDynamicCaster() const override { return true; }
 
     void OnMaterialHotReload(Renderer* renderer) override;
     OceanRenderable* AsOceanRenderable() override { return this; }

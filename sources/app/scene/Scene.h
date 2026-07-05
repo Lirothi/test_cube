@@ -90,7 +90,15 @@ public:
 
     const SceneFrameData& FrameData() const { return frameData_; }
 
+    // Rung 1 (Step 11) foundation: monotonic version of the STATIC caster set — bumped when set
+    // membership changes (level load, object add/remove/clear). A shadow cache compares it to
+    // know its static atlas is stale. Dynamic movers do NOT bump it (their motion is tracked
+    // per-caster via RenderableObject::MovedThisFrame). No consumer yet.
+    std::uint32_t GetStaticSetVersion() const { return staticSetVersion_; }
+
 private:
+    void BumpStaticSetVersion() { ++staticSetVersion_; }
+
     static constexpr int kCascades = SceneFrameData::kCascades;
 
     void UpdateCascades(const Camera& camera, Renderer* renderer);
@@ -128,6 +136,7 @@ private:
     Camera camera_;
 
     SceneRenderSettings renderSettings_{};
+    std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on static-caster-set membership changes
 
     DirectionalLight dirLight_;
 

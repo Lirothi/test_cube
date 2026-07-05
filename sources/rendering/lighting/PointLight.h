@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "core/math/Math.h"
 #include "rendering/meshes/Mesh.h"
 #include "materials/Material.h"
@@ -18,8 +19,13 @@ public:
     void Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive);
 
-    void SetDesc(const PointLightDesc& d) { desc_ = d; }
+    void SetDesc(const PointLightDesc& d) { desc_ = d; ++transformVersion_; }
     const PointLightDesc& GetDesc() const { return desc_; }
+
+    // Rung 1 (Step 11) foundation: monotonic version bumped on any SetDesc (conservative — a
+    // shadow cache compares it to detect a moved/changed light). PointLight has no dirty_, so
+    // it mirrors SpotLight's version. No consumer yet.
+    std::uint32_t GetTransformVersion() const { return transformVersion_; }
 
     // TWO SEPARATE FUNCTIONS:
     // 1) Z-FAIL stencil pre-pass (two passes: back then front)
@@ -70,4 +76,5 @@ private:
     void RebuildHandleCache();
 
     PointLightDesc desc_{};
+    std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDesc
 };

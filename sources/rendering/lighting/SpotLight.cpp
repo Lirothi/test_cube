@@ -123,6 +123,7 @@ void SpotLight::UpdateCachedData()
     }
 
     dirty_ = false;
+    ++transformVersion_; // Step 11: monotonic signal that this light's shadow transform changed
 
     Math::float3 dir = desc_.direction;
     if (dir.Length() <= Math::EPS)

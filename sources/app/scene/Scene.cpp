@@ -95,6 +95,7 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // once the object transforms are finalized (SyncSceneState above resets motion history so
     // prevWorld == world). Level load is GPU-idle, safe for the alloc.
     shadowGpu_.Rebuild(renderer, objects_);
+    BumpStaticSetVersion(); // Step 11: a fresh level = a new static caster set
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
@@ -284,6 +285,7 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 #if WITH_EDITOR
     objectIds_.push_back(0); // runtime object: no editor identity
 #endif
+    BumpStaticSetVersion();
 }
 
 bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj)
@@ -302,6 +304,7 @@ bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::
 #if WITH_EDITOR
     objectIds_.push_back(0);
 #endif
+    BumpStaticSetVersion();
     return true;
 }
 
@@ -321,6 +324,7 @@ bool Scene::RemoveOceanObjects()
         }
         ++i;
     }
+    if (removed) { BumpStaticSetVersion(); }
     return removed;
 }
 
@@ -345,6 +349,7 @@ Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase
     }
     objects_.push_back(std::move(obj));
     objectIds_.push_back(id);
+    BumpStaticSetVersion();
     return id;
 }
 
@@ -358,6 +363,7 @@ void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, Sce
     }
     objects_.push_back(std::move(obj));
     objectIds_.push_back(id);
+    BumpStaticSetVersion();
 
     // Keep the auto-allocator ahead of level-supplied ids so AddEditorObject
     // never hands out a colliding id later.
@@ -387,6 +393,7 @@ bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads,
 
     objects_.push_back(std::move(obj));
     objectIds_.push_back(id);
+    BumpStaticSetVersion();
     return true;
 }
 
@@ -408,6 +415,7 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
         }
         ++i;
     }
+    if (removed) { BumpStaticSetVersion(); }
     return removed;
 }
 

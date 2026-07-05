@@ -108,6 +108,14 @@ public:
     // drawing through their own RenderShadow even when indirect shadows are enabled.
     virtual bool IsGpuInstancedCaster() const { return false; }
 
+    // Rung 1 (Step 10) foundation: does this caster ever move at runtime? Static casters can be
+    // cached in a shadow atlas and re-rendered only on invalidation; dynamic ones re-render each
+    // frame. Default static; movers (rotating/animated/GPU-driven) override. Content-based:
+    // editor moves of a "static" object are caught separately by MovedThisFrame() + the scene's
+    // static-set version (Step 11), so this stays about intrinsic motion, not editor state.
+    // No consumer yet (Rung 1 caching / Rung 2 page invalidation will use it).
+    virtual bool IsDynamicCaster() const { return false; }
+
     virtual void OnMaterialHotReload(Renderer* renderer) {}
 
     // Step 6: choose this object's camera/gbuffer LOD for the frame. Called once per visible

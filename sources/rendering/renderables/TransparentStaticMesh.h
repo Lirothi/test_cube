@@ -37,6 +37,9 @@ public:
     bool IsNormalMapRG() const { return normalMapIsRG_; }
 
     bool IsSimpleRender() const override { return false; }
+    // Rung 1 (Step 10): dynamic only while it spins (rotationSpeed != 0); a still glass pane is
+    // a static caster.
+    bool IsDynamicCaster() const override { return rotationSpeed_ != 0.0f; }
     // S15b: glass samples the off-screen glass reflection, so it (and only it, not the ocean
     // or other transparent renderables) is rasterized into the glass-reflection G-buffer.
     bool UsesGlassReflection() const override { return true; }

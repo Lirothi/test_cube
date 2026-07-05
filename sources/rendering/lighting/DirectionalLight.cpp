@@ -16,6 +16,7 @@ const Math::float3& DirectionalLight::GetDirection() const
 void DirectionalLight::SetDirection(const Math::float3& direction)
 {
     direction_ = direction;
+    ++transformVersion_; // Step 11: the sun direction drives the CSM projection
 }
 
 const Math::float3& DirectionalLight::GetColor() const

@@ -38,6 +38,8 @@ public:
     // entry — the GPU-driven shadow path (Step 6) skips it and it draws via its own instanced
     // RenderShadow instead.
     bool IsGpuInstancedCaster() const override { return true; }
+    // Rung 1 (Step 10): per-instance rotation animates every frame -> always dynamic.
+    bool IsDynamicCaster() const override { return true; }
 
     const AABB& GetWorldBounds() const override;
     // RT: a single instance is meaningless for the whole field — GetRtInstance stays
