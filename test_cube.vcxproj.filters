@@ -405,6 +405,9 @@
     <ClCompile Include="sources/rendering/renderables/ShadowGpuData.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/VirtualShadowMap.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -774,6 +777,9 @@
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/ShadowGpuData.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/VirtualShadowMap.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/InstanceTypes.h">

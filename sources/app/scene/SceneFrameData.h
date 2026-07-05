@@ -14,6 +14,7 @@ class DirectionalLight;
 class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
+class VirtualShadowMap;
 
 enum class SsrTechnique : uint32_t
 {
@@ -94,6 +95,7 @@ struct SceneFrameData
     const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;
     const DirectionalLight* dirLight = nullptr;
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
+    VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
 
     CascadeData cascades{};
     std::uint64_t selectedEditorObjectId = 0;

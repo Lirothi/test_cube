@@ -8,6 +8,7 @@
 
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/ShadowGpuData.h"
+#include "rendering/renderables/VirtualShadowMap.h"
 #include "app/camera/Camera.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
@@ -132,6 +133,9 @@ private:
     // Rung 0 / Steps 1-2: GPU-side shadow data (per-caster instance + bounds, per-view
     // frustum planes). Built at level load, maintained per frame; not yet consumed by any pass.
     ShadowGpuData shadowGpu_{};
+    // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at
+    // level load; not yet consumed by any pass.
+    VirtualShadowMap vsm_{};
     LightManager lightManager_{};
     Camera camera_;
 

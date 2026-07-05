@@ -96,6 +96,8 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // prevWorld == world). Level load is GPU-idle, safe for the alloc.
     shadowGpu_.Rebuild(renderer, objects_);
     BumpStaticSetVersion(); // Step 11: a fresh level = a new static caster set
+    // Rung 2 (Step 18): allocate the persistent VSM page pool + page table once (idempotent).
+    vsm_.EnsureResources(renderer);
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
@@ -566,6 +568,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.objects = &objects_;
     frameData_.dirLight = &dirLight_;
     frameData_.shadowGpu = &shadowGpu_;
+    frameData_.vsm = &vsm_;
     frameData_.settings = renderSettings_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectId = selectedEditorObjectId_;
