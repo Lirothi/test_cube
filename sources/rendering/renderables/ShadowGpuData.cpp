@@ -422,20 +422,18 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         const RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
 
-        render::InstancePerObject inst;
-        render::CasterBounds bnd;
-        FillInstance(obj, inst);
-        FillBounds(obj, bnd);
-
-        const bool changed =
-            std::memcmp(&inst, &cpuInstances_[idx], sizeof(render::InstancePerObject)) != 0 ||
-            std::memcmp(&bnd, &cpuBounds_[idx], sizeof(render::CasterBounds)) != 0;
-        if (changed)
+        // Step 7: only movers are recomputed + re-uploaded. A static caster is skipped entirely
+        // (no fill, no compare) — the per-frame cost is O(movers), not O(casters). The move
+        // signal tracks transform changes, which is all a depth-only shadow entry depends on.
+        const RenderableObject* ro = obj->AsRenderableObject();
+        if (ro && ro->MovedThisFrame())
         {
-            cpuInstances_[idx] = inst;
-            cpuBounds_[idx] = bnd;
+            FillInstance(obj, cpuInstances_[idx]);
+            FillBounds(obj, cpuBounds_[idx]);
             pending_[idx] = static_cast<std::uint8_t>(render::kFrameCount);
         }
+        // pending>0 propagates a recent change across all kFrameCount ring regions (even after
+        // the object stops moving), so every region converges to the latest transform.
         if (pending_[idx] > 0)
         {
             instBase[idx] = cpuInstances_[idx];

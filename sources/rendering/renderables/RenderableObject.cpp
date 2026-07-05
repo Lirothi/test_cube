@@ -331,6 +331,10 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
         UpdateWorldBoundsCache();
     }
 
+    // Step 7: snapshot the move signal so it survives to render time (the GPU shadow path reads
+    // it after Tick to re-upload only movers). LevelLoad/spawn already reset it via
+    // ResetMotionHistory above, so those frames read false — Rebuild does the full upload then.
+    movedThisFrame_ = modelMatrixChangedThisTick_;
     modelMatrixChangedThisTick_ = false;
 }
 

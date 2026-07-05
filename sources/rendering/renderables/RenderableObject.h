@@ -67,6 +67,12 @@ public:
     // Transform
     const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
     const Math::mat4& GetPreviousModelMatrix() const { return prevModelMatrix_; }
+
+    // Rung 0 (Step 7 / Rung 1 Step 11): did this object's model matrix change during this
+    // frame's SyncSceneState? Snapshotted before modelMatrixChangedThisTick_ is cleared, so it
+    // survives to render time. Lets the GPU shadow path re-upload only movers (skip static
+    // casters entirely) instead of re-checking every caster each frame.
+    bool MovedThisFrame() const { return movedThisFrame_; }
     void ResetMotionHistory()
     {
         prevModelMatrix_ = modelMatrix_;
@@ -221,4 +227,5 @@ private:
     bool transformDirty_ = true;
     bool prevModelMatrixValid_ = false;
     bool modelMatrixChangedThisTick_ = false;
+    bool movedThisFrame_ = false; // render-visible snapshot of modelMatrixChangedThisTick_ (Step 7)
 };
