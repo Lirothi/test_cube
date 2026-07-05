@@ -527,10 +527,41 @@ meaningful.
   - **Right-size `kVirtualRes` per light type.** 8192² is ~32× the old spot/point maps; use a
     lower base for local lights (e.g. spot 2048², point-face 1024² — tune against the request
     count log). Directional keeps its (future) clipmap res in Step 24.
+- **Perf (MEASURED: the single-level Step-19 pass costs ~1.2 ms GPU — unacceptable, and it's
+  currently add-dormant).** The cost is dominated by (a) `InterlockedOr` contention (≈1.44M
+  pixels × up to 36 views hammering a 4608-word bitfield → threads serialize on shared words)
+  and (b) full-res × all-views projection. Fixes, in priority order:
+  1. **Run the request pass at reduced resolution** (e.g. 1/8 per axis ≈ 1/64 the threads) — the
+     biggest win (pages are coarse 128², so sub-sampled screen coverage still finds them). Add a
+     ~half-page margin / 1-page dilation so page edges aren't missed.
+  2. **Mip levels** (above) collapse distinct-page count → less contention.
+  3. **Per-pixel/tile light cull** — only project into views whose light influence reaches the
+     pixel (reuse the spot-cone / point-radius test), not all 24 point faces.
+  4. **Groupshared aggregation** — coalesce a tile's marks in LDS, one atomic per unique page.
+  5. **Gate the pass** — do not run it every frame while unused (until Step 21 consumes the
+     request); tie it to the VSM-active toggle. (Quick immediate win.)
 - **Verify:** the request-count log drops from ~57k to ≲ pool with headroom; per-view counts
-  are dense-near / sparse-far as the camera moves (mip levels working). `--scene-stress` +
-  `--scene-stress-gbv` CLEAN. This bounded, mip-aware, local-light request is the input Step 20
-  allocates from.
+  are dense-near / sparse-far as the camera moves (mip levels working); **request pass GPU cost
+  ≪ 1.2 ms** (reduced-res + gating). `--scene-stress` + `--scene-stress-gbv` CLEAN. This
+  bounded, mip-aware, local-light request is the input Step 20 allocates from.
+- **DONE (uncommitted) 2026-07-05:** all four changes landed. `kVirtualRes` 8192→**2048**; mip
+  pyramid (`kNumMipLevels=5`, per-view `kPagesPerView=341` = 16²+8²+4²+2²+1, `LevelPageOffset`
+  prefix sums); local-light scope `kMaxVirtualViews`=**32** (spots + point faces, cascades
+  dropped — `Pass_VsmPageRequest` no longer adds the 4 cascade views); per-pixel camera-distance
+  level selection (`level = clamp(log2(distCam/kLodRefDist=10), 0, kMaxMipLevel)`); reduced-res
+  dispatch (`kRequestDownscale=8` → 1/64 the threads); and a runtime **gate**
+  `render::g_vsmPageRequestEnabled` (default **OFF** — add-dormant; **Ctrl+V** =
+  "ToggleVsmPageRequest"). Page table shrank 147456→10912 entries; request bitfield 4608→341
+  words. **Measured (demo, gate temporarily ON): 872 pages requested** (was ~57279 — 66× drop,
+  fits the 1024-page pool), mip histogram L0=20/L1=723/L2=129/L3=0/L4=0 (multiple levels →
+  selection works). Both configs 0/0; `--scene-stress-gbv=120` + `--scene-stress=300` CLEAN
+  (only known-noise IDs {939,940,1006,1358}); shaders compile. DEFERRED (documented, not
+  needed for the count/cost goal): reduced-res **dilation** for edge-accurate pages (a Step-21
+  sampling concern — nothing samples yet), **per-pixel/tile light cull** + **groupshared
+  aggregation** (further perf), and **per-light-type** virtual res (unified 2048 used). Request
+  GPU cost not separately re-measured headless — expected ≪1.2 ms from 1/64 threads + mips;
+  confirm in a live capture if it matters. NEXT = **Step 20** (allocate physical pages from this
+  bounded request + persistent page table / free-list / LRU).
 
 ### Step 20 — Page allocation / free + persistent page table
 

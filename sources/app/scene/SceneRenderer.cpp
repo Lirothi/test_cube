@@ -911,10 +911,12 @@ void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext c
 
 void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    // Rung 2 / Step 19: mark the virtual shadow pages the visible frame needs. Runs after the
+    // Rung 2 / Step 19b: mark the virtual shadow pages the visible frame needs. Runs after the
     // GBuffer (needs camera depth); output is the request bitfield, consumed by Step 20 (unused
-    // yet). Builds the constants (camera + the shadow views' viewProj) in the Rung-0 slot layout
-    // [4 cascades | spots | point-faces], then the VSM records the clear + request dispatches.
+    // yet — so the pass is gated OFF by default, Ctrl+V to exercise/measure). LOCAL lights only:
+    // the view slots are [spots | point-faces] (NO CSM cascades — directional stays on Pass_CSM
+    // until Step 24). Per-view viewProj + a mip/refDist LOD param drive the request shader.
+    if (!render::g_vsmPageRequestEnabled) { return; }
     if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();
@@ -928,6 +930,8 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.camPosWS = DirectX::XMFLOAT4(mv.position.x, mv.position.y, mv.position.z, 0.0f);
     cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
                                   rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
+    cb.lodParams = DirectX::XMFLOAT4(vsm::kLodRefDist, static_cast<float>(vsm::kMaxMipLevel),
+                                     static_cast<float>(vsm::kRequestDownscale), 0.0f);
 
     std::uint32_t slot = 0;
     auto addView = [&](const SceneView& v, bool active)
@@ -938,7 +942,8 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         cb.views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
         ++slot;
     };
-    for (const SceneView& v : *frame_->cascadeViews) { addView(v, true); }
+    // Slot layout must match vsm::kMaxVirtualViews / the page-table view indexing: spots first,
+    // then point-light cube faces. Cascades are intentionally excluded (Step 19b local scope).
     const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
     { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
     const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;

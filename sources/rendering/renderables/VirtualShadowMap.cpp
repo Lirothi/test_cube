@@ -224,17 +224,22 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
         vsm::kRequestWords, 1,
         requestBuffer_.Get());
 
-    // Mark: one thread per screen pixel -> project into each active shadow view -> mark page.
+    // Mark: one thread per DOWN-SAMPLED screen block (Step 19b reduced res, ≈1/64 the threads) ->
+    // project the block-center pixel into each active local shadow view -> mark its mip page.
+    const UINT ds = vsm::kRequestDownscale;
+    const UINT reqW = (screenW + ds - 1u) / ds;
+    const UINT reqH = (screenH + ds - 1u) / ds;
     RecordComputeDispatch(renderer, cl, pageRequestMat_.get(), static_cast<UINT>(sizeof(vsm::PageRequestConstants)),
         [&constants](std::uint8_t* dst) { std::memcpy(dst, &constants, sizeof(constants)); },
         { depthSrv },
         { requestUav_ },
         noSampler,
-        screenW, screenH,
+        reqW, reqH,
         requestBuffer_.Get());
 
-    // Step 19 validation (temporary, one-shot after warmup): read the request bitfield back to
-    // log requested-page counts kFrameCount frames later.
+    // Step 19 validation (temporary): read the request bitfield back to log requested-page counts
+    // kFrameCount frames later. Re-arms every ~kRequestReadbackPeriod frames (PollPageRequestDebug)
+    // so a live/stress run samples several times as the camera + scene change.
     if (requestReadbackState_ == 0 && renderer->GetTotalFrameNumber() > render::kFrameCount)
     {
         if (!requestReadback_)
@@ -263,7 +268,15 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
 
 void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
 {
-    if (requestReadbackState_ != 1 || !renderer || !requestReadback_) { return; }
+    if (!renderer) { return; }
+    // Re-arm a new sample once the cooldown elapses (see RecordPageRequest).
+    if (requestReadbackState_ == 2 &&
+        renderer->GetTotalFrameNumber() >= requestReadbackDoneFrame_ + kRequestReadbackPeriod)
+    {
+        requestReadbackState_ = 0;
+        return;
+    }
+    if (requestReadbackState_ != 1 || !requestReadback_) { return; }
     if (renderer->GetTotalFrameNumber() < requestReadbackFrame_ + render::kFrameCount) { return; }
 
     const size_t bytes = static_cast<size_t>(vsm::kRequestWords) * sizeof(std::uint32_t);
@@ -276,32 +289,33 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     }
     const auto* words = reinterpret_cast<const std::uint32_t*>(mapped);
 
-    auto popcount = [](std::uint32_t x) { std::uint32_t c = 0; while (x) { c += (x & 1u); x >>= 1u; } return c; };
-    std::uint32_t total = 0;
-    for (std::uint32_t i = 0; i < vsm::kRequestWords; ++i) { total += popcount(words[i]); }
+    auto isSet = [&](std::uint32_t page) { return (words[page >> 5u] & (1u << (page & 31u))) != 0u; };
 
-    // Per-view counts for the first few views (each view = kVirtualPagesPerView contiguous bits).
-    std::uint32_t v0 = 0, v4 = 0; // view 0 (cascade 0) + view 4 (first spot slot)
-    auto viewCount = [&](std::uint32_t view) {
-        std::uint32_t c = 0;
-        const std::uint32_t firstPage = view * vsm::kVirtualPagesPerView;
-        for (std::uint32_t p = 0; p < vsm::kVirtualPagesPerView; ++p)
+    // Total requested pages + a per-mip-level histogram across all local views (confirms mip
+    // selection: far receivers should populate the coarse levels). Each view occupies
+    // kPagesPerView contiguous bits, laid out level 0..kMaxMipLevel via LevelPageOffset.
+    std::uint32_t total = 0;
+    std::uint32_t perLevel[vsm::kNumMipLevels] = {};
+    for (std::uint32_t v = 0; v < vsm::kMaxVirtualViews; ++v)
+    {
+        const std::uint32_t viewBase = v * vsm::kPagesPerView;
+        for (std::uint32_t lvl = 0; lvl < vsm::kNumMipLevels; ++lvl)
         {
-            const std::uint32_t page = firstPage + p;
-            if (words[page >> 5u] & (1u << (page & 31u))) { ++c; }
+            const std::uint32_t base = viewBase + vsm::LevelPageOffset(lvl);
+            const std::uint32_t n = vsm::LevelPageCount(lvl);
+            for (std::uint32_t p = 0; p < n; ++p) { if (isSet(base + p)) { ++perLevel[lvl]; ++total; } }
         }
-        return c;
-    };
-    v0 = viewCount(0);
-    v4 = viewCount(4);
+    }
 
     const D3D12_RANGE noWrite{ 0, 0 };
     requestReadback_->Unmap(0, &noWrite);
 
-    char buf[192];
+    char buf[224];
     std::snprintf(buf, sizeof(buf),
-        "[VSM] page request: %u pages total requested (view0=%u, view4=%u of %u/view).\n",
-        total, v0, v4, vsm::kVirtualPagesPerView);
+        "[VSM] page request: %u pages total (L0=%u L1=%u L2=%u L3=%u L4=%u; %u local views, %u/view, pool=%u).\n",
+        total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+        vsm::kMaxVirtualViews, vsm::kPagesPerView, vsm::kPoolPageCount);
     OutputDebugStringA(buf);
     requestReadbackState_ = 2;
+    requestReadbackDoneFrame_ = renderer->GetTotalFrameNumber();
 }

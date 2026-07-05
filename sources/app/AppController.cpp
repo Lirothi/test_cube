@@ -81,6 +81,13 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
             render::g_indirectShadowsEnabled = !render::g_indirectShadowsEnabled;
         }
+        if (input.WasActionPressed("ToggleVsmPageRequest"))
+        {
+            // Ctrl+V: run the Rung-2 VSM page-request pass (Step 19b) to exercise + measure it
+            // (add-dormant — its output isn't consumed until Step 20). Logs the requested-page
+            // count while on.
+            render::g_vsmPageRequestEnabled = !render::g_vsmPageRequestEnabled;
+        }
         if (input.WasActionPressed("CycleReflectionSource"))
         {
             // F5: cycle Off -> SSR -> RT -> Off (skip RT on non-RT hardware).

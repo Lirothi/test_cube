@@ -20,18 +20,44 @@ class Camera;
 namespace vsm
 {
     inline constexpr std::uint32_t kPageSize = 128;                                  // texels per page edge
-    inline constexpr std::uint32_t kVirtualRes = 8192;                               // virtual shadow res per view/level
-    inline constexpr std::uint32_t kVirtualPagesPerAxis = kVirtualRes / kPageSize;   // 64
-    inline constexpr std::uint32_t kVirtualPagesPerView = kVirtualPagesPerAxis * kVirtualPagesPerAxis; // 4096
+
+    // Step 19b: LOCAL-light virtual res (spot lights + point-light cube faces). The Step-18/19
+    // first cut used kVirtualRes=8192 at a single (finest) level, which over-subscribed the pool
+    // ~56× (~57k requested pages vs 1024). 2048² is ~4× the old spot/point maps' texel count and,
+    // combined with the mip pyramid below (per-pixel level selection), keeps the request set
+    // within the pool. Directional shadows stay on the existing CSM (Pass_CSM) until Step 24 gives
+    // them a clipmap with its own resolution.
+    inline constexpr std::uint32_t kVirtualRes = 2048;                               // finest-level virtual res per local view
+    inline constexpr std::uint32_t kVirtualPagesL0Axis = kVirtualRes / kPageSize;    // 16 (level-0 pages per axis)
+
+    // Mip pyramid: level L has (kVirtualRes>>L)/kPageSize pages per axis, down to 1×1. Each pixel
+    // marks exactly ONE page, at the level whose shadow-texel density ≈ its screen-pixel density,
+    // so far receivers request coarse (few) pages instead of finest-level ones — the 57k→pool fix.
+    inline constexpr std::uint32_t kNumMipLevels = 5;                                // 16,8,4,2,1 for 2048²
+    inline constexpr std::uint32_t kMaxMipLevel = kNumMipLevels - 1;                 // 4
+
+    inline constexpr std::uint32_t LevelPagesPerAxis(std::uint32_t level) { return kVirtualPagesL0Axis >> level; }
+    inline constexpr std::uint32_t LevelPageCount(std::uint32_t level) { return LevelPagesPerAxis(level) * LevelPagesPerAxis(level); }
+    // Prefix sum of level page counts within a view: LevelPageOffset(L) = pages of levels 0..L-1.
+    inline constexpr std::uint32_t LevelPageOffset(std::uint32_t level)
+    {
+        std::uint32_t sum = 0;
+        for (std::uint32_t l = 0; l < level; ++l) { sum += LevelPageCount(l); }
+        return sum;
+    }
+    inline constexpr std::uint32_t kPagesPerView = LevelPageOffset(kNumMipLevels);   // 341 = 256+64+16+4+1
 
     inline constexpr std::uint32_t kPoolTexels = 4096;                               // physical pool edge (~32 MB @ D16)
     inline constexpr std::uint32_t kPoolPagesPerAxis = kPoolTexels / kPageSize;      // 32
     inline constexpr std::uint32_t kPoolPageCount = kPoolPagesPerAxis * kPoolPagesPerAxis; // 1024
 
-    // First cut: one virtual view per Rung-0 shadow-view slot (4 CSM cascades + spots + point
-    // faces). Step 24's directional clipmap will re-slice this into clipmap levels.
-    inline constexpr std::uint32_t kMaxVirtualViews = render::kMaxShadowViews;        // 36
-    inline constexpr std::uint32_t kPageTableEntries = kVirtualPagesPerView * kMaxVirtualViews; // ~147456
+    // Step 19b: LOCAL lights only — spots + point-light cube faces, NO CSM cascades (directional
+    // stays on Pass_CSM until Step 24). render::kMaxShadowViews (36) = 4 cascades + this set, so
+    // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces
+    // (kMaxShadowedPointLights*6)] = 8 + 24 = 32.
+    inline constexpr std::uint32_t kNumCascades = 4;                                 // == SceneFrameData::kCascades
+    inline constexpr std::uint32_t kMaxVirtualViews = render::kMaxShadowViews - kNumCascades; // 32
+    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*32 = 10912
 
     // Page-table entry packing (a single uint per virtual page). Unused until Step 20 fills it.
     //   bit 31      : resident (1 = mapped to a physical page)
@@ -40,7 +66,17 @@ namespace vsm
     inline constexpr std::uint32_t kPagePhysicalMask = 0x0000FFFFu;
 
     // Step 19: the page-request set is a bitfield (1 bit per virtual page).
-    inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // ~4608 uints
+    inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // 341 uints
+
+    // Step 19b perf: run the request pass at 1/kRequestDownscale per axis (≈1/64 the threads at 8),
+    // the biggest win over the ~1.2 ms full-res single-level pass. Coarse 128² pages + mip
+    // selection keep sub-sampled screen coverage adequate for page discovery.
+    inline constexpr std::uint32_t kRequestDownscale = 8;
+
+    // Step 19b level selection: level = clamp(log2(distCamera / kLodRefDist), 0, kMaxMipLevel).
+    // Receivers within ~kLodRefDist of the camera use the finest level; each doubling of distance
+    // steps one level coarser (dense-near / sparse-far). Tuned against the request-count log.
+    inline constexpr float kLodRefDist = 10.0f;
 
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
@@ -55,6 +91,7 @@ namespace vsm
         DirectX::XMFLOAT4X4 invProj;
         DirectX::XMFLOAT4   camPosWS;   // xyz
         DirectX::XMFLOAT4   screen;     // x=w, y=h, z=1/w, w=1/h
+        DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=unused
         std::uint32_t       numViews;
         std::uint32_t       _pad[3];
         ViewProjEntry       views[kMaxVirtualViews];
@@ -115,8 +152,11 @@ private:
     std::shared_ptr<Material> pageRequestMat_;       // vsm_page_request_cs.hlsl
     bool shaderResourcesTried_ = false;
 
-    // Step 19 validation: deferred readback of the request bitfield.
+    // Step 19 validation: deferred readback of the request bitfield, re-armed periodically so a
+    // live/stress run samples the count several times.
+    static constexpr std::uint64_t kRequestReadbackPeriod = 180; // frames between samples
     Microsoft::WRL::ComPtr<ID3D12Resource> requestReadback_;
-    std::uint64_t requestReadbackFrame_ = 0;
-    int           requestReadbackState_ = 0; // 0 = not started, 1 = pending, 2 = done
+    std::uint64_t requestReadbackFrame_ = 0;     // frame the copy was scheduled
+    std::uint64_t requestReadbackDoneFrame_ = 0; // frame the last sample logged
+    int           requestReadbackState_ = 0;     // 0 = not started, 1 = pending, 2 = done
 };

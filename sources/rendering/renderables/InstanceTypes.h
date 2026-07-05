@@ -59,4 +59,10 @@ inline bool g_instancingEnabled = true;
 // Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to
 // build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
 inline bool g_indirectShadowsEnabled = true;
+
+// Rung 2 / Step 19b runtime gate (default OFF): the VSM screen-space page-request pass
+// (Pass_VsmPageRequest) is add-dormant — its output is not consumed until Step 20/21. Keep it OFF
+// so it costs nothing while unused; toggle ON (Ctrl+V, "ToggleVsmPageRequest") to exercise +
+// measure it (the "[VSM] page request" count log fires while it runs).
+inline bool g_vsmPageRequestEnabled = false;
 } // namespace render
