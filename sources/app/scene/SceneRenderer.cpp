@@ -420,7 +420,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // (which samples the cube atlas in B3).
     auto pPointShadow = rg.AddPass(RenderPass::Main_PointShadows, { pSpotShadow },
         [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
+            CPU_SCOPE(ProfilerScopes::kPassPointShadow);
             Pass_PointShadows(renderer, ctx, *frame_->pointShadowViews);
         });
 
@@ -1246,7 +1246,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
-            GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
+            GPU_SCOPE(t.cl, ProfilerScopes::kPassPointShadow);
             renderer->Transition(t.cl, D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
                 static_cast<UINT>(faceIndex % 6), /*clear=*/true);

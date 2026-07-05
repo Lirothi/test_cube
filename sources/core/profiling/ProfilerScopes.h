@@ -34,6 +34,7 @@ extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassLighting;
 extern const Profiler::ScopeNameKey kPassSpotShadow;
+extern const Profiler::ScopeNameKey kPassPointShadow;
 extern const Profiler::ScopeNameKey kSpotShadowPerLight;
 extern const Profiler::ScopeNameKey kPassSpotLights;
 extern const Profiler::ScopeNameKey kPassPointLights;
