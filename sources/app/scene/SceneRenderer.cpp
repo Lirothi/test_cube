@@ -20,6 +20,7 @@
 #include "rendering/core/RenderPass.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/ShadowGpuData.h"
+#include "rendering/renderables/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
@@ -429,6 +430,17 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
             Pass_GBuffer(renderer, ctx, *frame_->camera, *frame_->mainView);
         });
+
+    // Rung 2 / Step 19: VSM page-request pass — reads the camera depth (after GBuffer), marks the
+    // virtual pages the frame needs. Independent consumer of depth (its output is unused for now),
+    // so it doesn't gate lighting. Manages the request-buffer UAV state itself.
+    auto pVsmPageRequest = rg.AddPass(RenderPass::Main_VsmPageRequest, { pGbuf },
+        { { D.depth.Get(), kSrvAll } },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassVsmPageRequest);
+            Pass_VsmPageRequest(renderer, ctx);
+        });
+    (void)pVsmPageRequest;
 
     auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
         { { D.gb0.Get(), kSrvAll },
@@ -893,6 +905,51 @@ void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext c
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassShadowCull);
         frame_->shadowGpu->RecordCull(renderer, t.cl);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    // Rung 2 / Step 19: mark the virtual shadow pages the visible frame needs. Runs after the
+    // GBuffer (needs camera depth); output is the request bitfield, consumed by Step 20 (unused
+    // yet). Builds the constants (camera + the shadow views' viewProj) in the Rung-0 slot layout
+    // [4 cascades | spots | point-faces], then the VSM records the clear + request dispatches.
+    if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
+
+    const auto& D = renderer->GetDeferredForFrame();
+    const UINT rw = renderer->GetRenderWidth();
+    const UINT rh = renderer->GetRenderHeight();
+
+    vsm::PageRequestConstants cb{};
+    const SceneView& mv = *frame_->mainView;
+    cb.invView = mv.invView.m;
+    cb.invProj = mv.invProj.m;
+    cb.camPosWS = DirectX::XMFLOAT4(mv.position.x, mv.position.y, mv.position.z, 0.0f);
+    cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
+                                  rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
+
+    std::uint32_t slot = 0;
+    auto addView = [&](const SceneView& v, bool active)
+    {
+        if (slot >= vsm::kMaxVirtualViews) { return; }
+        cb.views[slot].viewProj = (v.view * v.proj).m;
+        const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
+        cb.views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
+        ++slot;
+    };
+    for (const SceneView& v : *frame_->cascadeViews) { addView(v, true); }
+    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
+    { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
+    const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
+    { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+    cb.numViews = slot;
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRequest);
+        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, D.depthSRV, rw, rh);
     }
     ctx.EndCL(t);
 }

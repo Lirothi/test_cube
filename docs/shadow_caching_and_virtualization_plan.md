@@ -458,6 +458,19 @@ sub-triangle page granularity), but it is genuinely viable on Rung 0's back. Ste
 "is virtual addressing a net win over plain Rung 0 indirect shadows?" — not "was GPU-driven
 even possible?". Keep the Rung 0 (non-virtual) path behind a runtime toggle as the fallback.
 
+**Scope + ordering correction (added after implementing Steps 18/19).** The VSM page pipeline
+(Steps 18–23) targets the **LOCAL lights first** — spot lights + point-light cube faces. The
+**directional shadow stays on the existing CSM** (`Pass_CSM`, 4 cascades) UNCHANGED through
+Steps 18–23, and is only virtualized in **Step 24**, where the clipmap REPLACES the cascades
+(so the cascades are eliminated by Step 24, not before — do not treat them as VSM "virtual
+views" in Steps 19–23). **Two things a naïve single-level request gets wrong (measured in
+Step 19: ~57k pages requested vs a 1024-page pool, 56× over):** (1) no mip/LOD means every
+receiver — near or far — requests a page at the finest `kVirtualRes` level, so far geometry
+requests orders of magnitude more page-area than it needs; (2) a uniform `kVirtualRes=8192` is
+~32× the old spot/point maps (512²/256²), so local lights over-subscribe massively. **Both are
+fixed by Step 19b BEFORE Step 20** — a bounded request is the prerequisite for allocation to be
+meaningful.
+
 ---
 
 ### Step 18 — Physical page pool + page-table resources
@@ -471,6 +484,10 @@ even possible?". Keep the Rung 0 (non-virtual) path behind a runtime toggle as t
   Add SRVs/UAVs/DSVs. These are PERSISTENT (cross-frame), not per-frame-tripled — the pool IS
   the cache.
 - **Verify:** builds 0/0; `--scene-stress-gbv` clean (unused resources must not perturb).
+- **DONE (uncommitted):** `VirtualShadowMap` class — 4096² D16 pool (1024 pages, 32 MB) + page
+  table `StructuredBuffer<uint>`. **Sizing note:** the initial flat level-0-only page table +
+  `kVirtualRes=8192` is REVISED by Step 19b (per-mip page-pyramid layout + local-light-only
+  view set + right-sized `kVirtualRes` per light type).
 
 ### Step 19 — Screen-space page-request pass
 
@@ -483,13 +500,45 @@ even possible?". Keep the Rung 0 (non-virtual) path behind a runtime toggle as t
   (F-key) that colors marked pages.
 - **Verify:** run the app; debug-viz shows a sane, camera-following set of requested pages
   (dense near, sparse far). `--scene-stress` Debug CLEAN; GBV clean.
+- **DONE (uncommitted) — SINGLE-LEVEL, transitional:** request bitfield UAV + clear/mark
+  compute shaders (`vsm_page_request_clear_cs.hlsl`, `vsm_page_request_cs.hlsl`); reconstruct
+  world from camera depth, project into each shadow view, mark the finest-level page. Verified
+  via a readback count-log (F-key screen-color viz deferred). **Two deliberate gaps handled by
+  Step 19b:** (a) NO mip selection — every pixel marks a finest-level page → ~57k requested;
+  (b) it transitionally projected into the 4 CSM cascades too — WRONG (directional stays on CSM
+  until Step 24). The mark math (reconstruct → project → page id) is the reusable core.
+
+### Step 19b — Mip-level page requests + local-light scope + right-sized virtual res  *(PREREQUISITE FOR STEP 20 — do before it)*
+
+- **Goal:** bound the page-request set so it fits the pool (target: total requested pages ≲ pool
+  size with headroom). Without this, Step 20's allocation has nothing sane to do (56× over).
+- **Changes:**
+  - **Local-light scope.** Restrict the VSM virtual views to spot lights + point-light cube
+    faces (drop the 4 CSM cascade slots from Step 19's request). Directional keeps rendering via
+    the existing `Pass_CSM` until Step 24. `kMaxVirtualViews` → `kMaxShadowedSpotLights` +
+    `kMaxShadowedPointLights*6` (= 8 + 24 = 32), no cascades.
+  - **Per-mip addressing.** Give each virtual view a mip pyramid: level L has
+    `(kVirtualRes>>L)/kPageSize` pages per axis, down to 1×1. Per-view page count becomes the
+    pyramid sum (e.g. 2048²: 16²+8²+4²+2²+1 = 341). Re-lay-out the page table + request bitfield
+    with per-(view,level) base offsets. Encode the level in the `(view, level, page)` request.
+  - **Level selection.** Per pixel per view, pick the mip level so shadow-texel density ≈
+    screen-pixel density — a distance heuristic first (`level = clamp(log2(dist / refDist), 0,
+    maxLevel)`), refine to `ddx/ddy` of the shadow UV later. Mark the page at THAT level.
+  - **Right-size `kVirtualRes` per light type.** 8192² is ~32× the old spot/point maps; use a
+    lower base for local lights (e.g. spot 2048², point-face 1024² — tune against the request
+    count log). Directional keeps its (future) clipmap res in Step 24.
+- **Verify:** the request-count log drops from ~57k to ≲ pool with headroom; per-view counts
+  are dense-near / sparse-far as the camera moves (mip levels working). `--scene-stress` +
+  `--scene-stress-gbv` CLEAN. This bounded, mip-aware, local-light request is the input Step 20
+  allocates from.
 
 ### Step 20 — Page allocation / free + persistent page table
 
 - **Goal:** turn requests into physical-page assignments, with cross-frame caching.
-- **Changes:** a compute pass consuming Step 19's requests: for each requested page not already
-  resident → allocate a free physical page (from a free-list); mark newly-allocated or
-  invalidated pages into a "needs-render" list; free (LRU) pages not requested for N frames.
+- **Changes:** a compute pass consuming Step 19b's bounded mip-aware local-light requests: for
+  each requested page not already resident → allocate a free physical page (from a free-list);
+  mark newly-allocated or invalidated pages into a "needs-render" list; free (LRU) pages not
+  requested for N frames.
   Maintain the page table + free-list + LRU state PERSISTENTLY across frames (this is the
   cross-frame GPU state VSM hinges on). Invalidation hooks come from Rung 1 (light moved →
   invalidate that light's pages; static caster changed → invalidate overlapping pages).
@@ -501,12 +550,14 @@ even possible?". Keep the Rung 0 (non-virtual) path behind a runtime toggle as t
 
 - **Goal:** shading reads through the page table. Do this behind a runtime toggle and validate
   parity against the Rung-1 path before rendering into pages.
-- **Changes:** update the shadow sampling in `spotlight_cs.hlsl`, `pointlight_cs.hlsl`,
-  `glass.hlsl` (and CSM sampling in the lighting pass) to: project into virtual space → look
-  up the page table → sample the physical page (with the same depth-compare + PCF). Handle
-  not-resident (fall back to lit, or to a coarser resident level). Mirror the existing
+- **Changes:** update the shadow sampling for the LOCAL lights — `spotlight_cs.hlsl`,
+  `pointlight_cs.hlsl`, `glass.hlsl` — to: project into virtual space → look up the page table →
+  sample the physical page (with the same depth-compare + PCF). Handle not-resident (fall back
+  to lit, or to a coarser resident level). Mirror the existing
   `PointShadowFactor`/`ComputeSpotShadow` structure; pass page-table SRV + pool SRV + page
-  constants like the spot `invShadowSize` plumbing.
+  constants like the spot `invShadowSize` plumbing. **Directional/CSM sampling in the lighting
+  pass is NOT touched here — it stays on the current cascade path until Step 24 moves directional
+  onto the clipmap + page table.**
 - **Verify (runtime-compiled → must run):** with the pool pre-filled from the Rung-1 renderer
   (temporary bridge), the virtual sampler must match the Rung-1 image. `--scene-stress` Debug
   CLEAN; GBV clean (new SRV-table slots).
@@ -540,14 +591,17 @@ even possible?". Keep the Rung 0 (non-virtual) path behind a runtime toggle as t
 - **Verify:** debug counter of "pages rendered this frame" → near-zero when camera + scene are
   static, small when a dynamic object moves. `--scene-stress` Debug CLEAN. Measure vs Rung 1.
 
-### Step 24 — Directional clipmap (replace/augment CSM)
+### Step 24 — Directional clipmap (REPLACES CSM — this is where cascades are eliminated)
 
 - **Goal:** crisp directional shadows at distance + camera-move caching (only edge pages
-  rebuild on recenter, vs. a whole cascade).
+  rebuild on recenter, vs. a whole cascade). **This is the step that removes cascades:** through
+  Steps 18–23 directional ran on the untouched CSM (`Pass_CSM`); here it moves onto the clipmap +
+  the shared page pool, and `UpdateCascades`/`Pass_CSM` are deleted. End state = no cascades.
 - **Changes:** replace the 4-cascade `UpdateCascades`/`Pass_CSM` with a virtual clipmap: N
   nested levels centered on the camera, each a virtual shadow map addressed through the same
-  page pool + table, page-cached across camera motion. Sampling picks the clipmap level by
-  distance. Large; a standalone sub-milestone.
+  page pool + table (add directional as clipmap-level "views" to the request/alloc/sample/render
+  steps, mip-selected by distance like the local lights), page-cached across camera motion.
+  Sampling picks the clipmap level by distance. Large; a standalone sub-milestone.
 - **Verify:** directional shadow parity/quality vs CSM at near range, better at distance; page
   churn only at level edges when the camera moves. Full stress + GBV.
 

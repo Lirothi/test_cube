@@ -29,6 +29,7 @@ extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassObjectCompute;
 extern const Profiler::ScopeNameKey kPassShadowCull;
+extern const Profiler::ScopeNameKey kPassVsmPageRequest;
 extern const Profiler::ScopeNameKey kPassCSM;
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;

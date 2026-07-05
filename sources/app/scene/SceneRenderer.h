@@ -74,6 +74,7 @@ private:
         const std::array<SceneView, kCascades>& cascadeViews);
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView);
+    void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,

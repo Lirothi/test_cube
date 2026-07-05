@@ -799,6 +799,7 @@ void Scene::Render(Renderer* renderer) {
     // mapped upload memory; no consumer yet.
     shadowGpu_.UpdateForFrame(renderer, objects_);
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
+    vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
 
     PrepareViews(renderer);
 
