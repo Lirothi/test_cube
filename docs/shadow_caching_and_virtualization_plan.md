@@ -576,6 +576,32 @@ meaningful.
 - **Verify:** debug-viz shows pages persisting frame-to-frame when the camera is still
   (cache), and only edges churning as it moves. GBV clean (cross-frame UAV state is a common
   GBV/state-tracker pitfall — this is a key run).
+- **DONE (uncommitted) 2026-07-05:** GPU-driven allocation with cross-frame caching. Added 5
+  PERSISTENT DEFAULT-heap `RWStructuredBuffer<uint>` (kept in UNORDERED_ACCESS, survive level
+  switches with the pool): `physOwner` (physical→virtual, or INVALID), `physLastFrame` (LRU
+  clock), `freeList`, `needsRender` (Step-22 input), `allocCounters[4]` (free/needs/fail/
+  resident). Four compute shaders run each frame in `RecordPageAllocate` right after
+  `RecordPageRequest` (same CL — request buffer stays UAV between them): **init** (one-shot:
+  clear page table + mark all pages free), **touch** (per virtual page: keep resident+requested
+  pages alive via `physLastFrame=curFrame`, + reset counters), **build-free** (per physical
+  page: evict pages unrequested for ≥`kLruFrameThreshold=16` frames — clear their page-table
+  entry + release — and append free pages to the free list), **allocate** (per virtual page:
+  requested-but-not-resident → atomic-pop a free page, write `pageTable[v]=resident|phys`, claim
+  owner/last-frame, append to needs-render; pool-full → fail counter). Page-table entry packing
+  unchanged (bit31 resident | bits0-15 physical). UAV barriers between the 4 ordered passes. Gate
+  is still `g_vsmPageRequestEnabled` (default OFF; Ctrl+V) — add-dormant (nothing samples the page
+  table or renders pages until Steps 21/22). Debug readback now reports request mip-histogram +
+  `resident`/`newThisFrame`/`fail`. **VERIFIED (gate temp-ON, reverted): both configs 0/0;
+  `--scene-stress-gbv=120` + `--scene-stress=300` CLEAN (only known-noise {939,940,1006,1358} —
+  the cross-frame UAV alloc state added NO new GBV surface, the doc's flagged pitfall); all 6 VSM
+  shaders compile.** Caching confirmed across churn samples: demo (872 requested) →
+  `resident=879 newThisFrame=4 fail=0` (nearly all cached — only 4 new allocs, fits pool); another
+  level → `request=235 resident=421 newThisFrame=0` (stable request set fully served from cache).
+  DEFERRED: **Rung-1 invalidation hooks** (light-moved / static-caster-changed → invalidate that
+  light's/overlapping pages) belong to **Step 23** (they need Steps 21/22 rendering to matter);
+  Step 20 is pure request→resident LRU allocation. Screen-space debug-viz (camera-follow visual)
+  still deferred — verified via the resident/new/fail counters instead. NEXT = **Step 21**
+  (virtual→physical sampling in the local-light shadow samplers, behind a toggle, parity-checked).
 
 ### Step 21 — Virtual→physical sampling in the shadow samplers
 

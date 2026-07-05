@@ -217,7 +217,7 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
     const double perUse = (row.usages ? (row.avgMs / static_cast<double>(row.usages)) : 0.0);
     wchar_t buf[192];
     std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-        L"%-35s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
+        L"%-50s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
         name->c_str(), row.avgMs, row.maxMs, perUse, row.usages);
     row.formatted.assign(buf);
 }
@@ -1268,7 +1268,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
     const int namePad = 35;
     const int otherCols = 1 + 28;
     const int lineCols = namePad + otherCols + 16;
-    const double charW = 0.60 * 18.0;
+    const double charW = 0.60 * 21.0;
     const double needW = charW * (double)lineCols;
     overlayWidthPx_ = overlayWidthPx_ * 0.9 + needW * 0.1;
     const double boxW = std::max(overlayWidthPx_, 480.0);
@@ -1312,7 +1312,7 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 
     // Rows
     int shown = 0;
-    const float4 colOdd = { 1, 1, 1,   0.92f };
+    const float4 colOdd = { 1, 1, 1, 0.92f };
     const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };
     for (const auto& r : rows) {
         if (shown >= maxLines) { break; }

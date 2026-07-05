@@ -162,12 +162,100 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         dev->CreateUnorderedAccessView(requestBuffer_.Get(), nullptr, &rqUd, requestUav_);
     }
 
+    // Step 20: the persistent page-allocation state (owner/last-frame/free-list/counters).
+    EnsureAllocResources(renderer);
+
     char buf[192];
     std::snprintf(buf, sizeof(buf),
         "[VSM] allocated: pool %ux%u D16 (%u pages), page table %u entries (%.2f MB pool).\n",
         vsm::kPoolTexels, vsm::kPoolTexels, vsm::kPoolPageCount, vsm::kPageTableEntries,
         (static_cast<double>(vsm::kPoolTexels) * vsm::kPoolTexels * 2.0) / (1024.0 * 1024.0));
     OutputDebugStringA(buf);
+}
+
+namespace
+{
+    // A persistent DEFAULT-heap RWStructuredBuffer<uint>[numUints] (ALLOW_UNORDERED_ACCESS,
+    // created COMMON). Used for the Step-20 allocation state buffers.
+    Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavUintBuffer(ID3D12Device* dev,
+        std::uint32_t numUints, const wchar_t* name)
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> res;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC bd{};
+        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bd.Width = static_cast<UINT64>(numUints) * sizeof(std::uint32_t);
+        bd.Height = 1;
+        bd.DepthOrArraySize = 1;
+        bd.MipLevels = 1;
+        bd.Format = DXGI_FORMAT_UNKNOWN;
+        bd.SampleDesc.Count = 1;
+        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
+        {
+            return nullptr;
+        }
+        res->SetName(name);
+        return res;
+    }
+}
+
+void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
+{
+    if (allocCounters_) { return; } // already created (persistent)
+    if (!renderer || !renderer->GetDevice()) { return; }
+    ID3D12Device* dev = renderer->GetDevice();
+
+    physOwner_     = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwner");
+    physLastFrame_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysLastFrame");
+    freeList_      = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList");
+    needsRender_   = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender");
+    allocCounters_ = CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters");
+    if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_)
+    {
+        physOwner_.Reset(); physLastFrame_.Reset(); freeList_.Reset();
+        needsRender_.Reset(); allocCounters_.Reset();
+        return;
+    }
+    renderer->SetResourceState(physOwner_.Get(), D3D12_RESOURCE_STATE_COMMON);
+    renderer->SetResourceState(physLastFrame_.Get(), D3D12_RESOURCE_STATE_COMMON);
+    renderer->SetResourceState(freeList_.Get(), D3D12_RESOURCE_STATE_COMMON);
+    renderer->SetResourceState(needsRender_.Get(), D3D12_RESOURCE_STATE_COMMON);
+    renderer->SetResourceState(allocCounters_.Get(), D3D12_RESOURCE_STATE_COMMON);
+
+    // One non-shader-visible heap for the 5 alloc-state UAVs (staged into the frame heap per
+    // dispatch alongside the existing pageTable/request UAVs).
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.NumDescriptors = 5;
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(allocUavHeap_.GetAddressOf()))) || !allocUavHeap_)
+    {
+        allocUavHeap_.Reset();
+        return;
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = allocUavHeap_->GetCPUDescriptorHandleForHeapStart();
+    auto makeUav = [&](ID3D12Resource* res, std::uint32_t numUints, UINT slot)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE h{ base.ptr + static_cast<SIZE_T>(slot) * incr };
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_UNKNOWN;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        ud.Buffer.FirstElement = 0;
+        ud.Buffer.NumElements = numUints;
+        ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        dev->CreateUnorderedAccessView(res, nullptr, &ud, h);
+        return h;
+    };
+    physOwnerUav_     = makeUav(physOwner_.Get(),     vsm::kPoolPageCount, 0);
+    physLastFrameUav_ = makeUav(physLastFrame_.Get(), vsm::kPoolPageCount, 1);
+    freeListUav_      = makeUav(freeList_.Get(),      vsm::kPoolPageCount, 2);
+    needsRenderUav_   = makeUav(needsRender_.Get(),   vsm::kPoolPageCount, 3);
+    allocCountersUav_ = makeUav(allocCounters_.Get(), 4u,                  4);
 }
 
 void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
@@ -189,16 +277,34 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         cd.csEntry = "CSMain";
         pageRequestMat_ = mm->GetOrCreateCompute(renderer, cd);
     }
-    if (!pageRequestClearMat_ || !pageRequestClearMat_->GetPipelineState() ||
-        !pageRequestMat_ || !pageRequestMat_->GetPipelineState())
+    // Step 20: page-allocation compute PSOs.
+    auto makeCompute = [&](const wchar_t* file)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = file;
+        cd.csEntry = "CSMain";
+        return mm->GetOrCreateCompute(renderer, cd);
+    };
+    allocInitMat_  = makeCompute(L"shaders/vsm_page_alloc_init_cs.hlsl");
+    allocTouchMat_ = makeCompute(L"shaders/vsm_page_alloc_touch_cs.hlsl");
+    allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
+    allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
+
+    auto ok = [](const std::shared_ptr<Material>& m) { return m && m->GetPipelineState(); };
+    if (!ok(pageRequestClearMat_) || !ok(pageRequestMat_))
     {
         OutputDebugStringA("[VSM] page-request PSO creation FAILED (shader compile?).\n");
         pageRequestClearMat_.reset();
         pageRequestMat_.reset();
     }
+    else if (!ok(allocInitMat_) || !ok(allocTouchMat_) || !ok(allocFreeMat_) || !ok(allocMapMat_))
+    {
+        OutputDebugStringA("[VSM] page-alloc PSO creation FAILED (shader compile?).\n");
+        allocInitMat_.reset(); allocTouchMat_.reset(); allocFreeMat_.reset(); allocMapMat_.reset();
+    }
     else
     {
-        OutputDebugStringA("[VSM] page-request shaders ready.\n");
+        OutputDebugStringA("[VSM] page-request + page-alloc shaders ready.\n");
     }
 }
 
@@ -236,58 +342,140 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
         noSampler,
         reqW, reqH,
         requestBuffer_.Get());
+    // Leaves requestBuffer_ in UNORDERED_ACCESS (the mark dispatch's UAV barrier) so
+    // RecordPageAllocate, called right after this on the same command list, can read it.
+}
 
-    // Step 19 validation (temporary): read the request bitfield back to log requested-page counts
-    // kFrameCount frames later. Re-arms every ~kRequestReadbackPeriod frames (PollPageRequestDebug)
-    // so a live/stress run samples several times as the camera + scene change.
-    if (requestReadbackState_ == 0 && renderer->GetTotalFrameNumber() > render::kFrameCount)
+void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer || !cl || !IsAllocated() || !allocCounters_ || !allocUavHeap_) { return; }
+    EnsureShaderResources(renderer);
+    if (!allocInitMat_ || !allocTouchMat_ || !allocFreeMat_ || !allocMapMat_) { return; }
+
+    const std::uint32_t numEntries = vsm::kPageTableEntries;
+    const std::uint32_t numPages = vsm::kPoolPageCount;
+    const std::uint32_t curFrame = static_cast<std::uint32_t>(renderer->GetTotalFrameNumber());
+
+    // These persistent buffers live in UNORDERED_ACCESS between frames; a debug-readback frame
+    // parks request/counters in COPY_SOURCE, so re-assert UAV at the top (idempotent otherwise).
+    renderer->Transition(cl, pageTable_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, physLastFrame_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold; };
+    auto writeCB = [&](std::uint8_t* dst)
     {
-        if (!requestReadback_)
-        {
-            D3D12_HEAP_PROPERTIES rb{};
-            rb.Type = D3D12_HEAP_TYPE_READBACK;
-            D3D12_RESOURCE_DESC rd{};
-            rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            rd.Width = static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t);
-            rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
-            rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
-            rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
-            renderer->GetDevice()->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(requestReadback_.GetAddressOf()));
-        }
-        if (requestReadback_)
-        {
-            renderer->Transition(cl, requestBuffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-            cl->CopyBufferRegion(requestReadback_.Get(), 0, requestBuffer_.Get(), 0,
-                                 static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t));
-            requestReadbackFrame_ = renderer->GetTotalFrameNumber();
-            requestReadbackState_ = 1;
-        }
+        AllocCB c{ numEntries, numPages, curFrame, vsm::kLruFrameThreshold };
+        std::memcpy(dst, &c, sizeof(c));
+    };
+    const UINT cbSize = static_cast<UINT>(sizeof(AllocCB));
+    const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
+
+    // Pass 0 (one-shot): clear the page table + mark all physical pages free. Persists across
+    // frames + level switches (the pool IS the cache), so this runs exactly once.
+    if (!allocInitialized_)
+    {
+        RecordComputeDispatch(renderer, cl, allocInitMat_.get(), cbSize, writeCB,
+            {},
+            { pageTableUav_, physOwnerUav_, physLastFrameUav_ },
+            noSampler,
+            numEntries, 1,
+            pageTable_.Get());
+        renderer->UAVBarrier(cl, physOwner_.Get());
+        renderer->UAVBarrier(cl, physLastFrame_.Get());
+        allocInitialized_ = true;
     }
+
+    // Pass 1 (touch): keep resident+requested pages alive (LRU) + reset this frame's counters.
+    RecordComputeDispatch(renderer, cl, allocTouchMat_.get(), cbSize, writeCB,
+        {},
+        { requestUav_, pageTableUav_, physLastFrameUav_, allocCountersUav_ },
+        noSampler,
+        numEntries, 1,
+        physLastFrame_.Get());
+    renderer->UAVBarrier(cl, allocCounters_.Get());
+
+    // Pass 2 (build free list): evict LRU-stale pages, append free physical pages to the list.
+    RecordComputeDispatch(renderer, cl, allocFreeMat_.get(), cbSize, writeCB,
+        {},
+        { physOwnerUav_, physLastFrameUav_, pageTableUav_, freeListUav_, allocCountersUav_ },
+        noSampler,
+        numPages, 1,
+        freeList_.Get());
+    renderer->UAVBarrier(cl, allocCounters_.Get());
+    renderer->UAVBarrier(cl, pageTable_.Get());
+    renderer->UAVBarrier(cl, physOwner_.Get());
+
+    // Pass 3 (allocate): map each requested-but-not-resident page to a free physical page + append
+    // it to the needs-render list.
+    RecordComputeDispatch(renderer, cl, allocMapMat_.get(), cbSize, writeCB,
+        {},
+        { requestUav_, pageTableUav_, physOwnerUav_, physLastFrameUav_, freeListUav_, needsRenderUav_, allocCountersUav_ },
+        noSampler,
+        numEntries, 1,
+        needsRender_.Get());
+
+    // Step 20 debug: sample the request bitfield + alloc counters a few frames later.
+    RecordDebugReadback(renderer, cl);
+}
+
+void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (debugReadbackState_ != 0 || renderer->GetTotalFrameNumber() <= render::kFrameCount) { return; }
+
+    const UINT64 reqBytes = static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t);
+    const UINT64 cntBytes = 4ull * sizeof(std::uint32_t);
+    if (!debugReadback_)
+    {
+        D3D12_HEAP_PROPERTIES rb{};
+        rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = reqBytes + cntBytes;
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        renderer->GetDevice()->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(debugReadback_.GetAddressOf()));
+    }
+    if (!debugReadback_) { return; }
+
+    renderer->Transition(cl, requestBuffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cl->CopyBufferRegion(debugReadback_.Get(), 0, requestBuffer_.Get(), 0, reqBytes);
+    renderer->Transition(cl, allocCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cl->CopyBufferRegion(debugReadback_.Get(), reqBytes, allocCounters_.Get(), 0, cntBytes);
+    debugReadbackFrame_ = renderer->GetTotalFrameNumber();
+    debugReadbackState_ = 1;
 }
 
 void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
 {
     if (!renderer) { return; }
-    // Re-arm a new sample once the cooldown elapses (see RecordPageRequest).
-    if (requestReadbackState_ == 2 &&
-        renderer->GetTotalFrameNumber() >= requestReadbackDoneFrame_ + kRequestReadbackPeriod)
+    // Re-arm a new sample once the cooldown elapses (see RecordDebugReadback).
+    if (debugReadbackState_ == 2 &&
+        renderer->GetTotalFrameNumber() >= debugReadbackDoneFrame_ + kRequestReadbackPeriod)
     {
-        requestReadbackState_ = 0;
+        debugReadbackState_ = 0;
         return;
     }
-    if (requestReadbackState_ != 1 || !requestReadback_) { return; }
-    if (renderer->GetTotalFrameNumber() < requestReadbackFrame_ + render::kFrameCount) { return; }
+    if (debugReadbackState_ != 1 || !debugReadback_) { return; }
+    if (renderer->GetTotalFrameNumber() < debugReadbackFrame_ + render::kFrameCount) { return; }
 
-    const size_t bytes = static_cast<size_t>(vsm::kRequestWords) * sizeof(std::uint32_t);
-    D3D12_RANGE readRange{ 0, bytes };
+    const size_t reqBytes = static_cast<size_t>(vsm::kRequestWords) * sizeof(std::uint32_t);
+    const size_t cntBytes = 4 * sizeof(std::uint32_t);
+    D3D12_RANGE readRange{ 0, reqBytes + cntBytes };
     void* mapped = nullptr;
-    if (FAILED(requestReadback_->Map(0, &readRange, &mapped)) || !mapped)
+    if (FAILED(debugReadback_->Map(0, &readRange, &mapped)) || !mapped)
     {
-        requestReadbackState_ = 2;
+        debugReadbackState_ = 2;
         return;
     }
     const auto* words = reinterpret_cast<const std::uint32_t*>(mapped);
+    const auto* counters = reinterpret_cast<const std::uint32_t*>(
+        static_cast<const std::uint8_t*>(mapped) + reqBytes);
 
     auto isSet = [&](std::uint32_t page) { return (words[page >> 5u] & (1u << (page & 31u))) != 0u; };
 
@@ -307,15 +495,22 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
         }
     }
 
-    const D3D12_RANGE noWrite{ 0, 0 };
-    requestReadback_->Unmap(0, &noWrite);
+    // Alloc counters (VSM_CNT_*): resident = carried-over survivors + newly allocated this frame.
+    const std::uint32_t freeCount = counters[0]; // post-allocate: leftover free pages (may underflow if pool full)
+    const std::uint32_t newAlloc  = counters[1]; // pages allocated (needs-render) this frame
+    const std::uint32_t failCount = counters[2]; // requested pages that couldn't allocate (pool full)
+    const std::uint32_t resident  = counters[3] + newAlloc;
+    (void)freeCount;
 
-    char buf[224];
+    const D3D12_RANGE noWrite{ 0, 0 };
+    debugReadback_->Unmap(0, &noWrite);
+
+    char buf[288];
     std::snprintf(buf, sizeof(buf),
-        "[VSM] page request: %u pages total (L0=%u L1=%u L2=%u L3=%u L4=%u; %u local views, %u/view, pool=%u).\n",
+        "[VSM] request %u pages (L0=%u L1=%u L2=%u L3=%u L4=%u) | alloc: resident=%u newThisFrame=%u fail=%u (pool=%u).\n",
         total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
-        vsm::kMaxVirtualViews, vsm::kPagesPerView, vsm::kPoolPageCount);
+        resident, newAlloc, failCount, vsm::kPoolPageCount);
     OutputDebugStringA(buf);
-    requestReadbackState_ = 2;
-    requestReadbackDoneFrame_ = renderer->GetTotalFrameNumber();
+    debugReadbackState_ = 2;
+    debugReadbackDoneFrame_ = renderer->GetTotalFrameNumber();
 }

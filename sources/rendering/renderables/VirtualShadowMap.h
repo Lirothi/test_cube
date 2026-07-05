@@ -78,6 +78,11 @@ namespace vsm
     // steps one level coarser (dense-near / sparse-far). Tuned against the request-count log.
     inline constexpr float kLodRefDist = 10.0f;
 
+    // Step 20 allocation: free a resident physical page that has not been requested for this many
+    // frames (LRU). Small enough that pages the camera moved off release promptly; large enough
+    // not to thrash pages that flicker in/out of the sub-sampled request set.
+    inline constexpr std::uint32_t kLruFrameThreshold = 16;
+
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
     struct alignas(16) ViewProjEntry
@@ -126,9 +131,18 @@ public:
                            const vsm::PageRequestConstants& constants,
                            D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH);
 
-    // Step 19 (temporary): once, a few frames in, read back the request bitfield and log the
-    // total + per-first-few-views requested-page counts, so the mechanism is verifiable
-    // (counts change as the camera moves). Call once per frame (main thread).
+    // Step 20: consume the request bitfield produced by RecordPageRequest (same command list,
+    // right after it) and turn it into physical-page assignments with cross-frame caching: touch
+    // resident+requested pages (LRU keep-alive), free LRU-stale pages back to a free list, then
+    // allocate a physical page for each requested-but-not-resident page and append it to the
+    // needs-render list (Step 22 input). Persists the page table + free-list/LRU state across
+    // frames. Nothing samples/renders the pages yet (add-dormant). Also records the debug readback.
+    void RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+
+    // Step 19/20 (temporary): a few frames in, read back the request bitfield + allocation
+    // counters and log the requested-page mip histogram + resident/newly-allocated/failed counts,
+    // so caching is verifiable (resident stabilizes, newly-allocated ~0 when the scene is stable).
+    // Re-armed periodically. Call once per frame (main thread).
     void PollPageRequestDebug(Renderer* renderer);
 
 private:
@@ -143,20 +157,44 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE pageTableUav_{};
 
     // Step 19: page-request bitfield (1 bit / virtual page) + its UAV. DEFAULT-heap; written +
-    // consumed in-frame (single buffer, cleared each frame). srvUavHeap slot 3.
+    // consumed in-frame (single buffer, cleared each frame).
     Microsoft::WRL::ComPtr<ID3D12Resource> requestBuffer_;
     D3D12_CPU_DESCRIPTOR_HANDLE           requestUav_{};
 
-    void EnsureShaderResources(Renderer* renderer); // lazily create the request compute PSOs
+    // Step 20: persistent (cross-frame — this IS the cache) page-allocation state. All DEFAULT-heap
+    // RWStructuredBuffer<uint>, kept in UNORDERED_ACCESS. physOwner/physLastFrame/free-list/LRU
+    // survive level switches with the pool + page table.
+    Microsoft::WRL::ComPtr<ID3D12Resource> physOwner_;     // [kPoolPageCount] physical -> virtual owner / INVALID
+    Microsoft::WRL::ComPtr<ID3D12Resource> physLastFrame_; // [kPoolPageCount] physical -> last requested frame
+    Microsoft::WRL::ComPtr<ID3D12Resource> freeList_;      // [kPoolPageCount] free physical indices (rebuilt per frame)
+    Microsoft::WRL::ComPtr<ID3D12Resource> needsRender_;   // [kPoolPageCount] pages allocated this frame (Step 22 input)
+    Microsoft::WRL::ComPtr<ID3D12Resource> allocCounters_; // [4] free / needs / fail / resident
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> allocUavHeap_; // the 5 alloc-state UAVs
+    D3D12_CPU_DESCRIPTOR_HANDLE physOwnerUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE physLastFrameUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE freeListUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE needsRenderUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE allocCountersUav_{};
+    bool allocInitialized_ = false; // one-shot page-table/owner init done
+
+    void EnsureShaderResources(Renderer* renderer); // lazily create all VSM compute PSOs
     std::shared_ptr<Material> pageRequestClearMat_;  // vsm_page_request_clear_cs.hlsl
     std::shared_ptr<Material> pageRequestMat_;       // vsm_page_request_cs.hlsl
+    std::shared_ptr<Material> allocInitMat_;         // vsm_page_alloc_init_cs.hlsl
+    std::shared_ptr<Material> allocTouchMat_;        // vsm_page_alloc_touch_cs.hlsl
+    std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
+    std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
     bool shaderResourcesTried_ = false;
 
-    // Step 19 validation: deferred readback of the request bitfield, re-armed periodically so a
-    // live/stress run samples the count several times.
+    // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed
+    // periodically so a live/stress run samples several times. The single readback buffer holds
+    // [request words | alloc counters].
     static constexpr std::uint64_t kRequestReadbackPeriod = 180; // frames between samples
-    Microsoft::WRL::ComPtr<ID3D12Resource> requestReadback_;
-    std::uint64_t requestReadbackFrame_ = 0;     // frame the copy was scheduled
-    std::uint64_t requestReadbackDoneFrame_ = 0; // frame the last sample logged
-    int           requestReadbackState_ = 0;     // 0 = not started, 1 = pending, 2 = done
+    Microsoft::WRL::ComPtr<ID3D12Resource> debugReadback_;
+    std::uint64_t debugReadbackFrame_ = 0;     // frame the copy was scheduled
+    std::uint64_t debugReadbackDoneFrame_ = 0; // frame the last sample logged
+    int           debugReadbackState_ = 0;     // 0 = not started, 1 = pending, 2 = done
+
+    void RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl); // Step 20: copy request+counters
+    void EnsureAllocResources(Renderer* renderer); // create the alloc buffers + descriptors
 };
