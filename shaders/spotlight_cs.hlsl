@@ -1,8 +1,10 @@
-#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : Texture2DArray Spot Shadow Atlas
 // t6     : StructuredBuffer<SpotLightData>
+// t7     : StructuredBuffer<uint> VSM page table (Rung 2 / Step 21)
+// t8     : Texture2D VSM physical page pool depth
 // u0     : Light accumulation RWTexture2D
 // s0     : LinearClamp
 // s1     : PointClamp
@@ -11,6 +13,7 @@
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
+#include "vsm_sample.hlsli"
 
 struct SpotLightData
 {
@@ -29,6 +32,8 @@ Texture2D GBVelocity : register(t3);
 Texture2D DepthT : register(t4);
 Texture2DArray SpotShadowAtlas : register(t5);
 StructuredBuffer<SpotLightData> SpotLights : register(t6);
+StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
+Texture2D VsmPool : register(t8);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
@@ -44,6 +49,9 @@ cbuffer SpotLightFrame : register(b0)
     float2 screenSize;
     float2 invScreenSize;
     float2 invShadowSize;
+    uint   useVsm;      // Rung 2 / Step 21: sample the VSM page pool instead of the atlas
+    float  vsmRefDist;  // VSM mip level-select reference distance
+    float2 _vsmPad;
 };
 
 float SampleShadowPCF(float3 uvw, float depth, float2 texel)
@@ -72,8 +80,16 @@ float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndo
 
     float normalBias = light.shadowParams2.x;
     float depthBias = light.shadowParams.w;
-
     float3 Poff = P + N * normalBias;
+
+    // Rung 2 / Step 21: sample through the VSM page table + physical pool instead of the atlas.
+    if (useVsm != 0u)
+    {
+        uint slot = (uint)light.shadowParams.y;
+        return VsmSpotShadow(slot, light.viewProj, Poff, camPosWS, vsmRefDist, depthBias,
+                             VsmPageTable, VsmPool, gSmpShadow);
+    }
+
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
     float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);

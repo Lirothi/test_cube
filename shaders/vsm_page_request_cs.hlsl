@@ -68,8 +68,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float distCam  = length(P - camPosWS.xyz);
     const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
     const uint  level    = (uint)clamp(rawLevel, 0, (int)maxLevel);
-    const uint  pagesAxis = kL0Axis >> level;
-    const uint  levelBase = kLevelOffset[level];
 
     const uint count = min(numViews, kMaxViews);
     for (uint v = 0; v < count; ++v)
@@ -82,15 +80,19 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f) { continue; }
         if (ndc.z < 0.0f || ndc.z > 1.0f) { continue; }
 
-        // Shadow UV (D3D clip -> UV, y flipped), then the virtual page it lands in at this level.
+        // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a
+        // mip chain): the sampler may pick a slightly different level per pixel, so keeping the
+        // coarser pages resident gives it something to fall back to (no distance pop-in). Coarser
+        // levels have very few pages (level 4 = 1/view), so the extra requests are cheap.
         float2 suv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-        uint pageX = min((uint)(suv.x * pagesAxis), pagesAxis - 1u);
-        uint pageY = min((uint)(suv.y * pagesAxis), pagesAxis - 1u);
-        uint page = v * kPagesPerView + levelBase + pageY * pagesAxis + pageX;
-
-        uint word = page >> 5u;
-        uint bit = page & 31u;
-        uint prev;
-        InterlockedOr(Request[word], 1u << bit, prev);
+        for (uint L = level; L <= maxLevel; ++L)
+        {
+            uint axisL = kL0Axis >> L;
+            uint pageX = min((uint)(suv.x * axisL), axisL - 1u);
+            uint pageY = min((uint)(suv.y * axisL), axisL - 1u);
+            uint page = v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX;
+            uint prev;
+            InterlockedOr(Request[page >> 5u], 1u << (page & 31u), prev);
+        }
     }
 }

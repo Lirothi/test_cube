@@ -21,6 +21,7 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "rendering/renderables/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 
@@ -500,6 +501,40 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     ImGui::TreePop();
                 }
 
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("VSM"))
+            {
+                ImGui::TextWrapped("Virtual Shadow Maps (Rung 2, experimental) for local spot lights. "
+                    "Tunes quality vs. cost live (no reallocation). Point/glass still use the atlas.");
+                ImGui::Separator();
+                ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &render::g_vsmPageRequestEnabled);
+                ImGui::BeginDisabled(!render::g_vsmPageRequestEnabled);
+
+                ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Smaller = coarser pages: fewer/faster + more stable, softer near.\n"
+                                      "Larger = sharper near but more resident pages + higher render cost.");
+
+                int ds = static_cast<int>(vsm::g_requestDownscale);
+                if (ImGui::SliderInt("Request downscale", &ds, 1, 8))
+                    vsm::g_requestDownscale = static_cast<std::uint32_t>(ds < 1 ? 1 : ds);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Screen sub-sampling for page discovery.\n"
+                                      "1 = full res (best coverage, costliest); higher = cheaper, may miss pages.");
+
+                int lru = static_cast<int>(vsm::g_lruThreshold);
+                if (ImGui::SliderInt("LRU eviction frames", &lru, 1, 120))
+                    vsm::g_lruThreshold = static_cast<std::uint32_t>(lru < 1 ? 1 : lru);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed.");
+
+                ImGui::EndDisabled();
+                ImGui::Separator();
+                ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",
+                    vsm::kPoolPageCount, vsm::kPoolTexels, vsm::kPoolTexels,
+                    vsm::g_refDist, vsm::g_requestDownscale, vsm::g_lruThreshold);
                 ImGui::EndTabItem();
             }
 

@@ -21,7 +21,7 @@ struct ResourceStateDecl {
     ID3D12Resource* resource = nullptr;   // null entries are skipped
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
 };
-using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 8>;
+using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 10>;
 
 struct RenderGraphPassContext {
     // Shared command-list state for a CL group (step 5). Lives on the group

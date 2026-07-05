@@ -72,6 +72,8 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     invShadowSize = material->ComputeCB0FieldHandle("invShadowSize");
+    useVsm = material->ComputeCB0FieldHandle("useVsm");
+    vsmRefDist = material->ComputeCB0FieldHandle("vsmRefDist");
 }
 
 void SceneSsrCBHandles::Populate(Material* material)
@@ -514,6 +516,8 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matSpotLightCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matSpotLightCS_->UpdateCBField(handles.invShadowSize, data.invShadowSize, dest);
+    matSpotLightCS_->UpdateCBField(handles.useVsm, data.useVsm, dest);
+    matSpotLightCS_->UpdateCBField(handles.vsmRefDist, data.vsmRefDist, dest);
 }
 
 void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, uint8_t* dest) const

@@ -442,6 +442,45 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         });
     (void)pVsmPageRequest;
 
+    // Rung 2 / Step 22: render shadow casters into the resident physical pages (depth-only into the
+    // VSM pool). Only wired when the VSM path is on, so the default render is untouched. Consumes
+    // Step 20's page table + Rung 0's per-view cull; the light passes (Step 21) read the pool.
+    // Perf: skip the VSM update (request + alloc + render) when the camera view is unchanged — the
+    // pool + page table persist, so last frame's content is still valid (the dominant cost, the
+    // ~O(pool) page-render draw loop, is what we save). The view matrix carries the camera
+    // transform with NO jitter (jitter lives in proj), so it is bit-stable when the camera is still.
+    vsmSkipUpdate_ = false;
+    if (render::g_vsmPageRequestEnabled && frame_->mainView)
+    {
+        if (vsmHasRendered_ && std::memcmp(&frame_->mainView->view, &vsmLastView_, sizeof(mat4)) == 0)
+        {
+            vsmSkipUpdate_ = true;
+        }
+        else
+        {
+            vsmLastView_ = frame_->mainView->view;
+            vsmHasRendered_ = true;
+        }
+    }
+    else
+    {
+        vsmHasRendered_ = false;
+    }
+
+    size_t pVsmPageRender = static_cast<size_t>(-1);
+    const bool vsmActive = render::g_vsmPageRequestEnabled && frame_->vsm && frame_->vsm->IsAllocated();
+    if (vsmActive)
+    {
+        // No declared pool state: RecordPageRender transitions the pool DEPTH_WRITE itself (the
+        // light passes declare it back to SRV). Ordering to the light passes is via their prereq.
+        pVsmPageRender = rg.AddPass(RenderPass::Main_VsmPageRender, { pVsmPageRequest },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassVsmPageRender);
+                Pass_VsmPageRender(renderer, ctx);
+            });
+    }
+    (void)pVsmPageRender;
+
     auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
         { { D.gb0.Get(), kSrvAll },
           { D.gb1.Get(), kSrvAll },
@@ -455,18 +494,44 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_Lighting(renderer, ctx, *frame_->camera);
         });
 
-    auto pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
-        { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
-          { D.gb0.Get(), kSrvAll },
-          { D.gb1.Get(), kSrvAll },
-          { D.gb2.Get(), kSrvAll },
-          { D.gbVelocity.Get(), kSrvAll },
-          { D.depth.Get(), kSrvAll },
-          { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassSpotLights);
-            Pass_SpotLights(renderer, ctx, *frame_->camera);
-        });
+    // Step 21: the spot lighting shader always binds the VSM page-table (t7) + pool (t8) SRVs, so
+    // when the VSM is allocated they must be in a readable state on entry (declared here). When VSM
+    // sampling is active, also order after the page render (fresh page content this frame).
+    auto spotFn = [this, renderer](RenderGraphPassContext ctx) {
+        CPU_SCOPE(ProfilerScopes::kPassSpotLights);
+        Pass_SpotLights(renderer, ctx, *frame_->camera);
+    };
+    const bool vsmAlloc = frame_->vsm && frame_->vsm->IsAllocated();
+    size_t pSpotLights;
+    if (vsmAlloc)
+    {
+        ID3D12Resource* vpool = frame_->vsm->PagePool();
+        ID3D12Resource* vpt = frame_->vsm->PageTable();
+        const std::initializer_list<ResourceStateDecl> spotDecls = {
+            { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+            { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
+            { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+            { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } };
+        if (vsmActive && pVsmPageRender != static_cast<size_t>(-1))
+        {
+            pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight, pVsmPageRender }, { pSpotShadow }, spotDecls, spotFn);
+        }
+        else
+        {
+            pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow }, spotDecls, spotFn);
+        }
+    }
+    else
+    {
+        pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
+            { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+            spotFn);
+    }
 
     // Depends on pPointShadow too: the cube must be rendered + transitioned to a
     // shader-readable state before this pass samples it (B3). kSrvAll keeps it readable
@@ -916,7 +981,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     // yet — so the pass is gated OFF by default, Ctrl+V to exercise/measure). LOCAL lights only:
     // the view slots are [spots | point-faces] (NO CSM cascades — directional stays on Pass_CSM
     // until Step 24). Per-view viewProj + a mip/refDist LOD param drive the request shader.
-    if (!render::g_vsmPageRequestEnabled) { return; }
+    if (!render::g_vsmPageRequestEnabled || vsmSkipUpdate_) { return; }
     if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();
@@ -930,8 +995,8 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.camPosWS = DirectX::XMFLOAT4(mv.position.x, mv.position.y, mv.position.z, 0.0f);
     cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
                                   rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
-    cb.lodParams = DirectX::XMFLOAT4(vsm::kLodRefDist, static_cast<float>(vsm::kMaxMipLevel),
-                                     static_cast<float>(vsm::kRequestDownscale), 0.0f);
+    cb.lodParams = DirectX::XMFLOAT4(vsm::g_refDist, static_cast<float>(vsm::kMaxMipLevel),
+                                     static_cast<float>(vsm::g_requestDownscale), 0.0f);
 
     std::uint32_t slot = 0;
     auto addView = [&](const SceneView& v, bool active)
@@ -958,6 +1023,38 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
         frame_->vsm->RecordPageAllocate(renderer, t.cl);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    // Rung 2 / Step 22: render casters into the resident VSM pages. Builds the LOCAL shadow views
+    // (spots then point faces — same slot layout as Pass_VsmPageRequest), then RecordPageRender
+    // does the GPU per-page setup + per-page ExecuteIndirect into the pool (DEPTH_WRITE via graph).
+    if (!render::g_vsmPageRequestEnabled || vsmSkipUpdate_) { return; }
+    if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated() || !frame_->shadowGpu) { return; }
+
+    std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
+    std::uint32_t slot = 0;
+    auto addView = [&](const SceneView& v, bool active)
+    {
+        if (slot >= vsm::kMaxVirtualViews) { return; }
+        views[slot].viewProj = (v.view * v.proj).m;
+        const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
+        views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
+        ++slot;
+    };
+    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
+    { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
+    const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
+    { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRender);
+        frame_->vsm->RecordPageRender(renderer, t.cl, frame_->shadowGpu, views.data(), slot);
     }
     ctx.EndCL(t);
 }
@@ -1615,6 +1712,15 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         }
     }
 
+    // Rung 2 / Step 21: the shader always binds the VSM page-table (t7) + pool (t8) SRVs (its root
+    // sig declares them); they exist once a level is loaded. Skip the frame if not (startup).
+    if (!frame_->vsm || !frame_->vsm->IsAllocated() ||
+        frame_->vsm->PageTableSrv().ptr == 0 || frame_->vsm->PagePoolSrv().ptr == 0)
+    {
+        return;
+    }
+    const bool vsmSample = render::g_vsmPageRequestEnabled;
+
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
     do
@@ -1658,11 +1764,14 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         const float invRes = shadowRes > 0.0f ? 1.0f / shadowRes : 0.0f;
         constants.invShadowSize = float2(invRes, invRes);
         constants.lightCount = static_cast<uint32_t>(spotLightCount);
+        constants.useVsm = vsmSample ? 1u : 0u;
+        constants.vsmRefDist = vsm::g_refDist;
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSpotLightConstants(constants, dest); },
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle },
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle,
+              frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

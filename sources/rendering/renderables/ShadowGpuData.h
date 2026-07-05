@@ -113,6 +113,10 @@ public:
     // Null until the shader resources are created (first RecordCull). Unused in Step 5.
     Material* IndirectShadowMaterial() const { return indirectShadowMat_.get(); }
 
+    // Rung 2 / Step 22: mesh-group id -> Mesh* (VB/IB for the per-page indirect draws, reusing this
+    // frame's per-view cull output). Empty until Rebuild.
+    const std::vector<const Mesh*>& GroupMeshes() const { return groupMesh_; }
+
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
     // `stride` bytes, persistently mapped, with one SRV per region. The shared boilerplate

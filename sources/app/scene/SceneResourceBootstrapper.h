@@ -62,6 +62,8 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle invShadowSize;
+    Material::CBFieldHandle useVsm;
+    Material::CBFieldHandle vsmRefDist;
 
     void Populate(Material* material);
 };
@@ -168,6 +170,8 @@ struct SpotLightPassConstants
     float2 screenSize{};
     float2 invScreenSize{};
     float2 invShadowSize{};
+    uint32_t useVsm = 0;      // Rung 2 / Step 21
+    float vsmRefDist = 10.0f;
 };
 
 struct SsrPassConstants

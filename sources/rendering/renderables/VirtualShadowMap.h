@@ -12,6 +12,7 @@
 class Renderer;
 class Material;
 class Camera;
+class ShadowGpuData;
 
 // Rung 2 (VSM-lite) addressing constants. A virtual shadow map is a conceptually huge
 // (kVirtualRes²) shadow surface split into kPageSize² pages; only the pages on-screen pixels
@@ -68,20 +69,30 @@ namespace vsm
     // Step 19: the page-request set is a bitfield (1 bit per virtual page).
     inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // 341 uints
 
-    // Step 19b perf: run the request pass at 1/kRequestDownscale per axis (≈1/64 the threads at 8),
-    // the biggest win over the ~1.2 ms full-res single-level pass. Coarse 128² pages + mip
-    // selection keep sub-sampled screen coverage adequate for page discovery.
-    inline constexpr std::uint32_t kRequestDownscale = 8;
+    // Step 19b perf: run the request pass at 1/kRequestDownscale per axis. Lower = denser screen
+    // sampling = better page coverage (fewer "missed" pages that show as a resident/lit
+    // checkerboard when the sampler needs a page the sub-sampled request never marked).
+    inline constexpr std::uint32_t kRequestDownscale = 4;
 
     // Step 19b level selection: level = clamp(log2(distCamera / kLodRefDist), 0, kMaxMipLevel).
     // Receivers within ~kLodRefDist of the camera use the finest level; each doubling of distance
-    // steps one level coarser (dense-near / sparse-far). Tuned against the request-count log.
-    inline constexpr float kLodRefDist = 10.0f;
+    // steps one level coarser. SMALLER = coarser overall = FEWER resident pages (the old spot atlas
+    // was 512² ≈ level 2; kVirtualRes=2048 level 0 is 16× finer per axis — wildly over-fine near,
+    // which both inflates the per-page render CPU cost and causes the sub-sample checkerboard).
+    inline constexpr float kLodRefDist = 5.0f;
 
     // Step 20 allocation: free a resident physical page that has not been requested for this many
     // frames (LRU). Small enough that pages the camera moved off release promptly; large enough
     // not to thrash pages that flicker in/out of the sub-sampled request set.
     inline constexpr std::uint32_t kLruFrameThreshold = 16;
+
+    // --- Runtime-tunable mirrors (dev-window "VSM" tab). The passes read THESE each frame, so a
+    // change applies live. They only feed per-frame CB values / the request dispatch size — NOT
+    // buffer sizing (kVirtualRes / kNumMipLevels / kPoolPageCount stay compile-time), so changing
+    // them needs no reallocation. Defaults = the constexpr values above. ---
+    inline float         g_refDist = kLodRefDist;
+    inline std::uint32_t g_requestDownscale = kRequestDownscale;
+    inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
@@ -139,6 +150,16 @@ public:
     // frames. Nothing samples/renders the pages yet (add-dormant). Also records the debug readback.
     void RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl);
 
+    // Step 22: render shadow casters into the resident physical pages. A setup compute builds a
+    // per-page off-center projection + per-page indirect args (copied from Rung 0's per-view cull),
+    // then the whole pool is cleared and each pool page is drawn via ExecuteIndirect (reusing
+    // ShadowGpuData's instance buffer + visible list + indirect depth VS) with its page-cell
+    // viewport. `views` are the VSM local shadow views (spots then point faces) in slot order.
+    // Same-frame, race-free (no readback). Correctness-first: re-renders every resident page each
+    // frame (Step 23 will gate to changed pages only).
+    void RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
+                          const vsm::ViewProjEntry* views, std::uint32_t viewCount);
+
     // Step 19/20 (temporary): a few frames in, read back the request bitfield + allocation
     // counters and log the requested-page mip histogram + resident/newly-allocated/failed counts,
     // so caching is verifiable (resident stabilizes, newly-allocated ~0 when the scene is stable).
@@ -184,7 +205,31 @@ private:
     std::shared_ptr<Material> allocTouchMat_;        // vsm_page_alloc_touch_cs.hlsl
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
     std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
+    std::shared_ptr<Material> pageSetupMat_;         // vsm_page_setup_cs.hlsl (Step 22)
     bool shaderResourcesTried_ = false;
+
+    // Step 22: per-page render state. pageProj_ = off-center viewProj per physical page (256-byte
+    // stride for root-CBV alignment); pageDrawArgs_ = per (page, mesh-group) indirect args copied
+    // from Rung 0's per-view cull. DEFAULT-heap, persistent.
+    Microsoft::WRL::ComPtr<ID3D12Resource> pageProj_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> pageDrawArgs_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderHeap_; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav
+    D3D12_CPU_DESCRIPTOR_HANDLE physOwnerSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE rung0ArgsSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageDrawArgsUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageProjUav_{};
+    std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
+    ID3D12Resource* cachedRung0Args_ = nullptr;  // detect a ShadowGpuData rebuild (re-create the SRV)
+    void EnsureRenderResources(Renderer* renderer, ShadowGpuData* shadowGpu);
+
+    // Step 22 CPU: the render loop only draws RESIDENT pool pages, not all kPoolPageCount. A per-
+    // frame readback ring of physOwner (kFrameCount-latency) tells the CPU which physical pages are
+    // resident so it skips the ~free ones (which otherwise cost ~15k no-op draw bindings/frame). The
+    // page content (pageProj/args) is always current, so the only effect of the latency is a
+    // newly-resident page showing unshadowed for a few frames (edge pop-in while moving).
+    Microsoft::WRL::ComPtr<ID3D12Resource> residentReadback_[render::kFrameCount];
+    const std::uint32_t* residentReadbackPtr_[render::kFrameCount] = {};
+    bool residentReadbackValid_[render::kFrameCount] = {};
 
     // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed
     // periodically so a live/stress run samples several times. The single readback buffer holds

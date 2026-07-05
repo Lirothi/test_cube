@@ -24,6 +24,7 @@ const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral
 const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral(L"Pass_ObjectCompute");
 const Profiler::ScopeNameKey kPassShadowCull = Profiler::RegisterTraceLiteral(L"Pass_ShadowCull");
 const Profiler::ScopeNameKey kPassVsmPageRequest = Profiler::RegisterTraceLiteral(L"Pass_VsmPageRequest");
+const Profiler::ScopeNameKey kPassVsmPageRender = Profiler::RegisterTraceLiteral(L"Pass_VsmPageRender");
 const Profiler::ScopeNameKey kPassCSM = Profiler::RegisterTraceLiteral(L"Pass_CSM");
 const Profiler::ScopeNameKey kPassShoreDepth = Profiler::RegisterTraceLiteral(L"Pass_ShoreDepth");
 const Profiler::ScopeNameKey kPassGBuffer = Profiler::RegisterTraceLiteral(L"Pass_GBuffer");

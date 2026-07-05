@@ -618,6 +618,41 @@ meaningful.
 - **Verify (runtime-compiled → must run):** with the pool pre-filled from the Rung-1 renderer
   (temporary bridge), the virtual sampler must match the Rung-1 image. `--scene-stress` Debug
   CLEAN; GBV clean (new SRV-table slots).
+- **DONE for SPOT (uncommitted) 2026-07-05 — point + glass DEFERRED.** No Rung-1 bridge exists
+  (Rung 1 skipped), so Step 22 fills the pages and Step 21 samples them (done together). Shared
+  `shaders/vsm_sample.hlsli`: `VsmSpotShadow` / `VsmPointShadow` / `VsmSampleNDC` — project into
+  the light's virtual space, mip-select by camera distance (mirrors request/setup), page-table
+  lookup, and `SampleCmpLevelZero` the physical pool page with a 3×3 PCF **clamped to the page**
+  (no neighbour bleed); not-resident → lit fallback. `shaders/vsm_addressing.hlsli` holds the
+  shared addressing (`VsmPageId`/`VsmDecodePage`/`VsmSelectLevel`). **SPOT wired end-to-end:**
+  `spotlight_cs.hlsl` root-sig SRV table 7→9 (+t7 `StructuredBuffer<uint>` page table, +t8
+  `Texture2D` pool), CB gained `useVsm` + `vsmRefDist` (reflection-based `UpdateCBField`, so no
+  manual offsets), and `ComputeSpotShadow` branches to `VsmSpotShadow` when `useVsm`. `Pass_
+  SpotLights` binds the pool + page-table SRVs (persistent, valid post-load) and sets `useVsm =
+  g_vsmPageRequestEnabled`. Render-graph state: the spot pass **declares pool + page-table SRV**
+  (both branches: active adds a `pVsmPageRender` prereq for fresh content) so they are readable on
+  entry; `ResourceStateDeclList` capacity 8→**10** (spot now has 9 decls). **VERIFIED (gate temp
+  ON): both configs 0/0; `--scene-stress-gbv=40` + `--scene-stress=200` CLEAN — only known-noise
+  {939,940,1006,1358}; spot shader compiles.** Two bugs fixed en route: setup shader `b0`
+  collision with the alloc-common cbuffer (dropped the include, inlined `VSM_INVALID`); GBV id=538
+  (pool cleared while in SRV — `RecordPageRender` now transitions the pool → DEPTH_WRITE itself
+  rather than via a graph decl the non-MT pass never applied). **DEFERRED (documented):** POINT +
+  GLASS sampling (point needs the 6-face viewProj buffer + a different depth scheme; glass is the
+  transparent pass — both still sample the atlas, which is still rendered, so they stay correct),
+  and the automated **parity readback** (atlas-vs-VSM diff) — spot VSM parity is the user's visual
+  A/B via **Ctrl+V**. Visual sign-off REQUIRED (I cannot verify the image headless).
+- **USER-TESTED + TUNED 2026-07-06.** Core spot path renders correctly; Release CPU ~0.5 ms even
+  near a dense spot grid. Post-test fixes: **mip chain** (request marks the selected level + all
+  coarser; sampler `VsmSampleNDC` walks to a coarser resident level) — killed the distance
+  flicker; **`kLodRefDist` 10→5** + **`kRequestDownscale` 8→4** — killed the checkerboard +
+  right-sized pages (872→~130 resident); **resident-only render iteration** (a `physOwner`
+  readback ring so `RecordPageRender` skips ~free pool pages — the 8 ms→~0.5 ms Release win; small
+  ~3-frame edge pop-in of freshly-revealed pages while moving). **Two limitations the user
+  ACCEPTED (2026-07-06):** (1) **8-spot cap** — a scene with >`kMaxShadowedSpotLights` spots
+  (demo.json has 9) toggles a whole spot's shadow as the camera moves and `SelectShadowedSpots`
+  re-picks the top 8; PRE-EXISTING (identical on the atlas path), not a VSM bug — proper fix is
+  the Rung-2 uncap. (2) **`GpuInstancedModels` don't cast VSM shadows** (excluded from the indirect
+  caster path since Step 6) — the atlas still shadows them when VSM is off.
 
 ### Step 22 — Render casters into allocated physical pages (reuses Rung 0)
 
@@ -636,6 +671,24 @@ meaningful.
   bridge); image must still match. `--scene-stress` Debug CLEAN; GBV clean (per-page DSV /
   viewport + pool DEPTH_WRITE↔read barriers + the cull-UAV→indirect-arg transitions are the
   surface).
+- **DONE (uncommitted) 2026-07-05 — full GPU-driven, race-free.** New `Main_VsmPageRender` pass
+  (after `Main_VsmPageRequest`, only wired when the gate is on). `shaders/vsm_page_setup_cs.hlsl`:
+  one thread per PHYSICAL page — resident pages decode their virtual page → (view, level, px, py),
+  build an **off-center projection** `pageProj = lightVP[view] × S` (S maps the page's NDC sub-rect
+  to full [-1,1], z preserved so the stored depth == the sampler's), and **copy that view's Rung-0
+  cull args** (VSM local view v → Rung-0 slot v+4) into a per-page `DRAW_INDEXED_ARGUMENTS` slot;
+  free pages get InstanceCount 0. `VirtualShadowMap::RecordPageRender`: setup dispatch (reads Rung-0
+  args as an SRV — transitioned from INDIRECT_ARGUMENT, safe post-shadow-pass), then transition
+  args→INDIRECT_ARGUMENT + pageProj→VERTEX_AND_CONSTANT_BUFFER, clear the whole pool, and loop the
+  1024 pool pages setting each cell's viewport/scissor + its `pageProj` as the b1 root CBV
+  (256-byte stride) and one `ExecuteIndirect` per mesh-group — **reusing the proven
+  `RecordIndirectShadowDraws` machinery** (instance buffer t0, Rung-0 visible list as the
+  per-instance stream, `shadow_indirect_csm` PSO). Correctness-first: the whole pool is cleared +
+  every resident page re-rendered each frame (Step 23 will gate to changed pages only, and reduce
+  the ~O(1024×groups) `ExecuteIndirect` CPU cost). Exposed `ShadowGpuData::GroupMeshes()`. **VERIFIED
+  (gate temp ON): both configs 0/0; `--scene-stress-gbv=40` + `--scene-stress=200` CLEAN — the new
+  DSV pass, per-page viewport, pool DEPTH_WRITE↔SRV round-trip, and the Rung-0-arg cross-pass read
+  added NO new GBV IDs (only known noise).** Visual sign-off (via Step 21 spot sampling) REQUIRED.
 
 ### Step 23 — Page-level caching (the payoff)
 

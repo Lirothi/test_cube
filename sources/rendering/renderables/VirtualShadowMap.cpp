@@ -6,6 +6,8 @@
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/renderables/ShadowGpuData.h"
+#include "rendering/meshes/Mesh.h"
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
 {
@@ -289,6 +291,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocTouchMat_ = makeCompute(L"shaders/vsm_page_alloc_touch_cs.hlsl");
     allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
+    pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
 
     auto ok = [](const std::shared_ptr<Material>& m) { return m && m->GetPipelineState(); };
     if (!ok(pageRequestClearMat_) || !ok(pageRequestMat_))
@@ -297,14 +300,14 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         pageRequestClearMat_.reset();
         pageRequestMat_.reset();
     }
-    else if (!ok(allocInitMat_) || !ok(allocTouchMat_) || !ok(allocFreeMat_) || !ok(allocMapMat_))
+    else if (!ok(allocInitMat_) || !ok(allocTouchMat_) || !ok(allocFreeMat_) || !ok(allocMapMat_) || !ok(pageSetupMat_))
     {
-        OutputDebugStringA("[VSM] page-alloc PSO creation FAILED (shader compile?).\n");
-        allocInitMat_.reset(); allocTouchMat_.reset(); allocFreeMat_.reset(); allocMapMat_.reset();
+        OutputDebugStringA("[VSM] page-alloc/setup PSO creation FAILED (shader compile?).\n");
+        allocInitMat_.reset(); allocTouchMat_.reset(); allocFreeMat_.reset(); allocMapMat_.reset(); pageSetupMat_.reset();
     }
     else
     {
-        OutputDebugStringA("[VSM] page-request + page-alloc shaders ready.\n");
+        OutputDebugStringA("[VSM] page-request + page-alloc + page-setup shaders ready.\n");
     }
 }
 
@@ -330,9 +333,12 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
         vsm::kRequestWords, 1,
         requestBuffer_.Get());
 
-    // Mark: one thread per DOWN-SAMPLED screen block (Step 19b reduced res, ≈1/64 the threads) ->
-    // project the block-center pixel into each active local shadow view -> mark its mip page.
-    const UINT ds = vsm::kRequestDownscale;
+    // Mark: one thread per DOWN-SAMPLED screen block (reduced res) -> project the block-center
+    // pixel into each active local shadow view -> mark its mip page. The downscale comes from the
+    // constants (lodParams.z), so the CPU dispatch size and the shader's block stride stay in sync
+    // when it is tuned at runtime.
+    UINT ds = static_cast<UINT>(constants.lodParams.z);
+    if (ds < 1u) { ds = 1u; }
     const UINT reqW = (screenW + ds - 1u) / ds;
     const UINT reqH = (screenH + ds - 1u) / ds;
     RecordComputeDispatch(renderer, cl, pageRequestMat_.get(), static_cast<UINT>(sizeof(vsm::PageRequestConstants)),
@@ -368,7 +374,7 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
     struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold; };
     auto writeCB = [&](std::uint8_t* dst)
     {
-        AllocCB c{ numEntries, numPages, curFrame, vsm::kLruFrameThreshold };
+        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold };
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(AllocCB));
@@ -451,6 +457,234 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
     debugReadbackState_ = 1;
 }
 
+void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* shadowGpu)
+{
+    if (!renderer || !renderer->GetDevice() || !shadowGpu) { return; }
+    ID3D12Device* dev = renderer->GetDevice();
+    const std::uint32_t groups = shadowGpu->MeshGroupCount();
+    ID3D12Resource* rung0Args = shadowGpu->IndirectArgsBuffer();
+    if (groups == 0 || !rung0Args) { return; }
+
+    const std::uint32_t argUints = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) / 4; // 5
+    if (!pageDrawArgs_ || groups > renderGroups_)
+    {
+        pageDrawArgs_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * argUints, L"VSM.PageDrawArgs");
+        renderGroups_ = groups;
+        if (pageDrawArgs_) { renderer->SetResourceState(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageDrawArgsUav_ = {}; // force descriptor rebuild
+    }
+    if (!pageProj_)
+    {
+        // 64 uints (256 bytes) per page: a float4x4 + padding for root-CBV alignment.
+        pageProj_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj");
+        if (pageProj_) { renderer->SetResourceState(pageProj_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageProjUav_ = {};
+    }
+    if (!pageDrawArgs_ || !pageProj_) { return; }
+
+    // Resident-set readback ring (physOwner snapshots), persistently mapped.
+    if (!residentReadback_[0])
+    {
+        D3D12_HEAP_PROPERTIES rb{}; rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t);
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        for (UINT i = 0; i < render::kFrameCount; ++i)
+        {
+            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(residentReadback_[i].GetAddressOf()))))
+            {
+                void* p = nullptr;
+                if (SUCCEEDED(residentReadback_[i]->Map(0, nullptr, &p))) { residentReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
+            }
+        }
+    }
+
+    const bool needHeap = !renderHeap_ || cachedRung0Args_ != rung0Args ||
+                          physOwnerSrv_.ptr == 0 || pageDrawArgsUav_.ptr == 0 || pageProjUav_.ptr == 0;
+    if (!needHeap) { return; }
+
+    if (!renderHeap_)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.NumDescriptors = 4; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
+        {
+            renderHeap_.Reset();
+            return;
+        }
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = renderHeap_->GetCPUDescriptorHandleForHeapStart();
+    physOwnerSrv_    = { base.ptr + static_cast<SIZE_T>(0) * incr };
+    rung0ArgsSrv_    = { base.ptr + static_cast<SIZE_T>(1) * incr };
+    pageDrawArgsUav_ = { base.ptr + static_cast<SIZE_T>(2) * incr };
+    pageProjUav_     = { base.ptr + static_cast<SIZE_T>(3) * incr };
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
+    oSd.Format = DXGI_FORMAT_UNKNOWN;
+    oSd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    oSd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    oSd.Buffer.NumElements = vsm::kPoolPageCount;
+    oSd.Buffer.StructureByteStride = sizeof(std::uint32_t);
+    dev->CreateShaderResourceView(physOwner_.Get(), &oSd, physOwnerSrv_);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC aSd{};
+    aSd.Format = DXGI_FORMAT_R32_TYPELESS;
+    aSd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    aSd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    aSd.Buffer.NumElements = static_cast<UINT>(rung0Args->GetDesc().Width / 4);
+    aSd.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+    dev->CreateShaderResourceView(rung0Args, &aSd, rung0ArgsSrv_);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC dUd{};
+    dUd.Format = DXGI_FORMAT_R32_TYPELESS;
+    dUd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    dUd.Buffer.NumElements = static_cast<UINT>(pageDrawArgs_->GetDesc().Width / 4);
+    dUd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    dev->CreateUnorderedAccessView(pageDrawArgs_.Get(), nullptr, &dUd, pageDrawArgsUav_);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC pUd{};
+    pUd.Format = DXGI_FORMAT_R32_TYPELESS;
+    pUd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    pUd.Buffer.NumElements = static_cast<UINT>(pageProj_->GetDesc().Width / 4);
+    pUd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    dev->CreateUnorderedAccessView(pageProj_.Get(), nullptr, &pUd, pageProjUav_);
+
+    cachedRung0Args_ = rung0Args;
+}
+
+void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    ShadowGpuData* shadowGpu, const vsm::ViewProjEntry* views, std::uint32_t viewCount)
+{
+    if (!renderer || !cl || !IsAllocated() || !shadowGpu || !views) { return; }
+    EnsureShaderResources(renderer);
+    if (!pageSetupMat_) { return; }
+    if (!shadowGpu->IndirectDrawReady()) { return; } // needs this frame's Rung 0 cull output
+    EnsureRenderResources(renderer, shadowGpu);
+    if (!pageDrawArgs_ || !pageProj_ || !renderHeap_) { return; }
+
+    Material* indirectMat = shadowGpu->IndirectShadowMaterial();
+    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    if (!indirectMat || !indirectMat->GetPipelineState() || !sig) { return; }
+
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+    const std::uint32_t groups = shadowGpu->MeshGroupCount();
+    if (groups == 0 || groups > renderGroups_) { return; }
+
+    // --- Setup compute: per physical page, build the off-center projection + copy the page's
+    // view's Rung-0 cull args. Reads Rung0 args + physOwner as SRVs. ---
+    renderer->Transition(cl, shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    struct SetupCB
+    {
+        std::uint32_t numGroups, argBaseElems, numPages, pad;
+        DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
+    };
+    const std::uint32_t argBaseElems = f * render::kMaxShadowViews * groups; // region f, 5-uint arg units
+    RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
+        [&](std::uint8_t* dst)
+        {
+            SetupCB cb{};
+            cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
+            const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
+            for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
+            std::memcpy(dst, &cb, sizeof(cb));
+        },
+        { physOwnerSrv_, rung0ArgsSrv_ },
+        { pageDrawArgsUav_, pageProjUav_ },
+        D3D12_GPU_DESCRIPTOR_HANDLE{},
+        vsm::kPoolPageCount, 1,
+        pageDrawArgs_.Get());
+    renderer->UAVBarrier(cl, pageProj_.Get());
+
+    // Resident-set for the draw loop: read this ring slot's kFrameCount-old physOwner snapshot (a
+    // page with owner != INVALID was resident; skip the rest — the ~free pages are what make the
+    // full-pool loop expensive). Then snapshot THIS frame's physOwner for kFrameCount frames later.
+    const std::uint32_t* residentSet = residentReadbackValid_[f] ? residentReadbackPtr_[f] : nullptr;
+    if (residentReadback_[f])
+    {
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cl->CopyBufferRegion(residentReadback_[f].Get(), 0, physOwner_.Get(), 0,
+                             static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t));
+        residentReadbackValid_[f] = true;
+    }
+
+    // Consume: args -> INDIRECT_ARGUMENT, projection -> readable as a root CBV.
+    renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+
+    // --- Render: clear the whole pool (Step 23 will gate to changed pages), then draw each pool
+    // page's casters into its 128² cell via ExecuteIndirect. The pool is left in SRV by the light
+    // passes' declared reads, so transition it back to DEPTH_WRITE here (manual, like the buffers). ---
+    renderer->Transition(cl, pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &poolDsv_);
+    cl->ClearDepthStencilView(poolDsv_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+    RenderContext& ctx = ctxHandle.ref();
+    ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
+    ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceSrv(f) }).gpu;
+    indirectMat->Bind(cl, ctx, false);
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    ID3D12Resource* visBuf = shadowGpu->VisibleListBuffer();
+    D3D12_VERTEX_BUFFER_VIEW visVBV{};
+    visVBV.BufferLocation = visBuf->GetGPUVirtualAddress() + static_cast<UINT64>(f) * shadowGpu->VisibleListRegionBytes();
+    visVBV.SizeInBytes = static_cast<UINT>(shadowGpu->VisibleListRegionBytes());
+    visVBV.StrideInBytes = sizeof(std::uint32_t);
+    cl->IASetVertexBuffers(1, 1, &visVBV);
+
+    const auto& groupMeshes = shadowGpu->GroupMeshes();
+    const D3D12_GPU_VIRTUAL_ADDRESS projVA = pageProj_->GetGPUVirtualAddress();
+    const UINT64 argStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    for (std::uint32_t p = 0; p < vsm::kPoolPageCount; ++p)
+    {
+        if (residentSet && residentSet[p] == 0xFFFFFFFFu) { continue; } // free page (stale snapshot) -> skip
+        const UINT gx = p % vsm::kPoolPagesPerAxis;
+        const UINT gy = p / vsm::kPoolPagesPerAxis;
+        const float ox = static_cast<float>(gx * vsm::kPageSize);
+        const float oy = static_cast<float>(gy * vsm::kPageSize);
+        D3D12_VIEWPORT vp{ ox, oy, static_cast<float>(vsm::kPageSize), static_cast<float>(vsm::kPageSize), 0.0f, 1.0f };
+        D3D12_RECT sc{ static_cast<LONG>(ox), static_cast<LONG>(oy),
+                       static_cast<LONG>(ox) + static_cast<LONG>(vsm::kPageSize),
+                       static_cast<LONG>(oy) + static_cast<LONG>(vsm::kPageSize) };
+        cl->RSSetViewports(1, &vp);
+        cl->RSSetScissorRects(1, &sc);
+        cl->SetGraphicsRootConstantBufferView(0, projVA + static_cast<UINT64>(p) * 256u); // b1 = this page's projection
+
+        for (std::uint32_t g = 0; g < groups; ++g)
+        {
+            const Mesh* mesh = (g < groupMeshes.size()) ? groupMeshes[g] : nullptr;
+            if (!mesh) { continue; }
+            ID3D12Resource* vb = mesh->GetVertexBufferResource();
+            ID3D12Resource* ib = mesh->GetIndexBufferResource();
+            if (!vb || !ib) { continue; }
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = vb->GetGPUVirtualAddress();
+            vbv.SizeInBytes = static_cast<UINT>(vb->GetDesc().Width);
+            vbv.StrideInBytes = mesh->GetVertexStride();
+            cl->IASetVertexBuffers(0, 1, &vbv);
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            ibv.BufferLocation = ib->GetGPUVirtualAddress();
+            ibv.SizeInBytes = static_cast<UINT>(ib->GetDesc().Width);
+            ibv.Format = mesh->GetIndexFormat();
+            cl->IASetIndexBuffer(&ibv);
+            const UINT64 argOff = static_cast<UINT64>(p * groups + g) * argStride;
+            renderer->ExecuteIndirect(cl, sig, 1, pageDrawArgs_.Get(), argOff, nullptr, 0);
+        }
+    }
+}
+
 void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
 {
     if (!renderer) { return; }
@@ -495,6 +729,15 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
         }
     }
 
+    // Per-view request counts for the 8 spot views (slots 0..7) — spots with 0 pages are the ones
+    // whose receivers the request never covers (starved -> no VSM shadow).
+    std::uint32_t perSpot[8] = {};
+    for (std::uint32_t v = 0; v < 8; ++v)
+    {
+        const std::uint32_t viewBase = v * vsm::kPagesPerView;
+        for (std::uint32_t p = 0; p < vsm::kPagesPerView; ++p) { if (isSet(viewBase + p)) { ++perSpot[v]; } }
+    }
+
     // Alloc counters (VSM_CNT_*): resident = carried-over survivors + newly allocated this frame.
     const std::uint32_t freeCount = counters[0]; // post-allocate: leftover free pages (may underflow if pool full)
     const std::uint32_t newAlloc  = counters[1]; // pages allocated (needs-render) this frame
@@ -505,11 +748,13 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     const D3D12_RANGE noWrite{ 0, 0 };
     debugReadback_->Unmap(0, &noWrite);
 
-    char buf[288];
+    char buf[384];
     std::snprintf(buf, sizeof(buf),
-        "[VSM] request %u pages (L0=%u L1=%u L2=%u L3=%u L4=%u) | alloc: resident=%u newThisFrame=%u fail=%u (pool=%u).\n",
+        "[VSM] request %u (L0=%u L1=%u L2=%u L3=%u L4=%u) | resident=%u new=%u fail=%u | spots[%u %u %u %u %u %u %u %u] (pool=%u).\n",
         total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
-        resident, newAlloc, failCount, vsm::kPoolPageCount);
+        resident, newAlloc, failCount,
+        perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
+        vsm::kPoolPageCount);
     OutputDebugStringA(buf);
     debugReadbackState_ = 2;
     debugReadbackDoneFrame_ = renderer->GetTotalFrameNumber();

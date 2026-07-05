@@ -75,6 +75,7 @@ private:
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView);
     void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
@@ -135,6 +136,13 @@ private:
     bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
     bool glassReflActive_ = false; // S15b: glass reflections active (RT or SSR; source != Off)
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
+
+    // VSM (Rung 2) skip-when-still: last camera view matrix + whether the VSM has been rendered
+    // since the gate turned on. When the camera view is unchanged the pool + page table persist, so
+    // the whole VSM update (request/alloc/render) is skipped that frame.
+    mat4 vsmLastView_{};
+    bool vsmHasRendered_ = false;
+    bool vsmSkipUpdate_ = false;
 
     // Valid only during Render(); pass bodies (running on task threads) read it.
     const SceneFrameData* frame_ = nullptr;
