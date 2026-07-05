@@ -76,6 +76,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
         }
+        if (input.WasActionPressed("ToggleIndirectShadows"))
+        {
+            // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
+            render::g_indirectShadowsEnabled = !render::g_indirectShadowsEnabled;
+        }
         if (input.WasActionPressed("CycleReflectionSource"))
         {
             // F5: cycle Off -> SSR -> RT -> Off (skip RT on non-RT hardware).

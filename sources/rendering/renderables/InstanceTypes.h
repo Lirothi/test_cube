@@ -53,4 +53,9 @@ inline constexpr uint32_t kInstancingThreshold = 8;
 // Runtime kill-switch for auto-instancing (default on). Useful for A/B debugging and
 // before/after measurement; when off, BuildInstancedBatches is a no-op (per-object path).
 inline bool g_instancingEnabled = true;
+
+// Rung 0 / Step 6 runtime toggle (default OFF): when on, the shadow passes draw via GPU cull +
+// ExecuteIndirect (ShadowGpuData) instead of the per-object CPU RenderShadow loop. A/B fallback
+// for the behavioral flip — flipped by the "ToggleIndirectShadows" action (Ctrl+I).
+inline bool g_indirectShadowsEnabled = false;
 } // namespace render

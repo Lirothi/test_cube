@@ -1022,7 +1022,11 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     const RenderPass passName = ctx.pass;
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName](std::size_t cascadeIndex)
+    // Step 6: GPU-driven indirect shadow submission (toggle, default off). The cull already ran
+    // in Pass_ShadowCull; here each cascade issues ExecuteIndirect instead of the CPU loop.
+    ShadowGpuData* shadowGpu = frame_->shadowGpu;
+    const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect](std::size_t cascadeIndex)
     {
         if (cascadeIndex >= cascadeViews.size())
         {
@@ -1047,22 +1051,36 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
             renderer->BindShadowTarget(t.cl, static_cast<int>(cascadeIndex), /*clear=*/false);
 
-            // Step 6c: far cascades cast coarse LODs (texels are huge there; silhouette error
-            // invisible). Cascade 0 (near, sharp shadows) stays full detail. Mesh clamps.
-            const UINT shadowLod = static_cast<UINT>(cascadeIndex);
-            for (auto* obj : opaqueSimple)
+            if (indirect)
             {
-                if (obj)
-                {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
-                }
+                // Cascade i -> shadow-view slot i (the frustum/args layout). Uses base-LOD
+                // geometry (the cull's args carry the base index count).
+                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, static_cast<std::uint32_t>(cascadeIndex), viewCB);
+                // GPU-instanced casters aren't in the indirect buffer (one object -> many GPU
+                // instances); draw them via their own instanced shadow path so they still cast.
+                const UINT giLod = static_cast<UINT>(cascadeIndex);
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
             }
-
-            for (auto* obj : opaqueComplex)
+            else
             {
-                if (obj)
+                // Step 6c: far cascades cast coarse LODs (texels are huge there; silhouette error
+                // invisible). Cascade 0 (near, sharp shadows) stays full detail. Mesh clamps.
+                const UINT shadowLod = static_cast<UINT>(cascadeIndex);
+                for (auto* obj : opaqueSimple)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                    }
+                }
+
+                for (auto* obj : opaqueComplex)
+                {
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                    }
                 }
             }
         }
@@ -1138,7 +1156,9 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     const auto& D = renderer->GetDeferredForFrame();
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex](std::size_t lightIndex)
+    ShadowGpuData* shadowGpu = frame_->shadowGpu;
+    const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect](std::size_t lightIndex)
     {
         if (lightIndex >= spotViews.size())
         {
@@ -1158,18 +1178,30 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
 
-            for (auto* obj : opaqueSimple)
+            if (indirect)
             {
-                if (obj)
-                {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
-                }
+                // Spot light i -> shadow-view slot kCascades + i.
+                const std::uint32_t viewSlot = static_cast<std::uint32_t>(kCascades + lightIndex);
+                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
+                // GPU-instanced casters draw via their own instanced shadow path (not indirect).
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
             }
-            for (auto* obj : opaqueComplex)
+            else
             {
-                if (obj)
+                for (auto* obj : opaqueSimple)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    }
+                }
+                for (auto* obj : opaqueComplex)
+                {
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    }
                 }
             }
         }
@@ -1236,7 +1268,9 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     const auto& D = renderer->GetDeferredForFrame();
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex](std::size_t faceIndex)
+    ShadowGpuData* shadowGpu = frame_->shadowGpu;
+    const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect](std::size_t faceIndex)
     {
         if (faceIndex >= pointViews.size())
         {
@@ -1257,18 +1291,31 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
 
-            for (auto* obj : opaqueSimple)
+            if (indirect)
             {
-                if (obj)
-                {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
-                }
+                // Point cube face k -> shadow-view slot kCascades + kMaxShadowedSpotLights + k.
+                const std::uint32_t viewSlot = static_cast<std::uint32_t>(
+                    kCascades + LightManager::kMaxShadowedSpotLights + faceIndex);
+                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
+                // GPU-instanced casters draw via their own instanced shadow path (not indirect).
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
             }
-            for (auto* obj : opaqueComplex)
+            else
             {
-                if (obj)
+                for (auto* obj : opaqueSimple)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    }
+                }
+                for (auto* obj : opaqueComplex)
+                {
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    }
                 }
             }
         }

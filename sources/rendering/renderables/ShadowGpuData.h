@@ -14,6 +14,7 @@ class Renderer;
 class RenderableObjectBase;
 class Frustum;
 class Material;
+class Mesh;
 
 // Rung 0 (Steps 1-2): the GPU-side data the future GPU-driven shadow pipeline consumes.
 // All buffers are ALLOCATED + MAINTAINED here but NOT yet read by any pass (add-dormant).
@@ -69,6 +70,19 @@ public:
     // snapshot; log PASS/FAIL. Pure CPU + deferred (uses the natural per-frame fence), so no
     // mid-frame stall. Call once per frame (main thread) from Scene::Render.
     void PollValidation(Renderer* renderer);
+
+    // Step 6: true when the indirect shadow draw path can run (PSO + buffers + group meshes
+    // ready, casters present). The shadow passes gate the ExecuteIndirect path on this.
+    bool IndirectDrawReady() const;
+
+    // Step 6: record the indirect depth-only shadow draws for ONE shadow view slot into the
+    // currently-bound depth target (the caller set the viewport via Bind*ShadowTarget). Binds
+    // the indirect PSO + instance SRV (t0) + visible-list per-instance vertex stream (slot 1) +
+    // b1 viewCB, then one ExecuteIndirect per mesh-group (empty groups draw 0 instances).
+    // `viewSlot` indexes the args/frustum layout (cascade i | 4+spot | 12+point-face). Returns
+    // false (drew nothing) if not ready. Thread-safe for the parallel per-view shadow CLs.
+    bool RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                   std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
 
     // Drop CPU-side state on level unload; RETAINS the GPU buffers + SRVs (the LightManager
     // lesson: a pass may reference an SRV while frames are in flight). Next Rebuild reuses them.
@@ -171,6 +185,8 @@ private:
     std::uint32_t count_ = 0;            // live caster count
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
+
+    std::vector<const Mesh*> groupMesh_; // mesh-group id -> Mesh* (VB/IB for the indirect draws)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
 

@@ -101,6 +101,13 @@ public:
     // would otherwise flood the glass G-buffer).
     virtual bool UsesGlassReflection() const { return false; }
     virtual bool CastsShadow() const = 0;
+
+    // Rung 0 (Step 6): true for casters whose shadow can't be one entry in the per-caster
+    // indirect instance buffer — i.e. GPU-instanced objects (one object → many GPU-driven
+    // instances). Such casters are excluded from the GPU cull / ExecuteIndirect path and keep
+    // drawing through their own RenderShadow even when indirect shadows are enabled.
+    virtual bool IsGpuInstancedCaster() const { return false; }
+
     virtual void OnMaterialHotReload(Renderer* renderer) {}
 
     // Step 6: choose this object's camera/gbuffer LOD for the frame. Called once per visible

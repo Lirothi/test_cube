@@ -34,6 +34,10 @@ public:
     void SelectLod(const Camera& camera) override;
     bool IsSimpleRender() const { return false; }
     bool CastsShadow() const override { return true; }
+    // One object drives many GPU-side instances, so it can't be a single per-caster indirect
+    // entry — the GPU-driven shadow path (Step 6) skips it and it draws via its own instanced
+    // RenderShadow instead.
+    bool IsGpuInstancedCaster() const override { return true; }
 
     const AABB& GetWorldBounds() const override;
     // RT: a single instance is meaningless for the whole field — GetRtInstance stays

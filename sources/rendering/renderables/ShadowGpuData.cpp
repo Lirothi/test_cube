@@ -206,8 +206,10 @@ bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
     // Mirror the CastsShadow() filter shadowCasterSource_.Bucketize uses. NOT filtered by
     // IsVisible()/layer mask: the caster id must be STABLE across frames, and per-view
     // visibility is the job of the GPU cull pass (Step 4), not of this buffer. Requires a
-    // mesh: a mesh-less "caster" draws nothing and has no mesh-group to slot into.
-    if (!obj || !obj->CastsShadow()) { return false; }
+    // mesh: a mesh-less "caster" draws nothing and has no mesh-group to slot into. GPU-instanced
+    // casters are excluded (one object → many GPU-side instances can't be a single entry); they
+    // keep drawing via their own RenderShadow (Step 6 draws them alongside the indirect path).
+    if (!obj || !obj->CastsShadow() || obj->IsGpuInstancedCaster()) { return false; }
     const RenderableObject* ro = obj->AsRenderableObject();
     return ro && ro->GetMesh() != nullptr;
 }
@@ -304,6 +306,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         ++idx;
     }
     numMeshGroups_ = static_cast<std::uint32_t>(meshToGroup.size());
+
+    // Reverse map (group id -> Mesh*) for the Step 6 indirect draws' per-group VB/IB binding.
+    groupMesh_.assign(numMeshGroups_, nullptr);
+    for (const auto& kv : meshToGroup)
+    {
+        if (kv.second < numMeshGroups_) { groupMesh_[kv.second] = kv.first; }
+    }
 
     // Per-group caster count + index count, and per-caster group id.
     std::vector<std::uint32_t> groupCount(numMeshGroups_, 0);
@@ -707,6 +716,78 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             valState_ = 1;
         }
     }
+
+    // Step 6: leave the args in INDIRECT_ARGUMENT and the visible list as a vertex buffer so the
+    // shadow passes (chained after this pass) can ExecuteIndirect + bind the per-instance stream
+    // without touching state on their parallel CLs. Done every frame (harmless when the toggle is
+    // off — nothing reads them); next frame's start transitions them back to UAV. Counts stays
+    // UAV (Step 6 uses maxCount=1 per draw, so no count buffer is read).
+    renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+}
+
+bool ShadowGpuData::IndirectDrawReady() const
+{
+    return indirectShadowMat_ && indirectShadowMat_->GetPipelineState() &&
+           count_ > 0 && numMeshGroups_ > 0 && !groupMesh_.empty() &&
+           indirectArgs_.Valid() && visibleList_.Valid() && instances_.Valid();
+}
+
+bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                              std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    if (!renderer || !cl || !IndirectDrawReady()) { return false; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return false; }
+    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    if (!sig) { return false; }
+
+    // Bind the depth-only indirect PSO + root args: b1 = light viewProj, t0 = instance buffer
+    // SRV for this frame's region.
+    auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+    RenderContext& ctx = ctxHandle.ref();
+    ctx.cbv[1] = viewCB;
+    ctx.srvTable[0] = renderer->StageSrvUavTable({ instances_.Srv(f) }).gpu;
+    indirectShadowMat_->Bind(cl, ctx, false);
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Slot 1 = this frame's visible-list region as a per-instance stream; each draw's
+    // StartInstanceLocation (baked by the cull) offsets into it.
+    D3D12_VERTEX_BUFFER_VIEW visVBV{};
+    visVBV.BufferLocation = visibleList_.buffer->GetGPUVirtualAddress() +
+                            static_cast<UINT64>(f) * visibleList_.regionBytes;
+    visVBV.SizeInBytes = static_cast<UINT>(visibleList_.regionBytes);
+    visVBV.StrideInBytes = sizeof(std::uint32_t);
+    cl->IASetVertexBuffers(1, 1, &visVBV);
+
+    const UINT64 argRegionBase = static_cast<UINT64>(f) * indirectArgs_.regionBytes;
+    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    {
+        const Mesh* mesh = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
+        if (!mesh) { continue; }
+        ID3D12Resource* vb = mesh->GetVertexBufferResource();
+        ID3D12Resource* ib = mesh->GetIndexBufferResource();
+        if (!vb || !ib) { continue; }
+
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = vb->GetGPUVirtualAddress();
+        vbv.SizeInBytes = static_cast<UINT>(vb->GetDesc().Width);
+        vbv.StrideInBytes = mesh->GetVertexStride();
+        cl->IASetVertexBuffers(0, 1, &vbv);
+
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = ib->GetGPUVirtualAddress();
+        ibv.SizeInBytes = static_cast<UINT>(ib->GetDesc().Width);
+        ibv.Format = mesh->GetIndexFormat();
+        cl->IASetIndexBuffer(&ibv);
+
+        // One indirect draw per (view, mesh-group). InstanceCount (from the cull) may be 0 -> a
+        // free no-op, so empty groups cost nothing beyond the binding.
+        const UINT64 argOffset = argRegionBase +
+            static_cast<UINT64>(viewSlot * numMeshGroups_ + g) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+        renderer->ExecuteIndirect(cl, sig, 1, indirectArgs_.buffer.Get(), argOffset, nullptr, 0);
+    }
+    return true;
 }
 
 void ShadowGpuData::PollValidation(Renderer* renderer)
@@ -792,6 +873,7 @@ void ShadowGpuData::Reset()
     cpuBounds_.clear();
     pending_.clear();
     cpuViewFrustums_.clear();
+    groupMesh_.clear();
     valState_ = 0;
     logFramesRemaining_ = 5;
 }

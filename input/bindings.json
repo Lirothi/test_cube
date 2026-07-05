@@ -14,6 +14,7 @@
     { "name": "ToggleDeveloperPanel", "keys": ["F1"] },
     { "name": "ToggleInstancing", "keys": ["F2"] },
     { "name": "ToggleLOD", "keys": ["F10"] },
+    { "name": "ToggleIndirectShadows", "keys": ["Ctrl","I"], "allKeys": true },
     { "name": "CycleReflectionSource", "keys": ["F5"] },
     { "name": "ToggleRTDebugView", "keys": ["F6"] },
     { "name": "ToggleOceanControls", "keys": ["F7"] },
