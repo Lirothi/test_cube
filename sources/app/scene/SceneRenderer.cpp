@@ -1044,6 +1044,10 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
     const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
     { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+    // Step 24d: directional clipmap levels fill slots [32, 40) — the request shader picks the finest
+    // level containing each receiver. Add-dormant: pages get requested + allocated but not yet
+    // rendered/sampled (the setup shader skips clipmap views; directional still uses CSM).
+    if (frame_->clipmapViews) { for (const SceneView& v : *frame_->clipmapViews) { addView(v, true); } }
     cb.numViews = slot;
 
     auto t = ctx.BeginCL();

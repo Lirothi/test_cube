@@ -104,6 +104,7 @@ private:
 
     void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
     void UpdateCascades(const Camera& camera, Renderer* renderer);
+    void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 
     void PrepareViews(Renderer* renderer);
     void SyncObjectsForRender(SceneObjectSyncReason reason);
@@ -125,6 +126,7 @@ private:
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};
+    std::array<SceneView, vsm::kNumClipmapLevels> clipmapViews_{}; // Step 24d: directional clipmap (VSM)
     std::array<SceneView, LightManager::kMaxShadowedSpotLights> spotShadowViews_{};
     std::array<SceneView, LightManager::kMaxShadowedPointLights * 6> pointShadowViews_{}; // 6 cube faces per shadowed point light
     // Step 6e: the directional cascades + spot shadow views all bucketize the same

@@ -272,6 +272,77 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     }
 }
 
+void Scene::UpdateClipmap(const Camera& camera)
+{
+    // Step 24d: N camera-centered nested ortho shadow views along the sun — the directional clipmap
+    // VSM mode uses instead of CSM cascades. Level i covers extent E0*2^i (E0 = the finest,
+    // runtime-tunable g_clipmapBaseExtent), texel-snapped in the fixed light frame for stability
+    // (mirrors the cascade snap). Consumed only in VSM mode; add-dormant until 24e/24f render+sample.
+    const float3 sunDirWS = dirLight_.GetDirection();
+    const float3 fwd = sunDirWS.Normalized();
+    if (fwd.Dot(fwd) < 1e-8f) // no valid sun direction -> reject-all views
+    {
+        for (auto& v : clipmapViews_)
+        {
+            v.frustum = Frustum{};
+            v.type = SceneView::Type::Shadow;
+            v.renderLayerMask = camera.GetRenderLayerMask();
+            v.requiresDepthCheck = false;
+        }
+        return;
+    }
+    const float3 up(0, 1, 0);
+    float3 right = up.Cross(fwd);
+    if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
+    right = right.Normalized();
+    const float3 trueUp = fwd.Cross(right);
+
+    const float tileRes = static_cast<float>(vsm::kVirtualRes); // texels per clipmap level edge
+    const float baseExtent = std::max(1.0f, vsm::g_clipmapBaseExtent);
+    const float lightDistance = 1000.0f; // push the light origin well up-sun above the scene
+    const float3 camPos = camera.GetPosition();
+
+    for (size_t i = 0; i < clipmapViews_.size(); ++i)
+    {
+        const float extent = baseExtent * static_cast<float>(1u << static_cast<unsigned>(i)); // E0*2^i
+        const float radius = 0.5f * extent;
+        const float unitsPerTexel = extent / tileRes;
+
+        // Texel-snap the level center (= camera) in the FIXED light frame, so shadow texels pin to
+        // world cells as the camera moves (no swim) — same stabilization as the cascades.
+        float3 center = camPos;
+        const float cx = center.Dot(right);
+        const float cy = center.Dot(trueUp);
+        center = center
+            + right  * (std::floor(cx / unitsPerTexel) * unitsPerTexel - cx)
+            + trueUp * (std::floor(cy / unitsPerTexel) * unitsPerTexel - cy);
+
+        const mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
+        const float2 centerLS = (lightView * float4(center, 1)).xy(); // ~(0,0): center is the target
+        const float minX = centerLS.x - radius, maxX = centerLS.x + radius;
+        const float minY = centerLS.y - radius, maxY = centerLS.y + radius;
+        // Generous symmetric depth span around the center so receivers/casters along the sun are
+        // contained (24f tunes it; add-dormant here only needs the request containment test to pass).
+        const float nearLS = 1.0f;
+        const float farLS = 2.0f * lightDistance;
+
+        const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+        SceneView& v = clipmapViews_[i];
+        v.view = lightView;
+        v.proj = lightProj;
+        v.invView = mat4::Inverse(lightView);
+        v.invProj = mat4::Inverse(lightProj);
+        v.frustum = Frustum::FromOrthoBounds(v.invView, minX, maxX, minY, maxY, nearLS, farLS);
+        v.renderLayerMask = camera.GetRenderLayerMask();
+        v.position = center;
+        v.type = SceneView::Type::Shadow;
+        v.zNear = nearLS;
+        v.zFar = farLS;
+        v.hfov = 0.0f;
+        v.requiresDepthCheck = true;
+    }
+}
+
 void Scene::SetDirectionalLight(DirectionalLight light)
 {
     dirLight_ = light;
@@ -567,6 +638,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.camera = &camera_;
     frameData_.mainView = &camera_.GetView();
     frameData_.cascadeViews = &cascadeViews_;
+    frameData_.clipmapViews = &clipmapViews_;
     frameData_.spotShadowViews = &spotShadowViews_;
     frameData_.pointShadowViews = &pointShadowViews_;
     frameData_.lightManager = &lightManager_;
@@ -597,6 +669,7 @@ void Scene::PrepareViews(Renderer* renderer)
         shoreViewPtr = &oceanSimulation->GetShoreDepthView();
     }
     UpdateCascades(camera_, renderer);
+    UpdateClipmap(camera_); // Step 24d: directional clipmap views (consumed only in VSM mode)
 
     // Choose which lit spots cast shadows this frame (highest projected size among
     // those whose influence intersects the view frustum) and their atlas slots,

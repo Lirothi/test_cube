@@ -58,6 +58,20 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     uint view, level, px, py;
     VsmDecodePage(owner, view, level, px, py);
 
+    // Step 24d (add-dormant): directional clipmap pages (view >= VSM_NUM_LOCAL_VIEWS) have no Rung-0
+    // cull yet (24e wires it). Emit zero-instance args so they draw nothing, and skip the
+    // rung0View = view + 4 arg copy below (which would read out of bounds for a clipmap view).
+    if (view >= VSM_NUM_LOCAL_VIEWS)
+    {
+        for (uint gc = 0u; gc < gNumGroups; ++gc)
+        {
+            uint offc = (p * gNumGroups + gc) * 20u;
+            PageDrawArgs.Store4(offc, uint4(0u, 0u, 0u, 0u));
+            PageDrawArgs.Store(offc + 16u, 0u);
+        }
+        return;
+    }
+
     // Off-center projection: the page (px,py) at this level covers the NDC sub-rect centered at
     // (cx,cy) with half-size 1/axis; scale/bias clip so that sub-rect fills [-1,1] (z preserved,
     // so the stored depth matches the light-space depth the sampler compares against).

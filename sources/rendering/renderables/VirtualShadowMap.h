@@ -57,8 +57,15 @@ namespace vsm
     // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces
     // (kMaxShadowedPointLights*6)] = 8 + 24 = 32.
     inline constexpr std::uint32_t kNumCascades = 4;                                 // == SceneFrameData::kCascades
-    inline constexpr std::uint32_t kMaxVirtualViews = render::kMaxShadowViews - kNumCascades; // 32
-    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*32 = 10912
+    inline constexpr std::uint32_t kNumLocalVirtualViews = render::kMaxShadowViews - kNumCascades; // 32 (spots + point faces)
+
+    // Step 24d: directional clipmap — N nested camera-centered ortho levels, appended as VSM views
+    // AFTER the 32 local ones (each a full view of kPagesPerView pages). Grows the view space; the
+    // clipmap views stay inactive (never requested) until 24d-2 fills them, and directional keeps
+    // running on CSM until the 24f sign-off. VSM_MAX_VIEWS / kMaxViews in the shaders must match.
+    inline constexpr std::uint32_t kNumClipmapLevels = 8;
+    inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 40
+    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
 
     // Page-table entry packing (a single uint per virtual page). Unused until Step 20 fills it.
     //   bit 31      : resident (1 = mapped to a physical page)
@@ -92,6 +99,9 @@ namespace vsm
     // them needs no reallocation. Defaults = the constexpr values above. ---
     inline float         g_refDist = kLodRefDist;
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
+    // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
+    // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
+    inline float         g_clipmapBaseExtent = 24.0f;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free

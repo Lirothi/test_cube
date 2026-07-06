@@ -15,7 +15,8 @@
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 // Must match the vsm:: constants in VirtualShadowMap.h.
-static const uint kMaxViews     = 32u;   // kMaxVirtualViews (spots + point faces, no cascades)
+static const uint kMaxViews     = 40u;   // kMaxVirtualViews (32 local + 8 clipmap levels, Step 24d)
+static const uint kNumLocalViews = 32u;  // views [0,32) = local (mip chain); [32,40) = directional clipmap
 static const uint kL0Axis       = 16u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint kMaxLevel     = 4u;    // kMaxMipLevel
 static const uint kPagesPerView = 341u;  // kPagesPerView (16²+8²+4²+2²+1)
@@ -70,7 +71,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint  level    = (uint)clamp(rawLevel, 0, (int)maxLevel);
 
     const uint count = min(numViews, kMaxViews);
-    for (uint v = 0; v < count; ++v)
+
+    // --- Local views (spots + point faces): per-view projection + a distance-selected mip chain. ---
+    const uint localCount = min(count, kNumLocalViews);
+    for (uint v = 0; v < localCount; ++v)
     {
         if (views[v].params.x < 0.5f) { continue; } // inactive view slot
 
@@ -94,5 +98,26 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             uint prev;
             InterlockedOr(Request[page >> 5u], 1u << (page & 31u), prev);
         }
+    }
+
+    // --- Directional clipmap (Step 24d): views [kNumLocalViews, count) are camera-centered ortho
+    // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain), so mark
+    // exactly ONE page: the finest level whose extent contains this receiver, at level 0 (16x16). ---
+    for (uint cv = kNumLocalViews; cv < count; ++cv)
+    {
+        if (views[cv].params.x < 0.5f) { continue; }
+        float4 cclip = mul(float4(P, 1.0f), views[cv].viewProj);
+        if (cclip.w <= 0.0f) { continue; }
+        float3 cndc = cclip.xyz / cclip.w;
+        if (cndc.x < -1.0f || cndc.x > 1.0f || cndc.y < -1.0f || cndc.y > 1.0f) { continue; } // outside this level
+        if (cndc.z < 0.0f || cndc.z > 1.0f) { continue; }
+        float2 csuv = float2(0.5f * cndc.x + 0.5f, 0.5f - 0.5f * cndc.y);
+        uint axis0 = kL0Axis; // clipmap levels use only level 0 (the level IS the LOD)
+        uint cpx = min((uint)(csuv.x * axis0), axis0 - 1u);
+        uint cpy = min((uint)(csuv.y * axis0), axis0 - 1u);
+        uint cpage = cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx;
+        uint cprev;
+        InterlockedOr(Request[cpage >> 5u], 1u << (cpage & 31u), cprev);
+        break; // finest containing clipmap level only
     }
 }

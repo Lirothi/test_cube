@@ -766,15 +766,31 @@ then the clipmap moves directional into the pool and retires the last resident C
   CSM cascade atlas stays full-res until 24f. Verified: both configs 0/0; Legacy scene-stress-gbv +
   a switch-round-trip stress (toggle every 10 frames) CLEAN, no UAF.
 
-**Part B — directional clipmap (the original Step 24), so VSM mode covers directional:**
-- **Step 24d — clipmap addressing + request/alloc.** N nested levels centered on the camera as
-  directional "views" into the request + alloc pipeline (distance-selected like the local-light mips).
-- **Step 24e — clipmap render.** Render directional casters into clipmap pages (reuses the per-page
-  render + mega-buffer).
-- **Step 24f — clipmap sampling + recentering + retire CSM.** Directional light path branches
-  CSM-vs-clipmap on mode; clipmap recenters on camera move (only edge pages rebuild); VSM mode now
-  frees the CSM cascade atlas → **VSM mode fully memory-optimal**. `Pass_CSM`/`UpdateCascades` are
-  **KEPT** (Legacy mode uses them) — not deleted.
+**Part B — directional clipmap (the original Step 24). Add-dormant + GBV-verifiable until 24f;
+directional keeps running on CSM (the Legacy path) until the visual sign-off at 24f. Sub-steps are
+sized so each one builds + passes `--scene-stress-gbv` on its own. VISUAL-ACCEPTANCE gates are
+called out explicitly — the clipmap projection / texel-snapping / level transitions can't be
+verified headlessly, they need the user's eyes.**
+- **Step 24d-1 — clipmap addressing (buffer growth only).** Add `kNumClipmapLevels` (N) + grow the
+  VSM view space: `kMaxVirtualViews` = 32 local + N clipmap; bump `VSM_MAX_VIEWS`, the page table,
+  the request bitfield, and the CB view arrays to match. NO behavior change — the N extra views stay
+  inactive (`numViews` unchanged). GATE: both configs 0/0 + `--scene-stress-gbv` CLEAN (bigger
+  buffers, no over-subscription).
+- **Step 24d-2 — clipmap views + request/alloc (add-dormant).** CPU builder for N camera-centered
+  nested-ortho sun views (mirror `UpdateCascades`: sun `LookAtLH` + ortho + light-space texel snap;
+  extent doubles per level). Append them to the request + render `addView` lists as the directional
+  block after the 32 local views + clipmap level-select in the request shader (finest level whose
+  extent contains the receiver). Nothing samples/renders them yet. GATE: `--scene-stress-gbv` CLEAN
+  + the `[VSM]` request log shows directional pages requested + allocated with the pool NOT
+  over-subscribed (watch the fail counter).
+- **Step 24e — clipmap render (add-dormant).** Render directional casters into the clipmap pages
+  (reuse the per-page render + mega-buffer). GATE: `--scene-stress-gbv` CLEAN. VISUAL-ACCEPTANCE
+  (optional): a pool/texture-debug view shows directional depth in the clipmap pages.
+- **Step 24f — clipmap sampling + recenter + retire CSM.** Directional light path (+ glass) branches
+  CSM↔clipmap on mode; clipmap recenters on camera move (only edge pages rebuild). **VISUAL-
+  ACCEPTANCE (required): user confirms directional shadows in VSM mode — parity at near range,
+  better at distance, no swimming/gaps.** Then VSM mode retires the CSM cascade atlas (shrink-to-1×1
+  like 24c) → **VSM mode fully memory-optimal**. `Pass_CSM`/`UpdateCascades` are **KEPT** for Legacy.
 
 **Verify (each step):** both configs 0/0; `--scene-stress(-gbv)` CLEAN incl. repeated live switches;
 only the active mode's shadow resources resident (allocation logging / PIX). Visual: Legacy↔VSM

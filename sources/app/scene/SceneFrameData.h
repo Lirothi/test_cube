@@ -8,6 +8,7 @@
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
 #include "rendering/lighting/LightManager.h"
+#include "rendering/renderables/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 
 class Camera;
 class DirectionalLight;
@@ -88,6 +89,7 @@ struct SceneFrameData
     const Camera* camera = nullptr;
     SceneView* mainView = nullptr;
     std::array<SceneView, kCascades>* cascadeViews = nullptr;
+    std::array<SceneView, vsm::kNumClipmapLevels>* clipmapViews = nullptr; // Step 24d: directional clipmap (VSM)
     std::array<SceneView, LightManager::kMaxShadowedSpotLights>* spotShadowViews = nullptr;
     std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>* pointShadowViews = nullptr;
     LightManager* lightManager = nullptr;
