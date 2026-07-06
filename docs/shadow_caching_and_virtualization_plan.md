@@ -641,6 +641,19 @@ meaningful.
   transparent pass — both still sample the atlas, which is still rendered, so they stay correct),
   and the automated **parity readback** (atlas-vs-VSM diff) — spot VSM parity is the user's visual
   A/B via **Ctrl+V**. Visual sign-off REQUIRED (I cannot verify the image headless).
+- **POINT + GLASS DONE (uncommitted) 2026-07-06.** `VsmPointShadow` reconstructs the cube face's
+  `LookAtLH*PerspectiveFovLH(90)` view-proj in-shader (major-axis face select — the 6 faces tile
+  the sphere exactly), so no per-face matrix buffer is needed; it feeds `VsmSampleNDC` at local view
+  `8+slot*6+face`. `pointlight_cs.hlsl` gains t7/t8 (page table + pool) + `useVsm`/`vsmRefDist` and
+  branches `PointShadowFactor` (world-space bias = pull toward the light before projecting). Glass
+  (`glass.hlsl`, the transparent VS+PS): root-sig SRV table 9→11 (+t9/t10), `vsmParams` in the
+  `GlassView` CB, and both `SampleSpotShadow` + `PointShadowFactor` branch to the VSM helpers; the
+  VSM SRVs are plumbed to the frame-less glass draw via `Renderer::SetVsmShadowSrvs` (set in
+  `Pass_Transparent`, read in `TransparentStaticMesh::Render`). Point/spot/glass all reuse the same
+  `vsm_sample.hlsli`. **VERIFIED: both configs 0/0; shaders compile; `--scene-stress-gbv=40` +
+  `--scene-stress=200` CLEAN (only {939,940,1006,1358} — the new SRV-table slots on point + glass
+  added no new surface).** Fixed a declaration-order crash (point CB `PointLightFrame` was below
+  `PointShadowFactor`; moved it above). All three lighting paths now sample VSM when Ctrl+V is on.
 - **USER-TESTED + TUNED 2026-07-06.** Core spot path renders correctly; Release CPU ~0.5 ms even
   near a dense spot grid. Post-test fixes: **mip chain** (request marks the selected level + all
   coarser; sampler `VsmSampleNDC` walks to a coarser resident level) — killed the distance

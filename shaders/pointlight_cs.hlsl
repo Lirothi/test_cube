@@ -1,8 +1,10 @@
-#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : StructuredBuffer<PointLightData>
 // t6     : TextureCubeArray point shadow depth cube (D16 -> R16), B2b
+// t7     : StructuredBuffer<uint> VSM page table (Rung 2 / Step 21)
+// t8     : Texture2D VSM physical page pool depth
 // u0     : Light accumulation RWTexture2D
 // s0     : LinearClamp
 // s1     : PointClamp
@@ -11,6 +13,7 @@
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
+#include "vsm_sample.hlsli"
 
 struct PointLightData
 {
@@ -28,11 +31,26 @@ Texture2D GBVelocity : register(t3);
 Texture2D DepthT : register(t4);
 StructuredBuffer<PointLightData> PointLights : register(t5);
 TextureCubeArray PointShadowCube : register(t6);
+StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
+Texture2D VsmPool : register(t8);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
 SamplerState gSmpPoint : register(s1);
 SamplerComparisonState gSmpShadowCmp : register(s2);
+
+cbuffer PointLightFrame : register(b0)
+{
+    float4x4 invView;
+    float4x4 invProj;
+    float3 camPosWS;
+    uint lightCount;
+    float2 screenSize;
+    float2 invScreenSize;
+    float invPointShadowSize; // 1 / pointShadowRes (cube face texel, for PCF)
+    uint   useVsm;      // Rung 2 / Step 21: sample the VSM page pool instead of the cube atlas
+    float  vsmRefDist;  // VSM mip level-select reference distance
+}
 
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Reconstructs the
 // standard-projection compare depth from the world offset (matches the render:
@@ -46,7 +64,21 @@ static const float kPointNormalBias = 0.05f; // world units, along the surface n
 float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
-    float3 d = (P + N * kPointNormalBias) - Ld.position; // normal-offset receiver; HW picks the face from d
+
+    float3 Poff = P + N * kPointNormalBias; // normal-offset receiver
+    // Rung 2 / Step 21: sample the VSM page pool. Reconstructs the cube face's view-proj + looks up
+    // the page table. World-space bias = pull the receiver toward the light before projecting (like
+    // the atlas path, avoiding the crushed-perspective-depth bias problem).
+    if (useVsm != 0u)
+    {
+        float3 toLight = Ld.position - Poff;
+        Poff += normalize(toLight) * Ld.shadowParams.y;
+        return VsmPointShadow((uint)Ld.shadowParams.x, Poff, Ld.position, Ld.shadowParams.z,
+                              Ld.shadowParams.w, camPosWS, vsmRefDist, 0.0f,
+                              VsmPageTable, VsmPool, gSmpShadowCmp);
+    }
+
+    float3 d = Poff - Ld.position; // HW picks the face from d
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));     // view-space Z on the selected face
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
@@ -78,17 +110,6 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
         }
     }
     return shadow / 9.0f;
-}
-
-cbuffer PointLightFrame : register(b0)
-{
-    float4x4 invView;
-    float4x4 invProj;
-    float3 camPosWS;
-    uint lightCount;
-    float2 screenSize;
-    float2 invScreenSize;
-    float invPointShadowSize; // 1 / pointShadowRes (cube face texel, for PCF)
 }
 
 [numthreads(8,8,1)]

@@ -70,26 +70,56 @@ float VsmSpotShadow(uint view, float4x4 viewProj, float3 Pbiased, float3 camPos,
     return VsmSampleNDC(view, ndc, uv, distCam, refDist, depthBias, PageTable, Pool, cmp);
 }
 
-// Point: `slot` = the light's cube slot. Projects into each of the 6 faces (views
-// 8 + slot*6 + face) and samples the one the receiver falls in — robust to face ordering.
-float VsmPointShadow(uint slot, float3 Pbiased, float3 camPos, float refDist, float depthBias,
-                     StructuredBuffer<float4x4> FaceViewProj, StructuredBuffer<uint> PageTable,
-                     Texture2D Pool, SamplerComparisonState cmp)
+// Point: `slot` = the light's cube slot. The 6 cube faces (VSM local views 8 + slot*6 + face) are
+// rendered with LookAtLH(lightPos, lightPos+kCubeDir[face], kCubeUp[face]) * PerspectiveFovLH(90,
+// 1, near, far) — the exact D3D face order (+X,-X,+Y,-Y,+Z,-Z). The receiver's direction major axis
+// picks the one face whose 90° cone contains it (the faces tile the sphere exactly, no overlap), so
+// we reconstruct just that face's view-proj here (no per-face buffer needed) and sample it.
+float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, float farP,
+                     float3 camPos, float refDist, float depthBias,
+                     StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     const uint kSpotViews = 8u; // kMaxShadowedSpotLights (point face views start after the spots)
-    [unroll] for (uint face = 0u; face < 6u; ++face)
+    float3 d = Pbiased - lightPos;
+    float3 ad = abs(d);
+
+    uint face; float3 fwd; float3 up; // fwd = kCubeDir[face], up = kCubeUp[face]
+    if (ad.x >= ad.y && ad.x >= ad.z)
     {
-        float4x4 vp = FaceViewProj[slot * 6u + face];
-        float4 clip = mul(float4(Pbiased, 1.0f), vp);
-        if (clip.w <= 0.0f) { continue; }
-        float3 ndc = clip.xyz / clip.w;
-        if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { continue; }
-        float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-        float distCam = length(Pbiased - camPos);
-        return VsmSampleNDC(kSpotViews + slot * 6u + face, ndc, uv, distCam, refDist, depthBias,
-                            PageTable, Pool, cmp);
+        face = (d.x >= 0.0f) ? 0u : 1u; fwd = float3((d.x >= 0.0f) ? 1.0f : -1.0f, 0, 0); up = float3(0, 1, 0);
     }
-    return 1.0f;
+    else if (ad.y >= ad.z)
+    {
+        face = (d.y >= 0.0f) ? 2u : 3u; fwd = float3(0, (d.y >= 0.0f) ? 1.0f : -1.0f, 0); up = float3(0, 0, (d.y >= 0.0f) ? -1.0f : 1.0f);
+    }
+    else
+    {
+        face = (d.z >= 0.0f) ? 4u : 5u; fwd = float3(0, 0, (d.z >= 0.0f) ? 1.0f : -1.0f); up = float3(0, 1, 0);
+    }
+
+    // LookAtLH (row-major, row-vector): right/up/fwd basis + translation.
+    float3 right = normalize(cross(up, fwd));
+    float3 upN = cross(fwd, right);
+    float4x4 view = float4x4(right.x, upN.x, fwd.x, 0.0f,
+                             right.y, upN.y, fwd.y, 0.0f,
+                             right.z, upN.z, fwd.z, 0.0f,
+                             -dot(right, lightPos), -dot(upN, lightPos), -dot(fwd, lightPos), 1.0f);
+    // PerspectiveFovLH(90,1,near,far): xScale=yScale=cot(45)=1.
+    float fRange = farP / (farP - nearP);
+    float4x4 proj = float4x4(1.0f, 0.0f, 0.0f, 0.0f,
+                             0.0f, 1.0f, 0.0f, 0.0f,
+                             0.0f, 0.0f, fRange, 1.0f,
+                             0.0f, 0.0f, -fRange * nearP, 0.0f);
+    float4x4 vp = mul(view, proj);
+
+    float4 clip = mul(float4(Pbiased, 1.0f), vp);
+    if (clip.w <= 0.0f) { return 1.0f; }
+    float3 ndc = clip.xyz / clip.w;
+    if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return 1.0f; }
+    float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+    float distCam = length(Pbiased - camPos);
+    return VsmSampleNDC(kSpotViews + slot * 6u + face, ndc, uv, distCam, refDist, depthBias,
+                        PageTable, Pool, cmp);
 }
 
 #endif // VSM_SAMPLE_HLSLI

@@ -213,7 +213,13 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     const D3D12_CPU_DESCRIPTOR_HANDLE glassReflSrv =
         deferred.glassReflectionSRV.ptr != 0 ? deferred.glassReflectionSRV : sceneColorSrv;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 9> srvs{
+    // t9/t10 = VSM page table + pool (Step 21), set by Pass_Transparent (valid once a level is
+    // loaded). Skip the draw if not set (its root sig binds them; a null staged SRV is invalid).
+    if (renderer->GetVsmPageTableSrv().ptr == 0 || renderer->GetVsmPoolSrv().ptr == 0)
+    {
+        return;
+    }
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 11> srvs{
         sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
@@ -222,7 +228,9 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         lights.GetSpotLightSrv(renderer->GetCurrentFrameIndex()),
         normalSrv,
         glassReflSrv,
-        deferred.pointShadowSRV // t8: omnidirectional point shadow cube (B3)
+        deferred.pointShadowSRV,          // t8: omnidirectional point shadow cube (B3)
+        renderer->GetVsmPageTableSrv(),   // t9: VSM page table
+        renderer->GetVsmPoolSrv()         // t10: VSM pool
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

@@ -1,9 +1,10 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsl"
+#include "vsm_sample.hlsli"
 
 struct PointLightData
 {
@@ -59,6 +60,7 @@ cbuffer GlassView : register(b1)
     float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
     float4 lightCounts;           // x = point lights, y = spot lights
     float4x4 lightViewProj[4];
+    float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -70,6 +72,8 @@ StructuredBuffer<SpotLightData> SpotLights : register(t5);
 Texture2D NormalMap : register(t6);
 Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT glass reflection
 TextureCubeArray PointShadowCube : register(t8); // B3: omnidirectional point shadow depth cube (D16 -> R16)
+StructuredBuffer<uint> VsmPageTable : register(t9);  // Rung 2 / Step 21
+Texture2D VsmPool : register(t10);
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -89,7 +93,17 @@ static const float3 kPointPcfOffsets[8] = {
 float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
-    float3 d = (P + N * kPointNormalBias) - Ld.position;
+    float3 Poff = P + N * kPointNormalBias;
+    // Rung 2 / Step 21: sample the VSM page pool (matches pointlight_cs.hlsl's VSM branch).
+    if (vsmParams.x != 0.0f)
+    {
+        float3 toLight = Ld.position - Poff;
+        Poff += normalize(toLight) * Ld.shadowParams.y;
+        return VsmPointShadow((uint)Ld.shadowParams.x, Poff, Ld.position, Ld.shadowParams.z,
+                              Ld.shadowParams.w, camPosSky.xyz, vsmParams.y, 0.0f,
+                              VsmPageTable, VsmPool, ShadowSampler);
+    }
+    float3 d = Poff - Ld.position;
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
@@ -236,8 +250,16 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndot
 
     float normalBias = light.shadowParams2.x;
     float depthBias = light.shadowParams.w;
-
     float3 Poff = P + N * normalBias;
+
+    // Rung 2 / Step 21: sample the VSM page pool (matches spotlight_cs.hlsl's VSM branch).
+    if (vsmParams.x != 0.0f)
+    {
+        uint slot = (uint)light.shadowParams.y;
+        return VsmSpotShadow(slot, light.viewProj, Poff, camPosSky.xyz, vsmParams.y, depthBias,
+                             VsmPageTable, VsmPool, ShadowSampler);
+    }
+
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
     float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
@@ -468,6 +490,7 @@ PSOut PSMain(VSOut i)
     //color = alpha.xxx;
     //alpha = 1.0f;
     //color = envRefl;
+    //color = diffuseAccum;
 
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPosH);

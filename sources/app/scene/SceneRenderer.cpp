@@ -141,6 +141,7 @@ namespace
         float4 spotShadowInfo;
         float4 lightCounts;
         mat4   lightViewProj[4];
+        float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
     };
 
     struct OceanReflectionConstants
@@ -240,6 +241,10 @@ namespace
         // z = glass-reflections-active flag: glass.hlsl samples GlassReflection when set (RT or
         // SSR mode), else uses skybox.
         vc.lightCounts = float4(pointCount, spotCount, glassReflActive ? 1.0f : 0.0f, 0.0f);
+
+        // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
+        const bool vsmOn = render::g_vsmPageRequestEnabled && frame.vsm && frame.vsm->IsAllocated();
+        vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist, 0.0f, 0.0f);
 
         return UploadFrameCB(renderer, vc);
     }
@@ -546,19 +551,34 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     // Depends on pPointShadow too: the cube must be rendered + transitioned to a
     // shader-readable state before this pass samples it (B3). kSrvAll keeps it readable
-    // by both this compute pass and the later transparent (glass) pixel pass.
-    auto pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
-        { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
-          { D.gb0.Get(), kSrvAll },
-          { D.gb1.Get(), kSrvAll },
-          { D.gb2.Get(), kSrvAll },
-          { D.gbVelocity.Get(), kSrvAll },
-          { D.depth.Get(), kSrvAll },
-          { D.pointShadow.Get(), kSrvAll } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassPointLights);
-            Pass_PointLights(renderer, ctx, *frame_->camera);
-        });
+    // by both this compute pass and the later transparent (glass) pixel pass. Step 21: the point
+    // shader also binds the VSM page-table (t7) + pool (t8) SRVs; ordering after the page render is
+    // transitive (this pass depends on pSpotLights, which depends on pVsmPageRender when active).
+    auto pointFn = [this, renderer](RenderGraphPassContext ctx) {
+        CPU_SCOPE(ProfilerScopes::kPassPointLights);
+        Pass_PointLights(renderer, ctx, *frame_->camera);
+    };
+    size_t pPointLights;
+    if (vsmAlloc)
+    {
+        pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
+            { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.pointShadow.Get(), kSrvAll },
+              { frame_->vsm->PagePool(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { frame_->vsm->PageTable(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+            pointFn);
+    }
+    else
+    {
+        pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
+            { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.pointShadow.Get(), kSrvAll } },
+            pointFn);
+    }
 
     auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1820,6 +1840,14 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         }
     }
 
+    // Rung 2 / Step 21: the shader always binds the VSM page-table (t7) + pool (t8) SRVs.
+    if (!frame_->vsm || !frame_->vsm->IsAllocated() ||
+        frame_->vsm->PageTableSrv().ptr == 0 || frame_->vsm->PagePoolSrv().ptr == 0)
+    {
+        return;
+    }
+    const bool vsmSample = render::g_vsmPageRequestEnabled;
+
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
     do
@@ -1865,13 +1893,16 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
         constants.lightCount = static_cast<uint32_t>(pointLights.size());
         constants.invPointShadowSize = 1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)); // cube-face texel for PCF
+        constants.useVsm = vsmSample ? 1u : 0u;
+        constants.vsmRefDist = vsm::g_refDist;
 
         // s2 = comparison sampler for the point shadow cube (B3).
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, pointMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WritePointLightConstants(constants, dest); },
-            // t0-t5 as before; t6 = point shadow depth cube (B3).
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV },
+            // t0-t5 as before; t6 = point shadow depth cube (B3); t7/t8 = VSM page table + pool.
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV,
+              frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -2635,6 +2666,18 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
 {
     // Shared per-view/per-frame CB (b1) for every transparent object in this pass.
     const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, glassReflActive_);
+
+    // Step 21: publish the VSM page-table + pool SRVs (t9/t10) for the glass draws, which lack frame
+    // access. Valid once a level is loaded; the pool/page-table are already SRV here (the light
+    // passes declared them). glass.hlsl only reads them when vsmParams.x != 0.
+    if (frame_->vsm && frame_->vsm->IsAllocated())
+    {
+        renderer->SetVsmShadowSrvs(frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv());
+    }
+    else
+    {
+        renderer->SetVsmShadowSrvs({}, {});
+    }
 
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 

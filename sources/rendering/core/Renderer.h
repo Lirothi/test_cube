@@ -113,6 +113,13 @@ public:
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
+    // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
+    // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.
+    void SetVsmShadowSrvs(D3D12_CPU_DESCRIPTOR_HANDLE pageTable, D3D12_CPU_DESCRIPTOR_HANDLE pool)
+    { vsmPageTableSrv_ = pageTable; vsmPoolSrv_ = pool; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPageTableSrv() const { return vsmPageTableSrv_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPoolSrv() const { return vsmPoolSrv_; }
+
     bool RequestObjectIdPick(float displayX, float displayY);
     bool HasPendingObjectIdPick() const { return objectIdPickRequested_; }
     void RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl);
@@ -354,6 +361,8 @@ private:
 
     UINT                              currentFrameIndex_ = 0;                   // 0..render::kFrameCount-1
     FrameResource*                    currentFrameResource_ = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
+    D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
     UINT                              currentFrameDescriptorHeapCount_ = 0;
