@@ -25,10 +25,13 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
 
     UploadManager up(device, uploadCmdList);
 
-    // VB
+    // VB. Left in COMMON (not VERTEX_AND_CONSTANT_BUFFER): buffers decay to COMMON after every
+    // ExecuteCommandLists regardless, and all readers (IA binds, RT BLAS builds, the Rung-2
+    // mega-buffer copy) implicitly promote from COMMON — so COMMON is the one initial state every
+    // consumer can start from without a barrier (needed by the mega-buffer's copy-source promotion).
     const UINT vbSize = vertexStride_ * vertexCount;
     vertexBuffer_ = up.CreateBufferWithData(vertices, vbSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        D3D12_RESOURCE_STATE_COMMON);
     vertexBufferView_.BufferLocation = vertexBuffer_->GetGPUVirtualAddress();
     vertexBufferView_.StrideInBytes = vertexStride_;
     vertexBufferView_.SizeInBytes = vbSize;
@@ -43,7 +46,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     }
 
     indexBuffer_ = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        D3D12_RESOURCE_STATE_COMMON); // see VB note: COMMON + implicit promotion for every reader
     indexBufferView_.BufferLocation = indexBuffer_->GetGPUVirtualAddress();
     indexBufferView_.SizeInBytes = ibSize;
     indexBufferView_.Format = indexFormat_;

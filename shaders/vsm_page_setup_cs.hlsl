@@ -15,13 +15,16 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
     "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
+#define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
+
 cbuffer SetupCB : register(b0)
 {
     uint gNumGroups;    // ShadowGpuData mesh-group count
     uint gArgBaseElems; // frame region base into Rung0Args, in 5-uint arg units (f*numViewsRung0*numGroups)
     uint gNumPages;     // kPoolPageCount
     uint _pad;
-    float4x4 gViewProj[VSM_MAX_VIEWS]; // per VSM local view (spots then point faces)
+    float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
+    uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
 };
 
 StructuredBuffer<uint> PhysOwner    : register(t0); // physical page -> virtual owner / INVALID
@@ -81,6 +84,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint src = (gArgBaseElems + rung0View * gNumGroups + g) * 20u;
         uint4 a0 = Rung0Args.Load4(src);      // IndexCountPerInstance, InstanceCount, StartIndex, BaseVertex
         uint  a4 = Rung0Args.Load(src + 16u); // StartInstanceLocation
+        // Rebase into the consolidated mega VB/IB (offsets are 0 when the mega path is off, so the
+        // args stay per-mesh for the per-group fallback binding). z = StartIndexLocation, w = BaseVertexLocation.
+        a0.z += gGroupMega[g].y;
+        a0.w += gGroupMega[g].x;
         uint dst = (p * gNumGroups + g) * 20u;
         PageDrawArgs.Store4(dst, a0);
         PageDrawArgs.Store(dst + 16u, a4);

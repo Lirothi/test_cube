@@ -578,6 +578,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const std::uint32_t groups = shadowGpu->MeshGroupCount();
     if (groups == 0 || groups > renderGroups_) { return; }
 
+    // Consolidated caster VB/IB (built once at level load, ShadowGpuData::EnsureMegaBuffer): when
+    // ready, the draw loop below binds geometry ONCE + issues one ExecuteIndirect(maxCount=groups)
+    // per page instead of a bind + draw per (page, mesh-group).
+    const bool useMega = shadowGpu->MegaReady() &&
+                         shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
+
     // --- Setup compute: per physical page, build the off-center projection + copy the page's
     // view's Rung-0 cull args. Reads Rung0 args + physOwner as SRVs. ---
     renderer->Transition(cl, shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -585,10 +591,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, pad;
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
+        DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
     const std::uint32_t argBaseElems = f * render::kMaxShadowViews * groups; // region f, 5-uint arg units
     RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
@@ -598,6 +606,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
+            // Mega offsets (0 unless the consolidated path is active) so the setup rebases each
+            // group's draw args into the mega VB/IB.
+            const std::uint32_t gm = (groups < kMaxMegaGroups) ? groups : kMaxMegaGroups;
+            for (std::uint32_t g = 0; useMega && g < gm; ++g)
+            {
+                cb.groupMega[g].x = shadowGpu->GroupBaseVertex(g);
+                cb.groupMega[g].y = shadowGpu->GroupStartIndex(g);
+            }
             std::memcpy(dst, &cb, sizeof(cb));
         },
         { physOwnerSrv_, rung0ArgsSrv_ },
@@ -647,6 +663,22 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     visVBV.StrideInBytes = sizeof(std::uint32_t);
     cl->IASetVertexBuffers(1, 1, &visVBV);
 
+    // Mega path: bind the consolidated caster VB/IB ONCE (the per-group offsets were baked into the
+    // args by the setup shader), so each page is a single ExecuteIndirect(maxCount=groups).
+    if (useMega)
+    {
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = shadowGpu->MegaVertexBuffer()->GetGPUVirtualAddress();
+        vbv.SizeInBytes = shadowGpu->MegaVertexBytes();
+        vbv.StrideInBytes = shadowGpu->MegaStride();
+        cl->IASetVertexBuffers(0, 1, &vbv);
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = shadowGpu->MegaIndexBuffer()->GetGPUVirtualAddress();
+        ibv.SizeInBytes = shadowGpu->MegaIndexBytes();
+        ibv.Format = shadowGpu->MegaIndexFormat();
+        cl->IASetIndexBuffer(&ibv);
+    }
+
     const auto& groupMeshes = shadowGpu->GroupMeshes();
     const D3D12_GPU_VIRTUAL_ADDRESS projVA = pageProj_->GetGPUVirtualAddress();
     const UINT64 argStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
@@ -665,6 +697,15 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         cl->RSSetScissorRects(1, &sc);
         cl->SetGraphicsRootConstantBufferView(0, projVA + static_cast<UINT64>(p) * 256u); // b1 = this page's projection
 
+        if (useMega)
+        {
+            // All `groups` args for this page are contiguous; empty groups draw 0 instances (no-op).
+            const UINT64 argOff = static_cast<UINT64>(p) * groups * argStride;
+            renderer->ExecuteIndirect(cl, sig, groups, pageDrawArgs_.Get(), argOff, nullptr, 0);
+            continue;
+        }
+
+        // Fallback (heterogeneous meshes): bind + draw per mesh-group.
         for (std::uint32_t g = 0; g < groups; ++g)
         {
             const Mesh* mesh = (g < groupMeshes.size()) ? groupMeshes[g] : nullptr;

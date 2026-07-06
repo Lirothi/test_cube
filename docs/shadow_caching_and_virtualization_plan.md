@@ -713,6 +713,23 @@ meaningful.
   mostly-static scenes.
 - **Verify:** debug counter of "pages rendered this frame" → near-zero when camera + scene are
   static, small when a dynamic object moves. `--scene-stress` Debug CLEAN. Measure vs Rung 1.
+- **NOT DONE — superseded for now by the MEGA-BUFFER (2026-07-06, user's pick over Step 23).**
+  Rationale: with hardware raster, "render only changed pages" needs the CPU to iterate a
+  GPU-computed changed-page list, which requires a GPU→CPU readback (the virtual→physical map is
+  GPU-side) → the same ~3-frame latency as `g_residentIterOnly` (mover ghosting). The clean
+  zero-latency version is a software rasterizer (Nanite), out of scope. So instead we attacked the
+  **per-page CPU submission cost** directly, latency-free: **`ShadowGpuData::EnsureMegaBuffer`**
+  concatenates all caster mesh groups into ONE VB + ONE IB (built once on the GPU-idle level-load
+  upload CL; uniform-stride + R32 only, else per-group fallback), so `RecordPageRender` binds
+  geometry ONCE and issues a single `ExecuteIndirect(maxCount=groups)` per page instead of a
+  bind+draw per (page, mesh-group) — ~4x fewer D3D calls, **same-frame, no flicker/latency**. The
+  VSM setup shader (`vsm_page_setup_cs`) bakes each group's mega vertex/index offset into the copied
+  draw args (`gGroupMega`), so the args self-describe into the mega buffer. Enabler: **mesh VB/IB
+  are now created in COMMON** (they decay to COMMON anyway; every reader — IA, RT BLAS, the mega
+  copy — implicitly promotes), which is what lets the load-CL copy use implicit COMMON→COPY_SOURCE
+  promotion robustly for both fresh and cross-level-cached meshes (no barriers, no state guessing).
+  Verified: both configs 0/0, `--scene-stress-gbv=40` + `--scene-stress=200` CLEAN. The real Step 23
+  (page-level caching) remains the eventual CPU win once a same-frame changed-set mechanism exists.
 
 ### Step 24 — Directional clipmap (REPLACES CSM — this is where cascades are eliminated)
 

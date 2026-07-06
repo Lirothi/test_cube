@@ -354,6 +354,58 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
     }
 
+    // Rung 2 mega-buffer layout: concatenate all group meshes into one VB + one IB so the VSM
+    // per-page render binds geometry once + issues a single ExecuteIndirect(maxCount=groups) per
+    // page. Only when every group shares a vertex stride + R32 index format (the MeshManager/PNTUV
+    // case); else megaWanted_ stays false and the VSM path keeps its per-group binding. The GPU copy
+    // itself is deferred to EnsureMegaBuffer (needs a command list). Offsets are in vertices/indices.
+    // Don't free megaVB_/megaIB_ here: Rebuild can run mid-game (editor spawn/delete, not GPU-idle),
+    // and a freed buffer might still be referenced by an in-flight frame. Clearing megaReady_ makes
+    // RecordPageRender fall back to per-group binding; EnsureMegaBuffer (GPU-idle level load only)
+    // frees + reallocates. So a mid-game caster change just drops the mega opt until the next load.
+    megaWanted_ = megaBuilt_ = megaReady_ = false;
+    megaVBBytes_ = megaIBBytes_ = megaStride_ = 0;
+    megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
+    baseVertex_.assign(numMeshGroups_, 0u);
+    startIndex_.assign(numMeshGroups_, 0u);
+    groupVBBytes_.assign(numMeshGroups_, 0u);
+    groupIBBytes_.assign(numMeshGroups_, 0u);
+    constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
+    if (numMeshGroups_ > 0 && numMeshGroups_ <= kMaxMegaGroups)
+    {
+        bool uniform = true;
+        UINT stride0 = 0;
+        DXGI_FORMAT fmt0 = DXGI_FORMAT_UNKNOWN;
+        for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+        {
+            const Mesh* m = groupMesh_[g];
+            ID3D12Resource* vb = m ? m->GetVertexBufferResource() : nullptr;
+            ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr;
+            if (!vb || !ib) { uniform = false; break; }
+            if (g == 0) { stride0 = m->GetVertexStride(); fmt0 = m->GetIndexFormat(); }
+            else if (m->GetVertexStride() != stride0 || m->GetIndexFormat() != fmt0) { uniform = false; break; }
+        }
+        if (uniform && stride0 > 0 && fmt0 == DXGI_FORMAT_R32_UINT) // consolidated path is R32-only
+        {
+            const UINT idxBytes = 4u;
+            UINT voff = 0, ioff = 0;
+            for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+            {
+                const Mesh* m = groupMesh_[g];
+                const UINT vbw = static_cast<UINT>(m->GetVertexBufferResource()->GetDesc().Width);
+                const UINT ibw = static_cast<UINT>(m->GetIndexBufferResource()->GetDesc().Width);
+                baseVertex_[g] = voff / stride0;   // exact: widths are stride*count
+                startIndex_[g] = ioff / idxBytes;  // exact: widths are 4*count
+                groupVBBytes_[g] = vbw;
+                groupIBBytes_[g] = ibw;
+                voff += vbw; ioff += ibw;
+            }
+            megaVBBytes_ = voff; megaIBBytes_ = ioff;
+            megaStride_ = stride0; megaIndexFormat_ = fmt0;
+            megaWanted_ = (megaVBBytes_ > 0 && megaIBBytes_ > 0);
+        }
+    }
+
     // Prime ALL ring regions — after this a static scene re-uploads nothing.
     if (casterCount > 0)
     {
@@ -790,6 +842,62 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     return true;
 }
 
+void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer || !renderer->GetDevice() || !cl || megaBuilt_ || !megaWanted_) { return; }
+    megaBuilt_ = true; // one-shot: never re-attempt (a failed alloc falls back to per-group binding)
+
+    auto makeBuf = [&](UINT bytes, Microsoft::WRL::ComPtr<ID3D12Resource>& out, const wchar_t* name) -> bool
+    {
+        out.Reset(); // free any prior-level mega buffer (safe: EnsureMegaBuffer runs GPU-idle at load)
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = bytes;
+        desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(out.GetAddressOf()));
+        if (FAILED(hr) || !out) { return false; }
+        renderer->SetResourceState(out.Get(), D3D12_RESOURCE_STATE_COMMON);
+        out->SetName(name);
+        return true;
+    };
+    if (!makeBuf(megaVBBytes_, megaVB_, L"ShadowGpuData.MegaVB") ||
+        !makeBuf(megaIBBytes_, megaIB_, L"ShadowGpuData.MegaIB"))
+    {
+        megaVB_.Reset(); megaIB_.Reset();
+        return; // fall back to per-group binding
+    }
+
+    // Concatenate each group's mesh VB/IB into the mega buffers. This runs on the GPU-idle
+    // level-load CL, where the mesh buffers (created in COMMON) + the freshly-created mega buffers
+    // are all in COMMON, so the copies rely on implicit COMMON->COPY_SOURCE / COMMON->COPY_DEST
+    // promotion — no barriers, and robust whether a mesh is fresh this load or a cached reuse. The
+    // load CL's execute+fence (before any frame renders) is the write->read sync; the mega buffers
+    // decay back to COMMON and the per-page draw's IA bind promotes them to VERTEX_/INDEX_BUFFER.
+    UINT voff = 0, ioff = 0;
+    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    {
+        const Mesh* m = groupMesh_[g];
+        ID3D12Resource* vb = m ? m->GetVertexBufferResource() : nullptr;
+        ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr;
+        if (vb && ib)
+        {
+            cl->CopyBufferRegion(megaVB_.Get(), voff, vb, 0, groupVBBytes_[g]);
+            cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, groupIBBytes_[g]);
+        }
+        voff += groupVBBytes_[g];
+        ioff += groupIBBytes_[g];
+    }
+    megaReady_ = true;
+}
+
 void ShadowGpuData::PollValidation(Renderer* renderer)
 {
     if (valState_ != 1 || !renderer || !valReadback_) { return; }
@@ -874,6 +982,7 @@ void ShadowGpuData::Reset()
     pending_.clear();
     cpuViewFrustums_.clear();
     groupMesh_.clear();
+    megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
     valState_ = 0;
     logFramesRemaining_ = 5;
 }

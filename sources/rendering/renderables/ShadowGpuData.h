@@ -121,6 +121,23 @@ public:
     // frame's per-view cull output). Empty until Rebuild.
     const std::vector<const Mesh*>& GroupMeshes() const { return groupMesh_; }
 
+    // Rung 2 mega-buffer (VSM per-page draws): all caster mesh groups concatenated into ONE VB + ONE
+    // IB, so the per-page render binds geometry ONCE and issues a single ExecuteIndirect(maxCount=
+    // groups) per page instead of a bind + draw per (page, mesh-group) — ~4x fewer CPU calls, same
+    // frame, no latency. Ready only when every group shares a vertex stride + R32 index format (the
+    // common MeshManager/PNTUV case); otherwise the VSM path falls back to per-group binding. The
+    // per-group offsets are in vertices / indices (added into the draw args by the setup shader).
+    void EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandList* cl); // one-time build on `cl`
+    bool MegaReady() const { return megaReady_; }
+    ID3D12Resource* MegaVertexBuffer() const { return megaVB_.Get(); }
+    ID3D12Resource* MegaIndexBuffer() const { return megaIB_.Get(); }
+    UINT MegaVertexBytes() const { return megaVBBytes_; }
+    UINT MegaIndexBytes() const { return megaIBBytes_; }
+    UINT MegaStride() const { return megaStride_; }
+    DXGI_FORMAT MegaIndexFormat() const { return megaIndexFormat_; }
+    std::uint32_t GroupBaseVertex(std::uint32_t g) const { return g < baseVertex_.size() ? baseVertex_[g] : 0u; }
+    std::uint32_t GroupStartIndex(std::uint32_t g) const { return g < startIndex_.size() ? startIndex_[g] : 0u; }
+
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
     // `stride` bytes, persistently mapped, with one SRV per region. The shared boilerplate
@@ -196,6 +213,19 @@ private:
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 
     std::vector<const Mesh*> groupMesh_; // mesh-group id -> Mesh* (VB/IB for the indirect draws)
+
+    // Rung 2 mega-buffer: all group meshes concatenated into one VB/IB (see EnsureMegaBuffer).
+    // megaWanted_ = layout is uniform + within limits (set in Rebuild); megaBuilt_ = the one-time
+    // GPU copy has run (one-shot, success or fail); megaReady_ = built + usable.
+    Microsoft::WRL::ComPtr<ID3D12Resource> megaVB_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> megaIB_;
+    std::vector<std::uint32_t> baseVertex_;   // per group: vertex offset into megaVB_
+    std::vector<std::uint32_t> startIndex_;   // per group: index offset into megaIB_
+    std::vector<std::uint32_t> groupVBBytes_; // per group: source VB byte size (copy length)
+    std::vector<std::uint32_t> groupIBBytes_; // per group: source IB byte size (copy length)
+    UINT megaVBBytes_ = 0, megaIBBytes_ = 0, megaStride_ = 0;
+    DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
+    bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
 

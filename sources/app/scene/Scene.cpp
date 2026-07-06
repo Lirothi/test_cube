@@ -95,6 +95,9 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // once the object transforms are finalized (SyncSceneState above resets motion history so
     // prevWorld == world). Level load is GPU-idle, safe for the alloc.
     shadowGpu_.Rebuild(renderer, objects_);
+    // Rung 2 mega-buffer: concatenate the caster meshes' VB/IB on this GPU-idle upload CL (meshes
+    // are all in COMMON here, so the copy uses implicit promotion) for the VSM per-page draws.
+    shadowGpu_.EnsureMegaBuffer(renderer, uploadCmdList);
     BumpStaticSetVersion(); // Step 11: a fresh level = a new static caster set
     // Rung 2 (Step 18): allocate the persistent VSM page pool + page table once (idempotent).
     vsm_.EnsureResources(renderer);
