@@ -1743,14 +1743,14 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         }
     }
 
-    // Rung 2 / Step 21: the shader always binds the VSM page-table (t7) + pool (t8) SRVs (its root
-    // sig declares them); they exist once a level is loaded. Skip the frame if not (startup).
-    if (!frame_->vsm || !frame_->vsm->IsAllocated() ||
-        frame_->vsm->PageTableSrv().ptr == 0 || frame_->vsm->PagePoolSrv().ptr == 0)
-    {
-        return;
-    }
+    // Rung 2 / Step 21+24b: the shader's root sig always binds t7 (VSM page table) + t8 (VSM pool).
+    // In VSM mode they must be resident; in Legacy mode the pool is freed, so bind inert dummy SRVs
+    // (the shader's useVsm=0 branch never samples them). Skip only when VSM SAMPLING is requested but
+    // the pool isn't ready (startup / OOM) — never in Legacy mode, which must still light via the atlas.
     const bool vsmSample = render::VsmActive();
+    const bool vsmReady = frame_->vsm && frame_->vsm->IsAllocated() &&
+                          frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
+    if (vsmSample && !vsmReady) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -1802,7 +1802,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSpotLightConstants(constants, dest); },
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle,
-              frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv() },
+              vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
+              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t8 (inert in Legacy)
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -1840,13 +1841,13 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         }
     }
 
-    // Rung 2 / Step 21: the shader always binds the VSM page-table (t7) + pool (t8) SRVs.
-    if (!frame_->vsm || !frame_->vsm->IsAllocated() ||
-        frame_->vsm->PageTableSrv().ptr == 0 || frame_->vsm->PagePoolSrv().ptr == 0)
-    {
-        return;
-    }
+    // Rung 2 / Step 21+24b: the shader always binds t7 (VSM page table) + t8 (VSM pool). Bind inert
+    // dummy SRVs in Legacy mode (freed pool) — useVsm=0 never samples them. Skip only when VSM
+    // sampling is requested but the pool isn't ready; Legacy must still light via the cube atlas.
     const bool vsmSample = render::VsmActive();
+    const bool vsmReady = frame_->vsm && frame_->vsm->IsAllocated() &&
+                          frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
+    if (vsmSample && !vsmReady) { return; }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -1902,7 +1903,8 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             [&](uint8_t* dest) { resources_.WritePointLightConstants(constants, dest); },
             // t0-t5 as before; t6 = point shadow depth cube (B3); t7/t8 = VSM page table + pool.
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV,
-              frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv() },
+              vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
+              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t8 (inert in Legacy)
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

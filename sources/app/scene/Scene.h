@@ -102,6 +102,7 @@ private:
 
     static constexpr int kCascades = SceneFrameData::kCascades;
 
+    void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
     void UpdateCascades(const Camera& camera, Renderer* renderer);
 
     void PrepareViews(Renderer* renderer);

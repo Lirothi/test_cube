@@ -115,10 +115,21 @@ public:
 
     // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
     // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.
+    // Step 24b: when VSM is off/freed (Legacy mode) a null handle is passed — substitute an inert
+    // DUMMY SRV so the glass draw still binds valid descriptors (glass.hlsl reads them only when
+    // vsmParams.x != 0) instead of skipping. The light passes use VsmDummy*Srv() the same way.
     void SetVsmShadowSrvs(D3D12_CPU_DESCRIPTOR_HANDLE pageTable, D3D12_CPU_DESCRIPTOR_HANDLE pool)
-    { vsmPageTableSrv_ = pageTable; vsmPoolSrv_ = pool; }
+    {
+        EnsureVsmDummySrvs();
+        vsmPageTableSrv_ = pageTable.ptr ? pageTable : vsmDummyBufferSrv_;
+        vsmPoolSrv_      = pool.ptr      ? pool      : vsmDummyTexSrv_;
+    }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPageTableSrv() const { return vsmPageTableSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPoolSrv() const { return vsmPoolSrv_; }
+    // Inert stand-in SRVs (null StructuredBuffer / null Texture2D) for the VSM t7/t8 slots when VSM
+    // isn't resident (Legacy mode) — valid to bind, never sampled (useVsm=0). See the spot/point passes.
+    D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyTexSrv()    { EnsureVsmDummySrvs(); return vsmDummyTexSrv_; }
 
     bool RequestObjectIdPick(float displayX, float displayY);
     bool HasPendingObjectIdPick() const { return objectIdPickRequested_; }
@@ -363,6 +374,10 @@ private:
     FrameResource*                    currentFrameResource_ = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs
+    D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)
+    D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyTexSrv_{};                        // null Texture2D (t8/t10)
+    void EnsureVsmDummySrvs();                                                  // lazily create the two null SRVs
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
     UINT                              currentFrameDescriptorHeapCount_ = 0;

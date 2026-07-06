@@ -865,6 +865,51 @@ void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
     cl->ResourceBarrier(1, &b);
 }
 
+void Renderer::EnsureVsmDummySrvs() {
+    if (vsmDummyHeap_) { return; }
+    ID3D12Device* dev = GetDevice();
+    if (!dev) { return; }
+
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.NumDescriptors = 2;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only: these are copy SOURCES for StageSrvUavTable
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(vsmDummyHeap_.GetAddressOf()))) || !vsmDummyHeap_) {
+        vsmDummyHeap_.Reset();
+        return;
+    }
+    vsmDummyHeap_->SetName(L"VSM.DummySrvs");
+
+    const UINT inc = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE base = vsmDummyHeap_->GetCPUDescriptorHandleForHeapStart();
+
+    // Slot 0: null StructuredBuffer<uint> — matches VsmPageTable (t7/t9). Inert (never sampled: the
+    // shaders read it only under useVsm/vsmParams != 0, which is false whenever VSM isn't resident).
+    vsmDummyBufferSrv_ = base;
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC d{};
+        d.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        d.Format = DXGI_FORMAT_UNKNOWN;
+        d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        d.Buffer.NumElements = 1;
+        d.Buffer.StructureByteStride = 4;
+        d.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        dev->CreateShaderResourceView(nullptr, &d, vsmDummyBufferSrv_);
+    }
+
+    // Slot 1: null Texture2D (R16_UNORM) — matches VsmPool (t8/t10).
+    vsmDummyTexSrv_ = base;
+    vsmDummyTexSrv_.ptr += inc;
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC d{};
+        d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        d.Format = DXGI_FORMAT_R16_UNORM;
+        d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        d.Texture2D.MipLevels = 1;
+        dev->CreateShaderResourceView(nullptr, &d, vsmDummyTexSrv_);
+    }
+}
+
 ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
     if (drawIndexedCmdSig_) {
         return drawIndexedCmdSig_.Get();

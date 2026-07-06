@@ -205,6 +205,53 @@ namespace
     }
 }
 
+void VirtualShadowMap::ReleaseResources()
+{
+    // Step 24b: free every VSM GPU allocation (pool + page table + request/alloc/render buffers +
+    // their descriptor heaps + the readback ring) when switching to Legacy mode, so nothing VSM is
+    // resident. MUST be called at GPU idle (the switch orchestration waits first) — a freed resource
+    // referenced by an in-flight frame would fault. The compute PSOs (Materials) are KEPT: they cost
+    // no pool memory and are reused if VSM is re-enabled. IsAllocated() goes false → all VSM passes +
+    // sampling early-out. A later EnsureResources rebuilds everything (idempotent, guards cleared).
+    pagePool_.Reset();
+    pageTable_.Reset();
+    dsvHeap_.Reset();
+    srvUavHeap_.Reset();
+    requestBuffer_.Reset();
+
+    physOwner_.Reset();
+    physLastFrame_.Reset();
+    freeList_.Reset();
+    needsRender_.Reset();
+    allocCounters_.Reset();
+    allocUavHeap_.Reset();
+    allocInitialized_ = false; // fresh alloc buffers need the one-shot page-table/owner init again
+
+    pageProj_.Reset();
+    pageDrawArgs_.Reset();
+    renderHeap_.Reset();
+    renderGroups_ = 0;
+    cachedRung0Args_ = nullptr;
+
+    for (UINT i = 0; i < render::kFrameCount; ++i)
+    {
+        residentReadback_[i].Reset(); // releasing implicitly unmaps the persistent map
+        residentReadbackPtr_[i] = nullptr;
+        residentReadbackValid_[i] = false;
+    }
+
+    debugReadback_.Reset();
+    debugReadbackState_ = 0;
+    debugReadbackFrame_ = 0;
+    debugReadbackDoneFrame_ = 0;
+
+    // Zero the cached CPU descriptor handles (their heaps are gone) so nothing stale is bound.
+    poolDsv_ = poolSrv_ = pageTableSrv_ = pageTableUav_ = {};
+    requestUav_ = {};
+    physOwnerUav_ = physLastFrameUav_ = freeListUav_ = needsRenderUav_ = allocCountersUav_ = {};
+    physOwnerSrv_ = rung0ArgsSrv_ = pageDrawArgsUav_ = pageProjUav_ = {};
+}
+
 void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
 {
     if (allocCounters_) { return; } // already created (persistent)

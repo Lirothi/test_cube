@@ -129,6 +129,8 @@ class VirtualShadowMap
 public:
     // Allocate the pool + page table once (idempotent; persistent across level switches).
     void EnsureResources(Renderer* renderer);
+    // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
+    void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }
 
     // Resources + views for the future VSM passes; null/{0} until allocated.

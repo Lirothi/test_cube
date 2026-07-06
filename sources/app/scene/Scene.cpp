@@ -99,8 +99,11 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // are all in COMMON here, so the copy uses implicit promotion) for the VSM per-page draws.
     shadowGpu_.EnsureMegaBuffer(renderer, uploadCmdList);
     BumpStaticSetVersion(); // Step 11: a fresh level = a new static caster set
-    // Rung 2 (Step 18): allocate the persistent VSM page pool + page table once (idempotent).
-    vsm_.EnsureResources(renderer);
+    // Rung 2 (Step 24b): allocate the persistent VSM page pool + page table only when VSM is the
+    // active mode — Legacy mode keeps ZERO VSM resources resident. A runtime Ctrl+V switch reconciles
+    // this at GPU idle in Scene::Render. (The mega-buffer above stays built regardless — it's tiny
+    // and lets a runtime switch to VSM use the fast per-page draw path immediately.)
+    if (render::VsmActive()) { vsm_.EnsureResources(renderer); }
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
@@ -784,11 +787,27 @@ void Scene::PrepareViews(Renderer* renderer)
     }
 }
 
+void Scene::ReconcileShadowMode(Renderer* renderer)
+{
+    // Step 24b: make the VSM resource state match the active shadow mode. The common path is a cheap
+    // bool compare; only when they disagree (a Ctrl+V toggle since last frame) do we stall to GPU idle
+    // and free/allocate — the same idle-then-realloc pattern the level-load path uses. So only ONE
+    // mode's shadow resources are ever resident (memory-optimal). Legacy atlas freeing is Step 24c.
+    if (!renderer) { return; }
+    const bool want = render::VsmActive();
+    if (want == vsm_.IsAllocated()) { return; }
+    renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating VSM resources
+    if (want) { vsm_.EnsureResources(renderer); }
+    else      { vsm_.ReleaseResources(); }
+}
+
 void Scene::Render(Renderer* renderer) {
     if (!renderer) {
         return;
     }
     CPU_SCOPE(ProfilerScopes::kSceneRender);
+
+    ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {
