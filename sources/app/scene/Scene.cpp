@@ -909,13 +909,15 @@ void Scene::Render(Renderer* renderer) {
         constexpr size_t kCascadeSlots = static_cast<size_t>(kCascades);
         constexpr size_t kSpotSlots = LightManager::kMaxShadowedSpotLights;
         constexpr size_t kPointFaceSlots = LightManager::kMaxShadowedPointLights * 6;
+        constexpr size_t kClipmapSlots = vsm::kNumClipmapLevels; // Step 24e: directional clipmap cull views
         // Single source of truth: the indirect buffers (ShadowGpuData) size per view against
         // render::kMaxShadowViews; keep it equal to the real cap sum so they can't drift.
-        static_assert(kCascadeSlots + kSpotSlots + kPointFaceSlots == render::kMaxShadowViews,
+        static_assert(kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots == render::kMaxShadowViews,
                       "render::kMaxShadowViews must equal the shadow-view slot layout");
-        // Direct constant base offsets (not a running index) so the array writes are
-        // provably in-bounds — [0,kCascadeSlots) | [kCascadeSlots,+kSpotSlots) | rest.
-        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots> frustums{};
+        // Direct constant base offsets (not a running index) so the array writes are provably
+        // in-bounds — [cascades | spots | point faces | clipmap]. The VSM setup's rung0View =
+        // view + kNumCascades relies on this exact ordering.
+        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots> frustums{};
         for (size_t i = 0; i < kCascadeSlots; ++i)
         {
             frustums[i] = &cascadeViews_[i].frustum;
@@ -929,6 +931,13 @@ void Scene::Render(Renderer* renderer) {
         for (size_t i = 0; i < kPointFaceSlots; ++i)
         {
             frustums[kCascadeSlots + kSpotSlots + i] = (i < pointFaceCount) ? &pointShadowViews_[i].frustum : nullptr;
+        }
+        // Step 24e: directional clipmap levels — culled ONLY in VSM mode (null = reject-all in Legacy,
+        // so the cull emits zero for them and the Legacy atlas path is untouched).
+        for (size_t i = 0; i < kClipmapSlots; ++i)
+        {
+            frustums[kCascadeSlots + kSpotSlots + kPointFaceSlots + i] =
+                render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
     }

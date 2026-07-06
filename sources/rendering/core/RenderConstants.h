@@ -27,7 +27,7 @@ inline constexpr unsigned kConstantBufferAlignment = 256u;
 // [4 CSM cascades | kMaxShadowedSpotLights | kMaxShadowedPointLights*6 point cube faces].
 // Kept here (below the light subsystem in the include graph) as a plain value; Scene.cpp
 // static_asserts it equals the sum of the actual LightManager caps so the two can't drift.
-inline constexpr unsigned kMaxShadowViews = 36; // 4 + 8 + 4*6
+inline constexpr unsigned kMaxShadowViews = 44; // 4 cascade + 8 spot + 4*6 point + 8 clipmap (Step 24e: directional clipmap cull views)
 
 // --- Swapchain / backbuffer formats ---
 inline constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;

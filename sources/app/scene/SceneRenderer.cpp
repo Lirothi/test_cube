@@ -1084,6 +1084,10 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
     const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
     { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+    // Step 24e: clipmap views fill slots [32, 40) so the setup builds their per-page projection from
+    // gViewProj[view]; they render directional casters via the Rung-0 clipmap cull slots (rung0View
+    // = view + kNumCascades). Matches the request pass + cull frustum layout.
+    if (frame_->clipmapViews) { for (const SceneView& v : *frame_->clipmapViews) { addView(v, true); } }
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);

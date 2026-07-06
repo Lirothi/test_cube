@@ -57,14 +57,18 @@ namespace vsm
     // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces
     // (kMaxShadowedPointLights*6)] = 8 + 24 = 32.
     inline constexpr std::uint32_t kNumCascades = 4;                                 // == SceneFrameData::kCascades
-    inline constexpr std::uint32_t kNumLocalVirtualViews = render::kMaxShadowViews - kNumCascades; // 32 (spots + point faces)
+    inline constexpr std::uint32_t kNumLocalVirtualViews = 32;                        // spots (8) + point faces (24)
 
-    // Step 24d: directional clipmap — N nested camera-centered ortho levels, appended as VSM views
-    // AFTER the 32 local ones (each a full view of kPagesPerView pages). Grows the view space; the
-    // clipmap views stay inactive (never requested) until 24d-2 fills them, and directional keeps
-    // running on CSM until the 24f sign-off. VSM_MAX_VIEWS / kMaxViews in the shaders must match.
+    // Step 24d/24e: directional clipmap — N nested camera-centered ortho levels, appended as VSM
+    // views AFTER the 32 local ones (each a full view of kPagesPerView pages). Step 24e adds them to
+    // the Rung-0 cull too, so the cull layout is [4 cascade | 32 local | N clipmap] and the setup's
+    // rung0View = view + kNumCascades maps a clipmap VSM view straight to its cull slot. Hence
+    // render::kMaxShadowViews == kNumCascades + kMaxVirtualViews. VSM_MAX_VIEWS / kMaxViews in the
+    // shaders must equal kMaxVirtualViews.
     inline constexpr std::uint32_t kNumClipmapLevels = 8;
     inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 40
+    static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
+                  "cull view layout must be [cascades | local | clipmap]");
     inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
 
     // Page-table entry packing (a single uint per virtual page). Unused until Step 20 fills it.
