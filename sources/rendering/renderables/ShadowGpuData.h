@@ -89,6 +89,10 @@ public:
     void Reset();
 
     std::uint32_t CasterCount() const { return count_; }
+    // Casters re-uploaded by the last UpdateForFrame (movers this frame + recent movers still
+    // propagating across ring regions). >0 means shadow content changed -> VSM must re-render even
+    // if the camera is still (drives SceneRenderer's skip-when-still gate).
+    std::uint32_t MoverCount() const { return lastMoverCount_; }
     std::uint32_t ViewFrustumCount() const { return viewFrustumCount_; }
     std::uint32_t MeshGroupCount() const { return numMeshGroups_; }
 
@@ -187,6 +191,7 @@ private:
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 
     std::uint32_t count_ = 0;            // live caster count
+    std::uint32_t lastMoverCount_ = 0;   // casters re-uploaded last UpdateForFrame (VSM skip gate)
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 

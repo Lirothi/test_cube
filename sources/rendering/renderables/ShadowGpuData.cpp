@@ -407,6 +407,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         newCount > instances_.capacity || newCount > bounds_.capacity)
     {
         Rebuild(renderer, objects);
+        lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
         return count_;
     }
 
@@ -453,6 +454,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         OutputDebugStringA(buf);
     }
 
+    lastMoverCount_ = uploaded;
     return uploaded;
 }
 

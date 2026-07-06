@@ -530,6 +530,12 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed.");
 
+                ImGui::Checkbox("Resident-only render (faster, may flicker)", &vsm::g_residentIterOnly);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"
+                                      "draws), but shadows blink for ~3 frames when the set changes (motion/churn).\n"
+                                      "OFF: render the whole pool every frame (correct, ~4x the render CPU).");
+
                 ImGui::EndDisabled();
                 ImGui::Separator();
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",

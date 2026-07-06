@@ -143,6 +143,7 @@ private:
     mat4 vsmLastView_{};
     bool vsmHasRendered_ = false;
     bool vsmSkipUpdate_ = false;
+    std::uint32_t vsmStillFrames_ = 0; // consecutive fully-still frames (settle before skipping)
 
     // Valid only during Render(); pass bodies (running on task threads) read it.
     const SceneFrameData* frame_ = nullptr;

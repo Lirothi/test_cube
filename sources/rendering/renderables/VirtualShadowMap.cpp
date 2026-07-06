@@ -607,12 +607,15 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         pageDrawArgs_.Get());
     renderer->UAVBarrier(cl, pageProj_.Get());
 
-    // Resident-set for the draw loop: read this ring slot's kFrameCount-old physOwner snapshot (a
-    // page with owner != INVALID was resident; skip the rest — the ~free pages are what make the
-    // full-pool loop expensive). Then snapshot THIS frame's physOwner for kFrameCount frames later.
-    const std::uint32_t* residentSet = residentReadbackValid_[f] ? residentReadbackPtr_[f] : nullptr;
-    if (residentReadback_[f])
+    // Resident-set for the draw loop (opt-in, g_residentIterOnly): read this ring slot's
+    // kFrameCount-old physOwner snapshot (owner != INVALID was resident; skip the rest — the ~free
+    // pages are what make the full-pool loop expensive). Then snapshot THIS frame's physOwner for
+    // kFrameCount frames later. OFF by default → residentSet null → iterate the whole pool (no
+    // snapshot latency, no motion flicker).
+    const std::uint32_t* residentSet = nullptr;
+    if (vsm::g_residentIterOnly && residentReadback_[f])
     {
+        residentSet = residentReadbackValid_[f] ? residentReadbackPtr_[f] : nullptr;
         renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         cl->CopyBufferRegion(residentReadback_[f].Get(), 0, physOwner_.Get(), 0,
                              static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t));

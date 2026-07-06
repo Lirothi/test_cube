@@ -94,6 +94,12 @@ namespace vsm
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
+    // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free
+    // pool pages → far fewer CPU draw calls). DEFAULT OFF: the snapshot latency makes shadows blink
+    // for ~kFrameCount frames when the resident set changes (camera motion / light churn). ON =
+    // cheaper CPU, minor motion flicker; OFF = iterate the whole pool every frame (correct, ~4x CPU).
+    inline bool g_residentIterOnly = false;
+
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
     struct alignas(16) ViewProjEntry

@@ -445,19 +445,29 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Rung 2 / Step 22: render shadow casters into the resident physical pages (depth-only into the
     // VSM pool). Only wired when the VSM path is on, so the default render is untouched. Consumes
     // Step 20's page table + Rung 0's per-view cull; the light passes (Step 21) read the pool.
-    // Perf: skip the VSM update (request + alloc + render) when the camera view is unchanged — the
-    // pool + page table persist, so last frame's content is still valid (the dominant cost, the
-    // ~O(pool) page-render draw loop, is what we save). The view matrix carries the camera
-    // transform with NO jitter (jitter lives in proj), so it is bit-stable when the camera is still.
+    // Perf: skip the VSM update (request + alloc + render) only when NOTHING changed — the camera
+    // view is unchanged AND no shadow caster moved. Then the pool + page table persist and last
+    // frame's content is still valid (saving the dominant cost, the page-render draw loop). Gating
+    // on movers is essential: a rotating caster must re-render its shadow every frame even with a
+    // still camera (otherwise its shadow freezes). The view matrix carries the camera transform
+    // with NO jitter (jitter lives in proj), so it is bit-stable when the camera is still.
     vsmSkipUpdate_ = false;
     if (render::g_vsmPageRequestEnabled && frame_->mainView)
     {
-        if (vsmHasRendered_ && std::memcmp(&frame_->mainView->view, &vsmLastView_, sizeof(mat4)) == 0)
+        const bool viewStill = vsmHasRendered_ &&
+            std::memcmp(&frame_->mainView->view, &vsmLastView_, sizeof(mat4)) == 0;
+        const bool contentStill = !frame_->shadowGpu || frame_->shadowGpu->MoverCount() == 0;
+        if (viewStill && contentStill)
         {
-            vsmSkipUpdate_ = true;
+            // Keep rendering for a few frames after everything goes still so the resident set + the
+            // physOwner readback snapshot (kFrameCount-latent) catch up before we freeze the pool —
+            // otherwise a just-stopped camera freezes a still-incomplete render.
+            if (vsmStillFrames_ < 0xFFFFu) { ++vsmStillFrames_; }
+            vsmSkipUpdate_ = vsmStillFrames_ > render::kFrameCount + 1u;
         }
         else
         {
+            vsmStillFrames_ = 0;
             vsmLastView_ = frame_->mainView->view;
             vsmHasRendered_ = true;
         }
@@ -465,6 +475,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     else
     {
         vsmHasRendered_ = false;
+        vsmStillFrames_ = 0;
     }
 
     size_t pVsmPageRender = static_cast<size_t>(-1);
