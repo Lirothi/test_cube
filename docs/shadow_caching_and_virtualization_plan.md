@@ -753,9 +753,18 @@ then the clipmap moves directional into the pool and retires the last resident C
   only in VSM mode. Switch orchestration `SwitchShadowMode()` at a frame boundary = WaitForGpu → free
   inactive → alloc active → rebuild descriptors → set mode. Legacy mode frees the ~32 MB VSM pool.
   Verify memory drop + switch-under-idle + scene-stress across repeated live switches CLEAN.
-- **Step 24c — Legacy atlas lifecycle.** Decouple the CSM/spot/point shadow atlases from
-  `RenderTargetManager`'s deferred ring so they free independently; free spot/point in VSM mode (the
-  directional CSM cascade atlas stays until 24f). Verify memory drop + clean.
+- **Step 24c — Legacy atlas lifecycle. DONE 2026-07-06.** SHRINK the spot/point shadow atlases to
+  **1×1** in VSM mode (Legacy = full res) rather than freeing them: the light/glass/transparent
+  passes *declare* those resources as render-graph read-state transitions AND bind their SRVs, so a
+  freed (null) resource would need null-handling in every declaration/bind — a valid 1×1 resource
+  (~bytes) keeps them all working with zero null-handling. ~22 MB → ~bytes in VSM mode. RTM's atlas
+  creation was extracted from `Create()`'s lambdas into `Create{Spot,Point}ShadowResource(dev,
+  tracker, f, resolution)`; `RenderTargetManager::SetLocalShadowResidency(full)` rebuilds them at
+  1×1/full at GPU idle; `Scene::ReconcileShadowMode` reconciles the atlas residency independently of
+  the VSM pool (so a resize self-corrects); `Pass_SpotShadows`/`Pass_PointShadows` early-return in
+  VSM mode (skip rendering into the placeholder — saves the per-light submission). The directional
+  CSM cascade atlas stays full-res until 24f. Verified: both configs 0/0; Legacy scene-stress-gbv +
+  a switch-round-trip stress (toggle every 10 frames) CLEAN, no UAF.
 
 **Part B — directional clipmap (the original Step 24), so VSM mode covers directional:**
 - **Step 24d — clipmap addressing + request/alloc.** N nested levels centered on the camera as

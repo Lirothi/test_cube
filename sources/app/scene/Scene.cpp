@@ -794,11 +794,15 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     // and free/allocate — the same idle-then-realloc pattern the level-load path uses. So only ONE
     // mode's shadow resources are ever resident (memory-optimal). Legacy atlas freeing is Step 24c.
     if (!renderer) { return; }
-    const bool want = render::VsmActive();
-    if (want == vsm_.IsAllocated()) { return; }
-    renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating VSM resources
-    if (want) { vsm_.EnsureResources(renderer); }
-    else      { vsm_.ReleaseResources(); }
+    const bool wantVsm = render::VsmActive();
+    const bool wantAtlasFull = !wantVsm; // legacy spot/point atlases full-res only in Legacy mode
+    const bool vsmOk = (wantVsm == vsm_.IsAllocated());
+    const bool atlasOk = (wantAtlasFull == renderer->IsLocalShadowFull());
+    if (vsmOk && atlasOk) { return; }    // both in sync — the common per-frame path
+    // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
+    renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
+    if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
+    if (!atlasOk) { renderer->SetLocalShadowResidency(wantAtlasFull); }
 }
 
 void Scene::Render(Renderer* renderer) {

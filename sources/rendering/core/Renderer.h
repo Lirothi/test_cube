@@ -113,6 +113,11 @@ public:
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
+    // Step 24c: full-res (Legacy) vs 1x1 (VSM) legacy spot/point shadow atlases — the shadow-mode
+    // reconcile calls this at GPU idle so only the active mode's shadow memory is resident.
+    void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), stateTracker_, full); } }
+    bool IsLocalShadowFull() const { return rtManager_.IsLocalShadowFull(); }
+
     // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
     // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.
     // Step 24b: when VSM is off/freed (Legacy mode) a null handle is passed — substitute an inert

@@ -51,6 +51,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     Destroy(tracker);
 
     if (!dev) { return; }
+    localShadowFull_ = true; // Create always builds full-res spot/point atlases (Step 24c)
 
     // --- Descriptor increments ---
     deferredRtvIncr_ = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -415,127 +416,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
-    auto CreateSpotShadow = [&](UINT frameIndex,
-        ComPtr<ID3D12Resource>& outRes,
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights>& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        UINT resolution)
-        {
-            if (resolution == 0) { resolution = 512; }
-
-            D3D12_CLEAR_VALUE clear{};
-            clear.Format = DXGI_FORMAT_D16_UNORM;
-            clear.DepthStencil.Depth = 1.0f;
-            clear.DepthStencil.Stencil = 0;
-
-            D3D12_RESOURCE_DESC desc{};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            desc.Alignment = 0;
-            desc.Width = resolution;
-            desc.Height = resolution;
-            desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxShadowedSpotLights);
-            desc.MipLevels = 1;
-            desc.Format = DXGI_FORMAT_R16_TYPELESS;
-            desc.SampleDesc.Count = 1;
-            desc.SampleDesc.Quality = 0;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
-
-            outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::SpotShadow);
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Texture2DArray.MipLevels = 1;
-            srvDesc.Texture2DArray.FirstArraySlice = 0;
-            srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
-            srvDesc.Texture2DArray.MostDetailedMip = 0;
-            srvDesc.Texture2DArray.PlaneSlice = 0;
-            srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
-            dev->CreateShaderResourceView(outRes.Get(), &srvDesc, outSRV);
-
-            for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
-            {
-                outDSV[i] = DeferredSpotShadowDsvCPU(frameIndex, i);
-                D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-                dsv.Format = DXGI_FORMAT_D16_UNORM;
-                dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-                dsv.Flags = D3D12_DSV_FLAG_NONE;
-                dsv.Texture2DArray.ArraySize = 1;
-                dsv.Texture2DArray.FirstArraySlice = i;
-                dsv.Texture2DArray.MipSlice = 0;
-                dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV[i]);
-            }
-
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
-
-    // Point shadows (Part B, depth-cube approach): an R16_TYPELESS 2D-array of 6*N
-    // slices viewed as a cube array; DSV=D16 per face, SRV=R16 cube array. Mirrors
-    // CreateSpotShadow (depth-target), just cube-ified — reuses the existing depth
-    // shadow rendering (no distance shader/material). See docs Step B2b.
-    auto CreatePointShadow = [&](UINT frameIndex,
-        ComPtr<ID3D12Resource>& outRes,
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6 * LightManager::kMaxShadowedPointLights>& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        UINT resolution)
-        {
-            if (resolution == 0) { resolution = 512; }
-            constexpr UINT kFaces = 6 * LightManager::kMaxShadowedPointLights;
-
-            D3D12_CLEAR_VALUE clear{};
-            clear.Format = DXGI_FORMAT_D16_UNORM;
-            clear.DepthStencil.Depth = 1.0f; // standard depth (1.0 = far), like the spot atlas
-            clear.DepthStencil.Stencil = 0;
-
-            D3D12_RESOURCE_DESC desc{};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            desc.Width = resolution;
-            desc.Height = resolution;
-            desc.DepthOrArraySize = static_cast<UINT16>(kFaces);
-            desc.MipLevels = 1;
-            desc.Format = DXGI_FORMAT_R16_TYPELESS;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(outRes.ReleaseAndGetAddressOf())));
-
-            // Cube-array SRV over all 6*N slices (sampled in B3 by direction).
-            outSRV = DeferredSrvCPU(frameIndex, DeferredSrvSlot::PointShadow);
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.TextureCubeArray.MostDetailedMip = 0;
-            srvDesc.TextureCubeArray.MipLevels = 1;
-            srvDesc.TextureCubeArray.First2DArrayFace = 0;
-            srvDesc.TextureCubeArray.NumCubes = LightManager::kMaxShadowedPointLights;
-            srvDesc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
-            dev->CreateShaderResourceView(outRes.Get(), &srvDesc, outSRV);
-
-            // One depth-stencil view per cube face (single array slice each).
-            for (UINT face = 0; face < kFaces; ++face)
-            {
-                outDSV[face] = DeferredPointShadowDsvCPU(frameIndex, face);
-                D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-                dsv.Format = DXGI_FORMAT_D16_UNORM;
-                dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-                dsv.Flags = D3D12_DSV_FLAG_NONE;
-                dsv.Texture2DArray.ArraySize = 1;
-                dsv.Texture2DArray.FirstArraySlice = face;
-                dsv.Texture2DArray.MipSlice = 0;
-                dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV[face]);
-            }
-
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
+    // Step 24c: spot + point shadow atlas creation lives in CreateSpotShadowResource /
+    // CreatePointShadowResource (below) so the shadow-mode residency toggle can rebuild them at
+    // 1x1 / full res. The per-frame loop calls them like the other CreateXxx helpers.
 
     for (UINT f = 0; f < render::kFrameCount; ++f)
     {
@@ -557,10 +440,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
 
         D.spotShadowRes = 512;
-        CreateSpotShadow(f, D.spotShadow, D.spotShadowDSV, D.spotShadowSRV, D.spotShadowRes);
+        CreateSpotShadowResource(dev, tracker, f, D.spotShadowRes);
 
         D.pointShadowRes = 256;
-        CreatePointShadow(f, D.pointShadow, D.pointShadowDSV, D.pointShadowSRV, D.pointShadowRes);
+        CreatePointShadowResource(dev, tracker, f, D.pointShadowRes);
 
         CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
@@ -618,6 +501,149 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.tonemap.Get(), L"Tonemap");
         nameRes(D.fxaa.Get(), L"Fxaa");
     }
+}
+
+// Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
+// Writes deferred_[f].spotShadow + its views. `resolution` = full-res (Legacy) or 1 (VSM: tiny).
+void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+{
+    if (!dev) { return; }
+    if (resolution == 0) { resolution = 512; }
+    auto& D = deferred_[f];
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format = DXGI_FORMAT_D16_UNORM;
+    clear.DepthStencil.Depth = 1.0f;
+    clear.DepthStencil.Stencil = 0;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Alignment = 0;
+    desc.Width = resolution;
+    desc.Height = resolution;
+    desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxShadowedSpotLights);
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R16_TYPELESS;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    ThrowIfFailed(dev->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.spotShadow.ReleaseAndGetAddressOf())));
+
+    D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.FirstArraySlice = 0;
+    srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
+    srvDesc.Texture2DArray.MostDetailedMip = 0;
+    srvDesc.Texture2DArray.PlaneSlice = 0;
+    srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+    dev->CreateShaderResourceView(D.spotShadow.Get(), &srvDesc, D.spotShadowSRV);
+
+    for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+    {
+        D.spotShadowDSV[i] = DeferredSpotShadowDsvCPU(f, i);
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D16_UNORM;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsv.Flags = D3D12_DSV_FLAG_NONE;
+        dsv.Texture2DArray.ArraySize = 1;
+        dsv.Texture2DArray.FirstArraySlice = i;
+        dsv.Texture2DArray.MipSlice = 0;
+        dev->CreateDepthStencilView(D.spotShadow.Get(), &dsv, D.spotShadowDSV[i]);
+    }
+
+    tracker.SetResourceState(D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+}
+
+// Step 24c: point shadow cube-array (6*N slices of R16_TYPELESS; DSV=D16 per face, SRV=R16 cube
+// array). Mirrors CreateSpotShadowResource, cube-ified. `resolution` = full-res (Legacy) or 1 (VSM).
+void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+{
+    if (!dev) { return; }
+    if (resolution == 0) { resolution = 512; }
+    auto& D = deferred_[f];
+    constexpr UINT kFaces = 6 * LightManager::kMaxShadowedPointLights;
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format = DXGI_FORMAT_D16_UNORM;
+    clear.DepthStencil.Depth = 1.0f; // standard depth (1.0 = far), like the spot atlas
+    clear.DepthStencil.Stencil = 0;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = resolution;
+    desc.Height = resolution;
+    desc.DepthOrArraySize = static_cast<UINT16>(kFaces);
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R16_TYPELESS;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    ThrowIfFailed(dev->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.pointShadow.ReleaseAndGetAddressOf())));
+
+    D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.TextureCubeArray.MostDetailedMip = 0;
+    srvDesc.TextureCubeArray.MipLevels = 1;
+    srvDesc.TextureCubeArray.First2DArrayFace = 0;
+    srvDesc.TextureCubeArray.NumCubes = LightManager::kMaxShadowedPointLights;
+    srvDesc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
+    dev->CreateShaderResourceView(D.pointShadow.Get(), &srvDesc, D.pointShadowSRV);
+
+    for (UINT face = 0; face < kFaces; ++face)
+    {
+        D.pointShadowDSV[face] = DeferredPointShadowDsvCPU(f, face);
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D16_UNORM;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsv.Flags = D3D12_DSV_FLAG_NONE;
+        dsv.Texture2DArray.ArraySize = 1;
+        dsv.Texture2DArray.FirstArraySlice = face;
+        dsv.Texture2DArray.MipSlice = 0;
+        dev->CreateDepthStencilView(D.pointShadow.Get(), &dsv, D.pointShadowDSV[face]);
+    }
+
+    tracker.SetResourceState(D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+}
+
+void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceStateTracker& tracker, bool full)
+{
+    if (full == localShadowFull_ || !dev) { return; }
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        auto& D = deferred_[f];
+        // Untrack the outgoing resources (ReleaseAndGetAddressOf inside the create calls frees them),
+        // so a re-used address can't inherit a stale tracked state.
+        if (D.spotShadow) { tracker.ClearResourceState(D.spotShadow.Get()); }
+        if (D.pointShadow) { tracker.ClearResourceState(D.pointShadow.Get()); }
+        // Keep the configured resolutions; only the created size changes (1 = tiny placeholder).
+        CreateSpotShadowResource(dev, tracker, f, full ? D.spotShadowRes : 1u);
+        CreatePointShadowResource(dev, tracker, f, full ? D.pointShadowRes : 1u);
+    }
+    localShadowFull_ = full;
 }
 
 void RenderTargetManager::Destroy(ResourceStateTracker& tracker)

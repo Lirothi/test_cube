@@ -1338,6 +1338,12 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     {
         return;
     }
+    // Step 24c: in VSM mode the spot atlas is a 1x1 placeholder and local shadows come from the VSM
+    // pool — skip rendering into it (saves the per-light submission + avoids touching the tiny atlas).
+    if (render::VsmActive())
+    {
+        return;
+    }
 
     const size_t shadowedLights = frame_->lightManager->GetShadowedSpotCount();
     const size_t viewCount = std::min(spotViews.size(), shadowedLights);
@@ -1444,6 +1450,11 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& pointViews)
 {
     if (!renderer)
+    {
+        return;
+    }
+    // Step 24c: VSM mode renders point shadows into the VSM pool; the cube atlas is a 1x1 placeholder.
+    if (render::VsmActive())
     {
         return;
     }

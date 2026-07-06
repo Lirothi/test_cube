@@ -110,6 +110,13 @@ public:
     DeferredTargets& Deferred(UINT frame) { return deferred_[frame]; }
     const DeferredTargets& Deferred(UINT frame) const { return deferred_[frame]; }
 
+    // Step 24c: shrink/restore the LEGACY local-light shadow atlases (spot + point) — full-res in
+    // Legacy mode, 1x1 (negligible memory) in VSM mode, where local shadows come from the VSM pool.
+    // The resources stay VALID (just tiny), so every render-graph declaration / SRV bind keeps
+    // working with no null handling. MUST be called at GPU idle (the shadow-mode reconcile waits).
+    void SetLocalShadowResidency(ID3D12Device* dev, ResourceStateTracker& tracker, bool full);
+    bool IsLocalShadowFull() const { return localShadowFull_; }
+
 private:
     enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, ObjectID, Light, Scene, DlssBias, GlassReflNormal, Count };
     enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
@@ -132,6 +139,12 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredPointShadowDsvCPU(UINT frame, UINT faceIndex) const;
 
+    // Step 24c: (re)create the spot / point shadow atlas resource + its SRV/DSV views at `resolution`
+    // for frame `f` (operates on deferred_[f]). Extracted from Create()'s lambdas so the residency
+    // toggle can rebuild them at 1x1 / full res.
+    void CreateSpotShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
+    void CreatePointShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
+
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredDsvHeap_;   // DSV shared across frames
@@ -140,4 +153,6 @@ private:
 
     // Per-frame sets
     DeferredTargets deferred_[render::kFrameCount];
+
+    bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)
 };
