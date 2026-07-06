@@ -713,7 +713,10 @@ meaningful.
   mostly-static scenes.
 - **Verify:** debug counter of "pages rendered this frame" → near-zero when camera + scene are
   static, small when a dynamic object moves. `--scene-stress` Debug CLEAN. Measure vs Rung 1.
-- **NOT DONE — superseded for now by the MEGA-BUFFER (2026-07-06, user's pick over Step 23).**
+- **DROPPED / PARKED (2026-07-06, user) — superseded by the MEGA-BUFFER, which got the CPU win
+  latency-free (VsmPageRender ~0.3 ms Release). Revisit ONLY if the per-frame re-render of all
+  resident pages becomes a *measured* bound at higher light/page scale, and then via a same-frame
+  GPU-driven changed-set, not a readback.**
   Rationale: with hardware raster, "render only changed pages" needs the CPU to iterate a
   GPU-computed changed-page list, which requires a GPU→CPU readback (the virtual→physical map is
   GPU-side) → the same ~3-frame latency as `g_residentIterOnly` (mover ghosting). The clean
@@ -731,19 +734,42 @@ meaningful.
   Verified: both configs 0/0, `--scene-stress-gbv=40` + `--scene-stress=200` CLEAN. The real Step 23
   (page-level caching) remains the eventual CPU win once a same-frame changed-set mechanism exists.
 
-### Step 24 — Directional clipmap (REPLACES CSM — this is where cascades are eliminated)
+### Step 24 — Directional clipmap + runtime Legacy(CSM)↔VSM switch  *(AMENDED 2026-07-06 — CSM is KEPT, not deleted)*
 
-- **Goal:** crisp directional shadows at distance + camera-move caching (only edge pages
-  rebuild on recenter, vs. a whole cascade). **This is the step that removes cascades:** through
-  Steps 18–23 directional ran on the untouched CSM (`Pass_CSM`); here it moves onto the clipmap +
-  the shared page pool, and `UpdateCascades`/`Pass_CSM` are deleted. End state = no cascades.
-- **Changes:** replace the 4-cascade `UpdateCascades`/`Pass_CSM` with a virtual clipmap: N
-  nested levels centered on the camera, each a virtual shadow map addressed through the same
-  page pool + table (add directional as clipmap-level "views" to the request/alloc/sample/render
-  steps, mip-selected by distance like the local lights), page-cached across camera motion.
-  Sampling picks the clipmap level by distance. Large; a standalone sub-milestone.
-- **Verify:** directional shadow parity/quality vs CSM at near range, better at distance; page
-  churn only at level edges when the camera moves. Full stress + GBV.
+**Amendment (user, 2026-07-06).** The original Step 24 *deleted* `UpdateCascades`/`Pass_CSM`.
+Superseded: the **legacy path (CSM directional + spot/point atlas) stays as a selectable mode.** A
+runtime `ShadowMode { Legacy, VSM }` switch **frees the inactive mode's GPU resources and allocates
+the active one's at GPU idle** (a mini level-reload), so only ONE method's buffers/textures are ever
+resident — memory-optimal, the user's hard requirement (chosen over load-time settings.json). The
+directional clipmap is what lets VSM mode cover directional so the switch is complete. Ordered so the
+switch framework + resource lifecycle land FIRST (independently valuable for today's local-light VSM),
+then the clipmap moves directional into the pool and retires the last resident CSM texture in VSM mode.
+
+**Part A — runtime shadow-mode switch (works with today's spot/point/glass VSM):**
+- **Step 24a — Mode state + sampling dispatch.** `render::g_shadowMode` (Legacy default) becomes the
+  source of `useVsm` (replaces the Ctrl+V `g_vsmPageRequestEnabled` gate); dev-window control + hotkey.
+  No freeing yet (both resident) — proves the mode drives sampling. Verify scene-stress.
+- **Step 24b — VSM resource lifecycle.** `VirtualShadowMap::ReleaseResources()`; `EnsureResources`
+  only in VSM mode. Switch orchestration `SwitchShadowMode()` at a frame boundary = WaitForGpu → free
+  inactive → alloc active → rebuild descriptors → set mode. Legacy mode frees the ~32 MB VSM pool.
+  Verify memory drop + switch-under-idle + scene-stress across repeated live switches CLEAN.
+- **Step 24c — Legacy atlas lifecycle.** Decouple the CSM/spot/point shadow atlases from
+  `RenderTargetManager`'s deferred ring so they free independently; free spot/point in VSM mode (the
+  directional CSM cascade atlas stays until 24f). Verify memory drop + clean.
+
+**Part B — directional clipmap (the original Step 24), so VSM mode covers directional:**
+- **Step 24d — clipmap addressing + request/alloc.** N nested levels centered on the camera as
+  directional "views" into the request + alloc pipeline (distance-selected like the local-light mips).
+- **Step 24e — clipmap render.** Render directional casters into clipmap pages (reuses the per-page
+  render + mega-buffer).
+- **Step 24f — clipmap sampling + recentering + retire CSM.** Directional light path branches
+  CSM-vs-clipmap on mode; clipmap recenters on camera move (only edge pages rebuild); VSM mode now
+  frees the CSM cascade atlas → **VSM mode fully memory-optimal**. `Pass_CSM`/`UpdateCascades` are
+  **KEPT** (Legacy mode uses them) — not deleted.
+
+**Verify (each step):** both configs 0/0; `--scene-stress(-gbv)` CLEAN incl. repeated live switches;
+only the active mode's shadow resources resident (allocation logging / PIX). Visual: Legacy↔VSM
+directional parity at near range, VSM better at distance (user A/B).
 
 ### Step 25 — (Optional) SMRT-style soft shadows
 

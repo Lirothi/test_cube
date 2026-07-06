@@ -60,9 +60,12 @@ inline bool g_instancingEnabled = true;
 // build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
 inline bool g_indirectShadowsEnabled = true;
 
-// Rung 2 / Step 19b runtime gate (default OFF): the VSM screen-space page-request pass
-// (Pass_VsmPageRequest) is add-dormant — its output is not consumed until Step 20/21. Keep it OFF
-// so it costs nothing while unused; toggle ON (Ctrl+V, "ToggleVsmPageRequest") to exercise +
-// measure it (the "[VSM] page request" count log fires while it runs).
-inline bool g_vsmPageRequestEnabled = false;
+// Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
+// path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
+// whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →
+// useVsm). Default Legacy (VSM opt-in). Toggle Legacy<->VSM with Ctrl+V ("ToggleVsmPageRequest").
+// Step 24b makes the switch free the inactive mode's GPU resources (only one mode ever resident).
+enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
+inline ShadowMode g_shadowMode = ShadowMode::Legacy;
+inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
 } // namespace render

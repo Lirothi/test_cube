@@ -83,10 +83,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
         if (input.WasActionPressed("ToggleVsmPageRequest"))
         {
-            // Ctrl+V: run the Rung-2 VSM page-request pass (Step 19b) to exercise + measure it
-            // (add-dormant — its output isn't consumed until Step 20). Logs the requested-page
-            // count while on.
-            render::g_vsmPageRequestEnabled = !render::g_vsmPageRequestEnabled;
+            // Ctrl+V: switch the active shadow method Legacy(CSM/atlas) <-> VSM (Step 24a). Drives
+            // both which sampler the light/glass shaders use and whether the VSM pipeline runs.
+            render::g_shadowMode = render::VsmActive() ? render::ShadowMode::Legacy
+                                                       : render::ShadowMode::VSM;
         }
         if (input.WasActionPressed("CycleReflectionSource"))
         {

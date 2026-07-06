@@ -506,11 +506,14 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
             if (ImGui::BeginTabItem("VSM"))
             {
-                ImGui::TextWrapped("Virtual Shadow Maps (Rung 2, experimental) for local spot lights. "
-                    "Tunes quality vs. cost live (no reallocation). Point/glass still use the atlas.");
+                ImGui::TextWrapped("Virtual Shadow Maps (Rung 2, experimental) for local lights "
+                    "(spot + point + glass). Legacy = CSM directional + spot/point atlas. Tunes "
+                    "quality vs. cost live (no reallocation). Directional still uses CSM until Step 24.");
                 ImGui::Separator();
-                ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &render::g_vsmPageRequestEnabled);
-                ImGui::BeginDisabled(!render::g_vsmPageRequestEnabled);
+                bool vsmMode = render::VsmActive();
+                if (ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &vsmMode))
+                    render::g_shadowMode = vsmMode ? render::ShadowMode::VSM : render::ShadowMode::Legacy;
+                ImGui::BeginDisabled(!render::VsmActive());
 
                 ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");
                 if (ImGui::IsItemHovered())

@@ -243,7 +243,7 @@ namespace
         vc.lightCounts = float4(pointCount, spotCount, glassReflActive ? 1.0f : 0.0f, 0.0f);
 
         // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
-        const bool vsmOn = render::g_vsmPageRequestEnabled && frame.vsm && frame.vsm->IsAllocated();
+        const bool vsmOn = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
         vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist, 0.0f, 0.0f);
 
         return UploadFrameCB(renderer, vc);
@@ -457,7 +457,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // still camera (otherwise its shadow freezes). The view matrix carries the camera transform
     // with NO jitter (jitter lives in proj), so it is bit-stable when the camera is still.
     vsmSkipUpdate_ = false;
-    if (render::g_vsmPageRequestEnabled && frame_->mainView)
+    if (render::VsmActive() && frame_->mainView)
     {
         const bool viewStill = vsmHasRendered_ &&
             std::memcmp(&frame_->mainView->view, &vsmLastView_, sizeof(mat4)) == 0;
@@ -484,7 +484,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
 
     size_t pVsmPageRender = static_cast<size_t>(-1);
-    const bool vsmActive = render::g_vsmPageRequestEnabled && frame_->vsm && frame_->vsm->IsAllocated();
+    const bool vsmActive = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated();
     if (vsmActive)
     {
         // No declared pool state: RecordPageRender transitions the pool DEPTH_WRITE itself (the
@@ -1012,7 +1012,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     // yet — so the pass is gated OFF by default, Ctrl+V to exercise/measure). LOCAL lights only:
     // the view slots are [spots | point-faces] (NO CSM cascades — directional stays on Pass_CSM
     // until Step 24). Per-view viewProj + a mip/refDist LOD param drive the request shader.
-    if (!render::g_vsmPageRequestEnabled || vsmSkipUpdate_) { return; }
+    if (!render::VsmActive() || vsmSkipUpdate_) { return; }
     if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();
@@ -1063,7 +1063,7 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     // Rung 2 / Step 22: render casters into the resident VSM pages. Builds the LOCAL shadow views
     // (spots then point faces — same slot layout as Pass_VsmPageRequest), then RecordPageRender
     // does the GPU per-page setup + per-page ExecuteIndirect into the pool (DEPTH_WRITE via graph).
-    if (!render::g_vsmPageRequestEnabled || vsmSkipUpdate_) { return; }
+    if (!render::VsmActive() || vsmSkipUpdate_) { return; }
     if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated() || !frame_->shadowGpu) { return; }
 
     std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
@@ -1750,7 +1750,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
     {
         return;
     }
-    const bool vsmSample = render::g_vsmPageRequestEnabled;
+    const bool vsmSample = render::VsmActive();
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -1846,7 +1846,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     {
         return;
     }
-    const bool vsmSample = render::g_vsmPageRequestEnabled;
+    const bool vsmSample = render::VsmActive();
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
