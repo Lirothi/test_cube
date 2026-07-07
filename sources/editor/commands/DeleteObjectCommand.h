@@ -1,6 +1,8 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstddef>
+
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h"
 
@@ -18,6 +20,7 @@ public:
 private:
     EditorObjectId id_;
     bool captured_ = false;
+    std::size_t objectIndex_ = 0;
     EditorObject object_;          // serialized copy for restore
     bool runtimeRemoved_ = false;  // did Execute remove a live runtime object?
     EditorObjectId previousSelection_{};

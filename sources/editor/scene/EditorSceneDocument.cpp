@@ -80,13 +80,38 @@ const EditorObject* EditorSceneDocument::Find(EditorObjectId id) const
     return nullptr;
 }
 
-void EditorSceneDocument::Add(EditorObject object)
+bool EditorSceneDocument::IndexOf(EditorObjectId id, std::size_t& outIndex) const
+{
+    for (std::size_t i = 0; i < objects_.size(); ++i)
+    {
+        if (objects_[i].id.value == id.value)
+        {
+            outIndex = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+void EditorSceneDocument::Insert(EditorObject object, std::size_t index)
 {
     if (object.id.value >= nextId_)
     {
         nextId_ = object.id.value + 1;
     }
-    objects_.push_back(std::move(object));
+    if (index > objects_.size())
+    {
+        index = objects_.size();
+    }
+
+    using DifferenceType = std::vector<EditorObject>::difference_type;
+    objects_.insert(objects_.begin() + static_cast<DifferenceType>(index),
+        std::move(object));
+}
+
+void EditorSceneDocument::Add(EditorObject object)
+{
+    Insert(std::move(object), objects_.size());
 }
 
 bool EditorSceneDocument::Remove(EditorObjectId id)

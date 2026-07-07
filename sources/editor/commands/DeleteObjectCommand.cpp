@@ -21,6 +21,11 @@ bool DeleteObjectCommand::Execute(EditorContext& ctx)
     // Capture the object once so Undo (and redo) can restore the same data.
     if (!captured_)
     {
+        if (!ctx.document.IndexOf(id_, objectIndex_))
+        {
+            return false;
+        }
+
         const EditorObject* obj = ctx.document.Find(id_);
         if (!obj)
         {
@@ -46,7 +51,7 @@ bool DeleteObjectCommand::Execute(EditorContext& ctx)
 
 void DeleteObjectCommand::Undo(EditorContext& ctx)
 {
-    ctx.document.Add(object_);
+    ctx.document.Insert(object_, objectIndex_);
 
     // Recreate the runtime object only if Execute actually removed one.
     if (runtimeRemoved_)

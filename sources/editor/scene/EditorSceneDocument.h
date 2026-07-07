@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -47,7 +48,9 @@ public:
     EditorObject* Find(EditorObjectId id);
     const EditorObject* Find(EditorObjectId id) const;
 
+    bool IndexOf(EditorObjectId id, std::size_t& outIndex) const;
     void Add(EditorObject object);
+    void Insert(EditorObject object, std::size_t index);
     bool Remove(EditorObjectId id);
 
     std::vector<EditorObject>& Objects() { return objects_; }
