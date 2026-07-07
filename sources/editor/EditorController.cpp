@@ -1268,7 +1268,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             false,
             [this](EditorContext& panelCtx)
             {
-                viewportGizmo_.Update(panelCtx, commandStack_);
+                viewportGizmo_.Update(panelCtx, commandStack_, assetRegistry_, extensions_);
             }));
 
         extensionsRegistered_ = true;

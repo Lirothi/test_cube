@@ -17,6 +17,7 @@
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "editor/ui/EditorDragDrop.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "ocean/OceanSimulation.h"
@@ -29,6 +30,7 @@
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 namespace
 {
@@ -52,6 +54,83 @@ namespace
     {
         std::replace(path.begin(), path.end(), '\\', '/');
         return path;
+    }
+
+    void DrawInspectorDropTarget(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        EditorObject* object)
+    {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (!window || window->SkipItems)
+        {
+            return;
+        }
+
+        const ImRect targetRect = window->WorkRect;
+        if (!ImGui::BeginDragDropTargetCustom(targetRect, ImGui::GetID("##inspectorDropTarget")))
+        {
+            return;
+        }
+
+        constexpr ImGuiDragDropFlags flags =
+            ImGuiDragDropFlags_AcceptBeforeDelivery |
+            ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(EditorDragDrop::kAssetPayloadType, flags))
+        {
+            EditorAssetId assetId;
+            const EditorAssetRecord* record = nullptr;
+            if (EditorDragDrop::DecodeAssetPayload(payload, assetId))
+            {
+                record = registry.FindById(assetId);
+            }
+
+            const char* reason = nullptr;
+            if (!record)
+            {
+                reason = "Dragged asset is no longer in the registry.";
+            }
+            else if (record->id.type != EditorAssetType::MaterialPreset)
+            {
+                reason = "Only material assets can be dropped on the Inspector.";
+            }
+            else if (!object)
+            {
+                reason = "Select a static mesh object first.";
+            }
+            else if (object->type != "staticMesh")
+            {
+                reason = "Selected object does not support material assignment.";
+            }
+
+            if (reason)
+            {
+                ImGui::SetTooltip("%s", reason);
+            }
+            else
+            {
+                window->DrawList->AddRect(targetRect.Min,
+                    targetRect.Max,
+                    ImGui::GetColorU32(ImGuiCol_DragDropTarget),
+                    0.0f,
+                    0,
+                    2.0f);
+                ImGui::SetTooltip("Assign material: %s", record->displayName.c_str());
+                if (payload->IsDelivery())
+                {
+                    commandStack.Execute(ctx,
+                        std::make_unique<SetMaterialCommand>(object->id, record->id.key));
+                }
+            }
+        }
+
+        if (ImGui::AcceptDragDropPayload(EditorDragDrop::kFolderPayloadType, flags))
+        {
+            ImGui::SetTooltip("Folder drops do not change Inspector properties.");
+        }
+
+        ImGui::EndDragDropTarget();
     }
 
     // Inspector for the top-level environment sections (Step 24). Edits write the
@@ -292,11 +371,13 @@ void InspectorPanel::Draw(EditorContext& ctx,
             ImGui::TextUnformatted(env.name.c_str());
             ImGui::Separator();
             DrawEnvironmentInspector(ctx, registry, env);
+            DrawInspectorDropTarget(ctx, commandStack, registry, &env);
             ImGui::End();
             return;
         }
 
         ImGui::TextDisabled("No object selected.");
+        DrawInspectorDropTarget(ctx, commandStack, registry, nullptr);
         ImGui::End();
         return;
     }
@@ -332,6 +413,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
         drawer->Draw(ctx, commandStack, registry, *obj);
     }
 
+    DrawInspectorDropTarget(ctx, commandStack, registry, obj);
     ImGui::End();
 }
 

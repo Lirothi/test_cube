@@ -6,6 +6,8 @@
 
 struct EditorContext;
 class EditorCommandStack;
+class AssetRegistry;
+class EditorExtensionRegistry;
 
 // Viewport interaction: click-to-select picking (CPU ray vs object bounds) and an
 // on-screen translate/rotate/scale gizmo (ImGuizmo) for the selected object. One
@@ -19,7 +21,10 @@ public:
     void DrawModeButtons(const char* hotkeyHintText);
 
     // Per-frame: draw + handle the gizmo for the selection, then click-to-pick.
-    void Update(EditorContext& ctx, EditorCommandStack& commandStack);
+    void Update(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        const EditorExtensionRegistry& extensions);
 
     void SetMode(Op op) { op_ = op; }
     Op GetMode() const { return op_; }

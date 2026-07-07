@@ -489,6 +489,60 @@ Validation:
 - Smoke test drag/drop with a mesh and material.
 - Try an unsupported folder move and confirm no files move.
 
+## Step 11A: Viewport Material Drop To Selected Object
+
+Goal: make material drag/drop work the way the user expects: dropping a material
+asset anywhere in the viewport assigns it to the currently selected object, if
+that object supports material assignment.
+
+Primary files:
+
+- `sources/editor/ui/ViewportGizmo.*`
+- `sources/editor/ui/EditorDragDrop.h`
+- `sources/editor/commands/SetMaterialCommand.*`
+- `sources/editor/EditorController.cpp`
+
+Implementation notes:
+
+- Reuse the existing `EditorDragDrop::kAssetPayloadType` and
+  `EditorDragDrop::DecodeAssetPayload` path from Step 11.
+- Extend the viewport drop target so `EditorAssetType::MaterialPreset` payloads
+  are accepted, not rejected.
+- Apply material drops to `ctx.selectedObject`; do not require a mesh under the
+  cursor for this step.
+- Only execute when the selected document object exists and has
+  `type == "staticMesh"`.
+- Use `SetMaterialCommand` so undo/redo restores the previous material.
+- Keep existing mesh-asset viewport drops working exactly as they do now.
+- Keep unsupported drops non-mutating with clear tooltip feedback:
+  - no selected object;
+  - selected object is not a static mesh;
+  - dragged asset is not a material;
+  - dragged asset no longer exists in the registry.
+- Do not add drag-to-hovered-object behavior in this step. That is a separate
+  feature because it needs reliable object hit-testing during drag preview.
+
+Acceptance criteria:
+
+- Select a static mesh, drag a material asset from the Content Browser, and drop
+  it anywhere over the viewport: the selected mesh changes material.
+- Undo/redo restores and reapplies the material assignment.
+- Dropping a material over the viewport with no selected object does nothing and
+  explains that a static mesh must be selected.
+- Dropping a material while a non-static-mesh object or environment entity is
+  selected does nothing and explains the unsupported target.
+- Mesh asset drops into the viewport still spawn objects.
+- Folder drops and other asset-type drops still do not mutate state.
+
+Validation:
+
+- Build `Debug|x64`.
+- In `data/levels/demo.json`, select a static mesh and drag at least two
+  material presets into the viewport.
+- Verify undo/redo after each material drop.
+- Try material drops with no selection and with a non-static-mesh selection.
+- Drag a mesh asset into the viewport and confirm spawn still works.
+
 ## Step 12: Content Browser Details, Preview, Collections, And Favorites
 
 Goal: add inspection and organization features that make the browser feel closer
@@ -635,26 +689,23 @@ Validation:
 
 ## Suggested Execution Order
 
-Recommended order from this point, prioritizing a UE-like Content Browser:
+Recommended order from this point, assuming Steps 6 through 11 have already
+been implemented in the current working tree:
 
-1. Step 6: Content Browser Asset Model And Folder Tree
-2. Step 7: UE-Style Content Browser Layout Shell
-3. Step 8: Asset View Modes, Search, And Filters
-4. Step 9: Content Browser Folder Operations And Context Menus
-5. Step 10: Content Browser Asset Actions
-6. Step 11: Content Browser Drag And Drop
-7. Step 12: Content Browser Details, Preview, Collections, And Favorites
-8. Step 4: Outliner Groups And Context Actions
-9. Step 5: Rename Command
-10. Step 13: Command-Backed Environment Edits
-11. Step 14: Persist Editor Panel UI State
-12. Step 15: UX Cleanup Pass
+1. Step 11A: Viewport Material Drop To Selected Object
+2. Step 12: Content Browser Details, Preview, Collections, And Favorites
+3. Step 4: Outliner Groups And Context Actions
+4. Step 5: Rename Command
+5. Step 13: Command-Backed Environment Edits
+6. Step 14: Persist Editor Panel UI State
+7. Step 15: UX Cleanup Pass
 
 Steps 4 and 5 remain valuable, but they are intentionally moved behind the
 Content Browser foundation because the current product direction is a UE-like
 folder browser. Step 13 is intentionally later because it has broader
-command/runtime impact. Step 11 is later because drag/drop touches several UI
-surfaces and is easier once the underlying browser actions already exist.
+command/runtime impact. Step 11A stays immediately after Step 11 because the
+current user expectation is material drop-to-selected-object in the viewport,
+not Inspector-only material assignment.
 
 ## Stop Conditions
 

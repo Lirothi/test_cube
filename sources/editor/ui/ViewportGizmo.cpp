@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <utility>
 #include <vector>
 #include <cmath>
 
@@ -12,14 +14,18 @@
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
+#include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "editor/ui/EditorDragDrop.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "ImGuizmo/ImGuizmo.h"
 
 namespace
@@ -75,6 +81,109 @@ namespace
         out[4] = u.x;  out[5] = u.y;  out[6] = u.z;  out[7] = 0.0f;
         out[8] = f.x;  out[9] = f.y;  out[10] = f.z; out[11] = 0.0f;
         out[12] = pos.x; out[13] = pos.y; out[14] = pos.z; out[15] = 1.0f;
+    }
+
+    const IEditorObjectFactory* FindDefaultMeshFactory(const EditorExtensionRegistry& extensions,
+        const EditorAssetRecord* record)
+    {
+        for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
+        {
+            if (factory && factory->CanBuildFromAsset(record))
+            {
+                return factory.get();
+            }
+        }
+        return nullptr;
+    }
+
+    void DrawViewportDropTarget(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        const EditorExtensionRegistry& extensions,
+        float width,
+        float height)
+    {
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
+                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+        {
+            return;
+        }
+
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        if (!viewport)
+        {
+            return;
+        }
+
+        const ImRect targetRect(
+            viewport->Pos,
+            ImVec2(viewport->Pos.x + width, viewport->Pos.y + height));
+        if (!ImGui::BeginDragDropTargetViewport(viewport, &targetRect))
+        {
+            return;
+        }
+
+        constexpr ImGuiDragDropFlags flags =
+            ImGuiDragDropFlags_AcceptBeforeDelivery |
+            ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(EditorDragDrop::kAssetPayloadType, flags))
+        {
+            EditorAssetId assetId;
+            const EditorAssetRecord* record = nullptr;
+            if (EditorDragDrop::DecodeAssetPayload(payload, assetId))
+            {
+                record = registry.FindById(assetId);
+            }
+
+            const IEditorObjectFactory* factory = nullptr;
+            const char* reason = nullptr;
+            if (!record)
+            {
+                reason = "Dragged asset is no longer in the registry.";
+            }
+            else if (record->id.type != EditorAssetType::Mesh)
+            {
+                reason = "Only mesh assets can be dropped in the viewport.";
+            }
+            else
+            {
+                factory = FindDefaultMeshFactory(extensions, record);
+                if (!factory)
+                {
+                    reason = "No object factory can spawn this mesh.";
+                }
+            }
+
+            if (reason)
+            {
+                ImGui::SetTooltip("%s", reason);
+            }
+            else
+            {
+                ImGui::GetForegroundDrawList()->AddRect(targetRect.Min,
+                    targetRect.Max,
+                    ImGui::GetColorU32(ImGuiCol_DragDropTarget),
+                    0.0f,
+                    0,
+                    2.0f);
+                ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
+                if (payload->IsDelivery())
+                {
+                    nlohmann::json objectJson =
+                        factory->BuildDefaultJson(record, ctx, registry);
+                    commandStack.Execute(ctx,
+                        std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                }
+            }
+        }
+
+        if (ImGui::AcceptDragDropPayload(EditorDragDrop::kFolderPayloadType, flags))
+        {
+            ImGui::SetTooltip("Folder drops do not move files or spawn objects.");
+        }
+
+        ImGui::EndDragDropTarget();
     }
 }
 
@@ -132,13 +241,18 @@ void ViewportGizmo::DrawModeButtons(const char* hotkeyHintText)
     }
 }
 
-void ViewportGizmo::Update(EditorContext& ctx, EditorCommandStack& commandStack)
+void ViewportGizmo::Update(EditorContext& ctx,
+    EditorCommandStack& commandStack,
+    const AssetRegistry& registry,
+    const EditorExtensionRegistry& extensions)
 {
     ImGuiIO& io = ImGui::GetIO();
 
     const float width = static_cast<float>(ctx.renderer.GetWidth());
     const float height = static_cast<float>(ctx.renderer.GetHeight());
     if (width <= 0.0f || height <= 0.0f) { return; }
+
+    DrawViewportDropTarget(ctx, commandStack, registry, extensions, width, height);
 
     struct IconHit { ImVec2 mn; ImVec2 mx; EditorObjectId id; };
     std::vector<IconHit> iconHits;

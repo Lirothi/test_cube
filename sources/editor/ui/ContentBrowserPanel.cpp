@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "editor/EditorExtensionRegistry.h"
+#include "editor/ui/EditorDragDrop.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -446,6 +447,76 @@ namespace
         request.folderPath = folderPath;
     }
 
+    void DrawAssetDragSource(const EditorAssetRecord& record,
+        EditorAssetId& selectedAsset)
+    {
+        if (!ImGui::BeginDragDropSource())
+        {
+            return;
+        }
+
+        selectedAsset = record.id;
+        const EditorDragDrop::AssetPayload payload =
+            EditorDragDrop::MakeAssetPayload(record.id);
+        ImGui::SetDragDropPayload(EditorDragDrop::kAssetPayloadType,
+            &payload,
+            sizeof(payload));
+        ImGui::Text("%s", record.displayName.c_str());
+        ImGui::TextDisabled("%s", record.virtualPath.c_str());
+        if (record.id.type == EditorAssetType::Mesh)
+        {
+            ImGui::TextDisabled("Drop in the viewport to spawn.");
+        }
+        else if (record.id.type == EditorAssetType::MaterialPreset)
+        {
+            ImGui::TextDisabled("Drop on the Inspector to assign.");
+        }
+        else
+        {
+            ImGui::TextDisabled("No drop target for this asset type yet.");
+        }
+        ImGui::EndDragDropSource();
+    }
+
+    void DrawFolderDragSource(const EditorAssetFolder& folder)
+    {
+        if (!ImGui::BeginDragDropSource())
+        {
+            return;
+        }
+
+        const EditorDragDrop::FolderPayload payload =
+            EditorDragDrop::MakeFolderPayload(folder.path);
+        ImGui::SetDragDropPayload(EditorDragDrop::kFolderPayloadType,
+            &payload,
+            sizeof(payload));
+        ImGui::Text("%s", folder.name.c_str());
+        ImGui::TextDisabled("%s", folder.path.c_str());
+        ImGui::TextDisabled("Folder moving is disabled.");
+        ImGui::EndDragDropSource();
+    }
+
+    void DrawDisabledFolderDropTarget()
+    {
+        if (!ImGui::BeginDragDropTarget())
+        {
+            return;
+        }
+
+        constexpr ImGuiDragDropFlags flags =
+            ImGuiDragDropFlags_AcceptBeforeDelivery |
+            ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+        const ImGuiPayload* assetPayload =
+            ImGui::AcceptDragDropPayload(EditorDragDrop::kAssetPayloadType, flags);
+        const ImGuiPayload* folderPayload =
+            ImGui::AcceptDragDropPayload(EditorDragDrop::kFolderPayloadType, flags);
+        if (assetPayload || folderPayload)
+        {
+            ImGui::SetTooltip("Moving assets or folders is disabled until references can be repaired safely.");
+        }
+        ImGui::EndDragDropTarget();
+    }
+
     void DrawFolderOperationsMenu(const std::string& folderPath,
         ContentBrowserUiRequest& request,
         bool includeOpen,
@@ -716,6 +787,8 @@ namespace
         {
             RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder.path);
         }
+        DrawFolderDragSource(folder);
+        DrawDisabledFolderDropTarget();
         if (ImGui::BeginPopupContextItem())
         {
             DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path, true);
@@ -1006,6 +1079,8 @@ namespace
             {
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
+            DrawFolderDragSource(*folder);
+            DrawDisabledFolderDropTarget();
             DrawFolderContextMenu(*folder, request);
             ImGui::PopID();
 
@@ -1041,6 +1116,7 @@ namespace
                     action.asset = record->id;
                 }
             }
+            DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject);
             ImGui::PopID();
@@ -1095,6 +1171,8 @@ namespace
             {
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
+            DrawFolderDragSource(*folder);
+            DrawDisabledFolderDropTarget();
             DrawFolderContextMenu(*folder, request);
             ImGui::PopID();
         }
@@ -1138,6 +1216,7 @@ namespace
                 ImGui::PopStyleColor(2);
             }
 
+            DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject);
             ImGui::PopID();

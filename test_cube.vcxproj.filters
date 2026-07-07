@@ -479,6 +479,9 @@
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/ui/EditorDragDrop.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">
       <Filter>sources\editor\scene</Filter>
     </ClInclude>
