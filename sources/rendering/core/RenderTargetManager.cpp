@@ -370,51 +370,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         };
 
-    auto CreateShadow = [&](UINT f,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& outRes,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
-        D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
-        UINT resolution)
-        {
-            // Shadows use a typeless texture with DSV=D16 and SRV=R16
-            D3D12_RESOURCE_DESC rd{};
-            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            rd.Width = resolution;
-            rd.Height = resolution;
-            rd.DepthOrArraySize = 1;
-            rd.MipLevels = 1;
-            rd.Format = DXGI_FORMAT_R16_TYPELESS;
-            rd.SampleDesc.Count = 1;
-            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            D3D12_CLEAR_VALUE cv{};
-            cv.Format = DXGI_FORMAT_D16_UNORM;
-            cv.DepthStencil.Depth = 1.0f;
-            cv.DepthStencil.Stencil = 0;
-
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
-
-            // DSV — goes into its dedicated shadow slot
-            outDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
-            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-            dsv.Format = DXGI_FORMAT_D16_UNORM;
-            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dev->CreateDepthStencilView(outRes.Get(), &dsv, outDSV);
-
-            // SRV — also stored in the shadow slot
-            outSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
-            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-            sd.Format = DXGI_FORMAT_R16_UNORM;
-            sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            sd.Texture2D.MipLevels = 1;
-            dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
-
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        };
+    // Step 24f-2: CSM cascade atlas creation lives in CreateShadowResource (below) so the shadow-mode
+    // residency toggle can shrink it to 1x1 in VSM mode (directional then comes from the clipmap).
 
     // Step 24c: spot + point shadow atlas creation lives in CreateSpotShadowResource /
     // CreatePointShadowResource (below) so the shadow-mode residency toggle can rebuild them at
@@ -437,7 +394,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
         D.shadowRes = 4096; // could be driven by config/parameter
-        CreateShadow(f, D.shadow, D.shadowDSV, D.shadowSRV, D.shadowRes);
+        CreateShadowResource(dev, tracker, f, D.shadowRes);
 
         D.spotShadowRes = 512;
         CreateSpotShadowResource(dev, tracker, f, D.spotShadowRes);
@@ -501,6 +458,56 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.tonemap.Get(), L"Tonemap");
         nameRes(D.fxaa.Get(), L"Fxaa");
     }
+}
+
+// Step 24f-2: CSM cascade atlas (R16_TYPELESS 2D, DSV=D16, SRV=R16). Writes deferred_[f].shadow + its
+// views. `resolution` = full-res (Legacy) or 1 (VSM: tiny, directional comes from the clipmap).
+void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+{
+    if (!dev) { return; }
+    if (resolution == 0) { resolution = 4096; }
+    auto& D = deferred_[f];
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC rd{};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = resolution;
+    rd.Height = resolution;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = DXGI_FORMAT_R16_TYPELESS;
+    rd.SampleDesc.Count = 1;
+    rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE cv{};
+    cv.Format = DXGI_FORMAT_D16_UNORM;
+    cv.DepthStencil.Depth = 1.0f;
+    cv.DepthStencil.Stencil = 0;
+
+    ThrowIfFailed(dev->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(D.shadow.ReleaseAndGetAddressOf())));
+
+    D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+    dsv.Format = DXGI_FORMAT_D16_UNORM;
+    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    dev->CreateDepthStencilView(D.shadow.Get(), &dsv, D.shadowDSV);
+
+    D.shadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = DXGI_FORMAT_R16_UNORM;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels = 1;
+    dev->CreateShaderResourceView(D.shadow.Get(), &sd, D.shadowSRV);
+
+    tracker.SetResourceState(D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 }
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
@@ -640,6 +647,9 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceSta
         if (D.spotShadow) { tracker.ClearResourceState(D.spotShadow.Get()); }
         if (D.pointShadow) { tracker.ClearResourceState(D.pointShadow.Get()); }
         // Keep the configured resolutions; only the created size changes (1 = tiny placeholder).
+        // NOTE: the CSM cascade atlas (D.shadow) is NOT retired here — Step 24f-2 deferred: it needs
+        // Pass_CSM skipped in VSM mode, which breaks the parallel CL timeline (see Pass_CSM). So the
+        // CSM atlas stays full-res + rendered in both modes for now.
         CreateSpotShadowResource(dev, tracker, f, full ? D.spotShadowRes : 1u);
         CreatePointShadowResource(dev, tracker, f, full ? D.pointShadowRes : 1u);
     }

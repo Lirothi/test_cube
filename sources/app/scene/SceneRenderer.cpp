@@ -142,6 +142,8 @@ namespace
         float4 lightCounts;
         mat4   lightViewProj[4];
         float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
+        float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
+        mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
     };
 
     struct OceanReflectionConstants
@@ -245,6 +247,16 @@ namespace
         // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
         const bool vsmOn = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
         vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist, 0.0f, 0.0f);
+        // Step 24f: directional clipmap for glass (matches lighting_cs). Same tunables + level viewProjs.
+        vc.clipmapParams = float4(vsm::g_clipmapBaseExtent, vsm::g_clipmapNormalBias, vsm::g_clipmapDepthBias, 0.0f);
+        if (frame.clipmapViews)
+        {
+            for (size_t i = 0; i < 8 && i < frame.clipmapViews->size(); ++i)
+            {
+                const SceneView& cv = (*frame.clipmapViews)[i];
+                vc.clipmapViewProj[i] = cv.view * cv.proj;
+            }
+        }
 
         return UploadFrameCB(renderer, vc);
     }
@@ -1231,7 +1243,10 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     {
         return;
     }
-
+    // NOTE (Step 24f-2, deferred): CSM renders in BOTH modes. Skipping this pass in VSM mode to retire
+    // the cascade atlas breaks the parallel-execution CL timeline (the graph expects this pass's
+    // cascade command lists) → GPU hang under churn. Retiring the atlas needs the Main_CSM pass to be
+    // conditionally NOT added to the render graph in VSM mode (surgery) — see the plan doc.
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(d.cl, ctx.pass);
     {

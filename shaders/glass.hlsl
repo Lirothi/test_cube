@@ -61,6 +61,8 @@ cbuffer GlassView : register(b1)
     float4 lightCounts;           // x = point lights, y = spot lights
     float4x4 lightViewProj[4];
     float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
+    float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
+    float4x4 clipmapViewProj[8];  // Step 24f: directional clipmap level viewProjs
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -198,6 +200,12 @@ float ShadowPCF3x3Texture(Texture2D atlas, float2 uv, float depth, float2 texel)
 
 float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
 {
+    // Step 24f: VSM mode samples the directional clipmap (matches lighting_cs.hlsl); Legacy = cascades.
+    if (vsmParams.x != 0.0f)
+    {
+        return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.x, clipmapParams.y, clipmapParams.z,
+                                clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
+    }
     int idx = ChooseCascadeIndex(Pws);
     float4 sb = cascadeScaleBias[idx];
     float2 scale = sb.xy;

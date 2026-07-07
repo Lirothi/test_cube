@@ -142,6 +142,7 @@ private:
     // Step 24c: (re)create the spot / point shadow atlas resource + its SRV/DSV views at `resolution`
     // for frame `f` (operates on deferred_[f]). Extracted from Create()'s lambdas so the residency
     // toggle can rebuild them at 1x1 / full res.
+    void CreateShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution); // Step 24f-2: CSM atlas
     void CreateSpotShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
     void CreatePointShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
 
