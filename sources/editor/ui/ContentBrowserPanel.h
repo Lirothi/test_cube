@@ -34,6 +34,9 @@ public:
 
 private:
     char searchBuffer_[256] = {};
+    char sourceSearchBuffer_[128] = {};
+    std::string selectedFolder_ = "/Game";
+    bool includeSubfolders_ = true;
     int typeFilterIndex_ = 0; // index into the type-filter combo (0 = All)
 };
 

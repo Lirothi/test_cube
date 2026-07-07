@@ -49,6 +49,38 @@ Important source files:
   `docs/level_editor_HANDOFF.md`.
 - Do not commit, push, switch branches, or rewrite unrelated user changes.
 
+## UE-Like Content Browser Direction
+
+Reference shape:
+
+- Epic Content Browser overview:
+  https://dev.epicgames.com/documentation/en-us/unreal-engine/content-browser-in-unreal-engine
+- Epic Content Browser interface:
+  https://dev.epicgames.com/documentation/en-us/unreal-engine/content-browser-interface-in-unreal-engine
+- Epic filters and collections:
+  https://dev.epicgames.com/documentation/en-us/unreal-engine/filters-and-collections-in-unreal-engine
+- Epic working with assets:
+  https://dev.epicgames.com/documentation/en-us/unreal-engine/working-with-assets-in-unreal-engine
+
+Target behavior for this repository:
+
+- Treat the Content Browser as a folder-first editor surface, not just an asset
+  table. The main areas should become Navigation Bar, Sources Panel, optional
+  Collections/Favorites, Filters/Search Bar, Asset View, Details/Preview, and
+  Settings.
+- Add an expandable folder tree in the Sources Panel. It should behave like a
+  regular file explorer: select a folder, expand/collapse children, search
+  folders, and show folder rows in the Asset View.
+- Keep a UE-style breadcrumb and back/forward path history above the Asset View.
+- Support view modes in the Settings menu. Aim for Tiles, List, and Columns,
+  but ship them in separable increments.
+- Search and filters should apply to the selected folder or collection. Multiple
+  type filters are additive.
+- Collections/Favorites should be references to assets, not physical folders.
+- Assets in this repository are raw files and JSON records, not UE packages.
+  Do not implement destructive move/delete/rename behavior for non-empty asset
+  folders until references can be updated or repaired safely.
+
 ## Step 1: Outliner Search And Type Filtering
 
 Goal: make the current flat outliner usable on medium-size levels without
@@ -206,9 +238,179 @@ Validation:
 - Verify undo/redo for rename.
 - Verify no-editor build if new command files touch project configuration.
 
-## Step 6: Content Browser Material Assignment
+## Step 6: Content Browser Asset Model And Folder Tree
 
-Goal: turn material assets from passive records into a useful editing action.
+Goal: give the Content Browser a folder-aware data model and Sources Panel before
+adding more asset actions.
+
+Primary files:
+
+- `sources/editor/assets/AssetRegistry.*`
+- `sources/editor/ui/ContentBrowserPanel.*`
+
+Implementation notes:
+
+- Add virtual content paths to assets, derived from existing physical paths.
+  Suggested roots:
+  - `/Game/Models` for mesh/model assets;
+  - `/Game/Textures` for texture assets;
+  - `/Game/Materials` for material presets;
+  - `/Game/Levels` for level JSON files;
+  - `/Game/Shaders` for shader assets.
+- Expose a folder tree from `AssetRegistry` with child folders, direct asset
+  ids, and recursive asset counts.
+- Preserve existing asset ids and action behavior. This step is read-only from
+  the filesystem perspective.
+- Keep sort deterministic: folders first A-Z, then assets A-Z.
+- Track selected source folder in `ContentBrowserPanel` state.
+- Add a recursive display flag, but default to direct contents of the selected
+  folder if that is practical with the current registry.
+
+Acceptance criteria:
+
+- The Sources Panel shows a project root with expandable virtual folders.
+- Selecting a folder changes the Asset View contents.
+- Refresh rebuilds the tree and keeps the selected folder if it still exists.
+- Folder filtering/search does not mutate the registry or physical files.
+- Existing mesh spawn behavior still works.
+
+Validation:
+
+- Build `Debug|x64`.
+- Refresh the Content Browser and navigate every root folder.
+- Confirm asset counts match visible records for at least Models, Textures, and
+  Levels.
+
+## Step 7: UE-Style Content Browser Layout Shell
+
+Goal: restructure the panel into the recognizable UE Content Browser areas.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+
+Implementation notes:
+
+- Add a top Navigation Bar with:
+  - Add, Import, and Save All controls as disabled or placeholder actions until
+    real implementations exist;
+  - Back and Forward folder history;
+  - a clickable breadcrumb for the selected virtual folder;
+  - Refresh;
+  - Settings.
+- Add a left Sources Panel containing the folder tree from Step 6.
+- Keep the right side as Asset View and reserve space for a bottom/right
+  Details/Preview area.
+- Add a compact status line with displayed asset count and selected folder path.
+- Use stable split sizes so the panel remains usable at small window sizes.
+- Do not add collections in this step unless they are read-only placeholders.
+
+Acceptance criteria:
+
+- The browser visibly has Navigation Bar, Sources Panel, Asset View, and
+  Details/Preview regions.
+- Back, Forward, and breadcrumbs navigate folders without changing asset
+  selection incorrectly.
+- Disabled placeholder controls explain why they are unavailable.
+- No text or controls overlap at the default editor window size.
+
+Validation:
+
+- Build `Debug|x64`.
+- Navigate through nested folders with the Sources tree, breadcrumbs, and
+  Back/Forward controls.
+- Resize the editor window and confirm the layout remains readable.
+
+## Step 8: Asset View Modes, Search, And Filters
+
+Goal: make folder browsing feel close to UE by combining folder rows, asset rows,
+view modes, search, and additive type filters.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/assets/AssetRegistry.*`
+
+Implementation notes:
+
+- Represent Asset View entries as either folder entries or asset entries.
+- Double-click folder entries to enter them. Double-click assets should keep
+  existing asset-specific behavior where present.
+- Add a Settings view-mode enum for Tiles, List, and Columns. Implement at least
+  Tiles and List in this step; leave Columns disabled with a reason if it cannot
+  be implemented cleanly.
+- Keep the current search box but scope results to the selected folder or
+  recursive view.
+- Add a Filters button/menu with additive type filters for Mesh, Material,
+  Texture, Level, and Shader.
+- Show active filters as compact chips/buttons that can be toggled or removed.
+- Support a folder search field in the Sources Panel. Prefix `-text` should hide
+  folders containing that text, matching UE's exclusion behavior.
+
+Acceptance criteria:
+
+- Asset View can show folder entries and assets together.
+- Search, type filters, selected folder, and recursive display combine
+  predictably.
+- The displayed count reflects the final filtered Asset View.
+- View mode changes do not lose selected folder or selected asset.
+- Clearing search restores the same folder contents.
+
+Validation:
+
+- Build `Debug|x64`.
+- Navigate to each virtual root and test search, type filters, recursive mode,
+  and view-mode switching.
+- Verify that an active filter cannot make the panel look broken; empty states
+  must say what filters are active.
+
+## Step 9: Content Browser Folder Operations And Context Menus
+
+Goal: add UE-like folder and asset context menus while staying safe with raw
+repository files.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/assets/AssetRegistry.*`
+- `sources/editor/EditorController.cpp`
+
+Implementation notes:
+
+- Add empty-space, folder-row, source-tree, and asset-row context menus.
+- Implement `New Folder` only for virtual paths that map to approved physical
+  content roots. Validate names and reject paths containing separators or
+  traversal.
+- Implement `Delete Empty Folder` with confirmation only when the mapped
+  directory is empty.
+- Keep `Rename Folder`, non-empty folder delete, and folder move/copy disabled
+  until asset reference repair exists.
+- Add asset actions that do not mutate files:
+  - Copy Virtual Path;
+  - Copy Physical Path;
+  - Show In Sources;
+  - Refresh.
+- Keep filesystem writes outside editor roots impossible by construction.
+
+Acceptance criteria:
+
+- Right-clicking empty space can create a new folder under the selected source
+  when the selected source maps to a writable editor content root.
+- Empty folder delete requires confirmation and refuses non-empty folders.
+- Disabled folder actions explain the missing reference-update support.
+- Asset context menus expose copy/show actions without breaking existing spawn
+  actions.
+
+Validation:
+
+- Build `Debug|x64`.
+- Create and delete an empty folder under an approved content root.
+- Attempt invalid names and confirm they are rejected.
+- Confirm non-empty folder delete and folder move/copy are unavailable.
+
+## Step 10: Content Browser Asset Actions
+
+Goal: make assets useful from the UE-like browser after the folder model exists.
 
 Primary files:
 
@@ -218,91 +420,38 @@ Primary files:
 
 Implementation notes:
 
+- Preserve existing mesh spawn actions and surface them from asset context menus.
 - Enable "Assign Material to Selected" only when:
   - the selected asset is `EditorAssetType::MaterialPreset`;
   - the selected object exists;
   - the selected object type supports material assignment.
-- Return a new `ContentBrowserAction` for material assignment.
-- Execute `SetMaterialCommand` from `EditorController`.
-- Keep unsupported object types disabled, not silently ignored.
+- Execute material assignment through `SetMaterialCommand`.
+- Add double-click and context-menu actions for level assets:
+  - Open Level;
+  - Open Level Preserving Camera, if supported by existing controller helpers.
+- Reuse `EditorController::RequestOpenLevelPath` or existing level-open helpers.
+- Do not auto-save dirty documents. If current dirty-document handling cannot
+  prompt before loading, defer level-open implementation and keep the action
+  disabled with a reason.
 
 Acceptance criteria:
 
 - Right-clicking a material asset can assign it to a selected static mesh.
 - Undo/redo restores the previous material.
-- The action is disabled for textures, shaders, levels, and unsupported selected
-  objects.
+- Double-clicking a level asset starts a level load only through an explicit
+  dirty-document-safe path.
+- Recent levels and level status update consistently with File > Open.
+- Unsupported actions are disabled, not silently ignored.
 
 Validation:
 
 - Build `Debug|x64`.
 - Assign each material preset to a selected mesh and undo/redo.
-
-## Step 7: Content Browser Level Actions
-
-Goal: make level assets openable from the Content Browser.
-
-Primary files:
-
-- `sources/editor/ui/ContentBrowserPanel.*`
-- `sources/editor/EditorController.cpp`
-
-Implementation notes:
-
-- Add double-click and context-menu actions for level assets:
-  - Open Level
-  - Open Level Preserving Camera
-- Reuse `EditorController::RequestOpenLevelPath` or existing level-open helpers.
-- Do not auto-save dirty documents without explicit user action.
-- If the current document is dirty, show a confirmation path before loading or
-  defer this step until a dirty-document prompt exists.
-
-Acceptance criteria:
-
-- Double-clicking a level asset starts a level load.
-- Recent levels and level status update consistently with File > Open.
-- Dirty-document behavior is explicit and cannot silently discard work.
-
-Validation:
-
-- Build `Debug|x64`.
 - Open `data/levels/demo.json` and another level from the Content Browser.
 
-## Step 8: Content Browser Asset Details And Preview Polish
+## Step 11: Content Browser Drag And Drop
 
-Goal: improve inspection value before adding heavier asset-management features.
-
-Primary files:
-
-- `sources/editor/ui/ContentBrowserPanel.*`
-- `sources/editor/assets/AssetRegistry.*`
-
-Implementation notes:
-
-- Replace the raw details footer with a clear details panel.
-- Add compact type icons or labels for Mesh, Material, Texture, Level, and Shader.
-- For textures, show dimensions, format, kind, mip count, and invalid metadata
-  state.
-- For material presets, show the source file and preset name. Optional: parse
-  common texture slots from `data/materials.json`.
-- Avoid GPU thumbnail loading in this step unless the executor can keep it small
-  and isolated.
-
-Acceptance criteria:
-
-- Selecting any asset type shows useful type-specific details.
-- Invalid/unreadable texture metadata is obvious.
-- Details remain visible when the selected asset is hidden by the active filter.
-
-Validation:
-
-- Build `Debug|x64`.
-- Select each asset type in the Content Browser.
-
-## Step 9: Drag And Drop From Content Browser
-
-Goal: support faster creation and assignment without replacing existing context
-menus.
+Goal: support fast UE-like workflows without adding unsafe file moves.
 
 Primary files:
 
@@ -313,25 +462,71 @@ Primary files:
 
 Implementation notes:
 
-- Define ImGui drag payloads for `EditorAssetId`.
+- Define ImGui drag payloads for `EditorAssetId` and virtual folder paths.
 - Drag mesh assets into the viewport to spawn using existing object factories.
 - Drag material assets onto the inspector or selected object target to execute
   `SetMaterialCommand`.
 - Optional: drag cube textures onto a selected skybox environment entity.
-- Keep all mutations command-backed where commands exist.
+- Do not implement drag-to-move files between folders until reference repair and
+  undo behavior are designed.
+- Make unsupported drops visibly unavailable.
 
 Acceptance criteria:
 
 - Dragging a mesh asset into the viewport spawns a new object.
 - Dragging a material asset onto a supported selected mesh assigns it.
-- Unsupported drops are ignored visibly or have disabled drop affordance.
+- Dragging folders or assets onto folder targets does not move files yet and
+  communicates that this is intentionally disabled.
+- Unsupported drops do not mutate state.
 
 Validation:
 
 - Build `Debug|x64`.
 - Smoke test drag/drop with a mesh and material.
+- Try an unsupported folder move and confirm no files move.
 
-## Step 10: Command-Backed Environment Edits
+## Step 12: Content Browser Details, Preview, Collections, And Favorites
+
+Goal: add inspection and organization features that make the browser feel closer
+to UE without requiring full package management.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/assets/AssetRegistry.*`
+- `sources/editor/EditorController.cpp`
+
+Implementation notes:
+
+- Replace the raw details footer with a clear Details/Preview panel.
+- Add compact type icons or labels for Mesh, Material, Texture, Level, Shader,
+  and Folder.
+- For textures, show dimensions, format, kind, mip count, and invalid metadata
+  state.
+- For material presets, show the source file and preset name. Optional: parse
+  common texture slots from `data/materials.json`.
+- Add Favorites as local references to assets or folders.
+- Add Collections only as reference lists, not physical folders. Collection
+  delete must not delete assets.
+- Optional: add Recently Opened/Recently Used as a generated collection.
+- Avoid GPU thumbnail loading unless it remains small and isolated.
+
+Acceptance criteria:
+
+- Selecting any asset type shows useful type-specific details.
+- Selecting a folder shows child folder and asset counts.
+- Invalid/unreadable texture metadata is obvious.
+- Favorites or Collections can show referenced assets without moving files.
+- Details remain visible when the selected asset is hidden by the active filter.
+
+Validation:
+
+- Build `Debug|x64`.
+- Select each asset type and at least one folder in the Content Browser.
+- Add and remove a favorite or collection reference without moving/deleting the
+  underlying asset.
+
+## Step 13: Command-Backed Environment Edits
 
 Goal: remove the largest undo/redo inconsistency in the editor.
 
@@ -369,7 +564,7 @@ Validation:
 - Smoke test undo/redo for point light, spot light, directional light, skybox,
   and ocean enabled state where present.
 
-## Step 11: Persist Editor Panel UI State
+## Step 14: Persist Editor Panel UI State
 
 Goal: make the editor reopen in the user's preferred layout/filter state.
 
@@ -383,13 +578,16 @@ Implementation notes:
 
 - Extend `editor_state.json` under the existing `levelEditor` object.
 - Persist panel visibility, outliner group expansion, content browser type
-  filter, and selection outline radius.
+  filter, selected source folder, recursive mode, view mode, source/details
+  split sizes, and selection outline radius.
 - Avoid persisting search strings unless the user explicitly asks; stale filters
   can make panels appear empty.
+- Persist Favorites/Collections only if Step 12 implemented them.
 
 Acceptance criteria:
 
 - Closing/reopening the app restores panel visibility and group expansion.
+- Content Browser reopens on the same source folder and view mode.
 - Corrupt or missing state falls back to defaults without breaking startup.
 
 Validation:
@@ -397,7 +595,7 @@ Validation:
 - Build `Debug|x64`.
 - Run once, change panel state, close, relaunch, and confirm state restoration.
 
-## Step 12: UX Cleanup Pass
+## Step 15: UX Cleanup Pass
 
 Goal: remove small sources of confusion after functional work lands.
 
@@ -433,23 +631,26 @@ Validation:
 
 ## Suggested Execution Order
 
-Recommended order for highest value with lowest risk:
+Recommended order from this point, prioritizing a UE-like Content Browser:
 
-1. Step 1: Outliner Search And Type Filtering
-2. Step 3: Preserve Object Order Across Delete Undo
-3. Step 6: Content Browser Material Assignment
-4. Step 2: Outliner Sorting And Stable Row Identity
-5. Step 4: Outliner Groups And Context Actions
-6. Step 7: Content Browser Level Actions
-7. Step 8: Content Browser Asset Details And Preview Polish
-8. Step 10: Command-Backed Environment Edits
-9. Step 9: Drag And Drop From Content Browser
-10. Step 11: Persist Editor Panel UI State
-11. Step 12: UX Cleanup Pass
+1. Step 6: Content Browser Asset Model And Folder Tree
+2. Step 7: UE-Style Content Browser Layout Shell
+3. Step 8: Asset View Modes, Search, And Filters
+4. Step 9: Content Browser Folder Operations And Context Menus
+5. Step 10: Content Browser Asset Actions
+6. Step 11: Content Browser Drag And Drop
+7. Step 12: Content Browser Details, Preview, Collections, And Favorites
+8. Step 4: Outliner Groups And Context Actions
+9. Step 5: Rename Command
+10. Step 13: Command-Backed Environment Edits
+11. Step 14: Persist Editor Panel UI State
+12. Step 15: UX Cleanup Pass
 
-Step 10 is intentionally later because it has broader command/runtime impact.
-Step 9 is later because drag/drop touches several UI surfaces and is easier once
-the underlying actions already exist.
+Steps 4 and 5 remain valuable, but they are intentionally moved behind the
+Content Browser foundation because the current product direction is a UE-like
+folder browser. Step 13 is intentionally later because it has broader
+command/runtime impact. Step 11 is later because drag/drop touches several UI
+surfaces and is easier once the underlying browser actions already exist.
 
 ## Stop Conditions
 
@@ -458,6 +659,8 @@ Stop and report instead of pushing through if:
 - a step requires changing runtime behavior in no-editor builds;
 - a command cannot reliably restore both document state and live runtime state;
 - level loading can discard dirty work without an explicit user path;
+- a folder operation would move/delete assets without a reference repair plan;
+- a filesystem operation can escape approved content roots;
 - a UI action targets environment and regular object rows differently but appears
   identical to the user;
 - GPU/resource lifetime changes are needed outside the editor draw/tick mutation

@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -55,10 +56,23 @@ struct EditorAssetRecord
 {
     EditorAssetId id;
     std::string path;
+    std::string virtualPath;
+    std::string virtualFolder;
     std::string displayName;
     std::string extension;
     uint64_t fileWriteTime = 0;
     EditorTextureInfo texture;
+};
+
+struct EditorAssetFolder
+{
+    std::string path;
+    std::string name;
+    std::string parentPath;
+    std::vector<std::string> childPaths;
+    std::vector<EditorAssetId> directAssetIds;
+    size_t directAssetCount = 0;
+    size_t recursiveAssetCount = 0;
 };
 
 class AssetRegistry
@@ -68,19 +82,26 @@ public:
     void Refresh();
 
     const std::vector<EditorAssetRecord>& Assets() const { return assets_; }
+    const std::vector<EditorAssetFolder>& Folders() const { return folders_; }
 
     // Returns records whose display name or path contains `text`
     // (case-insensitive). Pass EditorAssetType::Unknown for no type filter.
     std::vector<const EditorAssetRecord*> Search(std::string_view text,
         EditorAssetType typeFilter) const;
+    std::vector<const EditorAssetRecord*> SearchInFolder(std::string_view folderPath,
+        bool recursive,
+        std::string_view text,
+        EditorAssetType typeFilter) const;
 
     const EditorAssetRecord* FindById(const EditorAssetId& id) const;
     const EditorAssetRecord* FindByPath(std::string_view path) const;
+    const EditorAssetFolder* FindFolder(std::string_view virtualPath) const;
 
     size_t CountByType(EditorAssetType type) const;
 
 private:
     std::vector<EditorAssetRecord> assets_;
+    std::vector<EditorAssetFolder> folders_;
 };
 
 #endif // WITH_EDITOR

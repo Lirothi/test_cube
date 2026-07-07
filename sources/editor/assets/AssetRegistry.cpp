@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <dxgiformat.h>
@@ -347,30 +348,185 @@ namespace
     struct DirRoot
     {
         const char* dir;
+        const char* virtualRoot;
         EditorAssetType type;
         std::vector<std::string> extensions;
     };
+
+    constexpr const char* kVirtualRoot = "/Game";
+
+    std::string NormalizeVirtualPath(std::string path)
+    {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        while (path.size() > 1 && path.back() == '/')
+        {
+            path.pop_back();
+        }
+        return path.empty() ? std::string(kVirtualRoot) : path;
+    }
+
+    std::string ParentVirtualPath(std::string_view path)
+    {
+        if (path == kVirtualRoot || path.empty())
+        {
+            return {};
+        }
+
+        const size_t slash = path.find_last_of('/');
+        if (slash == std::string_view::npos || slash == 0)
+        {
+            return {};
+        }
+        return std::string(path.substr(0, slash));
+    }
+
+    std::string FolderNameFromVirtualPath(std::string_view path)
+    {
+        if (path == kVirtualRoot)
+        {
+            return "Game";
+        }
+
+        const size_t slash = path.find_last_of('/');
+        if (slash == std::string_view::npos)
+        {
+            return std::string(path);
+        }
+        return std::string(path.substr(slash + 1));
+    }
+
+    EditorAssetFolder* FindFolderMutable(std::vector<EditorAssetFolder>& folders,
+        std::string_view path)
+    {
+        for (EditorAssetFolder& folder : folders)
+        {
+            if (folder.path == path)
+            {
+                return &folder;
+            }
+        }
+        return nullptr;
+    }
+
+    EditorAssetFolder& EnsureFolder(std::vector<EditorAssetFolder>& folders,
+        std::string path)
+    {
+        path = NormalizeVirtualPath(std::move(path));
+        if (EditorAssetFolder* existing = FindFolderMutable(folders, path))
+        {
+            return *existing;
+        }
+
+        const std::string parent = ParentVirtualPath(path);
+        if (!parent.empty())
+        {
+            EnsureFolder(folders, parent);
+        }
+
+        EditorAssetFolder folder;
+        folder.path = path;
+        folder.name = FolderNameFromVirtualPath(path);
+        folder.parentPath = parent;
+        folders.push_back(std::move(folder));
+
+        EditorAssetFolder& inserted = folders.back();
+        if (!parent.empty())
+        {
+            EditorAssetFolder* parentFolder = FindFolderMutable(folders, parent);
+            if (parentFolder)
+            {
+                parentFolder->childPaths.push_back(inserted.path);
+            }
+        }
+        return inserted;
+    }
+
+    bool IsSameOrChildFolder(std::string_view folder, std::string_view parent)
+    {
+        if (parent.empty() || parent == kVirtualRoot)
+        {
+            return true;
+        }
+        if (folder == parent)
+        {
+            return true;
+        }
+        if (folder.size() <= parent.size() || folder.compare(0, parent.size(), parent) != 0)
+        {
+            return false;
+        }
+        return folder[parent.size()] == '/';
+    }
+
+    bool MatchesAssetQuery(const EditorAssetRecord& record,
+        const std::string& lowerNeedle,
+        EditorAssetType typeFilter)
+    {
+        if (typeFilter != EditorAssetType::Unknown && record.id.type != typeFilter)
+        {
+            return false;
+        }
+        if (!lowerNeedle.empty())
+        {
+            if (ToLower(record.displayName).find(lowerNeedle) == std::string::npos &&
+                ToLower(record.path).find(lowerNeedle) == std::string::npos &&
+                ToLower(record.virtualPath).find(lowerNeedle) == std::string::npos)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    size_t ComputeRecursiveAssetCount(std::vector<EditorAssetFolder>& folders,
+        const std::string& path)
+    {
+        EditorAssetFolder* folder = FindFolderMutable(folders, path);
+        if (!folder)
+        {
+            return 0;
+        }
+
+        size_t count = folder->directAssetCount;
+        const std::vector<std::string> children = folder->childPaths;
+        for (const std::string& childPath : children)
+        {
+            count += ComputeRecursiveAssetCount(folders, childPath);
+        }
+        folder = FindFolderMutable(folders, path);
+        if (folder)
+        {
+            folder->recursiveAssetCount = count;
+        }
+        return count;
+    }
 }
 
 void AssetRegistry::Refresh()
 {
     assets_.clear();
+    folders_.clear();
 
     const std::array<DirRoot, 4> roots = { {
-        { "models",      EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt" } },
-        { "textures",    EditorAssetType::Texture, { ".dds", ".png" } },
-        { "data/levels", EditorAssetType::Level,   { ".json" } },
-        { "shaders",     EditorAssetType::Shader,  { ".hlsl" } },
+        { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt" } },
+        { "textures",    "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
+        { "data/levels", "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
+        { "shaders",     "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
     } };
+
+    EnsureFolder(folders_, kVirtualRoot);
 
     for (const DirRoot& root : roots)
     {
+        EnsureFolder(folders_, root.virtualRoot);
+
         std::error_code ec;
         if (!fs::is_directory(root.dir, ec))
         {
             continue;
         }
 
+        const fs::path rootPath(root.dir);
         for (fs::recursive_directory_iterator it(root.dir,
                  fs::directory_options::skip_permission_denied, ec), end;
              it != end;
@@ -394,10 +550,21 @@ void AssetRegistry::Refresh()
                 continue;
             }
 
+            const std::string relativeFolder =
+                p.parent_path().lexically_relative(rootPath).generic_string();
+            std::string virtualFolder(root.virtualRoot);
+            if (!relativeFolder.empty() && relativeFolder != ".")
+            {
+                virtualFolder += "/";
+                virtualFolder += relativeFolder;
+            }
+
             EditorAssetRecord record;
             record.id.type = root.type;
             record.path = p.generic_string();
             record.id.key = record.path;
+            record.virtualFolder = NormalizeVirtualPath(std::move(virtualFolder));
+            record.virtualPath = record.virtualFolder + "/" + p.filename().generic_string();
             record.displayName = p.filename().string();
             record.extension = ext;
             record.fileWriteTime = WriteTimeOf(p);
@@ -412,6 +579,8 @@ void AssetRegistry::Refresh()
     // Material presets: names under "presets" in data/materials.json. Parsed
     // directly here (no MaterialDataManager / GPU dependency).
     {
+        EnsureFolder(folders_, "/Game/Materials");
+
         const char* materialsPath = "data/materials.json";
         std::error_code ec;
         if (fs::exists(materialsPath, ec))
@@ -444,6 +613,8 @@ void AssetRegistry::Refresh()
                         record.id.type = EditorAssetType::MaterialPreset;
                         record.id.key = it.key();
                         record.path = materialsPath;
+                        record.virtualFolder = "/Game/Materials";
+                        record.virtualPath = record.virtualFolder + "/" + it.key();
                         record.displayName = it.key();
                         record.fileWriteTime = writeTime;
                         assets_.push_back(std::move(record));
@@ -464,6 +635,19 @@ void AssetRegistry::Refresh()
             }
             return a.displayName < b.displayName;
         });
+
+    for (const EditorAssetRecord& record : assets_)
+    {
+        EditorAssetFolder& folder = EnsureFolder(folders_, record.virtualFolder);
+        folder.directAssetIds.push_back(record.id);
+        folder.directAssetCount = folder.directAssetIds.size();
+    }
+
+    for (EditorAssetFolder& folder : folders_)
+    {
+        std::sort(folder.childPaths.begin(), folder.childPaths.end());
+    }
+    ComputeRecursiveAssetCount(folders_, kVirtualRoot);
 }
 
 std::vector<const EditorAssetRecord*> AssetRegistry::Search(std::string_view text,
@@ -474,19 +658,37 @@ std::vector<const EditorAssetRecord*> AssetRegistry::Search(std::string_view tex
 
     for (const EditorAssetRecord& record : assets_)
     {
-        if (typeFilter != EditorAssetType::Unknown && record.id.type != typeFilter)
+        if (MatchesAssetQuery(record, needle, typeFilter))
+        {
+            results.push_back(&record);
+        }
+    }
+    return results;
+}
+
+std::vector<const EditorAssetRecord*> AssetRegistry::SearchInFolder(
+    std::string_view folderPath,
+    bool recursive,
+    std::string_view text,
+    EditorAssetType typeFilter) const
+{
+    std::vector<const EditorAssetRecord*> results;
+    const std::string folder = NormalizeVirtualPath(std::string(folderPath));
+    const std::string needle = ToLower(std::string(text));
+
+    for (const EditorAssetRecord& record : assets_)
+    {
+        const bool inFolder = recursive ?
+            IsSameOrChildFolder(record.virtualFolder, folder) :
+            record.virtualFolder == folder;
+        if (!inFolder)
         {
             continue;
         }
-        if (!needle.empty())
+        if (MatchesAssetQuery(record, needle, typeFilter))
         {
-            if (ToLower(record.displayName).find(needle) == std::string::npos &&
-                ToLower(record.path).find(needle) == std::string::npos)
-            {
-                continue;
-            }
+            results.push_back(&record);
         }
-        results.push_back(&record);
     }
     return results;
 }
@@ -510,6 +712,19 @@ const EditorAssetRecord* AssetRegistry::FindById(const EditorAssetId& id) const
         if (record.id.type == id.type && record.id.key == id.key)
         {
             return &record;
+        }
+    }
+    return nullptr;
+}
+
+const EditorAssetFolder* AssetRegistry::FindFolder(std::string_view virtualPath) const
+{
+    const std::string path = NormalizeVirtualPath(std::string(virtualPath));
+    for (const EditorAssetFolder& folder : folders_)
+    {
+        if (folder.path == path)
+        {
+            return &folder;
         }
     }
     return nullptr;

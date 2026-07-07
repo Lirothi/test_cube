@@ -1,10 +1,17 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #if WITH_EDITOR
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstring>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "editor/EditorExtensionRegistry.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 namespace
 {
@@ -41,6 +48,168 @@ namespace
         }
         return nullptr;
     }
+
+    std::string LowerCopy(std::string text)
+    {
+        for (char& ch : text)
+        {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return text;
+    }
+
+    bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
+    {
+        return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+    }
+
+    void DrawSearchInputWithClear(const char* id,
+        const char* hint,
+        char* buffer,
+        size_t bufferSize,
+        float width)
+    {
+        ImGui::SetNextItemWidth(width);
+        const ImVec2 inputMin = ImGui::GetCursorScreenPos();
+        const float inputWidth = ImGui::CalcItemWidth();
+        const float frameHeight = ImGui::GetFrameHeight();
+        const float buttonSize = frameHeight > 4.0f ? frameHeight - 4.0f : frameHeight;
+        ImVec2 buttonPos(
+            inputMin.x + inputWidth - buttonSize - 3.0f,
+            inputMin.y + (frameHeight - buttonSize) * 0.5f);
+        ImVec2 buttonMax(buttonPos.x + buttonSize, buttonPos.y + buttonSize);
+
+        if (buffer[0] != '\0' &&
+            ImGui::IsMouseHoveringRect(buttonPos, buttonMax, true) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            buffer[0] = '\0';
+            ImGui::ClearActiveID();
+        }
+
+        ImGui::InputTextWithHint(id, hint, buffer, bufferSize);
+        if (buffer[0] == '\0')
+        {
+            return;
+        }
+
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        const float actualFrameHeight = itemMax.y - itemMin.y;
+        const float actualButtonSize = actualFrameHeight > 4.0f ? actualFrameHeight - 4.0f : actualFrameHeight;
+        buttonPos = ImVec2(
+            itemMax.x - actualButtonSize - 3.0f,
+            itemMin.y + (actualFrameHeight - actualButtonSize) * 0.5f);
+        buttonMax = ImVec2(buttonPos.x + actualButtonSize, buttonPos.y + actualButtonSize);
+
+        const bool clearHovered = ImGui::IsMouseHoveringRect(buttonPos, buttonMax, true);
+        const ImU32 color = ImGui::GetColorU32(clearHovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+        const float pad = actualButtonSize > 12.0f ? 5.0f : 4.0f;
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddLine(
+            ImVec2(buttonPos.x + pad, buttonPos.y + pad),
+            ImVec2(buttonPos.x + actualButtonSize - pad, buttonPos.y + actualButtonSize - pad),
+            color,
+            1.5f);
+        drawList->AddLine(
+            ImVec2(buttonPos.x + actualButtonSize - pad, buttonPos.y + pad),
+            ImVec2(buttonPos.x + pad, buttonPos.y + actualButtonSize - pad),
+            color,
+            1.5f);
+    }
+
+    bool ShouldShowFolder(const AssetRegistry& registry,
+        const EditorAssetFolder& folder,
+        const std::string& sourceSearch)
+    {
+        if (sourceSearch.empty())
+        {
+            return true;
+        }
+
+        bool exclude = false;
+        std::string needle = sourceSearch;
+        if (needle.size() > 1 && needle.front() == '-')
+        {
+            exclude = true;
+            needle.erase(needle.begin());
+        }
+        needle = LowerCopy(needle);
+        if (needle.empty())
+        {
+            return true;
+        }
+
+        const bool selfMatches =
+            ContainsLower(folder.name, needle) || ContainsLower(folder.path, needle);
+        if (exclude)
+        {
+            return !selfMatches;
+        }
+        if (selfMatches)
+        {
+            return true;
+        }
+
+        for (const std::string& childPath : folder.childPaths)
+        {
+            const EditorAssetFolder* child = registry.FindFolder(childPath);
+            if (child && ShouldShowFolder(registry, *child, sourceSearch))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void DrawFolderTree(const AssetRegistry& registry,
+        const EditorAssetFolder& folder,
+        std::string& selectedFolder,
+        const std::string& sourceSearch)
+    {
+        if (!ShouldShowFolder(registry, folder, sourceSearch))
+        {
+            return;
+        }
+
+        ImGuiTreeNodeFlags flags =
+            ImGuiTreeNodeFlags_OpenOnArrow |
+            ImGuiTreeNodeFlags_SpanFullWidth;
+        if (folder.childPaths.empty())
+        {
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        }
+        if (selectedFolder == folder.path)
+        {
+            flags |= ImGuiTreeNodeFlags_Selected;
+        }
+        if (folder.path == "/Game")
+        {
+            flags |= ImGuiTreeNodeFlags_DefaultOpen;
+        }
+
+        char label[256];
+        std::snprintf(label, sizeof(label), "%s (%zu)",
+            folder.name.c_str(), folder.recursiveAssetCount);
+        const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+        {
+            selectedFolder = folder.path;
+        }
+
+        if (open && !folder.childPaths.empty())
+        {
+            for (const std::string& childPath : folder.childPaths)
+            {
+                const EditorAssetFolder* child = registry.FindFolder(childPath);
+                if (child)
+                {
+                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch);
+                }
+            }
+            ImGui::TreePop();
+        }
+    }
 }
 
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
@@ -50,22 +219,32 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 {
     ContentBrowserAction action;
 
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 420.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Content Browser", open))
     {
         ImGui::End();
         return action;
     }
 
-    // Toolbar: refresh, search, type filter.
+    if (!registry.FindFolder(selectedFolder_))
+    {
+        selectedFolder_ = registry.FindFolder("/Game") ? "/Game" :
+            (registry.Folders().empty() ? std::string() : registry.Folders().front().path);
+    }
+
+    // Toolbar: refresh, search, type filter, and recursive folder display.
     if (ImGui::Button("Refresh"))
     {
         registry.Refresh();
+        if (!registry.FindFolder(selectedFolder_))
+        {
+            selectedFolder_ = registry.FindFolder("/Game") ? "/Game" :
+                (registry.Folders().empty() ? std::string() : registry.Folders().front().path);
+        }
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(220.0f);
-    ImGui::InputTextWithHint("##search", "Search name or path...", searchBuffer_,
-        sizeof(searchBuffer_));
+    DrawSearchInputWithClear("##search", "Search assets...", searchBuffer_,
+        sizeof(searchBuffer_), 220.0f);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
     if (ImGui::BeginCombo("##typeFilter", kTypeFilters[typeFilterIndex_].label))
@@ -84,24 +263,54 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
         ImGui::EndCombo();
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
 
     const EditorAssetType typeFilter = kTypeFilters[typeFilterIndex_].type;
+    ImGui::Separator();
+
+    // Split browser. Reserve space at the bottom for selected-asset details.
+    const float detailHeight = ImGui::GetTextLineHeightWithSpacing() * 7.0f;
+    ImGui::BeginChild("##sourcesPanel", ImVec2(190.0f, -detailHeight), true);
+    ImGui::TextUnformatted("Sources");
+    DrawSearchInputWithClear("##sourceSearch", "Search folders...", sourceSearchBuffer_,
+        sizeof(sourceSearchBuffer_), -1.0f);
+    ImGui::Separator();
+    if (const EditorAssetFolder* root = registry.FindFolder("/Game"))
+    {
+        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_);
+    }
+    else
+    {
+        ImGui::TextDisabled("No content roots.");
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::BeginChild("##assetView", ImVec2(0.0f, -detailHeight), false);
+
+    const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_);
     const std::vector<const EditorAssetRecord*> results =
-        registry.Search(searchBuffer_, typeFilter);
+        registry.SearchInFolder(selectedFolder_, includeSubfolders_, searchBuffer_, typeFilter);
+    const size_t folderAssetCount = selectedFolder ?
+        (includeSubfolders_ ? selectedFolder->recursiveAssetCount : selectedFolder->directAssetCount) :
+        registry.Assets().size();
 
-    ImGui::Text("Showing %d of %d assets", static_cast<int>(results.size()),
-        static_cast<int>(registry.Assets().size()));
+    ImGui::Text("Path: %s", selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("| Showing %d of %d assets",
+        static_cast<int>(results.size()),
+        static_cast<int>(folderAssetCount));
 
-    // Asset table. Reserve space at the bottom for the selected-asset details.
-    const float detailHeight = ImGui::GetTextLineHeightWithSpacing() * 6.0f;
+    // Asset table.
     const ImGuiTableFlags tableFlags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("##assetTable", 3, tableFlags, ImVec2(0.0f, -detailHeight)))
+    if (ImGui::BeginTable("##assetTable", 3, tableFlags, ImVec2(0.0f, 0.0f)))
     {
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-        ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Virtual Path", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -153,11 +362,12 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(record->displayName.c_str());
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(record->path.c_str());
+            ImGui::TextUnformatted(record->virtualPath.c_str());
         }
 
         ImGui::EndTable();
     }
+    ImGui::EndChild();
 
     // Selected-asset details. Resolved against the full registry so the details
     // persist even if the current search/filter hides the row.
@@ -166,7 +376,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         ImGui::Text("Type: %s", ToString(selected->id.type));
         ImGui::Text("Name: %s", selected->displayName.c_str());
-        ImGui::Text("Path: %s", selected->path.c_str());
+        ImGui::Text("Virtual Path: %s", selected->virtualPath.c_str());
+        ImGui::Text("Source Path: %s", selected->path.c_str());
         if (selected->id.type == EditorAssetType::Texture)
         {
             const EditorTextureInfo& tex = selected->texture;
