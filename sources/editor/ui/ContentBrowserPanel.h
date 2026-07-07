@@ -1,7 +1,9 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 #include "editor/assets/AssetRegistry.h"
 
@@ -33,9 +35,15 @@ public:
         bool* open);
 
 private:
+    void EnsureSelectedFolder(const AssetRegistry& registry);
+    void SelectFolder(const AssetRegistry& registry, const std::string& folderPath, bool addHistory);
+    void NavigateHistory(const AssetRegistry& registry, int delta);
+
     char searchBuffer_[256] = {};
     char sourceSearchBuffer_[128] = {};
     std::string selectedFolder_ = "/Game";
+    std::vector<std::string> folderHistory_;
+    size_t folderHistoryIndex_ = 0;
     bool includeSubfolders_ = true;
     int typeFilterIndex_ = 0; // index into the type-filter combo (0 = All)
 };

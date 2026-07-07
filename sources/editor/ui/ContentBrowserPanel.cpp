@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "editor/EditorExtensionRegistry.h"
@@ -61,6 +63,28 @@ namespace
     bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
     {
         return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+    }
+
+    void DisabledButtonWithTooltip(const char* label, const char* tooltip)
+    {
+        ImGui::BeginDisabled(true);
+        ImGui::Button(label);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("%s", tooltip);
+        }
+    }
+
+    void DisabledMenuItemWithTooltip(const char* label, const char* tooltip)
+    {
+        ImGui::BeginDisabled(true);
+        ImGui::MenuItem(label);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("%s", tooltip);
+        }
     }
 
     void DrawSearchInputWithClear(const char* id,
@@ -164,8 +188,9 @@ namespace
 
     void DrawFolderTree(const AssetRegistry& registry,
         const EditorAssetFolder& folder,
-        std::string& selectedFolder,
-        const std::string& sourceSearch)
+        const std::string& selectedFolder,
+        const std::string& sourceSearch,
+        std::string& requestedFolder)
     {
         if (!ShouldShowFolder(registry, folder, sourceSearch))
         {
@@ -194,7 +219,7 @@ namespace
         const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
-            selectedFolder = folder.path;
+            requestedFolder = folder.path;
         }
 
         if (open && !folder.childPaths.empty())
@@ -204,12 +229,202 @@ namespace
                 const EditorAssetFolder* child = registry.FindFolder(childPath);
                 if (child)
                 {
-                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch);
+                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch, requestedFolder);
                 }
             }
             ImGui::TreePop();
         }
     }
+
+    std::vector<std::pair<std::string, std::string>> BuildBreadcrumbs(const std::string& folderPath)
+    {
+        std::vector<std::pair<std::string, std::string>> crumbs;
+        if (folderPath.empty())
+        {
+            return crumbs;
+        }
+
+        size_t start = 0;
+        if (folderPath.front() == '/')
+        {
+            start = 1;
+        }
+
+        std::string current;
+        while (start < folderPath.size())
+        {
+            const size_t slash = folderPath.find('/', start);
+            const size_t end = slash == std::string::npos ? folderPath.size() : slash;
+            if (end > start)
+            {
+                const std::string part = folderPath.substr(start, end - start);
+                current += "/";
+                current += part;
+                crumbs.push_back({ part, current });
+            }
+            if (slash == std::string::npos)
+            {
+                break;
+            }
+            start = slash + 1;
+        }
+        return crumbs;
+    }
+
+    std::string DrawBreadcrumbBar(const std::string& selectedFolder)
+    {
+        std::string requestedFolder;
+        const std::vector<std::pair<std::string, std::string>> crumbs =
+            BuildBreadcrumbs(selectedFolder);
+
+        ImGui::TextUnformatted("Path");
+        ImGui::SameLine();
+        for (size_t i = 0; i < crumbs.size(); ++i)
+        {
+            const auto& crumb = crumbs[i];
+            ImGui::PushID(crumb.second.c_str());
+            if (ImGui::SmallButton(crumb.first.c_str()))
+            {
+                requestedFolder = crumb.second;
+            }
+            ImGui::PopID();
+
+            if (i + 1 < crumbs.size())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled(">");
+                ImGui::SameLine();
+            }
+        }
+
+        if (crumbs.empty())
+        {
+            ImGui::TextDisabled("(none)");
+        }
+
+        return requestedFolder;
+    }
+}
+
+void ContentBrowserPanel::EnsureSelectedFolder(const AssetRegistry& registry)
+{
+    std::string fallback;
+    if (registry.FindFolder("/Game"))
+    {
+        fallback = "/Game";
+    }
+    else if (!registry.Folders().empty())
+    {
+        fallback = registry.Folders().front().path;
+    }
+
+    bool resetHistory = false;
+    if (selectedFolder_.empty() || !registry.FindFolder(selectedFolder_))
+    {
+        selectedFolder_ = fallback;
+        resetHistory = true;
+    }
+
+    if (folderHistory_.empty())
+    {
+        if (!selectedFolder_.empty())
+        {
+            folderHistory_.push_back(selectedFolder_);
+        }
+        folderHistoryIndex_ = 0;
+        return;
+    }
+
+    if (resetHistory)
+    {
+        folderHistory_.clear();
+        if (!selectedFolder_.empty())
+        {
+            folderHistory_.push_back(selectedFolder_);
+        }
+        folderHistoryIndex_ = 0;
+        return;
+    }
+
+    if (folderHistoryIndex_ >= folderHistory_.size())
+    {
+        folderHistoryIndex_ = folderHistory_.size() - 1;
+    }
+
+    if (selectedFolder_.empty() || registry.FindFolder(folderHistory_[folderHistoryIndex_]))
+    {
+        return;
+    }
+
+    folderHistory_.clear();
+    if (!selectedFolder_.empty())
+    {
+        folderHistory_.push_back(selectedFolder_);
+    }
+    folderHistoryIndex_ = 0;
+}
+
+void ContentBrowserPanel::SelectFolder(const AssetRegistry& registry,
+    const std::string& folderPath,
+    bool addHistory)
+{
+    if (folderPath.empty() || !registry.FindFolder(folderPath))
+    {
+        return;
+    }
+
+    if (selectedFolder_ == folderPath)
+    {
+        if (folderHistory_.empty())
+        {
+            folderHistory_.push_back(folderPath);
+            folderHistoryIndex_ = 0;
+        }
+        return;
+    }
+
+    selectedFolder_ = folderPath;
+    if (!addHistory)
+    {
+        return;
+    }
+
+    if (!folderHistory_.empty() && folderHistoryIndex_ + 1 < folderHistory_.size())
+    {
+        folderHistory_.erase(folderHistory_.begin() + static_cast<std::ptrdiff_t>(folderHistoryIndex_ + 1),
+            folderHistory_.end());
+    }
+
+    if (folderHistory_.empty() || folderHistory_.back() != folderPath)
+    {
+        folderHistory_.push_back(folderPath);
+    }
+    folderHistoryIndex_ = folderHistory_.size() - 1;
+}
+
+void ContentBrowserPanel::NavigateHistory(const AssetRegistry& registry, int delta)
+{
+    if (folderHistory_.empty() || delta == 0)
+    {
+        return;
+    }
+
+    const int current = static_cast<int>(folderHistoryIndex_);
+    const int next = current + delta;
+    if (next < 0 || next >= static_cast<int>(folderHistory_.size()))
+    {
+        return;
+    }
+
+    const std::string& target = folderHistory_[static_cast<size_t>(next)];
+    if (!registry.FindFolder(target))
+    {
+        EnsureSelectedFolder(registry);
+        return;
+    }
+
+    folderHistoryIndex_ = static_cast<size_t>(next);
+    selectedFolder_ = target;
 }
 
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
@@ -226,23 +441,72 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         return action;
     }
 
-    if (!registry.FindFolder(selectedFolder_))
+    EnsureSelectedFolder(registry);
+
+    const float navHeight = ImGui::GetFrameHeightWithSpacing() * 3.4f;
+    ImGui::BeginChild("##navigationBar", ImVec2(0.0f, navHeight), true);
+    ImGui::TextUnformatted("Navigation Bar");
+    ImGui::SameLine();
+    DisabledButtonWithTooltip("Add", "Asset creation is planned for a later Content Browser step.");
+    ImGui::SameLine();
+    DisabledButtonWithTooltip("Import", "Import is planned for a later Content Browser step.");
+    ImGui::SameLine();
+    DisabledButtonWithTooltip("Save All", "Assets are raw files; save integration is not available yet.");
+
+    ImGui::SameLine();
+    const bool canGoBack = folderHistoryIndex_ > 0 && !folderHistory_.empty();
+    ImGui::BeginDisabled(!canGoBack);
+    if (ImGui::Button("<"))
     {
-        selectedFolder_ = registry.FindFolder("/Game") ? "/Game" :
-            (registry.Folders().empty() ? std::string() : registry.Folders().front().path);
+        NavigateHistory(registry, -1);
+    }
+    ImGui::EndDisabled();
+    if (!canGoBack && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("No previous folder.");
     }
 
-    // Toolbar: refresh, search, type filter, and recursive folder display.
+    ImGui::SameLine();
+    const bool canGoForward =
+        !folderHistory_.empty() && folderHistoryIndex_ + 1 < folderHistory_.size();
+    ImGui::BeginDisabled(!canGoForward);
+    if (ImGui::Button(">"))
+    {
+        NavigateHistory(registry, 1);
+    }
+    ImGui::EndDisabled();
+    if (!canGoForward && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("No next folder.");
+    }
+
+    ImGui::SameLine();
     if (ImGui::Button("Refresh"))
     {
         registry.Refresh();
-        if (!registry.FindFolder(selectedFolder_))
-        {
-            selectedFolder_ = registry.FindFolder("/Game") ? "/Game" :
-                (registry.Folders().empty() ? std::string() : registry.Folders().front().path);
-        }
+        EnsureSelectedFolder(registry);
     }
     ImGui::SameLine();
+    if (ImGui::Button("Settings"))
+    {
+        ImGui::OpenPopup("##contentBrowserSettings");
+    }
+    if (ImGui::BeginPopup("##contentBrowserSettings"))
+    {
+        ImGui::TextUnformatted("Content Browser Settings");
+        ImGui::Separator();
+        ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
+        DisabledMenuItemWithTooltip("View Modes", "Tiles, List, and Columns are scheduled for Step 8.");
+        DisabledMenuItemWithTooltip("Collections", "Collections are scheduled for the later details/favorites step.");
+        ImGui::EndPopup();
+    }
+
+    const std::string breadcrumbRequest = DrawBreadcrumbBar(selectedFolder_);
+    if (!breadcrumbRequest.empty())
+    {
+        SelectFolder(registry, breadcrumbRequest, true);
+    }
+
     DrawSearchInputWithClear("##search", "Search assets...", searchBuffer_,
         sizeof(searchBuffer_), 220.0f);
     ImGui::SameLine();
@@ -264,7 +528,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
+    ImGui::Checkbox("Include Subfolders##toolbar", &includeSubfolders_);
+    ImGui::EndChild();
 
     const EditorAssetType typeFilter = kTypeFilters[typeFilterIndex_].type;
     ImGui::Separator();
@@ -276,15 +541,20 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     DrawSearchInputWithClear("##sourceSearch", "Search folders...", sourceSearchBuffer_,
         sizeof(sourceSearchBuffer_), -1.0f);
     ImGui::Separator();
+    std::string requestedSourceFolder;
     if (const EditorAssetFolder* root = registry.FindFolder("/Game"))
     {
-        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_);
+        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_, requestedSourceFolder);
     }
     else
     {
         ImGui::TextDisabled("No content roots.");
     }
     ImGui::EndChild();
+    if (!requestedSourceFolder.empty())
+    {
+        SelectFolder(registry, requestedSourceFolder, true);
+    }
 
     ImGui::SameLine();
     ImGui::BeginChild("##assetView", ImVec2(0.0f, -detailHeight), false);
@@ -296,11 +566,12 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         (includeSubfolders_ ? selectedFolder->recursiveAssetCount : selectedFolder->directAssetCount) :
         registry.Assets().size();
 
-    ImGui::Text("Path: %s", selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
+    ImGui::TextUnformatted("Asset View");
     ImGui::SameLine();
-    ImGui::TextDisabled("| Showing %d of %d assets",
+    ImGui::TextDisabled("%d of %d assets | %s",
         static_cast<int>(results.size()),
-        static_cast<int>(folderAssetCount));
+        static_cast<int>(folderAssetCount),
+        selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
 
     // Asset table.
     const ImGuiTableFlags tableFlags =
@@ -372,6 +643,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     // Selected-asset details. Resolved against the full registry so the details
     // persist even if the current search/filter hides the row.
     ImGui::Separator();
+    ImGui::TextUnformatted("Details / Preview");
     if (const EditorAssetRecord* selected = FindById(registry, selectedAsset))
     {
         ImGui::Text("Type: %s", ToString(selected->id.type));
