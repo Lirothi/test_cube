@@ -102,6 +102,18 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE BoundsSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE ViewFrustumSrv(UINT frameIndex) const;
 
+    // GI→VSM (Step 2): SRVs onto the DEFAULT-heap "unified" instance/bounds buffers for ring region
+    // `frameIndex`. RecordCull copies the upload ring's region into these each frame (a compute
+    // shader will also scatter GI casters into them in Step 4), so the cull reads UnifiedBoundsSrv
+    // and the indirect VS reads UnifiedInstanceSrv at t0. {0} until Rebuild allocates them.
+    D3D12_CPU_DESCRIPTOR_HANDLE UnifiedInstanceSrv(UINT frameIndex) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE UnifiedBoundsSrv(UINT frameIndex) const;
+    // The instance/bounds SRV a reader should bind: the unified copy when built (Step 2), else the
+    // upload ring (fallback if allocation failed). Both back a verbatim per-caster stream, so
+    // callers are agnostic to which one is used.
+    D3D12_CPU_DESCRIPTOR_HANDLE InstanceReadSrv(UINT frameIndex) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE BoundsReadSrv(UINT frameIndex) const;
+
     // Rung 0 (Step 3): the GPU-driven indirect-execution buffers, produced by the Step 4 cull
     // compute (UAV) and consumed by ExecuteIndirect (Step 6) / the indirect VS (Step 5).
     // DEFAULT-heap, kFrameCount-region rings; unused (no descriptors) until Step 4. Region f
@@ -185,6 +197,7 @@ private:
 
     void EnsureShaderResources(Renderer* renderer);         // lazily create cull compute + indirect-draw PSOs
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
+    void RebuildUnifiedDescriptors(Renderer* renderer);     // per-region SRVs for the unified instance/bounds buffers
     void EnsureReadback(Renderer* renderer, size_t bytes);  // validation readback buffer (READBACK heap)
 
     Ring instances_;     // per-caster InstancePerObject
@@ -196,6 +209,16 @@ private:
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
     UavRing indirectCounts_; // per view draw count (uint32)
+
+    // GI→VSM (Step 2): DEFAULT-heap mirrors of instances_/bounds_ (kFrameCount regions x count_).
+    // RecordCull copies the upload ring's region into these each frame (Step 4 additionally scatters
+    // GI casters here via a compute UAV write), so the cull + indirect VS read GPU-local copies that
+    // a compute shader can also write. One CPU (non-shader-visible) SRV heap holds a per-region SRV
+    // for each: [0..kFrameCount)=instances, [kFrameCount..2k)=bounds.
+    UavRing instancesUnified_;
+    UavRing boundsUnified_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> unifiedSrvHeap_;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2 * render::kFrameCount> unifiedSrv_{};
 
     // Non-shader-visible UAVs for the cull outputs, one per ring region:
     // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts.

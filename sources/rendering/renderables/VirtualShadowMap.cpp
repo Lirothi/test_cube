@@ -708,7 +708,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
-    ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceSrv(f) }).gpu;
+    ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
     indirectMat->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 

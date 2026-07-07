@@ -259,6 +259,25 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceSrv(UINT frameIndex) const { 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { return bounds_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
+{
+    return (f < render::kFrameCount) ? unifiedSrv_[f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedBoundsSrv(UINT f) const
+{
+    return (f < render::kFrameCount) ? unifiedSrv_[render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceReadSrv(UINT f) const
+{
+    const D3D12_CPU_DESCRIPTOR_HANDLE u = UnifiedInstanceSrv(f);
+    return u.ptr != 0 ? u : instances_.Srv(f);
+}
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsReadSrv(UINT f) const
+{
+    const D3D12_CPU_DESCRIPTOR_HANDLE u = UnifiedBoundsSrv(f);
+    return u.ptr != 0 ? u : bounds_.Srv(f);
+}
+
 void ShadowGpuData::Rebuild(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
@@ -425,10 +444,16 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), L"ShadowGpuData.IndirectArgs");
     EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), L"ShadowGpuData.VisibleList");
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), L"ShadowGpuData.IndirectCounts");
+    // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
+    // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
+    // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
+    EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), L"ShadowGpuData.InstancesUnified");
+    EnsureUavRing(renderer, boundsUnified_, casters * sizeof(render::CasterBounds), L"ShadowGpuData.BoundsUnified");
     // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
     renderer->GetDrawIndexedCommandSignature();
     // Step 4: per-region UAVs for the cull outputs (depend on the just-decided sizes).
     RebuildCullDescriptors(renderer);
+    RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
 
     char buf[224];
@@ -681,6 +706,63 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
     }
 }
 
+void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
+{
+    unifiedSrv_.fill({});
+    unifiedSrvHeap_.Reset();
+    if (!renderer || !renderer->GetDevice()) { return; }
+    if (!instancesUnified_.Valid() || !boundsUnified_.Valid() || count_ == 0) { return; }
+
+    ID3D12Device* dev = renderer->GetDevice();
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.NumDescriptors = 2 * render::kFrameCount; // [0..k)=instances, [k..2k)=bounds
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(unifiedSrvHeap_.GetAddressOf()))) || !unifiedSrvHeap_)
+    {
+        unifiedSrvHeap_.Reset();
+        return;
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = unifiedSrvHeap_->GetCPUDescriptorHandleForHeapStart();
+    auto slotHandle = [&](UINT slot) { D3D12_CPU_DESCRIPTOR_HANDLE h{ base.ptr + static_cast<SIZE_T>(slot) * incr }; return h; };
+
+    // Region f is spaced by the buffer's physical regionBytes (>= count_*stride when the allocation
+    // was reused from a larger prior level); NumElements is the live count_.
+    const UINT instStride = static_cast<UINT>(sizeof(render::InstancePerObject));
+    const UINT boundStride = static_cast<UINT>(sizeof(render::CasterBounds));
+    const UINT64 instElemsPerRegion = instancesUnified_.regionBytes / instStride;
+    const UINT64 boundElemsPerRegion = boundsUnified_.regionBytes / boundStride;
+
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = DXGI_FORMAT_UNKNOWN;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Buffer.FirstElement = static_cast<UINT64>(f) * instElemsPerRegion;
+            sd.Buffer.NumElements = count_;
+            sd.Buffer.StructureByteStride = instStride;
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(f);
+            dev->CreateShaderResourceView(instancesUnified_.buffer.Get(), &sd, h);
+            unifiedSrv_[f] = h;
+        }
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+            sd.Format = DXGI_FORMAT_UNKNOWN;
+            sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+            sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sd.Buffer.FirstElement = static_cast<UINT64>(f) * boundElemsPerRegion;
+            sd.Buffer.NumElements = count_;
+            sd.Buffer.StructureByteStride = boundStride;
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(render::kFrameCount + f);
+            dev->CreateShaderResourceView(boundsUnified_.buffer.Get(), &sd, h);
+            unifiedSrv_[render::kFrameCount + f] = h;
+        }
+    }
+}
+
 void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
 {
     if (!renderer || !renderer->GetDevice() || bytes == 0) { return; }
@@ -728,6 +810,31 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    // Step 2 (GI→VSM): before the cull, mirror this frame's per-caster ring region into the
+    // DEFAULT-heap unified buffers so the cull (bounds) + indirect VS (t0 instances) read a
+    // GPU-local copy a compute shader can also write. At this step it's a verbatim copy of
+    // [0,count_) (no GI casters yet), so the cull/VS results are byte-identical to reading the
+    // upload ring — a pure no-op refactor. The upload rings stay in GENERIC_READ (which includes
+    // COPY_SOURCE) so no source barrier is needed. Left in NON_PIXEL_SHADER_RESOURCE for the cull's
+    // compute SRV read and the parallel shadow passes' VS t0 read (both non-pixel shader stages).
+    const bool useUnified = instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
+                            UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
+    if (useUnified)
+    {
+        renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        const UINT64 instSrc = static_cast<UINT64>(f) * instances_.capacity * instances_.stride;
+        const UINT64 boundSrc = static_cast<UINT64>(f) * bounds_.capacity * bounds_.stride;
+        cl->CopyBufferRegion(instancesUnified_.buffer.Get(), static_cast<UINT64>(f) * instancesUnified_.regionBytes,
+                             instances_.buffer.Get(), instSrc,
+                             static_cast<UINT64>(numCasters) * sizeof(render::InstancePerObject));
+        cl->CopyBufferRegion(boundsUnified_.buffer.Get(), static_cast<UINT64>(f) * boundsUnified_.regionBytes,
+                             bounds_.buffer.Get(), boundSrc,
+                             static_cast<UINT64>(numCasters) * sizeof(render::CasterBounds));
+        renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
     struct CullCB { std::uint32_t numCasters, numViews, numGroups, pad; };
     auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, 0u }; std::memcpy(dst, &c, sizeof(c)); };
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
@@ -741,9 +848,10 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         numViews * numGroups, 1,
         indirectArgs_.buffer.Get()); // UAV barrier: args init visible to the cull's InterlockedAdd
 
-    // Cull: frustum-test every caster into the visible list + InstanceCounts.
+    // Cull: frustum-test every caster into the visible list + InstanceCounts. Reads bounds from the
+    // unified buffer (Step 2) when built, else the upload ring (fallback).
     RecordComputeDispatch(renderer, cl, cullMat_.get(), cbSize, writeCB,
-        { bounds_.Srv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroup_.Srv(0) },
+        { BoundsReadSrv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroup_.Srv(0) },
         { cullUav_[f], cullUav_[render::kFrameCount + f] },
         noSampler,
         numCasters, 1,
@@ -799,7 +907,7 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = viewCB;
-    ctx.srvTable[0] = renderer->StageSrvUavTable({ instances_.Srv(f) }).gpu;
+    ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
     indirectShadowMat_->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
