@@ -299,7 +299,6 @@ void Scene::UpdateClipmap(const Camera& camera)
 
     const float tileRes = static_cast<float>(vsm::kVirtualRes); // texels per clipmap level edge
     const float baseExtent = std::max(1.0f, vsm::g_clipmapBaseExtent);
-    const float lightDistance = 1000.0f; // push the light origin well up-sun above the scene
     const float3 camPos = camera.GetPosition();
 
     for (size_t i = 0; i < clipmapViews_.size(); ++i)
@@ -317,14 +316,19 @@ void Scene::UpdateClipmap(const Camera& camera)
             + right  * (std::floor(cx / unitsPerTexel) * unitsPerTexel - cx)
             + trueUp * (std::floor(cy / unitsPerTexel) * unitsPerTexel - cy);
 
-        const mat4 lightView = mat4::LookAtLH(center - sunDirWS * lightDistance, center, up);
+        // PER-LEVEL depth range that scales with the level extent (Step 24f): tight for fine near
+        // levels (good D16 precision -> a small NDC bias actually clears acne), proportionally larger
+        // for coarse far levels. Because the range ∝ extent, a SINGLE NDC depth bias works at every
+        // level. depthUp = caster reach up-sun (well above the level's ground); depthDown = receivers.
+        const float depthUp = extent * 5.0f;
+        const float depthDown = extent * 1.0f;
+        const float originDist = depthUp + 1.0f;
+        const mat4 lightView = mat4::LookAtLH(center - sunDirWS * originDist, center, up);
         const float2 centerLS = (lightView * float4(center, 1)).xy(); // ~(0,0): center is the target
         const float minX = centerLS.x - radius, maxX = centerLS.x + radius;
         const float minY = centerLS.y - radius, maxY = centerLS.y + radius;
-        // Generous symmetric depth span around the center so receivers/casters along the sun are
-        // contained (24f tunes it; add-dormant here only needs the request containment test to pass).
         const float nearLS = 1.0f;
-        const float farLS = 2.0f * lightDistance;
+        const float farLS = originDist + depthDown;
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
         SceneView& v = clipmapViews_[i];

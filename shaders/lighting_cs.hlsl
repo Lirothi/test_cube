@@ -8,6 +8,7 @@
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsl"
+#include "vsm_sample.hlsli"
 
 Texture2D GB0 : register(t0);
 Texture2D GB1 : register(t1);
@@ -15,6 +16,8 @@ Texture2D GB2 : register(t2);
 Texture2D GBVelocity : register(t3);
 Texture2D DepthT : register(t4);
 Texture2D ShadowAtlas : register(t5);
+StructuredBuffer<uint> VsmPageTable : register(t6); // Rung 2 / Step 24f: directional clipmap page table
+Texture2D VsmPool : register(t7);                    // VSM physical page pool depth
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -50,6 +53,13 @@ cbuffer PerFrame : register(b0)
     // sample-able sun glint instead of a sub-pixel spike. 0 = punctual (no change).
     float sunAngularSize;
     float2 _padSun;
+    // Rung 2 / Step 24f: sample directional shadows from the VSM clipmap (VSM mode) instead of the
+    // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
+    uint useVsm;
+    float vsmDepthBias;
+    float clipmapBaseExtent;  // finest clipmap level's world extent (for per-level texel-scaled bias)
+    float clipmapNormalBias;  // normal offset in texels
+    float4x4 clipmapViewProj[8];
 }
 
 static const float pcfRadius = 1.0f;
@@ -159,7 +169,7 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
@@ -214,7 +224,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 color = ambient * lightRgb;
     if (br.NdotL > 0.0)
     {
-        float shadow = SampleShadowCSM(P, br.NdotL, N);
+        // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
+        float shadow;
+        if (useVsm != 0u)
+        {
+            shadow = VsmClipmapShadow(P, N, camPosWS, clipmapBaseExtent, clipmapNormalBias, vsmDepthBias,
+                                      clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+        }
+        else
+        {
+            shadow = SampleShadowCSM(P, br.NdotL, N);
+        }
         // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
         // highlight reads against the environment reflection. metal=0 -> no change.
         const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

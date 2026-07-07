@@ -364,7 +364,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         Systems::DestroyOceanSimulation();
     }
 
-    AddAnonymousObjects(scene, objectRegistry.Create("debugGrid", creationCtx, json::object()));
+    //AddAnonymousObjects(scene, objectRegistry.Create("debugGrid", creationCtx, json::object()));
 
     // The top-level camera section stores projection only. Baseline position to
     // origin, then let a FreeCameraStart object provide a level default transform.

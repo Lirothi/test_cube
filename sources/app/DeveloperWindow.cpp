@@ -533,6 +533,19 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed.");
 
+                ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent, 4.0f, 200.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Step 24f directional clipmap: finest level's world extent (level i = base*2^i).\n"
+                                      "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
+                ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias, 0.0f, 0.01f, "%.4f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Directional clipmap NDC depth bias. Raise to kill shadow acne; too high = peter-panning.\n"
+                                      "Now uniform across levels (per-level depth range), so one value works everywhere.");
+                ImGui::SliderFloat("Clipmap normal bias (texels)", &vsm::g_clipmapNormalBias, 0.0f, 8.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Receiver normal offset in texels, scaled per level by world-units-per-texel.\n"
+                                      "Raise if far terrain self-shadows (the 'darkened area' when flying away).");
+
                 ImGui::Checkbox("Resident-only render (faster, may flicker)", &vsm::g_residentIterOnly);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"

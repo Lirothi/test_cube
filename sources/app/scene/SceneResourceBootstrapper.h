@@ -36,6 +36,11 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle sunMetalSpec;
     Material::CBFieldHandle sunAngularSize;
+    Material::CBFieldHandle useVsm;           // Step 24f: directional clipmap sampling
+    Material::CBFieldHandle vsmDepthBias;
+    Material::CBFieldHandle clipmapBaseExtent;
+    Material::CBFieldHandle clipmapNormalBias;
+    Material::CBFieldHandle clipmapViewProj;
 
     void Populate(Material* material);
 };
@@ -150,6 +155,11 @@ struct LightingPassConstants
     float2 invScreenSize{};
     float sunMetalSpec = 0.0f;
     float sunAngularSize = 0.0f;
+    uint32_t useVsm = 0;                          // Step 24f: 1 = sample the directional VSM clipmap
+    float vsmDepthBias = 0.0f;
+    float clipmapBaseExtent = 0.0f;               // finest clipmap level's world extent
+    float clipmapNormalBias = 0.0f;               // normal offset in texels
+    std::array<mat4, 8> clipmapViewProj{};        // camera-centered ortho viewProj per clipmap level
 };
 
 struct PointLightPassConstants

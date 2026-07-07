@@ -105,7 +105,12 @@ namespace vsm
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
-    inline float         g_clipmapBaseExtent = 24.0f;
+    inline float         g_clipmapBaseExtent = 12.0f;
+    // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
+    inline float         g_clipmapDepthBias = 0.0002f;
+    // Step 24f: directional-clipmap normal offset in TEXELS — scaled per level by world-units-per-texel
+    // (fine near, coarse far), so the receiver clears its own surface at every level. Tunable.
+    inline float         g_clipmapNormalBias = 2.0f;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free

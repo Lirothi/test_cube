@@ -122,4 +122,41 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
                         PageTable, Pool, cmp);
 }
 
+// Directional clipmap (Step 24f): the receiver picks the FINEST level whose ortho extent contains it
+// (levels ordered finest->coarsest in slots [VSM_NUM_LOCAL_VIEWS, +VSM_NUM_CLIPMAP_LEVELS)); the
+// clipmap LEVEL is the LOD, so we sample page-level 0 (distCam 0 forces VsmSampleNDC's start level 0).
+// `clipVP[i]` = clipmap level i's camera-centered ortho viewProj (built CPU-side, texel-snapped).
+// Not resident / outside every level -> lit (1.0). Mirrors VsmSpotShadow but with level selection.
+// P = un-offset receiver, N = world normal, camPos = camera (clipmap origin). The normal offset is
+// sized from the receiver's DISTANCE to the clipmap origin, which varies CONTINUOUSLY — a per-LEVEL
+// texel size instead jumps 2x at each boundary, and that jump pushes the outer side further toward
+// the light, popping it out of its own shadow → a lit seam that grows with normal bias. The
+// continuous texel (≈ the containing level's texel, dist/1024) removes the jump. depthBias is a
+// single NDC value: each level's ortho depth range ∝ its extent (UpdateClipmap), so it's uniform.
+float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float baseExtent, float normalBiasTexels,
+                       float depthBias, float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
+                       StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+{
+    const float dist = length(P - camPos);
+    const float texelWorld = max(dist, 0.5f * baseExtent) / (0.5f * VSM_VIRTUAL_RES); // continuous ≈ containing level
+    const float3 Poff = P + N * (normalBiasTexels * texelWorld);
+    for (uint i = 0u; i < VSM_NUM_CLIPMAP_LEVELS; ++i)
+    {
+        float4 clip = mul(float4(Poff, 1.0f), clipVP[i]);
+        if (clip.w <= 0.0f) { continue; }
+        float3 ndc = clip.xyz / clip.w;
+        if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { continue; } // outside this level
+        const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+        // Residency pre-check: if this level's page isn't resident (a level-boundary strip the
+        // sub-sampled request missed), fall through to the NEXT, coarser clipmap level — which covers
+        // the same spot and is resident there — instead of returning lit. Kills the bright seam.
+        const uint px = min((uint)(uv.x * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
+        const uint py = min((uint)(uv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
+        const uint entry = PageTable[VsmPageId(VSM_NUM_LOCAL_VIEWS + i, 0u, px, py)];
+        if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // not resident -> coarser level
+        return VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i, ndc, uv, 0.0f, 1.0f, depthBias, PageTable, Pool, cmp);
+    }
+    return 1.0f; // outside all clipmap levels
+}
+
 #endif // VSM_SAMPLE_HLSLI

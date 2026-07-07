@@ -497,18 +497,38 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     (void)pVsmPageRender;
 
-    auto pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
-        { { D.gb0.Get(), kSrvAll },
-          { D.gb1.Get(), kSrvAll },
-          { D.gb2.Get(), kSrvAll },
-          { D.gbVelocity.Get(), kSrvAll },
-          { D.depth.Get(), kSrvAll },
-          { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-          { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassLighting);
-            Pass_Lighting(renderer, ctx, *frame_->camera);
-        });
+    auto lightFn = [this, renderer](RenderGraphPassContext ctx) {
+        CPU_SCOPE(ProfilerScopes::kPassLighting);
+        Pass_Lighting(renderer, ctx, *frame_->camera);
+    };
+    size_t pLight;
+    // Step 24f: in VSM mode the directional shader samples the clipmap (VSM page pool + table), so it
+    // must order AFTER the page render and declare those SRV-readable. Legacy = the CSM-only decls.
+    if (vsmActive && pVsmPageRender != static_cast<size_t>(-1))
+    {
+        ID3D12Resource* vpool = frame_->vsm->PagePool();
+        ID3D12Resource* vpt = frame_->vsm->PageTable();
+        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf, pVsmPageRender }, { pShadow },
+            { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            lightFn);
+    }
+    else
+    {
+        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
+            { { D.gb0.Get(), kSrvAll },
+              { D.gb1.Get(), kSrvAll },
+              { D.gb2.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll },
+              { D.depth.Get(), kSrvAll },
+              { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            lightFn);
+    }
 
     // Step 21: the spot lighting shader always binds the VSM page-table (t7) + pool (t8) SRVs, so
     // when the VSM is allocated they must be in a readable state on entry (declared here). When VSM
@@ -1715,10 +1735,29 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
         constants.sunAngularSize = frame_->settings.sunAngularSize;
 
+        // Step 24f: sample directional shadows from the VSM clipmap in VSM mode (else CSM cascades).
+        // t6/t7 bind valid dummy SRVs when VSM isn't resident (Legacy) — useVsm=0 never samples them.
+        const bool vsmDir = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
+                            frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
+        constants.useVsm = vsmDir ? 1u : 0u;
+        constants.vsmDepthBias = vsm::g_clipmapDepthBias;
+        constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
+        constants.clipmapNormalBias = vsm::g_clipmapNormalBias;
+        if (frame_->clipmapViews)
+        {
+            for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
+            {
+                const SceneView& cv = (*frame_->clipmapViews)[i];
+                constants.clipmapViewProj[i] = cv.view * cv.proj;
+            }
+        }
+
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV },
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV,
+              vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
+              vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t7 (inert in Legacy)
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

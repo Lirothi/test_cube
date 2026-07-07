@@ -7,6 +7,8 @@
 
 static const uint VSM_MAX_VIEWS      = 40u;  // kMaxVirtualViews (32 local spots+point faces + 8 clipmap levels, Step 24d)
 static const uint VSM_NUM_LOCAL_VIEWS = 32u; // kNumLocalVirtualViews — views [0,32) local; [32,40) directional clipmap
+static const uint VSM_NUM_CLIPMAP_LEVELS = 8u; // kNumClipmapLevels (VSM_MAX_VIEWS - VSM_NUM_LOCAL_VIEWS)
+static const float VSM_VIRTUAL_RES = 2048.0f;  // kVirtualRes — texels per clipmap level edge (for texel-scaled bias)
 static const uint VSM_L0_AXIS        = 16u;  // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint VSM_MAX_LEVEL      = 4u;   // kMaxMipLevel
 static const uint VSM_PAGES_PER_VIEW = 341u; // kPagesPerView (16²+8²+4²+2²+1)

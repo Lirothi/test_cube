@@ -38,6 +38,11 @@ void SceneLightingCBHandles::Populate(Material* material)
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     sunMetalSpec = material->ComputeCB0FieldHandle("sunMetalSpec");
     sunAngularSize = material->ComputeCB0FieldHandle("sunAngularSize");
+    useVsm = material->ComputeCB0FieldHandle("useVsm");
+    vsmDepthBias = material->ComputeCB0FieldHandle("vsmDepthBias");
+    clipmapBaseExtent = material->ComputeCB0FieldHandle("clipmapBaseExtent");
+    clipmapNormalBias = material->ComputeCB0FieldHandle("clipmapNormalBias");
+    clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -484,6 +489,14 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matLighting_->UpdateCBField(handles.sunMetalSpec, data.sunMetalSpec, dest);
     matLighting_->UpdateCBField(handles.sunAngularSize, data.sunAngularSize, dest);
+    matLighting_->UpdateCBField(handles.useVsm, data.useVsm, dest);
+    matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);
+    matLighting_->UpdateCBField(handles.clipmapBaseExtent, data.clipmapBaseExtent, dest);
+    matLighting_->UpdateCBField(handles.clipmapNormalBias, data.clipmapNormalBias, dest);
+    for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
+    {
+        matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));
+    }
 }
 
 void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassConstants& data, uint8_t* dest) const
