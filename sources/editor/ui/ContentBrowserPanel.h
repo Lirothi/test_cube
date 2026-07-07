@@ -25,6 +25,13 @@ struct ContentBrowserAction
 class ContentBrowserPanel
 {
 public:
+    enum class ViewMode
+    {
+        List,
+        Tiles,
+        Columns
+    };
+
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it). `selectedAsset` is owned by the editor; the
     // panel highlights it and writes it when the user clicks a row. Returns the
@@ -45,7 +52,8 @@ private:
     std::vector<std::string> folderHistory_;
     size_t folderHistoryIndex_ = 0;
     bool includeSubfolders_ = true;
-    int typeFilterIndex_ = 0; // index into the type-filter combo (0 = All)
+    bool activeTypeFilters_[5] = {};
+    ViewMode viewMode_ = ViewMode::List;
 };
 
 #endif // WITH_EDITOR

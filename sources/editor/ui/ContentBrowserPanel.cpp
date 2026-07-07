@@ -23,16 +23,16 @@ namespace
         EditorAssetType type;
     };
 
-    // First entry is "All": EditorAssetType::Unknown means "no type filter" to
-    // AssetRegistry::Search.
     constexpr TypeFilterOption kTypeFilters[] = {
-        { "All",       EditorAssetType::Unknown },
         { "Meshes",    EditorAssetType::Mesh },
         { "Materials", EditorAssetType::MaterialPreset },
         { "Textures",  EditorAssetType::Texture },
         { "Levels",    EditorAssetType::Level },
         { "Shaders",   EditorAssetType::Shader },
     };
+
+    static_assert(IM_ARRAYSIZE(kTypeFilters) == 5,
+        "ContentBrowserPanel::activeTypeFilters_ must match kTypeFilters.");
 
     const EditorAssetRecord* FindById(const AssetRegistry& registry,
         const EditorAssetId& id)
@@ -63,6 +63,94 @@ namespace
     bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
     {
         return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+    }
+
+    const char* ViewModeLabel(ContentBrowserPanel::ViewMode mode)
+    {
+        switch (mode)
+        {
+        case ContentBrowserPanel::ViewMode::List:    return "List";
+        case ContentBrowserPanel::ViewMode::Tiles:   return "Tiles";
+        case ContentBrowserPanel::ViewMode::Columns: return "Columns";
+        }
+        return "List";
+    }
+
+    bool AnyTypeFilterActive(const bool* activeTypeFilters)
+    {
+        for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
+        {
+            if (activeTypeFilters[i])
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool MatchesActiveTypeFilters(const EditorAssetRecord& record,
+        const bool* activeTypeFilters)
+    {
+        bool any = false;
+        for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
+        {
+            if (!activeTypeFilters[i])
+            {
+                continue;
+            }
+
+            any = true;
+            if (record.id.type == kTypeFilters[i].type)
+            {
+                return true;
+            }
+        }
+        return !any;
+    }
+
+    void ClearTypeFilters(bool* activeTypeFilters)
+    {
+        for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
+        {
+            activeTypeFilters[i] = false;
+        }
+    }
+
+    void DrawActiveFilterChips(bool* activeTypeFilters)
+    {
+        bool any = false;
+        ImGui::TextUnformatted("Active Filters");
+        ImGui::SameLine();
+        for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
+        {
+            if (!activeTypeFilters[i])
+            {
+                continue;
+            }
+
+            any = true;
+            ImGui::PushID(i);
+            std::string label(kTypeFilters[i].label);
+            label += " x";
+            if (ImGui::SmallButton(label.c_str()))
+            {
+                activeTypeFilters[i] = false;
+            }
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+
+        if (any)
+        {
+            if (ImGui::SmallButton("Clear All"))
+            {
+                ClearTypeFilters(activeTypeFilters);
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("All Types");
+        }
     }
 
     void DisabledButtonWithTooltip(const char* label, const char* tooltip)
@@ -304,6 +392,260 @@ namespace
 
         return requestedFolder;
     }
+
+    bool FolderHasVisibleAsset(const AssetRegistry& registry,
+        const EditorAssetFolder& folder,
+        std::string_view searchText,
+        const bool* activeTypeFilters)
+    {
+        const std::vector<const EditorAssetRecord*> assets =
+            registry.SearchInFolder(folder.path, true, searchText, EditorAssetType::Unknown);
+        for (const EditorAssetRecord* asset : assets)
+        {
+            if (asset && MatchesActiveTypeFilters(*asset, activeTypeFilters))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool FolderMatchesAssetViewFilter(const AssetRegistry& registry,
+        const EditorAssetFolder& folder,
+        std::string_view searchText,
+        const bool* activeTypeFilters)
+    {
+        if (!searchText.empty())
+        {
+            const std::string needle = LowerCopy(std::string(searchText));
+            if (!ContainsLower(folder.name, needle) &&
+                !ContainsLower(folder.path, needle) &&
+                !FolderHasVisibleAsset(registry, folder, searchText, activeTypeFilters))
+            {
+                return false;
+            }
+        }
+
+        if (AnyTypeFilterActive(activeTypeFilters) &&
+            !FolderHasVisibleAsset(registry, folder, {}, activeTypeFilters))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    std::string TruncateLabel(const std::string& text, size_t maxChars)
+    {
+        if (text.size() <= maxChars)
+        {
+            return text;
+        }
+        if (maxChars <= 3)
+        {
+            return text.substr(0, maxChars);
+        }
+        return text.substr(0, maxChars - 3) + "...";
+    }
+
+    void DrawAssetContextMenu(const EditorAssetRecord* record,
+        const EditorExtensionRegistry& extensions,
+        EditorAssetId& selectedAsset,
+        ContentBrowserAction& action)
+    {
+        if (!record || !ImGui::BeginPopupContextItem())
+        {
+            return;
+        }
+
+        selectedAsset = record->id; // right-click also selects the row/tile
+        for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
+        {
+            if (!factory)
+            {
+                continue;
+            }
+
+            const std::string label(factory->MenuLabel());
+            const bool enabled = factory->CanBuildFromAsset(record);
+            ImGui::BeginDisabled(!enabled);
+            if (ImGui::MenuItem(label.c_str()))
+            {
+                action.objectFactoryType = std::string(factory->Type());
+                action.asset = record->id;
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::BeginDisabled(true);
+        ImGui::MenuItem("Assign Material to Selected");
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
+
+    void DrawFolderContextPlaceholder()
+    {
+        if (!ImGui::BeginPopupContextItem())
+        {
+            return;
+        }
+        ImGui::TextDisabled("Folder actions are planned for Step 9.");
+        ImGui::EndPopup();
+    }
+
+    void DrawListAssetView(const std::vector<const EditorAssetFolder*>& folders,
+        const std::vector<const EditorAssetRecord*>& assets,
+        EditorAssetId& selectedAsset,
+        const EditorExtensionRegistry& extensions,
+        ContentBrowserAction& action,
+        std::string& requestedFolder)
+    {
+        const ImGuiTableFlags tableFlags =
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+        if (!ImGui::BeginTable("##assetTable", 3, tableFlags, ImVec2(0.0f, 0.0f)))
+        {
+            return;
+        }
+
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableSetupColumn("Virtual Path", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+
+        for (const EditorAssetFolder* folder : folders)
+        {
+            if (!folder)
+            {
+                continue;
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::PushID(folder->path.c_str());
+            if (ImGui::Selectable("Folder", false,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                requestedFolder = folder->path;
+            }
+            DrawFolderContextPlaceholder();
+            ImGui::PopID();
+
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(folder->name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(folder->path.c_str());
+        }
+
+        for (const EditorAssetRecord* record : assets)
+        {
+            if (!record)
+            {
+                continue;
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            const bool isSelected = (selectedAsset.type == record->id.type &&
+                selectedAsset.key == record->id.key);
+
+            ImGui::PushID(record->id.key.c_str());
+            if (ImGui::Selectable(ToString(record->id.type), isSelected,
+                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
+            {
+                selectedAsset = record->id;
+            }
+            DrawAssetContextMenu(record, extensions, selectedAsset, action);
+            ImGui::PopID();
+
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(record->displayName.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(record->virtualPath.c_str());
+        }
+
+        ImGui::EndTable();
+    }
+
+    void DrawTileAssetView(const std::vector<const EditorAssetFolder*>& folders,
+        const std::vector<const EditorAssetRecord*>& assets,
+        EditorAssetId& selectedAsset,
+        const EditorExtensionRegistry& extensions,
+        ContentBrowserAction& action,
+        std::string& requestedFolder)
+    {
+        const ImVec2 tileSize(132.0f, 72.0f);
+        const float spacingX = ImGui::GetStyle().ItemSpacing.x;
+        const float availableWidth = ImGui::GetContentRegionAvail().x;
+        const int columns = std::max(1,
+            static_cast<int>((availableWidth + spacingX) / (tileSize.x + spacingX)));
+
+        int itemIndex = 0;
+        auto advanceTile = [&itemIndex, columns]()
+        {
+            if (itemIndex > 0 && (itemIndex % columns) != 0)
+            {
+                ImGui::SameLine();
+            }
+            ++itemIndex;
+        };
+
+        for (const EditorAssetFolder* folder : folders)
+        {
+            if (!folder)
+            {
+                continue;
+            }
+
+            advanceTile();
+            ImGui::PushID(folder->path.c_str());
+            const std::string label = std::string("[Folder]\n") +
+                TruncateLabel(folder->name, 24);
+            ImGui::Button(label.c_str(), tileSize);
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                requestedFolder = folder->path;
+            }
+            DrawFolderContextPlaceholder();
+            ImGui::PopID();
+        }
+
+        for (const EditorAssetRecord* record : assets)
+        {
+            if (!record)
+            {
+                continue;
+            }
+
+            advanceTile();
+            const bool isSelected = (selectedAsset.type == record->id.type &&
+                selectedAsset.key == record->id.key);
+
+            ImGui::PushID(record->id.key.c_str());
+            if (isSelected)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
+            }
+
+            const std::string label = std::string("[") + ToString(record->id.type) + "]\n" +
+                TruncateLabel(record->displayName, 24);
+            if (ImGui::Button(label.c_str(), tileSize))
+            {
+                selectedAsset = record->id;
+            }
+
+            if (isSelected)
+            {
+                ImGui::PopStyleColor(2);
+            }
+
+            DrawAssetContextMenu(record, extensions, selectedAsset, action);
+            ImGui::PopID();
+        }
+    }
 }
 
 void ContentBrowserPanel::EnsureSelectedFolder(const AssetRegistry& registry)
@@ -443,7 +785,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
     EnsureSelectedFolder(registry);
 
-    const float navHeight = ImGui::GetFrameHeightWithSpacing() * 3.4f;
+    const float navHeight = ImGui::GetFrameHeightWithSpacing() * 4.4f;
     ImGui::BeginChild("##navigationBar", ImVec2(0.0f, navHeight), true);
     ImGui::TextUnformatted("Navigation Bar");
     ImGui::SameLine();
@@ -495,8 +837,17 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         ImGui::TextUnformatted("Content Browser Settings");
         ImGui::Separator();
+        if (ImGui::MenuItem("List View", nullptr, viewMode_ == ViewMode::List))
+        {
+            viewMode_ = ViewMode::List;
+        }
+        if (ImGui::MenuItem("Tile View", nullptr, viewMode_ == ViewMode::Tiles))
+        {
+            viewMode_ = ViewMode::Tiles;
+        }
+        DisabledMenuItemWithTooltip("Column View", "Column view is planned after the list/tile data model settles.");
+        ImGui::Separator();
         ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
-        DisabledMenuItemWithTooltip("View Modes", "Tiles, List, and Columns are scheduled for Step 8.");
         DisabledMenuItemWithTooltip("Collections", "Collections are scheduled for the later details/favorites step.");
         ImGui::EndPopup();
     }
@@ -510,28 +861,38 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     DrawSearchInputWithClear("##search", "Search assets...", searchBuffer_,
         sizeof(searchBuffer_), 220.0f);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::BeginCombo("##typeFilter", kTypeFilters[typeFilterIndex_].label))
+    if (ImGui::Button("Filters"))
     {
+        ImGui::OpenPopup("##contentBrowserFilters");
+    }
+    if (ImGui::BeginPopup("##contentBrowserFilters"))
+    {
+        ImGui::TextUnformatted("Asset Type Filters");
+        ImGui::Separator();
         for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
         {
-            const bool selected = (typeFilterIndex_ == i);
-            if (ImGui::Selectable(kTypeFilters[i].label, selected))
+            if (ImGui::MenuItem(kTypeFilters[i].label, nullptr, activeTypeFilters_[i]))
             {
-                typeFilterIndex_ = i;
-            }
-            if (selected)
-            {
-                ImGui::SetItemDefaultFocus();
+                activeTypeFilters_[i] = !activeTypeFilters_[i];
             }
         }
-        ImGui::EndCombo();
+        if (AnyTypeFilterActive(activeTypeFilters_))
+        {
+            ImGui::Separator();
+            if (ImGui::MenuItem("Clear Filters"))
+            {
+                ClearTypeFilters(activeTypeFilters_);
+            }
+        }
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::Checkbox("Include Subfolders##toolbar", &includeSubfolders_);
+    ImGui::SameLine();
+    ImGui::TextDisabled("View: %s", ViewModeLabel(viewMode_));
+    DrawActiveFilterChips(activeTypeFilters_);
     ImGui::EndChild();
 
-    const EditorAssetType typeFilter = kTypeFilters[typeFilterIndex_].type;
     ImGui::Separator();
 
     // Split browser. Reserve space at the bottom for selected-asset details.
@@ -560,83 +921,68 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ImGui::BeginChild("##assetView", ImVec2(0.0f, -detailHeight), false);
 
     const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_);
-    const std::vector<const EditorAssetRecord*> results =
-        registry.SearchInFolder(selectedFolder_, includeSubfolders_, searchBuffer_, typeFilter);
-    const size_t folderAssetCount = selectedFolder ?
-        (includeSubfolders_ ? selectedFolder->recursiveAssetCount : selectedFolder->directAssetCount) :
-        registry.Assets().size();
+    std::vector<const EditorAssetFolder*> visibleFolders;
+    if (selectedFolder)
+    {
+        for (const std::string& childPath : selectedFolder->childPaths)
+        {
+            const EditorAssetFolder* child = registry.FindFolder(childPath);
+            if (child && FolderMatchesAssetViewFilter(registry, *child,
+                    searchBuffer_, activeTypeFilters_))
+            {
+                visibleFolders.push_back(child);
+            }
+        }
+    }
+
+    std::vector<const EditorAssetRecord*> visibleAssets;
+    const std::vector<const EditorAssetRecord*> assetCandidates =
+        registry.SearchInFolder(selectedFolder_, includeSubfolders_,
+            searchBuffer_, EditorAssetType::Unknown);
+    for (const EditorAssetRecord* record : assetCandidates)
+    {
+        if (record && MatchesActiveTypeFilters(*record, activeTypeFilters_))
+        {
+            visibleAssets.push_back(record);
+        }
+    }
+
+    const size_t visibleEntryCount = visibleFolders.size() + visibleAssets.size();
 
     ImGui::TextUnformatted("Asset View");
     ImGui::SameLine();
-    ImGui::TextDisabled("%d of %d assets | %s",
-        static_cast<int>(results.size()),
-        static_cast<int>(folderAssetCount),
+    ImGui::TextDisabled("%d entries (%d folders, %d assets) | %s",
+        static_cast<int>(visibleEntryCount),
+        static_cast<int>(visibleFolders.size()),
+        static_cast<int>(visibleAssets.size()),
         selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
 
-    // Asset table.
-    const ImGuiTableFlags tableFlags =
-        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("##assetTable", 3, tableFlags, ImVec2(0.0f, 0.0f)))
+    if (visibleEntryCount == 0)
     {
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-        ImGui::TableSetupColumn("Virtual Path", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-
-        int rowIndex = 0;
-        for (const EditorAssetRecord* record : results)
+        ImGui::TextDisabled("No entries match the current folder, search, and filters.");
+        if (AnyTypeFilterActive(activeTypeFilters_))
         {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-
-            const bool isSelected = (selectedAsset.type == record->id.type &&
-                selectedAsset.key == record->id.key);
-
-            ImGui::PushID(rowIndex++);
-            if (ImGui::Selectable(ToString(record->id.type), isSelected,
-                    ImGuiSelectableFlags_SpanAllColumns))
-            {
-                selectedAsset = record->id;
-            }
-
-            // Context menu. Spawn actions come from registered object factories;
-            // material assign remains disabled until multi-target editing exists.
-            if (ImGui::BeginPopupContextItem())
-            {
-                selectedAsset = record->id; // right-click also selects the row
-                for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
-                {
-                    if (!factory)
-                    {
-                        continue;
-                    }
-
-                    const std::string label(factory->MenuLabel());
-                    const bool enabled = factory->CanBuildFromAsset(record);
-                    ImGui::BeginDisabled(!enabled);
-                    if (ImGui::MenuItem(label.c_str()))
-                    {
-                        action.objectFactoryType = std::string(factory->Type());
-                        action.asset = record->id;
-                    }
-                    ImGui::EndDisabled();
-                }
-                ImGui::BeginDisabled(true);
-                ImGui::MenuItem("Assign Material to Selected");
-                ImGui::EndDisabled();
-                ImGui::EndPopup();
-            }
-            ImGui::PopID();
-
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(record->displayName.c_str());
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(record->virtualPath.c_str());
+            ImGui::TextDisabled("Active type filters are limiting results.");
+        }
+    }
+    else
+    {
+        std::string requestedAssetViewFolder;
+        if (viewMode_ == ViewMode::Tiles)
+        {
+            DrawTileAssetView(visibleFolders, visibleAssets, selectedAsset,
+                extensions, action, requestedAssetViewFolder);
+        }
+        else
+        {
+            DrawListAssetView(visibleFolders, visibleAssets, selectedAsset,
+                extensions, action, requestedAssetViewFolder);
         }
 
-        ImGui::EndTable();
+        if (!requestedAssetViewFolder.empty())
+        {
+            SelectFolder(registry, requestedAssetViewFolder, true);
+        }
     }
     ImGui::EndChild();
 
