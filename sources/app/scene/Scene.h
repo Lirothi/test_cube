@@ -34,6 +34,9 @@ public:
     const LightManager& GetLightManager() const { return lightManager_; }
     Skybox* GetSkybox() const { return skyBox_.get(); }
 
+    // Rung 2: the virtual-shadow-map page pool + page table (dev-window "VSM" tab reads its stats).
+    const VirtualShadowMap& Vsm() const { return vsm_; }
+
     // RT reflections for glass (S15): forwarded from the scene renderer so the
     // transparent pass can bind the TLAS + gate ray tracing.
     bool IsRtReflectActive() const { return sceneRenderer_.IsRtReflectActive(); }

@@ -1,8 +1,10 @@
 #include "app/DeveloperWindow.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -557,6 +559,94 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",
                     vsm::kPoolPageCount, vsm::kPoolTexels, vsm::kPoolTexels,
                     vsm::g_refDist, vsm::g_requestDownscale, vsm::g_lruThreshold);
+
+                // --- Live page stats + physical-pool residency grid (kFrameCount-old snapshot). ---
+                ImGui::Separator();
+                ImGui::TextUnformatted("Pages");
+                const VirtualShadowMap::DebugStats& vstats = scene.Vsm().Stats();
+                if (!render::VsmActive())
+                {
+                    ImGui::TextDisabled("(enable VSM to sample live page stats)");
+                }
+                else if (!vstats.valid)
+                {
+                    ImGui::TextDisabled("(sampling\xE2\x80\xA6 move the camera to populate)");
+                }
+                else
+                {
+                    const float frac = static_cast<float>(vstats.resident) /
+                                       static_cast<float>(vsm::kPoolPageCount);
+                    char resLabel[64];
+                    std::snprintf(resLabel, sizeof(resLabel), "%u / %u resident (%.0f%%)",
+                        vstats.resident, vsm::kPoolPageCount, frac * 100.0f);
+                    ImGui::ProgressBar(frac, ImVec2(240.0f, 0.0f), resLabel);
+                    ImGui::Text("Requested %u  |  new this frame %u", vstats.requested, vstats.newAlloc);
+                    if (vstats.fail > 0)
+                        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.30f, 1.0f),
+                            "Alloc fails: %u (pool oversubscribed \xE2\x80\x94 raise refDist/downscale or lower LOD)",
+                            vstats.fail);
+                    else
+                        ImGui::TextDisabled("Alloc fails: 0");
+                    ImGui::Text("Request LOD  L0=%u  L1=%u  L2=%u  L3=%u  L4=%u",
+                        vstats.perLevel[0], vstats.perLevel[1], vstats.perLevel[2],
+                        vstats.perLevel[3], vstats.perLevel[4]);
+
+                    const std::vector<std::uint32_t>& owners = scene.Vsm().PhysOwnerSnapshot();
+                    if (owners.size() == vsm::kPoolPageCount)
+                    {
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("Physical pool %ux%u pages \xE2\x80\x94 colour = owning shadow view:",
+                            vsm::kPoolPagesPerAxis, vsm::kPoolPagesPerAxis);
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        const ImVec2 origin = ImGui::GetCursorScreenPos();
+                        const int   axis = static_cast<int>(vsm::kPoolPagesPerAxis);
+                        const float cell = 9.0f, gap = 1.0f, pitch = cell + gap;
+                        for (int py = 0; py < axis; ++py)
+                        {
+                            for (int px = 0; px < axis; ++px)
+                            {
+                                const std::uint32_t owner = owners[static_cast<size_t>(py) * axis + px];
+                                ImU32 col;
+                                if (owner == 0xFFFFFFFFu)
+                                {
+                                    col = IM_COL32(38, 38, 44, 255); // free
+                                }
+                                else
+                                {
+                                    const std::uint32_t view = owner / vsm::kPagesPerView;
+                                    const bool clip = view >= vsm::kNumLocalVirtualViews; // directional clipmap
+                                    const float hue = static_cast<float>(view % vsm::kMaxVirtualViews) /
+                                                      static_cast<float>(vsm::kMaxVirtualViews);
+                                    col = ImColor::HSV(hue, clip ? 0.85f : 0.55f, clip ? 1.0f : 0.85f);
+                                }
+                                const ImVec2 a(origin.x + px * pitch, origin.y + py * pitch);
+                                dl->AddRectFilled(a, ImVec2(a.x + cell, a.y + cell), col, 1.5f);
+                            }
+                        }
+                        const float gridPx = axis * pitch;
+                        ImGui::Dummy(ImVec2(gridPx, gridPx));
+                        if (ImGui::IsItemHovered())
+                        {
+                            const ImVec2 m = ImGui::GetIO().MousePos;
+                            const int cx = static_cast<int>((m.x - origin.x) / pitch);
+                            const int cy = static_cast<int>((m.y - origin.y) / pitch);
+                            if (cx >= 0 && cx < axis && cy >= 0 && cy < axis)
+                            {
+                                const std::uint32_t owner = owners[static_cast<size_t>(cy) * axis + cx];
+                                if (owner == 0xFFFFFFFFu)
+                                    ImGui::SetTooltip("phys #%d (%d,%d): free", cy * axis + cx, cx, cy);
+                                else
+                                {
+                                    const std::uint32_t view = owner / vsm::kPagesPerView;
+                                    const char* kind = view < 8 ? "spot"
+                                        : (view < vsm::kNumLocalVirtualViews ? "point face" : "directional clipmap");
+                                    ImGui::SetTooltip("phys #%d (%d,%d)\nview %u (%s)",
+                                        cy * axis + cx, cx, cy, view, kind);
+                                }
+                            }
+                        }
+                    }
+                }
                 ImGui::EndTabItem();
             }
 

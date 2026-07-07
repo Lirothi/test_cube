@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 #include <d3d12.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
@@ -193,6 +194,27 @@ public:
     // Re-armed periodically. Call once per frame (main thread).
     void PollPageRequestDebug(Renderer* renderer);
 
+    // --- Live debug stats for the dev-window "VSM" tab. Filled by PollPageRequestDebug from the
+    // deferred readback (a kFrameCount-old snapshot, refreshed a few times/sec). They reflect the
+    // last ACTIVE frame — values freeze while VSM is off or the camera is still (request/alloc/render
+    // are skipped then), which is expected. ---
+    struct DebugStats
+    {
+        bool          valid = false;                     // a sample has landed at least once
+        std::uint64_t sampleFrame = 0;                   // total-frame the sampled data was produced
+        std::uint32_t requested = 0;                     // total requested virtual pages (this sample)
+        std::uint32_t resident = 0;                      // physical pages currently mapped (of kPoolPageCount)
+        std::uint32_t newAlloc = 0;                      // pages newly allocated on the sampled frame
+        std::uint32_t fail = 0;                          // requests that couldn't allocate (pool full)
+        std::uint32_t perLevel[vsm::kNumMipLevels] = {}; // requested pages per mip level (LOD histogram)
+    };
+    const DebugStats& Stats() const { return stats_; }
+
+    // Physical-page ownership snapshot for the dev-window pool grid: kPoolPageCount entries, each
+    // 0xFFFFFFFF (free) or the owning virtual-page id (view = id / vsm::kPagesPerView). Same
+    // kFrameCount-old snapshot as Stats(); empty until the first sample.
+    const std::vector<std::uint32_t>& PhysOwnerSnapshot() const { return physOwnerSnapshot_; }
+
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource>       pagePool_;   // R16_TYPELESS depth atlas (kPoolTexels²)
     Microsoft::WRL::ComPtr<ID3D12Resource>       pageTable_;  // StructuredBuffer<uint>[kPageTableEntries]
@@ -261,11 +283,17 @@ private:
     // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed
     // periodically so a live/stress run samples several times. The single readback buffer holds
     // [request words | alloc counters].
-    static constexpr std::uint64_t kRequestReadbackPeriod = 180; // frames between samples
+    static constexpr std::uint64_t kRequestReadbackPeriod = 30; // frames between samples (dev-window live-ish)
+    static constexpr std::uint64_t kDbwinLogPeriod = 180;       // throttle the OutputDebugStringA log separately
     Microsoft::WRL::ComPtr<ID3D12Resource> debugReadback_;
     std::uint64_t debugReadbackFrame_ = 0;     // frame the copy was scheduled
     std::uint64_t debugReadbackDoneFrame_ = 0; // frame the last sample logged
+    std::uint64_t debugLoggedFrame_ = 0;       // frame the last DBWIN line was emitted (log throttle)
     int           debugReadbackState_ = 0;     // 0 = not started, 1 = pending, 2 = done
+
+    // Dev-window readout: filled from the readback each sample (see PollPageRequestDebug).
+    DebugStats                 stats_;
+    std::vector<std::uint32_t> physOwnerSnapshot_; // kPoolPageCount, physical -> owning virtual page / INVALID
 
     void RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl); // Step 20: copy request+counters
     void EnsureAllocResources(Renderer* renderer); // create the alloc buffers + descriptors

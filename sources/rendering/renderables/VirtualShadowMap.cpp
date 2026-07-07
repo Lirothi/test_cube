@@ -244,6 +244,9 @@ void VirtualShadowMap::ReleaseResources()
     debugReadbackState_ = 0;
     debugReadbackFrame_ = 0;
     debugReadbackDoneFrame_ = 0;
+    debugLoggedFrame_ = 0;
+    stats_ = DebugStats{};             // dev-window readout invalid until VSM is active again
+    physOwnerSnapshot_.clear();
 
     // Zero the cached CPU descriptor handles (their heaps are gone) so nothing stale is bound.
     poolDsv_ = poolSrv_ = pageTableSrv_ = pageTableUav_ = {};
@@ -479,15 +482,16 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
 {
     if (debugReadbackState_ != 0 || renderer->GetTotalFrameNumber() <= render::kFrameCount) { return; }
 
-    const UINT64 reqBytes = static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t);
-    const UINT64 cntBytes = 4ull * sizeof(std::uint32_t);
+    const UINT64 reqBytes   = static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t);
+    const UINT64 cntBytes   = 4ull * sizeof(std::uint32_t);
+    const UINT64 ownerBytes = static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t); // physOwner snapshot (dev grid)
     if (!debugReadback_)
     {
         D3D12_HEAP_PROPERTIES rb{};
         rb.Type = D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = reqBytes + cntBytes;
+        rd.Width = reqBytes + cntBytes + ownerBytes;
         rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -500,6 +504,11 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
     cl->CopyBufferRegion(debugReadback_.Get(), 0, requestBuffer_.Get(), 0, reqBytes);
     renderer->Transition(cl, allocCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
     cl->CopyBufferRegion(debugReadback_.Get(), reqBytes, allocCounters_.Get(), 0, cntBytes);
+    if (physOwner_)
+    {
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cl->CopyBufferRegion(debugReadback_.Get(), reqBytes + cntBytes, physOwner_.Get(), 0, ownerBytes);
+    }
     debugReadbackFrame_ = renderer->GetTotalFrameNumber();
     debugReadbackState_ = 1;
 }
@@ -789,9 +798,10 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     if (debugReadbackState_ != 1 || !debugReadback_) { return; }
     if (renderer->GetTotalFrameNumber() < debugReadbackFrame_ + render::kFrameCount) { return; }
 
-    const size_t reqBytes = static_cast<size_t>(vsm::kRequestWords) * sizeof(std::uint32_t);
-    const size_t cntBytes = 4 * sizeof(std::uint32_t);
-    D3D12_RANGE readRange{ 0, reqBytes + cntBytes };
+    const size_t reqBytes   = static_cast<size_t>(vsm::kRequestWords) * sizeof(std::uint32_t);
+    const size_t cntBytes   = 4 * sizeof(std::uint32_t);
+    const size_t ownerBytes = static_cast<size_t>(vsm::kPoolPageCount) * sizeof(std::uint32_t);
+    D3D12_RANGE readRange{ 0, reqBytes + cntBytes + ownerBytes };
     void* mapped = nullptr;
     if (FAILED(debugReadback_->Map(0, &readRange, &mapped)) || !mapped)
     {
@@ -836,17 +846,37 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     const std::uint32_t resident  = counters[3] + newAlloc;
     (void)freeCount;
 
+    // Physical-page ownership snapshot for the dev-window grid (physical -> owning virtual page).
+    const auto* owners = reinterpret_cast<const std::uint32_t*>(
+        static_cast<const std::uint8_t*>(mapped) + reqBytes + cntBytes);
+    physOwnerSnapshot_.assign(owners, owners + vsm::kPoolPageCount);
+
     const D3D12_RANGE noWrite{ 0, 0 };
     debugReadback_->Unmap(0, &noWrite);
 
-    char buf[384];
-    std::snprintf(buf, sizeof(buf),
-        "[VSM] request %u (L0=%u L1=%u L2=%u L3=%u L4=%u) | resident=%u new=%u fail=%u | spots[%u %u %u %u %u %u %u %u] (pool=%u).\n",
-        total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
-        resident, newAlloc, failCount,
-        perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
-        vsm::kPoolPageCount);
-    OutputDebugStringA(buf);
+    // Publish the live stats the dev-window "VSM" tab reads.
+    stats_.valid = true;
+    stats_.sampleFrame = debugReadbackFrame_;
+    stats_.requested = total;
+    stats_.resident = resident;
+    stats_.newAlloc = newAlloc;
+    stats_.fail = failCount;
+    for (std::uint32_t l = 0; l < vsm::kNumMipLevels; ++l) { stats_.perLevel[l] = perLevel[l]; }
+
+    // DBWIN log throttled independently of the (faster) stats sampling so a captured stress/dev run
+    // is not flooded — the on-screen readout updates every sample, the log line only periodically.
+    if (renderer->GetTotalFrameNumber() >= debugLoggedFrame_ + kDbwinLogPeriod)
+    {
+        char buf[384];
+        std::snprintf(buf, sizeof(buf),
+            "[VSM] request %u (L0=%u L1=%u L2=%u L3=%u L4=%u) | resident=%u new=%u fail=%u | spots[%u %u %u %u %u %u %u %u] (pool=%u).\n",
+            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+            resident, newAlloc, failCount,
+            perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
+            vsm::kPoolPageCount);
+        OutputDebugStringA(buf);
+        debugLoggedFrame_ = renderer->GetTotalFrameNumber();
+    }
     debugReadbackState_ = 2;
     debugReadbackDoneFrame_ = renderer->GetTotalFrameNumber();
 }
