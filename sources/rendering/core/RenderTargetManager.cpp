@@ -644,12 +644,13 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceSta
         auto& D = deferred_[f];
         // Untrack the outgoing resources (ReleaseAndGetAddressOf inside the create calls frees them),
         // so a re-used address can't inherit a stale tracked state.
+        if (D.shadow) { tracker.ClearResourceState(D.shadow.Get()); }          // Step 24f-2: CSM cascade atlas
         if (D.spotShadow) { tracker.ClearResourceState(D.spotShadow.Get()); }
         if (D.pointShadow) { tracker.ClearResourceState(D.pointShadow.Get()); }
-        // Keep the configured resolutions; only the created size changes (1 = tiny placeholder).
-        // NOTE: the CSM cascade atlas (D.shadow) is NOT retired here — Step 24f-2 deferred: it needs
-        // Pass_CSM skipped in VSM mode, which breaks the parallel CL timeline (see Pass_CSM). So the
-        // CSM atlas stays full-res + rendered in both modes for now.
+        // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). VSM mode
+        // retires the CSM cascade atlas (~96 MB across frames) as well: the render graph omits the
+        // Main_CSM pass in VSM mode, so nothing renders into this 1x1 placeholder.
+        CreateShadowResource(dev, tracker, f, full ? D.shadowRes : 1u);
         CreateSpotShadowResource(dev, tracker, f, full ? D.spotShadowRes : 1u);
         CreatePointShadowResource(dev, tracker, f, full ? D.pointShadowRes : 1u);
     }

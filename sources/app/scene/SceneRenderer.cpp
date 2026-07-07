@@ -417,12 +417,26 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_ShadowCull(renderer, ctx);
         });
 
-    auto pShadow = rg.AddPass(RenderPass::Main_CSM, { pShadowCull },
-        { { D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassCSM);
-            Pass_CSM(renderer, ctx, *frame_->cascadeViews);
-        });
+    // Step 24f-2: in VSM mode directional shadows come from the clipmap and the CSM cascade atlas is a
+    // 1x1 placeholder — OMIT the Main_CSM pass entirely. (Adding it but skipping its per-cascade
+    // command lists breaks the parallel-execution CL timeline the graph expects → GPU hang, and its
+    // declared D.shadow->DEPTH_WRITE transition would go unrecorded.) Downstream passes chain off the
+    // cull instead; the light passes still declare the 1x1 D.shadow NON_PIXEL for their (unused) bind.
+    const bool vsmDirectional = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated();
+    size_t pShadow;
+    if (vsmDirectional)
+    {
+        pShadow = pShadowCull;
+    }
+    else
+    {
+        pShadow = rg.AddPass(RenderPass::Main_CSM, { pShadowCull },
+            { { D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassCSM);
+                Pass_CSM(renderer, ctx, *frame_->cascadeViews);
+            });
+    }
 
     // No declarations: the per-light command lists are recorded in parallel with
     // no deterministic submit order inside the batch, so each list must register
@@ -1243,10 +1257,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     {
         return;
     }
-    // NOTE (Step 24f-2, deferred): CSM renders in BOTH modes. Skipping this pass in VSM mode to retire
-    // the cascade atlas breaks the parallel-execution CL timeline (the graph expects this pass's
-    // cascade command lists) → GPU hang under churn. Retiring the atlas needs the Main_CSM pass to be
-    // conditionally NOT added to the render graph in VSM mode (surgery) — see the plan doc.
+    // Step 24f-2: only reached in Legacy mode — the graph omits the Main_CSM pass in VSM mode
+    // (directional then comes from the clipmap), so no VSM gate is needed here.
     auto d = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(d.cl, ctx.pass);
     {
