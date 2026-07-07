@@ -214,6 +214,16 @@ bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
     return ro && ro->GetMesh() != nullptr;
 }
 
+bool ShadowGpuData::IsGiFoldable(const RenderableObjectBase* obj)
+{
+    // A GPU-instanced caster we can fold into the consolidated caster set (Step 3): it casts
+    // shadow, exposes a per-instance transform SRV + non-zero instance count, and has a mesh.
+    if (!obj || !obj->CastsShadow() || !obj->IsGpuInstancedCaster()) { return false; }
+    if (obj->GetInstanceCasterSrv().ptr == 0 || obj->GetInstanceCasterCount() == 0) { return false; }
+    const RenderableObject* ro = obj->AsRenderableObject();
+    return ro && ro->GetMesh() != nullptr;
+}
+
 void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out)
 {
     std::memset(&out, 0, sizeof(out));
@@ -299,13 +309,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         return;
     }
 
-    count_ = static_cast<std::uint32_t>(casterCount);
+    staticCount_ = static_cast<std::uint32_t>(casterCount);
     cpuInstances_.assign(casterCount, render::InstancePerObject{});
     cpuBounds_.assign(casterCount, render::CasterBounds{});
     pending_.assign(casterCount, 0);
 
-    // Fill per-caster data + assign mesh-groups (the cull groups draws by mesh, so the indirect
-    // arg/count buffers are sized per (view, mesh-group)). Group ids are dense, first-seen order.
+    // (1) STATIC casters: fill per-caster data + assign mesh-groups (the cull groups draws by mesh,
+    // so the indirect arg/count buffers are sized per (view, mesh-group)). Group ids dense, first-seen.
     std::unordered_map<const Mesh*, std::uint32_t> meshToGroup;
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
     size_t idx = 0;
@@ -324,19 +334,70 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
         ++idx;
     }
-    numMeshGroups_ = static_cast<std::uint32_t>(meshToGroup.size());
+    const std::uint32_t staticGroups = static_cast<std::uint32_t>(meshToGroup.size());
 
-    // Reverse map (group id -> Mesh*) for the Step 6 indirect draws' per-group VB/IB binding.
+    // (2) GI→VSM reservation (Step 3): fold each GPU-instanced caster's instances into the caster
+    // set as an id sub-range [giBase, giBase+count) after the static casters, one mesh-group per GI
+    // object (all its instances share one mesh). Still DORMANT: the cull count stays at Nstatic
+    // (see RecordCull), so these ids/groups are allocated + wired but never visited or drawn yet —
+    // Step 4 runs the scatter + bumps the cull count. Respect the 64-group cap (VSM_MAX_SETUP_GROUPS):
+    // over-cap GI objects are left unfolded and keep drawing via the CPU RenderShadow tail (Step 5).
+    constexpr std::uint32_t kMaxGroups = 64u; // matches VSM_MAX_SETUP_GROUPS / kMaxMegaGroups below
+    giCasters_.clear();
+    giFoldableInstances_ = 0;
+    std::uint32_t totalCount = static_cast<std::uint32_t>(casterCount);
+    std::uint32_t numGroups = staticGroups;
+    std::vector<const Mesh*>   giGroupMesh;       // folded GI group (relative id staticGroups+j) -> mesh
+    std::vector<std::uint32_t> giGroupIndexCount; // its base-mesh index count
+    bool giCapped = false;
+    for (const auto& objPtr : objects)
+    {
+        RenderableObjectBase* obj = objPtr.get();
+        if (!IsGiFoldable(obj)) { continue; }
+        const std::uint32_t giCount = obj->GetInstanceCasterCount();
+        giFoldableInstances_ += giCount;
+        if (numGroups >= kMaxGroups) { giCapped = true; continue; } // over cap -> CPU tail (Step 5)
+        const RenderableObject* ro = obj->AsRenderableObject();
+        const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsGiFoldable requires it
+        if (!mesh) { continue; }
+
+        GiCaster gc{};
+        gc.obj = obj;
+        gc.giBase = totalCount;
+        gc.count = giCount;
+        const AABB& mb = mesh->GetBoundingBox();
+        if (mb.IsValid())
+        {
+            const Math::float3 c = mb.GetCenter();
+            const Math::float3 e = mb.GetHalfExtents();
+            gc.aabbCenter = DirectX::XMFLOAT4(c.x, c.y, c.z, 0.0f);
+            gc.aabbExtent = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
+        }
+        giCasters_.push_back(gc);
+        giGroupMesh.push_back(mesh);
+        giGroupIndexCount.push_back(static_cast<std::uint32_t>(mesh->GetIndexCount()));
+        totalCount += giCount;
+        ++numGroups;
+    }
+
+    count_ = totalCount;
+    numMeshGroups_ = numGroups;
+
+    // (3) group id -> Mesh*: static groups from the first-seen map, then one per folded GI object.
     groupMesh_.assign(numMeshGroups_, nullptr);
     for (const auto& kv : meshToGroup)
     {
-        if (kv.second < numMeshGroups_) { groupMesh_[kv.second] = kv.first; }
+        if (kv.second < staticGroups) { groupMesh_[kv.second] = kv.first; }
+    }
+    for (size_t j = 0; j < giGroupMesh.size(); ++j)
+    {
+        groupMesh_[staticGroups + j] = giGroupMesh[j];
     }
 
-    // Per-group caster count + index count, and per-caster group id.
+    // (4) Per-group caster count + index count, and per-caster group id (sized to the TOTAL count_).
     std::vector<std::uint32_t> groupCount(numMeshGroups_, 0);
     std::vector<std::uint32_t> groupIndexCount(numMeshGroups_, 0);
-    std::vector<std::uint32_t> casterGroupId(casterCount, 0);
+    std::vector<std::uint32_t> casterGroupId(std::max<std::uint32_t>(count_, 1u), 0);
     for (size_t i = 0; i < casterCount; ++i)
     {
         const Mesh* mesh = casterMesh[i];
@@ -348,19 +409,29 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             if (mesh) { groupIndexCount[g] = static_cast<std::uint32_t>(mesh->GetIndexCount()); }
         }
     }
-    // Prefix-sum group caster counts -> each group's base slice offset within a view's region
-    // (sum of counts == casterCount, so a group's visible run never overflows its slice).
+    for (size_t j = 0; j < giCasters_.size(); ++j)
+    {
+        const std::uint32_t g = staticGroups + static_cast<std::uint32_t>(j);
+        const GiCaster& gc = giCasters_[j];
+        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; }
+        groupCount[g] = gc.count;
+        groupIndexCount[g] = giGroupIndexCount[j];
+    }
+    // Prefix-sum group caster counts -> each group's base slice offset within a view's region (sum
+    // of counts == count_, so a group's visible run never overflows its slice). A GI group's base
+    // equals its giBase (GI ids are contiguous immediately after all static casters).
     std::vector<std::uint32_t> groupBase(numMeshGroups_, 0);
     for (std::uint32_t g = 1; g < numMeshGroups_; ++g)
     {
         groupBase[g] = groupBase[g - 1] + groupCount[g - 1];
     }
 
-    // Upload the static cull inputs (region 0; never rewritten after Rebuild).
-    if (EnsureRing(renderer, casterGroup_, casterCount, sizeof(std::uint32_t), L"ShadowGpuData.CasterGroup") &&
-        casterCount > 0)
+    // Upload the static cull inputs (region 0; never rewritten after Rebuild). CasterGroup is sized
+    // to the TOTAL count_ so Step 4's cull (numCasters=count_) can read the GI ids' group.
+    if (EnsureRing(renderer, casterGroup_, std::max<std::uint32_t>(count_, 1u), sizeof(std::uint32_t), L"ShadowGpuData.CasterGroup") &&
+        count_ > 0)
     {
-        std::memcpy(casterGroup_.Region(0), casterGroupId.data(), casterCount * sizeof(std::uint32_t));
+        std::memcpy(casterGroup_.Region(0), casterGroupId.data(), count_ * sizeof(std::uint32_t));
     }
     if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 2 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
         numMeshGroups_ > 0)
@@ -440,7 +511,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // (view, mesh-group) (args), one draw count per view. Still unused (no descriptors).
     const size_t numViews = render::kMaxShadowViews;
     const size_t groups = std::max<size_t>(numMeshGroups_, 1);
-    const size_t casters = std::max<size_t>(casterCount, 1);
+    const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
     EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), L"ShadowGpuData.IndirectArgs");
     EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), L"ShadowGpuData.VisibleList");
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), L"ShadowGpuData.IndirectCounts");
@@ -456,10 +527,12 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
 
-    char buf[224];
+    char buf[288];
     std::snprintf(buf, sizeof(buf),
-        "[ShadowGpuData] rebuilt: %u casters, %u mesh-groups; %.2f KB instance + %.2f KB bounds x%u regions.\n",
-        count_, numMeshGroups_,
+        "[ShadowGpuData] rebuilt: %u casters (%u static + %u GI in %zu objs%s), %u mesh-groups; "
+        "%.2f KB instance + %.2f KB bounds x%u regions.\n",
+        count_, staticCount_, count_ - staticCount_, giCasters_.size(),
+        giCapped ? ", CAPPED" : "", numMeshGroups_,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);
@@ -472,16 +545,21 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
 {
     if (!renderer) { return 0; }
 
-    size_t newCount = 0;
+    size_t newStatic = 0;
+    std::uint32_t newGiInstances = 0;
     for (const auto& obj : objects)
     {
-        if (IsCaster(obj.get())) { ++newCount; }
+        if (IsCaster(obj.get())) { ++newStatic; }
+        else if (IsGiFoldable(obj.get())) { newGiInstances += obj->GetInstanceCasterCount(); }
     }
 
-    // First use, or the caster set changed (level switch / editor spawn-delete) → full
-    // rebuild. Safe in Steps 1-2: the buffers are unused, so a reallocation strands no reader.
-    if (!instances_.Valid() || !bounds_.Valid() || newCount != count_ ||
-        newCount > instances_.capacity || newCount > bounds_.capacity)
+    // First use, or the caster set changed (level switch / editor spawn-delete) → full rebuild.
+    // Track BOTH the static count and the total foldable GI instance count: a GI spawn/delete leaves
+    // the static count unchanged but must re-run Rebuild (else groupMesh_/giCasters_ dangle). The
+    // instances_/bounds_ rings are sized to the static count only (GI lives in the unified buffers).
+    if (!instances_.Valid() || !bounds_.Valid() || newStatic != staticCount_ ||
+        newGiInstances != giFoldableInstances_ ||
+        newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
         Rebuild(renderer, objects);
         lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
@@ -802,7 +880,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
 
     const std::uint32_t numViews = render::kMaxShadowViews;
     const std::uint32_t numGroups = numMeshGroups_;
-    const std::uint32_t numCasters = count_;
+    // Step 3: the cull iterates only the STATIC casters; GI id sub-ranges are reserved but dormant
+    // (Step 4 flips this to count_ + runs the scatter). numCasters is also the per-view visible-list
+    // stride the clear/cull/draw all agree on (keeping it Nstatic keeps the static layout identical
+    // to before GI reservation). GI groups get cleared args (InstanceCount 0) and draw nothing.
+    const std::uint32_t numCasters = staticCount_;
 
     // The cull outputs must be UNORDERED_ACCESS before the dispatches (created COMMON, or left
     // COPY_SOURCE by a prior validation frame). This pass declares no states -> transition here.
@@ -810,27 +892,31 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    // Step 2 (GI→VSM): before the cull, mirror this frame's per-caster ring region into the
-    // DEFAULT-heap unified buffers so the cull (bounds) + indirect VS (t0 instances) read a
-    // GPU-local copy a compute shader can also write. At this step it's a verbatim copy of
-    // [0,count_) (no GI casters yet), so the cull/VS results are byte-identical to reading the
-    // upload ring — a pure no-op refactor. The upload rings stay in GENERIC_READ (which includes
-    // COPY_SOURCE) so no source barrier is needed. Left in NON_PIXEL_SHADER_RESOURCE for the cull's
-    // compute SRV read and the parallel shadow passes' VS t0 read (both non-pixel shader stages).
+    // Step 2/3 (GI→VSM): before the cull, mirror this frame's per-STATIC-caster ring region into the
+    // DEFAULT-heap unified buffers so the cull (bounds) + indirect VS (t0 instances) read a GPU-local
+    // copy a compute shader can also write. Only the static region [0,Nstatic) is copied; the GI
+    // region [Nstatic,count_) stays untouched here (Step 4's scatter fills it). The static copy is
+    // byte-identical to reading the upload ring, so the static shadows are unchanged. The upload
+    // rings stay in GENERIC_READ (which includes COPY_SOURCE) so no source barrier is needed. Left in
+    // NON_PIXEL_SHADER_RESOURCE for the cull's compute SRV read and the parallel shadow passes' VS t0
+    // read (both non-pixel shader stages).
     const bool useUnified = instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
                             UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
     if (useUnified)
     {
         renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
         renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
-        const UINT64 instSrc = static_cast<UINT64>(f) * instances_.capacity * instances_.stride;
-        const UINT64 boundSrc = static_cast<UINT64>(f) * bounds_.capacity * bounds_.stride;
-        cl->CopyBufferRegion(instancesUnified_.buffer.Get(), static_cast<UINT64>(f) * instancesUnified_.regionBytes,
-                             instances_.buffer.Get(), instSrc,
-                             static_cast<UINT64>(numCasters) * sizeof(render::InstancePerObject));
-        cl->CopyBufferRegion(boundsUnified_.buffer.Get(), static_cast<UINT64>(f) * boundsUnified_.regionBytes,
-                             bounds_.buffer.Get(), boundSrc,
-                             static_cast<UINT64>(numCasters) * sizeof(render::CasterBounds));
+        if (staticCount_ > 0)
+        {
+            const UINT64 instSrc = static_cast<UINT64>(f) * instances_.capacity * instances_.stride;
+            const UINT64 boundSrc = static_cast<UINT64>(f) * bounds_.capacity * bounds_.stride;
+            cl->CopyBufferRegion(instancesUnified_.buffer.Get(), static_cast<UINT64>(f) * instancesUnified_.regionBytes,
+                                 instances_.buffer.Get(), instSrc,
+                                 static_cast<UINT64>(staticCount_) * sizeof(render::InstancePerObject));
+            cl->CopyBufferRegion(boundsUnified_.buffer.Get(), static_cast<UINT64>(f) * boundsUnified_.regionBytes,
+                                 bounds_.buffer.Get(), boundSrc,
+                                 static_cast<UINT64>(staticCount_) * sizeof(render::CasterBounds));
+        }
         renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
@@ -1083,6 +1169,7 @@ void ShadowGpuData::Reset()
     // SRV while frames are in flight). Only CPU-side state is dropped; the next Rebuild reuses
     // the allocations when their capacity still suffices.
     count_ = 0;
+    staticCount_ = 0;
     viewFrustumCount_ = 0;
     numMeshGroups_ = 0;
     cpuInstances_.clear();
@@ -1090,6 +1177,8 @@ void ShadowGpuData::Reset()
     pending_.clear();
     cpuViewFrustums_.clear();
     groupMesh_.clear();
+    giCasters_.clear();            // GI reservation dropped; next Rebuild re-enumerates + refreshes obj*
+    giFoldableInstances_ = 0;
     megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
     valState_ = 0;
     logFramesRemaining_ = 5;

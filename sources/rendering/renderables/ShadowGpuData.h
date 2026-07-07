@@ -192,6 +192,10 @@ private:
     static void ReleaseUavRing(Renderer* renderer, UavRing& ring);
 
     static bool IsCaster(const RenderableObjectBase* obj);
+    // GI→VSM (Step 3): a GPU-instanced caster eligible to be folded into the caster set (casts
+    // shadow, has a valid per-instance transform SRV + count + mesh). Distinct from IsCaster,
+    // which excludes GPU-instanced casters.
+    static bool IsGiFoldable(const RenderableObjectBase* obj);
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
 
@@ -230,12 +234,28 @@ private:
     std::shared_ptr<Material> indirectShadowMat_; // shadow_indirect_csm.hlsl (Step 5; used in Step 6)
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 
-    std::uint32_t count_ = 0;            // live caster count
+    std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
+    std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow
     std::uint32_t lastMoverCount_ = 0;   // casters re-uploaded last UpdateForFrame (VSM skip gate)
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 
     std::vector<const Mesh*> groupMesh_; // mesh-group id -> Mesh* (VB/IB for the indirect draws)
+
+    // GI→VSM (Step 3): one entry per folded GPU-instanced caster. The scatter compute (Step 4)
+    // walks this to write each GI object's instances into the unified buffers' GI id sub-range
+    // [giBase, giBase+count). aabbCenter/aabbExtent are the mesh-LOCAL AABB (world AABB per instance
+    // is derived on the GPU). `obj` is refreshed every Rebuild (lifetime = the scene's object list).
+    struct GiCaster
+    {
+        RenderableObjectBase* obj = nullptr;
+        std::uint32_t         giBase = 0;   // first caster id of this object's instances
+        std::uint32_t         count = 0;    // instance count
+        DirectX::XMFLOAT4     aabbCenter{}; // mesh-local AABB center
+        DirectX::XMFLOAT4     aabbExtent{}; // mesh-local AABB half-extents
+    };
+    std::vector<GiCaster> giCasters_;
+    std::uint32_t         giFoldableInstances_ = 0; // Σ instance counts of ALL foldable GI (pre-cap); change-detector for UpdateForFrame
 
     // Rung 2 mega-buffer: all group meshes concatenated into one VB/IB (see EnsureMegaBuffer).
     // megaWanted_ = layout is uniform + within limits (set in Rebuild); megaBuilt_ = the one-time
