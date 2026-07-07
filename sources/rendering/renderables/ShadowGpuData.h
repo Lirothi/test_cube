@@ -110,6 +110,9 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE InstanceSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE BoundsSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE ViewFrustumSrv(UINT frameIndex) const;
+    // Per-caster mesh-group id SRV (static, region 0). Used by the VSM per-page cull to bucket each
+    // visible caster into its mesh-group's draw slice. {0} until Rebuild.
+    D3D12_CPU_DESCRIPTOR_HANDLE CasterGroupSrv() const;
 
     // GI→VSM (Step 2): SRVs onto the DEFAULT-heap "unified" instance/bounds buffers for ring region
     // `frameIndex`. RecordCull copies the upload ring's region into these each frame (a compute

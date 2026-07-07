@@ -518,6 +518,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     if (!renderer || !renderer->GetDevice() || !shadowGpu) { return; }
     ID3D12Device* dev = renderer->GetDevice();
     const std::uint32_t groups = shadowGpu->MeshGroupCount();
+    const std::uint32_t casters = shadowGpu->CasterCount();
     ID3D12Resource* rung0Args = shadowGpu->IndirectArgsBuffer();
     if (groups == 0 || !rung0Args) { return; }
 
@@ -535,6 +536,16 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         pageProj_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj");
         if (pageProj_) { renderer->SetResourceState(pageProj_.Get(), D3D12_RESOURCE_STATE_COMMON); }
         pageProjUav_ = {};
+    }
+    // Per-page-cull plan (Step 1): per (page, caster-slot) visible list, sized pool-pages x casters.
+    // Allocated dormant here; the setup shader writes it and the draw binds it starting Step 2.
+    if (!pageVisibleList_ || casters > renderCasters_)
+    {
+        const std::uint32_t cap = casters > 0u ? casters : 1u;
+        pageVisibleList_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList");
+        renderCasters_ = cap;
+        if (pageVisibleList_) { renderer->SetResourceState(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageVisibleListUav_ = {}; // force descriptor rebuild
     }
     if (!pageDrawArgs_ || !pageProj_) { return; }
 
@@ -560,13 +571,14 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     }
 
     const bool needHeap = !renderHeap_ || cachedRung0Args_ != rung0Args ||
-                          physOwnerSrv_.ptr == 0 || pageDrawArgsUav_.ptr == 0 || pageProjUav_.ptr == 0;
+                          physOwnerSrv_.ptr == 0 || pageDrawArgsUav_.ptr == 0 || pageProjUav_.ptr == 0 ||
+                          pageVisibleListUav_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 4; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav
+        hd.NumDescriptors = 5; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -577,10 +589,11 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     }
     const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const D3D12_CPU_DESCRIPTOR_HANDLE base = renderHeap_->GetCPUDescriptorHandleForHeapStart();
-    physOwnerSrv_    = { base.ptr + static_cast<SIZE_T>(0) * incr };
-    rung0ArgsSrv_    = { base.ptr + static_cast<SIZE_T>(1) * incr };
-    pageDrawArgsUav_ = { base.ptr + static_cast<SIZE_T>(2) * incr };
-    pageProjUav_     = { base.ptr + static_cast<SIZE_T>(3) * incr };
+    physOwnerSrv_       = { base.ptr + static_cast<SIZE_T>(0) * incr };
+    rung0ArgsSrv_       = { base.ptr + static_cast<SIZE_T>(1) * incr };
+    pageDrawArgsUav_    = { base.ptr + static_cast<SIZE_T>(2) * incr };
+    pageProjUav_        = { base.ptr + static_cast<SIZE_T>(3) * incr };
+    pageVisibleListUav_ = { base.ptr + static_cast<SIZE_T>(4) * incr };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -611,6 +624,18 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pUd.Buffer.NumElements = static_cast<UINT>(pageProj_->GetDesc().Width / 4);
     pUd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
     dev->CreateUnorderedAccessView(pageProj_.Get(), nullptr, &pUd, pageProjUav_);
+
+    // Per-page visible list: structured uint UAV (the setup shader appends caster ids). Dormant in
+    // Step 1 (created but not bound). Guarded because the buffer alloc can fail independently.
+    if (pageVisibleList_)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC vUd{};
+        vUd.Format = DXGI_FORMAT_UNKNOWN;
+        vUd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        vUd.Buffer.NumElements = static_cast<UINT>(pageVisibleList_->GetDesc().Width / sizeof(std::uint32_t));
+        vUd.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        dev->CreateUnorderedAccessView(pageVisibleList_.Get(), nullptr, &vUd, pageVisibleListUav_);
+    }
 
     cachedRung0Args_ = rung0Args;
 }
