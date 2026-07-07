@@ -85,8 +85,17 @@ float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndo
     // Rung 2 / Step 21: sample through the VSM page table + physical pool instead of the atlas.
     if (useVsm != 0u)
     {
+        // Coarse VSM mip levels (far from the camera) cover 2-4x more world per texel than the 512^2
+        // atlas the constant normalBias was tuned for, so that fixed offset no longer clears the
+        // texel -> the receiver self-shadows into acne STRIPES on grazing ground. Scale the normal
+        // offset by the LOD coarsening (continuous ~distCam/refDist, the SAME quantity that selects
+        // the mip level), clamped to the coarsest level. Continuous (no 2x step) => no ring at a
+        // level boundary. Mirrors the directional clipmap's distance-scaled offset.
+        float biasScale = clamp(length(P - camPosWS) / max(vsmRefDist, 1e-3f), 1.0f,
+                                (float)(1u << VSM_MAX_LEVEL));
+        float3 PoffV = P + N * (normalBias * biasScale);
         uint slot = (uint)light.shadowParams.y;
-        return VsmSpotShadow(slot, light.viewProj, Poff, camPosWS, vsmRefDist, depthBias,
+        return VsmSpotShadow(slot, light.viewProj, PoffV, camPosWS, vsmRefDist, depthBias,
                              VsmPageTable, VsmPool, gSmpShadow);
     }
 

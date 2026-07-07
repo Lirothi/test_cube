@@ -71,9 +71,16 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
     // the atlas path, avoiding the crushed-perspective-depth bias problem).
     if (useVsm != 0u)
     {
-        float3 toLight = Ld.position - Poff;
-        Poff += normalize(toLight) * Ld.shadowParams.y;
-        return VsmPointShadow((uint)Ld.shadowParams.x, Poff, Ld.position, Ld.shadowParams.z,
+        // Match the spot path: coarse VSM mip levels far from the camera need a larger world-space
+        // offset than the near/atlas-tuned constant, else the receiver self-shadows into acne
+        // stripes. Scale both the normal offset and the toLight pull by the LOD coarsening
+        // (continuous ~distCam/refDist, the same quantity that selects the mip level).
+        float biasScale = clamp(length(P - camPosWS) / max(vsmRefDist, 1e-3f), 1.0f,
+                                (float)(1u << VSM_MAX_LEVEL));
+        float3 PoffV = P + N * (kPointNormalBias * biasScale);
+        float3 toLight = Ld.position - PoffV;
+        PoffV += normalize(toLight) * (Ld.shadowParams.y * biasScale);
+        return VsmPointShadow((uint)Ld.shadowParams.x, PoffV, Ld.position, Ld.shadowParams.z,
                               Ld.shadowParams.w, camPosWS, vsmRefDist, 0.0f,
                               VsmPageTable, VsmPool, gSmpShadowCmp);
     }
