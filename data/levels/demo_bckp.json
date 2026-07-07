@@ -1,0 +1,2734 @@
+{
+  "camera": {
+    "hfovDeg": 90.0,
+    "zFar": 10000.0,
+    "zNear": 0.01
+  },
+  "directionalLight": {
+    "ambient": 0.05,
+    "color": [
+      1.0,
+      0.9,
+      0.85
+    ],
+    "direction": [
+      -1.5,
+      -0.7,
+      -0.5
+    ],
+    "enabled": true,
+    "exposure": 1.0
+  },
+  "objects": [
+    {
+      "enabled": true,
+      "id": 1,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #1",
+      "normalStrength": 1.0,
+      "position": [
+        0.0,
+        0.5,
+        -2.0
+      ],
+      "rotateSpeedDeg": 10.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 2,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2",
+      "position": [
+        0.0,
+        0.5,
+        -4.0
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 3,
+      "material": "bronze",
+      "model": "models/teapot.obj",
+      "name": "staticMesh #3",
+      "position": [
+        -1.0,
+        0.5,
+        -1.0
+      ],
+      "rotateSpeedDeg": 10.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 4,
+      "material": "bronze",
+      "model": "models/sphere.obj",
+      "name": "staticMesh #4",
+      "position": [
+        -3.0,
+        0.5,
+        -1.0
+      ],
+      "rotateSpeedDeg": 10.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 5,
+      "material": "brick",
+      "model": "models/corgi.obj",
+      "name": "staticMesh #5",
+      "position": [
+        3.0,
+        0.5,
+        -1.0
+      ],
+      "rotateSpeedDeg": 10.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "absorption": [
+        0.16,
+        0.07,
+        0.03
+      ],
+      "enabled": true,
+      "id": 6,
+      "ior": 1.1,
+      "model": "models/box.obj",
+      "name": "transparentMesh #6",
+      "normalMap": "textures/damaged_plaster_normal.dds",
+      "position": [
+        -1.7999999523162842,
+        0.4000000059604645,
+        -4.199999809265137
+      ],
+      "reflectionStrength": 1.25,
+      "refractionDistortion": 1.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "roughness": 0.05,
+      "scale": [
+        0.6000000238418579,
+        0.6000000238418579,
+        0.6000000238418579
+      ],
+      "thickness": 0.65,
+      "tint": [
+        0.78,
+        0.9,
+        1.0
+      ],
+      "type": "transparentMesh"
+    },
+    {
+      "absorption": [
+        0.16,
+        0.07,
+        0.03
+      ],
+      "enabled": true,
+      "id": 7,
+      "ior": 1.1,
+      "model": "models/sphere.obj",
+      "name": "transparentMesh #7",
+      "normalMap": "textures/damaged_plaster_normal.dds",
+      "position": [
+        -1.7999999523162842,
+        0.5,
+        -2.200000047683716
+      ],
+      "reflectionStrength": 4.25,
+      "refractionDistortion": 1.0,
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "roughness": 0.05,
+      "scale": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929
+      ],
+      "thickness": 0.65,
+      "tint": [
+        0.78,
+        0.9,
+        1.0
+      ],
+      "type": "transparentMesh"
+    },
+    {
+      "enabled": true,
+      "id": 8,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #8",
+      "position": [
+        0.0,
+        -0.800000011920929,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 9,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #9",
+      "position": [
+        0.0,
+        -2.5,
+        39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        5.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 10,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #10",
+      "position": [
+        39.0,
+        -4.199999809265137,
+        39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        5.0,
+        0.0,
+        -5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 11,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #11",
+      "position": [
+        39.0,
+        -4.199999809265137,
+        -39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        -5.0,
+        0.0,
+        -5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 12,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #12",
+      "position": [
+        -39.0,
+        -4.199999809265137,
+        -39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        -5.0,
+        0.0,
+        5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 13,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #13",
+      "position": [
+        -39.0,
+        -4.199999809265137,
+        39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        5.0,
+        0.0,
+        5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 14,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #14",
+      "position": [
+        0.0,
+        -2.5,
+        -39.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        -5.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 15,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #15",
+      "position": [
+        -39.0,
+        -2.5,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 16,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "staticMesh #16",
+      "position": [
+        39.0,
+        -2.5,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        -5.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 17,
+      "material": "bronze",
+      "model": "models/box.obj",
+      "name": "staticMesh #17",
+      "normalStrength": 0.01,
+      "position": [
+        -5.0,
+        -0.4000000059604645,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        5.0,
+        1.0,
+        5.0
+      ],
+      "texOffsScale": [
+        0.5,
+        0.0,
+        10.0,
+        10.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 18,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #18",
+      "position": [
+        0.0,
+        1.0,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 19,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.11111111
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #19",
+      "position": [
+        1.2000000476837158,
+        1.0,
+        -12.800000190734863
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 20,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.22222222
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #20",
+      "position": [
+        2.4000000953674316,
+        1.0,
+        -13.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 21,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.33333334
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #21",
+      "position": [
+        3.5999999046325684,
+        1.0,
+        -14.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 22,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.44444445
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #22",
+      "position": [
+        4.800000190734863,
+        1.0,
+        -15.199999809265137
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 23,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.55555558
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #23",
+      "position": [
+        6.0,
+        1.0,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 24,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.66666669
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #24",
+      "position": [
+        7.199999809265137,
+        1.0,
+        -16.799999237060547
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 25,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.77777779
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #25",
+      "position": [
+        8.399999618530273,
+        1.0,
+        -17.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 26,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        0.8888889
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #26",
+      "position": [
+        9.600000381469727,
+        1.0,
+        -18.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 27,
+      "material": "bronze",
+      "metalRough": [
+        0.0,
+        1.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #27",
+      "position": [
+        10.800000190734863,
+        1.0,
+        -19.200000762939453
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 28,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #28",
+      "position": [
+        0.0,
+        2.200000047683716,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 29,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.11111111
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #29",
+      "position": [
+        1.2000000476837158,
+        2.200000047683716,
+        -12.800000190734863
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 30,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.22222222
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #30",
+      "position": [
+        2.4000000953674316,
+        2.200000047683716,
+        -13.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 31,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.33333334
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #31",
+      "position": [
+        3.5999999046325684,
+        2.200000047683716,
+        -14.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 32,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.44444445
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #32",
+      "position": [
+        4.800000190734863,
+        2.200000047683716,
+        -15.199999809265137
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 33,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.55555558
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #33",
+      "position": [
+        6.0,
+        2.200000047683716,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 34,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.66666669
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #34",
+      "position": [
+        7.199999809265137,
+        2.200000047683716,
+        -16.799999237060547
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 35,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.77777779
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #35",
+      "position": [
+        8.399999618530273,
+        2.200000047683716,
+        -17.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 36,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        0.8888889
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #36",
+      "position": [
+        9.600000381469727,
+        2.200000047683716,
+        -18.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 37,
+      "material": "bronze",
+      "metalRough": [
+        0.25,
+        1.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #37",
+      "position": [
+        10.800000190734863,
+        2.200000047683716,
+        -19.200000762939453
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 38,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #38",
+      "position": [
+        0.0,
+        3.4000000953674316,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 39,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.11111111
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #39",
+      "position": [
+        1.2000000476837158,
+        3.4000000953674316,
+        -12.800000190734863
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 40,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.22222222
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #40",
+      "position": [
+        2.4000000953674316,
+        3.4000000953674316,
+        -13.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 41,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.33333334
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #41",
+      "position": [
+        3.5999999046325684,
+        3.4000000953674316,
+        -14.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 42,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.44444445
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #42",
+      "position": [
+        4.800000190734863,
+        3.4000000953674316,
+        -15.199999809265137
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 43,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.55555558
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #43",
+      "position": [
+        6.0,
+        3.4000000953674316,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 44,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.66666669
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #44",
+      "position": [
+        7.199999809265137,
+        3.4000000953674316,
+        -16.799999237060547
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 45,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.77777779
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #45",
+      "position": [
+        8.399999618530273,
+        3.4000000953674316,
+        -17.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 46,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        0.8888889
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #46",
+      "position": [
+        9.600000381469727,
+        3.4000000953674316,
+        -18.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 47,
+      "material": "bronze",
+      "metalRough": [
+        0.5,
+        1.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #47",
+      "position": [
+        10.800000190734863,
+        3.4000000953674316,
+        -19.200000762939453
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 48,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #48",
+      "position": [
+        0.0,
+        4.599999904632568,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 49,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.11111111
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #49",
+      "position": [
+        1.2000000476837158,
+        4.599999904632568,
+        -12.800000190734863
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 50,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.22222222
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #50",
+      "position": [
+        2.4000000953674316,
+        4.599999904632568,
+        -13.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 51,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.33333334
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #51",
+      "position": [
+        3.5999999046325684,
+        4.599999904632568,
+        -14.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 52,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.44444445
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #52",
+      "position": [
+        4.800000190734863,
+        4.599999904632568,
+        -15.199999809265137
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 53,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.55555558
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #53",
+      "position": [
+        6.0,
+        4.599999904632568,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 54,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.66666669
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #54",
+      "position": [
+        7.199999809265137,
+        4.599999904632568,
+        -16.799999237060547
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 55,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.77777779
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #55",
+      "position": [
+        8.399999618530273,
+        4.599999904632568,
+        -17.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 56,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        0.8888889
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #56",
+      "position": [
+        9.600000381469727,
+        4.599999904632568,
+        -18.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 57,
+      "material": "bronze",
+      "metalRough": [
+        0.75,
+        1.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #57",
+      "position": [
+        10.800000190734863,
+        4.599999904632568,
+        -19.200000762939453
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 58,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #58",
+      "position": [
+        0.0,
+        5.800000190734863,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 59,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.11111111
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #59",
+      "position": [
+        1.2000000476837158,
+        5.800000190734863,
+        -12.800000190734863
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 60,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.22222222
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #60",
+      "position": [
+        2.4000000953674316,
+        5.800000190734863,
+        -13.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 61,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.33333334
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #61",
+      "position": [
+        3.5999999046325684,
+        5.800000190734863,
+        -14.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 62,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.44444445
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #62",
+      "position": [
+        4.800000190734863,
+        5.800000190734863,
+        -15.199999809265137
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 63,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.55555558
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #63",
+      "position": [
+        6.0,
+        5.800000190734863,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 64,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.66666669
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #64",
+      "position": [
+        7.199999809265137,
+        5.800000190734863,
+        -16.799999237060547
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 65,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.77777779
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #65",
+      "position": [
+        8.399999618530273,
+        5.800000190734863,
+        -17.600000381469727
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 66,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.8888889
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #66",
+      "position": [
+        9.600000381469727,
+        5.800000190734863,
+        -18.399999618530273
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 67,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        1.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #67",
+      "position": [
+        10.800000190734863,
+        5.800000190734863,
+        -19.200000762939453
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "computeShader": "shaders/instance_anim.hlsl",
+      "count": 100,
+      "enabled": true,
+      "id": 68,
+      "material": "bronze",
+      "model": "models/teapot.obj",
+      "name": "instancedModels #68",
+      "position": [
+        0.0,
+        6.0,
+        24.711637496948242
+      ],
+      "rotationDeg": [
+        0.0,
+        -5.702901363372803,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer_inst.hlsl",
+      "type": "instancedModels"
+    },
+    {
+      "enabled": true,
+      "id": 78,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.0
+      ],
+      "model": "models/sphere.obj",
+      "name": "staticMesh #58 Copy",
+      "position": [
+        -6.52510404586792,
+        5.800000190734863,
+        -12.0
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "computeShader": "shaders/instance_anim.hlsl",
+      "count": 100,
+      "enabled": true,
+      "id": 79,
+      "material": "bronze",
+      "model": "models/teapot.obj",
+      "name": "instancedModels #68 Copy",
+      "position": [
+        0.0,
+        6.0,
+        16.18000030517578
+      ],
+      "rotationDeg": [
+        0.0,
+        -5.702901363372803,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer_inst.hlsl",
+      "type": "instancedModels"
+    },
+    {
+      "absorption": [
+        0.16,
+        0.07,
+        0.03
+      ],
+      "enabled": true,
+      "id": 80,
+      "ior": 1.1,
+      "model": "models/sphere.obj",
+      "name": "transparentMesh #7 111",
+      "normalMap": "textures/damaged_plaster_normal.dds",
+      "position": [
+        1.6497071981430054,
+        0.5,
+        4.739502429962158
+      ],
+      "reflectionStrength": 4.25,
+      "refractionDistortion": 1.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "roughness": 0.05,
+      "scale": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929
+      ],
+      "thickness": 0.65,
+      "tint": [
+        0.78,
+        0.9,
+        1.0
+      ],
+      "type": "transparentMesh"
+    },
+    {
+      "enabled": true,
+      "id": 98,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy",
+      "position": [
+        -6.335277080535889,
+        0.5,
+        -0.42332398891448975
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 99,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -5.667100429534912,
+        0.5,
+        4.373011589050293
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 117,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy",
+      "position": [
+        13.404454231262207,
+        0.5000002384185791,
+        3.784367561340332
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 118,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        10.22157096862793,
+        0.5000002384185791,
+        4.845297336578369
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 119,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        12.503339767456055,
+        0.5000002384185791,
+        6.580242156982422
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 137,
+      "name": "FreeCameraStart",
+      "position": [
+        35.149112701416016,
+        14.530500411987305,
+        0.16464269161224365
+      ],
+      "rotationDeg": [
+        27.54766845703125,
+        -92.3554916381836,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
+    },
+    {
+      "enabled": true,
+      "id": 155,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -15.132826805114746,
+        0.4999983012676239,
+        -13.892179489135742
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 156,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        -16.41788101196289,
+        0.4999983310699463,
+        -9.588846206665039
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 157,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        -19.434654235839844,
+        0.5000002384185791,
+        2.52286696434021
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 158,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy",
+      "position": [
+        -18.003875732421875,
+        0.5000002384185791,
+        7.411252975463867
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 159,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        21.04509925842285,
+        0.5000001788139343,
+        -12.603367805480957
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 160,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy",
+      "position": [
+        17.35663414001465,
+        0.5000001788139343,
+        -12.685556411743164
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 161,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy Copy",
+      "position": [
+        12.4303560256958,
+        1.102173924446106,
+        22.27199935913086
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 162,
+      "material": "damaged_plaster",
+      "model": "models/box.obj",
+      "name": "staticMesh #2 Copy Copy Copy Copy Copy",
+      "position": [
+        15.982893943786621,
+        1.102173924446106,
+        24.046802520751953
+      ],
+      "rotateSpeedDeg": 0.0,
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    }
+  ],
+  "ocean": {
+    "enabled": true,
+    "preset": "data/ocean/default.json"
+  },
+  "pointLights": [
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        2.4,
+        5.5,
+        -12.0
+      ],
+      "radius": 2.0,
+      "shadowsEnabled": false
+    },
+    {
+      "color": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "intensity": 15.0,
+      "position": [
+        2.4,
+        3.5,
+        -12.0
+      ],
+      "radius": 2.0,
+      "shadowsEnabled": false
+    },
+    {
+      "color": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "intensity": 15.0,
+      "position": [
+        2.4,
+        1.5,
+        -12.0
+      ],
+      "radius": 2.0,
+      "shadowsEnabled": false
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        12.538274765014648,
+        1.411637306213379,
+        2.977060079574585
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        14.47765064239502,
+        1.411636471748352,
+        23.231470108032227
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        19.5179386138916,
+        1.4116406440734863,
+        -13.622770309448242
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        -15.793497085571289,
+        1.5545227527618408,
+        -11.830423355102539
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "enabled": true,
+      "intensity": 15.0,
+      "position": [
+        -19.369644165039063,
+        1.554520845413208,
+        5.129709243774414
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true
+    }
+  ],
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  },
+  "spotLights": [
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.3214018940925598,
+        -0.7071067094802856,
+        -0.6298420429229736
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -0.549543023109436,
+        4.0,
+        -8.257765769958496
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "direction": [
+        0.5,
+        -1.0,
+        0.25
+      ],
+      "enabled": true,
+      "innerAngleDeg": 20.0,
+      "intensity": 18.0,
+      "outerAngleDeg": 32.0,
+      "position": [
+        -5.0,
+        5.0,
+        -6.0
+      ],
+      "range": 25.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        -0.2503381371498108,
+        -0.7071066498756409,
+        -0.6613101363182068
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        11.870731353759766,
+        4.0,
+        -11.386822700500488
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        -0.679000973701477,
+        -0.7071066498756409,
+        0.19737772643566132
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        15.123939514160156,
+        4.000000953674316,
+        -21.882057189941406
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.2589053511619568,
+        -0.7071068286895752,
+        0.6580030918121338
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -0.7361001968383789,
+        4.000001907348633,
+        -18.953529357910156
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.6469802260398865,
+        -0.7071068286895752,
+        -0.2853359580039978
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -8.480936050415039,
+        4.000002384185791,
+        27.386228561401367
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.85,
+        0.6
+      ],
+      "direction": [
+        0.5790231823921204,
+        -0.7071065306663513,
+        0.40587273240089417
+      ],
+      "enabled": true,
+      "innerAngleDeg": 29.799999237060547,
+      "intensity": 15.0,
+      "outerAngleDeg": 40.599998474121094,
+      "position": [
+        -8.931707382202148,
+        4.000000953674316,
+        12.121796607971191
+      ],
+      "range": 23.299999237060547,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "direction": [
+        0.4364357888698578,
+        -0.8728715777397156,
+        0.2182178944349289
+      ],
+      "enabled": true,
+      "innerAngleDeg": 20.0,
+      "intensity": 18.0,
+      "outerAngleDeg": 32.0,
+      "position": [
+        -9.30030345916748,
+        5.000000953674316,
+        -2.8949360847473145
+      ],
+      "range": 25.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        0.6,
+        0.8,
+        1.0
+      ],
+      "direction": [
+        0.4364357888698578,
+        -0.8728715777397156,
+        0.2182178944349289
+      ],
+      "innerAngleDeg": 20.0,
+      "intensity": 18.0,
+      "outerAngleDeg": 32.0,
+      "position": [
+        -8.668525695800781,
+        5.000000953674316,
+        2.2497804164886475
+      ],
+      "range": 25.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    }
+  ]
+}

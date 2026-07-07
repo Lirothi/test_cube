@@ -1,10 +1,12 @@
 #include "editor/ui/SceneOutlinerPanel.h"
 #if WITH_EDITOR
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -23,6 +25,14 @@ namespace
         Skybox,
         Ocean,
         Other
+    };
+
+    enum OutlinerColumnId
+    {
+        OutlinerColumn_Name = 1,
+        OutlinerColumn_Type,
+        OutlinerColumn_Id,
+        OutlinerColumn_Enabled
     };
 
     struct TypeFilterOption
@@ -123,6 +133,20 @@ namespace
         return type == "pointLight" || type == "spotLight" || type == "directionalLight";
     }
 
+    bool SupportsEnvironmentEnable(const EditorObject& object)
+    {
+        return IsLightType(object.type) || object.type == "ocean";
+    }
+
+    bool RowEnabledValue(const EditorObject& object, bool environment)
+    {
+        if (environment)
+        {
+            return SupportsEnvironmentEnable(object) && object.properties.value("enabled", true);
+        }
+        return object.enabled;
+    }
+
     bool IsCameraType(const std::string& type)
     {
         return type == "camera" || type == "freeCameraStart";
@@ -194,6 +218,103 @@ namespace
 
         return false;
     }
+
+    void PushEditorObjectId(EditorObjectId id)
+    {
+        char idText[32];
+        std::snprintf(idText, sizeof(idText), "%llu",
+            static_cast<unsigned long long>(id.value));
+        ImGui::PushID(idText);
+    }
+
+    int CompareCaseInsensitive(const std::string& a, const std::string& b)
+    {
+        const std::string lowerA = LowerCopy(a);
+        const std::string lowerB = LowerCopy(b);
+        if (lowerA < lowerB)
+        {
+            return -1;
+        }
+        if (lowerA > lowerB)
+        {
+            return 1;
+        }
+        return 0;
+    }
+
+    int CompareRows(const EditorObject* a,
+        bool aEnvironment,
+        const EditorObject* b,
+        bool bEnvironment,
+        ImGuiID columnId)
+    {
+        if (!a || !b)
+        {
+            return a ? -1 : (b ? 1 : 0);
+        }
+
+        int result = 0;
+        switch (columnId)
+        {
+        case OutlinerColumn_Name:
+            result = CompareCaseInsensitive(a->name, b->name);
+            break;
+        case OutlinerColumn_Type:
+            result = CompareCaseInsensitive(a->type, b->type);
+            break;
+        case OutlinerColumn_Id:
+            if (a->id.value < b->id.value) { result = -1; }
+            else if (a->id.value > b->id.value) { result = 1; }
+            break;
+        case OutlinerColumn_Enabled:
+        {
+            const bool aEnabled = RowEnabledValue(*a, aEnvironment);
+            const bool bEnabled = RowEnabledValue(*b, bEnvironment);
+            if (aEnabled != bEnabled)
+            {
+                result = aEnabled ? 1 : -1;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        if (result == 0)
+        {
+            if (a->id.value < b->id.value) { result = -1; }
+            else if (a->id.value > b->id.value) { result = 1; }
+        }
+        return result;
+    }
+
+    void SortRows(std::vector<EditorObject*>& rows, bool environment, const ImGuiTableSortSpecs* sortSpecs)
+    {
+        if (!sortSpecs || sortSpecs->SpecsCount <= 0)
+        {
+            return;
+        }
+
+        std::stable_sort(rows.begin(), rows.end(),
+            [environment, sortSpecs](const EditorObject* a, const EditorObject* b)
+            {
+                for (int n = 0; n < sortSpecs->SpecsCount; ++n)
+                {
+                    const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[n];
+                    int result = CompareRows(a, environment, b, environment, spec.ColumnUserID);
+                    if (result == 0)
+                    {
+                        continue;
+                    }
+                    if (spec.SortDirection == ImGuiSortDirection_Descending)
+                    {
+                        result = -result;
+                    }
+                    return result < 0;
+                }
+                return false;
+            });
+    }
 }
 
 OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open)
@@ -251,25 +372,30 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
     };
 
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
-    int visibleRows = 0;
-    int visibleEnvironmentRows = 0;
+    std::vector<EditorObject*> visibleObjects;
+    std::vector<EditorObject*> visibleEnvironment;
     bool selectedExists = false;
     bool selectedVisible = false;
-    for (const EditorObject& obj : document.Objects())
+    for (EditorObject& obj : document.Objects())
     {
         const bool visible = rowVisible(obj, false);
-        visibleRows += visible ? 1 : 0;
+        if (visible)
+        {
+            visibleObjects.push_back(&obj);
+        }
         if (selectedObject.value == obj.id.value)
         {
             selectedExists = true;
             selectedVisible = visible;
         }
     }
-    for (const EditorObject& env : document.Environment())
+    for (EditorObject& env : document.Environment())
     {
         const bool visible = rowVisible(env, true);
-        visibleRows += visible ? 1 : 0;
-        visibleEnvironmentRows += visible ? 1 : 0;
+        if (visible)
+        {
+            visibleEnvironment.push_back(&env);
+        }
         if (selectedObject.value == env.id.value)
         {
             selectedExists = true;
@@ -277,20 +403,29 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         }
     }
 
+    const int visibleRows = static_cast<int>(visibleObjects.size() + visibleEnvironment.size());
     ImGui::Text("Showing %d of %d rows", visibleRows, totalRows);
 
     const float footerHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
     const ImGuiTableFlags flags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Sortable;
     if (ImGui::BeginTable("##outliner", 4, flags, ImVec2(0.0f, -footerHeight)))
     {
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 48.0f);
-        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 28.0f);
+        ImGui::TableSetupColumn("Name",
+            ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort,
+            0.0f,
+            OutlinerColumn_Name);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 110.0f, OutlinerColumn_Type);
+        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 48.0f, OutlinerColumn_Id);
+        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 28.0f, OutlinerColumn_Enabled);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
+
+        const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+        SortRows(visibleObjects, false, sortSpecs);
+        SortRows(visibleEnvironment, true, sortSpecs);
 
         if (visibleRows == 0)
         {
@@ -302,50 +437,50 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             ImGui::TableNextColumn();
         }
 
-        for (EditorObject& obj : document.Objects())
+        for (EditorObject* obj : visibleObjects)
         {
-            if (!rowVisible(obj, false))
+            if (!obj)
             {
                 continue;
             }
 
             ImGui::TableNextRow();
-            ImGui::PushID(static_cast<int>(obj.id.value));
+            PushEditorObjectId(obj->id);
 
             ImGui::TableNextColumn();
-            const bool isSelected = (selectedObject.value == obj.id.value);
+            const bool isSelected = (selectedObject.value == obj->id.value);
             // AllowOverlap so the "On" checkbox in a later column stays clickable
             // instead of being covered by this row-spanning selectable.
-            if (ImGui::Selectable(obj.name.c_str(), isSelected,
+            if (ImGui::Selectable(obj->name.c_str(), isSelected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
             {
-                selectedObject = obj.id;
+                selectedObject = obj->id;
             }
 
             // Right-click context menu (Unreal-style): delete this object.
             if (ImGui::BeginPopupContextItem())
             {
-                selectedObject = obj.id; // right-click selects the row too
+                selectedObject = obj->id; // right-click selects the row too
                 if (ImGui::MenuItem("Delete"))
                 {
                     action.type = OutlinerAction::Type::DeleteObject;
-                    action.target = obj.id;
+                    action.target = obj->id;
                 }
                 ImGui::EndPopup();
             }
 
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(obj.type.c_str());
+            ImGui::TextUnformatted(obj->type.c_str());
 
             ImGui::TableNextColumn();
-            ImGui::Text("%llu", static_cast<unsigned long long>(obj.id.value));
+            ImGui::Text("%llu", static_cast<unsigned long long>(obj->id.value));
 
             ImGui::TableNextColumn();
-            bool enabled = obj.enabled;
+            bool enabled = obj->enabled;
             if (ImGui::Checkbox("##enabled", &enabled))
             {
                 action.type = OutlinerAction::Type::SetEnabled;
-                action.target = obj.id;
+                action.target = obj->id;
                 action.enabledValue = enabled;
             }
 
@@ -354,7 +489,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
 
         // Environment entities (camera/lights/skybox/ocean): selectable under a
         // label. Some expose an enable toggle, but they are not deletable here.
-        if (visibleEnvironmentRows > 0)
+        if (!visibleEnvironment.empty())
         {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -363,44 +498,42 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             ImGui::TableNextColumn();
             ImGui::TableNextColumn();
 
-            for (EditorObject& env : document.Environment())
+            for (EditorObject* env : visibleEnvironment)
             {
-                if (!rowVisible(env, true))
+                if (!env)
                 {
                     continue;
                 }
 
                 ImGui::TableNextRow();
-                ImGui::PushID(static_cast<int>(env.id.value));
+                PushEditorObjectId(env->id);
 
                 ImGui::TableNextColumn();
-                const bool isSelected = (selectedObject.value == env.id.value);
+                const bool isSelected = (selectedObject.value == env->id.value);
                 // AllowOverlap so the enable checkbox stays clickable under the
                 // row-spanning selectable (same as object rows).
-                if (ImGui::Selectable(env.name.c_str(), isSelected,
+                if (ImGui::Selectable(env->name.c_str(), isSelected,
                         ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
                 {
-                    selectedObject = env.id;
+                    selectedObject = env->id;
                 }
 
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(env.type.c_str());
+                ImGui::TextUnformatted(env->type.c_str());
 
                 ImGui::TableNextColumn();
-                ImGui::Text("%llu", static_cast<unsigned long long>(env.id.value));
+                ImGui::Text("%llu", static_cast<unsigned long long>(env->id.value));
 
                 ImGui::TableNextColumn();
                 // Enable toggle for lights + ocean (camera/skybox have none).
-                const bool supportsEnable =
-                    env.type == "pointLight" || env.type == "spotLight" ||
-                    env.type == "directionalLight" || env.type == "ocean";
+                const bool supportsEnable = SupportsEnvironmentEnable(*env);
                 if (supportsEnable)
                 {
-                    bool enabled = env.properties.value("enabled", true);
+                    bool enabled = env->properties.value("enabled", true);
                     if (ImGui::Checkbox("##enabled", &enabled))
                     {
                         action.type = OutlinerAction::Type::SetEnvEnabled;
-                        action.target = env.id;
+                        action.target = env->id;
                         action.enabledValue = enabled;
                     }
                 }
