@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/scene/EditorSceneDocument.h"
 
 class EditorExtensionRegistry;
 
@@ -13,10 +14,20 @@ class EditorExtensionRegistry;
 // reads it after Draw and turns it into a command. Type::None means no request.
 struct ContentBrowserAction
 {
+    enum class Type
+    {
+        None,
+        SpawnObject,
+        AssignMaterial,
+        OpenLevel,
+        OpenLevelPreservingCamera
+    };
+
+    Type type = Type::None;
     std::string objectFactoryType;
     EditorAssetId asset;
 
-    bool HasAction() const { return !objectFactoryType.empty(); }
+    bool HasAction() const { return type != Type::None; }
 };
 
 // Searchable / filterable list of discovered assets, drawn over an AssetRegistry.
@@ -39,6 +50,8 @@ public:
     ContentBrowserAction Draw(AssetRegistry& registry,
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
+        const EditorSceneDocument& document,
+        EditorObjectId selectedObject,
         bool* open);
 
 private:

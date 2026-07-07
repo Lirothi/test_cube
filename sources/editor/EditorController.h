@@ -92,6 +92,9 @@ private:
     PendingLevelAction pendingLevelAction_ = PendingLevelAction::None;
     std::string pendingLevelPath_;
     nlohmann::json pendingNewLevelJson_;
+    bool confirmOpenLevelPopupRequested_ = false;
+    bool confirmOpenLevelPreserveCamera_ = false;
+    std::string confirmOpenLevelPath_;
     LevelFileDialogMode levelFileDialogMode_ = LevelFileDialogMode::None;
     char levelFileDialogDirectory_[1024] = {};
     char levelFileDialogFileName_[260] = {};

@@ -24,6 +24,7 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
+#include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
@@ -1158,21 +1159,64 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             [this](EditorContext& panelCtx)
             {
                 const ContentBrowserAction action =
-                    contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_, &showContentBrowser_);
+                    contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,
+                        document_, selectedObject_, &showContentBrowser_);
                 if (!action.HasAction())
                 {
                     return;
                 }
 
-                const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
                 const EditorAssetRecord* asset = assetRegistry_.FindById(action.asset);
-                if (!factory || !asset || !factory->CanBuildFromAsset(asset))
+                if (!asset)
                 {
                     return;
                 }
 
-                nlohmann::json objectJson = factory->BuildDefaultJson(asset, panelCtx, assetRegistry_);
-                commandStack_.Execute(panelCtx, std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                if (action.type == ContentBrowserAction::Type::SpawnObject)
+                {
+                    const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
+                    if (!factory || !factory->CanBuildFromAsset(asset))
+                    {
+                        return;
+                    }
+
+                    nlohmann::json objectJson = factory->BuildDefaultJson(asset, panelCtx, assetRegistry_);
+                    commandStack_.Execute(panelCtx, std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                }
+                else if (action.type == ContentBrowserAction::Type::AssignMaterial)
+                {
+                    EditorObject* selected = document_.Find(selectedObject_);
+                    if (asset->id.type != EditorAssetType::MaterialPreset ||
+                        !selected ||
+                        selected->type != "staticMesh")
+                    {
+                        levelStatus_ = "Select a static mesh before assigning a material";
+                        return;
+                    }
+
+                    commandStack_.Execute(panelCtx,
+                        std::make_unique<SetMaterialCommand>(selectedObject_, asset->id.key));
+                }
+                else if (action.type == ContentBrowserAction::Type::OpenLevel ||
+                    action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera)
+                {
+                    if (asset->id.type != EditorAssetType::Level)
+                    {
+                        return;
+                    }
+                    const bool preserveCamera =
+                        action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera;
+                    if (document_.IsDirty())
+                    {
+                        confirmOpenLevelPath_ = asset->path;
+                        confirmOpenLevelPreserveCamera_ = preserveCamera;
+                        confirmOpenLevelPopupRequested_ = true;
+                        levelStatus_ = "Confirm opening " + asset->path;
+                        return;
+                    }
+
+                    RequestOpenLevelPath(panelCtx.levelManager, asset->path, preserveCamera);
+                }
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -1772,6 +1816,55 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("sceneOutliner");
     drawPanel("contentBrowser");
     drawPanel("inspector");
+    constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
+    if (confirmOpenLevelPopupRequested_)
+    {
+        ImGui::OpenPopup("Unsaved Changes###ContentBrowserOpenDirtyConfirm");
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 popupPos = ImGui::GetMousePos();
+        popupPos.x += 12.0f;
+        popupPos.y += 12.0f;
+        if (viewport)
+        {
+            const float minX = viewport->WorkPos.x + 8.0f;
+            const float minY = viewport->WorkPos.y + 8.0f;
+            const float maxX = viewport->WorkPos.x + viewport->WorkSize.x -
+                kOpenDirtyConfirmContentWidth - 40.0f;
+            const float maxY = viewport->WorkPos.y + viewport->WorkSize.y - 170.0f;
+            popupPos.x = std::clamp(popupPos.x, minX, std::max(minX, maxX));
+            popupPos.y = std::clamp(popupPos.y, minY, std::max(minY, maxY));
+        }
+        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Appearing);
+        ImGui::SetNextWindowContentSize(ImVec2(kOpenDirtyConfirmContentWidth, 0.0f));
+        confirmOpenLevelPopupRequested_ = false;
+    }
+    if (ImGui::BeginPopupModal("Unsaved Changes###ContentBrowserOpenDirtyConfirm",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("The current level has unsaved changes.");
+        ImGui::TextWrapped("Loading another level will discard those changes.");
+        ImGui::Separator();
+        ImGui::Text("Level: %s", confirmOpenLevelPath_.c_str());
+        if (ImGui::Button("Load Anyway"))
+        {
+            const std::string path = confirmOpenLevelPath_;
+            const bool preserveCamera = confirmOpenLevelPreserveCamera_;
+            confirmOpenLevelPath_.clear();
+            confirmOpenLevelPreserveCamera_ = false;
+            RequestOpenLevelPath(levelManager, path, preserveCamera);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            confirmOpenLevelPath_.clear();
+            confirmOpenLevelPreserveCamera_ = false;
+            levelStatus_ = "Open level canceled";
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
     drawPanel("viewportGizmo");
     selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));

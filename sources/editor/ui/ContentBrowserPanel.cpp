@@ -282,6 +282,48 @@ namespace
         return true;
     }
 
+    bool SupportsMaterialAssignment(const EditorObject* object)
+    {
+        return object && object->type == "staticMesh";
+    }
+
+    bool CanAssignMaterialAsset(const EditorAssetRecord& record,
+        const EditorSceneDocument& document,
+        EditorObjectId selectedObject,
+        std::string& reason)
+    {
+        if (record.id.type != EditorAssetType::MaterialPreset)
+        {
+            reason = "Only material assets can be assigned.";
+            return false;
+        }
+
+        const EditorObject* object = document.Find(selectedObject);
+        if (!object)
+        {
+            reason = "Select a static mesh object first.";
+            return false;
+        }
+        if (!SupportsMaterialAssignment(object))
+        {
+            reason = "Selected object does not support material assignment.";
+            return false;
+        }
+
+        return true;
+    }
+
+    bool CanOpenLevelAsset(const EditorAssetRecord& record,
+        std::string& reason)
+    {
+        if (record.id.type != EditorAssetType::Level)
+        {
+            reason = "Only level assets can be opened.";
+            return false;
+        }
+        return true;
+    }
+
     const char* ViewModeLabel(ContentBrowserPanel::ViewMode mode)
     {
         switch (mode)
@@ -406,7 +448,8 @@ namespace
 
     void DrawFolderOperationsMenu(const std::string& folderPath,
         ContentBrowserUiRequest& request,
-        bool includeOpen)
+        bool includeOpen,
+        bool allowDelete)
     {
         if (includeOpen)
         {
@@ -444,27 +487,28 @@ namespace
             DisabledMenuItemWithTooltip("New Folder", mapReason.c_str());
         }
 
-        const bool deleteAllowedRoot = !IsWritableRootFolder(folderPath) && folderPath != "/Game";
-        std::string deleteReason;
-        const bool emptyFolder = deleteAllowedRoot && IsPhysicalFolderEmpty(folderPath, deleteReason);
-        if (emptyFolder)
+        if (allowDelete)
         {
-            if (ImGui::MenuItem("Delete Empty Folder"))
+            const bool deleteAllowedRoot = !IsWritableRootFolder(folderPath) && folderPath != "/Game";
+            std::string deleteReason;
+            const bool emptyFolder = deleteAllowedRoot && IsPhysicalFolderEmpty(folderPath, deleteReason);
+            if (emptyFolder)
             {
-                RequestIfUnset(request, ContentBrowserRequestType::DeleteFolder, folderPath);
+                if (ImGui::MenuItem("Delete Empty Folder"))
+                {
+                    RequestIfUnset(request, ContentBrowserRequestType::DeleteFolder, folderPath);
+                }
             }
-        }
-        else
-        {
-            if (!deleteAllowedRoot)
+            else
             {
-                deleteReason = "Content roots cannot be deleted.";
+                if (!deleteAllowedRoot)
+                {
+                    deleteReason = "Content roots cannot be deleted.";
+                }
+                DisabledMenuItemWithTooltip("Delete Empty Folder", deleteReason.c_str());
             }
-            DisabledMenuItemWithTooltip("Delete Empty Folder", deleteReason.c_str());
         }
 
-        DisabledMenuItemWithTooltip("Rename Folder", "Folder rename needs asset reference repair first.");
-        DisabledMenuItemWithTooltip("Move/Copy Folder", "Folder move/copy needs asset reference repair first.");
         ImGui::Separator();
         if (ImGui::MenuItem("Copy Virtual Path"))
         {
@@ -481,6 +525,56 @@ namespace
         else
         {
             DisabledMenuItemWithTooltip("Copy Physical Path", mapReason.c_str());
+        }
+        if (ImGui::MenuItem("Refresh"))
+        {
+            RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
+        }
+    }
+
+    void DrawEmptySpaceContextMenu(const std::string& folderPath,
+        ContentBrowserUiRequest& request)
+    {
+        std::string mapReason;
+        fs::path physicalPath;
+        const bool mapsToPhysical =
+            TryMapVirtualFolderToPhysical(folderPath, physicalPath, mapReason);
+
+        bool isDirectory = false;
+        if (mapsToPhysical)
+        {
+            std::error_code ec;
+            isDirectory = fs::is_directory(physicalPath, ec);
+            if (!isDirectory)
+            {
+                mapReason = "Mapped physical folder does not exist.";
+            }
+        }
+
+        if (mapsToPhysical && isDirectory)
+        {
+            if (ImGui::MenuItem("New Folder"))
+            {
+                RequestIfUnset(request, ContentBrowserRequestType::NewFolder, folderPath);
+            }
+        }
+        else
+        {
+            DisabledMenuItemWithTooltip("New Folder", mapReason.c_str());
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy Current Folder Path"))
+        {
+            ImGui::SetClipboardText(folderPath.c_str());
+        }
+        if (mapsToPhysical)
+        {
+            const std::string physicalText = physicalPath.generic_string();
+            if (ImGui::MenuItem("Copy Current Physical Path"))
+            {
+                ImGui::SetClipboardText(physicalText.c_str());
+            }
         }
         if (ImGui::MenuItem("Refresh"))
         {
@@ -624,7 +718,7 @@ namespace
         }
         if (ImGui::BeginPopupContextItem())
         {
-            DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path);
+            DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path, true);
             ImGui::EndPopup();
         }
 
@@ -770,7 +864,9 @@ namespace
         const EditorExtensionRegistry& extensions,
         EditorAssetId& selectedAsset,
         ContentBrowserAction& action,
-        ContentBrowserUiRequest& request)
+        ContentBrowserUiRequest& request,
+        const EditorSceneDocument& document,
+        EditorObjectId selectedObject)
     {
         if (!record || !ImGui::BeginPopupContextItem())
         {
@@ -778,27 +874,69 @@ namespace
         }
 
         selectedAsset = record->id; // right-click also selects the row/tile
-        for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
+        bool wroteSpecificAction = false;
+        if (record->id.type == EditorAssetType::Mesh)
         {
-            if (!factory)
+            for (const std::unique_ptr<IEditorObjectFactory>& factory : extensions.ObjectFactories())
             {
-                continue;
-            }
+                if (!factory || !factory->CanBuildFromAsset(record))
+                {
+                    continue;
+                }
 
-            const std::string label(factory->MenuLabel());
-            const bool enabled = factory->CanBuildFromAsset(record);
-            ImGui::BeginDisabled(!enabled);
-            if (ImGui::MenuItem(label.c_str()))
-            {
-                action.objectFactoryType = std::string(factory->Type());
-                action.asset = record->id;
+                const std::string label(factory->MenuLabel());
+                if (ImGui::MenuItem(label.c_str()))
+                {
+                    action.type = ContentBrowserAction::Type::SpawnObject;
+                    action.objectFactoryType = std::string(factory->Type());
+                    action.asset = record->id;
+                }
+                wroteSpecificAction = true;
             }
-            ImGui::EndDisabled();
         }
-        ImGui::BeginDisabled(true);
-        ImGui::MenuItem("Assign Material to Selected");
-        ImGui::EndDisabled();
-        ImGui::Separator();
+        else if (record->id.type == EditorAssetType::MaterialPreset)
+        {
+            std::string materialReason;
+            const bool canAssignMaterial =
+                CanAssignMaterialAsset(*record, document, selectedObject, materialReason);
+            if (canAssignMaterial)
+            {
+                if (ImGui::MenuItem("Assign Material to Selected"))
+                {
+                    action.type = ContentBrowserAction::Type::AssignMaterial;
+                    action.asset = record->id;
+                }
+            }
+            else
+            {
+                DisabledMenuItemWithTooltip("Assign Material to Selected", materialReason.c_str());
+            }
+            wroteSpecificAction = true;
+        }
+        else if (record->id.type == EditorAssetType::Level)
+        {
+            std::string levelReason;
+            const bool canOpenLevel = CanOpenLevelAsset(*record, levelReason);
+            if (canOpenLevel)
+            {
+                if (ImGui::MenuItem("Open Level"))
+                {
+                    action.type = ContentBrowserAction::Type::OpenLevel;
+                    action.asset = record->id;
+                }
+                if (ImGui::MenuItem("Open Level Preserving Camera"))
+                {
+                    action.type = ContentBrowserAction::Type::OpenLevelPreservingCamera;
+                    action.asset = record->id;
+                }
+            }
+            wroteSpecificAction = true;
+        }
+
+        if (wroteSpecificAction)
+        {
+            ImGui::Separator();
+        }
         if (ImGui::MenuItem("Copy Virtual Path"))
         {
             ImGui::SetClipboardText(record->virtualPath.c_str());
@@ -825,7 +963,7 @@ namespace
         {
             return;
         }
-        DrawFolderOperationsMenu(folder.path, request, true);
+        DrawFolderOperationsMenu(folder.path, request, true, true);
         ImGui::EndPopup();
     }
 
@@ -834,7 +972,9 @@ namespace
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
-        ContentBrowserUiRequest& request)
+        ContentBrowserUiRequest& request,
+        const EditorSceneDocument& document,
+        EditorObjectId selectedObject)
     {
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -893,8 +1033,16 @@ namespace
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
                 selectedAsset = record->id;
+                std::string levelReason;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    CanOpenLevelAsset(*record, levelReason))
+                {
+                    action.type = ContentBrowserAction::Type::OpenLevel;
+                    action.asset = record->id;
+                }
             }
-            DrawAssetContextMenu(record, extensions, selectedAsset, action, request);
+            DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
+                document, selectedObject);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -911,7 +1059,9 @@ namespace
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
-        ContentBrowserUiRequest& request)
+        ContentBrowserUiRequest& request,
+        const EditorSceneDocument& document,
+        EditorObjectId selectedObject)
     {
         const ImVec2 tileSize(132.0f, 72.0f);
         const float spacingX = ImGui::GetStyle().ItemSpacing.x;
@@ -973,13 +1123,23 @@ namespace
             {
                 selectedAsset = record->id;
             }
+            std::string levelReason;
+            if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                CanOpenLevelAsset(*record, levelReason))
+            {
+                selectedAsset = record->id;
+                action.type = ContentBrowserAction::Type::OpenLevel;
+                action.asset = record->id;
+            }
 
             if (isSelected)
             {
                 ImGui::PopStyleColor(2);
             }
 
-            DrawAssetContextMenu(record, extensions, selectedAsset, action, request);
+            DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
+                document, selectedObject);
             ImGui::PopID();
         }
     }
@@ -1109,6 +1269,8 @@ void ContentBrowserPanel::NavigateHistory(const AssetRegistry& registry, int del
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     EditorAssetId& selectedAsset,
     const EditorExtensionRegistry& extensions,
+    const EditorSceneDocument& document,
+    EditorObjectId selectedObject,
     bool* open)
 {
     ContentBrowserAction action;
@@ -1303,18 +1465,18 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         if (viewMode_ == ViewMode::Tiles)
         {
             DrawTileAssetView(visibleFolders, visibleAssets, selectedAsset,
-                extensions, action, uiRequest);
+                extensions, action, uiRequest, document, selectedObject);
         }
         else
         {
             DrawListAssetView(visibleFolders, visibleAssets, selectedAsset,
-                extensions, action, uiRequest);
+                extensions, action, uiRequest, document, selectedObject);
         }
     }
     if (ImGui::BeginPopupContextWindow("##assetViewContext",
             ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
     {
-        DrawFolderOperationsMenu(selectedFolder_, uiRequest, false);
+        DrawEmptySpaceContextMenu(selectedFolder_, uiRequest);
         ImGui::EndPopup();
     }
     ImGui::EndChild();

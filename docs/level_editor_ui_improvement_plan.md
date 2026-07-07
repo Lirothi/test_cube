@@ -383,8 +383,11 @@ Implementation notes:
   traversal.
 - Implement `Delete Empty Folder` with confirmation only when the mapped
   directory is empty.
-- Keep `Rename Folder`, non-empty folder delete, and folder move/copy disabled
-  until asset reference repair exists.
+- Do not surface future folder actions such as rename or move/copy in normal
+  context menus until asset reference repair exists.
+- Keep context menus scoped to the clicked resource type. Avoid generic "all
+  commands" menus; show disabled items only when the action is relevant to that
+  resource but unavailable because of current selection or safety state.
 - Add asset actions that do not mutate files:
   - Copy Virtual Path;
   - Copy Physical Path;
@@ -397,7 +400,8 @@ Acceptance criteria:
 - Right-clicking empty space can create a new folder under the selected source
   when the selected source maps to a writable editor content root.
 - Empty folder delete requires confirmation and refuses non-empty folders.
-- Disabled folder actions explain the missing reference-update support.
+- Unavailable relevant actions explain their current blocker without cluttering
+  unrelated resource menus.
 - Asset context menus expose copy/show actions without breaking existing spawn
   actions.
 
