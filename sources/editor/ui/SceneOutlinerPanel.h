@@ -12,15 +12,21 @@ struct OutlinerAction
     bool enabledValue = false; // for SetEnabled / SetEnvEnabled
 };
 
-// Lists the document's objects in a table. Selecting a row writes the editor's
-// selected object; the enabled checkbox toggles EditorObject::enabled; the
-// "Delete Selected" button raises a delete request.
+// Lists document and environment entities in a searchable/filterable table.
+// Selecting a row writes the editor's selected object; row controls raise
+// actions that the editor turns into commands or live environment updates.
 class SceneOutlinerPanel
 {
 public:
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it).
     OutlinerAction Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open);
+
+private:
+    char searchBuffer_[256] = {};
+    bool showObjects_ = true;
+    bool showEnvironment_ = true;
+    int typeFilterIndex_ = 0;
 };
 
 #endif // WITH_EDITOR
