@@ -41,6 +41,7 @@ public:
     // GI→VSM (Step 1): expose the per-instance transform buffer for the GI-scatter compute.
     D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const override { return instanceBuffer_.GetSRVCPU(); }
     UINT GetInstanceCasterCount() const override { return instanceCount_; }
+    ID3D12Resource* GetInstanceCasterResource() const override { return instanceBuffer_.GetResource(); }
     // Rung 1 (Step 10): per-instance rotation animates every frame -> always dynamic.
     bool IsDynamicCaster() const override { return true; }
 

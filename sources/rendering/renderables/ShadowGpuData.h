@@ -89,6 +89,15 @@ public:
     void Reset();
 
     std::uint32_t CasterCount() const { return count_; }
+
+    // GI→VSM (Step 4): is the GI folding path active THIS frame — the runtime flag is on, there are
+    // folded GI casters, and the scatter PSO is ready? When true, RecordCull scatters + culls all
+    // count_ casters (GI included); when false it culls only the static Nstatic (GI stays dormant).
+    bool IsGiIndirectActive() const;
+    // True when `obj` is a GI object folded into the indirect path AND that path is active this frame
+    // (IsGiIndirectActive). The Legacy shadow passes skip such objects in their CPU RenderShadow tail
+    // (the indirect path draws them); everything else — flag off, over-cap, PSO failure — keeps the tail.
+    bool IsGiFoldedActive(const RenderableObjectBase* obj) const;
     // Casters re-uploaded by the last UpdateForFrame (movers this frame + recent movers still
     // propagating across ring regions). >0 means shadow content changed -> VSM must re-render even
     // if the camera is still (drives SceneRenderer's skip-when-still gate).
@@ -108,6 +117,9 @@ public:
     // and the indirect VS reads UnifiedInstanceSrv at t0. {0} until Rebuild allocates them.
     D3D12_CPU_DESCRIPTOR_HANDLE UnifiedInstanceSrv(UINT frameIndex) const;
     D3D12_CPU_DESCRIPTOR_HANDLE UnifiedBoundsSrv(UINT frameIndex) const;
+    // GI→VSM (Step 4): UAVs onto the same unified buffers for the GI-scatter compute write.
+    D3D12_CPU_DESCRIPTOR_HANDLE UnifiedInstanceUav(UINT frameIndex) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE UnifiedBoundsUav(UINT frameIndex) const;
     // The instance/bounds SRV a reader should bind: the unified copy when built (Step 2), else the
     // upload ring (fallback if allocation failed). Both back a verbatim per-caster stream, so
     // callers are agnostic to which one is used.
@@ -214,15 +226,15 @@ private:
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
     UavRing indirectCounts_; // per view draw count (uint32)
 
-    // GI→VSM (Step 2): DEFAULT-heap mirrors of instances_/bounds_ (kFrameCount regions x count_).
-    // RecordCull copies the upload ring's region into these each frame (Step 4 additionally scatters
-    // GI casters here via a compute UAV write), so the cull + indirect VS read GPU-local copies that
-    // a compute shader can also write. One CPU (non-shader-visible) SRV heap holds a per-region SRV
-    // for each: [0..kFrameCount)=instances, [kFrameCount..2k)=bounds.
+    // GI→VSM (Step 2/4): DEFAULT-heap mirrors of instances_/bounds_ (kFrameCount regions x count_).
+    // RecordCull copies the upload ring's static region into these each frame and (Step 4) scatters
+    // the GI casters' region via a compute UAV write, so the cull + indirect VS read GPU-local copies
+    // that a compute shader can also write. One CPU (non-shader-visible) heap holds per-region
+    // descriptors: [0..k)=instance SRV, [k..2k)=bounds SRV, [2k..3k)=instance UAV, [3k..4k)=bounds UAV.
     UavRing instancesUnified_;
     UavRing boundsUnified_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> unifiedSrvHeap_;
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2 * render::kFrameCount> unifiedSrv_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4 * render::kFrameCount> unifiedDescr_{};
 
     // Non-shader-visible UAVs for the cull outputs, one per ring region:
     // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts.
@@ -232,6 +244,7 @@ private:
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
     std::shared_ptr<Material> cullMat_;          // shadow_cull_cs.hlsl
     std::shared_ptr<Material> indirectShadowMat_; // shadow_indirect_csm.hlsl (Step 5; used in Step 6)
+    std::shared_ptr<Material> giScatterMat_;     // shadow_gi_scatter_cs.hlsl (Step 4)
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)

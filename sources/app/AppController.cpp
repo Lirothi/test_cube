@@ -81,6 +81,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
             render::g_indirectShadowsEnabled = !render::g_indirectShadowsEnabled;
         }
+        if (input.WasActionPressed("ToggleGiIndirectShadows"))
+        {
+            // Ctrl+G: A/B folding GPU-instanced casters into the indirect/VSM shadow path (ON) vs
+            // the Legacy CPU RenderShadow tail only (OFF — nothing in VSM, today's behavior).
+            render::g_giIndirectShadowsEnabled = !render::g_giIndirectShadowsEnabled;
+        }
         if (input.WasActionPressed("ToggleVsmPageRequest"))
         {
             // Ctrl+V: switch the active shadow method Legacy(CSM/atlas) <-> VSM (Step 24a). Drives

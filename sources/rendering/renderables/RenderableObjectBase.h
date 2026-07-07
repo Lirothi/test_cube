@@ -115,6 +115,9 @@ public:
     // only for IsGpuInstancedCaster() objects; default null/0 (dormant — no consumer yet).
     virtual D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const { return {}; }
     virtual UINT GetInstanceCasterCount() const { return 0; }
+    // The instance-caster buffer resource itself, so the GI-scatter pass can transition it to a
+    // shader-read state at the call site. Null for non-GPU-instanced casters.
+    virtual ID3D12Resource* GetInstanceCasterResource() const { return nullptr; }
 
     // Rung 1 (Step 10) foundation: does this caster ever move at runtime? Static casters can be
     // cached in a shadow atlas and re-rendered only on invalidation; dynamic ones re-render each

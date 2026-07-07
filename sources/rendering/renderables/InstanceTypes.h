@@ -60,6 +60,14 @@ inline bool g_instancingEnabled = true;
 // build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
 inline bool g_indirectShadowsEnabled = true;
 
+// GI→VSM runtime toggle (default ON): fold GPU-instanced casters' instances into the consolidated
+// ShadowGpuData caster set (GPU scatter → cull → indirect), so they cast in VSM and via the indirect
+// path in Legacy (dropping their per-view CPU RenderShadow tail). Toggle OFF (Ctrl+G,
+// "ToggleGiIndirectShadows") for the A/B: GI reverts to the Legacy CPU tail only (nothing in VSM) —
+// exactly today's behavior. Also the safety fallback: if the scatter PSO fails or an object is over
+// the group cap, GI keeps drawing through the retained CPU tail. Requires g_indirectShadowsEnabled.
+inline bool g_giIndirectShadowsEnabled = true;
+
 // Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
 // path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
 // whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →

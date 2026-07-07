@@ -271,11 +271,31 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
 {
-    return (f < render::kFrameCount) ? unifiedSrv_[f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    return (f < render::kFrameCount) ? unifiedDescr_[f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedBoundsSrv(UINT f) const
 {
-    return (f < render::kFrameCount) ? unifiedSrv_[render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    return (f < render::kFrameCount) ? unifiedDescr_[render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceUav(UINT f) const
+{
+    return (f < render::kFrameCount) ? unifiedDescr_[2 * render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedBoundsUav(UINT f) const
+{
+    return (f < render::kFrameCount) ? unifiedDescr_[3 * render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
+bool ShadowGpuData::IsGiIndirectActive() const
+{
+    return render::g_giIndirectShadowsEnabled && !giCasters_.empty() &&
+           giScatterMat_ && giScatterMat_->GetPipelineState();
+}
+bool ShadowGpuData::IsGiFoldedActive(const RenderableObjectBase* obj) const
+{
+    if (!obj || !IsGiIndirectActive()) { return false; }
+    for (const GiCaster& gc : giCasters_) { if (gc.obj == obj) { return true; } }
+    return false;
 }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceReadSrv(UINT f) const
 {
@@ -682,6 +702,14 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         cd.csEntry = "CSMain";
         cullMat_ = mm->GetOrCreateCompute(renderer, cd);
     }
+    // Step 4 (GI→VSM): the GI-scatter compute that folds each GPU-instanced object's per-instance
+    // transforms into the unified caster buffers. Optional — a failure just leaves GI on the CPU tail.
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/shadow_gi_scatter_cs.hlsl";
+        cd.csEntry = "CSMain";
+        giScatterMat_ = mm->GetOrCreateCompute(renderer, cd);
+    }
     // Step 5: the indirect depth-only shadow PSO. Depth-only (numRT 0, D16, LESS_EQUAL) mirroring
     // ConfigureShadowPipeline; the PosOnly_InstCasterId layout binds the mesh vertex stream (slot
     // 0) + the visible-list caster-id stream (slot 1, per-instance). Compiled now; drawn in Step 6.
@@ -715,6 +743,11 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
     {
         OutputDebugStringA("[ShadowGpuData] indirect shadow PSO creation FAILED (shader compile?).\n");
         indirectShadowMat_.reset();
+    }
+    if (!giScatterMat_ || !giScatterMat_->GetPipelineState())
+    {
+        OutputDebugStringA("[ShadowGpuData] GI-scatter PSO creation FAILED (GI stays on the CPU tail).\n");
+        giScatterMat_.reset();
     }
     if (cullOk && drawOk)
     {
@@ -786,14 +819,14 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
 
 void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
 {
-    unifiedSrv_.fill({});
+    unifiedDescr_.fill({});
     unifiedSrvHeap_.Reset();
     if (!renderer || !renderer->GetDevice()) { return; }
     if (!instancesUnified_.Valid() || !boundsUnified_.Valid() || count_ == 0) { return; }
 
     ID3D12Device* dev = renderer->GetDevice();
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.NumDescriptors = 2 * render::kFrameCount; // [0..k)=instances, [k..2k)=bounds
+    hd.NumDescriptors = 4 * render::kFrameCount; // [0..k)=inst SRV, [k..2k)=bounds SRV, [2k..3k)=inst UAV, [3k..4k)=bounds UAV
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(unifiedSrvHeap_.GetAddressOf()))) || !unifiedSrvHeap_)
@@ -806,7 +839,7 @@ void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
     auto slotHandle = [&](UINT slot) { D3D12_CPU_DESCRIPTOR_HANDLE h{ base.ptr + static_cast<SIZE_T>(slot) * incr }; return h; };
 
     // Region f is spaced by the buffer's physical regionBytes (>= count_*stride when the allocation
-    // was reused from a larger prior level); NumElements is the live count_.
+    // was reused from a larger prior level); NumElements is the live count_ (covers static + GI).
     const UINT instStride = static_cast<UINT>(sizeof(render::InstancePerObject));
     const UINT boundStride = static_cast<UINT>(sizeof(render::CasterBounds));
     const UINT64 instElemsPerRegion = instancesUnified_.regionBytes / instStride;
@@ -814,6 +847,7 @@ void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
 
     for (UINT f = 0; f < render::kFrameCount; ++f)
     {
+        // instance SRV (region f)
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = DXGI_FORMAT_UNKNOWN;
@@ -824,8 +858,9 @@ void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
             sd.Buffer.StructureByteStride = instStride;
             const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(f);
             dev->CreateShaderResourceView(instancesUnified_.buffer.Get(), &sd, h);
-            unifiedSrv_[f] = h;
+            unifiedDescr_[f] = h;
         }
+        // bounds SRV (region f)
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = DXGI_FORMAT_UNKNOWN;
@@ -836,7 +871,33 @@ void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
             sd.Buffer.StructureByteStride = boundStride;
             const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(render::kFrameCount + f);
             dev->CreateShaderResourceView(boundsUnified_.buffer.Get(), &sd, h);
-            unifiedSrv_[render::kFrameCount + f] = h;
+            unifiedDescr_[render::kFrameCount + f] = h;
+        }
+        // instance UAV (region f) — Step 4 scatter write target
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_UNKNOWN;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Buffer.FirstElement = static_cast<UINT64>(f) * instElemsPerRegion;
+            ud.Buffer.NumElements = count_;
+            ud.Buffer.StructureByteStride = instStride;
+            ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(2 * render::kFrameCount + f);
+            dev->CreateUnorderedAccessView(instancesUnified_.buffer.Get(), nullptr, &ud, h);
+            unifiedDescr_[2 * render::kFrameCount + f] = h;
+        }
+        // bounds UAV (region f)
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_UNKNOWN;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Buffer.FirstElement = static_cast<UINT64>(f) * boundElemsPerRegion;
+            ud.Buffer.NumElements = count_;
+            ud.Buffer.StructureByteStride = boundStride;
+            ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(3 * render::kFrameCount + f);
+            dev->CreateUnorderedAccessView(boundsUnified_.buffer.Get(), nullptr, &ud, h);
+            unifiedDescr_[3 * render::kFrameCount + f] = h;
         }
     }
 }
@@ -880,11 +941,12 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
 
     const std::uint32_t numViews = render::kMaxShadowViews;
     const std::uint32_t numGroups = numMeshGroups_;
-    // Step 3: the cull iterates only the STATIC casters; GI id sub-ranges are reserved but dormant
-    // (Step 4 flips this to count_ + runs the scatter). numCasters is also the per-view visible-list
-    // stride the clear/cull/draw all agree on (keeping it Nstatic keeps the static layout identical
-    // to before GI reservation). GI groups get cleared args (InstanceCount 0) and draw nothing.
-    const std::uint32_t numCasters = staticCount_;
+    // Step 4 (GI→VSM): when the GI folding path is active this frame, the cull covers ALL count_
+    // casters (the scatter below fills the GI region first); otherwise only the static Nstatic (GI
+    // dormant, drawn by the retained CPU tail). numCasters is also the per-view visible-list stride
+    // the clear/cull/draw all agree on — Nstatic keeps the static-only layout byte-identical.
+    const bool giOn = IsGiIndirectActive();
+    const std::uint32_t numCasters = giOn ? count_ : staticCount_;
 
     // The cull outputs must be UNORDERED_ACCESS before the dispatches (created COMMON, or left
     // COPY_SOURCE by a prior validation frame). This pass declares no states -> transition here.
@@ -917,6 +979,62 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                                  bounds_.buffer.Get(), boundSrc,
                                  static_cast<UINT64>(staticCount_) * sizeof(render::CasterBounds));
         }
+
+        // Step 4: scatter each folded GI object's per-instance transforms into the unified GI region
+        // [Nstatic,count_). Runs after the static copy (disjoint region) — transition the whole
+        // resource COPY_DEST -> UAV, dispatch one scatter per GI object (source = the object's own
+        // InstanceData buffer, read as NON_PIXEL; dst = the unified UAVs), UAV-barrier, then fall
+        // through to NON_PIXEL for the cull/VS reads. Ordering vs the GI rotation compute is safe:
+        // Main_ObjectCompute precedes Main_ShadowCull in the render graph.
+        if (giOn)
+        {
+            renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            const D3D12_CPU_DESCRIPTOR_HANDLE instUav = UnifiedInstanceUav(f);
+            const D3D12_CPU_DESCRIPTOR_HANDLE boundUav = UnifiedBoundsUav(f);
+
+            struct ScatterCB
+            {
+                std::uint32_t       giBase, count, pad0, pad1;
+                DirectX::XMFLOAT4   aabbCenter;
+                DirectX::XMFLOAT4   aabbExtent;
+                DirectX::XMFLOAT4X4 objectWorld;
+            };
+            const UINT scatterCbSize = static_cast<UINT>(sizeof(ScatterCB));
+            for (const GiCaster& gc : giCasters_)
+            {
+                if (!gc.obj || gc.count == 0) { continue; }
+                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
+                const D3D12_CPU_DESCRIPTOR_HANDLE giSrv = gc.obj->GetInstanceCasterSrv();
+                if (!giBuf || giSrv.ptr == 0) { continue; }
+                // Fold in the object's model matrix so the stored world matches gbuffer_inst_csm's
+                // mul(instanceWorld, objectWorld); read the object's transform fresh each frame.
+                const RenderableObject* ro = gc.obj->AsRenderableObject();
+                DirectX::XMFLOAT4X4 objWorld = ro ? ro->GetModelMatrix().m : DirectX::XMFLOAT4X4{};
+                if (!ro) { DirectX::XMStoreFloat4x4(&objWorld, DirectX::XMMatrixIdentity()); }
+
+                renderer->Transition(cl, giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                RecordComputeDispatch(renderer, cl, giScatterMat_.get(), scatterCbSize,
+                    [&](std::uint8_t* dst)
+                    {
+                        ScatterCB c{};
+                        c.giBase = gc.giBase;
+                        c.count = gc.count;
+                        c.aabbCenter = gc.aabbCenter;
+                        c.aabbExtent = gc.aabbExtent;
+                        c.objectWorld = objWorld;
+                        std::memcpy(dst, &c, sizeof(c));
+                    },
+                    { giSrv },
+                    { instUav, boundUav },
+                    D3D12_GPU_DESCRIPTOR_HANDLE{},
+                    gc.count, 1,
+                    nullptr); // GI objects write disjoint id ranges -> no inter-dispatch barrier
+            }
+            renderer->UAVBarrier(cl, instancesUnified_.buffer.Get());
+            renderer->UAVBarrier(cl, boundsUnified_.buffer.Get());
+        }
+
         renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
@@ -943,9 +1061,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         numCasters, 1,
         indirectArgs_.buffer.Get());
 
-    // Step 4 validation (temporary, one-shot after warmup): snapshot the inputs + read back
-    // this region's args to compare against a CPU cull kFrameCount frames later.
-    if (valState_ == 0 && renderer->GetTotalFrameNumber() > render::kFrameCount)
+    // Step 4 validation (temporary, one-shot after warmup): snapshot the inputs + read back this
+    // region's args to compare against a CPU cull kFrameCount frames later. Skipped when GI folding
+    // is active — the CPU reference (cpuBounds_) only covers static casters, so it can't validate
+    // the GPU-scattered GI bounds. Toggle GI off (Ctrl+G) to exercise the validator on the static set.
+    if (valState_ == 0 && !giOn && renderer->GetTotalFrameNumber() > render::kFrameCount)
     {
         valBounds_ = cpuBounds_;
         valFrustums_ = cpuViewFrustums_;

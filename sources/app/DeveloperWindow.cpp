@@ -515,6 +515,14 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 bool vsmMode = render::VsmActive();
                 if (ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &vsmMode))
                     render::g_shadowMode = vsmMode ? render::ShadowMode::VSM : render::ShadowMode::Legacy;
+
+                // Applies to BOTH modes (folds GPU-instanced casters into the indirect cull): ON =
+                // GI casts in VSM + via indirect in Legacy; OFF = GI reverts to the Legacy CPU tail.
+                ImGui::Checkbox("GPU-instanced casters -> indirect/VSM [Ctrl+G]", &render::g_giIndirectShadowsEnabled);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
+                                      "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
+
                 ImGui::BeginDisabled(!render::VsmActive());
 
                 ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");

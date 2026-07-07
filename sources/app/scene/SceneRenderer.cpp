@@ -1304,11 +1304,13 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 // Cascade i -> shadow-view slot i (the frustum/args layout). Uses base-LOD
                 // geometry (the cull's args carry the base index count).
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, static_cast<std::uint32_t>(cascadeIndex), viewCB);
-                // GPU-instanced casters aren't in the indirect buffer (one object -> many GPU
-                // instances); draw them via their own instanced shadow path so they still cast.
+                // GPU-instanced casters: when the GI folding path is active (Ctrl+G, default on) they
+                // cast via the indirect cull/scatter like everything else, so skip them here. Otherwise
+                // (flag off, over the group cap, or scatter PSO failure) draw them through their own
+                // instanced shadow path so they still cast — IsGiFoldedActive encodes exactly that.
                 const UINT giLod = static_cast<UINT>(cascadeIndex);
-                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
-                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
             }
             else
             {
@@ -1437,9 +1439,10 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
                 // Spot light i -> shadow-view slot kCascades + i.
                 const std::uint32_t viewSlot = static_cast<std::uint32_t>(kCascades + lightIndex);
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
-                // GPU-instanced casters draw via their own instanced shadow path (not indirect).
-                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
+                // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
             }
             else
             {
@@ -1556,9 +1559,10 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 const std::uint32_t viewSlot = static_cast<std::uint32_t>(
                     kCascades + LightManager::kMaxShadowedSpotLights + faceIndex);
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
-                // GPU-instanced casters draw via their own instanced shadow path (not indirect).
-                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster()) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
+                // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
+                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
             }
             else
             {
