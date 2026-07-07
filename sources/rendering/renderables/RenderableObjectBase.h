@@ -108,6 +108,14 @@ public:
     // drawing through their own RenderShadow even when indirect shadows are enabled.
     virtual bool IsGpuInstancedCaster() const { return false; }
 
+    // GI→VSM (Step 1): access to a GPU-instanced caster's own per-instance transform buffer, so
+    // the GI-scatter compute can fold each instance into the consolidated ShadowGpuData caster
+    // set (unified DEFAULT-heap path). GetInstanceCasterSrv is a CPU SRV handle to that
+    // StructuredBuffer<InstanceData>; GetInstanceCasterCount is its instance count. Meaningful
+    // only for IsGpuInstancedCaster() objects; default null/0 (dormant — no consumer yet).
+    virtual D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const { return {}; }
+    virtual UINT GetInstanceCasterCount() const { return 0; }
+
     // Rung 1 (Step 10) foundation: does this caster ever move at runtime? Static casters can be
     // cached in a shadow atlas and re-rendered only on invalidation; dynamic ones re-render each
     // frame. Default static; movers (rotating/animated/GPU-driven) override. Content-based:

@@ -38,6 +38,9 @@ public:
     // entry — the GPU-driven shadow path (Step 6) skips it and it draws via its own instanced
     // RenderShadow instead.
     bool IsGpuInstancedCaster() const override { return true; }
+    // GI→VSM (Step 1): expose the per-instance transform buffer for the GI-scatter compute.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const override { return instanceBuffer_.GetSRVCPU(); }
+    UINT GetInstanceCasterCount() const override { return instanceCount_; }
     // Rung 1 (Step 10): per-instance rotation animates every frame -> always dynamic.
     bool IsDynamicCaster() const override { return true; }
 
