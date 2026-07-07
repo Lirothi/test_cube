@@ -48,7 +48,11 @@ private:
 
     char searchBuffer_[256] = {};
     char sourceSearchBuffer_[128] = {};
+    char newFolderName_[64] = {};
     std::string selectedFolder_ = "/Game";
+    std::string newFolderParent_;
+    std::string deleteFolderTarget_;
+    std::string folderOperationMessage_;
     std::vector<std::string> folderHistory_;
     size_t folderHistoryIndex_ = 0;
     bool includeSubfolders_ = true;

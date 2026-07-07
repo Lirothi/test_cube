@@ -537,13 +537,28 @@ void AssetRegistry::Refresh()
                 break;
             }
 
+            const fs::path& p = it->path();
+            std::error_code dirEc;
+            if (it->is_directory(dirEc))
+            {
+                const std::string relativeFolder =
+                    p.lexically_relative(rootPath).generic_string();
+                std::string virtualFolder(root.virtualRoot);
+                if (!relativeFolder.empty() && relativeFolder != ".")
+                {
+                    virtualFolder += "/";
+                    virtualFolder += relativeFolder;
+                }
+                EnsureFolder(folders_, std::move(virtualFolder));
+                continue;
+            }
+
             std::error_code fileEc;
             if (!it->is_regular_file(fileEc))
             {
                 continue;
             }
 
-            const fs::path& p = it->path();
             const std::string ext = MatchExtension(p, root.extensions);
             if (ext.empty())
             {

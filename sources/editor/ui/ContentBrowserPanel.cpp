@@ -2,12 +2,15 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -17,10 +20,40 @@
 
 namespace
 {
+    namespace fs = std::filesystem;
+
     struct TypeFilterOption
     {
         const char* label;
         EditorAssetType type;
+    };
+
+    struct WritableContentRoot
+    {
+        const char* virtualRoot;
+        const char* physicalRoot;
+    };
+
+    constexpr WritableContentRoot kWritableContentRoots[] = {
+        { "/Game/Models",   "models" },
+        { "/Game/Textures", "textures" },
+        { "/Game/Levels",   "data/levels" },
+        { "/Game/Shaders",  "shaders" },
+    };
+
+    enum class ContentBrowserRequestType
+    {
+        None,
+        NewFolder,
+        DeleteFolder,
+        SelectFolder,
+        Refresh
+    };
+
+    struct ContentBrowserUiRequest
+    {
+        ContentBrowserRequestType type = ContentBrowserRequestType::None;
+        std::string folderPath;
     };
 
     constexpr TypeFilterOption kTypeFilters[] = {
@@ -63,6 +96,190 @@ namespace
     bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
     {
         return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+    }
+
+    bool IsSameOrChildVirtualPath(const std::string& path, const char* root)
+    {
+        const std::string rootString(root);
+        if (path == rootString)
+        {
+            return true;
+        }
+        if (path.size() <= rootString.size() ||
+            path.compare(0, rootString.size(), rootString) != 0)
+        {
+            return false;
+        }
+        return path[rootString.size()] == '/';
+    }
+
+    bool IsPathInsideRoot(const fs::path& path, const fs::path& root)
+    {
+        const std::string pathText = LowerCopy(path.lexically_normal().generic_string());
+        std::string rootText = LowerCopy(root.lexically_normal().generic_string());
+        while (!rootText.empty() && rootText.back() == '/')
+        {
+            rootText.pop_back();
+        }
+
+        if (pathText == rootText)
+        {
+            return true;
+        }
+        return pathText.size() > rootText.size() &&
+            pathText.compare(0, rootText.size(), rootText) == 0 &&
+            pathText[rootText.size()] == '/';
+    }
+
+    bool TryMapVirtualFolderToPhysical(const std::string& virtualPath,
+        fs::path& physicalPath,
+        std::string& reason)
+    {
+        for (const WritableContentRoot& root : kWritableContentRoots)
+        {
+            if (!IsSameOrChildVirtualPath(virtualPath, root.virtualRoot))
+            {
+                continue;
+            }
+
+            std::error_code ec;
+            fs::path physicalRoot = fs::weakly_canonical(root.physicalRoot, ec);
+            if (ec)
+            {
+                physicalRoot = fs::absolute(root.physicalRoot, ec);
+                if (ec)
+                {
+                    reason = "Content root cannot be resolved.";
+                    return false;
+                }
+                physicalRoot = physicalRoot.lexically_normal();
+            }
+
+            fs::path mapped = physicalRoot;
+            const std::string rootString(root.virtualRoot);
+            if (virtualPath.size() > rootString.size())
+            {
+                std::string suffix = virtualPath.substr(rootString.size() + 1);
+                size_t start = 0;
+                while (start < suffix.size())
+                {
+                    const size_t slash = suffix.find('/', start);
+                    const size_t end = slash == std::string::npos ? suffix.size() : slash;
+                    const std::string part = suffix.substr(start, end - start);
+                    if (part.empty() || part == "." || part == "..")
+                    {
+                        reason = "Virtual folder path is not safe.";
+                        return false;
+                    }
+                    mapped /= part;
+                    if (slash == std::string::npos)
+                    {
+                        break;
+                    }
+                    start = slash + 1;
+                }
+            }
+
+            mapped = mapped.lexically_normal();
+            if (!IsPathInsideRoot(mapped, physicalRoot))
+            {
+                reason = "Mapped folder escapes the approved content root.";
+                return false;
+            }
+
+            physicalPath = mapped;
+            return true;
+        }
+
+        reason = "This virtual folder is not backed by a writable content directory.";
+        return false;
+    }
+
+    bool IsWritableRootFolder(const std::string& virtualPath)
+    {
+        for (const WritableContentRoot& root : kWritableContentRoots)
+        {
+            if (virtualPath == root.virtualRoot)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string ParentVirtualPath(const std::string& virtualPath)
+    {
+        if (virtualPath.empty() || virtualPath == "/Game")
+        {
+            return {};
+        }
+
+        const size_t slash = virtualPath.find_last_of('/');
+        if (slash == std::string::npos || slash == 0)
+        {
+            return {};
+        }
+        return virtualPath.substr(0, slash);
+    }
+
+    std::string JoinVirtualPath(const std::string& parent, const std::string& child)
+    {
+        if (parent.empty() || parent == "/")
+        {
+            return "/" + child;
+        }
+        return parent + "/" + child;
+    }
+
+    bool ValidateFolderName(const char* name, std::string& reason)
+    {
+        if (!name || name[0] == '\0')
+        {
+            reason = "Folder name is required.";
+            return false;
+        }
+
+        const std::string text(name);
+        if (text == "." || text == "..")
+        {
+            reason = "Folder name cannot be a relative path.";
+            return false;
+        }
+        if (text.front() == ' ' || text.back() == ' ')
+        {
+            reason = "Folder name cannot start or end with a space.";
+            return false;
+        }
+
+        constexpr const char* invalidChars = "\\/:*?\"<>|";
+        if (text.find_first_of(invalidChars) != std::string::npos)
+        {
+            reason = "Folder name cannot contain path separators or reserved characters.";
+            return false;
+        }
+        return true;
+    }
+
+    bool IsPhysicalFolderEmpty(const std::string& virtualPath, std::string& reason)
+    {
+        fs::path physicalPath;
+        if (!TryMapVirtualFolderToPhysical(virtualPath, physicalPath, reason))
+        {
+            return false;
+        }
+
+        std::error_code ec;
+        if (!fs::is_directory(physicalPath, ec))
+        {
+            reason = "Physical folder does not exist.";
+            return false;
+        }
+        if (!fs::is_empty(physicalPath, ec))
+        {
+            reason = ec ? "Folder emptiness could not be checked." : "Folder is not empty.";
+            return false;
+        }
+        return true;
     }
 
     const char* ViewModeLabel(ContentBrowserPanel::ViewMode mode)
@@ -175,6 +392,102 @@ namespace
         }
     }
 
+    void RequestIfUnset(ContentBrowserUiRequest& request,
+        ContentBrowserRequestType type,
+        const std::string& folderPath)
+    {
+        if (request.type != ContentBrowserRequestType::None)
+        {
+            return;
+        }
+        request.type = type;
+        request.folderPath = folderPath;
+    }
+
+    void DrawFolderOperationsMenu(const std::string& folderPath,
+        ContentBrowserUiRequest& request,
+        bool includeOpen)
+    {
+        if (includeOpen)
+        {
+            if (ImGui::MenuItem("Open Folder"))
+            {
+                RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folderPath);
+            }
+            ImGui::Separator();
+        }
+
+        std::string mapReason;
+        fs::path physicalPath;
+        const bool mapsToPhysical =
+            TryMapVirtualFolderToPhysical(folderPath, physicalPath, mapReason);
+        bool isDirectory = false;
+        if (mapsToPhysical)
+        {
+            std::error_code ec;
+            isDirectory = fs::is_directory(physicalPath, ec);
+            if (!isDirectory)
+            {
+                mapReason = "Mapped physical folder does not exist.";
+            }
+        }
+
+        if (mapsToPhysical && isDirectory)
+        {
+            if (ImGui::MenuItem("New Folder"))
+            {
+                RequestIfUnset(request, ContentBrowserRequestType::NewFolder, folderPath);
+            }
+        }
+        else
+        {
+            DisabledMenuItemWithTooltip("New Folder", mapReason.c_str());
+        }
+
+        const bool deleteAllowedRoot = !IsWritableRootFolder(folderPath) && folderPath != "/Game";
+        std::string deleteReason;
+        const bool emptyFolder = deleteAllowedRoot && IsPhysicalFolderEmpty(folderPath, deleteReason);
+        if (emptyFolder)
+        {
+            if (ImGui::MenuItem("Delete Empty Folder"))
+            {
+                RequestIfUnset(request, ContentBrowserRequestType::DeleteFolder, folderPath);
+            }
+        }
+        else
+        {
+            if (!deleteAllowedRoot)
+            {
+                deleteReason = "Content roots cannot be deleted.";
+            }
+            DisabledMenuItemWithTooltip("Delete Empty Folder", deleteReason.c_str());
+        }
+
+        DisabledMenuItemWithTooltip("Rename Folder", "Folder rename needs asset reference repair first.");
+        DisabledMenuItemWithTooltip("Move/Copy Folder", "Folder move/copy needs asset reference repair first.");
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy Virtual Path"))
+        {
+            ImGui::SetClipboardText(folderPath.c_str());
+        }
+        if (mapsToPhysical)
+        {
+            const std::string physicalText = physicalPath.generic_string();
+            if (ImGui::MenuItem("Copy Physical Path"))
+            {
+                ImGui::SetClipboardText(physicalText.c_str());
+            }
+        }
+        else
+        {
+            DisabledMenuItemWithTooltip("Copy Physical Path", mapReason.c_str());
+        }
+        if (ImGui::MenuItem("Refresh"))
+        {
+            RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
+        }
+    }
+
     void DrawSearchInputWithClear(const char* id,
         const char* hint,
         char* buffer,
@@ -278,7 +591,7 @@ namespace
         const EditorAssetFolder& folder,
         const std::string& selectedFolder,
         const std::string& sourceSearch,
-        std::string& requestedFolder)
+        ContentBrowserUiRequest& request)
     {
         if (!ShouldShowFolder(registry, folder, sourceSearch))
         {
@@ -307,7 +620,12 @@ namespace
         const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
-            requestedFolder = folder.path;
+            RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder.path);
+        }
+        if (ImGui::BeginPopupContextItem())
+        {
+            DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path);
+            ImGui::EndPopup();
         }
 
         if (open && !folder.childPaths.empty())
@@ -317,7 +635,7 @@ namespace
                 const EditorAssetFolder* child = registry.FindFolder(childPath);
                 if (child)
                 {
-                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch, requestedFolder);
+                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch, request);
                 }
             }
             ImGui::TreePop();
@@ -451,7 +769,8 @@ namespace
     void DrawAssetContextMenu(const EditorAssetRecord* record,
         const EditorExtensionRegistry& extensions,
         EditorAssetId& selectedAsset,
-        ContentBrowserAction& action)
+        ContentBrowserAction& action,
+        ContentBrowserUiRequest& request)
     {
         if (!record || !ImGui::BeginPopupContextItem())
         {
@@ -479,16 +798,34 @@ namespace
         ImGui::BeginDisabled(true);
         ImGui::MenuItem("Assign Material to Selected");
         ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy Virtual Path"))
+        {
+            ImGui::SetClipboardText(record->virtualPath.c_str());
+        }
+        if (ImGui::MenuItem("Copy Physical Path"))
+        {
+            ImGui::SetClipboardText(record->path.c_str());
+        }
+        if (ImGui::MenuItem("Show In Sources"))
+        {
+            RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, record->virtualFolder);
+        }
+        if (ImGui::MenuItem("Refresh"))
+        {
+            RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
+        }
         ImGui::EndPopup();
     }
 
-    void DrawFolderContextPlaceholder()
+    void DrawFolderContextMenu(const EditorAssetFolder& folder,
+        ContentBrowserUiRequest& request)
     {
         if (!ImGui::BeginPopupContextItem())
         {
             return;
         }
-        ImGui::TextDisabled("Folder actions are planned for Step 9.");
+        DrawFolderOperationsMenu(folder.path, request, true);
         ImGui::EndPopup();
     }
 
@@ -497,7 +834,7 @@ namespace
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
-        std::string& requestedFolder)
+        ContentBrowserUiRequest& request)
     {
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -527,9 +864,9 @@ namespace
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                requestedFolder = folder->path;
+                RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
-            DrawFolderContextPlaceholder();
+            DrawFolderContextMenu(*folder, request);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -557,7 +894,7 @@ namespace
             {
                 selectedAsset = record->id;
             }
-            DrawAssetContextMenu(record, extensions, selectedAsset, action);
+            DrawAssetContextMenu(record, extensions, selectedAsset, action, request);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -574,7 +911,7 @@ namespace
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
-        std::string& requestedFolder)
+        ContentBrowserUiRequest& request)
     {
         const ImVec2 tileSize(132.0f, 72.0f);
         const float spacingX = ImGui::GetStyle().ItemSpacing.x;
@@ -606,9 +943,9 @@ namespace
             ImGui::Button(label.c_str(), tileSize);
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                requestedFolder = folder->path;
+                RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
-            DrawFolderContextPlaceholder();
+            DrawFolderContextMenu(*folder, request);
             ImGui::PopID();
         }
 
@@ -642,7 +979,7 @@ namespace
                 ImGui::PopStyleColor(2);
             }
 
-            DrawAssetContextMenu(record, extensions, selectedAsset, action);
+            DrawAssetContextMenu(record, extensions, selectedAsset, action, request);
             ImGui::PopID();
         }
     }
@@ -784,6 +1121,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     }
 
     EnsureSelectedFolder(registry);
+    ContentBrowserUiRequest uiRequest;
 
     const float navHeight = ImGui::GetFrameHeightWithSpacing() * 4.4f;
     ImGui::BeginChild("##navigationBar", ImVec2(0.0f, navHeight), true);
@@ -902,20 +1240,15 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     DrawSearchInputWithClear("##sourceSearch", "Search folders...", sourceSearchBuffer_,
         sizeof(sourceSearchBuffer_), -1.0f);
     ImGui::Separator();
-    std::string requestedSourceFolder;
     if (const EditorAssetFolder* root = registry.FindFolder("/Game"))
     {
-        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_, requestedSourceFolder);
+        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_, uiRequest);
     }
     else
     {
         ImGui::TextDisabled("No content roots.");
     }
     ImGui::EndChild();
-    if (!requestedSourceFolder.empty())
-    {
-        SelectFolder(registry, requestedSourceFolder, true);
-    }
 
     ImGui::SameLine();
     ImGui::BeginChild("##assetView", ImVec2(0.0f, -detailHeight), false);
@@ -967,24 +1300,162 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     }
     else
     {
-        std::string requestedAssetViewFolder;
         if (viewMode_ == ViewMode::Tiles)
         {
             DrawTileAssetView(visibleFolders, visibleAssets, selectedAsset,
-                extensions, action, requestedAssetViewFolder);
+                extensions, action, uiRequest);
         }
         else
         {
             DrawListAssetView(visibleFolders, visibleAssets, selectedAsset,
-                extensions, action, requestedAssetViewFolder);
-        }
-
-        if (!requestedAssetViewFolder.empty())
-        {
-            SelectFolder(registry, requestedAssetViewFolder, true);
+                extensions, action, uiRequest);
         }
     }
+    if (ImGui::BeginPopupContextWindow("##assetViewContext",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        DrawFolderOperationsMenu(selectedFolder_, uiRequest, false);
+        ImGui::EndPopup();
+    }
     ImGui::EndChild();
+
+    if (uiRequest.type == ContentBrowserRequestType::SelectFolder)
+    {
+        SelectFolder(registry, uiRequest.folderPath, true);
+    }
+    else if (uiRequest.type == ContentBrowserRequestType::Refresh)
+    {
+        registry.Refresh();
+        EnsureSelectedFolder(registry);
+    }
+    else if (uiRequest.type == ContentBrowserRequestType::NewFolder)
+    {
+        newFolderParent_ = uiRequest.folderPath;
+        newFolderName_[0] = '\0';
+        folderOperationMessage_.clear();
+        ImGui::OpenPopup("New Folder###ContentBrowserNewFolder");
+    }
+    else if (uiRequest.type == ContentBrowserRequestType::DeleteFolder)
+    {
+        deleteFolderTarget_ = uiRequest.folderPath;
+        folderOperationMessage_.clear();
+        ImGui::OpenPopup("Delete Empty Folder###ContentBrowserDeleteFolder");
+    }
+
+    if (ImGui::BeginPopupModal("New Folder###ContentBrowserNewFolder",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Parent: %s", newFolderParent_.c_str());
+        ImGui::InputText("Name", newFolderName_, sizeof(newFolderName_));
+        if (!folderOperationMessage_.empty())
+        {
+            ImGui::TextWrapped("%s", folderOperationMessage_.c_str());
+        }
+
+        if (ImGui::Button("Create"))
+        {
+            std::string reason;
+            fs::path parentPhysical;
+            if (!ValidateFolderName(newFolderName_, reason))
+            {
+                folderOperationMessage_ = reason;
+            }
+            else if (!TryMapVirtualFolderToPhysical(newFolderParent_, parentPhysical, reason))
+            {
+                folderOperationMessage_ = reason;
+            }
+            else
+            {
+                std::error_code ec;
+                if (!fs::is_directory(parentPhysical, ec))
+                {
+                    folderOperationMessage_ = "Parent physical folder does not exist.";
+                }
+                else
+                {
+                    const fs::path target = (parentPhysical / newFolderName_).lexically_normal();
+                    if (fs::exists(target, ec))
+                    {
+                        folderOperationMessage_ = "A file or folder with that name already exists.";
+                    }
+                    else if (!fs::create_directory(target, ec))
+                    {
+                        folderOperationMessage_ = ec ? ec.message() : "Folder could not be created.";
+                    }
+                    else
+                    {
+                        const std::string newVirtualFolder =
+                            JoinVirtualPath(newFolderParent_, newFolderName_);
+                        registry.Refresh();
+                        SelectFolder(registry, newVirtualFolder, true);
+                        folderOperationMessage_.clear();
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            folderOperationMessage_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Delete Empty Folder###ContentBrowserDeleteFolder",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("Delete empty folder?");
+        ImGui::Text("Folder: %s", deleteFolderTarget_.c_str());
+        if (!folderOperationMessage_.empty())
+        {
+            ImGui::TextWrapped("%s", folderOperationMessage_.c_str());
+        }
+
+        if (ImGui::Button("Delete"))
+        {
+            std::string reason;
+            fs::path physicalPath;
+            if (IsWritableRootFolder(deleteFolderTarget_) || deleteFolderTarget_ == "/Game")
+            {
+                folderOperationMessage_ = "Content roots cannot be deleted.";
+            }
+            else if (!IsPhysicalFolderEmpty(deleteFolderTarget_, reason))
+            {
+                folderOperationMessage_ = reason;
+            }
+            else if (!TryMapVirtualFolderToPhysical(deleteFolderTarget_, physicalPath, reason))
+            {
+                folderOperationMessage_ = reason;
+            }
+            else
+            {
+                std::error_code ec;
+                if (!fs::remove(physicalPath, ec))
+                {
+                    folderOperationMessage_ = ec ? ec.message() : "Folder could not be deleted.";
+                }
+                else
+                {
+                    const std::string parentFolder = ParentVirtualPath(deleteFolderTarget_);
+                    registry.Refresh();
+                    SelectFolder(registry, parentFolder.empty() ? "/Game" : parentFolder, true);
+                    folderOperationMessage_.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            folderOperationMessage_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     // Selected-asset details. Resolved against the full registry so the details
     // persist even if the current search/filter hides the row.
