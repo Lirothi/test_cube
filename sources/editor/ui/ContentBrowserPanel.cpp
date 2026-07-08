@@ -224,6 +224,141 @@ namespace
         return "[ASSET]";
     }
 
+    bool BeginDelayedResourceHint()
+    {
+        if (ImGui::GetDragDropPayload() != nullptr ||
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+        {
+            return false;
+        }
+        if (!ImGui::IsItemHovered(
+                ImGuiHoveredFlags_DelayNormal |
+                ImGuiHoveredFlags_NoSharedDelay))
+        {
+            return false;
+        }
+        return ImGui::BeginTooltip();
+    }
+
+    void DrawAssetHoverHint(const EditorAssetRecord* record,
+        const EditorAssetId& fallbackId)
+    {
+        if (!BeginDelayedResourceHint())
+        {
+            return;
+        }
+
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+        if (!record)
+        {
+            ImGui::Text("%s  Unavailable", AssetTypeBadge(fallbackId.type));
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", fallbackId.key.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                "This referenced asset is not in the registry.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+            return;
+        }
+
+        ImGui::Text("%s  %s",
+            AssetTypeBadge(record->id.type),
+            record->displayName.c_str());
+        ImGui::TextDisabled("%s", ToString(record->id.type));
+        ImGui::Separator();
+        ImGui::TextWrapped("Virtual Path: %s", record->virtualPath.c_str());
+
+        if (record->id.type == EditorAssetType::Texture)
+        {
+            const EditorTextureInfo& texture = record->texture;
+            if (!texture.scanned)
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                    "Metadata: Not scanned");
+            }
+            else if (!texture.valid)
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                    "Metadata: Invalid or unreadable");
+            }
+            else
+            {
+                if (texture.depth > 1)
+                {
+                    ImGui::Text("Dimensions: %u x %u x %u",
+                        texture.width,
+                        texture.height,
+                        texture.depth);
+                }
+                else
+                {
+                    ImGui::Text("Dimensions: %u x %u",
+                        texture.width,
+                        texture.height);
+                }
+                ImGui::Text("Kind: %s", ToString(texture.kind));
+                ImGui::TextWrapped("Format: %s", texture.format.c_str());
+                ImGui::Text("Mip Levels: %u", texture.mipLevels);
+                ImGui::Text("Array Size: %u", texture.arraySize);
+            }
+        }
+        else if (record->id.type == EditorAssetType::MaterialPreset)
+        {
+            ImGui::Text("Preset: %s", record->id.key.c_str());
+            ImGui::TextWrapped("Definition File: %s", record->path.c_str());
+        }
+        else
+        {
+            ImGui::TextWrapped("Source: %s", record->path.c_str());
+            ImGui::Text("Extension: %s",
+                record->extension.empty() ? "(none)" : record->extension.c_str());
+        }
+
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+
+    void DrawFolderHoverHint(const EditorAssetFolder* folder,
+        const std::string& fallbackPath)
+    {
+        if (!BeginDelayedResourceHint())
+        {
+            return;
+        }
+
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+        if (!folder)
+        {
+            ImGui::TextUnformatted("[DIR]  Unavailable");
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", fallbackPath.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                "This referenced folder is not in the registry.");
+        }
+        else
+        {
+            ImGui::Text("[DIR]  %s", folder->name.c_str());
+            ImGui::Separator();
+            ImGui::TextWrapped("Virtual Path: %s", folder->path.c_str());
+            ImGui::Text("Child Folders: %zu", folder->childPaths.size());
+            ImGui::Text("Direct Assets: %zu", folder->directAssetCount);
+            ImGui::Text("All Assets: %zu", folder->recursiveAssetCount);
+        }
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+
+    bool DrawReferenceRemovalMenu(const char* label)
+    {
+        bool remove = false;
+        if (ImGui::BeginPopupContextItem())
+        {
+            remove = ImGui::MenuItem(label);
+            ImGui::EndPopup();
+        }
+        return remove;
+    }
+
     std::string LowerCopy(std::string text)
     {
         for (char& ch : text)
@@ -941,6 +1076,7 @@ namespace
             DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path, true);
             ImGui::EndPopup();
         }
+        DrawFolderHoverHint(&folder, folder.path);
 
         if (open && !folder.childPaths.empty())
         {
@@ -1263,6 +1399,7 @@ namespace
                 favoriteFolders,
                 collections,
                 requestNewCollection);
+            DrawFolderHoverHint(folder, folder->path);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1300,6 +1437,7 @@ namespace
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
+            DrawAssetHoverHint(record, record->id);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1366,6 +1504,7 @@ namespace
                 favoriteFolders,
                 collections,
                 requestNewCollection);
+            DrawFolderHoverHint(folder, folder->path);
             ImGui::PopID();
         }
 
@@ -1411,6 +1550,7 @@ namespace
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
+            DrawAssetHoverHint(record, record->id);
             ImGui::PopID();
         }
     }
@@ -1710,6 +1850,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ImGui::Separator();
 
     const std::string sourceNeedle = LowerCopy(sourceSearchBuffer_);
+    std::string favoriteFolderToRemove;
+    EditorAssetId favoriteAssetToRemove;
     if (ImGui::CollapsingHeader("Favorites", ImGuiTreeNodeFlags_DefaultOpen))
     {
         if (favoriteFolders_.empty() && favoriteAssets_.empty())
@@ -1737,6 +1879,11 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 }
                 selectedAsset = {};
             }
+            if (DrawReferenceRemovalMenu("Remove from Favorites"))
+            {
+                favoriteFolderToRemove = folderPath;
+            }
+            DrawFolderHoverHint(folder, folderPath);
             ImGui::PopID();
         }
         for (const EditorAssetId& assetId : favoriteAssets_)
@@ -1757,7 +1904,35 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             {
                 selectedAsset = assetId;
             }
+            if (DrawReferenceRemovalMenu("Remove from Favorites"))
+            {
+                favoriteAssetToRemove = assetId;
+            }
+            DrawAssetHoverHint(record, assetId);
             ImGui::PopID();
+        }
+    }
+    if (!favoriteFolderToRemove.empty())
+    {
+        const auto it = std::find(favoriteFolders_.begin(),
+            favoriteFolders_.end(),
+            favoriteFolderToRemove);
+        if (it != favoriteFolders_.end())
+        {
+            favoriteFolders_.erase(it);
+        }
+    }
+    if (!favoriteAssetToRemove.key.empty())
+    {
+        const auto it = std::find_if(favoriteAssets_.begin(),
+            favoriteAssets_.end(),
+            [&favoriteAssetToRemove](const EditorAssetId& id)
+            {
+                return SameAssetId(id, favoriteAssetToRemove);
+            });
+        if (it != favoriteAssets_.end())
+        {
+            favoriteAssets_.erase(it);
         }
     }
 
@@ -1797,6 +1972,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
             if (collectionOpen)
             {
+                std::string collectionFolderToRemove;
+                EditorAssetId collectionAssetToRemove;
                 if (collection.folders.empty() && collection.assets.empty())
                 {
                     ImGui::TextDisabled("Empty");
@@ -1815,6 +1992,11 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                         }
                         selectedAsset = {};
                     }
+                    if (DrawReferenceRemovalMenu("Remove from Collection"))
+                    {
+                        collectionFolderToRemove = folderPath;
+                    }
+                    DrawFolderHoverHint(folder, folderPath);
                     ImGui::PopID();
                 }
                 for (const EditorAssetId& assetId : collection.assets)
@@ -1828,7 +2010,35 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     {
                         selectedAsset = assetId;
                     }
+                    if (DrawReferenceRemovalMenu("Remove from Collection"))
+                    {
+                        collectionAssetToRemove = assetId;
+                    }
+                    DrawAssetHoverHint(record, assetId);
                     ImGui::PopID();
+                }
+                if (!collectionFolderToRemove.empty())
+                {
+                    const auto it = std::find(collection.folders.begin(),
+                        collection.folders.end(),
+                        collectionFolderToRemove);
+                    if (it != collection.folders.end())
+                    {
+                        collection.folders.erase(it);
+                    }
+                }
+                if (!collectionAssetToRemove.key.empty())
+                {
+                    const auto it = std::find_if(collection.assets.begin(),
+                        collection.assets.end(),
+                        [&collectionAssetToRemove](const EditorAssetId& id)
+                        {
+                            return SameAssetId(id, collectionAssetToRemove);
+                        });
+                    if (it != collection.assets.end())
+                    {
+                        collection.assets.erase(it);
+                    }
                 }
                 ImGui::TreePop();
             }
