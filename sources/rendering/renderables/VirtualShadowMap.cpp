@@ -1014,9 +1014,10 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     stats_.fail = failCount;
     for (std::uint32_t l = 0; l < vsm::kNumMipLevels; ++l) { stats_.perLevel[l] = perLevel[l]; }
 
-    // DBWIN log throttled independently of the (faster) stats sampling so a captured stress/dev run
-    // is not flooded — the on-screen readout updates every sample, the log line only periodically.
-    if (renderer->GetTotalFrameNumber() >= debugLoggedFrame_ + kDbwinLogPeriod)
+    // DBWIN log — OFF by default (vsm::g_logPageStats), throttled independently of the (faster) stats
+    // sampling so a captured stress/dev run is not flooded. The on-screen readout updates every
+    // sample regardless; this only mirrors it into the debug output when explicitly enabled.
+    if (vsm::g_logPageStats && renderer->GetTotalFrameNumber() >= debugLoggedFrame_ + kDbwinLogPeriod)
     {
         char buf[384];
         std::snprintf(buf, sizeof(buf),

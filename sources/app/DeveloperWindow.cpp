@@ -568,6 +568,11 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                                       "depth. Measured no avg gain + worse spikes on this scene (cull-bound + dynamic\n"
                                       "teapots + gated clear slower than the hardware clear). Kept for a future coarse-skip.");
 
+                ImGui::Checkbox("Log page stats to debug output", &vsm::g_logPageStats);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Periodically print \"[VSM] request ... | resident=...\" to DBWIN. Off by default\n"
+                                      "(spammy); the live numbers above/below always update regardless.");
+
                 ImGui::EndDisabled();
                 ImGui::Separator();
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",

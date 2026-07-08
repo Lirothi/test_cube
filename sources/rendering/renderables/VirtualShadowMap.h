@@ -128,6 +128,11 @@ namespace vsm
     // gated clear; keep for a future coarse-skip (skip the cull for pages far from any mover).
     inline bool g_pageCaching = false;
 
+    // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
+    // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
+    // stats; flip this on only when you want them in the debug output too.
+    inline bool g_logPageStats = false;
+
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
     struct alignas(16) ViewProjEntry

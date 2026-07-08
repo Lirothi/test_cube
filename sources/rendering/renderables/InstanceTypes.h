@@ -74,6 +74,6 @@ inline bool g_giIndirectShadowsEnabled = true;
 // useVsm). Default Legacy (VSM opt-in). Toggle Legacy<->VSM with Ctrl+V ("ToggleVsmPageRequest").
 // Step 24b makes the switch free the inactive mode's GPU resources (only one mode ever resident).
 enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
-inline ShadowMode g_shadowMode = ShadowMode::Legacy;
+inline ShadowMode g_shadowMode = ShadowMode::VSM;
 inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
 } // namespace render

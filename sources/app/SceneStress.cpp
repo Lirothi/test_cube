@@ -1044,8 +1044,16 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
     systems_.reset();
 
     Log("shutdown complete; exit code %d\n", exitCode);
-    if (gLog) { fclose(gLog); gLog = nullptr; }
-    return exitCode;
+    if (gLog) { fflush(gLog); fclose(gLog); gLog = nullptr; }
+
+    // Skip the CRT exit-time teardown (execute_onexit_table). Streamline/NGX registers a static
+    // destructor that intermittently access-violates there — AFTER our explicit slShutdown() + device
+    // release (Renderer::Shutdown) and after this deterministic exit code is set. It's an NVIDIA DLL
+    // teardown-order bug (reproduces regardless of shadow mode; a dangling pointer into an unmapped
+    // module), not ours, and would otherwise mask the harness's real exit code with 0xC0000005. All
+    // our own cleanup has already run; the OS reclaims the rest. Mirrors the faultCaught path above.
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode));
+    return exitCode; // not reached (TerminateProcess doesn't return)
 }
 
 int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue)
