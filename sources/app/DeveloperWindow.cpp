@@ -562,6 +562,12 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                                       "draws), but shadows blink for ~3 frames when the set changes (motion/churn).\n"
                                       "OFF: render the whole pool every frame (correct, ~4x the render CPU).");
 
+                ImGui::Checkbox("Page cache (experimental, off = net loss here)", &vsm::g_pageCaching);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: re-render only new / dynamic-overlapping pages; cached pages keep their\n"
+                                      "depth. Measured no avg gain + worse spikes on this scene (cull-bound + dynamic\n"
+                                      "teapots + gated clear slower than the hardware clear). Kept for a future coarse-skip.");
+
                 ImGui::EndDisabled();
                 ImGui::Separator();
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",

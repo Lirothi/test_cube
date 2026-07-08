@@ -343,6 +343,25 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
     pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
 
+    // Page cache: the gated depth-clear graphics PSO (depth-only, ALWAYS-write z=1.0, no vertex input;
+    // VS drives from SV_VertexID/SV_InstanceID). Optional — a failure just falls back to whole-pool clear.
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/vsm_page_clear.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = ""; // no IA input
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.numRT = 0;
+        gd.dsvFormat = DXGI_FORMAT_D16_UNORM;
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        gd.blend.RenderTarget[0].BlendEnable = FALSE;
+        pageClearMat_ = mm->GetOrCreateGraphics(renderer, gd);
+    }
+
     auto ok = [](const std::shared_ptr<Material>& m) { return m && m->GetPipelineState(); };
     if (!ok(pageRequestClearMat_) || !ok(pageRequestMat_))
     {
@@ -358,6 +377,11 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     else
     {
         OutputDebugStringA("[VSM] page-request + page-alloc + page-setup shaders ready.\n");
+    }
+    if (!ok(pageClearMat_))
+    {
+        OutputDebugStringA("[VSM] page-clear PSO creation FAILED (page cache off -> whole-pool clear).\n");
+        pageClearMat_.reset();
     }
 }
 
@@ -701,8 +725,21 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // (OOM edge) rather than binding a null descriptor.
     const D3D12_CPU_DESCRIPTOR_HANDLE boundsSrv = shadowGpu->UnifiedBoundsSrv(f);
     const D3D12_CPU_DESCRIPTOR_HANDLE casterGroupSrv = shadowGpu->CasterGroupSrv();
-    if (boundsSrv.ptr == 0 || casterGroupSrv.ptr == 0 || pageVisibleListUav_.ptr == 0) { return; }
+    // The setup shader always reads physOwnerPrev (t4) + casterDynamic (t5) + writes perPageDirty (u3),
+    // so those must be non-null whenever it dispatches (bail otherwise, like the other inputs).
+    const D3D12_CPU_DESCRIPTOR_HANDLE casterDynamicSrv = shadowGpu->CasterDynamicSrv();
+    if (boundsSrv.ptr == 0 || casterGroupSrv.ptr == 0 || pageVisibleListUav_.ptr == 0 ||
+        physOwnerPrevSrv_.ptr == 0 || casterDynamicSrv.ptr == 0 || perPageDirtyUav_.ptr == 0) { return; }
     const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
+
+    // Page cache: active only when the clear PSO + dirty SRV are ready (the inputs above are already
+    // guaranteed here). When off, force every page dirty (gForceAll=1) so the whole-pool-clear +
+    // draw-all fallback stays correct. When on, force all only when a static caster moved this frame
+    // (MoverCount>0) or a rebuild happened — not covered by the per-page dynamic-overlap test.
+    const bool caching = vsm::g_pageCaching && pageClearMat_ && pageClearMat_->GetPipelineState() && perPageDirtySrv_.ptr != 0;
+    // Force a full render when caching is off, on the warmup frame (physOwnerPrev_ still garbage), or
+    // when a static caster moved / a rebuild happened (not covered by the per-page dynamic test).
+    const std::uint32_t forceAll = (!caching || cacheWarmup_ || shadowGpu->MoverCount() > 0) ? 1u : 0u;
 
     // Consolidated caster VB/IB (built once at level load, ShadowGpuData::EnsureMegaBuffer): when
     // ready, the draw loop below binds geometry ONCE + issues one ExecuteIndirect(maxCount=groups)
@@ -715,14 +752,17 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // Rung0 args (per-group index count) + physOwner + the unified world AABBs + per-caster group. ---
     renderer->Transition(cl, shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
+        std::uint32_t forceAll, _p0, _p1, _p2;
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
@@ -733,6 +773,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             SetupCB cb{};
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
+            cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
             // Mega offsets (0 unless the consolidated path is active) so the setup rebases each
@@ -745,13 +786,27 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },
-        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv },
-        { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_ },
+        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterDynamicSrv },
+        { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,
         pageDrawArgs_.Get());
     renderer->UAVBarrier(cl, pageProj_.Get());
     renderer->UAVBarrier(cl, pageVisibleList_.Get());
+
+    // Page cache: after the setup has READ physOwnerPrev, snapshot this frame's physOwner into it for
+    // next frame's new-page detection, and make the dirty bits readable by the gated clear (VS SRV).
+    if (caching)
+    {
+        renderer->UAVBarrier(cl, perPageDirty_.Get());
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        renderer->Transition(cl, physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        cl->CopyBufferRegion(physOwnerPrev_.Get(), 0, physOwner_.Get(), 0,
+                             static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t));
+        renderer->Transition(cl, physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, perPageDirty_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cacheWarmup_ = false; // physOwnerPrev_ now holds this frame's owners -> new-page detect valid next frame
+    }
 
     // Resident-set for the draw loop (opt-in, g_residentIterOnly): read this ring slot's
     // kFrameCount-old physOwner snapshot (owner != INVALID was resident; skip the rest — the ~free
@@ -773,12 +828,32 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
-    // --- Render: clear the whole pool (Step 23 will gate to changed pages), then draw each pool
-    // page's casters into its 128² cell via ExecuteIndirect. The pool is left in SRV by the light
-    // passes' declared reads, so transition it back to DEPTH_WRITE here (manual, like the buffers). ---
+    // --- Render: clear then draw each pool page's casters into its 128² cell via ExecuteIndirect. The
+    // pool is left in SRV by the light passes' declared reads, so transition it back to DEPTH_WRITE
+    // here (manual, like the buffers). With the page cache, the clear is GATED to dirty pages only
+    // (clean pages keep last frame's cached depth); without it, the whole pool is cleared. ---
     renderer->Transition(cl, pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
     cl->OMSetRenderTargets(0, nullptr, FALSE, &poolDsv_);
-    cl->ClearDepthStencilView(poolDsv_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    if (caching)
+    {
+        // One instance per pool page under a full-pool viewport; the VS emits a z=1.0 cell quad for a
+        // dirty page (PerPageDirty) and a clipped degenerate for a clean one. Overwrites only dirty cells.
+        const float poolTexels = static_cast<float>(vsm::kPoolTexels);
+        D3D12_VIEWPORT fullVp{ 0.0f, 0.0f, poolTexels, poolTexels, 0.0f, 1.0f };
+        D3D12_RECT fullSc{ 0, 0, static_cast<LONG>(vsm::kPoolTexels), static_cast<LONG>(vsm::kPoolTexels) };
+        cl->RSSetViewports(1, &fullVp);
+        cl->RSSetScissorRects(1, &fullSc);
+        auto clearHandle = renderer->GetRenderContextPool()->Acquire();
+        RenderContext& cctx = clearHandle.ref();
+        cctx.srvTable[0] = renderer->StageSrvUavTable({ perPageDirtySrv_ }).gpu;
+        pageClearMat_->Bind(cl, cctx, false);
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        cl->DrawInstanced(4u, vsm::kPoolPageCount, 0u, 0u);
+    }
+    else
+    {
+        cl->ClearDepthStencilView(poolDsv_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    }
 
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();

@@ -15,8 +15,8 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 
@@ -26,20 +26,25 @@ cbuffer SetupCB : register(b0)
     uint gArgBaseElems; // frame region base into Rung0Args, in 5-uint arg units (f*numViewsRung0*numGroups)
     uint gNumPages;     // kPoolPageCount
     uint gNumCasters;   // active caster count (ShadowGpuData::ActiveCasterCount) + per-page slice stride
+    uint gForceAll;     // page cache: 1 = mark every resident page dirty (static caster moved / rebuild)
+    uint _pad0, _pad1, _pad2;
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
 
-StructuredBuffer<uint>         PhysOwner    : register(t0); // physical page -> virtual owner / INVALID
-ByteAddressBuffer              Rung0Args    : register(t1); // D3D12_DRAW_INDEXED_ARGUMENTS[view*group] region f (per-group index count / offsets)
-StructuredBuffer<CasterBounds> Bounds       : register(t2); // per-caster world AABB (the unified buffer)
-StructuredBuffer<uint>         CasterGroup  : register(t3); // per-caster mesh-group id
+StructuredBuffer<uint>         PhysOwner     : register(t0); // physical page -> virtual owner / INVALID
+ByteAddressBuffer              Rung0Args     : register(t1); // D3D12_DRAW_INDEXED_ARGUMENTS[view*group] region f (per-group index count / offsets)
+StructuredBuffer<CasterBounds> Bounds        : register(t2); // per-caster world AABB (the unified buffer)
+StructuredBuffer<uint>         CasterGroup   : register(t3); // per-caster mesh-group id
+StructuredBuffer<uint>         PhysOwnerPrev : register(t4); // physical page -> last frame's owner (new-page detect)
+StructuredBuffer<uint>         CasterDynamic : register(t5); // per-caster dynamic flag (1 = animating)
 
 RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
 RWStructuredBuffer<uint> PageVisibleList : register(u2); // per (page, slot) visible caster id
+RWStructuredBuffer<uint> PerPageDirty    : register(u3); // per page: 1 = re-render this frame, 0 = cached
 
 // Positive-vertex AABB-vs-frustum test (mirrors shadow_cull_cs::Intersects). The planes are
 // unnormalized (extracted straight from the matrix) — the test is scale-invariant per plane.
@@ -67,8 +72,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint owner = PhysOwner[p];
     if (owner == VSM_INVALID)
     {
-        // Free page: zero-instance args for every group (drawn as a no-op). pageProj left stale
-        // (unread); the setup runs every frame so a page that becomes resident is fully rewritten.
+        // Free page: zero-instance args for every group (drawn as a no-op) + not dirty (the clear
+        // skips it). pageProj left stale (unread). A page that becomes resident is fully rewritten.
+        PerPageDirty[p] = 0u;
         for (uint g = 0u; g < gNumGroups; ++g)
         {
             uint off = (p * gNumGroups + g) * 20u;
@@ -77,6 +83,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         }
         return;
     }
+
+    // Page cache: a resident page needs re-render iff it was just allocated / re-owned (isNew), a
+    // dynamic caster overlaps it (found in pass 1 below), or a static caster moved this frame
+    // (gForceAll). Otherwise its depth is still valid from a previous frame -> skip clear + draw.
+    const bool isNew = (owner != PhysOwnerPrev[p]);
 
     uint view, level, px, py;
     VsmDecodePage(owner, view, level, px, py);
@@ -108,9 +119,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[4] = pt[2];         // near (z >= 0)
     planes[5] = pt[3] - pt[2]; // far
 
-    // Pass 1: count the casters visible in THIS page, per mesh-group.
+    // Pass 1: count the casters visible in THIS page, per mesh-group, and note whether any DYNAMIC
+    // caster overlaps (page-cache invalidation).
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
     for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
+    bool dynamicOverlap = false;
     for (uint c = 0u; c < gNumCasters; ++c)
     {
         CasterBounds b = Bounds[c];
@@ -118,7 +131,22 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         {
             uint g = CasterGroup[c];
             if (g < gNumGroups) { perGroupCount[g] += 1u; }
+            if (CasterDynamic[c] != 0u) { dynamicOverlap = true; }
         }
+    }
+
+    // Cache decision: dirty pages clear + redraw; clean pages keep their cached depth (draw nothing).
+    const bool dirty = isNew || dynamicOverlap || (gForceAll != 0u);
+    PerPageDirty[p] = dirty ? 1u : 0u;
+    if (!dirty)
+    {
+        for (uint gc = 0u; gc < gNumGroups; ++gc)
+        {
+            uint off = (p * gNumGroups + gc) * 20u;
+            PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u)); // InstanceCount 0 -> caster draw is a no-op
+            PageDrawArgs.Store(off + 16u, 0u);
+        }
+        return;
     }
 
     // Prefix-sum -> each group's base within this page's [p*gNumCasters, ...) list slice.

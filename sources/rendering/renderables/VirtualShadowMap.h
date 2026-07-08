@@ -120,6 +120,14 @@ namespace vsm
     // cheaper CPU, minor motion flicker; OFF = iterate the whole pool every frame (correct, ~4x CPU).
     inline bool g_residentIterOnly = false;
 
+    // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
+    // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net
+    // loss on the current scene — VsmPageRender is dominated by the per-page CULL (which caching
+    // can't skip), the teapots are dynamic (uncacheable), and the gated depth-clear is slower than a
+    // hardware full-pool clear on spike frames (max regressed). ON draws only dirty pages + uses the
+    // gated clear; keep for a future coarse-skip (skip the cull for pages far from any mover).
+    inline bool g_pageCaching = false;
+
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
     // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
     struct alignas(16) ViewProjEntry
@@ -255,6 +263,7 @@ private:
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
     std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
     std::shared_ptr<Material> pageSetupMat_;         // vsm_page_setup_cs.hlsl (Step 22)
+    std::shared_ptr<Material> pageClearMat_;         // vsm_page_clear.hlsl (page cache: gated depth clear)
     bool shaderResourcesTried_ = false;
 
     // Step 22: per-page render state. pageProj_ = off-center viewProj per physical page (256-byte
@@ -281,6 +290,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtySrv_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
+    bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
     ID3D12Resource* cachedRung0Args_ = nullptr;  // detect a ShadowGpuData rebuild (re-create the SRV)
     void EnsureRenderResources(Renderer* renderer, ShadowGpuData* shadowGpu);
 
