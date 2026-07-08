@@ -55,6 +55,13 @@ public:
         bool* open);
 
 private:
+    struct Collection
+    {
+        std::string name;
+        std::vector<EditorAssetId> assets;
+        std::vector<std::string> folders;
+    };
+
     void EnsureSelectedFolder(const AssetRegistry& registry);
     void SelectFolder(const AssetRegistry& registry, const std::string& folderPath, bool addHistory);
     void NavigateHistory(const AssetRegistry& registry, int delta);
@@ -62,11 +69,17 @@ private:
     char searchBuffer_[256] = {};
     char sourceSearchBuffer_[128] = {};
     char newFolderName_[64] = {};
+    char newCollectionName_[64] = {};
     std::string selectedFolder_ = "/Game";
+    std::string detailsFolder_ = "/Game";
     std::string newFolderParent_;
     std::string deleteFolderTarget_;
     std::string folderOperationMessage_;
+    std::string collectionOperationMessage_;
     std::vector<std::string> folderHistory_;
+    std::vector<EditorAssetId> favoriteAssets_;
+    std::vector<std::string> favoriteFolders_;
+    std::vector<Collection> collections_;
     size_t folderHistoryIndex_ = 0;
     bool includeSubfolders_ = true;
     bool activeTypeFilters_[5] = {};
