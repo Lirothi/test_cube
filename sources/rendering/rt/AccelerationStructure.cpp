@@ -164,6 +164,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
 
     PerFrameTlas& f = tlasFrames_[frameIndex];
     const UINT count = static_cast<UINT>(instances.size());
+    const UINT prevCount = f.instanceCount; // this slot's last build (refit needs an unchanged set)
     f.instanceCount = count;
     if (count == 0) {
         return; // nothing to build; leave the previous frame's SRV untouched
@@ -216,7 +217,10 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    // ALLOW_UPDATE so the built TLAS can be refit in place next frame (see the PERFORM_UPDATE path
+    // below). It also drives the prebuild sizes (a touch larger result; scratch covers the update).
+    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+                   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
     inputs.NumDescs = count;
     inputs.InstanceDescs = f.instanceUpload->GetGPUVirtualAddress();
 
@@ -226,10 +230,12 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         return;
     }
 
+    bool freshResult = false;
     if (f.resultSize < info.ResultDataMaxSizeInBytes || !f.result) {
         f.result = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
                                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
         f.resultSize = f.result ? info.ResultDataMaxSizeInBytes : 0;
+        freshResult = true; // a new buffer holds no prior AS — must full-build, can't refit
     }
     if (f.scratchSize < info.ScratchDataSizeInBytes || !f.scratch) {
         // COMMON: avoids the buffer-initial-state-ignored warning; the build's
@@ -243,12 +249,26 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         return;
     }
 
-    // 3) Build + UAV barrier.
+    // 3) Build (full) or refit (in-place PERFORM_UPDATE) + UAV barrier. Refit when the instance set
+    //    is unchanged (same count into an existing updatable result) and we haven't drifted too far
+    //    since the last full rebuild. The instanced casters only rotate, so this is the common path.
+    constexpr UINT kMaxRefits = 64u; // bound BVH-quality drift; full-rebuild this slot afterwards
+    const bool canRefit = !freshResult && f.canUpdate && (count == prevCount) &&
+                          (f.refitsSinceBuild < kMaxRefits);
+
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
     build.Inputs = inputs;
+    if (canRefit) {
+        build.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+        build.SourceAccelerationStructureData = f.result->GetGPUVirtualAddress(); // in-place source == dest
+        ++f.refitsSinceBuild;
+    } else {
+        f.refitsSinceBuild = 0;
+    }
     build.DestAccelerationStructureData = f.result->GetGPUVirtualAddress();
     build.ScratchAccelerationStructureData = f.scratch->GetGPUVirtualAddress();
     cmdList4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+    f.canUpdate = true; // built with ALLOW_UPDATE -> refit-eligible next time this slot is used
 
     D3D12_RESOURCE_BARRIER uav{};
     uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;

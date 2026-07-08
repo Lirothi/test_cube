@@ -101,6 +101,12 @@ private:
         Microsoft::WRL::ComPtr<ID3D12Resource> scratch;        // DEFAULT, UAV state
         UINT64 scratchSize = 0;
         UINT instanceCount = 0;
+        // TLAS refit (S12 perf): the result is built with ALLOW_UPDATE, so when the instance set is
+        // unchanged frame-to-frame (only transforms move — the rotating instanced casters) we
+        // PERFORM_UPDATE in place instead of a full rebuild (~2-3x cheaper). Periodically full-rebuild
+        // to keep BVH traversal quality from drifting as transforms accumulate.
+        bool canUpdate = false;       // result was built updatable (safe to refit)
+        UINT refitsSinceBuild = 0;    // in-place updates since the last full rebuild (bounded)
     };
 
     ID3D12Device5* device5_ = nullptr;
