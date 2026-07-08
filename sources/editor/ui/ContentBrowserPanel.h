@@ -85,7 +85,7 @@ private:
     std::vector<std::string> favoriteFolders_;
     std::vector<ContentBrowserCollection> collections_;
     size_t folderHistoryIndex_ = 0;
-    float sourcesWidth_ = 220.0f;
+    float sourcesWidth_ = 300.0f;
     bool includeSubfolders_ = true;
     bool activeTypeFilters_[5] = {};
     ViewMode viewMode_ = ViewMode::List;
