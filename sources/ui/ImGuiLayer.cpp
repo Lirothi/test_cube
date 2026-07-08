@@ -14,7 +14,14 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 namespace
 {
+#if WITH_EDITOR
+// The editor Content Browser draws many real texture thumbnails at once, each
+// costing kFrameCount preview descriptors, so it needs a much larger heap than
+// the handful the engine debug tools use. Non-editor builds keep the original 64.
+constexpr uint32_t kSrvDescriptorCapacity = 512;
+#else
 constexpr uint32_t kSrvDescriptorCapacity = 64;
+#endif
 constexpr float kUiScale = 1.5f;
 } // namespace
 
@@ -247,6 +254,30 @@ void ImGuiLayer::ReleasePreviewDescriptors()
     }
     previewSrvs_.clear();
 }
+
+#if WITH_EDITOR
+void ImGuiLayer::ReleasePreviewDescriptorsForResource(ID3D12Resource* resource)
+{
+    if (!resource)
+    {
+        return;
+    }
+    const auto it = previewSrvs_.find(resource);
+    if (it == previewSrvs_.end())
+    {
+        return;
+    }
+    for (D3D12_CPU_DESCRIPTOR_HANDLE& cpuHandle : it->second.cpu)
+    {
+        if (cpuHandle.ptr != 0)
+        {
+            FreeSrvDescriptor(cpuHandle);
+            cpuHandle = {};
+        }
+    }
+    previewSrvs_.erase(it);
+}
+#endif // WITH_EDITOR
 
 void ImGuiLayer::AllocateSrvDescriptorCallback(ImGui_ImplDX12_InitInfo* info,
     D3D12_CPU_DESCRIPTOR_HANDLE* outCpuHandle,

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/assets/AssetThumbnailCache.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/EditorHotkeys.h"
 #include "editor/EditorExtensionRegistry.h"
@@ -71,6 +72,7 @@ private:
     bool showInspector_ = true;
     int selectionOutlineRadius_ = 1;
     AssetRegistry assetRegistry_;
+    AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;

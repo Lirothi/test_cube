@@ -756,6 +756,26 @@ Validation:
 Goal: show the actual resource contents in Asset View for resources that can be
 meaningfully previewed, instead of representing them with generic type icons.
 
+Status (2026-07-08): the "safe core" of this step is implemented and builds clean
+(editor and no-editor). What landed:
+
+- `AssetThumbnailCache` (`sources/editor/assets/AssetThumbnailCache.*`): the full
+  cache framework with `Missing/Queued/Generating/Ready/Failed` states, keying by
+  asset id plus source write time, bounded per-frame generation (one fenced upload
+  batch), LRU eviction, and renderer-safe GPU/descriptor lifetime.
+- Real **texture** thumbnails wired into tile view, list rows, and hover hints
+  (aspect-preserved, checkerboard behind alpha, loading and failed placeholders).
+- Engine support (all `WITH_EDITOR`-gated): a per-resource ImGui preview-descriptor
+  release, and the ImGui preview SRV heap raised from 64 to 512 for editor builds
+  because each preview costs `kFrameCount` descriptors and a texture folder would
+  otherwise exhaust the heap (which throws).
+
+Deferred to Step 12E (they need an offscreen 3D render pass and/or an on-disk
+cache, which are higher risk): mesh thumbnails, material thumbnails, cubemap face
+previews, and the on-disk thumbnail cache for cross-restart reuse. The mesh and
+material acceptance/validation items below are tracked under Step 12E. The rest of
+this section is retained as the design record for the previewable-resource work.
+
 Primary files:
 
 - `sources/editor/assets/AssetThumbnailCache.*` (new)
@@ -829,6 +849,87 @@ Validation:
   framing.
 - Inspect multiple material presets and verify visible differences.
 - Restart the editor and confirm unchanged thumbnails come from cache.
+- Modify one source asset, refresh, and confirm only its thumbnail regenerates.
+- Navigate a folder with many previewable assets while watching frame time and
+  ImGui descriptor usage.
+
+## Step 12E: Mesh And Material Thumbnail Previews
+
+Goal: complete the previewable-resource work started in Step 12D by rendering real
+mesh and material thumbnails (and a representative cubemap face), and persist all
+thumbnails to an on-disk cache so unchanged assets survive an editor restart.
+
+Primary files:
+
+- `sources/editor/assets/AssetThumbnailCache.*` (extend the existing cache; do not
+  fork it)
+- `sources/editor/ui/ContentBrowserPanel.*` (no new preview path; the same
+  `ResolveAssetThumbnail`/`BrowserThumbnail` sites already handle any Ready image)
+- `sources/editor/EditorController.*`
+- renderer/material/mesh helpers only where required for an isolated preview render
+- `test_cube.vcxproj`
+- `test_cube.vcxproj.filters`
+
+Implementation notes:
+
+- Build on the Step 12D `AssetThumbnailCache`. It already owns the state machine,
+  write-time keying, bounded per-frame budget, LRU eviction, and GPU/descriptor
+  lifetime. This step adds new generators that produce a GPU thumbnail for mesh,
+  material, and cubemap records; the browser needs no new draw code because it
+  already renders any `Ready` thumbnail image.
+- All generation must run inside the editor draw/tick window, fenced with
+  `Renderer::WaitForPreviousFrame` like the current texture path, and must never
+  change the edited level, selection, command history, or dirty state. Respect the
+  Stop Condition on GPU/resource lifetime outside the editor draw/tick window: the
+  offscreen preview scene, targets, and pipeline are private to the cache.
+- Bound offscreen renders per frame more tightly than file loads; they are heavier.
+  A large folder should fill in over several frames without a visible stall.
+- Mesh thumbnails must render the real mesh:
+  - use an isolated offscreen preview scene or render pass with its own color +
+    depth targets;
+  - frame the mesh from its bounds with a deterministic three-quarter camera;
+  - use neutral lighting and a neutral background;
+  - use the mesh's available/default material when safe, otherwise a neutral
+    preview material;
+  - never add the preview mesh to the edited level or mutate selection.
+- Material thumbnails must render the real preset on a standard preview object,
+  preferably a sphere plus a small planar section for surface readability. Key the
+  thumbnail on `data/materials.json` and referenced texture write times so editing
+  a material invalidates only its own thumbnail.
+- Cubemap textures (skipped in Step 12D and left on their badge) get a
+  representative face via a documented sampling pass into a 2D target.
+- Add an on-disk thumbnail cache under an editor cache directory that is not
+  source-controlled. Key each cached PNG by asset id, source write time, the
+  thumbnail schema version (already reserved as `kThumbnailSchemaVersion`), and any
+  tracked dependencies. Loading the same unchanged folder on a later run must reuse
+  those files instead of re-rendering.
+- Tile view uses the largest available real thumbnail in its stable preview region;
+  list view uses a smaller version; Step 12B hover hints use a larger version of the
+  same thumbnail. Do not create a second preview path.
+- Create ImGui texture ids once per cached GPU thumbnail and release them through
+  the renderer-safe eviction/shutdown path already in the cache. On `Queued`/
+  `Generating`, draw the quiet loading placeholder; on `Failed`, draw the Step 12C
+  Preview Failed icon and include the failure reason in the hover hint.
+
+Acceptance criteria:
+
+- Mesh tiles show a framed render of the actual geometry, not a `[MESH]` badge.
+- Material tiles show the actual preset on the standard preview object when the
+  material pipeline supports it.
+- Cubemap tiles show a representative face instead of the texture badge.
+- Scrolling through a large folder remains responsive while thumbnails fill in.
+- Restarting the editor reuses unchanged thumbnails from the on-disk cache.
+- Modifying an asset invalidates and regenerates only affected thumbnails.
+- Thumbnail generation never changes the current level, selection, command
+  history, or dirty state.
+
+Validation:
+
+- Build `Debug|x64` and verify the no-editor build.
+- Inspect small, large, and unusually oriented meshes and confirm deterministic
+  framing.
+- Inspect multiple material presets and verify visible differences.
+- Restart the editor and confirm unchanged thumbnails come from the disk cache.
 - Modify one source asset, refresh, and confirm only its thumbnail regenerates.
 - Navigate a folder with many previewable assets while watching frame time and
   ImGui descriptor usage.
@@ -941,23 +1042,26 @@ Validation:
 Recommended order from this point, assuming Steps 6 through 12 and Step 11A
 have already been implemented in the current working tree:
 
-1. Step 12A: Resizable Sources And Asset View Split
-2. Step 12B: Resource Details In Hover Hints
-3. Step 12C: Folder And Fallback Content Browser Icons
-4. Step 12D: Real Asset Thumbnail Pipeline
-5. Step 4: Outliner Groups And Context Actions
-6. Step 5: Rename Command
-7. Step 13: Command-Backed Environment Edits
-8. Step 14: Persist Editor Panel UI State
-9. Step 15: UX Cleanup Pass
+1. Step 12A: Resizable Sources And Asset View Split (done)
+2. Step 12B: Resource Details In Hover Hints (done)
+3. Step 12C: Folder And Fallback Content Browser Icons (done)
+4. Step 12D: Real Asset Thumbnail Pipeline (safe core done: framework + textures)
+5. Step 12E: Mesh And Material Thumbnail Previews (remaining 12D scope)
+6. Step 4: Outliner Groups And Context Actions
+7. Step 5: Rename Command
+8. Step 13: Command-Backed Environment Edits
+9. Step 14: Persist Editor Panel UI State
+10. Step 15: UX Cleanup Pass
 
 Steps 4 and 5 remain valuable, but they are intentionally moved behind the
 Content Browser foundation because the current product direction is a UE-like
-folder browser. Steps 12A through 12D supersede Step 12's permanent bottom
+folder browser. Steps 12A through 12E supersede Step 12's permanent bottom
 Details/Preview layout: inspection moves to hover hints, the reclaimed area
 belongs to Asset View, and previewable assets use real cached thumbnails rather
-than generic icons. Step 13 remains later because it has broader command/runtime
-impact.
+than generic icons. Step 12D shipped the thumbnail cache framework and real
+texture thumbnails; Step 12E finishes the mesh, material, and cubemap previews
+plus the on-disk cache, and is split out because the offscreen 3D render pass is
+higher risk. Step 13 remains later because it has broader command/runtime impact.
 
 ## Stop Conditions
 

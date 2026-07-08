@@ -510,6 +510,13 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
     return imguiLayer_.CreateTextureIdForSrv(GetDevice(), resource, srvDesc, currentFrameIndex_);
 }
 
+#if WITH_EDITOR
+void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
+{
+    imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
+}
+#endif
+
 void Renderer::ShutdownImGui()
 {
     imguiLayer_.Shutdown();

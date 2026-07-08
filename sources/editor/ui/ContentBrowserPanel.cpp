@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "editor/EditorExtensionRegistry.h"
+#include "editor/assets/AssetThumbnailCache.h"
 #include "editor/ui/EditorDragDrop.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -304,6 +305,163 @@ namespace
         return true;
     }
 
+    // The renderer + thumbnail cache the browser threads into its draw helpers so
+    // they can request/draw real texture previews (Step 12D).
+    struct ThumbnailProvider
+    {
+        Renderer* renderer = nullptr;
+        AssetThumbnailCache* cache = nullptr;
+    };
+
+    // What to draw in an asset/folder's icon slot: a real GPU thumbnail, a baked
+    // atlas icon, a quiet loading placeholder, or nothing (caller draws a badge).
+    struct BrowserThumbnail
+    {
+        ImTextureID image = ImTextureID_Invalid;
+        std::uint32_t imageWidth = 0;
+        std::uint32_t imageHeight = 0;
+        BrowserIcon icon = BrowserIcon::None;
+        bool loading = false;
+        const char* failureReason = nullptr;
+    };
+
+    BrowserThumbnail FolderThumbnail()
+    {
+        BrowserThumbnail thumb;
+        thumb.icon = BrowserIcon::Folder;
+        return thumb;
+    }
+
+    BrowserThumbnail ResolveAssetThumbnail(const ThumbnailProvider& thumbs,
+        const EditorAssetRecord& record)
+    {
+        BrowserThumbnail thumb;
+
+        // Only real 2D textures get a preview in this pass. Cube textures need a
+        // sampling pass; mesh/material need an offscreen 3D render (a later pass)
+        // and fall back to their Step 12C icon/badge.
+        const bool previewableTexture =
+            record.id.type == EditorAssetType::Texture &&
+            record.texture.kind != EditorTextureKind::TextureCube;
+        if (previewableTexture && thumbs.cache && thumbs.renderer)
+        {
+            const AssetThumbnailCache::View view =
+                thumbs.cache->Request(*thumbs.renderer, record);
+            switch (view.state)
+            {
+            case AssetThumbnailCache::State::Ready:
+                thumb.image = view.texture;
+                thumb.imageWidth = view.width;
+                thumb.imageHeight = view.height;
+                return thumb;
+            case AssetThumbnailCache::State::Failed:
+                thumb.icon = BrowserIcon::PreviewFailed;
+                thumb.failureReason = view.failureReason;
+                return thumb;
+            default:
+                thumb.loading = true;
+                return thumb;
+            }
+        }
+
+        thumb.icon = IconForAsset(record.id.type);
+        return thumb;
+    }
+
+    void DrawCheckerboard(ImDrawList* drawList,
+        const ImVec2& min,
+        const ImVec2& max,
+        float cell)
+    {
+        const ImU32 lightCell = IM_COL32(96, 96, 100, 255);
+        const ImU32 darkCell = IM_COL32(64, 64, 68, 255);
+        drawList->AddRectFilled(min, max, darkCell);
+        drawList->PushClipRect(min, max, true);
+        int row = 0;
+        for (float y = min.y; y < max.y; y += cell, ++row)
+        {
+            const float startX = min.x + ((row & 1) ? cell : 0.0f);
+            for (float x = startX; x < max.x; x += cell * 2.0f)
+            {
+                drawList->AddRectFilled(ImVec2(x, y),
+                    ImVec2(std::min(x + cell, max.x), std::min(y + cell, max.y)),
+                    lightCell);
+            }
+        }
+        drawList->PopClipRect();
+    }
+
+    // Draws a checkerboard (so alpha reads clearly) then the image aspect-fit and
+    // centered inside the region.
+    void DrawFittedImage(ImDrawList* drawList,
+        ImTextureID image,
+        std::uint32_t width,
+        std::uint32_t height,
+        const ImVec2& regionMin,
+        const ImVec2& regionMax)
+    {
+        DrawCheckerboard(drawList, regionMin, regionMax, 8.0f);
+
+        const float regionW = std::max(1.0f, regionMax.x - regionMin.x);
+        const float regionH = std::max(1.0f, regionMax.y - regionMin.y);
+        const float aspect = static_cast<float>(std::max(width, 1u)) /
+            static_cast<float>(std::max(height, 1u));
+        ImVec2 size(regionW, regionH);
+        if (size.x / size.y > aspect)
+        {
+            size.x = size.y * aspect;
+        }
+        else
+        {
+            size.y = size.x / aspect;
+        }
+        const ImVec2 imageMin(regionMin.x + (regionW - size.x) * 0.5f,
+            regionMin.y + (regionH - size.y) * 0.5f);
+        drawList->AddImage(image, imageMin,
+            ImVec2(imageMin.x + size.x, imageMin.y + size.y));
+    }
+
+    void DrawLoadingPlaceholder(ImDrawList* drawList,
+        const ImVec2& min,
+        const ImVec2& max)
+    {
+        drawList->AddRectFilled(min, max,
+            ImGui::GetColorU32(ImGuiCol_FrameBg), 3.0f);
+        const ImVec2 center((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+        const float radius =
+            std::max(1.5f, std::min(max.x - min.x, max.y - min.y) * 0.09f);
+        const ImU32 dot = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        drawList->AddCircleFilled(ImVec2(center.x - radius * 2.6f, center.y), radius, dot);
+        drawList->AddCircleFilled(center, radius, dot);
+        drawList->AddCircleFilled(ImVec2(center.x + radius * 2.6f, center.y), radius, dot);
+    }
+
+    // Draws the icon slot for one entry. Returns false only when it drew nothing,
+    // so the caller can fall back to its text badge (mirrors DrawBrowserIcon).
+    bool DrawThumbnailRegion(ImDrawList* drawList,
+        const BrowserThumbnail& thumb,
+        const BrowserIconAtlas& atlas,
+        const ImVec2& min,
+        const ImVec2& max)
+    {
+        if (!drawList)
+        {
+            return false;
+        }
+        if (thumb.image != ImTextureID_Invalid)
+        {
+            DrawFittedImage(drawList, thumb.image, thumb.imageWidth, thumb.imageHeight,
+                min, max);
+            return true;
+        }
+        if (thumb.loading)
+        {
+            DrawLoadingPlaceholder(drawList, min, max);
+            return true;
+        }
+        return DrawBrowserIcon(drawList, atlas, thumb.icon, min, max);
+    }
+
     void DrawSourceRowIcon(const BrowserIconAtlas& atlas, BrowserIcon icon)
     {
         const ImVec2 itemMin = ImGui::GetItemRectMin();
@@ -319,8 +477,25 @@ namespace
             ImVec2(iconMin.x + size, iconMin.y + size));
     }
 
-    void DrawTileContents(const BrowserIconAtlas& atlas,
-        BrowserIcon icon,
+    // Row-icon variant that can draw a real texture thumbnail instead of an icon.
+    void DrawSourceRowThumbnail(const BrowserThumbnail& thumb,
+        const BrowserIconAtlas& atlas)
+    {
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        const float size = std::max(1.0f,
+            std::min(18.0f, itemMax.y - itemMin.y - 2.0f));
+        const ImVec2 iconMin(itemMin.x + 2.0f,
+            itemMin.y + (itemMax.y - itemMin.y - size) * 0.5f);
+        DrawThumbnailRegion(ImGui::GetWindowDrawList(),
+            thumb,
+            atlas,
+            iconMin,
+            ImVec2(iconMin.x + size, iconMin.y + size));
+    }
+
+    void DrawTileContents(const BrowserThumbnail& thumb,
+        const BrowserIconAtlas& atlas,
         const char* fallbackBadge,
         const std::string& name)
     {
@@ -333,9 +508,9 @@ namespace
         const ImVec2 iconMin(
             itemMin.x + (itemMax.x - itemMin.x - kIconSize) * 0.5f,
             itemMin.y + 7.0f);
-        if (!DrawBrowserIcon(drawList,
+        if (!DrawThumbnailRegion(drawList,
+                thumb,
                 atlas,
-                icon,
                 iconMin,
                 ImVec2(iconMin.x + kIconSize, iconMin.y + kIconSize)))
         {
@@ -376,7 +551,8 @@ namespace
 
     void DrawAssetHoverHint(const EditorAssetRecord* record,
         const EditorAssetId& fallbackId,
-        const BrowserIconAtlas& icons)
+        const BrowserIconAtlas& icons,
+        const ThumbnailProvider& thumbs)
     {
         if (!BeginDelayedResourceHint())
         {
@@ -400,13 +576,49 @@ namespace
             return;
         }
 
-        if (DrawBrowserIconItem(icons, IconForAsset(record->id.type), 32.0f))
+        const BrowserThumbnail thumb = ResolveAssetThumbnail(thumbs, *record);
+        bool drewInlineIcon = false;
+        if (thumb.image != ImTextureID_Invalid)
+        {
+            // A larger version of the same thumbnail on its own line.
+            constexpr float kMaxSize = 96.0f;
+            const float width = static_cast<float>(std::max(thumb.imageWidth, 1u));
+            const float height = static_cast<float>(std::max(thumb.imageHeight, 1u));
+            const float aspect = width / height;
+            ImVec2 size(kMaxSize, kMaxSize);
+            if (aspect >= 1.0f)
+            {
+                size.y = kMaxSize / aspect;
+            }
+            else
+            {
+                size.x = kMaxSize * aspect;
+            }
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            DrawFittedImage(ImGui::GetWindowDrawList(),
+                thumb.image,
+                thumb.imageWidth,
+                thumb.imageHeight,
+                origin,
+                ImVec2(origin.x + size.x, origin.y + size.y));
+            ImGui::Dummy(size);
+        }
+        else if (DrawBrowserIconItem(icons, thumb.icon, 32.0f))
+        {
+            drewInlineIcon = true;
+        }
+        if (drewInlineIcon)
         {
             ImGui::SameLine();
         }
         ImGui::Text("%s  %s",
             AssetTypeBadge(record->id.type),
             record->displayName.c_str());
+        if (thumb.failureReason)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                "Preview: %s", thumb.failureReason);
+        }
         ImGui::TextDisabled("%s", ToString(record->id.type));
         ImGui::Separator();
         ImGui::TextWrapped("Virtual Path: %s", record->virtualPath.c_str());
@@ -1525,7 +1737,8 @@ namespace
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
         bool& requestNewCollection,
-        const BrowserIconAtlas& icons)
+        const BrowserIconAtlas& icons,
+        const ThumbnailProvider& thumbs)
     {
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -1589,13 +1802,15 @@ namespace
 
             const bool isSelected = (selectedAsset.type == record->id.type &&
                 selectedAsset.key == record->id.key);
-            const BrowserIcon icon = IconForAsset(record->id.type);
+            const BrowserThumbnail thumb = ResolveAssetThumbnail(thumbs, *record);
+            const bool hasVisual =
+                thumb.image != ImTextureID_Invalid ||
+                thumb.loading ||
+                (icons.IsReady() && thumb.icon != BrowserIcon::None);
 
             ImGui::PushID(record->id.key.c_str());
             if (ImGui::Selectable(
-                    icons.IsReady() && icon != BrowserIcon::None ?
-                        "##assetType" :
-                        AssetTypeBadge(record->id.type),
+                    hasVisual ? "##assetType" : AssetTypeBadge(record->id.type),
                     isSelected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
@@ -1608,11 +1823,11 @@ namespace
                     action.asset = record->id;
                 }
             }
-            DrawSourceRowIcon(icons, icon);
+            DrawSourceRowThumbnail(thumb, icons);
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
-            DrawAssetHoverHint(record, record->id, icons);
+            DrawAssetHoverHint(record, record->id, icons, thumbs);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1636,7 +1851,8 @@ namespace
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
         bool& requestNewCollection,
-        const BrowserIconAtlas& icons)
+        const BrowserIconAtlas& icons,
+        const ThumbnailProvider& thumbs)
     {
         const ImVec2 tileSize(132.0f, 112.0f);
         const float spacingX = ImGui::GetStyle().ItemSpacing.x;
@@ -1667,7 +1883,7 @@ namespace
             {
                 selectedAsset = {};
             }
-            DrawTileContents(icons, BrowserIcon::Folder, "[DIR]", folder->name);
+            DrawTileContents(FolderThumbnail(), icons, "[DIR]", folder->name);
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
@@ -1705,8 +1921,8 @@ namespace
             {
                 selectedAsset = record->id;
             }
-            DrawTileContents(icons,
-                IconForAsset(record->id.type),
+            DrawTileContents(ResolveAssetThumbnail(thumbs, *record),
+                icons,
                 AssetTypeBadge(record->id.type),
                 record->displayName);
             std::string levelReason;
@@ -1727,7 +1943,7 @@ namespace
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
-            DrawAssetHoverHint(record, record->id, icons);
+            DrawAssetHoverHint(record, record->id, icons, thumbs);
             ImGui::PopID();
         }
     }
@@ -1860,10 +2076,13 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     const EditorSceneDocument& document,
     EditorObjectId selectedObject,
     Renderer& renderer,
+    AssetThumbnailCache& thumbnails,
     bool* open)
 {
     ContentBrowserAction action;
     BrowserIconAtlas icons;
+    const ThumbnailProvider thumbs{ &renderer, &thumbnails };
+    thumbnails.BeginFrame();
 
     if (!iconAtlasTried_)
     {
@@ -2129,7 +2348,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             {
                 favoriteAssetToRemove = assetId;
             }
-            DrawAssetHoverHint(record, assetId, icons);
+            DrawAssetHoverHint(record, assetId, icons, thumbs);
             ImGui::PopID();
         }
     }
@@ -2247,7 +2466,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     {
                         collectionAssetToRemove = assetId;
                     }
-                    DrawAssetHoverHint(record, assetId, icons);
+                    DrawAssetHoverHint(record, assetId, icons, thumbs);
                     ImGui::PopID();
                 }
                 if (!collectionFolderToRemove.empty())
@@ -2368,7 +2587,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 favoriteFolders_,
                 collections_,
                 requestNewCollection,
-                icons);
+                icons,
+                thumbs);
         }
         else
         {
@@ -2384,7 +2604,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 favoriteFolders_,
                 collections_,
                 requestNewCollection,
-                icons);
+                icons,
+                thumbs);
         }
     }
     if (ImGui::BeginPopupContextWindow("##assetViewContext",
@@ -2588,6 +2809,11 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
         ImGui::EndPopup();
     }
+
+    // Generate a bounded batch of the thumbnails requested above (no GPU stall
+    // when nothing is queued). Runs while the editor is drawing, before the frame
+    // is submitted, matching the icon-atlas load path above.
+    thumbnails.ProcessPending(renderer);
 
     ImGui::End();
     return action;

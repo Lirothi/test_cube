@@ -32,6 +32,11 @@ public:
         ID3D12Resource* resource,
         const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc,
         UINT frameIndex);
+#if WITH_EDITOR
+    // Free the cached preview descriptors for a single resource (used by the
+    // editor thumbnail cache when it evicts a GPU thumbnail). Idle the GPU first.
+    void ReleasePreviewDescriptorsForResource(ID3D12Resource* resource);
+#endif
 
 private:
     struct PreviewSrvDescriptors

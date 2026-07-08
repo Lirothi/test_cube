@@ -68,6 +68,11 @@ public:
     void BeginImGuiFrame();
     void RenderImGui(ID3D12GraphicsCommandList* commandList);
     ImTextureID CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
+#if WITH_EDITOR
+    // Drop the cached ImGui preview descriptors for a resource (editor thumbnail
+    // cache eviction). The caller idles the GPU before freeing the resource.
+    void ReleaseImGuiTextureDescriptors(ID3D12Resource* resource);
+#endif
     void ShutdownImGui();
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     bool ImGuiWantsMouse() const;

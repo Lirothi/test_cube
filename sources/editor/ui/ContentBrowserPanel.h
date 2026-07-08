@@ -9,6 +9,7 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "materials/Texture2D.h"
 
+class AssetThumbnailCache;
 class EditorExtensionRegistry;
 class Renderer;
 
@@ -62,6 +63,7 @@ public:
         const EditorSceneDocument& document,
         EditorObjectId selectedObject,
         Renderer& renderer,
+        AssetThumbnailCache& thumbnails,
         bool* open);
 
 private:

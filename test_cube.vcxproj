@@ -230,6 +230,7 @@
     <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp" />
     <ClCompile Include="sources/editor/EditorHotkeys.cpp" />
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
+    <ClCompile Include="sources/editor/assets/AssetThumbnailCache.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
@@ -363,6 +364,7 @@
     <ClInclude Include="sources/editor/EditorExtensionRegistry.h" />
     <ClInclude Include="sources/editor/EditorHotkeys.h" />
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
+    <ClInclude Include="sources/editor/assets/AssetThumbnailCache.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
