@@ -266,12 +266,19 @@ private:
     // caster set to each page's frustum and writes that page's compacted, mesh-group-grouped caster
     // ids into its [p*casters, (p+1)*casters) slice; the page draw binds this as the slot-1 stream.
     Microsoft::WRL::ComPtr<ID3D12Resource> pageVisibleList_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderHeap_; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav
+    // Page-caching plan (Rung 1): physOwnerPrev_ = last frame's physOwner (new-page detection);
+    // perPageDirty_ = per-page dirty bit the setup computes + the gated depth-clear reads.
+    Microsoft::WRL::ComPtr<ID3D12Resource> physOwnerPrev_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> perPageDirty_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderHeap_; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav, physOwnerPrevSrv, perPageDirtyUav, perPageDirtySrv
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE rung0ArgsSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageDrawArgsUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageProjUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageVisibleListUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE physOwnerPrevSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtyUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtySrv_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
     ID3D12Resource* cachedRung0Args_ = nullptr;  // detect a ShadowGpuData rebuild (re-create the SRV)

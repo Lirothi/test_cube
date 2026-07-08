@@ -547,7 +547,21 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         if (pageVisibleList_) { renderer->SetResourceState(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_COMMON); }
         pageVisibleListUav_ = {}; // force descriptor rebuild
     }
-    if (!pageDrawArgs_ || !pageProj_) { return; }
+    // Page-caching plan (Step 1): fixed-size (kPoolPageCount) caching buffers, allocated once.
+    // physOwnerPrev_ = last frame's physOwner (new-page detect); perPageDirty_ = per-page dirty bit.
+    if (!physOwnerPrev_)
+    {
+        physOwnerPrev_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev");
+        if (physOwnerPrev_) { renderer->SetResourceState(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        physOwnerPrevSrv_ = {};
+    }
+    if (!perPageDirty_)
+    {
+        perPageDirty_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PerPageDirty");
+        if (perPageDirty_) { renderer->SetResourceState(perPageDirty_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        perPageDirtyUav_ = {}; perPageDirtySrv_ = {};
+    }
+    if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_) { return; }
 
     // Resident-set readback ring (physOwner snapshots), persistently mapped.
     if (!residentReadback_[0])
@@ -572,13 +586,14 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
 
     const bool needHeap = !renderHeap_ || cachedRung0Args_ != rung0Args ||
                           physOwnerSrv_.ptr == 0 || pageDrawArgsUav_.ptr == 0 || pageProjUav_.ptr == 0 ||
-                          pageVisibleListUav_.ptr == 0;
+                          pageVisibleListUav_.ptr == 0 || physOwnerPrevSrv_.ptr == 0 ||
+                          perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 5; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav
+        hd.NumDescriptors = 8; // + physOwnerPrevSrv, perPageDirtyUav, perPageDirtySrv (page cache)
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -594,6 +609,9 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pageDrawArgsUav_    = { base.ptr + static_cast<SIZE_T>(2) * incr };
     pageProjUav_        = { base.ptr + static_cast<SIZE_T>(3) * incr };
     pageVisibleListUav_ = { base.ptr + static_cast<SIZE_T>(4) * incr };
+    physOwnerPrevSrv_   = { base.ptr + static_cast<SIZE_T>(5) * incr };
+    perPageDirtyUav_    = { base.ptr + static_cast<SIZE_T>(6) * incr };
+    perPageDirtySrv_    = { base.ptr + static_cast<SIZE_T>(7) * incr };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -635,6 +653,26 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         vUd.Buffer.NumElements = static_cast<UINT>(pageVisibleList_->GetDesc().Width / sizeof(std::uint32_t));
         vUd.Buffer.StructureByteStride = sizeof(std::uint32_t);
         dev->CreateUnorderedAccessView(pageVisibleList_.Get(), nullptr, &vUd, pageVisibleListUav_);
+    }
+
+    // Page cache (Step 1): physOwnerPrev SRV (setup reads last frame's owner), perPageDirty UAV
+    // (setup writes the dirty bit) + SRV (the gated depth-clear reads it). Dormant until Step 2.
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_UNKNOWN;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = vsm::kPoolPageCount;
+        sd.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        dev->CreateShaderResourceView(physOwnerPrev_.Get(), &sd, physOwnerPrevSrv_);
+        dev->CreateShaderResourceView(perPageDirty_.Get(), &sd, perPageDirtySrv_);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_UNKNOWN;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        ud.Buffer.NumElements = vsm::kPoolPageCount;
+        ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        dev->CreateUnorderedAccessView(perPageDirty_.Get(), nullptr, &ud, perPageDirtyUav_);
     }
 
     cachedRung0Args_ = rung0Args;

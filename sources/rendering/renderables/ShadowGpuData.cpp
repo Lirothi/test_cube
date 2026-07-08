@@ -269,6 +269,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceSrv(UINT frameIndex) const { 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { return bounds_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterDynamicSrv() const { return casterDynamic_.Srv(0); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
 {
@@ -339,6 +340,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // so the indirect arg/count buffers are sized per (view, mesh-group)). Group ids dense, first-seen.
     std::unordered_map<const Mesh*, std::uint32_t> meshToGroup;
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
+    std::vector<std::uint32_t> staticDynamic(casterCount, 0u); // per static caster: IsDynamicCaster (VSM page-cache invalidation)
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
@@ -349,6 +351,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         const RenderableObject* ro = obj->AsRenderableObject();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsCaster requires it
         casterMesh[idx] = mesh;
+        staticDynamic[idx] = obj->IsDynamicCaster() ? 1u : 0u;
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
             meshToGroup.emplace(mesh, static_cast<std::uint32_t>(meshToGroup.size()));
@@ -415,15 +418,19 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         groupMesh_[staticGroups + j] = giGroupMesh[j];
     }
 
-    // (4) Per-group caster count + index count, and per-caster group id (sized to the TOTAL count_).
+    // (4) Per-group caster count + index count, per-caster group id, and per-caster dynamic flag
+    // (all sized to the TOTAL count_). casterDynamicId feeds the VSM page-cache invalidation: 1 for
+    // GI (always animating) + any static caster whose object reports IsDynamicCaster.
     std::vector<std::uint32_t> groupCount(numMeshGroups_, 0);
     std::vector<std::uint32_t> groupIndexCount(numMeshGroups_, 0);
     std::vector<std::uint32_t> casterGroupId(std::max<std::uint32_t>(count_, 1u), 0);
+    std::vector<std::uint32_t> casterDynamicId(std::max<std::uint32_t>(count_, 1u), 0);
     for (size_t i = 0; i < casterCount; ++i)
     {
         const Mesh* mesh = casterMesh[i];
         const std::uint32_t g = mesh ? meshToGroup[mesh] : 0u;
         casterGroupId[i] = g;
+        casterDynamicId[i] = staticDynamic[i];
         if (g < numMeshGroups_)
         {
             ++groupCount[g];
@@ -434,7 +441,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         const std::uint32_t g = staticGroups + static_cast<std::uint32_t>(j);
         const GiCaster& gc = giCasters_[j];
-        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; }
+        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; casterDynamicId[gc.giBase + c] = 1u; }
         groupCount[g] = gc.count;
         groupIndexCount[g] = giGroupIndexCount[j];
     }
@@ -453,6 +460,12 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         count_ > 0)
     {
         std::memcpy(casterGroup_.Region(0), casterGroupId.data(), count_ * sizeof(std::uint32_t));
+    }
+    // Per-caster dynamic flag for VSM page-cache invalidation (region 0; static after Rebuild).
+    if (EnsureRing(renderer, casterDynamic_, std::max<std::uint32_t>(count_, 1u), sizeof(std::uint32_t), L"ShadowGpuData.CasterDynamic") &&
+        count_ > 0)
+    {
+        std::memcpy(casterDynamic_.Region(0), casterDynamicId.data(), count_ * sizeof(std::uint32_t));
     }
     if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 2 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
         numMeshGroups_ > 0)

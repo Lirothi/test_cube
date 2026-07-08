@@ -117,6 +117,9 @@ public:
     // Per-caster mesh-group id SRV (static, region 0). Used by the VSM per-page cull to bucket each
     // visible caster into its mesh-group's draw slice. {0} until Rebuild.
     D3D12_CPU_DESCRIPTOR_HANDLE CasterGroupSrv() const;
+    // Per-caster dynamic flag SRV (static, region 0; 1 = animating). The VSM page-cache marks a page
+    // dirty when a dynamic caster overlaps it. {0} until Rebuild.
+    D3D12_CPU_DESCRIPTOR_HANDLE CasterDynamicSrv() const;
 
     // GI→VSM (Step 2): SRVs onto the DEFAULT-heap "unified" instance/bounds buffers for ring region
     // `frameIndex`. RecordCull copies the upload ring's region into these each frame (a compute
@@ -227,6 +230,7 @@ private:
     Ring bounds_;        // per-caster CasterBounds
     Ring viewFrustums_;  // per-view ShadowViewFrustum
     Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
+    Ring casterDynamic_; // per-caster dynamic flag (uint; 1=animating) for VSM page-cache invalidation; static, region 0 only
     Ring perGroup_;      // per-group {base, indexCount} (uint2); static, region 0 only
 
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
