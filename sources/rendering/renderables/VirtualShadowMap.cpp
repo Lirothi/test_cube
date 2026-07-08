@@ -648,7 +648,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (!pageSetupMat_) { return; }
     if (!shadowGpu->IndirectDrawReady()) { return; } // needs this frame's Rung 0 cull output
     EnsureRenderResources(renderer, shadowGpu);
-    if (!pageDrawArgs_ || !pageProj_ || !renderHeap_) { return; }
+    if (!pageDrawArgs_ || !pageProj_ || !renderHeap_ || !pageVisibleList_) { return; }
 
     Material* indirectMat = shadowGpu->IndirectShadowMaterial();
     ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
@@ -658,6 +658,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (f >= render::kFrameCount) { return; }
     const std::uint32_t groups = shadowGpu->MeshGroupCount();
     if (groups == 0 || groups > renderGroups_) { return; }
+    // Per-page cull inputs: the unified world-AABB bounds (region f), the per-caster group ids, and
+    // the per-page-list UAV. All present whenever count_>0 (guaranteed by Rebuild); bail otherwise
+    // (OOM edge) rather than binding a null descriptor.
+    const D3D12_CPU_DESCRIPTOR_HANDLE boundsSrv = shadowGpu->UnifiedBoundsSrv(f);
+    const D3D12_CPU_DESCRIPTOR_HANDLE casterGroupSrv = shadowGpu->CasterGroupSrv();
+    if (boundsSrv.ptr == 0 || casterGroupSrv.ptr == 0 || pageVisibleListUav_.ptr == 0) { return; }
+    const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
 
     // Consolidated caster VB/IB (built once at level load, ShadowGpuData::EnsureMegaBuffer): when
     // ready, the draw loop below binds geometry ONCE + issues one ExecuteIndirect(maxCount=groups)
@@ -665,17 +672,19 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const bool useMega = shadowGpu->MegaReady() &&
                          shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
 
-    // --- Setup compute: per physical page, build the off-center projection + copy the page's
-    // view's Rung-0 cull args. Reads Rung0 args + physOwner as SRVs. ---
+    // --- Setup compute: per physical page, build the off-center projection AND cull the caster set
+    // to the page's frustum, writing a per-page compacted visible list + per-page draw args. Reads
+    // Rung0 args (per-group index count) + physOwner + the unified world AABBs + per-caster group. ---
     renderer->Transition(cl, shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
     struct SetupCB
     {
-        std::uint32_t numGroups, argBaseElems, numPages, pad;
+        std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
@@ -685,6 +694,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         {
             SetupCB cb{};
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
+            cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
             // Mega offsets (0 unless the consolidated path is active) so the setup rebases each
@@ -697,12 +707,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },
-        { physOwnerSrv_, rung0ArgsSrv_ },
-        { pageDrawArgsUav_, pageProjUav_ },
+        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv },
+        { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,
         pageDrawArgs_.Get());
     renderer->UAVBarrier(cl, pageProj_.Get());
+    renderer->UAVBarrier(cl, pageVisibleList_.Get());
 
     // Resident-set for the draw loop (opt-in, g_residentIterOnly): read this ring slot's
     // kFrameCount-old physOwner snapshot (owner != INVALID was resident; skip the rest — the ~free
@@ -719,9 +730,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         residentReadbackValid_[f] = true;
     }
 
-    // Consume: args -> INDIRECT_ARGUMENT, projection -> readable as a root CBV.
+    // Consume: args -> INDIRECT_ARGUMENT, projection -> root CBV, per-page list -> per-instance stream.
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
     // --- Render: clear the whole pool (Step 23 will gate to changed pages), then draw each pool
     // page's casters into its 128² cell via ExecuteIndirect. The pool is left in SRV by the light
@@ -737,10 +749,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     indirectMat->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    ID3D12Resource* visBuf = shadowGpu->VisibleListBuffer();
+    // Per-instance stream = the per-PAGE visible list (the setup culled each page's casters into its
+    // own slice). Each draw's StartInstanceLocation (baked per page/group by the setup) offsets into it.
     D3D12_VERTEX_BUFFER_VIEW visVBV{};
-    visVBV.BufferLocation = visBuf->GetGPUVirtualAddress() + static_cast<UINT64>(f) * shadowGpu->VisibleListRegionBytes();
-    visVBV.SizeInBytes = static_cast<UINT>(shadowGpu->VisibleListRegionBytes());
+    visVBV.BufferLocation = pageVisibleList_->GetGPUVirtualAddress();
+    visVBV.SizeInBytes = static_cast<UINT>(pageVisibleList_->GetDesc().Width);
     visVBV.StrideInBytes = sizeof(std::uint32_t);
     cl->IASetVertexBuffers(1, 1, &visVBV);
 

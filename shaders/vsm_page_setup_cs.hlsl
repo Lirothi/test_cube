@@ -1,10 +1,13 @@
-// Rung 2 / Step 22 setup: one thread per PHYSICAL pool page. For a resident page, decode the
-// virtual page it holds -> (view, mip level, px, py), build an off-center projection that maps
-// that page's virtual sub-rect to full NDC (so a 128² viewport renders exactly that sub-rect),
-// and copy the page's VIEW's Rung-0 cull args (InstanceCount + StartInstanceLocation into the
-// shared visible list) into a per-page indirect-args slot. Free pages get zero InstanceCount.
-// The CPU then loops physical pages, setting each page's pool-cell viewport + this projection, and
-// ExecuteIndirect draws the casters (reusing Rung 0's instance buffer + visible list + indirect VS).
+// Rung 2 per-page instance cull: one thread per PHYSICAL pool page. For a resident page, decode the
+// virtual page it holds -> (view, mip level, px, py), build the off-center projection that maps that
+// page's virtual sub-rect to full NDC, extract the page's 6 frustum planes, and cull the WHOLE caster
+// set to THIS page (positive-vertex AABB test, mirroring shadow_cull_cs). Each visible caster id is
+// appended to the page's slice of PageVisibleList, grouped by mesh-group; the per (page, group) draw
+// args get the per-page InstanceCount + a StartInstanceLocation into that slice. This replaces the old
+// "copy the whole VIEW's args to every page" (which redrew every view-visible caster into every page
+// and leaned on the 128 scissor) -> the draw only submits instances that actually land in the page.
+// The CPU loops physical pages, sets each page's pool-cell viewport + this projection, binds
+// PageVisibleList as the per-instance stream, and ExecuteIndirect draws the page's own casters.
 #pragma pack_matrix(row_major)
 #include "vsm_addressing.hlsli"
 
@@ -12,8 +15,8 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 
@@ -22,15 +25,36 @@ cbuffer SetupCB : register(b0)
     uint gNumGroups;    // ShadowGpuData mesh-group count
     uint gArgBaseElems; // frame region base into Rung0Args, in 5-uint arg units (f*numViewsRung0*numGroups)
     uint gNumPages;     // kPoolPageCount
-    uint _pad;
+    uint gNumCasters;   // active caster count (ShadowGpuData::ActiveCasterCount) + per-page slice stride
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
 };
 
-StructuredBuffer<uint> PhysOwner    : register(t0); // physical page -> virtual owner / INVALID
-ByteAddressBuffer      Rung0Args    : register(t1); // D3D12_DRAW_INDEXED_ARGUMENTS[view*group] region f
-RWByteAddressBuffer    PageDrawArgs : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
-RWByteAddressBuffer    PageProj     : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
+struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
+
+StructuredBuffer<uint>         PhysOwner    : register(t0); // physical page -> virtual owner / INVALID
+ByteAddressBuffer              Rung0Args    : register(t1); // D3D12_DRAW_INDEXED_ARGUMENTS[view*group] region f (per-group index count / offsets)
+StructuredBuffer<CasterBounds> Bounds       : register(t2); // per-caster world AABB (the unified buffer)
+StructuredBuffer<uint>         CasterGroup  : register(t3); // per-caster mesh-group id
+
+RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
+RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
+RWStructuredBuffer<uint> PageVisibleList : register(u2); // per (page, slot) visible caster id
+
+// Positive-vertex AABB-vs-frustum test (mirrors shadow_cull_cs::Intersects). The planes are
+// unnormalized (extracted straight from the matrix) — the test is scale-invariant per plane.
+bool PageIntersects(float4 planes[6], float3 c, float3 e)
+{
+    [unroll]
+    for (int i = 0; i < 6; ++i)
+    {
+        float4 pl = planes[i];
+        float signedDist = dot(pl.xyz, c) + pl.w;
+        float projRadius = dot(abs(pl.xyz), e);
+        if (signedDist + projRadius < 0.0f) { return false; }
+    }
+    return true;
+}
 
 [numthreads(8, 8, 1)]
 [RootSignature(VSM_PAGE_SETUP_RS)]
@@ -43,9 +67,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint owner = PhysOwner[p];
     if (owner == VSM_INVALID)
     {
-        // Free page: emit zero-instance args for every group (drawn as a no-op). pageProj is
-        // left stale (unread — the draw is a no-op); the setup runs every frame so a page that
-        // becomes resident is fully rewritten before it is drawn.
+        // Free page: zero-instance args for every group (drawn as a no-op). pageProj left stale
+        // (unread); the setup runs every frame so a page that becomes resident is fully rewritten.
         for (uint g = 0u; g < gNumGroups; ++g)
         {
             uint off = (p * gNumGroups + g) * 20u;
@@ -59,8 +82,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     VsmDecodePage(owner, view, level, px, py);
 
     // Off-center projection: the page (px,py) at this level covers the NDC sub-rect centered at
-    // (cx,cy) with half-size 1/axis; scale/bias clip so that sub-rect fills [-1,1] (z preserved,
-    // so the stored depth matches the light-space depth the sampler compares against).
+    // (cx,cy) with half-size 1/axis; scale/bias clip so that sub-rect fills [-1,1] (z preserved).
     const float a = (float)(VSM_L0_AXIS >> level);
     const float cx = -1.0f + (2.0f * px + 1.0f) / a;
     const float cy =  1.0f - (2.0f * py + 1.0f) / a;
@@ -75,21 +97,65 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     PageProj.Store4(po + 32u, asuint(pm[2]));
     PageProj.Store4(po + 48u, asuint(pm[3]));
 
-    // Copy this page's VIEW's Rung-0 cull args (VSM local view v -> Rung-0 slot v+4, since VSM
-    // drops the 4 CSM cascades). The StartInstanceLocation is a global offset into region f's
-    // visible list, which the CPU binds once as the per-instance stream.
-    const uint rung0View = view + 4u;
-    for (uint g = 0u; g < gNumGroups; ++g)
+    // The page's 6 frustum planes from pm (columns; clip = mul(world, pm)). Positive-vertex test is
+    // scale-invariant, so unnormalized planes are fine. Near/far match the view (S preserves z).
+    const float4x4 pt = transpose(pm); // pt[k] = column k of pm
+    float4 planes[6];
+    planes[0] = pt[3] + pt[0]; // left
+    planes[1] = pt[3] - pt[0]; // right
+    planes[2] = pt[3] + pt[1]; // bottom
+    planes[3] = pt[3] - pt[1]; // top
+    planes[4] = pt[2];         // near (z >= 0)
+    planes[5] = pt[3] - pt[2]; // far
+
+    // Pass 1: count the casters visible in THIS page, per mesh-group.
+    uint perGroupCount[VSM_MAX_SETUP_GROUPS];
+    for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
+    for (uint c = 0u; c < gNumCasters; ++c)
     {
-        uint src = (gArgBaseElems + rung0View * gNumGroups + g) * 20u;
-        uint4 a0 = Rung0Args.Load4(src);      // IndexCountPerInstance, InstanceCount, StartIndex, BaseVertex
-        uint  a4 = Rung0Args.Load(src + 16u); // StartInstanceLocation
-        // Rebase into the consolidated mega VB/IB (offsets are 0 when the mega path is off, so the
-        // args stay per-mesh for the per-group fallback binding). z = StartIndexLocation, w = BaseVertexLocation.
-        a0.z += gGroupMega[g].y;
-        a0.w += gGroupMega[g].x;
-        uint dst = (p * gNumGroups + g) * 20u;
+        CasterBounds b = Bounds[c];
+        if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
+        {
+            uint g = CasterGroup[c];
+            if (g < gNumGroups) { perGroupCount[g] += 1u; }
+        }
+    }
+
+    // Prefix-sum -> each group's base within this page's [p*gNumCasters, ...) list slice.
+    uint perGroupBase[VSM_MAX_SETUP_GROUPS];
+    uint acc = 0u;
+    for (uint gp = 0u; gp < gNumGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
+
+    const uint pageBase = p * gNumCasters;
+
+    // Write per (page, group) args BEFORE the scatter (so perGroupBase can double as the scatter
+    // cursor below). InstanceCount + StartInstanceLocation are per-page; index count / offsets are
+    // the per-group constants (mega-rebased) read from Rung 0's args (view v -> Rung-0 slot v+4).
+    const uint rung0View = view + 4u;
+    for (uint g2 = 0u; g2 < gNumGroups; ++g2)
+    {
+        uint src = (gArgBaseElems + rung0View * gNumGroups + g2) * 20u;
+        uint4 a0 = Rung0Args.Load4(src);      // IndexCountPerInstance, InstanceCount(view), StartIndex, BaseVertex
+        a0.y = perGroupCount[g2];             // OVERRIDE: this page's instance count
+        a0.z += gGroupMega[g2].y;             // startIndex mega-rebase
+        a0.w += gGroupMega[g2].x;             // baseVertex mega-rebase
+        uint dst = (p * gNumGroups + g2) * 20u;
         PageDrawArgs.Store4(dst, a0);
-        PageDrawArgs.Store(dst + 16u, a4);
+        PageDrawArgs.Store(dst + 16u, pageBase + perGroupBase[g2]); // StartInstanceLocation -> page slice
+    }
+
+    // Pass 2: scatter the visible caster ids into the page's slice, grouped (perGroupBase = cursor).
+    for (uint c2 = 0u; c2 < gNumCasters; ++c2)
+    {
+        CasterBounds b = Bounds[c2];
+        if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
+        {
+            uint g = CasterGroup[c2];
+            if (g < gNumGroups)
+            {
+                PageVisibleList[pageBase + perGroupBase[g]] = c2;
+                perGroupBase[g] += 1u;
+            }
+        }
     }
 }

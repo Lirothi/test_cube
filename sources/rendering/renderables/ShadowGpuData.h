@@ -89,6 +89,10 @@ public:
     void Reset();
 
     std::uint32_t CasterCount() const { return count_; }
+    // The caster count actually populated in the unified buffers + visited by the cull THIS frame:
+    // count_ (static + GI) when GI folding is active, else staticCount_ (GI region left stale). The
+    // VSM per-page cull must use this so it never tests the un-scattered GI bounds when GI is off.
+    std::uint32_t ActiveCasterCount() const { return IsGiIndirectActive() ? count_ : staticCount_; }
 
     // GI→VSM (Step 4): is the GI folding path active THIS frame — the runtime flag is on, there are
     // folded GI casters, and the scatter PSO is ready? When true, RecordCull scatters + culls all
