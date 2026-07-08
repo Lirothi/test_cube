@@ -697,6 +697,10 @@ void Profiler::EndFrame() {
             entryPtrs.reserve(statsMap.size());
             for (auto& kv : statsMap) {
                 if (kv.second.overlayId == 0) { continue; }
+                // Drop scopes not recorded this frame (lastCount == 0): CommitFrame freezes their
+                // avg/max, so otherwise they linger forever with stale values (e.g. VSM passes in
+                // Legacy mode). The entry stays in statsMap, so it reappears seamlessly if it resumes.
+                if (kv.second.stats.lastCount == 0) { continue; }
                 entryPtrs.push_back(&kv.second);
             }
             const size_t count = entryPtrs.size();

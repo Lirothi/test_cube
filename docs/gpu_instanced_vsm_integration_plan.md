@@ -170,8 +170,12 @@ see Step 5 guard).
   hard cap. (Realistically #GI ≪ 64, so this is a safety net.)
 - Mega uniform-layout: GI meshes must share the caster stride + R32 index for the mega path; if
   not, the existing per-group fallback in `RecordPageRender` already covers them (verify).
-- **Measure**: Legacy CPU should drop (GI tail gone); watch VSM per-page GPU (clipmap overdraw with
-  dense GI). Capture VsmPageRender CPU/GPU before/after; note if a per-page cull rung is warranted.
+- **Measure (DONE)**: Legacy CPU dropped as predicted when GI folds — `SpotShadow.PerLight` 8.08 → 6.96
+  ms, `CSM.PerCascade` 0.77 → 0.59, `Pass_CSM` 0.62 → 0.54, `GPU.Frame` 2.09 → 1.96 (GI off → on, VSM off).
+  VSM per-page GPU DID balloon with dense GI as feared — `Pass_VsmPageRender` GPU jumped to 4.49 ms (~73%
+  of the frame) from per-view (not per-page) overdraw. A per-page cull rung WAS warranted and is now
+  implemented (`docs/vsm_per_page_instance_cull_plan.md`): it took VsmPageRender GPU 4.49 → 0.33 ms
+  (~13.6×). The remaining VSM cost is CPU (the 1024-page render loop, ~2.31 ms) — a separate future rung.
 - Update memory `shadow-caching-virtualization-plan.md` + this doc with results.
 
 ---

@@ -69,9 +69,45 @@ and a `gNumCasters` CB field. In `RecordPageRender`: pass `count_` + stage `shad
 UAV→VERTEX_AND_CONSTANT_BUFFER like `pageDrawArgs_`. **Verify:** both 0/0; `--scene-stress-gbv=120` (VSM)
 CLEAN; **VsmPageRender collapses** (capture before/after with GI on); user A/B — VSM shadows byte-identical.
 
-### Step 3 — measure, tune, docs
-Capture `Pass_VsmPageRender` CPU+GPU before/after (GI on, VSM). If the setup/cull now shows up, upgrade
-to threadgroup-per-page (groupshared per-group counts). Update memory + this doc + the GI plan's Step 5.
+### Step 3 — measure, tune, docs — DONE
+Measured in-engine (demo scene: 82 static + 200 GI casters, VSM local lights, DLSS Perf, 1024-page pool
+~55% resident). No tuning needed and no threadgroup-per-page upgrade — the cull collapsed the GPU cost so
+hard it no longer registers on the profile.
+
+## Results (measured)
+
+**Per-page cull (VSM + GI, before → after):**
+
+| Pass | GPU before | GPU after | CPU before | CPU after |
+|------|-----------:|----------:|-----------:|----------:|
+| `Pass_VsmPageRender` | **4.49 ms** | **0.33 ms** (~13.6×) | 2.38 ms | 2.31 ms |
+| `GPU.Frame` (whole)  | 6.18 ms | 2.04 ms | — | — |
+
+The GPU draw overdraw is gone. `Pass_VsmPageRender` CPU barely moved (2.38 → 2.31 ms) because the cull
+attacks per-instance *vertex* work, not the per-page CPU loop — see "New bottleneck" below.
+
+**Legacy GI-fold bonus (GI folding off → on, VSM off), i.e. dropping the CPU RenderShadow tail:**
+
+| Metric | GI off | GI on |
+|--------|-------:|------:|
+| `SpotShadow.PerLight` (CPU, aggregate ×32) | 8.08 ms | **6.96 ms** |
+| `CSM.PerCascade` (CPU, ×4) | 0.77 ms | 0.59 ms |
+| `Pass_CSM` (CPU) | 0.62 ms | 0.54 ms |
+| `GPU.Frame` (whole) | 2.09 ms | 1.96 ms |
+
+Overall FPS was unchanged (311 both) because the Legacy shadow passes record on parallel worker threads
+and aren't the critical path there — the saving is real aggregate CPU work, just off the hot path.
+
+## New bottleneck (follow-up rung, not in scope)
+NOTE: these CPU numbers are **Debug config** — Release will cut CPU substantially and likely re-baseline
+what's actually the bound (the GPU 4.49 → 0.33 ms win is config-independent — shaders compile the same at
+runtime). With the GPU freed, in Debug **VSM is CPU-bound**: CPU.Frame 5.01 ms vs GPU.Frame 2.04 ms. The dominant VSM CPU
+cost is `Pass_VsmPageRender` **2.31 ms** — the CPU loop over all 1024 pool pages (viewport + root-CBV +
+one `ExecuteIndirect` per page), independent of instance count so the per-page cull didn't touch it.
+Levers for a future rung: (a) the existing `g_residentIterOnly` toggle (skip the ~45% free pages via the
+physOwner snapshot); (b) GPU-driven page iteration (one indirect dispatch/draw over the resident set
+instead of a 1024-iteration CPU loop). Also `Scene::prepareQueue` / `SceneRenderQueue::Cull` scale with the
+many VSM views — a separate CPU cost.
 
 ## Risks / notes
 - **Per-page list state**: `pageVisibleList_` cycles UAV (setup write) → VERTEX_AND_CONSTANT_BUFFER (draw)
