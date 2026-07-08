@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cfloat>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -135,6 +136,77 @@ namespace
         else
         {
             folders.push_back(path);
+        }
+    }
+
+    void DrawAssetOrganizationMenu(const EditorAssetId& assetId,
+        std::vector<EditorAssetId>& favoriteAssets,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
+    {
+        const bool isFavorite = ContainsAssetId(favoriteAssets, assetId);
+        if (ImGui::MenuItem(isFavorite ? "Remove from Favorites" : "Add to Favorites"))
+        {
+            ToggleAssetId(favoriteAssets, assetId);
+        }
+        if (ImGui::BeginMenu("Collections"))
+        {
+            if (collections.empty())
+            {
+                ImGui::TextDisabled("No collections.");
+                if (ImGui::MenuItem("New Collection..."))
+                {
+                    requestNewCollection = true;
+                }
+            }
+            else
+            {
+                for (ContentBrowserCollection& collection : collections)
+                {
+                    const bool contains = ContainsAssetId(collection.assets, assetId);
+                    if (ImGui::MenuItem(collection.name.c_str(), nullptr, contains))
+                    {
+                        ToggleAssetId(collection.assets, assetId);
+                    }
+                }
+            }
+            ImGui::EndMenu();
+        }
+    }
+
+    void DrawFolderOrganizationMenu(const std::string& folderPath,
+        std::vector<std::string>& favoriteFolders,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
+    {
+        const bool isFavorite = ContainsFolderPath(favoriteFolders, folderPath);
+        if (ImGui::MenuItem(isFavorite ? "Remove from Favorites" : "Add to Favorites"))
+        {
+            ToggleFolderPath(favoriteFolders, folderPath);
+        }
+        if (ImGui::BeginMenu("Collections"))
+        {
+            if (collections.empty())
+            {
+                ImGui::TextDisabled("No collections.");
+                if (ImGui::MenuItem("New Collection..."))
+                {
+                    requestNewCollection = true;
+                }
+            }
+            else
+            {
+                for (ContentBrowserCollection& collection : collections)
+                {
+                    const bool contains =
+                        ContainsFolderPath(collection.folders, folderPath);
+                    if (ImGui::MenuItem(collection.name.c_str(), nullptr, contains))
+                    {
+                        ToggleFolderPath(collection.folders, folderPath);
+                    }
+                }
+            }
+            ImGui::EndMenu();
         }
     }
 
@@ -823,7 +895,10 @@ namespace
         const EditorAssetFolder& folder,
         const std::string& selectedFolder,
         const std::string& sourceSearch,
-        ContentBrowserUiRequest& request)
+        ContentBrowserUiRequest& request,
+        std::vector<std::string>& favoriteFolders,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
     {
         if (!ShouldShowFolder(registry, folder, sourceSearch))
         {
@@ -858,6 +933,11 @@ namespace
         DrawDisabledFolderDropTarget();
         if (ImGui::BeginPopupContextItem())
         {
+            DrawFolderOrganizationMenu(folder.path,
+                favoriteFolders,
+                collections,
+                requestNewCollection);
+            ImGui::Separator();
             DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path, true);
             ImGui::EndPopup();
         }
@@ -869,7 +949,14 @@ namespace
                 const EditorAssetFolder* child = registry.FindFolder(childPath);
                 if (child)
                 {
-                    DrawFolderTree(registry, *child, selectedFolder, sourceSearch, request);
+                    DrawFolderTree(registry,
+                        *child,
+                        selectedFolder,
+                        sourceSearch,
+                        request,
+                        favoriteFolders,
+                        collections,
+                        requestNewCollection);
                 }
             }
             ImGui::TreePop();
@@ -1006,7 +1093,10 @@ namespace
         ContentBrowserAction& action,
         ContentBrowserUiRequest& request,
         const EditorSceneDocument& document,
-        EditorObjectId selectedObject)
+        EditorObjectId selectedObject,
+        std::vector<EditorAssetId>& favoriteAssets,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
     {
         if (!record || !ImGui::BeginPopupContextItem())
         {
@@ -1077,6 +1167,11 @@ namespace
         {
             ImGui::Separator();
         }
+        DrawAssetOrganizationMenu(record->id,
+            favoriteAssets,
+            collections,
+            requestNewCollection);
+        ImGui::Separator();
         if (ImGui::MenuItem("Copy Virtual Path"))
         {
             ImGui::SetClipboardText(record->virtualPath.c_str());
@@ -1097,12 +1192,20 @@ namespace
     }
 
     void DrawFolderContextMenu(const EditorAssetFolder& folder,
-        ContentBrowserUiRequest& request)
+        ContentBrowserUiRequest& request,
+        std::vector<std::string>& favoriteFolders,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
     {
         if (!ImGui::BeginPopupContextItem())
         {
             return;
         }
+        DrawFolderOrganizationMenu(folder.path,
+            favoriteFolders,
+            collections,
+            requestNewCollection);
+        ImGui::Separator();
         DrawFolderOperationsMenu(folder.path, request, true, true);
         ImGui::EndPopup();
     }
@@ -1110,12 +1213,15 @@ namespace
     void DrawListAssetView(const std::vector<const EditorAssetFolder*>& folders,
         const std::vector<const EditorAssetRecord*>& assets,
         EditorAssetId& selectedAsset,
-        std::string& detailsFolder,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
         ContentBrowserUiRequest& request,
         const EditorSceneDocument& document,
-        EditorObjectId selectedObject)
+        EditorObjectId selectedObject,
+        std::vector<EditorAssetId>& favoriteAssets,
+        std::vector<std::string>& favoriteFolders,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
     {
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -1141,11 +1247,10 @@ namespace
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::PushID(folder->path.c_str());
-            if (ImGui::Selectable("[DIR]", detailsFolder == folder->path,
+            if (ImGui::Selectable("[DIR]", false,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
                 selectedAsset = {};
-                detailsFolder = folder->path;
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
                     RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
@@ -1153,7 +1258,11 @@ namespace
             }
             DrawFolderDragSource(*folder);
             DrawDisabledFolderDropTarget();
-            DrawFolderContextMenu(*folder, request);
+            DrawFolderContextMenu(*folder,
+                request,
+                favoriteFolders,
+                collections,
+                requestNewCollection);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1180,7 +1289,6 @@ namespace
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
                 selectedAsset = record->id;
-                detailsFolder.clear();
                 std::string levelReason;
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
                     CanOpenLevelAsset(*record, levelReason))
@@ -1191,7 +1299,7 @@ namespace
             }
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
-                document, selectedObject);
+                document, selectedObject, favoriteAssets, collections, requestNewCollection);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1206,12 +1314,15 @@ namespace
     void DrawTileAssetView(const std::vector<const EditorAssetFolder*>& folders,
         const std::vector<const EditorAssetRecord*>& assets,
         EditorAssetId& selectedAsset,
-        std::string& detailsFolder,
         const EditorExtensionRegistry& extensions,
         ContentBrowserAction& action,
         ContentBrowserUiRequest& request,
         const EditorSceneDocument& document,
-        EditorObjectId selectedObject)
+        EditorObjectId selectedObject,
+        std::vector<EditorAssetId>& favoriteAssets,
+        std::vector<std::string>& favoriteFolders,
+        std::vector<ContentBrowserCollection>& collections,
+        bool& requestNewCollection)
     {
         const ImVec2 tileSize(132.0f, 72.0f);
         const float spacingX = ImGui::GetStyle().ItemSpacing.x;
@@ -1238,30 +1349,23 @@ namespace
 
             advanceTile();
             ImGui::PushID(folder->path.c_str());
-            const bool isSelectedFolder = detailsFolder == folder->path;
             const std::string label = std::string("[DIR]\n") +
                 TruncateLabel(folder->name, 24);
-            if (isSelectedFolder)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-            }
             if (ImGui::Button(label.c_str(), tileSize))
             {
                 selectedAsset = {};
-                detailsFolder = folder->path;
             }
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
-            if (isSelectedFolder)
-            {
-                ImGui::PopStyleColor(2);
-            }
             DrawFolderDragSource(*folder);
             DrawDisabledFolderDropTarget();
-            DrawFolderContextMenu(*folder, request);
+            DrawFolderContextMenu(*folder,
+                request,
+                favoriteFolders,
+                collections,
+                requestNewCollection);
             ImGui::PopID();
         }
 
@@ -1288,7 +1392,6 @@ namespace
             if (ImGui::Button(label.c_str(), tileSize))
             {
                 selectedAsset = record->id;
-                detailsFolder.clear();
             }
             std::string levelReason;
             if (ImGui::IsItemHovered() &&
@@ -1296,7 +1399,6 @@ namespace
                 CanOpenLevelAsset(*record, levelReason))
             {
                 selectedAsset = record->id;
-                detailsFolder.clear();
                 action.type = ContentBrowserAction::Type::OpenLevel;
                 action.asset = record->id;
             }
@@ -1308,7 +1410,7 @@ namespace
 
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
-                document, selectedObject);
+                document, selectedObject, favoriteAssets, collections, requestNewCollection);
             ImGui::PopID();
         }
     }
@@ -1330,12 +1432,7 @@ void ContentBrowserPanel::EnsureSelectedFolder(const AssetRegistry& registry)
     if (selectedFolder_.empty() || !registry.FindFolder(selectedFolder_))
     {
         selectedFolder_ = fallback;
-        detailsFolder_ = fallback;
         resetHistory = true;
-    }
-    else if (!detailsFolder_.empty() && !registry.FindFolder(detailsFolder_))
-    {
-        detailsFolder_ = selectedFolder_;
     }
 
     if (folderHistory_.empty())
@@ -1386,7 +1483,6 @@ void ContentBrowserPanel::SelectFolder(const AssetRegistry& registry,
         return;
     }
 
-    detailsFolder_ = folderPath;
     if (selectedFolder_ == folderPath)
     {
         if (folderHistory_.empty())
@@ -1439,7 +1535,6 @@ void ContentBrowserPanel::NavigateHistory(const AssetRegistry& registry, int del
 
     folderHistoryIndex_ = static_cast<size_t>(next);
     selectedFolder_ = target;
-    detailsFolder_ = target;
 }
 
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
@@ -1452,6 +1547,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ContentBrowserAction action;
 
     ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f),
+        ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Content Browser", open))
     {
         ImGui::End();
@@ -1579,10 +1676,34 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
     ImGui::Separator();
 
-    // Split browser. Reserve space at the bottom for selected-asset details.
-    const float detailHeight = std::max(170.0f,
-        ImGui::GetTextLineHeightWithSpacing() * 9.0f);
-    ImGui::BeginChild("##sourcesPanel", ImVec2(220.0f, -detailHeight), true);
+    constexpr float kMinSourcesWidth = 160.0f;
+    constexpr float kMinAssetViewWidth = 320.0f;
+    constexpr float kSplitterWidth = 6.0f;
+    const ImVec2 workspaceSize = ImGui::GetContentRegionAvail();
+    const float maxSourcesWidth = std::max(kMinSourcesWidth,
+        workspaceSize.x - kMinAssetViewWidth - kSplitterWidth);
+    sourcesWidth_ = std::clamp(sourcesWidth_, kMinSourcesWidth, maxSourcesWidth);
+    float assetViewWidth =
+        std::max(kMinAssetViewWidth, workspaceSize.x - sourcesWidth_ - kSplitterWidth);
+
+    const ImVec2 workspaceOrigin = ImGui::GetCursorScreenPos();
+    const ImRect splitterRect(
+        ImVec2(workspaceOrigin.x + sourcesWidth_, workspaceOrigin.y),
+        ImVec2(workspaceOrigin.x + sourcesWidth_ + kSplitterWidth,
+            workspaceOrigin.y + workspaceSize.y));
+    ImGui::SplitterBehavior(splitterRect,
+        ImGui::GetID("##sourcesAssetSplitter"),
+        ImGuiAxis_X,
+        &sourcesWidth_,
+        &assetViewWidth,
+        kMinSourcesWidth,
+        kMinAssetViewWidth,
+        3.0f,
+        0.1f);
+
+    ImGui::BeginChild("##sourcesPanel",
+        ImVec2(sourcesWidth_, workspaceSize.y),
+        true);
     ImGui::TextUnformatted("Sources");
     DrawSearchInputWithClear("##sourceSearch", "Search folders...", sourceSearchBuffer_,
         sizeof(sourceSearchBuffer_), -1.0f);
@@ -1608,7 +1729,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
             ImGui::PushID(folderPath.c_str());
             if (ImGui::Selectable((std::string("[DIR] ") + label).c_str(),
-                    detailsFolder_ == folderPath && selectedAsset.key.empty()))
+                    selectedFolder_ == folderPath && selectedAsset.key.empty()))
             {
                 if (folder)
                 {
@@ -1635,7 +1756,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             if (ImGui::Selectable(rowLabel.c_str(), SameAssetId(selectedAsset, assetId)))
             {
                 selectedAsset = assetId;
-                detailsFolder_.clear();
             }
             ImGui::PopID();
         }
@@ -1662,7 +1782,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
              collectionIndex < collections_.size();
              ++collectionIndex)
         {
-            Collection& collection = collections_[collectionIndex];
+            ContentBrowserCollection& collection = collections_[collectionIndex];
             ImGui::PushID(static_cast<int>(collectionIndex));
             const bool collectionOpen =
                 ImGui::TreeNodeEx(collection.name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
@@ -1687,7 +1807,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     const std::string label = folder ? folder->name : folderPath;
                     ImGui::PushID(folderPath.c_str());
                     if (ImGui::Selectable((std::string("[DIR] ") + label).c_str(),
-                            detailsFolder_ == folderPath && selectedAsset.key.empty()))
+                            selectedFolder_ == folderPath && selectedAsset.key.empty()))
                     {
                         if (folder)
                         {
@@ -1707,7 +1827,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     if (ImGui::Selectable(rowLabel.c_str(), SameAssetId(selectedAsset, assetId)))
                     {
                         selectedAsset = assetId;
-                        detailsFolder_.clear();
                     }
                     ImGui::PopID();
                 }
@@ -1724,7 +1843,14 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ImGui::SeparatorText("Folders");
     if (const EditorAssetFolder* root = registry.FindFolder("/Game"))
     {
-        DrawFolderTree(registry, *root, selectedFolder_, sourceSearchBuffer_, uiRequest);
+        DrawFolderTree(registry,
+            *root,
+            selectedFolder_,
+            sourceSearchBuffer_,
+            uiRequest,
+            favoriteFolders_,
+            collections_,
+            requestNewCollection);
     }
     else
     {
@@ -1732,8 +1858,10 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     }
     ImGui::EndChild();
 
-    ImGui::SameLine();
-    ImGui::BeginChild("##assetView", ImVec2(0.0f, -detailHeight), false);
+    ImGui::SameLine(0.0f, kSplitterWidth);
+    ImGui::BeginChild("##assetView",
+        ImVec2(0.0f, workspaceSize.y),
+        false);
 
     const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_);
     std::vector<const EditorAssetFolder*> visibleFolders;
@@ -1784,13 +1912,33 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         if (viewMode_ == ViewMode::Tiles)
         {
-            DrawTileAssetView(visibleFolders, visibleAssets, selectedAsset, detailsFolder_,
-                extensions, action, uiRequest, document, selectedObject);
+            DrawTileAssetView(visibleFolders,
+                visibleAssets,
+                selectedAsset,
+                extensions,
+                action,
+                uiRequest,
+                document,
+                selectedObject,
+                favoriteAssets_,
+                favoriteFolders_,
+                collections_,
+                requestNewCollection);
         }
         else
         {
-            DrawListAssetView(visibleFolders, visibleAssets, selectedAsset, detailsFolder_,
-                extensions, action, uiRequest, document, selectedObject);
+            DrawListAssetView(visibleFolders,
+                visibleAssets,
+                selectedAsset,
+                extensions,
+                action,
+                uiRequest,
+                document,
+                selectedObject,
+                favoriteAssets_,
+                favoriteFolders_,
+                collections_,
+                requestNewCollection);
         }
     }
     if (ImGui::BeginPopupContextWindow("##assetViewContext",
@@ -1940,193 +2088,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImGui::EndPopup();
     }
 
-    // Resolve details against the full registry, not the filtered asset list.
-    // This keeps a selected asset inspectable while search/type filters hide it.
-    ImGui::Separator();
-    ImGui::BeginChild("##detailsPreviewPanel", ImVec2(0.0f, 0.0f), true);
-    const EditorAssetRecord* selected = FindById(registry, selectedAsset);
-    const EditorAssetFolder* detailsFolder =
-        selected ? nullptr : registry.FindFolder(
-            detailsFolder_.empty() ? selectedFolder_ : detailsFolder_);
-
-    if (ImGui::BeginTabBar("##detailsPreviewTabs"))
-    {
-        if (ImGui::BeginTabItem("Details"))
-        {
-            if (selected)
-            {
-                ImGui::Text("%s  %s",
-                    AssetTypeBadge(selected->id.type),
-                    selected->displayName.c_str());
-
-                const bool isFavorite = ContainsAssetId(favoriteAssets_, selected->id);
-                if (ImGui::SmallButton(isFavorite ? "Remove Favorite" : "Add Favorite"))
-                {
-                    ToggleAssetId(favoriteAssets_, selected->id);
-                }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Collections"))
-                {
-                    ImGui::OpenPopup("##assetCollections");
-                }
-                if (ImGui::BeginPopup("##assetCollections"))
-                {
-                    if (collections_.empty())
-                    {
-                        ImGui::TextDisabled("No collections.");
-                        if (ImGui::MenuItem("New Collection..."))
-                        {
-                            requestNewCollection = true;
-                        }
-                    }
-                    else
-                    {
-                        for (Collection& collection : collections_)
-                        {
-                            const bool contains =
-                                ContainsAssetId(collection.assets, selected->id);
-                            if (ImGui::MenuItem(collection.name.c_str(), nullptr, contains))
-                            {
-                                ToggleAssetId(collection.assets, selected->id);
-                            }
-                        }
-                    }
-                    ImGui::EndPopup();
-                }
-
-                ImGui::Separator();
-                ImGui::Text("Type: %s", ToString(selected->id.type));
-                ImGui::Text("Virtual Path: %s", selected->virtualPath.c_str());
-                ImGui::Text("Source File: %s", selected->path.c_str());
-
-                if (selected->id.type == EditorAssetType::Texture)
-                {
-                    const EditorTextureInfo& tex = selected->texture;
-                    if (!tex.scanned)
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
-                            "Metadata: Not scanned");
-                    }
-                    else if (!tex.valid)
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
-                            "Metadata: Invalid or unreadable");
-                    }
-                    else
-                    {
-                        ImGui::Text("Kind: %s", ToString(tex.kind));
-                        ImGui::Text("Dimensions: %u x %u x %u",
-                            tex.width, tex.height, tex.depth);
-                        ImGui::Text("Format: %s", tex.format.c_str());
-                        ImGui::Text("Mip Levels: %u", tex.mipLevels);
-                        ImGui::Text("Array Size: %u", tex.arraySize);
-                    }
-                }
-                else if (selected->id.type == EditorAssetType::MaterialPreset)
-                {
-                    ImGui::Text("Preset: %s", selected->id.key.c_str());
-                    ImGui::Text("Definition File: %s", selected->path.c_str());
-                }
-                else
-                {
-                    ImGui::Text("Extension: %s",
-                        selected->extension.empty() ? "(none)" : selected->extension.c_str());
-                }
-            }
-            else if (detailsFolder)
-            {
-                ImGui::Text("[DIR]  %s", detailsFolder->name.c_str());
-                const bool isFavorite =
-                    ContainsFolderPath(favoriteFolders_, detailsFolder->path);
-                if (ImGui::SmallButton(isFavorite ? "Remove Favorite" : "Add Favorite"))
-                {
-                    ToggleFolderPath(favoriteFolders_, detailsFolder->path);
-                }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Collections"))
-                {
-                    ImGui::OpenPopup("##folderCollections");
-                }
-                if (ImGui::BeginPopup("##folderCollections"))
-                {
-                    if (collections_.empty())
-                    {
-                        ImGui::TextDisabled("No collections.");
-                        if (ImGui::MenuItem("New Collection..."))
-                        {
-                            requestNewCollection = true;
-                        }
-                    }
-                    else
-                    {
-                        for (Collection& collection : collections_)
-                        {
-                            const bool contains =
-                                ContainsFolderPath(collection.folders, detailsFolder->path);
-                            if (ImGui::MenuItem(collection.name.c_str(), nullptr, contains))
-                            {
-                                ToggleFolderPath(collection.folders, detailsFolder->path);
-                            }
-                        }
-                    }
-                    ImGui::EndPopup();
-                }
-
-                ImGui::Separator();
-                ImGui::Text("Virtual Path: %s", detailsFolder->path.c_str());
-                ImGui::Text("Child Folders: %zu", detailsFolder->childPaths.size());
-                ImGui::Text("Direct Assets: %zu", detailsFolder->directAssetCount);
-                ImGui::Text("All Assets: %zu", detailsFolder->recursiveAssetCount);
-            }
-            else if (!selectedAsset.key.empty())
-            {
-                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
-                    "Selected asset is unavailable.");
-            }
-            else
-            {
-                ImGui::TextDisabled("No asset or folder selected.");
-            }
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Preview"))
-        {
-            if (selected)
-            {
-                ImGui::Text("%s", AssetTypeBadge(selected->id.type));
-                ImGui::TextWrapped("%s", selected->displayName.c_str());
-                if (selected->id.type == EditorAssetType::Texture &&
-                    selected->texture.valid)
-                {
-                    ImGui::Text("%u x %u  %s",
-                        selected->texture.width,
-                        selected->texture.height,
-                        selected->texture.format.c_str());
-                }
-                else
-                {
-                    ImGui::TextDisabled("%s", selected->virtualPath.c_str());
-                }
-            }
-            else if (detailsFolder)
-            {
-                ImGui::TextUnformatted("[DIR]");
-                ImGui::TextWrapped("%s", detailsFolder->name.c_str());
-                ImGui::Text("%zu folders, %zu assets",
-                    detailsFolder->childPaths.size(),
-                    detailsFolder->recursiveAssetCount);
-            }
-            else
-            {
-                ImGui::TextDisabled("No preview.");
-            }
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-    }
-    ImGui::EndChild();
-
     if (requestNewCollection)
     {
         newCollectionName_[0] = '\0';
@@ -2155,7 +2116,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             {
                 name = name.substr(first, last - first + 1);
                 const bool duplicate = std::any_of(collections_.begin(), collections_.end(),
-                    [&name](const Collection& collection)
+                    [&name](const ContentBrowserCollection& collection)
                     {
                         return LowerCopy(collection.name) == LowerCopy(name);
                     });
@@ -2165,7 +2126,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 }
                 else
                 {
-                    Collection collection;
+                    ContentBrowserCollection collection;
                     collection.name = std::move(name);
                     collections_.push_back(std::move(collection));
                     collectionOperationMessage_.clear();

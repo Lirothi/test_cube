@@ -584,6 +584,255 @@ Validation:
 - Add and remove a favorite or collection reference without moving/deleting the
   underlying asset.
 
+## Step 12A: Resizable Sources And Asset View Split
+
+Goal: remove the fixed, undersized Sources column and let the user choose how
+much horizontal space the folder tree receives while the Asset View resizes to
+fill the remainder.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+
+Implementation notes:
+
+- Remove the bottom Details/Preview child introduced by Step 12. The Sources and
+  Asset View children should use all remaining height below the navigation bar.
+- Replace the fixed `220.0f` Sources width with panel-owned splitter state.
+- Draw a narrow vertical splitter between Sources and Asset View. While dragging:
+  - show the horizontal-resize cursor;
+  - update the Sources width continuously;
+  - resize the Asset View in the same frame;
+  - clamp Sources to a practical minimum, initially `160.0f`;
+  - preserve a practical Asset View minimum, initially `320.0f`;
+  - recompute the upper clamp from current Content Browser width so resizing the
+    outer window cannot push either child off-screen.
+- Use stable child sizes and a stable splitter hit target so dragging does not
+  shift when scrollbars appear.
+- Keep Favorites, Collections, and Folders in the Sources child. Its vertical
+  scrollbar must cover the full-height Sources area.
+- Remove footer-only selection state that no longer has a consumer. Keep asset
+  selection used by drag/drop, context actions, and visual highlighting.
+- Do not persist the width in this step. Step 14 owns editor UI persistence.
+
+Acceptance criteria:
+
+- Dragging the splitter left and right visibly resizes Sources and Asset View.
+- Sources cannot become too narrow to use and Asset View cannot collapse.
+- Resizing the Content Browser clamps the saved in-memory split without overlap.
+- Removing the bottom panel gives the Asset View the reclaimed vertical space.
+- List and tile views, folder navigation, drag/drop, Favorites, and Collections
+  continue to work.
+
+Validation:
+
+- Build `Debug|x64`.
+- Drag the splitter at default, narrow, and wide Content Browser sizes.
+- Exercise Sources and Asset View scrollbars at both splitter extremes.
+- Switch between list and tile view after resizing.
+
+## Step 12B: Resource Details In Hover Hints
+
+Goal: preserve useful inspection data without reserving permanent layout space
+for a Details/Preview panel.
+
+Primary files:
+
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/assets/AssetRegistry.*` only if additional cheap metadata is
+  required
+
+Implementation notes:
+
+- Add one reusable hover-hint renderer for assets and one for folders.
+- Invoke the same hint renderer from:
+  - Asset View list rows;
+  - Asset View tiles;
+  - folder tree rows;
+  - Favorite and Collection references.
+- Use delayed hover behavior so hints do not flash while the user moves across
+  a dense tile grid. Suppress hints during drag/drop.
+- Asset hints should show the real thumbnail when that asset type supports one,
+  otherwise the baked fallback icon, plus display name, virtual path, and
+  concise type-specific metadata:
+  - Texture: dimensions, format, kind, mip count, and invalid/unreadable state.
+  - Material: preset name and definition file.
+  - Mesh, Level, and Shader: source path and extension.
+- Folder hints should show virtual path, child folder count, direct asset count,
+  and recursive asset count.
+- Keep hints read-only. Move `Add/Remove Favorite` and `Collections` controls
+  from the removed footer into the existing resource-specific context menus.
+  These two organization entries are valid for both asset and folder resources;
+  do not reintroduce unrelated entries.
+- A missing Favorite or Collection reference should show an unavailable hint
+  and remain non-mutating until explicitly removed.
+
+Acceptance criteria:
+
+- Hovering any visible asset or folder shows its details after a short delay.
+- Texture metadata failures remain obvious in the hint.
+- Hints do not obscure drag/drop feedback or appear while dragging.
+- Favorite and Collection membership can still be changed after the footer is
+  removed.
+- Context menus remain scoped to the selected resource type.
+
+Validation:
+
+- Build `Debug|x64`.
+- Hover every asset type in list and tile view, plus folders in both Sources and
+  Asset View.
+- Verify hints for valid and invalid texture metadata.
+- Add/remove Favorite and Collection references from asset and folder menus.
+- Start a drag and confirm hover hints remain closed.
+
+## Step 12C: Folder And Fallback Content Browser Icons
+
+Goal: replace text-only folder and non-previewable-resource badges with
+recognizable baked icons without using generic icons where a real asset preview
+is possible.
+
+Primary files:
+
+- `art/editor/content_browser_icons/*.svg` (new editable vector sources)
+- `textures/editor/content_browser_icons.png` (new baked runtime atlas)
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/EditorController.*` if renderer/resource ownership belongs
+  outside the panel
+- `test_cube.vcxproj`
+- `test_cube.vcxproj.filters`
+
+Implementation notes:
+
+- Author simple SVG source icons for Folder, Level, Shader, Unknown, and Preview
+  Failed. The Folder source must be a real folder silhouette, not text in a box.
+- Do not author or display normal-state generic icons for Mesh, Material, or
+  Texture assets. Step 12D supplies real thumbnails for those types.
+- Convert the SVGs to transparent PNG cells at a fixed resolution, initially
+  `64x64`, and pack them into one committed PNG atlas with a documented,
+  deterministic cell order.
+- Keep SVG sources and the baked PNG atlas in the repository. Runtime code must
+  load the PNG atlas only; it must not parse or rasterize SVG.
+- Use a deterministic conversion command or small tooling script and document
+  it next to the SVG sources so another executor can reproduce the atlas.
+- Load the atlas once using the existing `Texture2D`, `UploadBatch`, and ImGui
+  texture-ID path. Give resource lifetime to an editor-owned object and release
+  it through the normal renderer-safe shutdown path.
+- Tile view:
+  - reserve a stable icon region at the top of every tile;
+  - draw the icon without stretching its aspect ratio;
+  - place the asset/folder name below it with clipping or wrapping that cannot
+    resize the tile.
+- List view:
+  - draw a smaller icon before the resource name;
+  - keep row height stable across resource types.
+- Use the same atlas icons in Step 12B hover hints.
+- Use the Preview Failed icon only after real-thumbnail generation reports a
+  failure. Use a neutral loading placeholder while work is queued.
+- Keep a text badge fallback when atlas loading fails.
+
+Acceptance criteria:
+
+- Every folder in Sources and Asset View uses the baked folder icon.
+- Level and Shader entries use distinct baked icons.
+- Mesh, Material, and Texture entries do not show generic type icons in their
+  normal ready state.
+- Folder/fallback icons render in list view, tile view, Favorites, Collections,
+  and hover hints.
+- Tile dimensions remain stable and labels do not overlap icons.
+- Missing atlas data falls back to readable text without breaking the browser.
+
+Validation:
+
+- Rebuild the PNG atlas from the committed SVG sources and confirm the output is
+  deterministic.
+- Build `Debug|x64`.
+- Inspect list and tile views at narrow/default/wide Content Browser sizes.
+- Confirm the icon atlas loads once and does not leak ImGui descriptors across
+  frames.
+- Temporarily make the atlas unavailable and verify the text fallback.
+
+## Step 12D: Real Asset Thumbnail Pipeline
+
+Goal: show the actual resource contents in Asset View for resources that can be
+meaningfully previewed, instead of representing them with generic type icons.
+
+Primary files:
+
+- `sources/editor/assets/AssetThumbnailCache.*` (new)
+- `sources/editor/assets/AssetRegistry.*`
+- `sources/editor/ui/ContentBrowserPanel.*`
+- `sources/editor/EditorController.*`
+- renderer/material/mesh helpers only where required for isolated thumbnail
+  rendering
+- `test_cube.vcxproj`
+- `test_cube.vcxproj.filters`
+
+Implementation notes:
+
+- Add an editor-owned thumbnail cache with explicit `Missing`, `Queued`,
+  `Generating`, `Ready`, and `Failed` states.
+- Key each thumbnail by asset ID, source write time, thumbnail schema version,
+  and any directly tracked dependencies needed for correctness.
+- Generate or refresh thumbnails lazily for assets visible in Asset View. Bound
+  work per frame so opening a large folder does not stall the editor.
+- Cache generated thumbnail PNGs under an editor cache directory that is not
+  source-controlled. Loading the same unchanged folder on a later run should
+  reuse those files.
+- Texture thumbnails must display the real texture contents:
+  - preserve aspect ratio;
+  - use a checkerboard behind alpha;
+  - apply the correct linear/sRGB presentation path;
+  - use a representative face or documented projection for cubemaps;
+  - report unreadable/unsupported textures as `Failed`.
+- Mesh thumbnails must render the real mesh:
+  - use an isolated offscreen preview scene or render pass;
+  - frame the mesh from its bounds with a deterministic three-quarter camera;
+  - use neutral lighting and a neutral background;
+  - use the mesh's available/default material when safe, otherwise a neutral
+    preview material;
+  - never add the preview mesh to the edited level or mutate selection.
+- Material thumbnails must render the real preset on a standard preview object,
+  preferably a sphere plus a small planar section for surface readability.
+  Track `data/materials.json` and referenced texture write times for invalidation.
+- Level and Shader assets remain on their baked Step 12C icons until dedicated
+  preview renderers are intentionally designed.
+- Tile view should use the largest available real thumbnail inside its stable
+  preview region. List view may use a smaller version of the same thumbnail.
+- Step 12B hover hints should show a larger version of the same real thumbnail;
+  do not create a second preview path.
+- Create ImGui texture IDs once per cached GPU thumbnail and release them through
+  the renderer-safe editor shutdown/eviction path. Do not allocate descriptors
+  every frame.
+- On `Queued` or `Generating`, draw a quiet loading placeholder. On `Failed`,
+  draw the Step 12C Preview Failed icon and include the failure reason in the
+  hover hint.
+
+Acceptance criteria:
+
+- Texture tiles show the actual texture, not a `[TEX]` badge or texture icon.
+- Mesh tiles show a framed render of the actual geometry, not a `[MESH]` badge
+  or mesh icon.
+- Material tiles show the actual preset on the standard preview object when the
+  material pipeline supports it.
+- Scrolling through a large folder remains responsive while thumbnails fill in.
+- Revisiting unchanged assets reuses cached thumbnails.
+- Modifying an asset invalidates and regenerates only affected thumbnails.
+- Thumbnail generation never changes the current level, selection, command
+  history, or dirty state.
+
+Validation:
+
+- Build `Debug|x64`.
+- Inspect several textures with different aspect ratios, alpha, formats, and a
+  cubemap.
+- Inspect small, large, and unusually oriented meshes and confirm deterministic
+  framing.
+- Inspect multiple material presets and verify visible differences.
+- Restart the editor and confirm unchanged thumbnails come from cache.
+- Modify one source asset, refresh, and confirm only its thumbnail regenerates.
+- Navigate a folder with many previewable assets while watching frame time and
+  ImGui descriptor usage.
+
 ## Step 13: Command-Backed Environment Edits
 
 Goal: remove the largest undo/redo inconsistency in the editor.
@@ -636,8 +885,8 @@ Implementation notes:
 
 - Extend `editor_state.json` under the existing `levelEditor` object.
 - Persist panel visibility, outliner group expansion, content browser type
-  filter, selected source folder, recursive mode, view mode, source/details
-  split sizes, and selection outline radius.
+  filter, selected source folder, recursive mode, view mode, source/asset split
+  width, and selection outline radius.
 - Avoid persisting search strings unless the user explicitly asks; stale filters
   can make panels appear empty.
 - Persist Favorites/Collections only if Step 12 implemented them.
@@ -689,23 +938,26 @@ Validation:
 
 ## Suggested Execution Order
 
-Recommended order from this point, assuming Steps 6 through 11 have already
-been implemented in the current working tree:
+Recommended order from this point, assuming Steps 6 through 12 and Step 11A
+have already been implemented in the current working tree:
 
-1. Step 11A: Viewport Material Drop To Selected Object
-2. Step 12: Content Browser Details, Preview, Collections, And Favorites
-3. Step 4: Outliner Groups And Context Actions
-4. Step 5: Rename Command
-5. Step 13: Command-Backed Environment Edits
-6. Step 14: Persist Editor Panel UI State
-7. Step 15: UX Cleanup Pass
+1. Step 12A: Resizable Sources And Asset View Split
+2. Step 12B: Resource Details In Hover Hints
+3. Step 12C: Folder And Fallback Content Browser Icons
+4. Step 12D: Real Asset Thumbnail Pipeline
+5. Step 4: Outliner Groups And Context Actions
+6. Step 5: Rename Command
+7. Step 13: Command-Backed Environment Edits
+8. Step 14: Persist Editor Panel UI State
+9. Step 15: UX Cleanup Pass
 
 Steps 4 and 5 remain valuable, but they are intentionally moved behind the
 Content Browser foundation because the current product direction is a UE-like
-folder browser. Step 13 is intentionally later because it has broader
-command/runtime impact. Step 11A stays immediately after Step 11 because the
-current user expectation is material drop-to-selected-object in the viewport,
-not Inspector-only material assignment.
+folder browser. Steps 12A through 12D supersede Step 12's permanent bottom
+Details/Preview layout: inspection moves to hover hints, the reclaimed area
+belongs to Asset View, and previewable assets use real cached thumbnails rather
+than generic icons. Step 13 remains later because it has broader command/runtime
+impact.
 
 ## Stop Conditions
 

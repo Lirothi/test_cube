@@ -10,6 +10,13 @@
 
 class EditorExtensionRegistry;
 
+struct ContentBrowserCollection
+{
+    std::string name;
+    std::vector<EditorAssetId> assets;
+    std::vector<std::string> folders;
+};
+
 // A spawn request raised by the content browser's context menu. The editor
 // reads it after Draw and turns it into a command. Type::None means no request.
 struct ContentBrowserAction
@@ -55,13 +62,6 @@ public:
         bool* open);
 
 private:
-    struct Collection
-    {
-        std::string name;
-        std::vector<EditorAssetId> assets;
-        std::vector<std::string> folders;
-    };
-
     void EnsureSelectedFolder(const AssetRegistry& registry);
     void SelectFolder(const AssetRegistry& registry, const std::string& folderPath, bool addHistory);
     void NavigateHistory(const AssetRegistry& registry, int delta);
@@ -71,7 +71,6 @@ private:
     char newFolderName_[64] = {};
     char newCollectionName_[64] = {};
     std::string selectedFolder_ = "/Game";
-    std::string detailsFolder_ = "/Game";
     std::string newFolderParent_;
     std::string deleteFolderTarget_;
     std::string folderOperationMessage_;
@@ -79,8 +78,9 @@ private:
     std::vector<std::string> folderHistory_;
     std::vector<EditorAssetId> favoriteAssets_;
     std::vector<std::string> favoriteFolders_;
-    std::vector<Collection> collections_;
+    std::vector<ContentBrowserCollection> collections_;
     size_t folderHistoryIndex_ = 0;
+    float sourcesWidth_ = 220.0f;
     bool includeSubfolders_ = true;
     bool activeTypeFilters_[5] = {};
     ViewMode viewMode_ = ViewMode::List;
