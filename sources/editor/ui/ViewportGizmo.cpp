@@ -17,6 +17,7 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
@@ -137,22 +138,35 @@ namespace
             }
 
             const IEditorObjectFactory* factory = nullptr;
+            EditorObject* selectedObject = nullptr;
             const char* reason = nullptr;
             if (!record)
             {
                 reason = "Dragged asset is no longer in the registry.";
             }
-            else if (record->id.type != EditorAssetType::Mesh)
-            {
-                reason = "Only mesh assets can be dropped in the viewport.";
-            }
-            else
+            else if (record->id.type == EditorAssetType::Mesh)
             {
                 factory = FindDefaultMeshFactory(extensions, record);
                 if (!factory)
                 {
                     reason = "No object factory can spawn this mesh.";
                 }
+            }
+            else if (record->id.type == EditorAssetType::MaterialPreset)
+            {
+                selectedObject = ctx.document.Find(ctx.selectedObject);
+                if (!selectedObject)
+                {
+                    reason = "Select a static mesh before dropping a material.";
+                }
+                else if (selectedObject->type != "staticMesh")
+                {
+                    reason = "Selected object does not support material assignment.";
+                }
+            }
+            else
+            {
+                reason = "Only mesh and material assets can be dropped in the viewport.";
             }
 
             if (reason)
@@ -167,13 +181,29 @@ namespace
                     0.0f,
                     0,
                     2.0f);
-                ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
-                if (payload->IsDelivery())
+                if (record->id.type == EditorAssetType::Mesh)
                 {
-                    nlohmann::json objectJson =
-                        factory->BuildDefaultJson(record, ctx, registry);
-                    commandStack.Execute(ctx,
-                        std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                    ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
+                    if (payload->IsDelivery())
+                    {
+                        nlohmann::json objectJson =
+                            factory->BuildDefaultJson(record, ctx, registry);
+                        commandStack.Execute(ctx,
+                            std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                    }
+                }
+                else
+                {
+                    ImGui::SetTooltip("Assign %s to %s",
+                        record->displayName.c_str(),
+                        selectedObject->name.c_str());
+                    if (payload->IsDelivery())
+                    {
+                        commandStack.Execute(ctx,
+                            std::make_unique<SetMaterialCommand>(
+                                selectedObject->id,
+                                record->id.key));
+                    }
                 }
             }
         }

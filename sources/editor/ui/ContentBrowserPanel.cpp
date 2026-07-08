@@ -469,7 +469,7 @@ namespace
         }
         else if (record.id.type == EditorAssetType::MaterialPreset)
         {
-            ImGui::TextDisabled("Drop on the Inspector to assign.");
+            ImGui::TextDisabled("Drop in the viewport or Inspector to assign.");
         }
         else
         {
