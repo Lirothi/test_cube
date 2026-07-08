@@ -17,6 +17,8 @@
 
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/ui/EditorDragDrop.h"
+#include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -224,6 +226,138 @@ namespace
         return "[ASSET]";
     }
 
+    enum class BrowserIcon
+    {
+        None = -1,
+        Folder = 0,
+        Level = 1,
+        Shader = 2,
+        Unknown = 3,
+        PreviewFailed = 4
+    };
+
+    struct BrowserIconAtlas
+    {
+        ImTextureID texture = ImTextureID_Invalid;
+
+        bool IsReady() const { return texture != ImTextureID_Invalid; }
+    };
+
+    std::string TruncateLabel(const std::string& text, size_t maxChars);
+
+    BrowserIcon IconForAsset(EditorAssetType type)
+    {
+        switch (type)
+        {
+        case EditorAssetType::Level:   return BrowserIcon::Level;
+        case EditorAssetType::Shader:  return BrowserIcon::Shader;
+        case EditorAssetType::Unknown: return BrowserIcon::Unknown;
+        case EditorAssetType::Mesh:
+        case EditorAssetType::MaterialPreset:
+        case EditorAssetType::Texture:
+            return BrowserIcon::None;
+        }
+        return BrowserIcon::Unknown;
+    }
+
+    void IconUvs(BrowserIcon icon, ImVec2& uv0, ImVec2& uv1)
+    {
+        constexpr float kAtlasWidth = 320.0f;
+        constexpr float kCellSize = 64.0f;
+        const float cell = static_cast<float>(static_cast<int>(icon));
+        uv0 = ImVec2((cell * kCellSize + 0.5f) / kAtlasWidth, 0.5f / kCellSize);
+        uv1 = ImVec2(((cell + 1.0f) * kCellSize - 0.5f) / kAtlasWidth,
+            (kCellSize - 0.5f) / kCellSize);
+    }
+
+    bool DrawBrowserIcon(ImDrawList* drawList,
+        const BrowserIconAtlas& atlas,
+        BrowserIcon icon,
+        const ImVec2& min,
+        const ImVec2& max)
+    {
+        if (!drawList || !atlas.IsReady() || icon == BrowserIcon::None)
+        {
+            return false;
+        }
+
+        ImVec2 uv0;
+        ImVec2 uv1;
+        IconUvs(icon, uv0, uv1);
+        drawList->AddImage(atlas.texture, min, max, uv0, uv1);
+        return true;
+    }
+
+    bool DrawBrowserIconItem(const BrowserIconAtlas& atlas,
+        BrowserIcon icon,
+        float size)
+    {
+        if (!atlas.IsReady() || icon == BrowserIcon::None)
+        {
+            return false;
+        }
+
+        ImVec2 uv0;
+        ImVec2 uv1;
+        IconUvs(icon, uv0, uv1);
+        ImGui::Image(atlas.texture, ImVec2(size, size), uv0, uv1);
+        return true;
+    }
+
+    void DrawSourceRowIcon(const BrowserIconAtlas& atlas, BrowserIcon icon)
+    {
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        const float size = std::max(1.0f,
+            std::min(18.0f, itemMax.y - itemMin.y - 2.0f));
+        const ImVec2 iconMin(itemMin.x + 2.0f,
+            itemMin.y + (itemMax.y - itemMin.y - size) * 0.5f);
+        DrawBrowserIcon(ImGui::GetWindowDrawList(),
+            atlas,
+            icon,
+            iconMin,
+            ImVec2(iconMin.x + size, iconMin.y + size));
+    }
+
+    void DrawTileContents(const BrowserIconAtlas& atlas,
+        BrowserIcon icon,
+        const char* fallbackBadge,
+        const std::string& name)
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        drawList->PushClipRect(itemMin, itemMax, true);
+
+        constexpr float kIconSize = 48.0f;
+        const ImVec2 iconMin(
+            itemMin.x + (itemMax.x - itemMin.x - kIconSize) * 0.5f,
+            itemMin.y + 7.0f);
+        if (!DrawBrowserIcon(drawList,
+                atlas,
+                icon,
+                iconMin,
+                ImVec2(iconMin.x + kIconSize, iconMin.y + kIconSize)))
+        {
+            const ImVec2 badgeSize = ImGui::CalcTextSize(fallbackBadge);
+            drawList->AddText(
+                ImVec2(itemMin.x + (itemMax.x - itemMin.x - badgeSize.x) * 0.5f,
+                    itemMin.y + 23.0f),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                fallbackBadge);
+        }
+
+        const std::string displayName = TruncateLabel(name, 20);
+        const ImVec2 nameSize = ImGui::CalcTextSize(displayName.c_str());
+        drawList->AddText(
+            ImVec2(itemMin.x + std::max(6.0f,
+                    (itemMax.x - itemMin.x - nameSize.x) * 0.5f),
+                itemMax.y - nameSize.y - 8.0f),
+            ImGui::GetColorU32(ImGuiCol_Text),
+            displayName.c_str());
+        drawList->PopClipRect();
+    }
+
     bool BeginDelayedResourceHint()
     {
         if (ImGui::GetDragDropPayload() != nullptr ||
@@ -241,7 +375,8 @@ namespace
     }
 
     void DrawAssetHoverHint(const EditorAssetRecord* record,
-        const EditorAssetId& fallbackId)
+        const EditorAssetId& fallbackId,
+        const BrowserIconAtlas& icons)
     {
         if (!BeginDelayedResourceHint())
         {
@@ -251,6 +386,10 @@ namespace
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
         if (!record)
         {
+            if (DrawBrowserIconItem(icons, BrowserIcon::PreviewFailed, 32.0f))
+            {
+                ImGui::SameLine();
+            }
             ImGui::Text("%s  Unavailable", AssetTypeBadge(fallbackId.type));
             ImGui::Separator();
             ImGui::TextWrapped("%s", fallbackId.key.c_str());
@@ -261,6 +400,10 @@ namespace
             return;
         }
 
+        if (DrawBrowserIconItem(icons, IconForAsset(record->id.type), 32.0f))
+        {
+            ImGui::SameLine();
+        }
         ImGui::Text("%s  %s",
             AssetTypeBadge(record->id.type),
             record->displayName.c_str());
@@ -319,7 +462,8 @@ namespace
     }
 
     void DrawFolderHoverHint(const EditorAssetFolder* folder,
-        const std::string& fallbackPath)
+        const std::string& fallbackPath,
+        const BrowserIconAtlas& icons)
     {
         if (!BeginDelayedResourceHint())
         {
@@ -327,6 +471,12 @@ namespace
         }
 
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+        if (DrawBrowserIconItem(icons,
+                folder ? BrowserIcon::Folder : BrowserIcon::PreviewFailed,
+                32.0f))
+        {
+            ImGui::SameLine();
+        }
         if (!folder)
         {
             ImGui::TextUnformatted("[DIR]  Unavailable");
@@ -1033,7 +1183,8 @@ namespace
         ContentBrowserUiRequest& request,
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
-        bool& requestNewCollection)
+        bool& requestNewCollection,
+        const BrowserIconAtlas& icons)
     {
         if (!ShouldShowFolder(registry, folder, sourceSearch))
         {
@@ -1057,9 +1208,24 @@ namespace
         }
 
         char label[256];
-        std::snprintf(label, sizeof(label), "%s (%zu)",
-            folder.name.c_str(), folder.recursiveAssetCount);
+        std::snprintf(label, sizeof(label), icons.IsReady() ? "   %s (%zu)" : "%s (%zu)",
+            folder.name.c_str(),
+            folder.recursiveAssetCount);
         const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
+        if (icons.IsReady())
+        {
+            const ImVec2 itemMin = ImGui::GetItemRectMin();
+            const ImVec2 itemMax = ImGui::GetItemRectMax();
+            const float size = std::min(18.0f, itemMax.y - itemMin.y - 2.0f);
+            const float x = itemMin.x + ImGui::GetTreeNodeToLabelSpacing();
+            const ImVec2 iconMin(x,
+                itemMin.y + (itemMax.y - itemMin.y - size) * 0.5f);
+            DrawBrowserIcon(ImGui::GetWindowDrawList(),
+                icons,
+                BrowserIcon::Folder,
+                iconMin,
+                ImVec2(iconMin.x + size, iconMin.y + size));
+        }
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
             RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder.path);
@@ -1076,7 +1242,7 @@ namespace
             DrawFolderOperationsMenu(folder.path, request, selectedFolder != folder.path, true);
             ImGui::EndPopup();
         }
-        DrawFolderHoverHint(&folder, folder.path);
+        DrawFolderHoverHint(&folder, folder.path, icons);
 
         if (open && !folder.childPaths.empty())
         {
@@ -1092,7 +1258,8 @@ namespace
                         request,
                         favoriteFolders,
                         collections,
-                        requestNewCollection);
+                        requestNewCollection,
+                        icons);
                 }
             }
             ImGui::TreePop();
@@ -1357,7 +1524,8 @@ namespace
         std::vector<EditorAssetId>& favoriteAssets,
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
-        bool& requestNewCollection)
+        bool& requestNewCollection,
+        const BrowserIconAtlas& icons)
     {
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -1383,7 +1551,7 @@ namespace
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::PushID(folder->path.c_str());
-            if (ImGui::Selectable("[DIR]", false,
+            if (ImGui::Selectable(icons.IsReady() ? "##folderType" : "[DIR]", false,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
                 selectedAsset = {};
@@ -1392,6 +1560,7 @@ namespace
                     RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
                 }
             }
+            DrawSourceRowIcon(icons, BrowserIcon::Folder);
             DrawFolderDragSource(*folder);
             DrawDisabledFolderDropTarget();
             DrawFolderContextMenu(*folder,
@@ -1399,7 +1568,7 @@ namespace
                 favoriteFolders,
                 collections,
                 requestNewCollection);
-            DrawFolderHoverHint(folder, folder->path);
+            DrawFolderHoverHint(folder, folder->path, icons);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1420,9 +1589,14 @@ namespace
 
             const bool isSelected = (selectedAsset.type == record->id.type &&
                 selectedAsset.key == record->id.key);
+            const BrowserIcon icon = IconForAsset(record->id.type);
 
             ImGui::PushID(record->id.key.c_str());
-            if (ImGui::Selectable(AssetTypeBadge(record->id.type), isSelected,
+            if (ImGui::Selectable(
+                    icons.IsReady() && icon != BrowserIcon::None ?
+                        "##assetType" :
+                        AssetTypeBadge(record->id.type),
+                    isSelected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
                 selectedAsset = record->id;
@@ -1434,10 +1608,11 @@ namespace
                     action.asset = record->id;
                 }
             }
+            DrawSourceRowIcon(icons, icon);
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
-            DrawAssetHoverHint(record, record->id);
+            DrawAssetHoverHint(record, record->id, icons);
             ImGui::PopID();
 
             ImGui::TableNextColumn();
@@ -1460,9 +1635,10 @@ namespace
         std::vector<EditorAssetId>& favoriteAssets,
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
-        bool& requestNewCollection)
+        bool& requestNewCollection,
+        const BrowserIconAtlas& icons)
     {
-        const ImVec2 tileSize(132.0f, 72.0f);
+        const ImVec2 tileSize(132.0f, 112.0f);
         const float spacingX = ImGui::GetStyle().ItemSpacing.x;
         const float availableWidth = ImGui::GetContentRegionAvail().x;
         const int columns = std::max(1,
@@ -1487,12 +1663,11 @@ namespace
 
             advanceTile();
             ImGui::PushID(folder->path.c_str());
-            const std::string label = std::string("[DIR]\n") +
-                TruncateLabel(folder->name, 24);
-            if (ImGui::Button(label.c_str(), tileSize))
+            if (ImGui::Button("##folderTile", tileSize))
             {
                 selectedAsset = {};
             }
+            DrawTileContents(icons, BrowserIcon::Folder, "[DIR]", folder->name);
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
@@ -1504,7 +1679,7 @@ namespace
                 favoriteFolders,
                 collections,
                 requestNewCollection);
-            DrawFolderHoverHint(folder, folder->path);
+            DrawFolderHoverHint(folder, folder->path, icons);
             ImGui::PopID();
         }
 
@@ -1526,12 +1701,14 @@ namespace
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
             }
 
-            const std::string label = std::string(AssetTypeBadge(record->id.type)) + "\n" +
-                TruncateLabel(record->displayName, 24);
-            if (ImGui::Button(label.c_str(), tileSize))
+            if (ImGui::Button("##assetTile", tileSize))
             {
                 selectedAsset = record->id;
             }
+            DrawTileContents(icons,
+                IconForAsset(record->id.type),
+                AssetTypeBadge(record->id.type),
+                record->displayName);
             std::string levelReason;
             if (ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
@@ -1550,7 +1727,7 @@ namespace
             DrawAssetDragSource(*record, selectedAsset);
             DrawAssetContextMenu(record, extensions, selectedAsset, action, request,
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
-            DrawAssetHoverHint(record, record->id);
+            DrawAssetHoverHint(record, record->id, icons);
             ImGui::PopID();
         }
     }
@@ -1682,9 +1859,41 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     const EditorExtensionRegistry& extensions,
     const EditorSceneDocument& document,
     EditorObjectId selectedObject,
+    Renderer& renderer,
     bool* open)
 {
     ContentBrowserAction action;
+    BrowserIconAtlas icons;
+
+    if (!iconAtlasTried_)
+    {
+        iconAtlasTried_ = true;
+        renderer.WaitForPreviousFrame();
+        UploadBatch uploads;
+        if (uploads.Begin(&renderer))
+        {
+            Texture2D::CreateDesc desc;
+            desc.path = L"textures/editor/content_browser_icons.png";
+            desc.usage = Texture2D::Usage::AlbedoSRGB;
+            iconAtlasReady_ = iconAtlas_.CreateFromFile(
+                &renderer,
+                uploads.CommandList(),
+                desc,
+                uploads.KeepAlive());
+            uploads.SubmitAndWait(&renderer);
+        }
+    }
+
+    if (iconAtlasReady_)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = iconAtlas_.GetSrvFormat();
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        icons.texture =
+            renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
+    }
 
     ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f),
@@ -1870,7 +2079,13 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             }
 
             ImGui::PushID(folderPath.c_str());
-            if (ImGui::Selectable((std::string("[DIR] ") + label).c_str(),
+            const BrowserIcon folderIcon =
+                folder ? BrowserIcon::Folder : BrowserIcon::PreviewFailed;
+            const std::string rowLabel =
+                icons.IsReady() ?
+                    std::string("   ") + label :
+                    std::string("[DIR] ") + label;
+            if (ImGui::Selectable(rowLabel.c_str(),
                     selectedFolder_ == folderPath && selectedAsset.key.empty()))
             {
                 if (folder)
@@ -1879,11 +2094,12 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 }
                 selectedAsset = {};
             }
+            DrawSourceRowIcon(icons, folderIcon);
             if (DrawReferenceRemovalMenu("Remove from Favorites"))
             {
                 favoriteFolderToRemove = folderPath;
             }
-            DrawFolderHoverHint(folder, folderPath);
+            DrawFolderHoverHint(folder, folderPath, icons);
             ImGui::PopID();
         }
         for (const EditorAssetId& assetId : favoriteAssets_)
@@ -1898,17 +2114,22 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             }
 
             ImGui::PushID(assetId.key.c_str());
+            const BrowserIcon assetIcon =
+                record ? IconForAsset(record->id.type) : BrowserIcon::PreviewFailed;
             const std::string rowLabel =
-                std::string(AssetTypeBadge(assetId.type)) + " " + label;
+                icons.IsReady() && assetIcon != BrowserIcon::None ?
+                    std::string("   ") + label :
+                    std::string(AssetTypeBadge(assetId.type)) + " " + label;
             if (ImGui::Selectable(rowLabel.c_str(), SameAssetId(selectedAsset, assetId)))
             {
                 selectedAsset = assetId;
             }
+            DrawSourceRowIcon(icons, assetIcon);
             if (DrawReferenceRemovalMenu("Remove from Favorites"))
             {
                 favoriteAssetToRemove = assetId;
             }
-            DrawAssetHoverHint(record, assetId);
+            DrawAssetHoverHint(record, assetId, icons);
             ImGui::PopID();
         }
     }
@@ -1983,7 +2204,13 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     const EditorAssetFolder* folder = registry.FindFolder(folderPath);
                     const std::string label = folder ? folder->name : folderPath;
                     ImGui::PushID(folderPath.c_str());
-                    if (ImGui::Selectable((std::string("[DIR] ") + label).c_str(),
+                    const BrowserIcon folderIcon =
+                        folder ? BrowserIcon::Folder : BrowserIcon::PreviewFailed;
+                    const std::string rowLabel =
+                        icons.IsReady() ?
+                            std::string("   ") + label :
+                            std::string("[DIR] ") + label;
+                    if (ImGui::Selectable(rowLabel.c_str(),
                             selectedFolder_ == folderPath && selectedAsset.key.empty()))
                     {
                         if (folder)
@@ -1992,11 +2219,12 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                         }
                         selectedAsset = {};
                     }
+                    DrawSourceRowIcon(icons, folderIcon);
                     if (DrawReferenceRemovalMenu("Remove from Collection"))
                     {
                         collectionFolderToRemove = folderPath;
                     }
-                    DrawFolderHoverHint(folder, folderPath);
+                    DrawFolderHoverHint(folder, folderPath, icons);
                     ImGui::PopID();
                 }
                 for (const EditorAssetId& assetId : collection.assets)
@@ -2004,17 +2232,22 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     const EditorAssetRecord* record = registry.FindById(assetId);
                     const std::string label = record ? record->displayName : assetId.key;
                     ImGui::PushID(assetId.key.c_str());
+                    const BrowserIcon assetIcon =
+                        record ? IconForAsset(record->id.type) : BrowserIcon::PreviewFailed;
                     const std::string rowLabel =
-                        std::string(AssetTypeBadge(assetId.type)) + " " + label;
+                        icons.IsReady() && assetIcon != BrowserIcon::None ?
+                            std::string("   ") + label :
+                            std::string(AssetTypeBadge(assetId.type)) + " " + label;
                     if (ImGui::Selectable(rowLabel.c_str(), SameAssetId(selectedAsset, assetId)))
                     {
                         selectedAsset = assetId;
                     }
+                    DrawSourceRowIcon(icons, assetIcon);
                     if (DrawReferenceRemovalMenu("Remove from Collection"))
                     {
                         collectionAssetToRemove = assetId;
                     }
-                    DrawAssetHoverHint(record, assetId);
+                    DrawAssetHoverHint(record, assetId, icons);
                     ImGui::PopID();
                 }
                 if (!collectionFolderToRemove.empty())
@@ -2060,7 +2293,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             uiRequest,
             favoriteFolders_,
             collections_,
-            requestNewCollection);
+            requestNewCollection,
+            icons);
     }
     else
     {
@@ -2133,7 +2367,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 favoriteAssets_,
                 favoriteFolders_,
                 collections_,
-                requestNewCollection);
+                requestNewCollection,
+                icons);
         }
         else
         {
@@ -2148,7 +2383,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 favoriteAssets_,
                 favoriteFolders_,
                 collections_,
-                requestNewCollection);
+                requestNewCollection,
+                icons);
         }
     }
     if (ImGui::BeginPopupContextWindow("##assetViewContext",

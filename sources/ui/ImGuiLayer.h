@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "imgui.h"
@@ -33,6 +34,12 @@ public:
         UINT frameIndex);
 
 private:
+    struct PreviewSrvDescriptors
+    {
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> cpu{};
+        std::array<D3D12_GPU_DESCRIPTOR_HANDLE, render::kFrameCount> gpu{};
+    };
+
     void ApplyPendingRightClickFocusClear();
     void ReleasePreviewDescriptors();
 
@@ -48,8 +55,7 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE GpuHandleForCpuHandle(D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle) const;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_;
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> previewSrvCpu_{};
-    std::array<D3D12_GPU_DESCRIPTOR_HANDLE, render::kFrameCount> previewSrvGpu_{};
+    std::unordered_map<ID3D12Resource*, PreviewSrvDescriptors> previewSrvs_;
     UINT descriptorSize_ = 0;
     uint32_t descriptorCapacity_ = 0;
     uint32_t nextDescriptorIndex_ = 0;

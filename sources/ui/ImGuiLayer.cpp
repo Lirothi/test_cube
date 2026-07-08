@@ -90,8 +90,7 @@ void ImGuiLayer::Shutdown()
     if (!initialized_)
     {
         srvHeap_.Reset();
-        previewSrvCpu_.fill({});
-        previewSrvGpu_.fill({});
+        previewSrvs_.clear();
         descriptorSize_ = 0;
         descriptorCapacity_ = 0;
         nextDescriptorIndex_ = 0;
@@ -114,8 +113,7 @@ void ImGuiLayer::Shutdown()
     ImGui::DestroyContext();
 
     srvHeap_.Reset();
-    previewSrvCpu_.fill({});
-    previewSrvGpu_.fill({});
+    previewSrvs_.clear();
     descriptorSize_ = 0;
     descriptorCapacity_ = 0;
     nextDescriptorIndex_ = 0;
@@ -220,27 +218,34 @@ ImTextureID ImGuiLayer::CreateTextureIdForSrv(ID3D12Device* device,
         return ImTextureID_Invalid;
     }
 
-    if (previewSrvCpu_[frameIndex].ptr == 0)
+    PreviewSrvDescriptors& descriptors = previewSrvs_[resource];
+    if (descriptors.cpu[frameIndex].ptr == 0)
     {
-        previewSrvCpu_[frameIndex] = AllocateSrvDescriptor();
-        previewSrvGpu_[frameIndex] = GpuHandleForCpuHandle(previewSrvCpu_[frameIndex]);
+        descriptors.cpu[frameIndex] = AllocateSrvDescriptor();
+        descriptors.gpu[frameIndex] =
+            GpuHandleForCpuHandle(descriptors.cpu[frameIndex]);
     }
 
-    device->CreateShaderResourceView(resource, &srvDesc, previewSrvCpu_[frameIndex]);
-    return static_cast<ImTextureID>(previewSrvGpu_[frameIndex].ptr);
+    device->CreateShaderResourceView(resource,
+        &srvDesc,
+        descriptors.cpu[frameIndex]);
+    return static_cast<ImTextureID>(descriptors.gpu[frameIndex].ptr);
 }
 
 void ImGuiLayer::ReleasePreviewDescriptors()
 {
-    for (D3D12_CPU_DESCRIPTOR_HANDLE& cpuHandle : previewSrvCpu_)
+    for (auto& entry : previewSrvs_)
     {
-        if (cpuHandle.ptr != 0)
+        for (D3D12_CPU_DESCRIPTOR_HANDLE& cpuHandle : entry.second.cpu)
         {
-            FreeSrvDescriptor(cpuHandle);
-            cpuHandle = {};
+            if (cpuHandle.ptr != 0)
+            {
+                FreeSrvDescriptor(cpuHandle);
+                cpuHandle = {};
+            }
         }
     }
-    previewSrvGpu_.fill({});
+    previewSrvs_.clear();
 }
 
 void ImGuiLayer::AllocateSrvDescriptorCallback(ImGui_ImplDX12_InitInfo* info,

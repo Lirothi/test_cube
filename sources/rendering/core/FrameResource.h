@@ -59,10 +59,32 @@ private:
         return 0; // fallback to Direct
     }
 
+    // Per-queue capacity. Each pool's vector is reserved to this once at
+    // construction, which fixes its storage pointer for the object's lifetime.
+    // That is what makes the lock-free fast path in Acquire() sound: a reader can
+    // dereference pools[qi][index] for an already-published index while another
+    // thread grows the pool, and the read can never race a reallocation (the
+    // storage never moves). If a single frame ever needs more than this many
+    // entries on one queue, Acquire() throws loudly instead of reallocating
+    // underneath concurrent readers. Peak real usage is in the hundreds; this is
+    // ~10-20x headroom.
+    static constexpr UINT kMaxPerQueue_ = 8192u;
+
     struct CommandAllocPools_ {
         std::vector<Microsoft::WRL::ComPtr<ID3D12CommandAllocator>> pools[kQueueCount_];
+        // Number of fully-constructed, published entries per queue. Written with
+        // release under mtx after push_back; read with acquire on the fast path.
+        // Persists across frames (the pools are reused; only `used` resets), so
+        // after warm-up every acquire hits the lock-free fast path.
+        std::atomic<UINT> committed[kQueueCount_] = { 0, 0, 0, 0 };
         std::atomic<UINT> used[kQueueCount_] = { 0, 0, 0, 0 };
         std::mutex mtx[kQueueCount_];
+
+        CommandAllocPools_() {
+            for (int qi = 0; qi < kQueueCount_; ++qi) {
+                pools[qi].reserve(kMaxPerQueue_);
+            }
+        }
 
         void ResetAll(ID3D12Device* dev) {
             for (int qi = 0; qi < kQueueCount_; ++qi) {
@@ -81,33 +103,46 @@ private:
             const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
             auto& queuePool = pools[qi];
 
-            // Fast path: an allocator with this index already exists.
-            if (index < queuePool.size()) {
+            // Fast path: this index was already created and published by an
+            // earlier grow. The acquire-load pairs with the release-store below,
+            // so the entry is fully constructed and visible; the storage pointer
+            // is stable (reserved once), so this read never races a push_back.
+            if (index < committed[qi].load(std::memory_order_acquire)) {
                 return queuePool[index].Get();
             }
-            else {
-                // Slow path: grow the vector while holding only this queue's lock.
-                std::lock_guard<std::mutex> lk(mtx[qi]);
-                // Another thread may have grown it already—check again.
-                while (index >= queuePool.size()) {
-                    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> ca;
-                    if (FAILED(dev->CreateCommandAllocator(type, IID_PPV_ARGS(&ca)))) {
-                        throw std::runtime_error("CreateCommandAllocator failed");
-					}
-                    queuePool.push_back(ca);
+
+            // Slow path: grow under the lock, then publish the new high-water mark.
+            std::lock_guard<std::mutex> lk(mtx[qi]);
+            while (index >= queuePool.size()) {
+                if (queuePool.size() >= kMaxPerQueue_) {
+                    throw std::runtime_error("CommandAllocator pool exceeded kMaxPerQueue_");
                 }
-                return queuePool[index].Get();
+                Microsoft::WRL::ComPtr<ID3D12CommandAllocator> ca;
+                if (FAILED(dev->CreateCommandAllocator(type, IID_PPV_ARGS(&ca)))) {
+                    throw std::runtime_error("CreateCommandAllocator failed");
+                }
+                queuePool.push_back(ca);
             }
+            committed[qi].store(static_cast<UINT>(queuePool.size()), std::memory_order_release);
+            return queuePool[index].Get();
         }
     };
 
     struct CommandListPools_ {
         std::vector<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>> pools[kQueueCount_];
+        // See CommandAllocPools_::committed — same lock-free-read invariant.
+        std::atomic<UINT> committed[kQueueCount_] = { 0, 0, 0, 0 };
         std::atomic<UINT> used[kQueueCount_] = { 0, 0, 0, 0 };
         std::mutex mtx[kQueueCount_];
         std::atomic<uint32_t> epoch_{ 0 };
 
         static constexpr UINT kChunkSize_ = 8u;
+
+        CommandListPools_() {
+            for (int qi = 0; qi < kQueueCount_; ++qi) {
+                pools[qi].reserve(kMaxPerQueue_);
+            }
+        }
 
         void ResetUsage() {
             for (int qi = 0; qi < kQueueCount_; ++qi) {
@@ -151,10 +186,20 @@ private:
             const UINT index = used[qi].fetch_add(1u, std::memory_order_relaxed);
 #endif
             auto& vec = pools[qi];
+            ID3D12GraphicsCommandList* acquired = nullptr;
 
-            if (index >= vec.size()) {
+            // Fast path: already created and published — no lock. (See
+            // CommandAllocPools_::Acquire for the memory-ordering rationale.)
+            if (index < committed[qi].load(std::memory_order_acquire)) {
+                acquired = vec[index].Get();
+            }
+            else {
+                // Slow path: grow under the lock, then publish the high-water mark.
                 std::lock_guard<std::mutex> lk(mtx[qi]);
                 while (index >= vec.size()) {
+                    if (vec.size() >= kMaxPerQueue_) {
+                        throw std::runtime_error("CommandList pool exceeded kMaxPerQueue_");
+                    }
                     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cl;
                     if (FAILED(dev->CreateCommandList(0, type, alloc, initialPSO, IID_PPV_ARGS(&cl)))) {
                         throw std::runtime_error("CreateCommandList failed");
@@ -165,9 +210,11 @@ private:
                     }
                     vec.push_back(cl);
                 }
+                committed[qi].store(static_cast<UINT>(vec.size()), std::memory_order_release);
+                acquired = vec[index].Get();
             }
 
-            ID3D12GraphicsCommandList* cl = vec[index].Get();
+            ID3D12GraphicsCommandList* cl = acquired;
             const HRESULT resetHr = cl->Reset(alloc, initialPSO);
             if (FAILED(resetHr)) {
                 // Reset fails on (a) device removal (a GPU fault upstream — then

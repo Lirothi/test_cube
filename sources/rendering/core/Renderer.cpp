@@ -315,7 +315,7 @@ void Renderer::BeginFrame() {
 
     ctxPool_.ResetForFrame();
     debugDrawSystem_.BeginFrame();
-    pendingImGuiTextureResource_ = nullptr;
+    pendingImGuiTextureResources_.clear();
 }
 
 void Renderer::EndFrame() {
@@ -486,12 +486,12 @@ void Renderer::BeginImGuiFrame()
 
 void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
 {
-    if (pendingImGuiTextureResource_)
+    for (ID3D12Resource* resource : pendingImGuiTextureResources_)
     {
-        Transition(commandList, pendingImGuiTextureResource_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(commandList, resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     imguiLayer_.Render(commandList);
-    pendingImGuiTextureResource_ = nullptr;
+    pendingImGuiTextureResources_.clear();
 }
 
 ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
@@ -501,7 +501,12 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
         return ImTextureID_Invalid;
     }
 
-    pendingImGuiTextureResource_ = resource;
+    if (std::find(pendingImGuiTextureResources_.begin(),
+            pendingImGuiTextureResources_.end(),
+            resource) == pendingImGuiTextureResources_.end())
+    {
+        pendingImGuiTextureResources_.push_back(resource);
+    }
     return imguiLayer_.CreateTextureIdForSrv(GetDevice(), resource, srvDesc, currentFrameIndex_);
 }
 

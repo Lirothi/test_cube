@@ -115,6 +115,21 @@
     <Filter Include="textures\ocean">
       <UniqueIdentifier>{4f4e25a2-8f7a-4601-8f8b-fcf539813b4e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="textures\editor">
+      <UniqueIdentifier>{82957f61-e3cb-4e16-9d43-c90bc43e619a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="art">
+      <UniqueIdentifier>{a79f922c-0bc7-498b-b043-36a0c958a516}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="art\editor">
+      <UniqueIdentifier>{6e3f5b40-91dc-45db-a8e8-c0628d559e03}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="art\editor\content_browser_icons">
+      <UniqueIdentifier>{d45e02d2-1eeb-449a-a5bd-c55e13dc69b8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="tools">
+      <UniqueIdentifier>{b9af8407-19f0-4282-a46e-220724aa0246}</UniqueIdentifier>
+    </Filter>
     <Filter Include="data">
       <UniqueIdentifier>{ef8c8f75-2723-43e9-9415-8f7479d6b118}</UniqueIdentifier>
     </Filter>
@@ -1017,6 +1032,30 @@
     </None>
     <None Include="textures\ocean\wind_gusts.png">
       <Filter>textures\ocean</Filter>
+    </None>
+    <None Include="textures\editor\content_browser_icons.png">
+      <Filter>textures\editor</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\folder.svg">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\level.svg">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\shader.svg">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\unknown.svg">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\preview_failed.svg">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="art\editor\content_browser_icons\README.md">
+      <Filter>art\editor\content_browser_icons</Filter>
+    </None>
+    <None Include="tools\build_content_browser_icons.py">
+      <Filter>tools</Filter>
     </None>
     <None Include="input\bindings.json">
       <Filter>input</Filter>

@@ -1160,7 +1160,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             {
                 const ContentBrowserAction action =
                     contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,
-                        document_, selectedObject_, &showContentBrowser_);
+                        document_, selectedObject_, panelCtx.renderer, &showContentBrowser_);
                 if (!action.HasAction())
                 {
                     return;

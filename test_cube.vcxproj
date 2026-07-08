@@ -543,6 +543,14 @@
     <None Include="textures\ocean\FoamTrail.png" />
     <None Include="textures\ocean\UnderwaterFoam.png" />
     <None Include="textures\ocean\wind_gusts.png" />
+    <None Include="textures\editor\content_browser_icons.png" />
+    <None Include="art\editor\content_browser_icons\folder.svg" />
+    <None Include="art\editor\content_browser_icons\level.svg" />
+    <None Include="art\editor\content_browser_icons\shader.svg" />
+    <None Include="art\editor\content_browser_icons\unknown.svg" />
+    <None Include="art\editor\content_browser_icons\preview_failed.svg" />
+    <None Include="art\editor\content_browser_icons\README.md" />
+    <None Include="tools\build_content_browser_icons.py" />
     <None Include="third_party\imgui\LICENSE.txt" />
   </ItemGroup>
   <ItemGroup>

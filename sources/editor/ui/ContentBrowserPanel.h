@@ -7,8 +7,10 @@
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "materials/Texture2D.h"
 
 class EditorExtensionRegistry;
+class Renderer;
 
 struct ContentBrowserCollection
 {
@@ -59,6 +61,7 @@ public:
         const EditorExtensionRegistry& extensions,
         const EditorSceneDocument& document,
         EditorObjectId selectedObject,
+        Renderer& renderer,
         bool* open);
 
 private:
@@ -84,6 +87,9 @@ private:
     bool includeSubfolders_ = true;
     bool activeTypeFilters_[5] = {};
     ViewMode viewMode_ = ViewMode::List;
+    Texture2D iconAtlas_;
+    bool iconAtlasTried_ = false;
+    bool iconAtlasReady_ = false;
 };
 
 #endif // WITH_EDITOR

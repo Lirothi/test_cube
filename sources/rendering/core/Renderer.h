@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
@@ -359,7 +360,7 @@ private:
     UINT oceanReflectionTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
-    ID3D12Resource* pendingImGuiTextureResource_ = nullptr;
+    std::vector<ID3D12Resource*> pendingImGuiTextureResources_;
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.99f; // exponential smoothing: 0..1 (higher is smoother)
