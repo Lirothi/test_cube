@@ -1067,7 +1067,7 @@ have already been implemented in the current working tree:
 4. Step 12D: Real Asset Thumbnail Pipeline (safe core done: framework + textures)
 5. Step 12E: Mesh And Material Thumbnail Previews (remaining 12D scope)
 6. Step 4: Outliner Groups And Context Actions
-7. Step 5: Rename Command
+7. Step 5: Rename Command (done)
 8. Step 13: Command-Backed Environment Edits
 9. Step 14: Persist Editor Panel UI State
 10. Step 15: UX Cleanup Pass

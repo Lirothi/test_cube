@@ -1,6 +1,8 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <string>
+
 #include "editor/scene/EditorSceneDocument.h" // EditorObject, EditorTransform
 
 struct EditorContext;
@@ -25,6 +27,10 @@ public:
 private:
     void DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);
 
+    EditorObjectId nameEditObject_{};
+    char nameEditBuffer_[256] = {};
+    std::string nameBeforeEdit_;
+    bool nameEditActive_ = false;
     EditorTransform transformBeforeEdit_{}; // captured when a transform edit gesture begins
 };
 

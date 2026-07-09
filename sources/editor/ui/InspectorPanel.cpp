@@ -14,6 +14,7 @@
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
@@ -362,6 +363,9 @@ void InspectorPanel::Draw(EditorContext& ctx,
     EditorObject* obj = ctx.document.Find(ctx.selectedObject);
     if (!obj)
     {
+        nameEditActive_ = false;
+        nameEditObject_ = EditorObjectId{};
+
         // Environment entities (camera/lights/skybox/ocean) live in a separate list.
         for (EditorObject& env : ctx.document.Environment())
         {
@@ -385,12 +389,40 @@ void InspectorPanel::Draw(EditorContext& ctx,
     ImGui::Text("ID: %llu", static_cast<unsigned long long>(obj->id.value));
     ImGui::Text("Type: %s", obj->type.c_str());
 
-    char nameBuf[256];
-    std::snprintf(nameBuf, sizeof(nameBuf), "%s", obj->name.c_str());
-    if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+    if (nameEditObject_.value != obj->id.value || !nameEditActive_)
     {
-        obj->name = nameBuf;
-        ctx.document.SetDirty(true);
+        nameEditObject_ = obj->id;
+        std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
+    }
+
+    const bool submitted = ImGui::InputText(
+        "Name",
+        nameEditBuffer_,
+        sizeof(nameEditBuffer_),
+        ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemActivated())
+    {
+        nameEditActive_ = true;
+        nameBeforeEdit_ = obj->name;
+    }
+
+    const bool cancelNameEdit =
+        nameEditActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape);
+    const bool finishNameEdit =
+        submitted || (nameEditActive_ && ImGui::IsItemDeactivated());
+    if (cancelNameEdit)
+    {
+        nameEditActive_ = false;
+        std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
+    }
+    else if (finishNameEdit)
+    {
+        nameEditActive_ = false;
+        commandStack.Execute(ctx, std::make_unique<RenameObjectCommand>(
+            obj->id,
+            nameBeforeEdit_,
+            std::string(nameEditBuffer_)));
+        std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
     }
 
     bool enabled = obj->enabled;

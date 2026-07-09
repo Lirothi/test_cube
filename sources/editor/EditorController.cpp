@@ -23,6 +23,7 @@
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
+#include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
@@ -1246,6 +1247,17 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                             outlinerAction.target))
                     {
                         levelStatus_ = "Nothing to frame";
+                    }
+                }
+                else if (outlinerAction.type == OutlinerAction::Type::RenameObject)
+                {
+                    const EditorObject* object = document_.Find(outlinerAction.target);
+                    if (object)
+                    {
+                        commandStack_.Execute(panelCtx, std::make_unique<RenameObjectCommand>(
+                            outlinerAction.target,
+                            object->name,
+                            outlinerAction.nameValue));
                     }
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)

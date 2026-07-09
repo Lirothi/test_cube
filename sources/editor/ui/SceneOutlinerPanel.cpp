@@ -539,73 +539,120 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
 
             ImGui::TableNextColumn();
             const bool isSelected = (selectedObject.value == obj->id.value);
-            // AllowOverlap so the "On" checkbox in a later column stays clickable
-            // instead of being covered by this row-spanning selectable.
-            if (ImGui::Selectable(obj->name.c_str(), isSelected,
-                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+            const bool renaming =
+                !row.environment && renamingObject_.value == obj->id.value;
+            if (renaming)
             {
-                selectedObject = obj->id;
+                if (renameFocusRequested_)
+                {
+                    ImGui::SetKeyboardFocusHere();
+                    renameFocusRequested_ = false;
+                }
+
+                ImGui::SetNextItemWidth(-1.0f);
+                const bool submitted = ImGui::InputText(
+                    "##rename",
+                    renameBuffer_,
+                    sizeof(renameBuffer_),
+                    ImGuiInputTextFlags_EnterReturnsTrue |
+                        ImGuiInputTextFlags_AutoSelectAll);
+                const bool cancelRename = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                const bool finishRename = submitted || ImGui::IsItemDeactivated();
+                if (cancelRename)
+                {
+                    renamingObject_ = EditorObjectId{};
+                }
+                else if (finishRename)
+                {
+                    if (std::string(renameBuffer_) != obj->name)
+                    {
+                        action.type = OutlinerAction::Type::RenameObject;
+                        action.target = obj->id;
+                        action.nameValue = renameBuffer_;
+                    }
+                    renamingObject_ = EditorObjectId{};
+                }
             }
-
-            if (ImGui::BeginPopupContextItem())
+            else
             {
-                selectedObject = obj->id; // right-click selects the row too
-
-                bool hasAction = false;
-                if (SupportsDuplicate(*obj, row.environment))
+                // AllowOverlap so the "On" checkbox in a later column stays
+                // clickable instead of being covered by this row-spanning item.
+                if (ImGui::Selectable(obj->name.c_str(), isSelected,
+                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
                 {
-                    if (ImGui::MenuItem("Duplicate"))
-                    {
-                        action.type = OutlinerAction::Type::DuplicateObject;
-                        action.target = obj->id;
-                    }
-                    hasAction = true;
-                }
-                if (SupportsFrameSelection(*obj, row.environment))
-                {
-                    if (ImGui::MenuItem("Frame Selection"))
-                    {
-                        action.type = OutlinerAction::Type::FrameSelection;
-                        action.target = obj->id;
-                    }
-                    hasAction = true;
+                    selectedObject = obj->id;
                 }
 
-                const bool supportsEnable =
-                    row.environment ? SupportsEnvironmentEnable(*obj) : true;
-                if (supportsEnable || !row.environment)
+                if (ImGui::BeginPopupContextItem())
                 {
-                    if (hasAction)
-                    {
-                        ImGui::Separator();
-                    }
-                    const bool enabled = RowEnabledValue(*obj, row.environment);
-                    if (ImGui::MenuItem(enabled ? "Disable" : "Enable"))
-                    {
-                        action.type = row.environment ?
-                            OutlinerAction::Type::SetEnvEnabled :
-                            OutlinerAction::Type::SetEnabled;
-                        action.target = obj->id;
-                        action.enabledValue = !enabled;
-                    }
-                    hasAction = true;
-                }
+                    selectedObject = obj->id; // right-click selects the row too
 
-                if (!row.environment)
-                {
-                    if (ImGui::MenuItem("Delete"))
+                    bool hasAction = false;
+                    if (!row.environment)
                     {
-                        action.type = OutlinerAction::Type::DeleteObject;
-                        action.target = obj->id;
+                        if (ImGui::MenuItem("Rename"))
+                        {
+                            std::snprintf(renameBuffer_, sizeof(renameBuffer_), "%s", obj->name.c_str());
+                            renamingObject_ = obj->id;
+                            renameFocusRequested_ = true;
+                        }
+                        hasAction = true;
                     }
-                    hasAction = true;
-                }
+                    if (SupportsDuplicate(*obj, row.environment))
+                    {
+                        if (ImGui::MenuItem("Duplicate"))
+                        {
+                            action.type = OutlinerAction::Type::DuplicateObject;
+                            action.target = obj->id;
+                        }
+                        hasAction = true;
+                    }
+                    if (SupportsFrameSelection(*obj, row.environment))
+                    {
+                        if (ImGui::MenuItem("Frame Selection"))
+                        {
+                            action.type = OutlinerAction::Type::FrameSelection;
+                            action.target = obj->id;
+                        }
+                        hasAction = true;
+                    }
 
-                if (!hasAction)
-                {
-                    ImGui::TextDisabled("No available actions.");
+                    const bool supportsEnable =
+                        row.environment ? SupportsEnvironmentEnable(*obj) : true;
+                    if (supportsEnable || !row.environment)
+                    {
+                        if (hasAction)
+                        {
+                            ImGui::Separator();
+                        }
+                        const bool enabled = RowEnabledValue(*obj, row.environment);
+                        if (ImGui::MenuItem(enabled ? "Disable" : "Enable"))
+                        {
+                            action.type = row.environment ?
+                                OutlinerAction::Type::SetEnvEnabled :
+                                OutlinerAction::Type::SetEnabled;
+                            action.target = obj->id;
+                            action.enabledValue = !enabled;
+                        }
+                        hasAction = true;
+                    }
+
+                    if (!row.environment)
+                    {
+                        if (ImGui::MenuItem("Delete"))
+                        {
+                            action.type = OutlinerAction::Type::DeleteObject;
+                            action.target = obj->id;
+                        }
+                        hasAction = true;
+                    }
+
+                    if (!hasAction)
+                    {
+                        ImGui::TextDisabled("No available actions.");
+                    }
+                    ImGui::EndPopup();
                 }
-                ImGui::EndPopup();
             }
 
             ImGui::TableNextColumn();
@@ -622,9 +669,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                     bool enabled = obj->properties.value("enabled", true);
                     if (ImGui::Checkbox("##enabled", &enabled))
                     {
-                        action.type = OutlinerAction::Type::SetEnvEnabled;
-                        action.target = obj->id;
-                        action.enabledValue = enabled;
+                        if (action.type == OutlinerAction::Type::None)
+                        {
+                            action.type = OutlinerAction::Type::SetEnvEnabled;
+                            action.target = obj->id;
+                            action.enabledValue = enabled;
+                        }
                     }
                 }
             }
@@ -633,9 +683,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                 bool enabled = obj->enabled;
                 if (ImGui::Checkbox("##enabled", &enabled))
                 {
-                    action.type = OutlinerAction::Type::SetEnabled;
-                    action.target = obj->id;
-                    action.enabledValue = enabled;
+                    if (action.type == OutlinerAction::Type::None)
+                    {
+                        action.type = OutlinerAction::Type::SetEnabled;
+                        action.target = obj->id;
+                        action.enabledValue = enabled;
+                    }
                 }
             }
 

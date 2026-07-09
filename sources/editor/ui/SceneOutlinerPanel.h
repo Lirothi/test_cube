@@ -1,6 +1,8 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <string>
+
 #include "editor/scene/EditorSceneDocument.h"
 
 // A delete request raised by the outliner; the editor turns it into a command.
@@ -12,12 +14,14 @@ struct OutlinerAction
         DeleteObject,
         DuplicateObject,
         FrameSelection,
+        RenameObject,
         SetEnabled,
         SetEnvEnabled
     };
     Type type = Type::None;
     EditorObjectId target;
     bool enabledValue = false; // for SetEnabled / SetEnvEnabled
+    std::string nameValue; // for RenameObject
 };
 
 // Lists document and environment entities in a searchable/filterable table.
@@ -40,6 +44,9 @@ private:
     bool environmentGroupOpen_ = true;
     bool otherGroupOpen_ = true;
     int typeFilterIndex_ = 0;
+    EditorObjectId renamingObject_{};
+    char renameBuffer_[256] = {};
+    bool renameFocusRequested_ = false;
 };
 
 #endif // WITH_EDITOR
