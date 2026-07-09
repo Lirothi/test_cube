@@ -1677,9 +1677,10 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         RenderGraph<kGBufferRenderGraphPassCount>::DependencyList selectedDeps;
         selectedDeps.push_back(pOpaqueSimple);
         selectedDeps.push_back(pOpaqueComplex);
-        rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
+        rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
             RenderableObjectBase* selected = FindSelectedObject(*frame_, mainView, false);
-            if (!selected)
+            auto material = resources_.GetSelectionStencilMaterial();
+            if (!selected || !material)
             {
                 return;
             }
@@ -1688,9 +1689,17 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
             SetCommandListName(t.cl, sub.pass);
             {
                 GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
-                renderer->BindGBuffer(t.cl, Renderer::ClearMode::None);
+
+                const auto& D = renderer->GetDeferredForFrame();
+                t.cl->OMSetRenderTargets(0, nullptr, FALSE, &D.dsv);
+
+                const D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()), 0.0f, 1.0f };
+                const D3D12_RECT sr{ 0, 0, static_cast<LONG>(renderer->GetRenderWidth()), static_cast<LONG>(renderer->GetRenderHeight()) };
+                t.cl->RSSetViewports(1, &vp);
+                t.cl->RSSetScissorRects(1, &sr);
+
                 t.cl->OMSetStencilRef(kSelectionStencilBit);
-                selected->Render(renderer, t.cl, camera, viewCB);
+                selected->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
                 t.cl->OMSetStencilRef(0);
             }
             renderer->EndThreadCommandList(t, sub.batchIndex, kSelectionStencilGBufferLocalOrder);

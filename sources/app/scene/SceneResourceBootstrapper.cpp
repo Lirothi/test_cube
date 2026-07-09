@@ -299,9 +299,11 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         gd.inputLayoutKey = "PosNormTanUV";
         gd.numRT = 0;
         gd.dsvFormat = renderer->GetDsvFormat();
-        gd.depth.DepthEnable = TRUE;
+        // Selection uses an x-ray silhouette: stencil the selected mesh even
+        // where scene geometry is closer, then outline that projected contour.
+        gd.depth.DepthEnable = FALSE;
         gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
         gd.depth.StencilEnable = TRUE;
         gd.depth.StencilReadMask = 0xff;
         gd.depth.StencilWriteMask = kEditorSelectionStencilBit;
