@@ -8,27 +8,27 @@
 #include <unordered_map>
 
 #include <d3d12.h>
+#include <wrl/client.h>
 
 #include "imgui.h"
+#include "editor/assets/EditorPreviewRenderer.h"
 #include "materials/Texture2D.h"
 
 struct EditorAssetRecord;
 class Renderer;
 
-// Editor-owned cache of real asset thumbnails for the Content Browser (Step 12D).
+// Editor-owned cache of real asset thumbnails for the Content Browser (Step 12D/E).
 //
-// Scope of this pass ("safe core"): TEXTURE assets are previewed by loading the
-// source image once on the GPU and handing the browser a per-frame ImGui texture
-// id to draw. Mesh and material previews (an offscreen 3D render pass) are a
-// separate, later pass; the browser leaves those types on their Step 12C
-// icons/badges. Cube textures are not previewed here (a cube face needs a
-// sampling pass) and are also left on their badge by the browser.
+// Texture assets are previewed by loading the source image on the GPU; mesh and
+// material assets are previewed by rendering them offscreen through
+// EditorPreviewRenderer. Every generated thumbnail is a GPU resource left in a
+// shader-read state and handed to ImGui via a per-frame texture id. Cube textures
+// are not previewed (the browser leaves them on their badge).
 //
-// Lifetime / threading: every method must run inside the editor draw/tick window
-// (the same place the Content Browser runs). All GPU work (texture upload,
-// resource release) is fenced with Renderer::WaitForPreviousFrame, matching the
-// rest of the editor. Nothing here touches the Scene, selection, command
-// history, or document dirty state, so generation is side-effect free.
+// Lifetime / threading: every method runs inside the editor draw/tick window. All
+// GPU work (texture upload, offscreen render, resource release) is fenced with
+// Renderer::WaitForPreviousFrame, matching the rest of the editor. Nothing here
+// touches the Scene, selection, command history, or document dirty state.
 class AssetThumbnailCache
 {
 public:
@@ -54,14 +54,14 @@ public:
     // editor frame before issuing any Request.
     void BeginFrame();
 
-    // Request the thumbnail for a texture asset and, when Ready, obtain a
-    // drawable per-frame ImGui id for it. Marks the asset as used this frame.
-    // Safe to call for any record; only texture records ever produce a preview.
+    // Request the thumbnail for a previewable asset (texture, mesh, or material)
+    // and, when Ready, obtain a drawable per-frame ImGui id for it. Marks the
+    // asset used this frame. Non-previewable records return State::Missing.
     View Request(Renderer& renderer, const EditorAssetRecord& record);
 
-    // Generate a bounded number of queued thumbnails (one fenced upload batch).
-    // Call once per editor frame after the browser has issued its Requests. A
-    // no-op with no GPU stall when the queue is empty.
+    // Generate a bounded number of queued thumbnails (fenced upload + offscreen
+    // render). Call once per editor frame after the browser has issued Requests.
+    // A no-op with no GPU stall when the queue is empty.
     void ProcessPending(Renderer& renderer);
 
     // Release every GPU thumbnail under a full GPU wait. Optional: natural
@@ -73,7 +73,7 @@ private:
     struct Entry
     {
         State state = State::Missing;
-        Texture2D texture;
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource; // loaded texture or rendered target
         DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -85,9 +85,18 @@ private:
 
     struct PendingLoad
     {
+        enum class Kind
+        {
+            Texture,
+            Mesh,
+            Material
+        };
+
         std::string key;
-        std::wstring physicalPath;
-        Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB;
+        Kind kind = Kind::Texture;
+        std::string path;                   // texture / mesh source file
+        std::string presetKey;              // material preset name
+        Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB; // texture only
     };
 
     void EvictIfNeeded(Renderer& renderer);
@@ -95,6 +104,7 @@ private:
 
     std::unordered_map<std::string, Entry> entries_;
     std::deque<PendingLoad> queue_;
+    EditorPreviewRenderer preview_;
     std::uint64_t frameCounter_ = 0;
 };
 

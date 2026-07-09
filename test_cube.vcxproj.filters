@@ -159,6 +159,9 @@
     <ClCompile Include="sources/editor/assets/AssetThumbnailCache.cpp">
       <Filter>sources\editor\assets</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/assets/EditorPreviewRenderer.cpp">
+      <Filter>sources\editor\assets</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -495,6 +498,9 @@
       <Filter>sources\editor\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/assets/AssetThumbnailCache.h">
+      <Filter>sources\editor\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h">
       <Filter>sources\editor\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
@@ -881,6 +887,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\editor_preview.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\reflection_blur_cs.hlsl">

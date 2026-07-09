@@ -341,6 +341,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
+        ctx.renderer.MarkImGuiTextureShaderReadable(iconAtlas_.GetResource());
         const ImTextureID iconTex = ctx.renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
         if (iconTex != ImTextureID_Invalid)
         {

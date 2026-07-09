@@ -859,6 +859,25 @@ Goal: complete the previewable-resource work started in Step 12D by rendering re
 mesh and material thumbnails (and a representative cubemap face), and persist all
 thumbnails to an on-disk cache so unchanged assets survive an editor restart.
 
+Status (2026-07-08): mesh and material previews are implemented and build clean
+(editor and no-editor). What landed:
+
+- `EditorPreviewRenderer` (`sources/editor/assets/EditorPreviewRenderer.*`,
+  `shaders/editor_preview.hlsl`): a self-contained offscreen forward pass (own
+  PSO/root signature/depth target/constant buffer, private MeshManager and
+  MaterialDataManager) that renders a mesh from a deterministic three-quarter
+  camera with neutral lighting. Meshes use a neutral material; materials render
+  their preset albedo on a shared unit sphere.
+- `AssetThumbnailCache` extended to generate mesh and material thumbnails through
+  that renderer (bounded per frame, fenced, one draw per command list), reusing
+  the same states/keying/eviction/GPU-lifetime paths as texture thumbnails. The
+  browser's existing `Ready` image path renders them in tiles, list, and hover.
+
+Still deferred (documented below): cubemap face previews and the on-disk
+thumbnail cache for cross-restart reuse. This is a renderer path, so a clean
+build is necessary but not sufficient; it needs a GUI check (correct framing,
+non-empty thumbnails, no descriptor/barrier issues).
+
 Primary files:
 
 - `sources/editor/assets/AssetThumbnailCache.*` (extend the existing cache; do not

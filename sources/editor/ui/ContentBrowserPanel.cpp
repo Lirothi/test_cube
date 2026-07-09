@@ -337,13 +337,15 @@ namespace
     {
         BrowserThumbnail thumb;
 
-        // Only real 2D textures get a preview in this pass. Cube textures need a
-        // sampling pass; mesh/material need an offscreen 3D render (a later pass)
-        // and fall back to their Step 12C icon/badge.
-        const bool previewableTexture =
-            record.id.type == EditorAssetType::Texture &&
-            record.texture.kind != EditorTextureKind::TextureCube;
-        if (previewableTexture && thumbs.cache && thumbs.renderer)
+        // Textures (2D, not cube), meshes, and material presets get a real
+        // preview from the thumbnail cache. Cube textures still need a sampling
+        // pass; everything else falls back to its Step 12C icon/badge.
+        const bool previewable =
+            (record.id.type == EditorAssetType::Texture &&
+                record.texture.kind != EditorTextureKind::TextureCube) ||
+            record.id.type == EditorAssetType::Mesh ||
+            record.id.type == EditorAssetType::MaterialPreset;
+        if (previewable && thumbs.cache && thumbs.renderer)
         {
             const AssetThumbnailCache::View view =
                 thumbs.cache->Request(*thumbs.renderer, record);
@@ -504,7 +506,7 @@ namespace
         const ImVec2 itemMax = ImGui::GetItemRectMax();
         drawList->PushClipRect(itemMin, itemMax, true);
 
-        constexpr float kIconSize = 48.0f;
+        constexpr float kIconSize = 56.0f;
         const ImVec2 iconMin(
             itemMin.x + (itemMax.x - itemMin.x - kIconSize) * 0.5f,
             itemMin.y + 7.0f);
@@ -2110,6 +2112,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
+        renderer.MarkImGuiTextureShaderReadable(iconAtlas_.GetResource());
         icons.texture =
             renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
     }

@@ -514,6 +514,22 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
 void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
 {
     imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
+    stateTracker_.ClearResourceState(resource);
+}
+
+void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
+{
+    // Editor textures shown through CreateImGuiTextureId (icon atlas, asset
+    // thumbnails, viewport billboards) are created in a pixel-shader-readable
+    // state outside the state tracker. Register that so RenderImGui does not
+    // record a COMMON->PSR barrier with a wrong before-state, which the D3D12
+    // debug layer rejects. Call each frame before RenderImGui, since a resize
+    // clears all known states. Engine render targets go through TextureDebugViewer
+    // instead and keep their real tracked state, so they are unaffected.
+    if (resource)
+    {
+        stateTracker_.SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
 }
 #endif
 

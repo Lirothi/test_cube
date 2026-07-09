@@ -72,6 +72,10 @@ public:
     // Drop the cached ImGui preview descriptors for a resource (editor thumbnail
     // cache eviction). The caller idles the GPU before freeing the resource.
     void ReleaseImGuiTextureDescriptors(ID3D12Resource* resource);
+    // Register an editor-owned ImGui texture as pixel-shader-readable so
+    // RenderImGui does not emit a bogus COMMON->PSR barrier. Call each frame the
+    // resource is displayed, before RenderImGui.
+    void MarkImGuiTextureShaderReadable(ID3D12Resource* resource);
 #endif
     void ShutdownImGui();
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);

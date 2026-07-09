@@ -231,6 +231,7 @@
     <ClCompile Include="sources/editor/EditorHotkeys.cpp" />
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/editor/assets/AssetThumbnailCache.cpp" />
+    <ClCompile Include="sources/editor/assets/EditorPreviewRenderer.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
@@ -365,6 +366,7 @@
     <ClInclude Include="sources/editor/EditorHotkeys.h" />
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/editor/assets/AssetThumbnailCache.h" />
+    <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
@@ -493,6 +495,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
+    <None Include="shaders\editor_preview.hlsl" />
     <None Include="shaders\reflection_blur_cs.hlsl" />
     <None Include="shaders\selection_outline_cs.hlsl" />
     <None Include="shaders\selection_stencil.hlsl" />
