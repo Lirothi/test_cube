@@ -23,7 +23,7 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/renderables/InstanceTypes.h"
-#include "rendering/renderables/VirtualShadowMap.h"
+#include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 

@@ -8,7 +8,7 @@
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
 #include "rendering/lighting/LightManager.h"
-#include "rendering/renderables/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
+#include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 
 class Camera;
 class DirectionalLight;

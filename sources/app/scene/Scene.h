@@ -7,8 +7,8 @@
 #include <cstdint>
 
 #include "rendering/renderables/RenderableObject.h"
-#include "rendering/renderables/ShadowGpuData.h"
-#include "rendering/renderables/VirtualShadowMap.h"
+#include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/VirtualShadowMap.h"
 #include "app/camera/Camera.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"

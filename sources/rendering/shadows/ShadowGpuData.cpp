@@ -1,4 +1,4 @@
-#include "rendering/renderables/ShadowGpuData.h"
+#include "rendering/shadows/ShadowGpuData.h"
 
 #include <algorithm>
 #include <cstdio>

@@ -88,6 +88,9 @@
     <Filter Include="sources\rendering\renderables">
       <UniqueIdentifier>{99f7c016-b0a5-4396-a20a-8823cda192d5}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\rendering\shadows">
+      <UniqueIdentifier>{f843b580-8945-4bb6-a7e5-a54a45200f3b}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\text">
       <UniqueIdentifier>{4426bb63-b333-4e9f-b709-016e83f65a2e}</UniqueIdentifier>
     </Filter>
@@ -444,11 +447,11 @@
     <ClCompile Include="sources/rendering/renderables/InstancedDrawBatch.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/ShadowGpuData.cpp">
-      <Filter>sources\rendering\renderables</Filter>
+    <ClCompile Include="sources/rendering/shadows/ShadowGpuData.cpp">
+      <Filter>sources\rendering\shadows</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/renderables/VirtualShadowMap.cpp">
-      <Filter>sources\rendering\renderables</Filter>
+    <ClCompile Include="sources/rendering/shadows/VirtualShadowMap.cpp">
+      <Filter>sources\rendering\shadows</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
@@ -848,11 +851,11 @@
     <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/ShadowGpuData.h">
-      <Filter>sources\rendering\renderables</Filter>
+    <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h">
+      <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/renderables/VirtualShadowMap.h">
-      <Filter>sources\rendering\renderables</Filter>
+    <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h">
+      <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/InstanceTypes.h">
       <Filter>sources\rendering\renderables</Filter>

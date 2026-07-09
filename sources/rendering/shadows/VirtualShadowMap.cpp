@@ -1,4 +1,4 @@
-#include "rendering/renderables/VirtualShadowMap.h"
+#include "rendering/shadows/VirtualShadowMap.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -6,7 +6,7 @@
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/renderables/ShadowGpuData.h"
+#include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
