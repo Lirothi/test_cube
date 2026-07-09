@@ -587,6 +587,9 @@
     <ClInclude Include="sources/app/SceneStress.h">
       <Filter>sources\app</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/CullBenchmark.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/camera/Camera.h">
       <Filter>sources\app\camera</Filter>
     </ClInclude>
@@ -743,6 +746,9 @@
     <ClInclude Include="sources/rendering/core/RenderConstants.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderStats.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
@@ -809,6 +815,9 @@
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/LodSelect.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/meshes/Mesh.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
@@ -819,6 +828,9 @@
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/IInstanceable.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h">
@@ -1049,6 +1061,51 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\rt_reflections_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_cull_clear_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_cull_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_gi_scatter_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_indirect_csm.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_addressing.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_alloc_common.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_alloc_freelist_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_alloc_init_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_alloc_map_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_alloc_touch_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_clear.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_request_clear_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_request_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_page_setup_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_sample.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="textures\ocean\ContactFoam.png">

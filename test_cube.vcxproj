@@ -362,6 +362,7 @@
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/SceneStress.h" />
+    <ClInclude Include="sources/app/CullBenchmark.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
@@ -441,6 +442,7 @@
     <ClInclude Include="sources/rendering/core/RenderGraph.h" />
     <ClInclude Include="sources/rendering/core/RenderPass.h" />
     <ClInclude Include="sources/rendering/core/RenderConstants.h" />
+    <ClInclude Include="sources/rendering/core/RenderStats.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
@@ -470,10 +472,12 @@
     <ClInclude Include="sources/core/math/OBB.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
+    <ClInclude Include="sources/rendering/meshes/LodSelect.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />
     <ClInclude Include="sources/rendering/meshes/MeshManager.h" />
     <ClInclude Include="sources/rendering/meshes/StaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h" />
+    <ClInclude Include="sources/rendering/renderables/IInstanceable.h" />
     <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h" />
     <ClInclude Include="sources/rendering/renderables/InstanceTypes.h" />
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h" />
@@ -549,6 +553,21 @@
     <None Include="shaders\rt_debug_cs.hlsl" />
     <None Include="shaders\rt_reflection_denoise_cs.hlsl" />
     <None Include="shaders\rt_reflections_cs.hlsl" />
+    <None Include="shaders\shadow_cull_clear_cs.hlsl" />
+    <None Include="shaders\shadow_cull_cs.hlsl" />
+    <None Include="shaders\shadow_gi_scatter_cs.hlsl" />
+    <None Include="shaders\shadow_indirect_csm.hlsl" />
+    <None Include="shaders\vsm_addressing.hlsli" />
+    <None Include="shaders\vsm_page_alloc_common.hlsli" />
+    <None Include="shaders\vsm_page_alloc_freelist_cs.hlsl" />
+    <None Include="shaders\vsm_page_alloc_init_cs.hlsl" />
+    <None Include="shaders\vsm_page_alloc_map_cs.hlsl" />
+    <None Include="shaders\vsm_page_alloc_touch_cs.hlsl" />
+    <None Include="shaders\vsm_page_clear.hlsl" />
+    <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
+    <None Include="shaders\vsm_page_request_cs.hlsl" />
+    <None Include="shaders\vsm_page_setup_cs.hlsl" />
+    <None Include="shaders\vsm_sample.hlsli" />
     <None Include="textures\ocean\ContactFoam.png" />
     <None Include="textures\ocean\FoamAlbedo.png" />
     <None Include="textures\ocean\FoamTrail.png" />
