@@ -1425,13 +1425,14 @@ namespace
         std::snprintf(label, sizeof(label), icons.IsReady() ? "   %s (%zu)" : "%s (%zu)",
             folder.name.c_str(),
             folder.recursiveAssetCount);
+        const float nodeCursorX = ImGui::GetCursorScreenPos().x;
         const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
         if (icons.IsReady())
         {
             const ImVec2 itemMin = ImGui::GetItemRectMin();
             const ImVec2 itemMax = ImGui::GetItemRectMax();
             const float size = std::min(18.0f, itemMax.y - itemMin.y - 2.0f);
-            const float x = itemMin.x + ImGui::GetTreeNodeToLabelSpacing();
+            const float x = nodeCursorX + ImGui::GetTreeNodeToLabelSpacing();
             const ImVec2 iconMin(x,
                 itemMin.y + (itemMax.y - itemMin.y - size) * 0.5f);
             DrawBrowserIcon(ImGui::GetWindowDrawList(),
