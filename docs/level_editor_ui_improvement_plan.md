@@ -238,6 +238,42 @@ Validation:
 - Verify undo/redo for rename.
 - Verify no-editor build if new command files touch project configuration.
 
+## Step 5A: Command History Window (Done)
+
+Goal: expose the undo timeline and allow restoring any reachable command state.
+
+Primary files:
+
+- `sources/editor/commands/EditorCommand.*`
+- `sources/editor/commands/EditorCommandStack.*`
+- `sources/editor/ui/CommandHistoryPanel.*`
+- `sources/editor/EditorController.*`
+
+Implemented behavior:
+
+- Store commands in one linear timeline with an applied-command cursor.
+- Show Initial State plus one row for the state after each command.
+- Selecting a row moves backward with Undo or forward with Redo until that state
+  is restored.
+- Keep forward entries visible after rewinding; executing a new command discards
+  that forward branch.
+- Show concise labels supplied by each command type.
+- Register Command History as a normal editor window.
+
+Acceptance criteria:
+
+- Undo and redo buttons preserve their existing behavior.
+- Selecting Initial State undoes every applied command.
+- Selecting a later row reapplies commands up to that state.
+- A new edit after rewind removes states that are no longer reachable.
+- Loading or creating a level clears the history.
+
+Validation:
+
+- Build editor and no-editor x64 configurations.
+- Exercise rename, transform, duplicate, delete, rewind, forward restore, and a
+  new branch after rewind.
+
 ## Step 6: Content Browser Asset Model And Folder Tree
 
 Goal: give the Content Browser a folder-aware data model and Sources Panel before
@@ -1068,9 +1104,10 @@ have already been implemented in the current working tree:
 5. Step 12E: Mesh And Material Thumbnail Previews (remaining 12D scope)
 6. Step 4: Outliner Groups And Context Actions
 7. Step 5: Rename Command (done)
-8. Step 13: Command-Backed Environment Edits
-9. Step 14: Persist Editor Panel UI State
-10. Step 15: UX Cleanup Pass
+8. Step 5A: Command History Window (done)
+9. Step 13: Command-Backed Environment Edits
+10. Step 14: Persist Editor Panel UI State
+11. Step 15: UX Cleanup Pass
 
 Steps 4 and 5 remain valuable, but they are intentionally moved behind the
 Content Browser foundation because the current product direction is a UE-like

@@ -16,6 +16,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Delete Object"; }
 
 private:
     EditorObjectId id_;

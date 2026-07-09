@@ -16,6 +16,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Set Material"; }
 
 private:
     bool Apply(EditorContext& ctx, const std::string& material);

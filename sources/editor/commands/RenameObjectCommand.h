@@ -15,6 +15,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Rename Object"; }
 
 private:
     void Apply(EditorContext& ctx, const std::string& name);

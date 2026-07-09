@@ -1291,6 +1291,16 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "commandHistory",
+            "Command History",
+            &showCommandHistory_,
+            true,
+            [this](EditorContext& panelCtx)
+            {
+                commandHistory_.Draw(panelCtx, commandStack_, &showCommandHistory_);
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "viewportGizmo",
             "Viewport/Gizmo",
             nullptr,
@@ -1815,6 +1825,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         drawPanelToggle("contentBrowser");
         drawPanelToggle("sceneOutliner");
         drawPanelToggle("inspector");
+        drawPanelToggle("commandHistory");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Selection");
@@ -1845,6 +1856,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("sceneOutliner");
     drawPanel("contentBrowser");
     drawPanel("inspector");
+    drawPanel("commandHistory");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {

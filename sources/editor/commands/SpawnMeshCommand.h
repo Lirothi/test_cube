@@ -16,6 +16,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Spawn Mesh"; }
 
 private:
     bool built_ = false;

@@ -13,6 +13,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Create Document Object"; }
 
 private:
     EditorObject object_;

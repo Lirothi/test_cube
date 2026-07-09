@@ -10,6 +10,7 @@
 #include "editor/EditorHotkeys.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "editor/ui/CommandHistoryPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
@@ -70,12 +71,14 @@ private:
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
     bool showInspector_ = true;
+    bool showCommandHistory_ = true;
     int selectionOutlineRadius_ = 1;
     AssetRegistry assetRegistry_;
     AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
+    CommandHistoryPanel commandHistory_;
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

@@ -1,6 +1,8 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <string_view>
+
 struct EditorContext;
 
 // Base class for undoable editor actions. Execute performs the action and
@@ -12,6 +14,7 @@ public:
     virtual ~EditorCommand() = default;
     virtual bool Execute(EditorContext& ctx) = 0;
     virtual void Undo(EditorContext& ctx) = 0;
+    virtual std::string_view HistoryLabel() const { return "Command"; }
 };
 
 #endif // WITH_EDITOR

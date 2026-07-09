@@ -13,6 +13,7 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override { return "Transform Object"; }
 
     // Apply a transform to both the document object and its runtime object (when
     // it has a live editor-owned one). Used for live editing and by the command.

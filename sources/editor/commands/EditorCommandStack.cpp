@@ -13,39 +13,72 @@ bool EditorCommandStack::Execute(EditorContext& ctx, std::unique_ptr<EditorComma
     {
         return false; // a command that fails to apply is not recorded
     }
-    undo_.push_back(std::move(command));
-    redo_.clear();
+
+    history_.erase(
+        history_.begin() + static_cast<std::ptrdiff_t>(appliedCount_),
+        history_.end());
+    history_.push_back(std::move(command));
+    appliedCount_ = history_.size();
     return true;
 }
 
 void EditorCommandStack::Undo(EditorContext& ctx)
 {
-    if (undo_.empty())
+    if (!CanUndo())
     {
         return;
     }
-    std::unique_ptr<EditorCommand> command = std::move(undo_.back());
-    undo_.pop_back();
-    command->Undo(ctx);
-    redo_.push_back(std::move(command));
+
+    history_[appliedCount_ - 1]->Undo(ctx);
+    --appliedCount_;
 }
 
 void EditorCommandStack::Redo(EditorContext& ctx)
 {
-    if (redo_.empty())
+    if (!CanRedo())
     {
         return;
     }
-    std::unique_ptr<EditorCommand> command = std::move(redo_.back());
-    redo_.pop_back();
-    command->Execute(ctx);
-    undo_.push_back(std::move(command));
+
+    if (history_[appliedCount_]->Execute(ctx))
+    {
+        ++appliedCount_;
+    }
+}
+
+bool EditorCommandStack::MoveTo(EditorContext& ctx, std::size_t appliedCommandCount)
+{
+    if (appliedCommandCount > history_.size())
+    {
+        return false;
+    }
+
+    const std::size_t target = appliedCommandCount;
+    while (appliedCount_ > target)
+    {
+        Undo(ctx);
+    }
+    while (appliedCount_ < target)
+    {
+        const std::size_t before = appliedCount_;
+        Redo(ctx);
+        if (appliedCount_ == before)
+        {
+            return false;
+        }
+    }
+    return appliedCount_ == target;
+}
+
+const EditorCommand* EditorCommandStack::HistoryEntry(std::size_t index) const
+{
+    return index < history_.size() ? history_[index].get() : nullptr;
 }
 
 void EditorCommandStack::Clear()
 {
-    undo_.clear();
-    redo_.clear();
+    history_.clear();
+    appliedCount_ = 0;
 }
 
 #endif // WITH_EDITOR

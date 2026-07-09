@@ -13,6 +13,10 @@ public:
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
+    std::string_view HistoryLabel() const override
+    {
+        return enabled_ ? "Enable Object" : "Disable Object";
+    }
 
 private:
     void Apply(EditorContext& ctx, bool enabled);
