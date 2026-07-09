@@ -502,6 +502,24 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
     return removed;
 }
 
+void Scene::RefreshShadowGpuForEditor(Renderer& renderer)
+{
+    // An editor spawn/delete changed the caster set, so ShadowGpuData's next UpdateForFrame will
+    // Rebuild and drop megaReady_ — but nothing rebuilds the consolidated mega VB/IB mid-game (it is
+    // only built at level load). Without it, VirtualShadowMap::RecordPageRender falls back to per-group
+    // binding: 1024 pool pages × mesh-groups × (bind VB/IB + ExecuteIndirect) → ~10ms CPU, forever.
+    // Rebuild the caster data + mega now, on a fresh GPU-idle upload batch (the meshes' buffers have
+    // decayed to COMMON, so EnsureMegaBuffer's implicit-promotion copies are valid). Mirrors
+    // FinalizeLevelLoad. The Rebuild here also pre-empts the per-frame UpdateForFrame rebuild (counts
+    // already match), so there is no double work.
+    renderer.WaitForPreviousFrame(); // no in-flight frame references the old mega buffers before we free them
+    UploadBatch uploads;
+    if (!uploads.Begin(&renderer)) { return; }
+    shadowGpu_.Rebuild(&renderer, objects_);
+    shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
+    uploads.SubmitAndWait(&renderer);
+}
+
 RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id)
 {
     if (id == 0)

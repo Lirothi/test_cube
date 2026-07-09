@@ -69,6 +69,10 @@ public:
     void AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id);
     bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj);
     bool RemoveEditorObject(SceneObjectId id);
+    // Rebuild the shadow-caster GPU data + the consolidated mega VB/IB after an editor caster-set
+    // change (spawn/delete). Runs on a fresh GPU-idle upload batch, so the VSM per-page draw keeps its
+    // fast single-ExecuteIndirect-per-page path instead of the ~10ms per-group fallback until reload.
+    void RefreshShadowGpuForEditor(Renderer& renderer);
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
     const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
     void SetSelectedEditorObjectId(SceneObjectId id) { selectedEditorObjectId_ = id; }

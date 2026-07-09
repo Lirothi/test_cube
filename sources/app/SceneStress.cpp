@@ -916,12 +916,17 @@ private:
         {
             return;
         }
+        // Mirror the editor command path (EditorCommandStack): rebuild the shadow-caster GPU data +
+        // mega VB/IB after the caster-set change, else VSM's per-page draw falls into the per-group
+        // fallback. Also gives GBV coverage of the mid-game EnsureMegaBuffer.
+        scene_.RefreshShadowGpuForEditor(renderer_);
 
         // Render a couple of frames with the object live, then delete it.
         RenderFrames_(2, "editor-spawn");
 
         renderer_.WaitForPreviousFrame();
         scene_.RemoveEditorObject(id);
+        scene_.RefreshShadowGpuForEditor(renderer_);
     }
 #endif
 

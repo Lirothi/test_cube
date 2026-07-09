@@ -3,16 +3,36 @@
 
 #include <utility>
 
+#include "app/scene/Scene.h"
+#include "editor/EditorContext.h"
+
+namespace
+{
+    // After a command applies, rebuild the shadow-caster GPU data + mega VB/IB if (and only if) the
+    // caster set actually changed (spawn/delete bump GetStaticSetVersion; transform/rename/select do
+    // not). Skipping this leaves VSM's per-page draw in the ~10ms per-group fallback (see
+    // Scene::RefreshShadowGpuForEditor). One choke point covers Execute/Undo/Redo.
+    void RefreshShadowsIfCasterSetChanged(EditorContext& ctx, std::uint32_t versionBefore)
+    {
+        if (ctx.scene.GetStaticSetVersion() != versionBefore)
+        {
+            ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
+        }
+    }
+}
+
 bool EditorCommandStack::Execute(EditorContext& ctx, std::unique_ptr<EditorCommand> command)
 {
     if (!command)
     {
         return false;
     }
+    const std::uint32_t versionBefore = ctx.scene.GetStaticSetVersion();
     if (!command->Execute(ctx))
     {
         return false; // a command that fails to apply is not recorded
     }
+    RefreshShadowsIfCasterSetChanged(ctx, versionBefore);
 
     history_.erase(
         history_.begin() + static_cast<std::ptrdiff_t>(appliedCount_),
@@ -29,8 +49,10 @@ void EditorCommandStack::Undo(EditorContext& ctx)
         return;
     }
 
+    const std::uint32_t versionBefore = ctx.scene.GetStaticSetVersion();
     history_[appliedCount_ - 1]->Undo(ctx);
     --appliedCount_;
+    RefreshShadowsIfCasterSetChanged(ctx, versionBefore);
 }
 
 void EditorCommandStack::Redo(EditorContext& ctx)
@@ -40,9 +62,11 @@ void EditorCommandStack::Redo(EditorContext& ctx)
         return;
     }
 
+    const std::uint32_t versionBefore = ctx.scene.GetStaticSetVersion();
     if (history_[appliedCount_]->Execute(ctx))
     {
         ++appliedCount_;
+        RefreshShadowsIfCasterSetChanged(ctx, versionBefore);
     }
 }
 
