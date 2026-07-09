@@ -1,6 +1,6 @@
 #include "rendering/meshes/Mesh.h"
 #include "core/Helpers.h"
-#include "materials/UploadManager.h"
+#include "rendering/core/UploadManager.h"
 #include "rendering/core/CommandListBindState.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"

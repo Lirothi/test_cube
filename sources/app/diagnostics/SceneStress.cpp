@@ -1,4 +1,4 @@
-#include "app/SceneStress.h"
+#include "app/diagnostics/SceneStress.h"
 
 #include "app/App.h"
 #include "core/math/Math.h"

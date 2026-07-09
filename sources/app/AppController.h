@@ -1,6 +1,6 @@
 #pragma once
 
-#include "app/DeveloperWindow.h"
+#include "app/ui/DeveloperWindow.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
 #if WITH_EDITOR

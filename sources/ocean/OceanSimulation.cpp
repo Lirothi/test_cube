@@ -11,7 +11,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
-#include "materials/UploadManager.h"
+#include "rendering/core/UploadManager.h"
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSpectrum.h"
 #include "app/camera/Camera.h"

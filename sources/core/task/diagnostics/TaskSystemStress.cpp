@@ -1,4 +1,4 @@
-#include "core/task/TaskSystemStress.h"
+#include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/task/TaskSystem.h"
 
 #include <algorithm>

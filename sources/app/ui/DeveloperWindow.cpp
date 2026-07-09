@@ -1,4 +1,4 @@
-#include "app/DeveloperWindow.h"
+#include "app/ui/DeveloperWindow.h"
 
 #include <algorithm>
 #include <cstdint>

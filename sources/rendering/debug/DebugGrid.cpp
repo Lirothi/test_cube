@@ -5,7 +5,7 @@
 #include "app/camera/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/core/Renderer.h"
-#include "materials/UploadManager.h"
+#include "rendering/core/UploadManager.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;

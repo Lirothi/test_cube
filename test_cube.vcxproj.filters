@@ -7,6 +7,12 @@
     <Filter Include="sources\app">
       <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\ui">
+      <UniqueIdentifier>{10b794f9-6252-4338-a7cf-a17c4396881f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\app\diagnostics">
+      <UniqueIdentifier>{00d55c0d-417a-46be-899e-d59e8c5bfccb}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\editor">
       <UniqueIdentifier>{16c05df7-1353-41a0-9a7e-e124edb0c1ab}</UniqueIdentifier>
     </Filter>
@@ -43,6 +49,9 @@
     <Filter Include="sources\core\task">
       <UniqueIdentifier>{614b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\task\diagnostics">
+      <UniqueIdentifier>{d1bbfba0-b798-45a8-a1b8-0a9ff5061066}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\input">
       <UniqueIdentifier>{849f6304-d894-4dd4-9d93-005e85a0b4e2}</UniqueIdentifier>
     </Filter>
@@ -57,6 +66,9 @@
     </Filter>
     <Filter Include="sources\rendering\core">
       <UniqueIdentifier>{dc6790ce-276e-4f46-8000-f893062b29a2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rendering\diagnostics">
+      <UniqueIdentifier>{5cb7c7b9-fdcc-4910-aa3c-f415f30f3de0}</UniqueIdentifier>
     </Filter>
     <Filter Include="sources\rendering\debug">
       <UniqueIdentifier>{5b663f47-cdab-4683-891d-f6186e6cdece}</UniqueIdentifier>
@@ -219,8 +231,8 @@
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/DeveloperWindow.cpp">
-      <Filter>sources\app</Filter>
+    <ClCompile Include="sources/app/ui/DeveloperWindow.cpp">
+      <Filter>sources\app\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp">
       <Filter>sources\ocean</Filter>
@@ -228,8 +240,8 @@
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/SceneStress.cpp">
-      <Filter>sources\app</Filter>
+    <ClCompile Include="sources/app/diagnostics/SceneStress.cpp">
+      <Filter>sources\app\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/camera/Camera.cpp">
       <Filter>sources\app\camera</Filter>
@@ -282,8 +294,8 @@
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp">
       <Filter>sources\core\task</Filter>
     </ClCompile>
-    <ClCompile Include="sources/core/task/TaskSystemStress.cpp">
-      <Filter>sources\core\task</Filter>
+    <ClCompile Include="sources/core/task/diagnostics/TaskSystemStress.cpp">
+      <Filter>sources\core\task\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/task/TaskSystemLockFree.cpp">
       <Filter>sources\core\task</Filter>
@@ -363,8 +375,8 @@
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/RendererSubmissionStress.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp">
+      <Filter>sources\rendering\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
@@ -575,8 +587,8 @@
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/DeveloperWindow.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/app/ui/DeveloperWindow.h">
+      <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanControlsWindow.h">
       <Filter>sources\ocean</Filter>
@@ -584,11 +596,11 @@
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/SceneStress.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/app/diagnostics/SceneStress.h">
+      <Filter>sources\app\diagnostics</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/CullBenchmark.h">
-      <Filter>sources\app</Filter>
+    <ClInclude Include="sources/app/diagnostics/CullBenchmark.h">
+      <Filter>sources\app\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/camera/Camera.h">
       <Filter>sources\app\camera</Filter>
@@ -650,8 +662,8 @@
     <ClInclude Include="sources/core/task/TaskSystem.h">
       <Filter>sources\core\task</Filter>
     </ClInclude>
-    <ClInclude Include="sources/core/task/TaskSystemStress.h">
-      <Filter>sources\core\task</Filter>
+    <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h">
+      <Filter>sources\core\task\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h">
       <Filter>sources\core\task</Filter>
@@ -683,8 +695,8 @@
     <ClInclude Include="sources/materials/TextureCube.h">
       <Filter>sources\materials</Filter>
     </ClInclude>
-    <ClInclude Include="sources/materials/UploadManager.h">
-      <Filter>sources\materials</Filter>
+    <ClInclude Include="sources/rendering/core/UploadManager.h">
+      <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanRenderable.h">
       <Filter>sources\ocean</Filter>
@@ -770,8 +782,8 @@
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/RendererSubmissionStress.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h">
+      <Filter>sources\rendering\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h">
       <Filter>sources\rendering\core</Filter>

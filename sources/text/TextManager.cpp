@@ -12,7 +12,7 @@
 #include <string_view>
 #include <DirectXPackedVector.h>
 #include "text/TextManager.h"
-#include "materials/UploadManager.h"
+#include "rendering/core/UploadManager.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/descriptors/InputLayoutManager.h"
 #include "rendering/core/Renderer.h"

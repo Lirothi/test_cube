@@ -1,4 +1,4 @@
-#include "rendering/core/RendererSubmissionStress.h"
+#include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/core/ResourceStateTracker.h"
 #include "rendering/core/SubmitTimeline.h"
 

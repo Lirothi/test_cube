@@ -1,6 +1,6 @@
 #include "rendering/lighting/Skybox.h"
 #include "rendering/core/Renderer.h"
-#include "materials/UploadManager.h"
+#include "rendering/core/UploadManager.h"
 #include "rendering/core/FrameResource.h"
 #include "app/camera/Camera.h"
 
