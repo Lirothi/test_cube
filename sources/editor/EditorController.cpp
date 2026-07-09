@@ -23,6 +23,7 @@
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
+#include "editor/commands/EditEnvironmentCommand.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -1266,14 +1267,20 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::SetEnvEnabled)
                 {
-                    // Environment entities live in document_.Environment(), not objects_,
-                    // so this is a direct live-patch (non-undoable, like other env edits)
-                    // rather than a SetEnabledCommand.
-                    for (EditorObject& env : document_.Environment())
+                    for (const EditorObject& env : document_.Environment())
                     {
                         if (env.id.value == outlinerAction.target.value)
                         {
-                            EnvironmentRuntime::SetEnabled(panelCtx, env, outlinerAction.enabledValue);
+                            nlohmann::json after = env.properties;
+                            after["enabled"] = outlinerAction.enabledValue;
+                            commandStack_.Execute(panelCtx,
+                                std::make_unique<EditEnvironmentCommand>(
+                                    env.id,
+                                    env.properties,
+                                    std::move(after),
+                                    outlinerAction.enabledValue ?
+                                        "Enable Environment" :
+                                        "Disable Environment"));
                             break;
                         }
                     }

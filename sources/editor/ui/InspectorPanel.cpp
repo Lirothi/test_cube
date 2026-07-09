@@ -13,6 +13,7 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/assets/AssetRegistry.h"
+#include "editor/commands/EditEnvironmentCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
@@ -138,13 +139,60 @@ namespace
     // entity's `properties` (round-tripped on save via the entity-driven
     // serializer) and patch the live runtime; lights/camera update instantly,
     // skybox texture edits rebuild the live skybox.
-    void DrawEnvironmentInspector(EditorContext& ctx, const AssetRegistry& registry, EditorObject& env)
+    void DrawEnvironmentInspector(
+        EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        EditorObject& env,
+        EditorObjectId& activeEditObject,
+        nlohmann::json& propertiesBeforeEdit)
     {
         nlohmann::json& p = env.properties;
+        const std::string historyLabel =
+            env.type == "pointLight" ? "Edit Point Light" :
+            env.type == "spotLight" ? "Edit Spot Light" :
+            env.type == "directionalLight" ? "Edit Directional Light" :
+            env.type == "camera" ? "Edit Camera" :
+            env.type == "skybox" ? "Edit Skybox" :
+            env.type == "ocean" ? "Edit Ocean" :
+            "Edit Environment";
 
-        // Enable toggle for lights + ocean. A disabled entity does not render (a
-        // disabled light also frees its runtime slot); the entity still persists
-        // in the document so it saves and can be re-enabled. Applied live.
+        const auto executeChange = [&](nlohmann::json after, const std::string& label)
+        {
+            commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
+                env.id,
+                p,
+                std::move(after),
+                label));
+        };
+
+        const auto trackContinuousEdit = [&](const nlohmann::json& beforeItem, bool changed)
+        {
+            if (ImGui::IsItemActivated())
+            {
+                activeEditObject = env.id;
+                propertiesBeforeEdit = beforeItem;
+            }
+            if (changed)
+            {
+                EnvironmentRuntime::Apply(ctx, env);
+                ctx.document.SetDirty(true);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                const nlohmann::json before =
+                    activeEditObject.value == env.id.value ?
+                        propertiesBeforeEdit :
+                        beforeItem;
+                commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
+                    env.id,
+                    before,
+                    p,
+                    historyLabel));
+                activeEditObject = EditorObjectId{};
+            }
+        };
+
         const bool supportsEnable =
             env.type == "pointLight" || env.type == "spotLight" ||
             env.type == "directionalLight" || env.type == "ocean";
@@ -153,81 +201,85 @@ namespace
             bool enabled = p.value("enabled", true);
             if (ImGui::Checkbox("Enabled", &enabled))
             {
-                EnvironmentRuntime::SetEnabled(ctx, env, enabled);
+                nlohmann::json after = p;
+                after["enabled"] = enabled;
+                executeChange(
+                    std::move(after),
+                    enabled ? "Enable Environment" : "Disable Environment");
             }
             ImGui::Separator();
         }
 
         auto colorEdit = [&]()
         {
+            const nlohmann::json beforeItem = p;
             const Math::float3 c = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));
             float cv[3] = { c.x, c.y, c.z };
-            if (ImGui::ColorEdit3("Color", cv)) { p["color"] = { cv[0], cv[1], cv[2] }; return true; }
-            return false;
+            const bool changed = ImGui::ColorEdit3("Color", cv);
+            if (changed) { p["color"] = { cv[0], cv[1], cv[2] }; }
+            trackContinuousEdit(beforeItem, changed);
         };
         auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi)
         {
+            const nlohmann::json beforeItem = p;
             float v = JsonFloat(p, key, def);
-            if (ImGui::DragFloat(label, &v, speed, lo, hi)) { p[key] = v; return true; }
-            return false;
+            const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi);
+            if (changed) { p[key] = v; }
+            trackContinuousEdit(beforeItem, changed);
         };
         auto dragF3 = [&](const char* label, const char* key, const Math::float3& def, float speed)
         {
+            const nlohmann::json beforeItem = p;
             const Math::float3 d3 = JsonFloat3(p, key, def);
             float v[3] = { d3.x, d3.y, d3.z };
-            if (ImGui::DragFloat3(label, v, speed)) { p[key] = { v[0], v[1], v[2] }; return true; }
-            return false;
+            const bool changed = ImGui::DragFloat3(label, v, speed);
+            if (changed) { p[key] = { v[0], v[1], v[2] }; }
+            trackContinuousEdit(beforeItem, changed);
         };
         auto checkB = [&](const char* label, const char* key, bool def)
         {
             bool v = p.value(key, def);
-            if (ImGui::Checkbox(label, &v)) { p[key] = v; return true; }
-            return false;
+            if (ImGui::Checkbox(label, &v))
+            {
+                nlohmann::json after = p;
+                after[key] = v;
+                executeChange(std::move(after), historyLabel);
+            }
         };
 
-        bool changed = false;
         if (env.type == "pointLight")
         {
-            changed |= colorEdit();
-            changed |= dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
-            changed |= dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
-            changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
-            changed |= checkB("Cast Shadows", "shadowsEnabled", false);
-            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+            colorEdit();
+            dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
+            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            checkB("Cast Shadows", "shadowsEnabled", false);
         }
         else if (env.type == "spotLight")
         {
-            changed |= colorEdit();
-            changed |= dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
-            changed |= dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
-            changed |= dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
-            changed |= dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
-            changed |= dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
-            changed |= dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
-            changed |= checkB("Cast Shadows", "shadowsEnabled", false);
-            changed |= dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f);
-            changed |= dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f);
-            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+            colorEdit();
+            dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
+            dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
+            dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
+            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
+            checkB("Cast Shadows", "shadowsEnabled", false);
+            dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f);
+            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f);
         }
         else if (env.type == "directionalLight")
         {
-            changed |= colorEdit();
-            changed |= dragF("Exposure", "exposure", 1.0f, 0.05f, 0.0f, 100.0f);
-            changed |= dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
-            changed |= dragF3("Direction", "direction", Math::float3(-1.0f, -1.0f, -1.0f), 0.01f);
-            if (changed) { EnvironmentRuntime::Apply(ctx, env); ctx.document.SetDirty(true); }
+            colorEdit();
+            dragF("Exposure", "exposure", 1.0f, 0.05f, 0.0f, 100.0f);
+            dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
+            dragF3("Direction", "direction", Math::float3(-1.0f, -1.0f, -1.0f), 0.01f);
         }
         else if (env.type == "camera")
         {
-            const bool camChanged =
-                dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f) |
-                dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f) |
-                dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
-            if (camChanged)
-            {
-                EnvironmentRuntime::Apply(ctx, env);
-                ctx.document.SetDirty(true);
-            }
+            dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f);
+            dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f);
+            dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
         }
         else if (env.type == "skybox")
         {
@@ -259,9 +311,9 @@ namespace
                     ++visibleTextures;
                     if (ImGui::Selectable(label.c_str(), selected) && !selected)
                     {
-                        p["texture"] = NormalizePath(rec.id.key);
-                        EnvironmentRuntime::Apply(ctx, env);
-                        ctx.document.SetDirty(true);
+                        nlohmann::json after = p;
+                        after["texture"] = NormalizePath(rec.id.key);
+                        executeChange(std::move(after), "Set Skybox Texture");
                     }
                     if (selected)
                     {
@@ -278,19 +330,38 @@ namespace
             char buf[512];
             std::snprintf(buf, sizeof(buf), "%s", p.value("texture", std::string()).c_str());
             ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 72.0f));
-            if (ImGui::InputText("Texture", buf, sizeof(buf)))
+            const nlohmann::json beforeItem = p;
+            const bool textureChanged = ImGui::InputText("Texture", buf, sizeof(buf));
+            if (ImGui::IsItemActivated())
+            {
+                activeEditObject = env.id;
+                propertiesBeforeEdit = beforeItem;
+            }
+            if (textureChanged)
             {
                 p["texture"] = NormalizePath(buf);
                 ctx.document.SetDirty(true);
             }
 
-            bool applyTexture = ImGui::IsItemDeactivatedAfterEdit();
+            const bool textureCommitted = ImGui::IsItemDeactivatedAfterEdit();
             ImGui::SameLine();
-            applyTexture |= ImGui::Button("Apply");
-            if (applyTexture)
+            const bool applyTexture = ImGui::Button("Apply");
+            if (textureCommitted)
+            {
+                const nlohmann::json before =
+                    activeEditObject.value == env.id.value ?
+                        propertiesBeforeEdit :
+                        beforeItem;
+                commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
+                    env.id,
+                    before,
+                    p,
+                    "Set Skybox Texture"));
+                activeEditObject = EditorObjectId{};
+            }
+            else if (applyTexture)
             {
                 EnvironmentRuntime::Apply(ctx, env);
-                ctx.document.SetDirty(true);
             }
         }
         else if (env.type == "ocean")
@@ -314,30 +385,50 @@ namespace
                         const std::string label = std::filesystem::path(pr).filename().string();
                         if (ImGui::Selectable(label.c_str(), sel) && !sel)
                         {
-                            p["preset"] = pr;
-                            ocean->LoadConfig(&ctx.renderer, std::wstring(pr.begin(), pr.end()));
-                            ctx.document.SetDirty(true);
+                            nlohmann::json after = p;
+                            after["preset"] = pr;
+                            executeChange(std::move(after), "Set Ocean Preset");
                         }
                     }
                     ImGui::EndCombo();
                 }
 
-                // Inline wind overrides (live). Show the sim's current values.
-                float windForce = ocean->GetWindForce01();
-                float windDir = ocean->GetLocalWindDirectionDegrees();
-                float swellDir = ocean->GetSwellDirectionDegrees();
-                bool windChanged = false;
-                windChanged |= ImGui::SliderFloat("Wind Force", &windForce, 0.0f, 1.0f);
-                windChanged |= ImGui::DragFloat("Wind Direction", &windDir, 0.5f, -360.0f, 360.0f, "%.1f deg");
-                windChanged |= ImGui::DragFloat("Swell Direction", &swellDir, 0.5f, -360.0f, 360.0f, "%.1f deg");
-                if (windChanged)
-                {
-                    p["windForce"] = windForce;
-                    p["windDirectionDeg"] = windDir;
-                    p["swellDirectionDeg"] = swellDir;
-                    EnvironmentRuntime::Apply(ctx, env);
-                    ctx.document.SetDirty(true);
-                }
+                const nlohmann::json windForceBefore = p;
+                float windForce = JsonFloat(p, "windForce", ocean->GetWindForce01());
+                const bool windForceChanged =
+                    ImGui::SliderFloat("Wind Force", &windForce, 0.0f, 1.0f);
+                if (windForceChanged) { p["windForce"] = windForce; }
+                trackContinuousEdit(windForceBefore, windForceChanged);
+
+                const nlohmann::json windDirectionBefore = p;
+                float windDirection = JsonFloat(
+                    p,
+                    "windDirectionDeg",
+                    ocean->GetLocalWindDirectionDegrees());
+                const bool windDirectionChanged = ImGui::DragFloat(
+                    "Wind Direction",
+                    &windDirection,
+                    0.5f,
+                    -360.0f,
+                    360.0f,
+                    "%.1f deg");
+                if (windDirectionChanged) { p["windDirectionDeg"] = windDirection; }
+                trackContinuousEdit(windDirectionBefore, windDirectionChanged);
+
+                const nlohmann::json swellDirectionBefore = p;
+                float swellDirection = JsonFloat(
+                    p,
+                    "swellDirectionDeg",
+                    ocean->GetSwellDirectionDegrees());
+                const bool swellDirectionChanged = ImGui::DragFloat(
+                    "Swell Direction",
+                    &swellDirection,
+                    0.5f,
+                    -360.0f,
+                    360.0f,
+                    "%.1f deg");
+                if (swellDirectionChanged) { p["swellDirectionDeg"] = swellDirection; }
+                trackContinuousEdit(swellDirectionBefore, swellDirectionChanged);
             }
         }
         else
@@ -374,7 +465,13 @@ void InspectorPanel::Draw(EditorContext& ctx,
             ImGui::Text("Type: %s", env.type.c_str());
             ImGui::TextUnformatted(env.name.c_str());
             ImGui::Separator();
-            DrawEnvironmentInspector(ctx, registry, env);
+            DrawEnvironmentInspector(
+                ctx,
+                commandStack,
+                registry,
+                env,
+                environmentEditObject_,
+                environmentPropertiesBeforeEdit_);
             DrawInspectorDropTarget(ctx, commandStack, registry, &env);
             ImGui::End();
             return;

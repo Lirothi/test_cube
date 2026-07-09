@@ -37,6 +37,9 @@ private:
     bool wasUsing_ = false;
     EditorTransform transformBeforeDrag_;
     float envGizmoMatrix_[16] = {}; // persistent model matrix while dragging an env light
+    bool envWasUsing_ = false;
+    EditorObjectId envDragObject_{};
+    nlohmann::json envPropertiesBeforeDrag_;
 
     // Editor icon billboards for world-positioned editor entities: screen-space,
     // always-on-top ImGui overlay images drawn from the icon atlas, clickable to

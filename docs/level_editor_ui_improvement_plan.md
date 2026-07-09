@@ -989,7 +989,7 @@ Validation:
 - Navigate a folder with many previewable assets while watching frame time and
   ImGui descriptor usage.
 
-## Step 13: Command-Backed Environment Edits
+## Step 13: Command-Backed Environment Edits (Done)
 
 Goal: remove the largest undo/redo inconsistency in the editor.
 
@@ -1105,7 +1105,7 @@ have already been implemented in the current working tree:
 6. Step 4: Outliner Groups And Context Actions
 7. Step 5: Rename Command (done)
 8. Step 5A: Command History Window (done)
-9. Step 13: Command-Backed Environment Edits
+9. Step 13: Command-Backed Environment Edits (done)
 10. Step 14: Persist Editor Panel UI State
 11. Step 15: UX Cleanup Pass
 

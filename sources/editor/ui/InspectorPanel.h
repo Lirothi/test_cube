@@ -31,6 +31,8 @@ private:
     char nameEditBuffer_[256] = {};
     std::string nameBeforeEdit_;
     bool nameEditActive_ = false;
+    EditorObjectId environmentEditObject_{};
+    nlohmann::json environmentPropertiesBeforeEdit_;
     EditorTransform transformBeforeEdit_{}; // captured when a transform edit gesture begins
 };
 

@@ -158,6 +158,49 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     }
 }
 
+void EnvironmentRuntime::ApplyChange(
+    EditorContext& ctx,
+    const EditorObject& env,
+    const EditorObject& previous)
+{
+    const bool enabledChanged =
+        env.properties.value("enabled", true) !=
+        previous.properties.value("enabled", true);
+
+    if (env.type == "pointLight" || env.type == "spotLight")
+    {
+        if (enabledChanged)
+        {
+            RebuildLights(ctx);
+        }
+        else
+        {
+            Apply(ctx, env);
+        }
+        return;
+    }
+
+    if (env.type == "ocean")
+    {
+        const std::string preset = env.properties.value("preset", std::string());
+        const std::string previousPreset =
+            previous.properties.value("preset", std::string());
+        if (preset != previousPreset && !preset.empty())
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                ocean->LoadConfig(&ctx.renderer, Widen(preset));
+            }
+        }
+
+        ctx.scene.SetOceanVisible(env.properties.value("enabled", true));
+        Apply(ctx, env);
+        return;
+    }
+
+    Apply(ctx, env);
+}
+
 void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
 {
     if (env.type == "pointLight" || env.type == "spotLight")
@@ -240,24 +283,6 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
     {
         lm.EnsureSpotLightBuffer(&ctx.renderer, lm.GetSpotLightCount());
     }
-}
-
-void EnvironmentRuntime::SetEnabled(EditorContext& ctx, EditorObject& env, bool enabled)
-{
-    env.properties["enabled"] = enabled;
-    if (env.type == "spotLight" || env.type == "pointLight")
-    {
-        RebuildLights(ctx);
-    }
-    else if (env.type == "directionalLight")
-    {
-        Apply(ctx, env);
-    }
-    else if (env.type == "ocean")
-    {
-        ctx.scene.SetOceanVisible(enabled);
-    }
-    ctx.document.SetDirty(true);
 }
 
 std::vector<std::string> EnvironmentRuntime::OceanPresets()

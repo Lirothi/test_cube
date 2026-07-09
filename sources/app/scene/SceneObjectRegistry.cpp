@@ -1,6 +1,7 @@
 #include "app/scene/SceneObjectRegistry.h"
 
 #include <cassert>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -41,13 +42,14 @@ public:
 
     void Tick(float deltaTime) override
     {
-        rotationY_ += angularSpeed_ * deltaTime;
-        if (rotationY_ > XM_2PI)
+        if (angularSpeed_ == 0.0f)
         {
-            rotationY_ -= XM_2PI;
+            return;
         }
 
-        SetRotationEulerRad({ 0.0f, rotationY_, 0.0f });
+        Math::float3 rotation = GetRotationEulerRad();
+        rotation.y = std::fmod(rotation.y + angularSpeed_ * deltaTime, XM_2PI);
+        SetRotationEulerRad(rotation);
     }
 
     // Rung 1 (Step 10): spins every frame -> dynamic caster (this is the "moved-but-static"
@@ -55,7 +57,6 @@ public:
     bool IsDynamicCaster() const override { return angularSpeed_ != 0.0f; }
 
 private:
-    float rotationY_ = 0.0f;
     float angularSpeed_ = 10.0f * Math::DEG2RAD;
 };
 
@@ -83,10 +84,11 @@ SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationCo
 
     SceneObjectRegistry::ObjectList objects;
 
-    // RotatingObject is demo-specific: build it here, then apply the shared
-    // staticMesh JSON properties through the factory so behavior matches a plain
-    // staticMesh. Non-rotating meshes come straight from the factory.
-    if (o.contains("rotateSpeedDeg"))
+    // RotatingObject is demo-specific: build it only for a nonzero speed, then
+    // apply shared staticMesh properties so animation starts from the authored
+    // rotation. Zero-speed meshes remain plain meshes and stay fully editable.
+    const float rotateSpeedDeg = o.value("rotateSpeedDeg", 0.0f);
+    if (rotateSpeedDeg != 0.0f)
     {
         const std::string model = o.value("model", std::string{});
         const std::string material = o.value("material", std::string{});
@@ -96,7 +98,7 @@ SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationCo
         const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
-            o["rotateSpeedDeg"].get<float>() * DEG2RAD);
+            rotateSpeedDeg * DEG2RAD);
         SceneObjectFactory::ApplyStaticMeshJsonProperties(*mesh, o);
         objects.push_back(std::move(mesh));
     }

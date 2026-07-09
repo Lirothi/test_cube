@@ -16,6 +16,7 @@
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
+#include "editor/commands/EditEnvironmentCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
@@ -524,11 +525,29 @@ void ViewportGizmo::Update(EditorContext& ctx,
         wasUsing_ = false;
     }
 
+    const auto commitEnvironmentGizmo = [&]()
+    {
+        for (EditorObject& environment : ctx.document.Environment())
+        {
+            if (environment.id.value != envDragObject_.value)
+            {
+                continue;
+            }
+
+            commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
+                environment.id,
+                envPropertiesBeforeDrag_,
+                environment.properties,
+                "Transform Environment Light"));
+            break;
+        }
+    };
+
     // Env light gizmo: translate point/spot position, rotate spot/directional
-    // direction. Env entities have no RenderableObject, so drive a synthetic matrix
-    // (persisted across the drag) and write the result back to the entity's
-    // properties, patching the live runtime via the shared helper. Non-undoable
-    // (like the env inspector edits).
+    // direction. Env entities have no RenderableObject, so drive a synthetic
+    // matrix and live-patch properties during the drag, then record one command
+    // when the gesture ends.
+    bool environmentGizmoHandled = false;
     if (gizmoVisible && !obj)
     {
         EditorObject* light = nullptr;
@@ -569,7 +588,13 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 if (!hasPos && giz == ImGuizmo::TRANSLATE) { giz = ImGuizmo::ROTATE; }
 
                 ImGuizmo::Manipulate(view, proj, giz, ImGuizmo::WORLD, envGizmoMatrix_);
-                if (ImGuizmo::IsUsing())
+                const bool usingNow = ImGuizmo::IsUsing();
+                if (usingNow && !envWasUsing_)
+                {
+                    envDragObject_ = light->id;
+                    envPropertiesBeforeDrag_ = light->properties;
+                }
+                if (usingNow)
                 {
                     if (hasPos)
                     {
@@ -584,9 +609,20 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     EnvironmentRuntime::Apply(ctx, *light);
                     ctx.document.SetDirty(true);
                 }
-                gizmoBusy = gizmoBusy || ImGuizmo::IsUsing() || ImGuizmo::IsOver();
+                if (!usingNow && envWasUsing_)
+                {
+                    commitEnvironmentGizmo();
+                }
+                envWasUsing_ = usingNow;
+                environmentGizmoHandled = true;
+                gizmoBusy = gizmoBusy || usingNow || ImGuizmo::IsOver();
             }
         }
+    }
+    if (!environmentGizmoHandled && envWasUsing_)
+    {
+        commitEnvironmentGizmo();
+        envWasUsing_ = false;
     }
 
     // Click-to-select: only over the 3D view, not on the gizmo, not while flying.
