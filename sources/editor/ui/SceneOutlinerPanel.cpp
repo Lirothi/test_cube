@@ -35,6 +35,21 @@ namespace
         OutlinerColumn_Enabled
     };
 
+    enum class OutlinerGroup
+    {
+        Meshes,
+        Lights,
+        Cameras,
+        Environment,
+        Other
+    };
+
+    struct OutlinerRowRef
+    {
+        EditorObject* object = nullptr;
+        bool environment = false;
+    };
+
     struct TypeFilterOption
     {
         const char* label;
@@ -163,6 +178,47 @@ namespace
             type == "skybox" || type == "ocean";
     }
 
+    OutlinerGroup GroupForObject(const EditorObject& object)
+    {
+        if (IsMeshType(object.type))
+        {
+            return OutlinerGroup::Meshes;
+        }
+        if (IsLightType(object.type))
+        {
+            return OutlinerGroup::Lights;
+        }
+        if (IsCameraType(object.type))
+        {
+            return OutlinerGroup::Cameras;
+        }
+        if (object.type == "skybox" || object.type == "ocean")
+        {
+            return OutlinerGroup::Environment;
+        }
+        return OutlinerGroup::Other;
+    }
+
+    bool SupportsDuplicate(const EditorObject& object, bool environment)
+    {
+        return environment ?
+            (object.type == "pointLight" || object.type == "spotLight") :
+            object.type != "ocean";
+    }
+
+    bool SupportsFrameSelection(const EditorObject& object, bool environment)
+    {
+        if (!environment)
+        {
+            return true;
+        }
+
+        const auto position = object.properties.find("position");
+        return position != object.properties.end() &&
+            position->is_array() &&
+            position->size() >= 3;
+    }
+
     bool MatchesTypeFilter(const EditorObject& object, OutlinerTypeFilter filter)
     {
         const std::string& type = object.type;
@@ -288,7 +344,8 @@ namespace
         return result;
     }
 
-    void SortRows(std::vector<EditorObject*>& rows, bool environment, const ImGuiTableSortSpecs* sortSpecs)
+    void SortRows(std::vector<OutlinerRowRef>& rows,
+        const ImGuiTableSortSpecs* sortSpecs)
     {
         if (!sortSpecs || sortSpecs->SpecsCount <= 0)
         {
@@ -296,12 +353,16 @@ namespace
         }
 
         std::stable_sort(rows.begin(), rows.end(),
-            [environment, sortSpecs](const EditorObject* a, const EditorObject* b)
+            [sortSpecs](const OutlinerRowRef& a, const OutlinerRowRef& b)
             {
                 for (int n = 0; n < sortSpecs->SpecsCount; ++n)
                 {
                     const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[n];
-                    int result = CompareRows(a, environment, b, environment, spec.ColumnUserID);
+                    int result = CompareRows(a.object,
+                        a.environment,
+                        b.object,
+                        b.environment,
+                        spec.ColumnUserID);
                     if (result == 0)
                     {
                         continue;
@@ -372,16 +433,36 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
     };
 
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
-    std::vector<EditorObject*> visibleObjects;
-    std::vector<EditorObject*> visibleEnvironment;
+    std::vector<OutlinerRowRef> meshes;
+    std::vector<OutlinerRowRef> lights;
+    std::vector<OutlinerRowRef> cameras;
+    std::vector<OutlinerRowRef> environmentRows;
+    std::vector<OutlinerRowRef> other;
     bool selectedExists = false;
     bool selectedVisible = false;
+    const auto addVisibleRow = [&](EditorObject& object, bool environment)
+    {
+        std::vector<OutlinerRowRef>* group = nullptr;
+        switch (GroupForObject(object))
+        {
+        case OutlinerGroup::Meshes:      group = &meshes; break;
+        case OutlinerGroup::Lights:      group = &lights; break;
+        case OutlinerGroup::Cameras:     group = &cameras; break;
+        case OutlinerGroup::Environment: group = &environmentRows; break;
+        case OutlinerGroup::Other:       group = &other; break;
+        }
+        if (group)
+        {
+            group->push_back(OutlinerRowRef{ &object, environment });
+        }
+    };
+
     for (EditorObject& obj : document.Objects())
     {
         const bool visible = rowVisible(obj, false);
         if (visible)
         {
-            visibleObjects.push_back(&obj);
+            addVisibleRow(obj, false);
         }
         if (selectedObject.value == obj.id.value)
         {
@@ -394,7 +475,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         const bool visible = rowVisible(env, true);
         if (visible)
         {
-            visibleEnvironment.push_back(&env);
+            addVisibleRow(env, true);
         }
         if (selectedObject.value == env.id.value)
         {
@@ -403,7 +484,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         }
     }
 
-    const int visibleRows = static_cast<int>(visibleObjects.size() + visibleEnvironment.size());
+    const int visibleRows = static_cast<int>(
+        meshes.size() +
+        lights.size() +
+        cameras.size() +
+        environmentRows.size() +
+        other.size());
     ImGui::Text("Showing %d of %d rows", visibleRows, totalRows);
 
     const float footerHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
@@ -424,8 +510,11 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         ImGui::TableHeadersRow();
 
         const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
-        SortRows(visibleObjects, false, sortSpecs);
-        SortRows(visibleEnvironment, true, sortSpecs);
+        SortRows(meshes, sortSpecs);
+        SortRows(lights, sortSpecs);
+        SortRows(cameras, sortSpecs);
+        SortRows(environmentRows, sortSpecs);
+        SortRows(other, sortSpecs);
 
         if (visibleRows == 0)
         {
@@ -437,11 +526,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             ImGui::TableNextColumn();
         }
 
-        for (EditorObject* obj : visibleObjects)
+        const auto drawRow = [&](const OutlinerRowRef& row)
         {
+            EditorObject* obj = row.object;
             if (!obj)
             {
-                continue;
+                return;
             }
 
             ImGui::TableNextRow();
@@ -457,14 +547,63 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                 selectedObject = obj->id;
             }
 
-            // Right-click context menu (Unreal-style): delete this object.
             if (ImGui::BeginPopupContextItem())
             {
                 selectedObject = obj->id; // right-click selects the row too
-                if (ImGui::MenuItem("Delete"))
+
+                bool hasAction = false;
+                if (SupportsDuplicate(*obj, row.environment))
                 {
-                    action.type = OutlinerAction::Type::DeleteObject;
-                    action.target = obj->id;
+                    if (ImGui::MenuItem("Duplicate"))
+                    {
+                        action.type = OutlinerAction::Type::DuplicateObject;
+                        action.target = obj->id;
+                    }
+                    hasAction = true;
+                }
+                if (SupportsFrameSelection(*obj, row.environment))
+                {
+                    if (ImGui::MenuItem("Frame Selection"))
+                    {
+                        action.type = OutlinerAction::Type::FrameSelection;
+                        action.target = obj->id;
+                    }
+                    hasAction = true;
+                }
+
+                const bool supportsEnable =
+                    row.environment ? SupportsEnvironmentEnable(*obj) : true;
+                if (supportsEnable || !row.environment)
+                {
+                    if (hasAction)
+                    {
+                        ImGui::Separator();
+                    }
+                    const bool enabled = RowEnabledValue(*obj, row.environment);
+                    if (ImGui::MenuItem(enabled ? "Disable" : "Enable"))
+                    {
+                        action.type = row.environment ?
+                            OutlinerAction::Type::SetEnvEnabled :
+                            OutlinerAction::Type::SetEnabled;
+                        action.target = obj->id;
+                        action.enabledValue = !enabled;
+                    }
+                    hasAction = true;
+                }
+
+                if (!row.environment)
+                {
+                    if (ImGui::MenuItem("Delete"))
+                    {
+                        action.type = OutlinerAction::Type::DeleteObject;
+                        action.target = obj->id;
+                    }
+                    hasAction = true;
+                }
+
+                if (!hasAction)
+                {
+                    ImGui::TextDisabled("No available actions.");
                 }
                 ImGui::EndPopup();
             }
@@ -476,71 +615,72 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             ImGui::Text("%llu", static_cast<unsigned long long>(obj->id.value));
 
             ImGui::TableNextColumn();
-            bool enabled = obj->enabled;
-            if (ImGui::Checkbox("##enabled", &enabled))
+            if (row.environment)
             {
-                action.type = OutlinerAction::Type::SetEnabled;
-                action.target = obj->id;
-                action.enabledValue = enabled;
-            }
-
-            ImGui::PopID();
-        }
-
-        // Environment entities (camera/lights/skybox/ocean): selectable under a
-        // label. Some expose an enable toggle, but they are not deletable here.
-        if (!visibleEnvironment.empty())
-        {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextDisabled("Environment");
-            ImGui::TableNextColumn();
-            ImGui::TableNextColumn();
-            ImGui::TableNextColumn();
-
-            for (EditorObject* env : visibleEnvironment)
-            {
-                if (!env)
+                if (SupportsEnvironmentEnable(*obj))
                 {
-                    continue;
-                }
-
-                ImGui::TableNextRow();
-                PushEditorObjectId(env->id);
-
-                ImGui::TableNextColumn();
-                const bool isSelected = (selectedObject.value == env->id.value);
-                // AllowOverlap so the enable checkbox stays clickable under the
-                // row-spanning selectable (same as object rows).
-                if (ImGui::Selectable(env->name.c_str(), isSelected,
-                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
-                {
-                    selectedObject = env->id;
-                }
-
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted(env->type.c_str());
-
-                ImGui::TableNextColumn();
-                ImGui::Text("%llu", static_cast<unsigned long long>(env->id.value));
-
-                ImGui::TableNextColumn();
-                // Enable toggle for lights + ocean (camera/skybox have none).
-                const bool supportsEnable = SupportsEnvironmentEnable(*env);
-                if (supportsEnable)
-                {
-                    bool enabled = env->properties.value("enabled", true);
+                    bool enabled = obj->properties.value("enabled", true);
                     if (ImGui::Checkbox("##enabled", &enabled))
                     {
                         action.type = OutlinerAction::Type::SetEnvEnabled;
-                        action.target = env->id;
+                        action.target = obj->id;
                         action.enabledValue = enabled;
                     }
                 }
-
-                ImGui::PopID();
             }
-        }
+            else
+            {
+                bool enabled = obj->enabled;
+                if (ImGui::Checkbox("##enabled", &enabled))
+                {
+                    action.type = OutlinerAction::Type::SetEnabled;
+                    action.target = obj->id;
+                    action.enabledValue = enabled;
+                }
+            }
+
+            ImGui::PopID();
+        };
+
+        const auto drawGroup = [&](const char* id,
+            const char* label,
+            const std::vector<OutlinerRowRef>& rows,
+            bool& groupOpen)
+        {
+            if (rows.empty())
+            {
+                return;
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemOpen(groupOpen, ImGuiCond_Always);
+            const ImGuiTreeNodeFlags groupFlags =
+                ImGuiTreeNodeFlags_SpanAllColumns |
+                ImGuiTreeNodeFlags_LabelSpanAllColumns |
+                ImGuiTreeNodeFlags_FramePadding |
+                ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            const bool openNow =
+                ImGui::TreeNodeEx(id, groupFlags, "%s (%zu)", label, rows.size());
+            if (ImGui::IsItemToggledOpen())
+            {
+                groupOpen = openNow;
+            }
+            if (!openNow)
+            {
+                return;
+            }
+            for (const OutlinerRowRef& row : rows)
+            {
+                drawRow(row);
+            }
+        };
+
+        drawGroup("##meshesGroup", "Meshes", meshes, meshesGroupOpen_);
+        drawGroup("##lightsGroup", "Lights", lights, lightsGroupOpen_);
+        drawGroup("##camerasGroup", "Cameras", cameras, camerasGroupOpen_);
+        drawGroup("##environmentGroup", "Environment", environmentRows, environmentGroupOpen_);
+        drawGroup("##otherGroup", "Other", other, otherGroupOpen_);
 
         ImGui::EndTable();
     }

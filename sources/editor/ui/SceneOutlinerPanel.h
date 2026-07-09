@@ -6,7 +6,15 @@
 // A delete request raised by the outliner; the editor turns it into a command.
 struct OutlinerAction
 {
-    enum class Type { None, DeleteObject, SetEnabled, SetEnvEnabled };
+    enum class Type
+    {
+        None,
+        DeleteObject,
+        DuplicateObject,
+        FrameSelection,
+        SetEnabled,
+        SetEnvEnabled
+    };
     Type type = Type::None;
     EditorObjectId target;
     bool enabledValue = false; // for SetEnabled / SetEnvEnabled
@@ -26,6 +34,11 @@ private:
     char searchBuffer_[256] = {};
     bool showObjects_ = true;
     bool showEnvironment_ = true;
+    bool meshesGroupOpen_ = true;
+    bool lightsGroupOpen_ = true;
+    bool camerasGroupOpen_ = true;
+    bool environmentGroupOpen_ = true;
+    bool otherGroupOpen_ = true;
     int typeFilterIndex_ = 0;
 };
 

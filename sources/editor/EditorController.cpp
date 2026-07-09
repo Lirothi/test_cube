@@ -1232,6 +1232,22 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(panelCtx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
                 }
+                else if (outlinerAction.type == OutlinerAction::Type::DuplicateObject)
+                {
+                    commandStack_.Execute(panelCtx,
+                        std::make_unique<DuplicateObjectCommand>(outlinerAction.target));
+                }
+                else if (outlinerAction.type == OutlinerAction::Type::FrameSelection)
+                {
+                    selectedObject_ = outlinerAction.target;
+                    if (!FrameSelection(panelCtx.renderer,
+                            panelCtx.scene,
+                            document_,
+                            outlinerAction.target))
+                    {
+                        levelStatus_ = "Nothing to frame";
+                    }
+                }
                 else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)
                 {
                     commandStack_.Execute(panelCtx, std::make_unique<SetEnabledCommand>(outlinerAction.target, outlinerAction.enabledValue));

@@ -16,9 +16,24 @@
 
 namespace
 {
+    constexpr float kDuplicatePositionOffset = 0.5f;
+
     std::string DuplicateName(const std::string& name)
     {
         return name.empty() ? std::string("Copy") : name + " Copy";
+    }
+
+    void OffsetEnvironmentPosition(EditorObject& object)
+    {
+        const auto positionIt = object.properties.find("position");
+        if (positionIt != object.properties.end() &&
+            positionIt->is_array() &&
+            positionIt->size() >= 3 &&
+            (*positionIt)[0].is_number())
+        {
+            (*positionIt)[0] =
+                (*positionIt)[0].get<float>() + kDuplicatePositionOffset;
+        }
     }
 
     bool IsDocumentOnlyObject(const EditorObject& object)
@@ -46,6 +61,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
             object_ = *source;
             object_.id = ctx.document.AllocateId();
             object_.name = DuplicateName(source->name);
+            object_.transform.position.x += kDuplicatePositionOffset;
             isEnvironment_ = false;
             built_ = true;
         }
@@ -68,6 +84,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
                 object_ = env;
                 object_.id = ctx.document.AllocateId();
                 object_.name = DuplicateName(env.name);
+                OffsetEnvironmentPosition(object_);
                 isEnvironment_ = true;
                 built_ = true;
                 foundLight = true;

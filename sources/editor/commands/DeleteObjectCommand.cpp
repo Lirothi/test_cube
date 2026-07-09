@@ -1,11 +1,12 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #if WITH_EDITOR
 
+#include <cassert>
 #include <memory>
 #include <utility>
 
 #include "app/scene/Scene.h"
-#include "app/scene/SceneObjectFactory.h"
+#include "app/scene/SceneObjectRegistry.h"
 #include "editor/EditorContext.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -57,19 +58,44 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
     if (runtimeRemoved_)
     {
         const nlohmann::json o = EditorSceneDocument::ObjectToJson(object_);
-        std::unique_ptr<RenderableObjectBase> runtime =
-            (object_.type == "transparentMesh")
-                ? SceneObjectFactory::CreateTransparentMeshFromJson(ctx.scene, o)
-                : SceneObjectFactory::CreateStaticMeshFromJson(o);
-        if (runtime)
+        SceneObjectRegistry objectRegistry = SceneObjectRegistry::CreateWithBuiltins();
+        SceneObjectRegistry::CreationContext creationCtx{ ctx.scene };
+        SceneObjectRegistry::ObjectList runtimeObjects =
+            objectRegistry.Create(object_.type, creationCtx, o);
+        if (!runtimeObjects.empty())
         {
             ctx.renderer.WaitForPreviousFrame();
             UploadBatch uploads;
             if (uploads.Begin(&ctx.renderer))
             {
-                ctx.scene.AddInitializedEditorObject(
-                    ctx.renderer, uploads, object_.id.value, std::move(runtime));
-                uploads.SubmitAndWait(&ctx.renderer);
+                bool addedAny = false;
+                for (std::unique_ptr<RenderableObjectBase>& runtime : runtimeObjects)
+                {
+                    if (!runtime)
+                    {
+                        continue;
+                    }
+
+                    runtime->SetVisible(object_.enabled);
+                    addedAny |= ctx.scene.AddInitializedEditorObject(
+                        ctx.renderer, uploads, object_.id.value, std::move(runtime));
+                }
+
+                if (addedAny)
+                {
+                    uploads.SubmitAndWait(&ctx.renderer);
+
+#ifndef NDEBUG
+                    if (object_.type == "staticMesh" &&
+                        o.value("rotateSpeedDeg", 0.0f) != 0.0f)
+                    {
+                        const RenderableObjectBase* restored =
+                            ctx.scene.FindEditorObject(object_.id.value);
+                        assert(restored && restored->IsDynamicCaster() &&
+                            "Undo must restore the rotating static-mesh runtime type");
+                    }
+#endif
+                }
             }
         }
     }
