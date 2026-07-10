@@ -100,6 +100,10 @@ private:
     bool confirmOpenLevelPopupRequested_ = false;
     bool confirmOpenLevelPreserveCamera_ = false;
     std::string confirmOpenLevelPath_;
+    nlohmann::json lastObservedPanelState_;
+    bool panelStateLoaded_ = false;
+    bool panelStateDirty_ = false;
+    double nextPanelStateSaveTimeSec_ = 0.0;
     LevelFileDialogMode levelFileDialogMode_ = LevelFileDialogMode::None;
     char levelFileDialogDirectory_[1024] = {};
     char levelFileDialogFileName_[260] = {};

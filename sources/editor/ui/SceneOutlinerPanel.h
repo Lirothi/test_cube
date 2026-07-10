@@ -30,9 +30,21 @@ struct OutlinerAction
 class SceneOutlinerPanel
 {
 public:
+    struct PersistentState
+    {
+        bool meshesGroupOpen = true;
+        bool lightsGroupOpen = true;
+        bool camerasGroupOpen = true;
+        bool environmentGroupOpen = true;
+        bool otherGroupOpen = true;
+    };
+
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it).
     OutlinerAction Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open);
+
+    PersistentState GetPersistentState() const;
+    void SetPersistentState(const PersistentState& state);
 
 private:
     char searchBuffer_[256] = {};

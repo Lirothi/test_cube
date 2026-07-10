@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -673,6 +674,376 @@ namespace
         return file.good();
     }
 
+    constexpr size_t kMaxPersistedContentItems = 512;
+    constexpr size_t kMaxPersistedCollections = 128;
+
+    nlohmann::json AssetIdToJson(const EditorAssetId& id)
+    {
+        return nlohmann::json{
+            { "type", static_cast<int>(id.type) },
+            { "key", id.key }
+        };
+    }
+
+    bool TryReadAssetId(const nlohmann::json& value, EditorAssetId& out)
+    {
+        if (!value.is_object())
+        {
+            return false;
+        }
+
+        const auto typeIt = value.find("type");
+        const auto keyIt = value.find("key");
+        if (typeIt == value.end() || keyIt == value.end() ||
+            !typeIt->is_number_integer() || !keyIt->is_string())
+        {
+            return false;
+        }
+
+        const std::int64_t typeValue = typeIt->get<std::int64_t>();
+        if (typeValue < static_cast<int>(EditorAssetType::Mesh) ||
+            typeValue > static_cast<int>(EditorAssetType::Shader) ||
+            keyIt->get_ref<const std::string&>().empty())
+        {
+            return false;
+        }
+
+        out.type = static_cast<EditorAssetType>(typeValue);
+        out.key = keyIt->get<std::string>();
+        return true;
+    }
+
+    bool SameAssetId(const EditorAssetId& a, const EditorAssetId& b)
+    {
+        return a.type == b.type && a.key == b.key;
+    }
+
+    bool ContainsAssetId(const std::vector<EditorAssetId>& ids, const EditorAssetId& id)
+    {
+        return std::any_of(ids.begin(), ids.end(),
+            [&id](const EditorAssetId& candidate)
+            {
+                return SameAssetId(candidate, id);
+            });
+    }
+
+    bool TryReadAssetIds(const nlohmann::json& value, std::vector<EditorAssetId>& out)
+    {
+        if (!value.is_array())
+        {
+            return false;
+        }
+
+        std::vector<EditorAssetId> ids;
+        for (const nlohmann::json& item : value)
+        {
+            if (ids.size() >= kMaxPersistedContentItems)
+            {
+                break;
+            }
+
+            EditorAssetId id;
+            if (TryReadAssetId(item, id) && !ContainsAssetId(ids, id))
+            {
+                ids.push_back(std::move(id));
+            }
+        }
+
+        out = std::move(ids);
+        return true;
+    }
+
+    bool TryReadFolderPaths(const nlohmann::json& value, std::vector<std::string>& out)
+    {
+        if (!value.is_array())
+        {
+            return false;
+        }
+
+        std::vector<std::string> folders;
+        for (const nlohmann::json& item : value)
+        {
+            if (folders.size() >= kMaxPersistedContentItems)
+            {
+                break;
+            }
+            if (!item.is_string())
+            {
+                continue;
+            }
+
+            const std::string& folder = item.get_ref<const std::string&>();
+            if (!folder.empty() &&
+                std::find(folders.begin(), folders.end(), folder) == folders.end())
+            {
+                folders.push_back(folder);
+            }
+        }
+
+        out = std::move(folders);
+        return true;
+    }
+
+    nlohmann::json ContentBrowserStateToJson(const ContentBrowserPanel::PersistentState& state)
+    {
+        nlohmann::json typeFilters = nlohmann::json::array();
+        for (bool enabled : state.activeTypeFilters)
+        {
+            typeFilters.push_back(enabled);
+        }
+
+        nlohmann::json favoriteAssets = nlohmann::json::array();
+        for (const EditorAssetId& id : state.favoriteAssets)
+        {
+            favoriteAssets.push_back(AssetIdToJson(id));
+        }
+
+        nlohmann::json collections = nlohmann::json::array();
+        for (const ContentBrowserCollection& collection : state.collections)
+        {
+            nlohmann::json collectionAssets = nlohmann::json::array();
+            for (const EditorAssetId& id : collection.assets)
+            {
+                collectionAssets.push_back(AssetIdToJson(id));
+            }
+            collections.push_back({
+                { "name", collection.name },
+                { "assets", std::move(collectionAssets) },
+                { "folders", collection.folders }
+            });
+        }
+
+        return nlohmann::json{
+            { "typeFilters", std::move(typeFilters) },
+            { "selectedFolder", state.selectedFolder },
+            { "includeSubfolders", state.includeSubfolders },
+            { "viewMode", state.viewMode == ContentBrowserPanel::ViewMode::Tiles ? "tiles" : "list" },
+            { "sourcesWidth", state.sourcesWidth },
+            { "favorites", {
+                { "assets", std::move(favoriteAssets) },
+                { "folders", state.favoriteFolders }
+            } },
+            { "collections", std::move(collections) }
+        };
+    }
+
+    void ReadBoolMember(const nlohmann::json& object, const char* key, bool& out)
+    {
+        const auto it = object.find(key);
+        if (it != object.end() && it->is_boolean())
+        {
+            out = it->get<bool>();
+        }
+    }
+
+    void LoadContentBrowserState(const nlohmann::json& value, ContentBrowserPanel& panel)
+    {
+        if (!value.is_object())
+        {
+            return;
+        }
+
+        ContentBrowserPanel::PersistentState state = panel.GetPersistentState();
+        const auto typeFiltersIt = value.find("typeFilters");
+        if (typeFiltersIt != value.end() && typeFiltersIt->is_array() &&
+            typeFiltersIt->size() == state.activeTypeFilters.size())
+        {
+            std::array<bool, 5> typeFilters{};
+            bool valid = true;
+            for (size_t i = 0; i < typeFilters.size(); ++i)
+            {
+                const nlohmann::json& item = (*typeFiltersIt)[i];
+                if (!item.is_boolean())
+                {
+                    valid = false;
+                    break;
+                }
+                typeFilters[i] = item.get<bool>();
+            }
+            if (valid)
+            {
+                state.activeTypeFilters = typeFilters;
+            }
+        }
+
+        const auto folderIt = value.find("selectedFolder");
+        if (folderIt != value.end() && folderIt->is_string() &&
+            !folderIt->get_ref<const std::string&>().empty())
+        {
+            state.selectedFolder = folderIt->get<std::string>();
+        }
+        ReadBoolMember(value, "includeSubfolders", state.includeSubfolders);
+
+        const auto viewModeIt = value.find("viewMode");
+        if (viewModeIt != value.end() && viewModeIt->is_string())
+        {
+            const std::string& viewMode = viewModeIt->get_ref<const std::string&>();
+            if (viewMode == "tiles")
+            {
+                state.viewMode = ContentBrowserPanel::ViewMode::Tiles;
+            }
+            else if (viewMode == "list")
+            {
+                state.viewMode = ContentBrowserPanel::ViewMode::List;
+            }
+        }
+
+        const auto sourcesWidthIt = value.find("sourcesWidth");
+        if (sourcesWidthIt != value.end() && sourcesWidthIt->is_number())
+        {
+            const double width = sourcesWidthIt->get<double>();
+            if (std::isfinite(width) && width >= 160.0 && width <= 4096.0)
+            {
+                state.sourcesWidth = static_cast<float>(width);
+            }
+        }
+
+        const auto favoritesIt = value.find("favorites");
+        if (favoritesIt != value.end() && favoritesIt->is_object())
+        {
+            const auto assetsIt = favoritesIt->find("assets");
+            if (assetsIt != favoritesIt->end())
+            {
+                TryReadAssetIds(*assetsIt, state.favoriteAssets);
+            }
+            const auto foldersIt = favoritesIt->find("folders");
+            if (foldersIt != favoritesIt->end())
+            {
+                TryReadFolderPaths(*foldersIt, state.favoriteFolders);
+            }
+        }
+
+        const auto collectionsIt = value.find("collections");
+        if (collectionsIt != value.end() && collectionsIt->is_array())
+        {
+            std::vector<ContentBrowserCollection> collections;
+            for (const nlohmann::json& item : *collectionsIt)
+            {
+                if (collections.size() >= kMaxPersistedCollections || !item.is_object())
+                {
+                    break;
+                }
+
+                const auto nameIt = item.find("name");
+                if (nameIt == item.end() || !nameIt->is_string() ||
+                    nameIt->get_ref<const std::string&>().empty())
+                {
+                    continue;
+                }
+
+                ContentBrowserCollection collection;
+                collection.name = nameIt->get<std::string>();
+                const auto assetsIt = item.find("assets");
+                if (assetsIt != item.end())
+                {
+                    TryReadAssetIds(*assetsIt, collection.assets);
+                }
+                const auto foldersIt = item.find("folders");
+                if (foldersIt != item.end())
+                {
+                    TryReadFolderPaths(*foldersIt, collection.folders);
+                }
+                collections.push_back(std::move(collection));
+            }
+            state.collections = std::move(collections);
+        }
+
+        panel.SetPersistentState(state);
+    }
+
+    nlohmann::json OutlinerStateToJson(const SceneOutlinerPanel::PersistentState& state)
+    {
+        return nlohmann::json{
+            { "meshesExpanded", state.meshesGroupOpen },
+            { "lightsExpanded", state.lightsGroupOpen },
+            { "camerasExpanded", state.camerasGroupOpen },
+            { "environmentExpanded", state.environmentGroupOpen },
+            { "otherExpanded", state.otherGroupOpen }
+        };
+    }
+
+    void LoadOutlinerState(const nlohmann::json& value, SceneOutlinerPanel& panel)
+    {
+        if (!value.is_object())
+        {
+            return;
+        }
+
+        SceneOutlinerPanel::PersistentState state = panel.GetPersistentState();
+        ReadBoolMember(value, "meshesExpanded", state.meshesGroupOpen);
+        ReadBoolMember(value, "lightsExpanded", state.lightsGroupOpen);
+        ReadBoolMember(value, "camerasExpanded", state.camerasGroupOpen);
+        ReadBoolMember(value, "environmentExpanded", state.environmentGroupOpen);
+        ReadBoolMember(value, "otherExpanded", state.otherGroupOpen);
+        panel.SetPersistentState(state);
+    }
+
+    nlohmann::json BuildPanelStateJson(bool showContentBrowser,
+        bool showOutliner,
+        bool showInspector,
+        bool showCommandHistory,
+        const ContentBrowserPanel& contentBrowser,
+        const SceneOutlinerPanel& outliner)
+    {
+        return nlohmann::json{
+            { "contentBrowserVisible", showContentBrowser },
+            { "outlinerVisible", showOutliner },
+            { "inspectorVisible", showInspector },
+            { "commandHistoryVisible", showCommandHistory },
+            { "contentBrowser", ContentBrowserStateToJson(contentBrowser.GetPersistentState()) },
+            { "outliner", OutlinerStateToJson(outliner.GetPersistentState()) }
+        };
+    }
+
+    void LoadEditorPanelState(bool& showContentBrowser,
+        bool& showOutliner,
+        bool& showInspector,
+        bool& showCommandHistory,
+        ContentBrowserPanel& contentBrowser,
+        SceneOutlinerPanel& outliner)
+    {
+        const nlohmann::json root = LoadEditorStateJson();
+        const auto levelEditorIt = root.find("levelEditor");
+        if (levelEditorIt == root.end() || !levelEditorIt->is_object())
+        {
+            return;
+        }
+
+        const auto panelStateIt = levelEditorIt->find("panelState");
+        if (panelStateIt == levelEditorIt->end() || !panelStateIt->is_object())
+        {
+            return;
+        }
+
+        const nlohmann::json& panelState = *panelStateIt;
+        ReadBoolMember(panelState, "contentBrowserVisible", showContentBrowser);
+        ReadBoolMember(panelState, "outlinerVisible", showOutliner);
+        ReadBoolMember(panelState, "inspectorVisible", showInspector);
+        ReadBoolMember(panelState, "commandHistoryVisible", showCommandHistory);
+
+        const auto contentBrowserIt = panelState.find("contentBrowser");
+        if (contentBrowserIt != panelState.end())
+        {
+            LoadContentBrowserState(*contentBrowserIt, contentBrowser);
+        }
+        const auto outlinerIt = panelState.find("outliner");
+        if (outlinerIt != panelState.end())
+        {
+            LoadOutlinerState(*outlinerIt, outliner);
+        }
+    }
+
+    bool SaveEditorPanelState(const nlohmann::json& panelState)
+    {
+        nlohmann::json root = LoadEditorStateJson();
+        if (!root["levelEditor"].is_object())
+        {
+            root["levelEditor"] = nlohmann::json::object();
+        }
+        root["levelEditor"]["panelState"] = panelState;
+        return SaveEditorStateJson(root);
+    }
+
     bool LoadLevelCameraState(const std::string& levelPath, LevelCameraState& out)
     {
         const std::string normalizedPath = NormalizeLevelPath(levelPath);
@@ -1129,6 +1500,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     {
         assetRegistry_.Refresh();
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
+        LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
+            contentBrowser_, outliner_);
+        lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
+            showInspector_, showCommandHistory_, contentBrowser_, outliner_);
+        panelStateLoaded_ = true;
         if (document_.LoadFromLevelFile("data/levels/demo.json"))
         {
             if (RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
@@ -1917,6 +2293,26 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
     scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
+    const nlohmann::json panelState = BuildPanelStateJson(showContentBrowser_, showOutliner_,
+        showInspector_, showCommandHistory_, contentBrowser_, outliner_);
+    if (!panelStateLoaded_ || panelState != lastObservedPanelState_)
+    {
+        lastObservedPanelState_ = panelState;
+        panelStateLoaded_ = true;
+        panelStateDirty_ = true;
+        nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 0.25;
+    }
+    if (panelStateDirty_ && (!open_ || ImGui::GetTime() >= nextPanelStateSaveTimeSec_))
+    {
+        if (SaveEditorPanelState(lastObservedPanelState_))
+        {
+            panelStateDirty_ = false;
+        }
+        else
+        {
+            nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 1.0;
+        }
+    }
     saveCurrentLevelCameraState(false);
 }
 

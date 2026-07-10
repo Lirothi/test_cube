@@ -5,6 +5,7 @@
 #include <array>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -1950,6 +1951,37 @@ namespace
             ImGui::PopID();
         }
     }
+}
+
+ContentBrowserPanel::PersistentState ContentBrowserPanel::GetPersistentState() const
+{
+    PersistentState state;
+    std::copy(std::begin(activeTypeFilters_), std::end(activeTypeFilters_), state.activeTypeFilters.begin());
+    state.selectedFolder = selectedFolder_;
+    state.includeSubfolders = includeSubfolders_;
+    state.viewMode = viewMode_;
+    state.sourcesWidth = sourcesWidth_;
+    state.favoriteAssets = favoriteAssets_;
+    state.favoriteFolders = favoriteFolders_;
+    state.collections = collections_;
+    return state;
+}
+
+void ContentBrowserPanel::SetPersistentState(const PersistentState& state)
+{
+    std::copy(state.activeTypeFilters.begin(), state.activeTypeFilters.end(), std::begin(activeTypeFilters_));
+    selectedFolder_ = state.selectedFolder.empty() ? "/Game" : state.selectedFolder;
+    folderHistory_.clear();
+    folderHistoryIndex_ = 0;
+    includeSubfolders_ = state.includeSubfolders;
+    viewMode_ = state.viewMode == ViewMode::Tiles ? ViewMode::Tiles : ViewMode::List;
+    if (std::isfinite(state.sourcesWidth))
+    {
+        sourcesWidth_ = std::clamp(state.sourcesWidth, 160.0f, 4096.0f);
+    }
+    favoriteAssets_ = state.favoriteAssets;
+    favoriteFolders_ = state.favoriteFolders;
+    collections_ = state.collections;
 }
 
 void ContentBrowserPanel::EnsureSelectedFolder(const AssetRegistry& registry)

@@ -378,6 +378,26 @@ namespace
     }
 }
 
+SceneOutlinerPanel::PersistentState SceneOutlinerPanel::GetPersistentState() const
+{
+    return PersistentState{
+        meshesGroupOpen_,
+        lightsGroupOpen_,
+        camerasGroupOpen_,
+        environmentGroupOpen_,
+        otherGroupOpen_
+    };
+}
+
+void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
+{
+    meshesGroupOpen_ = state.meshesGroupOpen;
+    lightsGroupOpen_ = state.lightsGroupOpen;
+    camerasGroupOpen_ = state.camerasGroupOpen;
+    environmentGroupOpen_ = state.environmentGroupOpen;
+    otherGroupOpen_ = state.otherGroupOpen;
+}
+
 OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open)
 {
     OutlinerAction action;

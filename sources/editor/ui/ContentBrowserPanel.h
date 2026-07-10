@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -53,6 +54,18 @@ public:
         Columns
     };
 
+    struct PersistentState
+    {
+        std::array<bool, 5> activeTypeFilters{};
+        std::string selectedFolder = "/Game";
+        bool includeSubfolders = true;
+        ViewMode viewMode = ViewMode::List;
+        float sourcesWidth = 300.0f;
+        std::vector<EditorAssetId> favoriteAssets;
+        std::vector<std::string> favoriteFolders;
+        std::vector<ContentBrowserCollection> collections;
+    };
+
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it). `selectedAsset` is owned by the editor; the
     // panel highlights it and writes it when the user clicks a row. Returns the
@@ -65,6 +78,9 @@ public:
         Renderer& renderer,
         AssetThumbnailCache& thumbnails,
         bool* open);
+
+    PersistentState GetPersistentState() const;
+    void SetPersistentState(const PersistentState& state);
 
 private:
     void EnsureSelectedFolder(const AssetRegistry& registry);
