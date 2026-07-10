@@ -460,6 +460,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
     std::vector<OutlinerRowRef> other;
     bool selectedExists = false;
     bool selectedVisible = false;
+    std::string selectedName;
     const auto addVisibleRow = [&](EditorObject& object, bool environment)
     {
         std::vector<OutlinerRowRef>* group = nullptr;
@@ -488,6 +489,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         {
             selectedExists = true;
             selectedVisible = visible;
+            selectedName = obj.name;
         }
     }
     for (EditorObject& env : document.Environment())
@@ -501,6 +503,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         {
             selectedExists = true;
             selectedVisible = visible;
+            selectedName = env.name;
         }
     }
 
@@ -511,6 +514,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         environmentRows.size() +
         other.size());
     ImGui::Text("Showing %d of %d rows", visibleRows, totalRows);
+    if (selectedExists)
+    {
+        ImGui::TextDisabled("Selected: %s", selectedName.c_str());
+    }
 
     const float footerHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
     const ImGuiTableFlags flags =
@@ -629,7 +636,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                     }
                     if (SupportsFrameSelection(*obj, row.environment))
                     {
-                        if (ImGui::MenuItem("Frame Selection"))
+                        if (ImGui::MenuItem("Frame Selected"))
                         {
                             action.type = OutlinerAction::Type::FrameSelection;
                             action.target = obj->id;

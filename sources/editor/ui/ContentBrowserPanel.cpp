@@ -1650,7 +1650,7 @@ namespace
                 CanAssignMaterialAsset(*record, document, selectedObject, materialReason);
             if (canAssignMaterial)
             {
-                if (ImGui::MenuItem("Assign Material to Selected"))
+                if (ImGui::MenuItem("Assign Material to Selected Object"))
                 {
                     action.type = ContentBrowserAction::Type::AssignMaterial;
                     action.asset = record->id;
@@ -1658,7 +1658,7 @@ namespace
             }
             else
             {
-                DisabledMenuItemWithTooltip("Assign Material to Selected", materialReason.c_str());
+                DisabledMenuItemWithTooltip("Assign Material to Selected Object", materialReason.c_str());
             }
             wroteSpecificAction = true;
         }
@@ -1673,7 +1673,7 @@ namespace
                     action.type = ContentBrowserAction::Type::OpenLevel;
                     action.asset = record->id;
                 }
-                if (ImGui::MenuItem("Open Level Preserving Camera"))
+                if (ImGui::MenuItem("Open Level (Keep Camera)"))
                 {
                     action.type = ContentBrowserAction::Type::OpenLevelPreservingCamera;
                     action.asset = record->id;
@@ -1699,11 +1699,11 @@ namespace
         {
             ImGui::SetClipboardText(record->path.c_str());
         }
-        if (ImGui::MenuItem("Show In Sources"))
+        if (ImGui::MenuItem("Reveal in Sources"))
         {
             RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, record->virtualFolder);
         }
-        if (ImGui::MenuItem("Refresh"))
+        if (ImGui::MenuItem("Refresh Asset Registry"))
         {
             RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
         }
@@ -2166,7 +2166,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
     const float navHeight = ImGui::GetFrameHeightWithSpacing() * 4.4f;
     ImGui::BeginChild("##navigationBar", ImVec2(0.0f, navHeight), true);
-    ImGui::TextUnformatted("Navigation Bar");
+    ImGui::TextUnformatted("Navigation");
     ImGui::SameLine();
     DisabledButtonWithTooltip("Add", "Asset creation is planned for a later Content Browser step.");
     ImGui::SameLine();
@@ -2210,23 +2210,23 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         EnsureSelectedFolder(registry);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Settings"))
+    if (ImGui::Button("View Options"))
     {
         ImGui::OpenPopup("##contentBrowserSettings");
     }
     if (ImGui::BeginPopup("##contentBrowserSettings"))
     {
-        ImGui::TextUnformatted("Content Browser Settings");
+        ImGui::TextUnformatted("View Options");
         ImGui::Separator();
-        if (ImGui::MenuItem("List View", nullptr, viewMode_ == ViewMode::List))
+        if (ImGui::MenuItem("List", nullptr, viewMode_ == ViewMode::List))
         {
             viewMode_ = ViewMode::List;
         }
-        if (ImGui::MenuItem("Tile View", nullptr, viewMode_ == ViewMode::Tiles))
+        if (ImGui::MenuItem("Tiles", nullptr, viewMode_ == ViewMode::Tiles))
         {
             viewMode_ = ViewMode::Tiles;
         }
-        DisabledMenuItemWithTooltip("Column View", "Column view is planned after the list/tile data model settles.");
+        DisabledMenuItemWithTooltip("Columns", "Column view is planned after the list and tile data model settles.");
         ImGui::Separator();
         ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
         if (ImGui::MenuItem("New Collection..."))
@@ -2598,6 +2598,11 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         static_cast<int>(visibleFolders.size()),
         static_cast<int>(visibleAssets.size()),
         selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
+    if (const EditorAssetRecord* selectedRecord = FindById(registry, selectedAsset))
+    {
+        const std::string selectedLabel = TruncateLabel(selectedRecord->displayName, 48);
+        ImGui::TextDisabled("Selected: %s", selectedLabel.c_str());
+    }
 
     if (visibleEntryCount == 0)
     {

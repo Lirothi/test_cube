@@ -43,6 +43,25 @@ namespace
     constexpr size_t kMaxRecentLevels = 8;
     constexpr const char* kEditorStatePath = "editor_state.json";
 
+    bool MenuItemWithDisabledReason(const char* label, bool enabled, const char* disabledReason)
+    {
+        const bool pressed = ImGui::MenuItem(label, nullptr, false, enabled);
+        if (!enabled && disabledReason &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("%s", disabledReason);
+        }
+        return pressed;
+    }
+
+    void ShowDisabledItemTooltip(bool disabled, const char* reason)
+    {
+        if (disabled && reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("%s", reason);
+        }
+    }
+
     struct FileDialogEntry
     {
         std::string name;
@@ -1426,7 +1445,8 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
 
 bool EditorController::RequestOpenLevelPath(LevelManager& levelManager,
     const std::string& path,
-    bool preserveCameraTransform)
+    bool preserveCameraTransform,
+    bool bypassUnsavedChangesConfirmation)
 {
     const std::string normalizedPath = NormalizeLevelPath(path);
     if (normalizedPath.empty())
@@ -1439,9 +1459,23 @@ bool EditorController::RequestOpenLevelPath(LevelManager& levelManager,
         return false;
     }
 
+    if (document_.IsDirty() && !bypassUnsavedChangesConfirmation)
+    {
+        confirmOpenLevelPath_ = normalizedPath;
+        confirmOpenLevelPreserveCamera_ = preserveCameraTransform;
+        confirmOpenLevelPopupRequested_ = true;
+        levelStatus_ = "Confirm opening " + normalizedPath;
+        open_ = true;
+        return true;
+    }
+
     LevelLoadOptions options;
     options.preserveCameraTransform = preserveCameraTransform;
     options.editorDocument = &document_;
+    if (!preserveCameraTransform)
+    {
+        ApplyLevelCameraStateToLoadOptions(normalizedPath, options);
+    }
     levelManager.RequestLevelPathChange(normalizedPath, options);
     pendingLevelAction_ = PendingLevelAction::Open;
     pendingLevelPath_ = normalizedPath;
@@ -1585,15 +1619,6 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     }
                     const bool preserveCamera =
                         action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera;
-                    if (document_.IsDirty())
-                    {
-                        confirmOpenLevelPath_ = asset->path;
-                        confirmOpenLevelPreserveCamera_ = preserveCamera;
-                        confirmOpenLevelPopupRequested_ = true;
-                        levelStatus_ = "Confirm opening " + asset->path;
-                        return;
-                    }
-
                     RequestOpenLevelPath(panelCtx.levelManager, asset->path, preserveCamera);
                 }
             }));
@@ -1739,7 +1764,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         }
 
         saveCurrentLevelCameraState(true);
-        return queueLevelPathLoad(normalizedPath, false, PendingLevelAction::Open, "Opening " + normalizedPath);
+        return RequestOpenLevelPath(levelManager, normalizedPath, false);
     };
     const auto saveLevel = [&](const std::string& path) -> bool
     {
@@ -1836,21 +1861,24 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     // Closing it (its X) closes the whole editor interface.
     ImGui::SetNextWindowSize(ImVec2(360.0f, 180.0f), ImGuiCond_FirstUseEver);
     bool open = open_;
-    if (ImGui::Begin("Level Editor###LevelEditor", &open, ImGuiWindowFlags_MenuBar))
+    const char* editorWindowTitle = document_.IsDirty() ?
+        "Level Editor *###LevelEditor" :
+        "Level Editor###LevelEditor";
+    if (ImGui::Begin(editorWindowTitle, &open, ImGuiWindowFlags_MenuBar))
     {
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
             {
-                if (ImGui::MenuItem("New"))
+                if (ImGui::MenuItem("New Level"))
                 {
                     newLevel();
                 }
-                if (ImGui::MenuItem("Open..."))
+                if (ImGui::MenuItem("Open Level..."))
                 {
                     beginOpenLevelDialog();
                 }
-                if (ImGui::MenuItem("Save"))
+                if (ImGui::MenuItem("Save Level"))
                 {
                     if (document_.LevelPath().empty())
                     {
@@ -1861,12 +1889,13 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         saveLevel(document_.LevelPath());
                     }
                 }
-                if (ImGui::MenuItem("Save As..."))
+                if (ImGui::MenuItem("Save Level As..."))
                 {
                     beginSaveLevelAsDialog();
                 }
-                ImGui::BeginDisabled(document_.LevelPath().empty());
-                if (ImGui::MenuItem("Reload"))
+                if (MenuItemWithDisabledReason("Reload Level",
+                        !document_.LevelPath().empty(),
+                        "Save the level to a file before reloading it."))
                 {
                     saveCurrentLevelCameraState(true);
                     const std::string reloadPath = NormalizeLevelPath(document_.LevelPath());
@@ -1875,8 +1904,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         queueLevelPathLoad(reloadPath, true, PendingLevelAction::Reload, "Reloading " + reloadPath);
                     }
                 }
-                ImGui::EndDisabled();
-                if (ImGui::BeginMenu("Recent", !recentLevelPaths_.empty()))
+                const bool hasRecentLevels = !recentLevelPaths_.empty();
+                if (ImGui::BeginMenu("Recent Levels", hasRecentLevels))
                 {
                     const std::vector<std::string> recentSnapshot = recentLevelPaths_;
                     for (const std::string& recentPath : recentSnapshot)
@@ -1888,13 +1917,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     }
                     ImGui::EndMenu();
                 }
+                ShowDisabledItemTooltip(!hasRecentLevels, "No recently opened levels.");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Create"))
             {
                 if (ImGui::BeginMenu("Camera"))
                 {
-                    if (ImGui::MenuItem("FreeCameraStart"))
+                    if (ImGui::MenuItem("Free Camera Start"))
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateDocumentObjectCommand>(
                             BuildFreeCameraStartObject(scene)));
@@ -1904,21 +1934,17 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 if (ImGui::BeginMenu("Mesh"))
                 {
                     const std::string defaultMesh = PickDefaultMesh(assetRegistry_);
-                    ImGui::BeginDisabled(defaultMesh.empty());
-                    if (ImGui::MenuItem("Static Mesh"))
+                    if (MenuItemWithDisabledReason("Static Mesh", !defaultMesh.empty(),
+                            "No mesh assets are available."))
                     {
                         commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
                             BuildStaticMeshObjectJson(scene, assetRegistry_)));
                     }
-                    if (ImGui::MenuItem("Transparent Mesh"))
+                    if (MenuItemWithDisabledReason("Transparent Mesh", !defaultMesh.empty(),
+                            "No mesh assets are available."))
                     {
                         commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
                             BuildTransparentMeshObjectJson(scene, assetRegistry_)));
-                    }
-                    ImGui::EndDisabled();
-                    if (defaultMesh.empty())
-                    {
-                        ImGui::TextDisabled("No mesh assets found.");
                     }
                     ImGui::EndMenu();
                 }
@@ -1935,7 +1961,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                             BuildSpotLightObject(scene)));
                     }
-                    if (ImGui::MenuItem("Directional Light", nullptr, false, !hasDirectionalLight))
+                    if (MenuItemWithDisabledReason("Directional Light", !hasDirectionalLight,
+                            "Only one directional light is supported per level."))
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                             BuildDirectionalLightObject()));
@@ -1943,7 +1970,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     ImGui::EndMenu();
                 }
                 const bool hasSkybox = HasEnvironmentObject(document_, "skybox");
-                if (ImGui::MenuItem("Skybox", nullptr, false, !hasSkybox))
+                if (MenuItemWithDisabledReason("Skybox", !hasSkybox,
+                        "This level already has a skybox."))
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildSkyboxObject(assetRegistry_)));
@@ -1957,7 +1985,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     if (e.type == "ocean") { hasOcean = true; break; }
                 }
-                if (ImGui::MenuItem("Create Ocean", nullptr, false, !hasOcean))
+                if (MenuItemWithDisabledReason("Create Ocean", !hasOcean,
+                        "This level already has an ocean."))
                 {
                     const std::string preset = DefaultOceanPresetPath();
                     if (CreateLiveOcean(renderer, scene, preset, levelStatus_))
@@ -1973,7 +2002,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         document_.SetDirty(true);
                     }
                 }
-                if (ImGui::MenuItem("Remove Ocean", nullptr, false, hasOcean))
+                if (MenuItemWithDisabledReason("Remove Ocean", hasOcean,
+                        "This level has no ocean to remove."))
                 {
                     DestroyLiveOcean(renderer, scene);
                     std::vector<EditorObject>& env = document_.Environment();
@@ -1989,7 +2019,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     document_.SetDirty(true);
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Preset Editor...", nullptr, false, hasOcean))
+                if (MenuItemWithDisabledReason("Open Preset Editor...", hasOcean,
+                        "Create an ocean before opening its preset editor."))
                 {
                     openOceanPresetEditorRequested_ = true;
                 }
@@ -2008,7 +2039,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
         const std::string levelPath = NormalizeLevelPath(document_.LevelPath());
         ImGui::Text("Level: %s", levelPath.empty() ? "(untitled)" : levelPath.c_str());
-        ImGui::Text("Document objects: %d", static_cast<int>(document_.Objects().size()));
+        if (document_.IsDirty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Unsaved Changes");
+        }
+        else
+        {
+            ImGui::TextDisabled("Saved");
+        }
+        ImGui::Text("Objects: %d", static_cast<int>(document_.Objects().size()));
         if (!levelStatus_.empty())
         {
             ImGui::TextDisabled("%s", levelStatus_.c_str());
@@ -2183,10 +2222,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::BeginDisabled(!commandStack_.CanUndo());
         if (ImGui::Button("Undo")) { commandStack_.Undo(ctx); }
         ImGui::EndDisabled();
+        ShowDisabledItemTooltip(!commandStack_.CanUndo(), "No command is available to undo.");
         ImGui::SameLine();
         ImGui::BeginDisabled(!commandStack_.CanRedo());
         if (ImGui::Button("Redo")) { commandStack_.Redo(ctx); }
         ImGui::EndDisabled();
+        ShowDisabledItemTooltip(!commandStack_.CanRedo(), "No command is available to redo.");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Windows");
@@ -2276,7 +2317,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             const bool preserveCamera = confirmOpenLevelPreserveCamera_;
             confirmOpenLevelPath_.clear();
             confirmOpenLevelPreserveCamera_ = false;
-            RequestOpenLevelPath(levelManager, path, preserveCamera);
+            RequestOpenLevelPath(levelManager, path, preserveCamera, true);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();

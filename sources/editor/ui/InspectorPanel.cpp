@@ -329,7 +329,10 @@ namespace
 
             char buf[512];
             std::snprintf(buf, sizeof(buf), "%s", p.value("texture", std::string()).c_str());
-            ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 72.0f));
+            const float applyButtonWidth = ImGui::CalcTextSize("Apply Texture").x +
+                ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetNextItemWidth(std::max(120.0f,
+                ImGui::GetContentRegionAvail().x - applyButtonWidth - ImGui::GetStyle().ItemSpacing.x));
             const nlohmann::json beforeItem = p;
             const bool textureChanged = ImGui::InputText("Texture", buf, sizeof(buf));
             if (ImGui::IsItemActivated())
@@ -345,7 +348,7 @@ namespace
 
             const bool textureCommitted = ImGui::IsItemDeactivatedAfterEdit();
             ImGui::SameLine();
-            const bool applyTexture = ImGui::Button("Apply");
+            const bool applyTexture = ImGui::Button("Apply Texture");
             if (textureCommitted)
             {
                 const nlohmann::json before =
@@ -461,9 +464,10 @@ void InspectorPanel::Draw(EditorContext& ctx,
         for (EditorObject& env : ctx.document.Environment())
         {
             if (env.id.value != ctx.selectedObject.value) { continue; }
-            ImGui::Text("ID: %llu", static_cast<unsigned long long>(env.id.value));
-            ImGui::Text("Type: %s", env.type.c_str());
-            ImGui::TextUnformatted(env.name.c_str());
+            ImGui::Text("Selection: %s", env.name.c_str());
+            ImGui::TextDisabled("Type: %s | ID: %llu",
+                env.type.c_str(),
+                static_cast<unsigned long long>(env.id.value));
             ImGui::Separator();
             DrawEnvironmentInspector(
                 ctx,
@@ -477,14 +481,16 @@ void InspectorPanel::Draw(EditorContext& ctx,
             return;
         }
 
-        ImGui::TextDisabled("No object selected.");
+        ImGui::TextDisabled("No Selection");
         DrawInspectorDropTarget(ctx, commandStack, registry, nullptr);
         ImGui::End();
         return;
     }
 
-    ImGui::Text("ID: %llu", static_cast<unsigned long long>(obj->id.value));
-    ImGui::Text("Type: %s", obj->type.c_str());
+    ImGui::Text("Selection: %s", obj->name.c_str());
+    ImGui::TextDisabled("Type: %s | ID: %llu",
+        obj->type.c_str(),
+        static_cast<unsigned long long>(obj->id.value));
 
     if (nameEditObject_.value != obj->id.value || !nameEditActive_)
     {
