@@ -7,18 +7,48 @@ This plan is intentionally split into separable steps. Each step should leave th
 repo buildable and usable on its own. Do not combine steps unless the user asks
 for a larger batch.
 
-## Current Baseline
+## Current Baseline (updated 2026-07-10)
 
-- `ContentBrowserPanel` is a searchable/filterable asset table over
-  `AssetRegistry`. It supports refresh, asset selection, details, and mesh spawn
-  actions through `IEditorObjectFactory`.
-- `SceneOutlinerPanel` is a flat table over `EditorSceneDocument::Objects()` plus
-  a labeled environment section. It supports row selection, object delete, and
-  enable toggles.
-- Selection is shared across outliner, inspector, viewport picking, object-id
-  readback, icon billboards, and selection outline.
-- Regular object edits mostly use `EditorCommand`. Environment edits are mostly
-  direct live patches and are not undoable.
+Steps 1 through 15 — including 5A, 11A, and 12A through 12E — are implemented
+and committed. The editor currently provides:
+
+- A UE-style Content Browser: navigation bar with back/forward and breadcrumbs,
+  a resizable Sources panel (folder tree, Favorites, Collections), additive type
+  filters, search, list/tile views, empty-folder create/delete, drag-and-drop to
+  the viewport and Inspector, delayed hover hints, and a real thumbnail pipeline
+  (`AssetThumbnailCache` + `EditorPreviewRenderer`) covering textures, meshes,
+  and material presets. Cube-texture previews and an on-disk thumbnail cache
+  remain open (Step 12F).
+- A Scene Outliner with search, type filters, sorting, collapsible groups, row
+  context actions (delete, duplicate, rename, frame, enable), and environment
+  entities (lights, camera, skybox, ocean) with enable toggles.
+- An Inspector with command-backed name/enabled/transform/material editing,
+  registry-driven per-type property drawers, environment inspectors, and asset
+  drop targets.
+- Viewport interaction: GPU object-id picking, stencil selection outline,
+  ImGuizmo translate/rotate/scale (one drag = one undo entry), environment light
+  gizmos, icon billboards, and selected-light wireframes.
+- A full command stack with undo/redo, a Command History window (Step 5A), and
+  hotkeys (Q/W/E/R/Space, Delete, Ctrl+D, Ctrl+Z/Y, Ctrl+Shift+Z, Ctrl+S, F,
+  Esc).
+- Object and environment creation through a Create menu (camera, mesh, lights,
+  ocean), all command-backed (Step 13).
+- Persistent UI state in `editor_state.json` (panel visibility, outliner state,
+  Content Browser folder/view/filters, Favorites/Collections, per-level camera).
+
+Known limitations that the next wave of steps (12F and 16 through 23) addresses:
+
+- Selection is a single `EditorObjectId`; there is no multi-select anywhere.
+- The gizmo has no snapping and no local/world transform-space toggle.
+- There is no copy/paste of objects.
+- Spawns and viewport drops always land at camera position plus five units
+  forward, never at the cursor.
+- There are no camera bookmarks.
+- The asset registry refreshes only on demand.
+- Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
+  outliner but are effectively read-only.
+- Disabled objects can still appear in RT reflections, which gather scene
+  objects without the `IsVisible` check.
 
 Important source files:
 
@@ -989,6 +1019,58 @@ Validation:
 - Navigate a folder with many previewable assets while watching frame time and
   ImGui descriptor usage.
 
+## Step 12F: Thumbnail Disk Cache And Cubemap Previews
+
+Goal: finish the two items Step 12E deferred — reuse thumbnails across editor
+restarts through an on-disk cache, and preview cube textures with a
+representative face instead of a badge.
+
+Primary files:
+
+- `sources/editor/assets/AssetThumbnailCache.*`
+- `sources/editor/assets/EditorPreviewRenderer.*`
+- `shaders/editor_preview.hlsl` or a small companion shader for cube sampling
+- `.gitignore`
+
+Implementation notes:
+
+- Disk cache: after a mesh/material/cubemap thumbnail is rendered (and optionally
+  for decoded textures), read the 256x256 color target back to the CPU and encode
+  it as PNG. Use WIC for encoding — `Texture2D` already decodes through WIC, so
+  no new dependency. Follow the fenced readback pattern; never stall per frame
+  (readback inside the existing bounded `ProcessPending` batch is fine).
+- Cache files live under an editor cache directory (for example
+  `editor_cache/thumbnails/`), added to `.gitignore`. Key each file by a hash of
+  asset id, source write time, `kThumbnailSchemaVersion` (already reserved in
+  `AssetThumbnailCache.cpp`), and tracked dependencies (materials also key on
+  `data/materials.json` and referenced texture write times).
+- On a cache-entry miss in `Request`, probe the disk cache before queueing GPU
+  generation; a disk hit uploads the PNG like any texture thumbnail.
+- Cubemap previews: sample one documented face (+X is fine) of the cube texture
+  into the standard preview color target with a small pixel shader pass in
+  `EditorPreviewRenderer`. Unreadable cubemaps report `Failed`. Remove the
+  cube-texture exclusion in `ContentBrowserPanel`'s `ResolveAssetThumbnail` once
+  this works.
+- Stale cache files (key mismatch) are deleted lazily when encountered.
+
+Acceptance criteria:
+
+- Restarting the editor shows mesh/material thumbnails without re-rendering them
+  (disk hits).
+- Modifying a source asset regenerates only that thumbnail and replaces its
+  cache file.
+- Cube textures show a real face in tiles, list, and hover hints.
+- The cache directory is never committed and can be deleted safely at any time.
+
+Validation:
+
+- Build `Debug|x64` and verify the no-editor build.
+- Browse Models/Materials, restart, and confirm thumbnails appear without the
+  generation delay.
+- Delete the cache directory while the editor is closed and confirm clean
+  regeneration.
+- Touch one texture file and confirm only its thumbnail regenerates.
+
 ## Step 13: Command-Backed Environment Edits (Done)
 
 Goal: remove the largest undo/redo inconsistency in the editor.
@@ -1092,32 +1174,314 @@ Validation:
 - Manually inspect Content Browser, Scene Outliner, Inspector, and Level Editor
   at small and default window sizes.
 
+## Step 16: Gizmo Snapping And Transform Spaces
+
+Goal: give the transform gizmo the two features every editor user reaches for
+first — increment snapping and a local/world space toggle.
+
+Primary files:
+
+- `sources/editor/ui/ViewportGizmo.*`
+- `sources/editor/EditorHotkeys.*`
+- `sources/editor/EditorController.cpp` (persistence)
+
+Implementation notes:
+
+- `ImGuizmo::Manipulate` already accepts a snap vector; pass one per operation
+  when snapping is active: translation grid (default 0.5), rotation angle
+  (default 15 degrees), scale increment (default 0.1).
+- Add toolbar controls next to the existing mode buttons: a snap on/off toggle
+  and compact per-operation increment fields.
+- Holding Ctrl during a drag temporarily inverts the snap state (UE behavior).
+  Route the modifier through `ViewportGizmo` so it cannot fight the
+  Ctrl-based hotkeys; snapping only matters while a drag is active.
+- Add a LOCAL/WORLD toggle mapped to ImGuizmo's mode parameter. Environment
+  light gizmos build synthetic matrices and stay WORLD regardless of the
+  toggle.
+- Persist snap enabled, the three increments, and the space toggle in
+  `editor_state.json` under `levelEditor`, reusing the Step 14 helpers.
+
+Acceptance criteria:
+
+- Dragging with snap on moves the object in exact increments; rotation snaps to
+  the configured angle.
+- Ctrl inverts snapping only for the duration of the hold.
+- Local mode orients the gizmo with the object's rotation; world mode matches
+  today's behavior.
+- Settings survive an editor restart.
+
+Validation:
+
+- Build `Debug|x64`.
+- Manually verify snap values in the Inspector transform fields after snapped
+  drags, in both spaces, on a mesh and on a spot light.
+
+## Step 17: Cursor-Aware Placement And Drop To Ground
+
+Goal: make object placement land where the user points instead of always five
+units in front of the camera.
+
+Primary files:
+
+- `sources/editor/ui/ViewportGizmo.cpp` (viewport drop target)
+- `sources/editor/EditorExtensionRegistry.*` (factory position hint)
+- `sources/editor/EditorHotkeys.*`
+- `sources/editor/EditorController.cpp`
+
+Implementation notes:
+
+- On a viewport mesh drop, cast the cursor ray with the existing
+  `Scene::RaycastEditorObject` path and spawn at the hit point; keep the current
+  camera-forward-times-five position as the no-hit fallback and for the Create
+  menu.
+- Extend `IEditorObjectFactory::BuildDefaultJson` (or add an overload) with an
+  optional world-position hint so the drop site controls placement without
+  duplicating factory logic.
+- Add an End-key "drop to ground" action: ray straight down from the selected
+  object's bounds bottom; on a hit, move the object with a
+  `TransformObjectCommand` so it is undoable; on no hit, do nothing and say so
+  in the status line.
+- Note the ray only hits editor-linked, visible objects; document that
+  generators and hidden objects are not landing surfaces.
+
+Acceptance criteria:
+
+- Dropping a mesh onto existing geometry spawns it at the cursor hit point.
+- Dropping onto empty sky uses the old fallback position.
+- End rests the selected object on the surface below it, undoably.
+
+Validation:
+
+- Build `Debug|x64`.
+- Drop meshes onto the demo floor and onto the sky; verify both paths.
+- Drop-to-ground an object raised above the floor, then undo.
+
+## Step 18: Object Copy And Paste
+
+Goal: complete the edit loop with clipboard operations that work across levels.
+
+Primary files:
+
+- `sources/editor/EditorHotkeys.*`
+- `sources/editor/EditorController.*`
+- `sources/editor/commands/` (paste command, mirroring `DuplicateObjectCommand`)
+
+Implementation notes:
+
+- Ctrl+C serializes the selected document object with the existing
+  `EditorSceneDocument::ObjectToJson` into an editor-owned clipboard string;
+  also mirror it to the OS clipboard via `ImGui::SetClipboardText` so a paste
+  can cross editor instances.
+- Ctrl+V parses the clipboard JSON, validates it (must be an object with a
+  known `type`), allocates a fresh id, offsets the position slightly, and
+  executes an undoable command that follows the `DuplicateObjectCommand`
+  document+runtime spawn path.
+- Environment entities follow the duplicate rules: point and spot lights are
+  copyable; singletons (camera, skybox, directional light, ocean) refuse with a
+  status message.
+- Suppress both hotkeys while ImGui wants text input, matching the existing
+  hotkey gating.
+- Paste into a different level works because object `properties` are
+  self-contained JSON.
+
+Acceptance criteria:
+
+- Ctrl+C then Ctrl+V produces a working copy, selected, undoable as one entry.
+- Copy in one level, open another, paste there: the object appears and saves
+  correctly.
+- Malformed clipboard content is rejected without side effects.
+
+Validation:
+
+- Build `Debug|x64`.
+- Copy/paste a mesh and a point light; undo each paste.
+- Cross-level paste via File > Open between two levels.
+
+## Step 19: Multi-Selection Foundation
+
+Goal: turn the single-object selection model into an ordered multi-selection so
+bulk workflows (move, delete, duplicate, enable) stop being one-at-a-time.
+
+Primary files:
+
+- `sources/editor/EditorController.*` and `sources/editor/EditorContext.h`
+- `sources/editor/ui/SceneOutlinerPanel.*`
+- `sources/editor/ui/ViewportGizmo.*`
+- `sources/editor/ui/InspectorPanel.*`
+- `sources/editor/commands/` (composite command)
+- `sources/app/scene/Scene.*` (selection outline id set, editor-gated)
+
+Implementation notes:
+
+- Replace the single selected id with an ordered selection (vector of
+  `EditorObjectId` plus a primary). Keep a primary-selection accessor with the
+  old semantics so panels can migrate incrementally.
+- Outliner: plain click replaces the selection, Ctrl+click toggles membership,
+  Shift+click range-selects over the currently displayed row order.
+- Viewport: Ctrl+click adds/removes the picked object; plain click replaces.
+- Add a `CompositeCommand` that executes child commands in order and undoes in
+  reverse; Delete, Duplicate, Enable, and Copy/Paste over a selection become one
+  composite entry in the history.
+- Gizmo: manipulate the primary object and apply the same delta to the rest;
+  one composite transform command per drag.
+- Inspector: with multiple objects, show a "N objects selected" header, the
+  shared Enabled checkbox, and the primary object's details; do not attempt
+  full mixed-value editing in this step.
+- Selection outline: `Scene::SetSelectedEditorObjectId` is singular. Extend the
+  editor-gated API to accept a small bounded set (for example up to 64 ids) and
+  compare in the outline pass. This is the step's only renderer-adjacent edit;
+  keep it behind `WITH_EDITOR` and verify the no-editor build.
+- F frames the combined bounds of the whole selection.
+
+Acceptance criteria:
+
+- Ctrl/Shift selection works in the outliner; Ctrl+click works in the viewport.
+- Deleting five objects is a single undo entry that restores all five.
+- A gizmo drag moves every selected object rigidly and undoes as one entry.
+- All selected objects show the outline; single-selection behavior is unchanged.
+
+Validation:
+
+- Build `Debug|x64` and verify the no-editor build.
+- Multi-select mixes of meshes and lights; exercise delete, duplicate, enable,
+  drag, and undo after each.
+
+## Step 20: Camera Bookmarks And Scene Framing
+
+Goal: fast navigation around a level during editing.
+
+Primary files:
+
+- `sources/editor/EditorHotkeys.*`
+- `sources/editor/EditorController.*` (per-level persistence already exists)
+
+Implementation notes:
+
+- Ctrl+1..9 stores the current camera pose in bookmark slots; 1..9 recalls.
+  Suppress while ImGui wants text input and while the fly-camera RMB is held,
+  matching existing hotkey gating.
+- Persist bookmarks inside the existing per-level camera record in
+  `editor_state.json` so each level keeps its own set.
+- Add "Frame Scene" (Home): frame the combined bounds of all visible editor
+  objects, reusing the F-focus math.
+- List the new keys in the hotkey hint text.
+
+Acceptance criteria:
+
+- Bookmarks recall exact camera poses and survive restarts, per level.
+- Home frames the whole scene.
+- Number keys never fire while typing in a text field.
+
+Validation:
+
+- Build `Debug|x64`.
+- Store/recall bookmarks in two different levels and restart between them.
+
+## Step 21: Asset Registry Auto-Refresh
+
+Goal: keep the Content Browser in sync with the filesystem without manual
+Refresh clicks.
+
+Primary files:
+
+- `sources/editor/assets/AssetRegistry.*`
+- `sources/editor/EditorController.cpp`
+- `sources/editor/ui/ContentBrowserPanel.cpp` (status text only)
+
+Implementation notes:
+
+- Start with throttled polling: at most every ~2 seconds of editor-open time,
+  compare a cheap change signature of the asset roots (directory and file write
+  times from the existing scan machinery) and run `Refresh` when it differs.
+  The current registry scan is metadata-only over a small tree; measure its
+  cost once before considering a `ReadDirectoryChangesW` watcher, and prefer
+  the poll if it stays trivially cheap.
+- Never rescan mid-frame more than once, and never from a worker thread — the
+  registry has no locking.
+- Selected folder, history, and selection survive via the existing
+  `EnsureSelectedFolder` handling; thumbnails invalidate for free through the
+  `fileWriteTime` keying.
+- Show a subtle "auto-refreshed" note in the browser status line; keep the
+  manual Refresh button.
+
+Acceptance criteria:
+
+- Adding, deleting, or overwriting an asset file on disk shows up in the
+  browser within a few seconds, without pressing Refresh.
+- The selected folder and view state are preserved across auto-refreshes.
+- Frame time shows no visible periodic hitch from the poll.
+
+Validation:
+
+- Build `Debug|x64`.
+- Copy a texture into `textures/`, watch it appear; delete it, watch it leave.
+- Watch the profiler HUD while the poll runs.
+
+
+## Step 22: Visibility Consistency Hardening
+
+Goal: make the Enabled toggle authoritative in every render path, not just the
+bucketized ones.
+
+Primary files:
+
+- The RT reflections instance gather (TLAS build site in the renderer)
+- Any other pass that iterates scene objects without `SceneRenderQueue`
+
+Implementation notes:
+
+- `SceneRenderQueue::Bucketize` already skips `!IsVisible()` objects, so main,
+  shadow, and glass passes honor the toggle. RT reflections gather `objects_`
+  directly and still include hidden objects; add the `IsVisible` check to the
+  RT instance gather.
+- Audit the remaining direct consumers (VSM caster gather, instanced-model
+  paths) and align any that bypass the check.
+- This is ungated engine code, but behavior-invariant outside the editor:
+  `IsVisible` defaults to true and only editor code calls `SetVisible`. State
+  that invariant in a comment at the check site.
+- Confirm the TLAS rebuild path handles instance-count changes between frames
+  (it rebuilds per frame; verify rather than assume).
+
+Acceptance criteria:
+
+- Disabling an object removes it from RT reflections (F5 RT mode) the same
+  frame it disappears from the main view.
+- Non-editor Release rendering is unchanged.
+- No new GBV or debug-layer messages.
+
+Validation:
+
+- Build `Debug|x64` and the no-editor Release build.
+- Toggle Enabled on a mirror-visible object with RT reflections active.
+- Run `--scene-stress` once as a regression gate.
+
 ## Suggested Execution Order
 
-Recommended order from this point, assuming Steps 6 through 12 and Step 11A
-have already been implemented in the current working tree:
+Steps 1 through 15 (including 5A, 11A, 12A-12E) are complete. Recommended order
+for the next wave:
 
-1. Step 12A: Resizable Sources And Asset View Split (done)
-2. Step 12B: Resource Details In Hover Hints (done)
-3. Step 12C: Folder And Fallback Content Browser Icons (done)
-4. Step 12D: Real Asset Thumbnail Pipeline (safe core done: framework + textures)
-5. Step 12E: Mesh And Material Thumbnail Previews (remaining 12D scope)
-6. Step 4: Outliner Groups And Context Actions
-7. Step 5: Rename Command (done)
-8. Step 5A: Command History Window (done)
-9. Step 13: Command-Backed Environment Edits (done)
-10. Step 14: Persist Editor Panel UI State
-11. Step 15: UX Cleanup Pass
+1. Step 16: Gizmo Snapping And Transform Spaces — smallest step, immediate
+   daily-use value.
+2. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
+   Content Browser thumbnail family.
+3. Step 17: Cursor-Aware Placement And Drop To Ground — small, high-feel
+   placement win on existing raycast machinery.
+4. Step 18: Object Copy And Paste — completes the basic edit loop
+   (single-object first; Step 19 upgrades it to selections).
+5. Step 19: Multi-Selection Foundation — the largest step and the foundation
+   the bulk workflows sit on; scheduled after the smaller wins so each earlier
+   step stays independently shippable.
+6. Step 20: Camera Bookmarks And Scene Framing.
+7. Step 21: Asset Registry Auto-Refresh.
+8. Step 22: Generator Entity Editing — needs a new gated Scene helper and
+   respawn churn care; keep it late and stress-test it.
+9. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
+   wants a runtime/GBV pass, so schedule it when one is planned anyway.
 
-Steps 4 and 5 remain valuable, but they are intentionally moved behind the
-Content Browser foundation because the current product direction is a UE-like
-folder browser. Steps 12A through 12E supersede Step 12's permanent bottom
-Details/Preview layout: inspection moves to hover hints, the reclaimed area
-belongs to Asset View, and previewable assets use real cached thumbnails rather
-than generic icons. Step 12D shipped the thumbnail cache framework and real
-texture thumbnails; Step 12E finishes the mesh, material, and cubemap previews
-plus the on-disk cache, and is split out because the offscreen 3D render pass is
-higher risk. Step 13 remains later because it has broader command/runtime impact.
+Ordering rationale: quick wins first (16, 12F, 17, 18) because each is
+self-contained and immediately felt; the selection-model rework (19) lands once
+the single-selection behaviors it must preserve are all in place; 22
+carry renderer/churn risk and sit last so a regression is easy to bisect.
 
 ## Stop Conditions
 

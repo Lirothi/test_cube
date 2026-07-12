@@ -1,6 +1,7 @@
 #include "editor/ui/ViewportGizmo.h"
 #if WITH_EDITOR
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -235,6 +236,31 @@ const char* ViewportGizmo::ModeLabel() const
     return ModeLabel(op_);
 }
 
+ViewportGizmo::PersistentState ViewportGizmo::GetPersistentState() const
+{
+    return PersistentState{
+        snapEnabled_,
+        translationIncrement_,
+        rotationIncrement_,
+        scaleIncrement_,
+        transformSpace_
+    };
+}
+
+void ViewportGizmo::SetPersistentState(const PersistentState& state)
+{
+    snapEnabled_ = state.snapEnabled;
+    translationIncrement_ = std::isfinite(state.translationIncrement) ?
+        std::clamp(state.translationIncrement, 0.001f, 10000.0f) : 0.5f;
+    rotationIncrement_ = std::isfinite(state.rotationIncrement) ?
+        std::clamp(state.rotationIncrement, 0.1f, 180.0f) : 15.0f;
+    scaleIncrement_ = std::isfinite(state.scaleIncrement) ?
+        std::clamp(state.scaleIncrement, 0.001f, 10.0f) : 0.1f;
+    transformSpace_ = state.transformSpace == TransformSpace::Local ?
+        TransformSpace::Local :
+        TransformSpace::World;
+}
+
 void ViewportGizmo::CycleTransformMode()
 {
     switch (op_)
@@ -270,6 +296,56 @@ void ViewportGizmo::DrawModeButtons(const char* hotkeyHintText)
     {
         op_ = static_cast<Op>(mode);
     }
+
+    ImGui::TextUnformatted("Space:");
+    ImGui::SameLine();
+    const char* spaceLabel = transformSpace_ == TransformSpace::Local ? "LOCAL" : "WORLD";
+    if (ImGui::Button(spaceLabel, ImVec2(62.0f, 0.0f)))
+    {
+        transformSpace_ = transformSpace_ == TransformSpace::Local ?
+            TransformSpace::World :
+            TransformSpace::Local;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Object gizmo transform space. Environment lights always use WORLD.");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Snap", &snapEnabled_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Hold Ctrl during a gizmo drag to temporarily invert snapping.");
+    }
+
+    ImGui::SetNextItemWidth(54.0f);
+    ImGui::DragFloat("Move##translationSnap", &translationIncrement_, 0.05f,
+        0.001f, 10000.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Translation snap increment in scene units.");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(54.0f);
+    ImGui::DragFloat("Rotate##rotationSnap", &rotationIncrement_, 0.5f,
+        0.1f, 180.0f, "%.1f deg");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Rotation snap increment in degrees.");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(54.0f);
+    ImGui::DragFloat("Scale##scaleSnap", &scaleIncrement_, 0.01f,
+        0.001f, 10.0f, "%.3f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Scale snap increment.");
+    }
+    translationIncrement_ = std::isfinite(translationIncrement_) ?
+        std::clamp(translationIncrement_, 0.001f, 10000.0f) : 0.5f;
+    rotationIncrement_ = std::isfinite(rotationIncrement_) ?
+        std::clamp(rotationIncrement_, 0.1f, 180.0f) : 15.0f;
+    scaleIncrement_ = std::isfinite(scaleIncrement_) ?
+        std::clamp(scaleIncrement_, 0.001f, 10.0f) : 0.1f;
 }
 
 void ViewportGizmo::Update(EditorContext& ctx,
@@ -473,6 +549,22 @@ void ViewportGizmo::Update(EditorContext& ctx,
 
     bool gizmoBusy = false;
 
+    const auto snapForOperation = [this](ImGuizmo::OPERATION operation, float values[3]) -> const float*
+    {
+        if (snapEnabled_ == temporarySnapInvertHeld_)
+        {
+            return nullptr;
+        }
+
+        const float increment = operation == ImGuizmo::ROTATE ? rotationIncrement_ :
+            operation == ImGuizmo::SCALE ? scaleIncrement_ :
+            translationIncrement_;
+        values[0] = increment;
+        values[1] = increment;
+        values[2] = increment;
+        return values;
+    };
+
     // Gizmo for the selected object (only if it has a live editor-owned runtime).
     EditorObject* obj = ctx.document.Find(ctx.selectedObject);
     RenderableObjectBase* base = obj ? ctx.scene.FindEditorObject(ctx.selectedObject.value) : nullptr;
@@ -494,7 +586,13 @@ void ViewportGizmo::Update(EditorContext& ctx,
         float model[16];
         ToFloat16(ro->GetModelMatrix(), model);
 
-        ImGuizmo::Manipulate(view, proj, ToImGuizmo(op_), ImGuizmo::WORLD, model);
+        const ImGuizmo::OPERATION operation = ToImGuizmo(op_);
+        const ImGuizmo::MODE mode = transformSpace_ == TransformSpace::Local ?
+            ImGuizmo::LOCAL :
+            ImGuizmo::WORLD;
+        float snapValues[3];
+        ImGuizmo::Manipulate(view, proj, operation, mode, model, nullptr,
+            snapForOperation(operation, snapValues));
 
         const bool usingNow = ImGuizmo::IsUsing();
         if (usingNow && !wasUsing_)
@@ -587,7 +685,9 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 if (!hasDir && giz == ImGuizmo::ROTATE) { giz = ImGuizmo::TRANSLATE; }
                 if (!hasPos && giz == ImGuizmo::TRANSLATE) { giz = ImGuizmo::ROTATE; }
 
-                ImGuizmo::Manipulate(view, proj, giz, ImGuizmo::WORLD, envGizmoMatrix_);
+                float snapValues[3];
+                ImGuizmo::Manipulate(view, proj, giz, ImGuizmo::WORLD, envGizmoMatrix_, nullptr,
+                    snapForOperation(giz, snapValues));
                 const bool usingNow = ImGuizmo::IsUsing();
                 if (usingNow && !envWasUsing_)
                 {

@@ -132,6 +132,7 @@ EditorHotkeyActions EditorHotkeys::Poll(ViewportGizmo& viewportGizmo)
 {
     EditorHotkeyActions actions;
     ImGuiIO& io = ImGui::GetIO();
+    viewportGizmo.SetTemporarySnapInvert(io.KeyCtrl);
 
     if (io.WantTextInput)
     {

@@ -16,6 +16,16 @@ class ViewportGizmo
 {
 public:
     enum class Op { Select, Translate, Rotate, Scale };
+    enum class TransformSpace { Local, World };
+
+    struct PersistentState
+    {
+        bool snapEnabled = false;
+        float translationIncrement = 0.1f;
+        float rotationIncrement = 15.0f;
+        float scaleIncrement = 0.1f;
+        TransformSpace transformSpace = TransformSpace::World;
+    };
 
     // Draw the Select/Translate/Rotate/Scale mode buttons (call from the editor toolbar).
     void DrawModeButtons(const char* hotkeyHintText);
@@ -28,12 +38,21 @@ public:
 
     void SetMode(Op op) { op_ = op; }
     Op GetMode() const { return op_; }
+    void SetTemporarySnapInvert(bool held) { temporarySnapInvertHeld_ = held; }
+    PersistentState GetPersistentState() const;
+    void SetPersistentState(const PersistentState& state);
     void CycleTransformMode();
     const char* ModeLabel() const;
     static const char* ModeLabel(Op op);
 
 private:
     Op op_ = Op::Translate;
+    TransformSpace transformSpace_ = TransformSpace::World;
+    bool snapEnabled_ = false;
+    bool temporarySnapInvertHeld_ = false;
+    float translationIncrement_ = 0.5f;
+    float rotationIncrement_ = 15.0f;
+    float scaleIncrement_ = 0.1f;
     bool wasUsing_ = false;
     EditorTransform transformBeforeDrag_;
     float envGizmoMatrix_[16] = {}; // persistent model matrix while dragging an env light

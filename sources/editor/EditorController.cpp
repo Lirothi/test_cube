@@ -855,6 +855,25 @@ namespace
         }
     }
 
+    void ReadFloatMember(const nlohmann::json& object,
+        const char* key,
+        float minValue,
+        float maxValue,
+        float& out)
+    {
+        const auto it = object.find(key);
+        if (it == object.end() || !it->is_number())
+        {
+            return;
+        }
+
+        const double value = it->get<double>();
+        if (std::isfinite(value))
+        {
+            out = std::clamp(static_cast<float>(value), minValue, maxValue);
+        }
+    }
+
     void LoadContentBrowserState(const nlohmann::json& value, ContentBrowserPanel& panel)
     {
         if (!value.is_object())
@@ -997,12 +1016,59 @@ namespace
         panel.SetPersistentState(state);
     }
 
+    nlohmann::json ViewportGizmoStateToJson(const ViewportGizmo::PersistentState& state)
+    {
+        return nlohmann::json{
+            { "snapEnabled", state.snapEnabled },
+            { "translationIncrement", state.translationIncrement },
+            { "rotationIncrement", state.rotationIncrement },
+            { "scaleIncrement", state.scaleIncrement },
+            { "transformSpace", state.transformSpace == ViewportGizmo::TransformSpace::Local ?
+                "local" : "world" }
+        };
+    }
+
+    void LoadViewportGizmoState(const nlohmann::json& value, ViewportGizmo& viewportGizmo)
+    {
+        if (!value.is_object())
+        {
+            return;
+        }
+
+        ViewportGizmo::PersistentState state = viewportGizmo.GetPersistentState();
+        ReadBoolMember(value, "snapEnabled", state.snapEnabled);
+        ReadFloatMember(value, "translationIncrement", 0.001f, 10000.0f,
+            state.translationIncrement);
+        ReadFloatMember(value, "rotationIncrement", 0.1f, 180.0f,
+            state.rotationIncrement);
+        ReadFloatMember(value, "scaleIncrement", 0.001f, 10.0f,
+            state.scaleIncrement);
+
+        const auto transformSpaceIt = value.find("transformSpace");
+        if (transformSpaceIt != value.end() && transformSpaceIt->is_string())
+        {
+            const std::string& transformSpace =
+                transformSpaceIt->get_ref<const std::string&>();
+            if (transformSpace == "local")
+            {
+                state.transformSpace = ViewportGizmo::TransformSpace::Local;
+            }
+            else if (transformSpace == "world")
+            {
+                state.transformSpace = ViewportGizmo::TransformSpace::World;
+            }
+        }
+
+        viewportGizmo.SetPersistentState(state);
+    }
+
     nlohmann::json BuildPanelStateJson(bool showContentBrowser,
         bool showOutliner,
         bool showInspector,
         bool showCommandHistory,
         const ContentBrowserPanel& contentBrowser,
-        const SceneOutlinerPanel& outliner)
+        const SceneOutlinerPanel& outliner,
+        const ViewportGizmo& viewportGizmo)
     {
         return nlohmann::json{
             { "contentBrowserVisible", showContentBrowser },
@@ -1010,7 +1076,8 @@ namespace
             { "inspectorVisible", showInspector },
             { "commandHistoryVisible", showCommandHistory },
             { "contentBrowser", ContentBrowserStateToJson(contentBrowser.GetPersistentState()) },
-            { "outliner", OutlinerStateToJson(outliner.GetPersistentState()) }
+            { "outliner", OutlinerStateToJson(outliner.GetPersistentState()) },
+            { "viewportGizmo", ViewportGizmoStateToJson(viewportGizmo.GetPersistentState()) }
         };
     }
 
@@ -1019,7 +1086,8 @@ namespace
         bool& showInspector,
         bool& showCommandHistory,
         ContentBrowserPanel& contentBrowser,
-        SceneOutlinerPanel& outliner)
+        SceneOutlinerPanel& outliner,
+        ViewportGizmo& viewportGizmo)
     {
         const nlohmann::json root = LoadEditorStateJson();
         const auto levelEditorIt = root.find("levelEditor");
@@ -1049,6 +1117,11 @@ namespace
         if (outlinerIt != panelState.end())
         {
             LoadOutlinerState(*outlinerIt, outliner);
+        }
+        const auto viewportGizmoIt = panelState.find("viewportGizmo");
+        if (viewportGizmoIt != panelState.end())
+        {
+            LoadViewportGizmoState(*viewportGizmoIt, viewportGizmo);
         }
     }
 
@@ -1535,9 +1608,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         assetRegistry_.Refresh();
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
-            contentBrowser_, outliner_);
+            contentBrowser_, outliner_, viewportGizmo_);
         lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-            showInspector_, showCommandHistory_, contentBrowser_, outliner_);
+            showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
         panelStateLoaded_ = true;
         if (document_.LoadFromLevelFile("data/levels/demo.json"))
         {
@@ -2335,7 +2408,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
     scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
     const nlohmann::json panelState = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-        showInspector_, showCommandHistory_, contentBrowser_, outliner_);
+        showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
     if (!panelStateLoaded_ || panelState != lastObservedPanelState_)
     {
         lastObservedPanelState_ = panelState;
