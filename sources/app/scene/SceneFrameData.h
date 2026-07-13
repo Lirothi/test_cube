@@ -74,6 +74,7 @@ struct SceneRenderSettings
 struct SceneFrameData
 {
     static constexpr int kCascades = 4;
+    static constexpr std::size_t kMaxEditorSelection = 64;
 
     struct CascadeData
     {
@@ -100,7 +101,8 @@ struct SceneFrameData
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
 
     CascadeData cascades{};
-    std::uint64_t selectedEditorObjectId = 0;
+    std::array<std::uint64_t, kMaxEditorSelection> selectedEditorObjectIds{};
+    std::uint32_t selectedEditorObjectCount = 0;
     std::uint32_t selectionOutlineRadius = 1;
 
     SceneRenderSettings settings{};

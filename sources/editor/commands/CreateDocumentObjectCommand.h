@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // Creates a serializable editor document object that has no live runtime
@@ -17,7 +18,7 @@ public:
 
 private:
     EditorObject object_;
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
     bool built_ = false;
 };
 

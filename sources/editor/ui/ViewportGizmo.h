@@ -1,6 +1,9 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <vector>
+
+#include "core/math/Math.h"
 #include "editor/scene/EditorSceneDocument.h" // EditorTransform
 #include "materials/Texture2D.h"
 
@@ -46,6 +49,17 @@ public:
     static const char* ModeLabel(Op op);
 
 private:
+    struct DragSnapshot
+    {
+        EditorObjectId id{};
+        bool environment = false;
+        bool hasPosition = false;
+        bool hasDirection = false;
+        EditorTransform transform{};
+        nlohmann::json properties;
+        Math::mat4 model;
+    };
+
     Op op_ = Op::Translate;
     TransformSpace transformSpace_ = TransformSpace::World;
     bool snapEnabled_ = false;
@@ -54,11 +68,10 @@ private:
     float rotationIncrement_ = 15.0f;
     float scaleIncrement_ = 0.1f;
     bool wasUsing_ = false;
-    EditorTransform transformBeforeDrag_;
-    float envGizmoMatrix_[16] = {}; // persistent model matrix while dragging an env light
-    bool envWasUsing_ = false;
-    EditorObjectId envDragObject_{};
-    nlohmann::json envPropertiesBeforeDrag_;
+    EditorObjectId dragPrimary_{};
+    Math::mat4 primaryMatrixBeforeDrag_;
+    std::vector<DragSnapshot> dragSnapshots_;
+    bool pendingPickToggle_ = false;
 
     // Editor icon billboards for world-positioned editor entities: screen-space,
     // always-on-top ImGui overlay images drawn from the icon atlas, clickable to

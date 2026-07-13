@@ -7,10 +7,10 @@ This plan is intentionally split into separable steps. Each step should leave th
 repo buildable and usable on its own. Do not combine steps unless the user asks
 for a larger batch.
 
-## Current Baseline (updated 2026-07-10)
+## Current Baseline (updated 2026-07-13)
 
 Steps 1 through 15 — including 5A, 11A, and 12A through 12E — are implemented
-and committed. The editor currently provides:
+and committed. Steps 16 through 19 are also implemented. The editor currently provides:
 
 - A UE-style Content Browser: navigation bar with back/forward and breadcrumbs,
   a resizable Sources panel (folder tree, Favorites, Collections), additive type
@@ -36,13 +36,8 @@ and committed. The editor currently provides:
 - Persistent UI state in `editor_state.json` (panel visibility, outliner state,
   Content Browser folder/view/filters, Favorites/Collections, per-level camera).
 
-Known limitations that the next wave of steps (12F and 16 through 23) addresses:
+Known limitations that the next wave of steps (12F and 20 through 23) addresses:
 
-- Selection is a single `EditorObjectId`; there is no multi-select anywhere.
-- The gizmo has no snapping and no local/world transform-space toggle.
-- There is no copy/paste of objects.
-- Spawns and viewport drops always land at camera position plus five units
-  forward, never at the cursor.
 - There are no camera bookmarks.
 - The asset registry refreshes only on demand.
 - Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
@@ -1299,6 +1294,11 @@ Validation:
 
 ## Step 19: Multi-Selection Foundation
 
+Status (2026-07-13): implemented. The ordered selection, composite command
+history entries, batch clipboard format, multi-object gizmo drag, combined F
+frame, and 64-object editor outline set are in place. `Debug|x64` and the
+no-editor `Release|x64` build both pass.
+
 Goal: turn the single-object selection model into an ordered multi-selection so
 bulk workflows (move, delete, duplicate, enable) stop being one-at-a-time.
 
@@ -1457,31 +1457,21 @@ Validation:
 
 ## Suggested Execution Order
 
-Steps 1 through 15 (including 5A, 11A, 12A-12E) are complete. Recommended order
+Steps 1 through 19 (including 5A, 11A, 12A-12E) are complete. Recommended order
 for the next wave:
 
-1. Step 16: Gizmo Snapping And Transform Spaces — smallest step, immediate
-   daily-use value.
-2. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
+1. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
    Content Browser thumbnail family.
-3. Step 17: Cursor-Aware Placement And Drop To Ground — small, high-feel
-   placement win on existing raycast machinery.
-4. Step 18: Object Copy And Paste — completes the basic edit loop
-   (single-object first; Step 19 upgrades it to selections).
-5. Step 19: Multi-Selection Foundation — the largest step and the foundation
-   the bulk workflows sit on; scheduled after the smaller wins so each earlier
-   step stays independently shippable.
-6. Step 20: Camera Bookmarks And Scene Framing.
-7. Step 21: Asset Registry Auto-Refresh.
-8. Step 22: Generator Entity Editing — needs a new gated Scene helper and
+2. Step 20: Camera Bookmarks And Scene Framing.
+3. Step 21: Asset Registry Auto-Refresh.
+4. Step 22: Generator Entity Editing — needs a new gated Scene helper and
    respawn churn care; keep it late and stress-test it.
-9. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
+5. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
    wants a runtime/GBV pass, so schedule it when one is planned anyway.
 
-Ordering rationale: quick wins first (16, 12F, 17, 18) because each is
-self-contained and immediately felt; the selection-model rework (19) lands once
-the single-selection behaviors it must preserve are all in place; 22
-carry renderer/churn risk and sit last so a regression is easy to bisect.
+Ordering rationale: finish the thumbnail work first, then add camera workflow
+and asset-refresh quality-of-life. The generator and ungated renderer work remain
+last because they need broader regression coverage.
 
 ## Stop Conditions
 

@@ -552,6 +552,33 @@ const RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id) const
     return nullptr;
 }
 
+void Scene::SetSelectedEditorObjectIds(const std::vector<SceneObjectId>& ids)
+{
+    selectedEditorObjectIds_.fill(0);
+    selectedEditorObjectCount_ = 0;
+    for (const SceneObjectId id : ids)
+    {
+        if (id == 0 || selectedEditorObjectCount_ >= selectedEditorObjectIds_.size())
+        {
+            continue;
+        }
+
+        bool alreadySelected = false;
+        for (std::uint32_t i = 0; i < selectedEditorObjectCount_; ++i)
+        {
+            if (selectedEditorObjectIds_[i] == id)
+            {
+                alreadySelected = true;
+                break;
+            }
+        }
+        if (!alreadySelected)
+        {
+            selectedEditorObjectIds_[selectedEditorObjectCount_++] = id;
+        }
+    }
+}
+
 Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
     const Math::float3& dir,
     float* outDistance,
@@ -683,10 +710,12 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.vsm = &vsm_;
     frameData_.settings = renderSettings_;
 #if WITH_EDITOR
-    frameData_.selectedEditorObjectId = selectedEditorObjectId_;
+    frameData_.selectedEditorObjectIds = selectedEditorObjectIds_;
+    frameData_.selectedEditorObjectCount = selectedEditorObjectCount_;
     frameData_.selectionOutlineRadius = std::clamp<std::uint32_t>(selectionOutlineRadius_, 1u, 8u);
 #else
-    frameData_.selectedEditorObjectId = 0;
+    frameData_.selectedEditorObjectIds.fill(0);
+    frameData_.selectedEditorObjectCount = 0;
     frameData_.selectionOutlineRadius = 1;
 #endif
 
@@ -988,7 +1017,8 @@ void Scene::Clear()
     objects_.clear();
 #if WITH_EDITOR
     objectIds_.clear();
-    selectedEditorObjectId_ = 0;
+    selectedEditorObjectIds_.fill(0);
+    selectedEditorObjectCount_ = 0;
     selectionOutlineRadius_ = 1;
 #endif
     camera_.GetView().queue.Clear();

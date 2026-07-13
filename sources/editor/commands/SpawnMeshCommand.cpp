@@ -44,7 +44,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
         built_ = true;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
 
     // Mirror the object in the document.
     ctx.document.Add(object_);
@@ -76,7 +76,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    ctx.selectedObject = object_.id;
+    ctx.selection.Replace(object_.id);
     ctx.document.SetDirty(true);
     return true;
 }
@@ -86,7 +86,7 @@ void SpawnMeshCommand::Undo(EditorContext& ctx)
     ctx.renderer.WaitForPreviousFrame();
     ctx.scene.RemoveEditorObject(object_.id.value);
     ctx.document.Remove(object_.id);
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

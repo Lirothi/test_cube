@@ -23,9 +23,9 @@ bool CreateDocumentObjectCommand::Execute(EditorContext& ctx)
         built_ = true;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
     ctx.document.Add(object_);
-    ctx.selectedObject = object_.id;
+    ctx.selection.Replace(object_.id);
     ctx.document.SetDirty(true);
     return true;
 }
@@ -33,7 +33,7 @@ bool CreateDocumentObjectCommand::Execute(EditorContext& ctx)
 void CreateDocumentObjectCommand::Undo(EditorContext& ctx)
 {
     ctx.document.Remove(object_.id);
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

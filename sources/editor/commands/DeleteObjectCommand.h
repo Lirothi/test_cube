@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // Deletes an editor object from the document (and its runtime counterpart when it
@@ -21,10 +22,11 @@ public:
 private:
     EditorObjectId id_;
     bool captured_ = false;
+    bool isEnvironment_ = false;
     std::size_t objectIndex_ = 0;
     EditorObject object_;          // serialized copy for restore
     bool runtimeRemoved_ = false;  // did Execute remove a live runtime object?
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
 };
 
 #endif // WITH_EDITOR

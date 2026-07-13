@@ -57,7 +57,7 @@ bool CreateEnvironmentCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
 
     ctx.renderer.WaitForPreviousFrame();
     ctx.document.Environment().push_back(object_);
@@ -70,7 +70,7 @@ bool CreateEnvironmentCommand::Execute(EditorContext& ctx)
         EnvironmentRuntime::Apply(ctx, object_);
     }
 
-    ctx.selectedObject = object_.id;
+    ctx.selection.Replace(object_.id);
     ctx.document.SetDirty(true);
     return true;
 }
@@ -91,7 +91,7 @@ void CreateEnvironmentCommand::Undo(EditorContext& ctx)
 
     EnvironmentRuntime::Remove(ctx, object_);
 
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

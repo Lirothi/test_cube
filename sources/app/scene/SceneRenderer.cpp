@@ -51,41 +51,44 @@ namespace
     }
 
 #if WITH_EDITOR
-    RenderableObjectBase* FindSelectedObject(const SceneFrameData& frame, const SceneView& view, bool transparent)
+    bool IsSelectedEditorObject(const SceneFrameData& frame, std::uint64_t id)
     {
-        if (frame.selectedEditorObjectId == 0 || !frame.objects)
+        if (id == 0)
         {
-            return nullptr;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < frame.selectedEditorObjectCount; ++i)
+        {
+            if (frame.selectedEditorObjectIds[i] == id)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool ShouldRenderSelectionStencil(const SceneFrameData& frame,
+        const SceneView& view,
+        const RenderableObjectBase& object,
+        bool transparent)
+    {
+        if (!IsSelectedEditorObject(frame, object.GetEditorObjectId()) ||
+            !object.IsVisible() || object.IsTransparent() != transparent)
+        {
+            return false;
         }
 
-        for (const auto& owned : *frame.objects)
+        if ((object.GetRenderLayerMask() & view.renderLayerMask) == 0)
         {
-            RenderableObjectBase* obj = owned.get();
-            if (!obj || obj->GetEditorObjectId() != frame.selectedEditorObjectId)
-            {
-                continue;
-            }
-
-            if (!obj->IsVisible() || obj->IsTransparent() != transparent)
-            {
-                return nullptr;
-            }
-
-            if ((obj->GetRenderLayerMask() & view.renderLayerMask) == 0)
-            {
-                return nullptr;
-            }
-
-            const AABB& bounds = obj->GetWorldBounds();
-            if (view.frustum.IsValid() && bounds.IsValid() && !view.frustum.Intersects(bounds))
-            {
-                return nullptr;
-            }
-
-            return obj;
+            return false;
         }
 
-        return nullptr;
+        const AABB& bounds = object.GetWorldBounds();
+        if (view.frustum.IsValid() && bounds.IsValid() && !view.frustum.Intersects(bounds))
+        {
+            return false;
+        }
+        return true;
     }
 #endif
 
@@ -807,7 +810,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     size_t pSelectionOutline = pDebugDraw;
 #if WITH_EDITOR
-    if (frame_->selectedEditorObjectId != 0)
+    if (frame_->selectedEditorObjectCount != 0)
     {
         pSelectionOutline = rg.AddPass(RenderPass::Main_SelectionOutline, { pDebugDraw },
             { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1672,15 +1675,14 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         });
 
 #if WITH_EDITOR
-    if (frame_->selectedEditorObjectId != 0)
+    if (frame_->selectedEditorObjectCount != 0)
     {
         RenderGraph<kGBufferRenderGraphPassCount>::DependencyList selectedDeps;
         selectedDeps.push_back(pOpaqueSimple);
         selectedDeps.push_back(pOpaqueComplex);
         rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
-            RenderableObjectBase* selected = FindSelectedObject(*frame_, mainView, false);
             auto material = resources_.GetSelectionStencilMaterial();
-            if (!selected || !material)
+            if (!frame_->objects || !material)
             {
                 return;
             }
@@ -1699,7 +1701,14 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
                 t.cl->RSSetScissorRects(1, &sr);
 
                 t.cl->OMSetStencilRef(kSelectionStencilBit);
-                selected->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
+                for (const std::unique_ptr<RenderableObjectBase>& owned : *frame_->objects)
+                {
+                    RenderableObjectBase* object = owned.get();
+                    if (object && ShouldRenderSelectionStencil(*frame_, mainView, *object, false))
+                    {
+                        object->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
+                    }
+                }
                 t.cl->OMSetStencilRef(0);
             }
             renderer->EndThreadCommandList(t, sub.batchIndex, kSelectionStencilGBufferLocalOrder);
@@ -2846,15 +2855,14 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         });
 
 #if WITH_EDITOR
-    if (frame_ && frame_->selectedEditorObjectId != 0)
+    if (frame_ && frame_->selectedEditorObjectCount != 0)
     {
         RenderGraph<kTransparentRenderGraphPassCount>::DependencyList selectedDeps;
         selectedDeps.push_back(pTransparentSimple);
         selectedDeps.push_back(pTransparentComplex);
         rgTr.AddPass(RenderPass::Transparent_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
-            RenderableObjectBase* selected = FindSelectedObject(*frame_, mainView, true);
             auto material = resources_.GetSelectionStencilMaterial();
-            if (!selected || !material)
+            if (!frame_->objects || !material)
             {
                 return;
             }
@@ -2874,7 +2882,14 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
                 t.cl->RSSetScissorRects(1, &sr);
 
                 t.cl->OMSetStencilRef(kSelectionStencilBit);
-                selected->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
+                for (const std::unique_ptr<RenderableObjectBase>& owned : *frame_->objects)
+                {
+                    RenderableObjectBase* object = owned.get();
+                    if (object && ShouldRenderSelectionStencil(*frame_, mainView, *object, true))
+                    {
+                        object->RenderSelectionStencil(renderer, t.cl, material.get(), camera);
+                    }
+                }
                 t.cl->OMSetStencilRef(0);
             }
             renderer->EndThreadCommandList(t, sub.batchIndex, kSelectionStencilTransparentLocalOrder);
@@ -2915,7 +2930,7 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
 #if WITH_EDITOR
 void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    if (!renderer || !frame_ || frame_->selectedEditorObjectId == 0)
+    if (!renderer || !frame_ || frame_->selectedEditorObjectCount == 0)
     {
         return;
     }

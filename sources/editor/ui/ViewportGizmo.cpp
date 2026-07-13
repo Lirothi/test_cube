@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 #include <cmath>
@@ -17,6 +18,7 @@
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
+#include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -40,6 +42,47 @@ namespace
         DirectX::XMFLOAT4X4 f;
         DirectX::XMStoreFloat4x4(&f, m.xm());
         std::memcpy(out, &f.m[0][0], sizeof(float) * 16);
+    }
+
+    Math::mat4 FromFloat16(const float values[16])
+    {
+        DirectX::XMFLOAT4X4 matrix;
+        std::memcpy(&matrix, values, sizeof(matrix));
+        return Math::mat4(matrix);
+    }
+
+    EditorTransform TransformFromMatrix(const Math::mat4& matrix)
+    {
+        float values[16];
+        ToFloat16(matrix, values);
+        float translation[3];
+        float rotation[3];
+        float scale[3];
+        ImGuizmo::DecomposeMatrixToComponents(values, translation, rotation, scale);
+
+        EditorTransform transform;
+        transform.position = Math::float3(translation[0], translation[1], translation[2]);
+        transform.rotationDeg = Math::float3(rotation[0], rotation[1], rotation[2]);
+        transform.scale = Math::float3(scale[0], scale[1], scale[2]);
+        return transform;
+    }
+
+    bool TransformMatches(const EditorTransform& lhs, const EditorTransform& rhs)
+    {
+        constexpr float epsilon = 1.0e-4f;
+        const auto close = [epsilon](float a, float b)
+        {
+            return std::fabs(a - b) <= epsilon;
+        };
+        return close(lhs.position.x, rhs.position.x) &&
+            close(lhs.position.y, rhs.position.y) &&
+            close(lhs.position.z, rhs.position.z) &&
+            close(lhs.rotationDeg.x, rhs.rotationDeg.x) &&
+            close(lhs.rotationDeg.y, rhs.rotationDeg.y) &&
+            close(lhs.rotationDeg.z, rhs.rotationDeg.z) &&
+            close(lhs.scale.x, rhs.scale.x) &&
+            close(lhs.scale.y, rhs.scale.y) &&
+            close(lhs.scale.z, rhs.scale.z);
     }
 
     bool BuildViewportCursorRay(const Camera& camera,
@@ -182,7 +225,7 @@ namespace
             }
             else if (record->id.type == EditorAssetType::MaterialPreset)
             {
-                selectedObject = ctx.document.Find(ctx.selectedObject);
+                selectedObject = ctx.document.Find(ctx.selection.Primary());
                 if (!selectedObject)
                 {
                     reason = "Select a static mesh before dropping a material.";
@@ -413,13 +456,19 @@ void ViewportGizmo::Update(EditorContext& ctx,
     std::vector<IconHit> iconHits;
 
     uint32_t pickedObjectId = 0;
-    if (ctx.renderer.ConsumeObjectIdPick(pickedObjectId) && pickedObjectId != 0)
+    if (ctx.renderer.ConsumeObjectIdPick(pickedObjectId))
     {
         EditorObjectId id{ static_cast<std::uint64_t>(pickedObjectId) };
-        if (ctx.document.Find(id) && ctx.scene.FindEditorObject(id.value))
+        if (pickedObjectId != 0 && ctx.document.Find(id) && ctx.scene.FindEditorObject(id.value))
         {
-            ctx.selectedObject = id;
+            if (pendingPickToggle_) { ctx.selection.Toggle(id); }
+            else { ctx.selection.Replace(id); }
         }
+        else if (!pendingPickToggle_)
+        {
+            ctx.selection.Clear();
+        }
+        pendingPickToggle_ = false;
     }
 
     // Right mouse = camera look (LookToggle). While flying, keep drawing active
@@ -492,7 +541,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
 
                 const ImVec2 mn(sx - kIconHalf, sy - kIconHalf);
                 const ImVec2 mx(sx + kIconHalf, sy + kIconHalf);
-                if (ctx.selectedObject.value == id.value)
+                if (ctx.selection.Contains(id))
                 {
                     dl->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f), ImVec2(mx.x + 2.0f, mx.y + 2.0f),
                                 IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
@@ -559,7 +608,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
     {
         for (EditorObject& env : ctx.document.Environment())
         {
-            if (ctx.selectedObject.value != env.id.value) { continue; }
+            if (ctx.selection.Primary().value != env.id.value) { continue; }
 
             const auto posIt = env.properties.find("position");
             if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { break; }
@@ -613,164 +662,242 @@ void ViewportGizmo::Update(EditorContext& ctx,
         return values;
     };
 
-    // Gizmo for the selected object (only if it has a live editor-owned runtime).
-    EditorObject* obj = ctx.document.Find(ctx.selectedObject);
-    RenderableObjectBase* base = obj ? ctx.scene.FindEditorObject(ctx.selectedObject.value) : nullptr;
-    RenderableObject* ro = base ? base->AsRenderableObject() : nullptr;
-
-    // Only when the object is in front of the camera. ImGuizmo's own behind-camera
-    // cull misfires under our reverse-Z projection (the gizmo would appear mirrored
-    // in front when you look away), so gate on the camera-forward dot instead.
-    bool inFront = false;
-    if (obj && ro)
+    const auto captureDragSnapshots = [&]()
     {
-        const Math::float3 forward = camera.GetDirection();
-        const Math::float3 toObj = ro->GetPosition() - camera.GetPosition();
-        inFront = (toObj.x * forward.x + toObj.y * forward.y + toObj.z * forward.z) > 0.0f;
-    }
-
-    if (gizmoVisible && obj && ro && inFront)
-    {
-        float model[16];
-        ToFloat16(ro->GetModelMatrix(), model);
-
-        const ImGuizmo::OPERATION operation = ToImGuizmo(op_);
-        const ImGuizmo::MODE mode = transformSpace_ == TransformSpace::Local ?
-            ImGuizmo::LOCAL :
-            ImGuizmo::WORLD;
-        float snapValues[3];
-        ImGuizmo::Manipulate(view, proj, operation, mode, model, nullptr,
-            snapForOperation(operation, snapValues));
-
-        const bool usingNow = ImGuizmo::IsUsing();
-        if (usingNow && !wasUsing_)
+        dragSnapshots_.clear();
+        dragSnapshots_.reserve(ctx.selection.Size());
+        for (const EditorObjectId id : ctx.selection.Ordered())
         {
-            transformBeforeDrag_ = obj->transform; // drag start
-        }
-        if (usingNow)
-        {
-            float t[3], r[3], s[3];
-            ImGuizmo::DecomposeMatrixToComponents(model, t, r, s);
-            EditorTransform nt;
-            nt.position = Math::float3(t[0], t[1], t[2]);
-            nt.rotationDeg = Math::float3(r[0], r[1], r[2]);
-            nt.scale = Math::float3(s[0], s[1], s[2]);
-            TransformObjectCommand::ApplyTransform(ctx, ctx.selectedObject, nt); // live
-        }
-        if (!usingNow && wasUsing_)
-        {
-            // Drag finished: record one undo entry for the whole gesture.
-            commandStack.Execute(ctx, std::make_unique<TransformObjectCommand>(
-                ctx.selectedObject, transformBeforeDrag_, obj->transform));
-        }
-        wasUsing_ = usingNow;
-        gizmoBusy = usingNow || ImGuizmo::IsOver();
-    }
-    else
-    {
-        wasUsing_ = false;
-    }
-
-    const auto commitEnvironmentGizmo = [&]()
-    {
-        for (EditorObject& environment : ctx.document.Environment())
-        {
-            if (environment.id.value != envDragObject_.value)
+            if (EditorObject* object = ctx.document.Find(id))
             {
+                RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
+                RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
+                if (!renderable)
+                {
+                    continue;
+                }
+
+                DragSnapshot snapshot;
+                snapshot.id = id;
+                snapshot.transform = object->transform;
+                snapshot.model = renderable->GetModelMatrix();
+                dragSnapshots_.push_back(std::move(snapshot));
                 continue;
             }
 
-            commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
-                environment.id,
-                envPropertiesBeforeDrag_,
-                environment.properties,
-                "Transform Environment Light"));
-            break;
-        }
-    };
-
-    // Env light gizmo: translate point/spot position, rotate spot/directional
-    // direction. Env entities have no RenderableObject, so drive a synthetic
-    // matrix and live-patch properties during the drag, then record one command
-    // when the gesture ends.
-    bool environmentGizmoHandled = false;
-    if (gizmoVisible && !obj)
-    {
-        EditorObject* light = nullptr;
-        for (EditorObject& e : ctx.document.Environment())
-        {
-            if (e.id.value == ctx.selectedObject.value &&
-                (e.type == "pointLight" || e.type == "spotLight" || e.type == "directionalLight"))
+            for (EditorObject& environment : ctx.document.Environment())
             {
-                light = &e;
+                if (environment.id.value != id.value ||
+                    (environment.type != "pointLight" && environment.type != "spotLight" &&
+                        environment.type != "directionalLight"))
+                {
+                    continue;
+                }
+
+                DragSnapshot snapshot;
+                snapshot.id = id;
+                snapshot.environment = true;
+                snapshot.hasPosition = environment.type != "directionalLight";
+                snapshot.hasDirection = environment.type != "pointLight";
+                snapshot.properties = environment.properties;
+                const Math::float3 pos = snapshot.hasPosition ?
+                    ReadFloat3(snapshot.properties, "position", Math::float3(0.0f, 0.0f, 0.0f)) :
+                    camera.GetPosition() + camera.GetDirection() * 8.0f;
+                const Math::float3 dir = snapshot.hasDirection ?
+                    ReadFloat3(snapshot.properties, "direction", Math::float3(0.0f, -1.0f, 0.0f)) :
+                    Math::float3(0.0f, -1.0f, 0.0f);
+                float lightMatrix[16];
+                BuildLightMatrix(pos, dir, lightMatrix);
+                snapshot.model = FromFloat16(lightMatrix);
+                dragSnapshots_.push_back(std::move(snapshot));
                 break;
             }
         }
+    };
 
-        if (light)
+    const auto applyDragDelta = [&](const Math::mat4& currentPrimaryMatrix)
+    {
+        const Math::mat4 delta = Math::mat4::Inverse(primaryMatrixBeforeDrag_) * currentPrimaryMatrix;
+        for (const DragSnapshot& snapshot : dragSnapshots_)
         {
-            const bool hasPos = (light->type != "directionalLight");
-            const bool hasDir = (light->type != "pointLight");
-            const Math::float3 camPos = camera.GetPosition();
-            const Math::float3 camFwd = camera.GetDirection();
-            const Math::float3 pos = hasPos
-                ? ReadFloat3(light->properties, "position", Math::float3(0.0f, 0.0f, 0.0f))
-                : camPos + camFwd * 8.0f; // directional has no position: anchor in front of the camera
-            const Math::float3 dir = hasDir
-                ? ReadFloat3(light->properties, "direction", Math::float3(0.0f, -1.0f, 0.0f))
-                : Math::float3(0.0f, -1.0f, 0.0f);
-
-            const Math::float3 toLight = pos - camPos;
-            const bool inFrontLight =
-                (toLight.x * camFwd.x + toLight.y * camFwd.y + toLight.z * camFwd.z) > 0.0f;
-
-            if (inFrontLight)
+            if (!snapshot.environment)
             {
-                if (!ImGuizmo::IsUsing()) { BuildLightMatrix(pos, dir, envGizmoMatrix_); }
+                TransformObjectCommand::ApplyTransform(
+                    ctx,
+                    snapshot.id,
+                    TransformFromMatrix(snapshot.model * delta));
+                continue;
+            }
 
-                ImGuizmo::OPERATION giz = ToImGuizmo(op_);
-                if (giz == ImGuizmo::SCALE) { giz = ImGuizmo::TRANSLATE; }
-                if (!hasDir && giz == ImGuizmo::ROTATE) { giz = ImGuizmo::TRANSLATE; }
-                if (!hasPos && giz == ImGuizmo::TRANSLATE) { giz = ImGuizmo::ROTATE; }
+            for (EditorObject& environment : ctx.document.Environment())
+            {
+                if (environment.id.value != snapshot.id.value)
+                {
+                    continue;
+                }
 
-                float snapValues[3];
-                ImGuizmo::Manipulate(view, proj, giz, ImGuizmo::WORLD, envGizmoMatrix_, nullptr,
-                    snapForOperation(giz, snapValues));
-                const bool usingNow = ImGuizmo::IsUsing();
-                if (usingNow && !envWasUsing_)
+                nlohmann::json properties = snapshot.properties;
+                if (snapshot.hasPosition)
                 {
-                    envDragObject_ = light->id;
-                    envPropertiesBeforeDrag_ = light->properties;
+                    const Math::float3 position = delta.TransformPoint(
+                        ReadFloat3(snapshot.properties, "position", Math::float3(0.0f, 0.0f, 0.0f)));
+                    properties["position"] = { position.x, position.y, position.z };
                 }
-                if (usingNow)
+                if (snapshot.hasDirection)
                 {
-                    if (hasPos)
-                    {
-                        light->properties["position"] = { envGizmoMatrix_[12], envGizmoMatrix_[13], envGizmoMatrix_[14] };
-                    }
-                    if (hasDir)
-                    {
-                        const Math::float3 nd =
-                            Math::float3(envGizmoMatrix_[8], envGizmoMatrix_[9], envGizmoMatrix_[10]).Normalized();
-                        light->properties["direction"] = { nd.x, nd.y, nd.z };
-                    }
-                    EnvironmentRuntime::Apply(ctx, *light);
-                    ctx.document.SetDirty(true);
+                    const Math::float3 direction = delta.TransformDirection(
+                        ReadFloat3(snapshot.properties, "direction", Math::float3(0.0f, -1.0f, 0.0f))).Normalized();
+                    properties["direction"] = { direction.x, direction.y, direction.z };
                 }
-                if (!usingNow && envWasUsing_)
+                environment.properties = std::move(properties);
+                EnvironmentRuntime::Apply(ctx, environment);
+                ctx.document.SetDirty(true);
+                break;
+            }
+        }
+    };
+
+    const auto commitDrag = [&]()
+    {
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(dragSnapshots_.size());
+        for (const DragSnapshot& snapshot : dragSnapshots_)
+        {
+            if (!snapshot.environment)
+            {
+                const EditorObject* object = ctx.document.Find(snapshot.id);
+                if (object && !TransformMatches(snapshot.transform, object->transform))
                 {
-                    commitEnvironmentGizmo();
+                    commands.push_back(std::make_unique<TransformObjectCommand>(
+                        snapshot.id, snapshot.transform, object->transform));
                 }
-                envWasUsing_ = usingNow;
-                environmentGizmoHandled = true;
-                gizmoBusy = gizmoBusy || usingNow || ImGuizmo::IsOver();
+                continue;
+            }
+
+            for (const EditorObject& environment : ctx.document.Environment())
+            {
+                if (environment.id.value == snapshot.id.value &&
+                    environment.properties != snapshot.properties)
+                {
+                    commands.push_back(std::make_unique<EditEnvironmentCommand>(
+                        snapshot.id,
+                        snapshot.properties,
+                        environment.properties,
+                        "Transform Environment Light"));
+                    break;
+                }
+            }
+        }
+
+        if (commands.size() == 1)
+        {
+            commandStack.Execute(ctx, std::move(commands.front()));
+        }
+        else if (!commands.empty())
+        {
+            auto composite = std::make_unique<CompositeCommand>(
+                "Transform " + std::to_string(commands.size()) + " Objects");
+            for (std::unique_ptr<EditorCommand>& command : commands)
+            {
+                composite->Add(std::move(command));
+            }
+            commandStack.Execute(ctx, std::move(composite));
+        }
+        dragSnapshots_.clear();
+        dragPrimary_ = EditorObjectId{};
+    };
+
+    const EditorObjectId primary = ctx.selection.Primary();
+    EditorObject* primaryObject = ctx.document.Find(primary);
+    RenderableObjectBase* primaryRuntime = primaryObject ? ctx.scene.FindEditorObject(primary.value) : nullptr;
+    RenderableObject* primaryRenderable = primaryRuntime ? primaryRuntime->AsRenderableObject() : nullptr;
+    EditorObject* primaryEnvironment = nullptr;
+    if (!primaryObject)
+    {
+        for (EditorObject& environment : ctx.document.Environment())
+        {
+            if (environment.id.value == primary.value &&
+                (environment.type == "pointLight" || environment.type == "spotLight" ||
+                    environment.type == "directionalLight"))
+            {
+                primaryEnvironment = &environment;
+                break;
             }
         }
     }
-    if (!environmentGizmoHandled && envWasUsing_)
+
+    bool gizmoHandled = false;
+    if (gizmoVisible && (primaryRenderable || primaryEnvironment))
     {
-        commitEnvironmentGizmo();
-        envWasUsing_ = false;
+        bool primaryHasPosition = false;
+        bool primaryHasDirection = false;
+        Math::float3 primaryPosition;
+        Math::mat4 primaryModel;
+        if (primaryRenderable)
+        {
+            primaryPosition = primaryRenderable->GetPosition();
+            primaryModel = primaryRenderable->GetModelMatrix();
+        }
+        else
+        {
+            primaryHasPosition = primaryEnvironment->type != "directionalLight";
+            primaryHasDirection = primaryEnvironment->type != "pointLight";
+            primaryPosition = primaryHasPosition ?
+                ReadFloat3(primaryEnvironment->properties, "position", Math::float3(0.0f, 0.0f, 0.0f)) :
+                camera.GetPosition() + camera.GetDirection() * 8.0f;
+            const Math::float3 direction = primaryHasDirection ?
+                ReadFloat3(primaryEnvironment->properties, "direction", Math::float3(0.0f, -1.0f, 0.0f)) :
+                Math::float3(0.0f, -1.0f, 0.0f);
+            float lightMatrix[16];
+            BuildLightMatrix(primaryPosition, direction, lightMatrix);
+            primaryModel = FromFloat16(lightMatrix);
+        }
+
+        const Math::float3 toPrimary = primaryPosition - camera.GetPosition();
+        const Math::float3 cameraForward = camera.GetDirection();
+        const bool inFront =
+            (toPrimary.x * cameraForward.x + toPrimary.y * cameraForward.y + toPrimary.z * cameraForward.z) > 0.0f;
+        if (inFront)
+        {
+            float model[16];
+            ToFloat16(primaryModel, model);
+            ImGuizmo::OPERATION operation = ToImGuizmo(op_);
+            if (primaryEnvironment)
+            {
+                if (operation == ImGuizmo::SCALE) { operation = ImGuizmo::TRANSLATE; }
+                if (!primaryHasDirection && operation == ImGuizmo::ROTATE) { operation = ImGuizmo::TRANSLATE; }
+                if (!primaryHasPosition && operation == ImGuizmo::TRANSLATE) { operation = ImGuizmo::ROTATE; }
+            }
+
+            const ImGuizmo::MODE mode = primaryEnvironment ||
+                transformSpace_ == TransformSpace::World ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+            float snapValues[3];
+            ImGuizmo::Manipulate(view, proj, operation, mode, model, nullptr,
+                snapForOperation(operation, snapValues));
+            const bool usingNow = ImGuizmo::IsUsing();
+            if (usingNow && !wasUsing_)
+            {
+                captureDragSnapshots();
+                primaryMatrixBeforeDrag_ = primaryModel;
+                dragPrimary_ = primary;
+            }
+            if (usingNow && !dragSnapshots_.empty())
+            {
+                applyDragDelta(FromFloat16(model));
+            }
+            if (!usingNow && wasUsing_)
+            {
+                commitDrag();
+            }
+            wasUsing_ = usingNow;
+            gizmoBusy = usingNow || ImGuizmo::IsOver();
+            gizmoHandled = true;
+        }
+    }
+    if (!gizmoHandled && wasUsing_)
+    {
+        commitDrag();
+        wasUsing_ = false;
     }
 
     // Click-to-select: only over the 3D view, not on the gizmo, not while flying.
@@ -783,13 +910,15 @@ void ViewportGizmo::Update(EditorContext& ctx,
         if (io.MousePos.x >= it->mn.x && io.MousePos.x <= it->mx.x &&
             io.MousePos.y >= it->mn.y && io.MousePos.y <= it->mx.y)
         {
-            ctx.selectedObject = it->id;
+            if (io.KeyCtrl) { ctx.selection.Toggle(it->id); }
+            else { ctx.selection.Replace(it->id); }
             return;
         }
     }
 
     if (ctx.renderer.RequestObjectIdPick(io.MousePos.x, io.MousePos.y))
     {
+        pendingPickToggle_ = io.KeyCtrl;
         return;
     }
 
@@ -805,7 +934,13 @@ void ViewportGizmo::Update(EditorContext& ctx,
     const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(origin, dir);
     if (hit != 0)
     {
-        ctx.selectedObject = EditorObjectId{ hit };
+        const EditorObjectId id{ hit };
+        if (io.KeyCtrl) { ctx.selection.Toggle(id); }
+        else { ctx.selection.Replace(id); }
+    }
+    else if (!io.KeyCtrl)
+    {
+        ctx.selection.Clear();
     }
 }
 

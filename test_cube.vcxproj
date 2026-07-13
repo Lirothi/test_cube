@@ -238,6 +238,7 @@
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
     <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp" />
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp" />
+    <ClCompile Include="sources/editor/commands/CompositeCommand.cpp" />
     <ClCompile Include="sources/editor/commands/EditEnvironmentCommand.cpp" />
     <ClCompile Include="sources/editor/commands/CreateDocumentObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/CreateEnvironmentCommand.cpp" />
@@ -366,6 +367,7 @@
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
+    <ClInclude Include="sources/editor/EditorSelection.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
     <ClInclude Include="sources/editor/EditorExtensionRegistry.h" />
     <ClInclude Include="sources/editor/EditorHotkeys.h" />
@@ -380,6 +382,7 @@
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />
     <ClInclude Include="sources/editor/commands/EditorCommand.h" />
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h" />
+    <ClInclude Include="sources/editor/commands/CompositeCommand.h" />
     <ClInclude Include="sources/editor/commands/EditEnvironmentCommand.h" />
     <ClInclude Include="sources/editor/commands/CreateDocumentObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/CreateEnvironmentCommand.h" />

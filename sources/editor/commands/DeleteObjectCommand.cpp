@@ -1,13 +1,16 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #if WITH_EDITOR
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
 #include "editor/EditorContext.h"
+#include "editor/scene/EnvironmentRuntime.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/renderables/RenderableObjectBase.h"
@@ -22,36 +25,86 @@ bool DeleteObjectCommand::Execute(EditorContext& ctx)
     // Capture the object once so Undo (and redo) can restore the same data.
     if (!captured_)
     {
-        if (!ctx.document.IndexOf(id_, objectIndex_))
+        if (ctx.document.IndexOf(id_, objectIndex_))
         {
-            return false;
+            const EditorObject* obj = ctx.document.Find(id_);
+            if (!obj || obj->type == "ocean")
+            {
+                return false;
+            }
+            object_ = *obj;
+            isEnvironment_ = false;
         }
-
-        const EditorObject* obj = ctx.document.Find(id_);
-        if (!obj)
+        else
         {
-            return false;
+            const std::vector<EditorObject>& environment = ctx.document.Environment();
+            bool found = false;
+            for (std::size_t i = 0; i < environment.size(); ++i)
+            {
+                if (environment[i].id.value != id_.value)
+                {
+                    continue;
+                }
+                if (environment[i].type != "pointLight" && environment[i].type != "spotLight")
+                {
+                    return false;
+                }
+                objectIndex_ = i;
+                object_ = environment[i];
+                isEnvironment_ = true;
+                found = true;
+                break;
+            }
+            if (!found)
+            {
+                return false;
+            }
         }
-        object_ = *obj;
         captured_ = true;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
+
+    if (isEnvironment_)
+    {
+        ctx.renderer.WaitForPreviousFrame();
+        std::vector<EditorObject>& environment = ctx.document.Environment();
+        for (auto it = environment.begin(); it != environment.end(); ++it)
+        {
+            if (it->id.value == id_.value)
+            {
+                environment.erase(it);
+                break;
+            }
+        }
+        EnvironmentRuntime::RebuildLights(ctx);
+        ctx.selection.Remove(id_);
+        ctx.document.SetDirty(true);
+        return true;
+    }
 
     ctx.renderer.WaitForPreviousFrame();
     runtimeRemoved_ = ctx.scene.RemoveEditorObject(id_.value);
     ctx.document.Remove(id_);
 
-    if (ctx.selectedObject.value == id_.value)
-    {
-        ctx.selectedObject = EditorObjectId{};
-    }
+    ctx.selection.Remove(id_);
     ctx.document.SetDirty(true);
     return true;
 }
 
 void DeleteObjectCommand::Undo(EditorContext& ctx)
 {
+    if (isEnvironment_)
+    {
+        std::vector<EditorObject>& environment = ctx.document.Environment();
+        const std::size_t index = std::min(objectIndex_, environment.size());
+        environment.insert(environment.begin() + static_cast<std::ptrdiff_t>(index), object_);
+        EnvironmentRuntime::RebuildLights(ctx);
+        ctx.selection = previousSelection_;
+        ctx.document.SetDirty(true);
+        return;
+    }
+
     ctx.document.Insert(object_, objectIndex_);
 
     // Recreate the runtime object only if Execute actually removed one.
@@ -100,7 +153,7 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
         }
     }
 
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

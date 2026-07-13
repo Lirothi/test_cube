@@ -4,6 +4,7 @@
 #include <string>
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // Creates a fresh object from serialized clipboard JSON. Regular document
@@ -12,7 +13,7 @@
 class PasteObjectCommand : public EditorCommand
 {
 public:
-    explicit PasteObjectCommand(nlohmann::json objectJson);
+    explicit PasteObjectCommand(nlohmann::json objectJson, bool addToSelection = false);
 
     static bool Validate(const nlohmann::json& objectJson, std::string& outReason);
 
@@ -22,8 +23,9 @@ public:
 
 private:
     nlohmann::json objectJson_;
+    bool addToSelection_ = false;
     EditorObject object_;
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
     bool built_ = false;
     bool isEnvironment_ = false;
 };

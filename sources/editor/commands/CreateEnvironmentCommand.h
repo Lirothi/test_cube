@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // Creates one top-level environment entity. Point/spot lights may have many
@@ -19,7 +20,7 @@ public:
 
 private:
     EditorObject object_;
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
     bool built_ = false;
 };
 

@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // Duplicates one editor entity. Runtime document objects are recreated via the
@@ -12,7 +13,7 @@
 class DuplicateObjectCommand : public EditorCommand
 {
 public:
-    explicit DuplicateObjectCommand(EditorObjectId sourceId);
+    explicit DuplicateObjectCommand(EditorObjectId sourceId, bool addToSelection = false);
 
     bool Execute(EditorContext& ctx) override;
     void Undo(EditorContext& ctx) override;
@@ -20,10 +21,11 @@ public:
 
 private:
     EditorObjectId sourceId_;
+    bool addToSelection_ = false;
     bool built_ = false;
     bool isEnvironment_ = false; // source was an environment light, not a document object
     EditorObject object_;
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
 };
 
 #endif // WITH_EDITOR

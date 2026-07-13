@@ -22,6 +22,7 @@
 #include "editor/EditorContext.h"
 #include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
+#include "editor/commands/CompositeCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
@@ -1412,13 +1413,55 @@ namespace
         return false;
     }
 
-    bool FrameSelection(Renderer& renderer, Scene& scene, const EditorSceneDocument& document, EditorObjectId id)
+    bool FrameSelection(Renderer& renderer,
+        Scene& scene,
+        const EditorSceneDocument& document,
+        const EditorSelection& selection)
     {
-        Math::float3 center;
-        float radius = 1.0f;
-        if (!TryGetSelectionFrameTarget(scene, document, id, center, radius))
+        Math::float3 firstCenter;
+        float firstRadius = 1.0f;
+        Math::float3 boundsMin;
+        Math::float3 boundsMax;
+        std::size_t validTargetCount = 0;
+        for (const EditorObjectId id : selection.Ordered())
+        {
+            Math::float3 center;
+            float radius = 1.0f;
+            if (!TryGetSelectionFrameTarget(scene, document, id, center, radius))
+            {
+                continue;
+            }
+
+            if (validTargetCount == 0)
+            {
+                firstCenter = center;
+                firstRadius = radius;
+                boundsMin = center - Math::float3(radius);
+                boundsMax = center + Math::float3(radius);
+            }
+            else
+            {
+                boundsMin.x = std::min(boundsMin.x, center.x - radius);
+                boundsMin.y = std::min(boundsMin.y, center.y - radius);
+                boundsMin.z = std::min(boundsMin.z, center.z - radius);
+                boundsMax.x = std::max(boundsMax.x, center.x + radius);
+                boundsMax.y = std::max(boundsMax.y, center.y + radius);
+                boundsMax.z = std::max(boundsMax.z, center.z + radius);
+            }
+            ++validTargetCount;
+        }
+
+        if (validTargetCount == 0)
         {
             return false;
+        }
+
+        Math::float3 center = firstCenter;
+        float radius = firstRadius;
+        if (validTargetCount > 1)
+        {
+            center = (boundsMin + boundsMax) * 0.5f;
+            radius = std::max((boundsMax - boundsMin).Length() * 0.5f, 1.0f);
         }
 
         Camera& camera = scene.CameraRef();
@@ -1437,8 +1480,9 @@ namespace
 
     std::string DropSelectionToGround(EditorContext& ctx, EditorCommandStack& commandStack)
     {
-        EditorObject* object = ctx.document.Find(ctx.selectedObject);
-        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(ctx.selectedObject.value);
+        const EditorObjectId primary = ctx.selection.Primary();
+        EditorObject* object = ctx.document.Find(primary);
+        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(primary.value);
         if (!object || !runtime || !runtime->AsRenderableObject())
         {
             return "Select a mesh to drop to ground";
@@ -1455,7 +1499,7 @@ namespace
         const Math::float3 rayDirection(0.0f, -1.0f, 0.0f);
         float hitDistance = 0.0f;
         const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
-            rayOrigin, rayDirection, &hitDistance, ctx.selectedObject.value);
+            rayOrigin, rayDirection, &hitDistance, primary.value);
         if (hit == 0 || !std::isfinite(hitDistance))
         {
             return "No visible editor object below selection";
@@ -1489,13 +1533,12 @@ namespace
         return nullptr;
     }
 
-    bool CopySelectionToClipboard(const EditorSceneDocument& document,
+    bool TryBuildClipboardObject(const EditorSceneDocument& document,
         EditorObjectId selection,
-        std::string& editorClipboard,
+        nlohmann::json& outJson,
+        std::string& outName,
         std::string& outStatus)
     {
-        nlohmann::json clipboardJson;
-        std::string copiedName;
         if (const EditorObject* object = document.Find(selection))
         {
             if (object->type == "ocean")
@@ -1503,10 +1546,12 @@ namespace
                 outStatus = "Ocean objects cannot be copied";
                 return false;
             }
-            clipboardJson = EditorSceneDocument::ObjectToJson(*object);
-            copiedName = object->name;
+            outJson = EditorSceneDocument::ObjectToJson(*object);
+            outName = object->name;
+            return true;
         }
-        else if (const EditorObject* environment = FindEnvironmentObject(document, selection))
+
+        if (const EditorObject* environment = FindEnvironmentObject(document, selection))
         {
             if (environment->type != "pointLight" && environment->type != "spotLight")
             {
@@ -1516,21 +1561,65 @@ namespace
                 return false;
             }
 
-            clipboardJson = environment->properties;
-            clipboardJson["id"] = environment->id.value;
-            clipboardJson["name"] = environment->name;
-            clipboardJson["type"] = environment->type;
-            copiedName = environment->name;
+            outJson = environment->properties;
+            outJson["id"] = environment->id.value;
+            outJson["name"] = environment->name;
+            outJson["type"] = environment->type;
+            outName = environment->name;
+            return true;
         }
-        else
+
+        outStatus = "Nothing selected to copy";
+        return false;
+    }
+
+    bool CopySelectionToClipboard(const EditorSceneDocument& document,
+        const EditorSelection& selection,
+        std::string& editorClipboard,
+        std::string& outStatus)
+    {
+        if (selection.Empty())
         {
             outStatus = "Nothing selected to copy";
             return false;
         }
 
+        nlohmann::json objects = nlohmann::json::array();
+        std::string copiedName;
+        for (const EditorObjectId id : selection.Ordered())
+        {
+            nlohmann::json objectJson;
+            std::string objectName;
+            if (!TryBuildClipboardObject(document, id, objectJson, objectName, outStatus))
+            {
+                return false;
+            }
+            objects.push_back(std::move(objectJson));
+            if (copiedName.empty())
+            {
+                copiedName = std::move(objectName);
+            }
+        }
+
+        nlohmann::json clipboardJson;
+        if (objects.size() == 1)
+        {
+            clipboardJson = std::move(objects[0]);
+        }
+        else
+        {
+            clipboardJson = {
+                { "editorClipboard", "objectSelection" },
+                { "version", 1 },
+                { "objects", std::move(objects) }
+            };
+        }
+
         editorClipboard = clipboardJson.dump();
         ImGui::SetClipboardText(editorClipboard.c_str());
-        outStatus = copiedName.empty() ? "Copied object" : "Copied " + copiedName;
+        outStatus = selection.Size() == 1 ?
+            (copiedName.empty() ? "Copied object" : "Copied " + copiedName) :
+            "Copied " + std::to_string(selection.Size()) + " objects";
         return true;
     }
 
@@ -1548,32 +1637,219 @@ namespace
             return false;
         }
 
-        nlohmann::json objectJson =
+        nlohmann::json clipboardJson =
             nlohmann::json::parse(clipboardText, nullptr, false);
-        if (objectJson.is_discarded())
+        if (clipboardJson.is_discarded())
         {
             outStatus = "Paste failed: clipboard does not contain valid JSON";
             return false;
         }
 
-        std::string reason;
-        if (!PasteObjectCommand::Validate(objectJson, reason))
+        std::vector<nlohmann::json> objects;
+        if (clipboardJson.is_object() &&
+            clipboardJson.value("editorClipboard", std::string()) == "objectSelection" &&
+            clipboardJson.value("version", 0) == 1)
         {
-            outStatus = "Paste failed: " + reason;
-            return false;
+            const auto objectsIt = clipboardJson.find("objects");
+            if (objectsIt == clipboardJson.end() || !objectsIt->is_array() || objectsIt->empty())
+            {
+                outStatus = "Paste failed: object selection is empty";
+                return false;
+            }
+            for (const nlohmann::json& objectJson : *objectsIt)
+            {
+                objects.push_back(objectJson);
+            }
+        }
+        else
+        {
+            objects.push_back(std::move(clipboardJson));
         }
 
-        if (!commandStack.Execute(ctx,
-                std::make_unique<PasteObjectCommand>(objectJson)))
+        for (const nlohmann::json& objectJson : objects)
+        {
+            std::string reason;
+            if (!PasteObjectCommand::Validate(objectJson, reason))
+            {
+                outStatus = "Paste failed: " + reason;
+                return false;
+            }
+        }
+
+        bool pasted = false;
+        if (objects.size() == 1)
+        {
+            pasted = commandStack.Execute(ctx,
+                std::make_unique<PasteObjectCommand>(objects.front()));
+        }
+        else
+        {
+            auto composite = std::make_unique<CompositeCommand>(
+                "Paste " + std::to_string(objects.size()) + " Objects");
+            for (std::size_t i = 0; i < objects.size(); ++i)
+            {
+                composite->Add(std::make_unique<PasteObjectCommand>(objects[i], i != 0));
+            }
+            pasted = commandStack.Execute(ctx, std::move(composite));
+        }
+
+        if (!pasted)
         {
             outStatus = "Paste failed: object could not be created";
             return false;
         }
 
         editorClipboard = std::move(clipboardText);
-        const std::string type = objectJson.value("type", std::string("object"));
-        outStatus = "Pasted " + type;
+        outStatus = objects.size() == 1 ?
+            "Pasted " + objects.front().value("type", std::string("object")) :
+            "Pasted " + std::to_string(objects.size()) + " objects";
         return true;
+    }
+
+    bool IsBulkObjectSupported(const EditorSceneDocument& document, EditorObjectId id)
+    {
+        if (const EditorObject* object = document.Find(id))
+        {
+            return object->type != "ocean";
+        }
+        const EditorObject* environment = FindEnvironmentObject(document, id);
+        return environment &&
+            (environment->type == "pointLight" || environment->type == "spotLight");
+    }
+
+    bool DuplicateSelection(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        std::string& outStatus)
+    {
+        if (ctx.selection.Empty())
+        {
+            outStatus = "Nothing selected to duplicate";
+            return false;
+        }
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            if (!IsBulkObjectSupported(ctx.document, id))
+            {
+                outStatus = "Selection contains an object that cannot be duplicated";
+                return false;
+            }
+        }
+
+        if (ctx.selection.Size() == 1)
+        {
+            return commandStack.Execute(ctx,
+                std::make_unique<DuplicateObjectCommand>(ctx.selection.Primary()));
+        }
+
+        auto composite = std::make_unique<CompositeCommand>(
+            "Duplicate " + std::to_string(ctx.selection.Size()) + " Objects");
+        std::size_t index = 0;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            composite->Add(std::make_unique<DuplicateObjectCommand>(id, index != 0));
+            ++index;
+        }
+        return commandStack.Execute(ctx, std::move(composite));
+    }
+
+    bool DeleteSelection(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        std::string& outStatus)
+    {
+        if (ctx.selection.Empty())
+        {
+            outStatus = "Nothing selected to delete";
+            return false;
+        }
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            if (!IsBulkObjectSupported(ctx.document, id))
+            {
+                outStatus = "Selection contains an object that cannot be deleted";
+                return false;
+            }
+        }
+
+        if (ctx.selection.Size() == 1)
+        {
+            return commandStack.Execute(ctx,
+                std::make_unique<DeleteObjectCommand>(ctx.selection.Primary()));
+        }
+
+        auto composite = std::make_unique<CompositeCommand>(
+            "Delete " + std::to_string(ctx.selection.Size()) + " Objects");
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            composite->Add(std::make_unique<DeleteObjectCommand>(id));
+        }
+        return commandStack.Execute(ctx, std::move(composite));
+    }
+
+    std::unique_ptr<EditorCommand> BuildSetEnabledCommand(
+        const EditorSceneDocument& document,
+        EditorObjectId id,
+        bool enabled)
+    {
+        if (document.Find(id))
+        {
+            return std::make_unique<SetEnabledCommand>(id, enabled);
+        }
+
+        const EditorObject* environment = FindEnvironmentObject(document, id);
+        if (!environment || (environment->type != "pointLight" &&
+            environment->type != "spotLight" &&
+            environment->type != "directionalLight" &&
+            environment->type != "ocean"))
+        {
+            return nullptr;
+        }
+
+        nlohmann::json after = environment->properties;
+        after["enabled"] = enabled;
+        return std::make_unique<EditEnvironmentCommand>(
+            id,
+            environment->properties,
+            std::move(after),
+            enabled ? "Enable Environment" : "Disable Environment");
+    }
+
+    bool SetSelectionEnabled(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        bool enabled,
+        std::string& outStatus)
+    {
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(ctx.selection.Size());
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            std::unique_ptr<EditorCommand> command =
+                BuildSetEnabledCommand(ctx.document, id, enabled);
+            if (!command)
+            {
+                outStatus = "Selection contains an object that cannot be enabled or disabled";
+                return false;
+            }
+            commands.push_back(std::move(command));
+        }
+
+        if (commands.empty())
+        {
+            outStatus = "Nothing selected";
+            return false;
+        }
+        if (commands.size() == 1)
+        {
+            return commandStack.Execute(ctx, std::move(commands.front()));
+        }
+
+        auto composite = std::make_unique<CompositeCommand>(
+            std::string(enabled ? "Enable " : "Disable ") +
+            std::to_string(commands.size()) + " Objects");
+        for (std::unique_ptr<EditorCommand>& command : commands)
+        {
+            composite->Add(std::move(command));
+        }
+        return commandStack.Execute(ctx, std::move(composite));
     }
 }
 
@@ -1615,7 +1891,7 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     }
 
     commandStack_.Clear();
-    selectedObject_ = EditorObjectId{};
+    selection_.Clear();
 
     if (completedAction == PendingLevelAction::New)
     {
@@ -1768,13 +2044,22 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
 
     selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
-    scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
+    std::vector<Scene::SceneObjectId> selectedSceneObjects;
+    if (open_)
+    {
+        selectedSceneObjects.reserve(selection_.Size());
+        for (const EditorObjectId id : selection_.Ordered())
+        {
+            selectedSceneObjects.push_back(id.value);
+        }
+    }
+    scene.SetSelectedEditorObjectIds(selectedSceneObjects);
     if (!open_)
     {
         return;
     }
 
-    EditorContext ctx{ renderer, scene, levelManager, document_, selectedObject_ };
+    EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };
     if (!extensionsRegistered_)
     {
         EditorExtensionRegistry::RegisterBuiltins(extensions_);
@@ -1788,7 +2073,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             {
                 const ContentBrowserAction action =
                     contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,
-                        document_, selectedObject_, panelCtx.renderer, thumbnailCache_,
+                        document_, selection_.Primary(), panelCtx.renderer, thumbnailCache_,
                         &showContentBrowser_);
                 if (!action.HasAction())
                 {
@@ -1814,7 +2099,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 }
                 else if (action.type == ContentBrowserAction::Type::AssignMaterial)
                 {
-                    EditorObject* selected = document_.Find(selectedObject_);
+                    const EditorObjectId primary = selection_.Primary();
+                    EditorObject* selected = document_.Find(primary);
                     if (asset->id.type != EditorAssetType::MaterialPreset ||
                         !selected ||
                         selected->type != "staticMesh")
@@ -1824,7 +2110,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     }
 
                     commandStack_.Execute(panelCtx,
-                        std::make_unique<SetMaterialCommand>(selectedObject_, asset->id.key));
+                        std::make_unique<SetMaterialCommand>(primary, asset->id.key));
                 }
                 else if (action.type == ContentBrowserAction::Type::OpenLevel ||
                     action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera)
@@ -1846,23 +2132,33 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             true,
             [this](EditorContext& panelCtx)
             {
-                const OutlinerAction outlinerAction = outliner_.Draw(document_, selectedObject_, &showOutliner_);
+                const OutlinerAction outlinerAction = outliner_.Draw(document_, selection_, &showOutliner_);
                 if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
                 {
-                    commandStack_.Execute(panelCtx, std::make_unique<DeleteObjectCommand>(outlinerAction.target));
+                    if (!selection_.Contains(outlinerAction.target))
+                    {
+                        selection_.Replace(outlinerAction.target);
+                    }
+                    DeleteSelection(panelCtx, commandStack_, levelStatus_);
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::DuplicateObject)
                 {
-                    commandStack_.Execute(panelCtx,
-                        std::make_unique<DuplicateObjectCommand>(outlinerAction.target));
+                    if (!selection_.Contains(outlinerAction.target))
+                    {
+                        selection_.Replace(outlinerAction.target);
+                    }
+                    DuplicateSelection(panelCtx, commandStack_, levelStatus_);
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::FrameSelection)
                 {
-                    selectedObject_ = outlinerAction.target;
+                    if (!selection_.Contains(outlinerAction.target))
+                    {
+                        selection_.Replace(outlinerAction.target);
+                    }
                     if (!FrameSelection(panelCtx.renderer,
                             panelCtx.scene,
                             document_,
-                            outlinerAction.target))
+                            selection_))
                     {
                         levelStatus_ = "Nothing to frame";
                     }
@@ -1878,29 +2174,17 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                             outlinerAction.nameValue));
                     }
                 }
-                else if (outlinerAction.type == OutlinerAction::Type::SetEnabled)
+                else if (outlinerAction.type == OutlinerAction::Type::SetEnabled ||
+                    outlinerAction.type == OutlinerAction::Type::SetEnvEnabled)
                 {
-                    commandStack_.Execute(panelCtx, std::make_unique<SetEnabledCommand>(outlinerAction.target, outlinerAction.enabledValue));
-                }
-                else if (outlinerAction.type == OutlinerAction::Type::SetEnvEnabled)
-                {
-                    for (const EditorObject& env : document_.Environment())
+                    if (!selection_.Contains(outlinerAction.target))
                     {
-                        if (env.id.value == outlinerAction.target.value)
-                        {
-                            nlohmann::json after = env.properties;
-                            after["enabled"] = outlinerAction.enabledValue;
-                            commandStack_.Execute(panelCtx,
-                                std::make_unique<EditEnvironmentCommand>(
-                                    env.id,
-                                    env.properties,
-                                    std::move(after),
-                                    outlinerAction.enabledValue ?
-                                        "Enable Environment" :
-                                        "Disable Environment"));
-                            break;
-                        }
+                        selection_.Replace(outlinerAction.target);
                     }
+                    SetSelectionEnabled(panelCtx,
+                        commandStack_,
+                        outlinerAction.enabledValue,
+                        levelStatus_);
                 }
             }));
 
@@ -2034,7 +2318,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     };
     const auto copySelection = [&]()
     {
-        CopySelectionToClipboard(document_, selectedObject_, objectClipboard_, levelStatus_);
+        CopySelectionToClipboard(document_, selection_, objectClipboard_, levelStatus_);
     };
     const auto pasteObject = [&]()
     {
@@ -2063,7 +2347,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
     if (hotkeyActions.duplicateSelection)
     {
-        commandStack_.Execute(ctx, std::make_unique<DuplicateObjectCommand>(selectedObject_));
+        DuplicateSelection(ctx, commandStack_, levelStatus_);
     }
     if (hotkeyActions.copySelection)
     {
@@ -2075,11 +2359,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
     if (hotkeyActions.deleteSelection)
     {
-        commandStack_.Execute(ctx, std::make_unique<DeleteObjectCommand>(selectedObject_));
+        DeleteSelection(ctx, commandStack_, levelStatus_);
     }
     if (hotkeyActions.focusSelection)
     {
-        if (!FrameSelection(renderer, scene, document_, selectedObject_))
+        if (!FrameSelection(renderer, scene, document_, selection_))
         {
             levelStatus_ = "Nothing to frame";
         }
@@ -2090,7 +2374,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
     if (hotkeyActions.clearSelection)
     {
-        selectedObject_ = EditorObjectId{};
+        selection_.Clear();
     }
 
     // Main editor window: status, undo/redo, and per-window visibility toggles.
@@ -2259,7 +2543,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     {
                         if (it->type == "ocean")
                         {
-                            if (selectedObject_.value == it->id.value) { selectedObject_ = EditorObjectId{}; }
+                            selection_.Remove(it->id);
                             env.erase(it);
                             break;
                         }
@@ -2581,7 +2865,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("viewportGizmo");
     selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
     scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
-    scene.SetSelectedEditorObjectId(open_ ? selectedObject_.value : 0);
+    selectedSceneObjects.clear();
+    if (open_)
+    {
+        for (const EditorObjectId id : selection_.Ordered())
+        {
+            selectedSceneObjects.push_back(id.value);
+        }
+    }
+    scene.SetSelectedEditorObjectIds(selectedSceneObjects);
     const nlohmann::json panelState = BuildPanelStateJson(showContentBrowser_, showOutliner_,
         showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
     if (!panelStateLoaded_ || panelState != lastObservedPanelState_)

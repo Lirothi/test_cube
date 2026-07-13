@@ -4,6 +4,7 @@
 #include <string>
 
 #include "editor/commands/EditorCommand.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h" // EditorObject, EditorObjectId, nlohmann::json
 
 // Spawns a factory-built mesh object into the live scene as an initialized
@@ -22,7 +23,7 @@ private:
     bool built_ = false;
     nlohmann::json objectJson_;   // factory-shape JSON
     EditorObject object_;         // document mirror, built once (stable id)
-    EditorObjectId previousSelection_{};
+    EditorSelection previousSelection_;
 };
 
 #endif // WITH_EDITOR

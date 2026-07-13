@@ -201,6 +201,9 @@
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/CompositeCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/EditEnvironmentCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -578,6 +581,9 @@
     <ClInclude Include="sources/editor/EditorContext.h">
       <Filter>sources\editor</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/EditorSelection.h">
+      <Filter>sources\editor</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/EditorController.h">
       <Filter>sources\editor</Filter>
     </ClInclude>
@@ -618,6 +624,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/CompositeCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditEnvironmentCommand.h">

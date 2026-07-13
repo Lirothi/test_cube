@@ -42,8 +42,9 @@ namespace
     }
 }
 
-DuplicateObjectCommand::DuplicateObjectCommand(EditorObjectId sourceId)
+DuplicateObjectCommand::DuplicateObjectCommand(EditorObjectId sourceId, bool addToSelection)
     : sourceId_(sourceId)
+    , addToSelection_(addToSelection)
 {
 }
 
@@ -102,11 +103,12 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
         // Lights are not runtime scene objects; the duplicate is a new environment
         // entity that RebuildLights folds into the LightManager (CPU-only, no GPU
         // upload). The whole-scene idle keeps it consistent with the object path.
-        previousSelection_ = ctx.selectedObject;
+        previousSelection_ = ctx.selection;
         ctx.renderer.WaitForPreviousFrame();
         ctx.document.Environment().push_back(object_);
         EnvironmentRuntime::RebuildLights(ctx);
-        ctx.selectedObject = object_.id;
+        if (addToSelection_) { ctx.selection.Add(object_.id); }
+        else { ctx.selection.Replace(object_.id); }
         ctx.document.SetDirty(true);
         return true;
     }
@@ -120,9 +122,10 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
             return false;
         }
 
-        previousSelection_ = ctx.selectedObject;
+        previousSelection_ = ctx.selection;
         ctx.document.Add(object_);
-        ctx.selectedObject = object_.id;
+        if (addToSelection_) { ctx.selection.Add(object_.id); }
+        else { ctx.selection.Replace(object_.id); }
         ctx.document.SetDirty(true);
         return true;
     }
@@ -134,7 +137,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
     ctx.document.Add(object_);
 
     ctx.renderer.WaitForPreviousFrame();
@@ -171,7 +174,8 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
     }
 
     uploads.SubmitAndWait(&ctx.renderer);
-    ctx.selectedObject = object_.id;
+    if (addToSelection_) { ctx.selection.Add(object_.id); }
+    else { ctx.selection.Replace(object_.id); }
     ctx.document.SetDirty(true);
     return true;
 }
@@ -197,7 +201,7 @@ void DuplicateObjectCommand::Undo(EditorContext& ctx)
         ctx.scene.RemoveEditorObject(object_.id.value);
         ctx.document.Remove(object_.id);
     }
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

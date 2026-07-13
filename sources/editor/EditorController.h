@@ -9,6 +9,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/EditorHotkeys.h"
 #include "editor/EditorExtensionRegistry.h"
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/CommandHistoryPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
@@ -87,7 +88,7 @@ private:
     EditorExtensionRegistry extensions_;
     EditorAssetId selectedAsset_;
     EditorSceneDocument document_;
-    EditorObjectId selectedObject_;
+    EditorSelection selection_;
     EditorCommandStack commandStack_;
     std::vector<std::string> recentLevelPaths_;
     std::string objectClipboard_;

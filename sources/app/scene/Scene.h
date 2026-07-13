@@ -75,7 +75,7 @@ public:
     void RefreshShadowGpuForEditor(Renderer& renderer);
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
     const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
-    void SetSelectedEditorObjectId(SceneObjectId id) { selectedEditorObjectId_ = id; }
+    void SetSelectedEditorObjectIds(const std::vector<SceneObjectId>& ids);
     void SetEditorSelectionOutlineRadius(std::uint32_t radius) { selectionOutlineRadius_ = radius; }
 
     // Nearest editor-owned, visible object hit by the ray (CPU ray vs world AABB),
@@ -133,7 +133,8 @@ private:
     // 0 for a runtime object with no editor identity.
     std::vector<SceneObjectId> objectIds_;
     SceneObjectId nextEditorId_ = 1;
-    SceneObjectId selectedEditorObjectId_ = 0;
+    std::array<SceneObjectId, SceneFrameData::kMaxEditorSelection> selectedEditorObjectIds_{};
+    std::uint32_t selectedEditorObjectCount_ = 0;
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};

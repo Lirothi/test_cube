@@ -398,7 +398,7 @@ void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
     otherGroupOpen_ = state.otherGroupOpen;
 }
 
-OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open)
+OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open)
 {
     OutlinerAction action;
 
@@ -461,6 +461,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
     bool selectedExists = false;
     bool selectedVisible = false;
     std::string selectedName;
+    const EditorObjectId primarySelection = selection.Primary();
     const auto addVisibleRow = [&](EditorObject& object, bool environment)
     {
         std::vector<OutlinerRowRef>* group = nullptr;
@@ -485,7 +486,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         {
             addVisibleRow(obj, false);
         }
-        if (selectedObject.value == obj.id.value)
+        if (primarySelection.value == obj.id.value)
         {
             selectedExists = true;
             selectedVisible = visible;
@@ -499,7 +500,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         {
             addVisibleRow(env, true);
         }
-        if (selectedObject.value == env.id.value)
+        if (primarySelection.value == env.id.value)
         {
             selectedExists = true;
             selectedVisible = visible;
@@ -516,7 +517,15 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
     ImGui::Text("Showing %d of %d rows", visibleRows, totalRows);
     if (selectedExists)
     {
-        ImGui::TextDisabled("Selected: %s", selectedName.c_str());
+        if (selection.Size() > 1)
+        {
+            ImGui::TextDisabled("Selected: %zu objects | Primary: %s",
+                selection.Size(), selectedName.c_str());
+        }
+        else
+        {
+            ImGui::TextDisabled("Selected: %s", selectedName.c_str());
+        }
     }
 
     const float footerHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
@@ -543,6 +552,59 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         SortRows(environmentRows, sortSpecs);
         SortRows(other, sortSpecs);
 
+        std::vector<EditorObjectId> displayedOrder;
+        displayedOrder.reserve(static_cast<std::size_t>(visibleRows));
+        const auto appendDisplayedRows = [&](const std::vector<OutlinerRowRef>& rows, bool groupOpen)
+        {
+            if (!groupOpen)
+            {
+                return;
+            }
+            for (const OutlinerRowRef& row : rows)
+            {
+                if (row.object)
+                {
+                    displayedOrder.push_back(row.object->id);
+                }
+            }
+        };
+        appendDisplayedRows(meshes, meshesGroupOpen_);
+        appendDisplayedRows(lights, lightsGroupOpen_);
+        appendDisplayedRows(cameras, camerasGroupOpen_);
+        appendDisplayedRows(environmentRows, environmentGroupOpen_);
+        appendDisplayedRows(other, otherGroupOpen_);
+
+        const auto selectRow = [&](EditorObjectId id)
+        {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyShift)
+            {
+                EditorObjectId anchor = rangeAnchor_.value != 0 ? rangeAnchor_ : selection.Primary();
+                const auto anchorIt = std::find_if(displayedOrder.begin(), displayedOrder.end(),
+                    [anchor](EditorObjectId item) { return item.value == anchor.value; });
+                const auto clickedIt = std::find_if(displayedOrder.begin(), displayedOrder.end(),
+                    [id](EditorObjectId item) { return item.value == id.value; });
+                if (anchorIt != displayedOrder.end() && clickedIt != displayedOrder.end())
+                {
+                    auto first = anchorIt < clickedIt ? anchorIt : clickedIt;
+                    auto last = anchorIt < clickedIt ? clickedIt : anchorIt;
+                    std::vector<EditorObjectId> range(first, last + 1);
+                    selection.SetOrdered(std::move(range), id);
+                    return;
+                }
+            }
+
+            rangeAnchor_ = id;
+            if (io.KeyCtrl)
+            {
+                selection.Toggle(id);
+            }
+            else
+            {
+                selection.Replace(id);
+            }
+        };
+
         if (visibleRows == 0)
         {
             ImGui::TableNextRow();
@@ -565,7 +627,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
             PushEditorObjectId(obj->id);
 
             ImGui::TableNextColumn();
-            const bool isSelected = (selectedObject.value == obj->id.value);
+            const bool isSelected = selection.Contains(obj->id);
             const bool renaming =
                 !row.environment && renamingObject_.value == obj->id.value;
             if (renaming)
@@ -607,12 +669,16 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                 if (ImGui::Selectable(obj->name.c_str(), isSelected,
                         ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
                 {
-                    selectedObject = obj->id;
+                    selectRow(obj->id);
                 }
 
                 if (ImGui::BeginPopupContextItem())
                 {
-                    selectedObject = obj->id; // right-click selects the row too
+                    if (!selection.Contains(obj->id))
+                    {
+                        selection.Replace(obj->id);
+                        rangeAnchor_ = obj->id;
+                    }
 
                     bool hasAction = false;
                     if (!row.environment)
@@ -664,7 +730,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
                         hasAction = true;
                     }
 
-                    if (!row.environment)
+                    if (!row.environment || SupportsDuplicate(*obj, true))
                     {
                         if (ImGui::MenuItem("Delete"))
                         {
@@ -765,15 +831,15 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorObj
         ImGui::EndTable();
     }
 
-    if (selectedObject.value != 0 && selectedExists && !selectedVisible)
+    if (primarySelection.value != 0 && selectedExists && !selectedVisible)
     {
         ImGui::TextDisabled("Selected ID %llu is hidden by the current filters.",
-            static_cast<unsigned long long>(selectedObject.value));
+            static_cast<unsigned long long>(primarySelection.value));
     }
-    else if (selectedObject.value != 0 && !selectedExists)
+    else if (primarySelection.value != 0 && !selectedExists)
     {
         ImGui::TextDisabled("Selected ID %llu is not in the document.",
-            static_cast<unsigned long long>(selectedObject.value));
+            static_cast<unsigned long long>(primarySelection.value));
     }
 
     ImGui::End();

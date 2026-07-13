@@ -128,8 +128,9 @@ namespace
     }
 }
 
-PasteObjectCommand::PasteObjectCommand(nlohmann::json objectJson)
+PasteObjectCommand::PasteObjectCommand(nlohmann::json objectJson, bool addToSelection)
     : objectJson_(std::move(objectJson))
+    , addToSelection_(addToSelection)
 {
 }
 
@@ -237,11 +238,12 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
         {
             object_.id = ctx.document.AllocateId();
         }
-        previousSelection_ = ctx.selectedObject;
+        previousSelection_ = ctx.selection;
         ctx.renderer.WaitForPreviousFrame();
         ctx.document.Environment().push_back(object_);
         EnvironmentRuntime::RebuildLights(ctx);
-        ctx.selectedObject = object_.id;
+        if (addToSelection_) { ctx.selection.Add(object_.id); }
+        else { ctx.selection.Replace(object_.id); }
         ctx.document.SetDirty(true);
         return true;
     }
@@ -255,13 +257,14 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
             return false;
         }
 
-        previousSelection_ = ctx.selectedObject;
+        previousSelection_ = ctx.selection;
         if (object_.id.value == 0)
         {
             object_.id = ctx.document.AllocateId();
         }
         ctx.document.Add(object_);
-        ctx.selectedObject = object_.id;
+        if (addToSelection_) { ctx.selection.Add(object_.id); }
+        else { ctx.selection.Replace(object_.id); }
         ctx.document.SetDirty(true);
         return true;
     }
@@ -281,7 +284,7 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    previousSelection_ = ctx.selectedObject;
+    previousSelection_ = ctx.selection;
     if (object_.id.value == 0)
     {
         object_.id = ctx.document.AllocateId();
@@ -322,7 +325,8 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
     }
 
     uploads.SubmitAndWait(&ctx.renderer);
-    ctx.selectedObject = object_.id;
+    if (addToSelection_) { ctx.selection.Add(object_.id); }
+    else { ctx.selection.Replace(object_.id); }
     ctx.document.SetDirty(true);
     return true;
 }
@@ -348,7 +352,7 @@ void PasteObjectCommand::Undo(EditorContext& ctx)
         ctx.scene.RemoveEditorObject(object_.id.value);
         ctx.document.Remove(object_.id);
     }
-    ctx.selectedObject = previousSelection_;
+    ctx.selection = previousSelection_;
     ctx.document.SetDirty(true);
 }
 

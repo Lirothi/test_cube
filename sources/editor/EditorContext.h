@@ -1,21 +1,22 @@
 #pragma once
 #if WITH_EDITOR
 
+#include "editor/EditorSelection.h"
+
 class Renderer;
 class Scene;
 class LevelManager;
 class EditorSceneDocument;
-struct EditorObjectId;
 
 // References to the app systems and editor state that commands and panels read
-// and mutate. `selectedObject` and `document` are owned by EditorController.
+// and mutate. `selection` and `document` are owned by EditorController.
 struct EditorContext
 {
     Renderer& renderer;
     Scene& scene;
     LevelManager& levelManager;
     EditorSceneDocument& document;
-    EditorObjectId& selectedObject;
+    EditorSelection& selection;
 };
 
 #endif // WITH_EDITOR

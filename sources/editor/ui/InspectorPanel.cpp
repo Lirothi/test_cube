@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
@@ -13,6 +14,7 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/assets/AssetRegistry.h"
+#include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
@@ -56,6 +58,119 @@ namespace
     {
         std::replace(path.begin(), path.end(), '\\', '/');
         return path;
+    }
+
+    const EditorObject* FindEnvironmentObject(
+        const EditorSceneDocument& document,
+        EditorObjectId id)
+    {
+        for (const EditorObject& environment : document.Environment())
+        {
+            if (environment.id.value == id.value)
+            {
+                return &environment;
+            }
+        }
+        return nullptr;
+    }
+
+    bool TryGetEnabled(const EditorSceneDocument& document,
+        EditorObjectId id,
+        bool& outEnabled)
+    {
+        if (const EditorObject* object = document.Find(id))
+        {
+            outEnabled = object->enabled;
+            return true;
+        }
+
+        const EditorObject* environment = FindEnvironmentObject(document, id);
+        if (!environment || (environment->type != "pointLight" &&
+            environment->type != "spotLight" &&
+            environment->type != "directionalLight" &&
+            environment->type != "ocean"))
+        {
+            return false;
+        }
+        outEnabled = environment->properties.value("enabled", true);
+        return true;
+    }
+
+    std::unique_ptr<EditorCommand> BuildEnabledCommand(
+        const EditorSceneDocument& document,
+        EditorObjectId id,
+        bool enabled)
+    {
+        if (document.Find(id))
+        {
+            return std::make_unique<SetEnabledCommand>(id, enabled);
+        }
+
+        const EditorObject* environment = FindEnvironmentObject(document, id);
+        if (!environment)
+        {
+            return nullptr;
+        }
+        nlohmann::json after = environment->properties;
+        after["enabled"] = enabled;
+        return std::make_unique<EditEnvironmentCommand>(
+            id,
+            environment->properties,
+            std::move(after),
+            enabled ? "Enable Environment" : "Disable Environment");
+    }
+
+    void DrawSharedEnabled(EditorContext& ctx, EditorCommandStack& commandStack)
+    {
+        bool enabled = true;
+        bool first = true;
+        bool mixed = false;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            bool objectEnabled = true;
+            if (!TryGetEnabled(ctx.document, id, objectEnabled))
+            {
+                ImGui::TextDisabled("Enabled is not shared by this selection.");
+                return;
+            }
+            if (first)
+            {
+                enabled = objectEnabled;
+                first = false;
+            }
+            else
+            {
+                mixed |= enabled != objectEnabled;
+            }
+        }
+
+        if (mixed)
+        {
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+        }
+        const bool changed = ImGui::Checkbox("Enabled", &enabled);
+        if (mixed)
+        {
+            ImGui::PopItemFlag();
+        }
+        if (!changed)
+        {
+            return;
+        }
+
+        auto composite = std::make_unique<CompositeCommand>(
+            std::string(enabled ? "Enable " : "Disable ") +
+            std::to_string(ctx.selection.Size()) + " Objects");
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            std::unique_ptr<EditorCommand> command =
+                BuildEnabledCommand(ctx.document, id, enabled);
+            if (command)
+            {
+                composite->Add(std::move(command));
+            }
+        }
+        commandStack.Execute(ctx, std::move(composite));
     }
 
     void DrawInspectorDropTarget(EditorContext& ctx,
@@ -144,6 +259,7 @@ namespace
         EditorCommandStack& commandStack,
         const AssetRegistry& registry,
         EditorObject& env,
+        bool showEnabled,
         EditorObjectId& activeEditObject,
         nlohmann::json& propertiesBeforeEdit)
     {
@@ -196,7 +312,7 @@ namespace
         const bool supportsEnable =
             env.type == "pointLight" || env.type == "spotLight" ||
             env.type == "directionalLight" || env.type == "ocean";
-        if (supportsEnable)
+        if (showEnabled && supportsEnable)
         {
             bool enabled = p.value("enabled", true);
             if (ImGui::Checkbox("Enabled", &enabled))
@@ -454,7 +570,16 @@ void InspectorPanel::Draw(EditorContext& ctx,
         return;
     }
 
-    EditorObject* obj = ctx.document.Find(ctx.selectedObject);
+    const EditorObjectId primary = ctx.selection.Primary();
+    const bool multiSelection = ctx.selection.Size() > 1;
+    if (multiSelection)
+    {
+        ImGui::Text("%zu objects selected", ctx.selection.Size());
+        DrawSharedEnabled(ctx, commandStack);
+        ImGui::Separator();
+    }
+
+    EditorObject* obj = ctx.document.Find(primary);
     if (!obj)
     {
         nameEditActive_ = false;
@@ -463,7 +588,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
         // Environment entities (camera/lights/skybox/ocean) live in a separate list.
         for (EditorObject& env : ctx.document.Environment())
         {
-            if (env.id.value != ctx.selectedObject.value) { continue; }
+            if (env.id.value != primary.value) { continue; }
             ImGui::Text("Selection: %s", env.name.c_str());
             ImGui::TextDisabled("Type: %s | ID: %llu",
                 env.type.c_str(),
@@ -474,6 +599,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
                 commandStack,
                 registry,
                 env,
+                !multiSelection,
                 environmentEditObject_,
                 environmentPropertiesBeforeEdit_);
             DrawInspectorDropTarget(ctx, commandStack, registry, &env);
@@ -528,10 +654,13 @@ void InspectorPanel::Draw(EditorContext& ctx,
         std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
     }
 
-    bool enabled = obj->enabled;
-    if (ImGui::Checkbox("Enabled", &enabled))
+    if (!multiSelection)
     {
-        commandStack.Execute(ctx, std::make_unique<SetEnabledCommand>(obj->id, enabled));
+        bool enabled = obj->enabled;
+        if (ImGui::Checkbox("Enabled", &enabled))
+        {
+            commandStack.Execute(ctx, std::make_unique<SetEnabledCommand>(obj->id, enabled));
+        }
     }
 
     if (obj->properties.contains("model") && obj->properties["model"].is_string())

@@ -3,6 +3,7 @@
 
 #include <string>
 
+#include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 // A delete request raised by the outliner; the editor turns it into a command.
@@ -41,7 +42,7 @@ public:
 
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it).
-    OutlinerAction Draw(EditorSceneDocument& document, EditorObjectId& selectedObject, bool* open);
+    OutlinerAction Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open);
 
     PersistentState GetPersistentState() const;
     void SetPersistentState(const PersistentState& state);
@@ -56,6 +57,7 @@ private:
     bool environmentGroupOpen_ = true;
     bool otherGroupOpen_ = true;
     int typeFilterIndex_ = 0;
+    EditorObjectId rangeAnchor_{};
     EditorObjectId renamingObject_{};
     char renameBuffer_[256] = {};
     bool renameFocusRequested_ = false;
