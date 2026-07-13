@@ -59,7 +59,8 @@ public:
     // cubemap)
     // and, when Ready, obtain a drawable per-frame ImGui id for it. Marks the
     // asset used this frame. Non-previewable records return State::Missing.
-    View Request(Renderer& renderer, const EditorAssetRecord& record);
+    View Request(Renderer& renderer, const EditorAssetRecord& record,
+        std::uint64_t assetRegistryRevision);
 
     // Generate a bounded number of queued thumbnails (fenced upload + offscreen
     // render). Call once per editor frame after the browser has issued Requests.
@@ -82,6 +83,7 @@ private:
         std::uint32_t mipLevels = 1;
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t cacheSignature = 0;
+        std::uint64_t registryRevision = 0;
         std::string cachePath;
         std::string failureReason;
         std::uint64_t lastRequestedFrame = 0;

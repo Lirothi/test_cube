@@ -11,11 +11,14 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetThumbnailCache.h"
 #include "editor/ui/EditorDragDrop.h"
@@ -312,6 +315,7 @@ namespace
     {
         Renderer* renderer = nullptr;
         AssetThumbnailCache* cache = nullptr;
+        std::uint64_t assetRegistryRevision = 0;
     };
 
     // What to draw in an asset/folder's icon slot: a real GPU thumbnail, a baked
@@ -346,8 +350,8 @@ namespace
             record.id.type == EditorAssetType::MaterialPreset;
         if (previewable && thumbs.cache && thumbs.renderer)
         {
-            const AssetThumbnailCache::View view =
-                thumbs.cache->Request(*thumbs.renderer, record);
+            const AssetThumbnailCache::View view = thumbs.cache->Request(
+                *thumbs.renderer, record, thumbs.assetRegistryRevision);
             switch (view.state)
             {
             case AssetThumbnailCache::State::Ready:
@@ -1756,11 +1760,11 @@ namespace
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        for (const EditorAssetFolder* folder : folders)
+        const auto drawFolderRow = [&](const EditorAssetFolder* folder)
         {
             if (!folder)
             {
-                continue;
+                return;
             }
 
             ImGui::TableNextRow();
@@ -1790,13 +1794,13 @@ namespace
             ImGui::TextUnformatted(folder->name.c_str());
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(folder->path.c_str());
-        }
+        };
 
-        for (const EditorAssetRecord* record : assets)
+        const auto drawAssetRow = [&](const EditorAssetRecord* record)
         {
             if (!record)
             {
-                continue;
+                return;
             }
 
             ImGui::TableNextRow();
@@ -1836,6 +1840,27 @@ namespace
             ImGui::TextUnformatted(record->displayName.c_str());
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(record->virtualPath.c_str());
+        };
+
+        const int itemCount = static_cast<int>(folders.size() + assets.size());
+        ImGuiListClipper clipper;
+        clipper.Begin(itemCount, ImGui::GetTextLineHeightWithSpacing());
+        while (clipper.Step())
+        {
+            for (int itemIndex = clipper.DisplayStart;
+                 itemIndex < clipper.DisplayEnd;
+                 ++itemIndex)
+            {
+                const size_t index = static_cast<size_t>(itemIndex);
+                if (index < folders.size())
+                {
+                    drawFolderRow(folders[index]);
+                }
+                else
+                {
+                    drawAssetRow(assets[index - folders.size()]);
+                }
+            }
         }
 
         ImGui::EndTable();
@@ -1862,24 +1887,13 @@ namespace
         const int columns = std::max(1,
             static_cast<int>((availableWidth + spacingX) / (tileSize.x + spacingX)));
 
-        int itemIndex = 0;
-        auto advanceTile = [&itemIndex, columns]()
-        {
-            if (itemIndex > 0 && (itemIndex % columns) != 0)
-            {
-                ImGui::SameLine();
-            }
-            ++itemIndex;
-        };
-
-        for (const EditorAssetFolder* folder : folders)
+        const auto drawFolderTile = [&](const EditorAssetFolder* folder)
         {
             if (!folder)
             {
-                continue;
+                return;
             }
 
-            advanceTile();
             ImGui::PushID(folder->path.c_str());
             if (ImGui::Button("##folderTile", tileSize))
             {
@@ -1899,16 +1913,15 @@ namespace
                 requestNewCollection);
             DrawFolderHoverHint(folder, folder->path, icons);
             ImGui::PopID();
-        }
+        };
 
-        for (const EditorAssetRecord* record : assets)
+        const auto drawAssetTile = [&](const EditorAssetRecord* record)
         {
             if (!record)
             {
-                continue;
+                return;
             }
 
-            advanceTile();
             const bool isSelected = (selectedAsset.type == record->id.type &&
                 selectedAsset.key == record->id.key);
 
@@ -1947,6 +1960,35 @@ namespace
                 document, selectedObject, favoriteAssets, collections, requestNewCollection);
             DrawAssetHoverHint(record, record->id, icons, thumbs);
             ImGui::PopID();
+        };
+
+        const size_t itemCount = folders.size() + assets.size();
+        const int rowCount = static_cast<int>((itemCount + static_cast<size_t>(columns) - 1u) /
+            static_cast<size_t>(columns));
+        ImGuiListClipper clipper;
+        clipper.Begin(rowCount, tileSize.y + ImGui::GetStyle().ItemSpacing.y);
+        while (clipper.Step())
+        {
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+            {
+                const size_t firstIndex = static_cast<size_t>(row) * static_cast<size_t>(columns);
+                const size_t lastIndex = std::min(firstIndex + static_cast<size_t>(columns), itemCount);
+                for (size_t itemIndex = firstIndex; itemIndex < lastIndex; ++itemIndex)
+                {
+                    if (itemIndex != firstIndex)
+                    {
+                        ImGui::SameLine();
+                    }
+                    if (itemIndex < folders.size())
+                    {
+                        drawFolderTile(folders[itemIndex]);
+                    }
+                    else
+                    {
+                        drawAssetTile(assets[itemIndex - folders.size()]);
+                    }
+                }
+            }
         }
     }
 }
@@ -2117,9 +2159,10 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     AssetThumbnailCache& thumbnails,
     bool* open)
 {
+    CPU_SCOPE(ProfilerScopes::kContentBrowserDraw);
     ContentBrowserAction action;
     BrowserIconAtlas icons;
-    const ThumbnailProvider thumbs{ &renderer, &thumbnails };
+    const ThumbnailProvider thumbs{ &renderer, &thumbnails, registry.Revision() };
     thumbnails.BeginFrame();
 
     if (!iconAtlasTried_)
@@ -2308,6 +2351,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         3.0f,
         0.1f);
 
+    std::optional<Profiler::ScopedCpu> drawSourcesScope(
+        std::in_place, ProfilerScopes::kContentBrowserDrawSources);
     ImGui::BeginChild("##sourcesPanel",
         ImVec2(sourcesWidth_, workspaceSize.y),
         true);
@@ -2559,6 +2604,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImGui::TextDisabled("No content roots.");
     }
     ImGui::EndChild();
+    drawSourcesScope.reset();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
     ImGui::BeginChild("##assetView",
@@ -2567,6 +2613,9 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
 
     const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_);
     std::vector<const EditorAssetFolder*> visibleFolders;
+    std::vector<const EditorAssetRecord*> visibleAssets;
+    std::optional<Profiler::ScopedCpu> buildVisibleEntriesScope(
+        std::in_place, ProfilerScopes::kContentBrowserBuildVisibleEntries);
     if (selectedFolder)
     {
         for (const std::string& childPath : selectedFolder->childPaths)
@@ -2580,7 +2629,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
     }
 
-    std::vector<const EditorAssetRecord*> visibleAssets;
     const std::vector<const EditorAssetRecord*> assetCandidates =
         registry.SearchInFolder(selectedFolder_, includeSubfolders_,
             searchBuffer_, EditorAssetType::Unknown);
@@ -2591,7 +2639,10 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             visibleAssets.push_back(record);
         }
     }
+    buildVisibleEntriesScope.reset();
 
+    std::optional<Profiler::ScopedCpu> drawAssetViewScope(
+        std::in_place, ProfilerScopes::kContentBrowserDrawAssetView);
     const size_t visibleEntryCount = visibleFolders.size() + visibleAssets.size();
 
     ImGui::TextUnformatted("Asset View");
@@ -2664,6 +2715,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImGui::EndPopup();
     }
     ImGui::EndChild();
+    drawAssetViewScope.reset();
 
     if (uiRequest.type == ContentBrowserRequestType::SelectFolder)
     {

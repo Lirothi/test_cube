@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -400,6 +402,7 @@ void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
 
 OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open)
 {
+    CPU_SCOPE(ProfilerScopes::kSceneOutlinerDraw);
     OutlinerAction action;
 
     ImGui::SetNextWindowSize(ImVec2(360.0f, 420.0f), ImGuiCond_FirstUseEver);

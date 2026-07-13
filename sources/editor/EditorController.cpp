@@ -19,6 +19,8 @@
 #include "app/camera/Camera.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
@@ -1154,6 +1156,77 @@ namespace
         };
     }
 
+    bool AssetIdsMatch(const std::vector<EditorAssetId>& a,
+        const std::vector<EditorAssetId>& b)
+    {
+        if (a.size() != b.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (a[i].type != b[i].type || a[i].key != b[i].key)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool CollectionsMatch(const std::vector<ContentBrowserCollection>& a,
+        const std::vector<ContentBrowserCollection>& b)
+    {
+        if (a.size() != b.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (a[i].name != b[i].name ||
+                !AssetIdsMatch(a[i].assets, b[i].assets) ||
+                a[i].folders != b[i].folders)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ContentBrowserStatesMatch(const ContentBrowserPanel::PersistentState& a,
+        const ContentBrowserPanel::PersistentState& b)
+    {
+        return a.activeTypeFilters == b.activeTypeFilters &&
+            a.selectedFolder == b.selectedFolder &&
+            a.includeSubfolders == b.includeSubfolders &&
+            a.viewMode == b.viewMode &&
+            a.sourcesWidth == b.sourcesWidth &&
+            AssetIdsMatch(a.favoriteAssets, b.favoriteAssets) &&
+            a.favoriteFolders == b.favoriteFolders &&
+            CollectionsMatch(a.collections, b.collections);
+    }
+
+    bool OutlinerStatesMatch(const SceneOutlinerPanel::PersistentState& a,
+        const SceneOutlinerPanel::PersistentState& b)
+    {
+        return a.meshesGroupOpen == b.meshesGroupOpen &&
+            a.lightsGroupOpen == b.lightsGroupOpen &&
+            a.camerasGroupOpen == b.camerasGroupOpen &&
+            a.environmentGroupOpen == b.environmentGroupOpen &&
+            a.otherGroupOpen == b.otherGroupOpen;
+    }
+
+    bool ViewportGizmoStatesMatch(const ViewportGizmo::PersistentState& a,
+        const ViewportGizmo::PersistentState& b)
+    {
+        return a.snapEnabled == b.snapEnabled &&
+            a.translationIncrement == b.translationIncrement &&
+            a.rotationIncrement == b.rotationIncrement &&
+            a.scaleIncrement == b.scaleIncrement &&
+            a.transformSpace == b.transformSpace;
+    }
+
     void LoadEditorPanelState(bool& showContentBrowser,
         bool& showOutliner,
         bool& showInspector,
@@ -2148,8 +2221,35 @@ bool EditorController::RequestOpenLevelPath(LevelManager& levelManager,
     return true;
 }
 
+EditorController::PanelStateSnapshot EditorController::CapturePanelState() const
+{
+    CPU_SCOPE(ProfilerScopes::kEditorPanelStateCapture);
+    return PanelStateSnapshot{
+        showContentBrowser_,
+        showOutliner_,
+        showInspector_,
+        showCommandHistory_,
+        contentBrowser_.GetPersistentState(),
+        outliner_.GetPersistentState(),
+        viewportGizmo_.GetPersistentState()
+    };
+}
+
+bool EditorController::PanelStateMatches(const PanelStateSnapshot& a,
+    const PanelStateSnapshot& b)
+{
+    return a.showContentBrowser == b.showContentBrowser &&
+        a.showOutliner == b.showOutliner &&
+        a.showInspector == b.showInspector &&
+        a.showCommandHistory == b.showCommandHistory &&
+        ContentBrowserStatesMatch(a.contentBrowser, b.contentBrowser) &&
+        OutlinerStatesMatch(a.outliner, b.outliner) &&
+        ViewportGizmoStatesMatch(a.viewportGizmo, b.viewportGizmo);
+}
+
 void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager)
 {
+    CPU_SCOPE(ProfilerScopes::kEditorDraw);
     const auto markCameraStateSaved = [this](const std::string& levelPath, const LevelCameraState& cameraState)
     {
         lastSavedCameraLevelPath_ = NormalizeLevelPath(levelPath);
@@ -2202,6 +2302,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
             contentBrowser_, outliner_, viewportGizmo_);
+        lastObservedPanelStateSnapshot_ = CapturePanelState();
         lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
             showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
         panelStateLoaded_ = true;
@@ -2237,6 +2338,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     const double now = ImGui::GetTime();
     if (now >= nextAssetRegistryPollTimeSec_)
     {
+        CPU_SCOPE(ProfilerScopes::kEditorAssetRegistryPoll);
         nextAssetRegistryPollTimeSec_ = now + 2.0;
         if (assetRegistry_.HasChangedOnDisk())
         {
@@ -3129,35 +3231,44 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         ImGui::EndPopup();
     }
     drawPanel("viewportGizmo");
-    selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
-    scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
-    selectedSceneObjects.clear();
-    if (open_)
     {
-        for (const EditorObjectId id : selection_.Ordered())
+        CPU_SCOPE(ProfilerScopes::kEditorSyncSceneSelection);
+        selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
+        scene.SetEditorSelectionOutlineRadius(static_cast<std::uint32_t>(selectionOutlineRadius_));
+        selectedSceneObjects.clear();
+        if (open_)
         {
-            selectedSceneObjects.push_back(id.value);
+            for (const EditorObjectId id : selection_.Ordered())
+            {
+                selectedSceneObjects.push_back(id.value);
+            }
         }
+        scene.SetSelectedEditorObjectIds(selectedSceneObjects);
     }
-    scene.SetSelectedEditorObjectIds(selectedSceneObjects);
-    const nlohmann::json panelState = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-        showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
-    if (!panelStateLoaded_ || panelState != lastObservedPanelState_)
     {
-        lastObservedPanelState_ = panelState;
-        panelStateLoaded_ = true;
-        panelStateDirty_ = true;
-        nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 0.25;
-    }
-    if (panelStateDirty_ && (!open_ || ImGui::GetTime() >= nextPanelStateSaveTimeSec_))
-    {
-        if (SaveEditorPanelState(lastObservedPanelState_))
+        CPU_SCOPE(ProfilerScopes::kEditorPanelStateSync);
+        PanelStateSnapshot panelStateSnapshot = CapturePanelState();
+        if (!panelStateLoaded_ || !PanelStateMatches(panelStateSnapshot, lastObservedPanelStateSnapshot_))
         {
-            panelStateDirty_ = false;
+            CPU_SCOPE(ProfilerScopes::kEditorPanelStateBuildJson);
+            lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
+                showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
+            lastObservedPanelStateSnapshot_ = std::move(panelStateSnapshot);
+            panelStateLoaded_ = true;
+            panelStateDirty_ = true;
+            nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 0.25;
         }
-        else
+        if (panelStateDirty_ && (!open_ || ImGui::GetTime() >= nextPanelStateSaveTimeSec_))
         {
-            nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 1.0;
+            CPU_SCOPE(ProfilerScopes::kEditorPanelStateSave);
+            if (SaveEditorPanelState(lastObservedPanelState_))
+            {
+                panelStateDirty_ = false;
+            }
+            else
+            {
+                nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 1.0;
+            }
         }
     }
     saveCurrentLevelCameraState(false);

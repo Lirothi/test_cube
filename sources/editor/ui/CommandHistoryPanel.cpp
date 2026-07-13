@@ -4,6 +4,8 @@
 #include <limits>
 #include <string>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/EditorCommand.h"
 #include "editor/commands/EditorCommandStack.h"
@@ -14,6 +16,7 @@ void CommandHistoryPanel::Draw(
     EditorCommandStack& commandStack,
     bool* open)
 {
+    CPU_SCOPE(ProfilerScopes::kCommandHistoryDraw);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 360.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Command History", open))
     {

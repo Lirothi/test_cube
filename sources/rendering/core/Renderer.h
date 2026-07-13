@@ -67,6 +67,9 @@ public:
     void InitImGui();
     void BeginImGuiFrame();
     void RenderImGui(ID3D12GraphicsCommandList* commandList);
+    // ImGui and other external renderers replace descriptor heaps, root state,
+    // viewport, and scissor. Call before recording engine-native draws afterward.
+    void RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* commandList);
     ImTextureID CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
 #if WITH_EDITOR
     // Drop the cached ImGui preview descriptors for a resource (editor thumbnail

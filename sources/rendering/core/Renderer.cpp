@@ -494,6 +494,21 @@ void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
     pendingImGuiTextureResources_.clear();
 }
 
+void Renderer::RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* commandList)
+{
+    if (!commandList)
+    {
+        return;
+    }
+
+    // ImGui directly records D3D12 state, bypassing the engine's material bind
+    // cache. Rebind the main output and engine heaps, then make the next native
+    // Material::Bind fully establish its pipeline and root bindings.
+    RecordBindDefaultsNoClear(commandList);
+    BindDescriptorHeaps(commandList);
+    render::g_clBindState.Reset();
+}
+
 ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
 {
     if (!resource)

@@ -11,6 +11,31 @@ extern const Profiler::ScopeNameKey kAppControllerTick;
 extern const Profiler::ScopeNameKey kBuildDeveloperWindow;
 extern const Profiler::ScopeNameKey kTextureDebugViewerDraw;
 
+// Editor
+extern const Profiler::ScopeNameKey kEditorDraw;
+extern const Profiler::ScopeNameKey kEditorAssetRegistryPoll;
+extern const Profiler::ScopeNameKey kEditorSyncSceneSelection;
+extern const Profiler::ScopeNameKey kEditorPanelStateSync;
+extern const Profiler::ScopeNameKey kEditorPanelStateCapture;
+extern const Profiler::ScopeNameKey kEditorPanelStateBuildJson;
+extern const Profiler::ScopeNameKey kEditorPanelStateSave;
+extern const Profiler::ScopeNameKey kAssetRegistryRefresh;
+extern const Profiler::ScopeNameKey kAssetRegistryHasChangedOnDisk;
+extern const Profiler::ScopeNameKey kContentBrowserDraw;
+extern const Profiler::ScopeNameKey kContentBrowserDrawSources;
+extern const Profiler::ScopeNameKey kContentBrowserBuildVisibleEntries;
+extern const Profiler::ScopeNameKey kContentBrowserDrawAssetView;
+extern const Profiler::ScopeNameKey kAssetThumbnailRequest;
+extern const Profiler::ScopeNameKey kAssetThumbnailProcessPending;
+extern const Profiler::ScopeNameKey kSceneOutlinerDraw;
+extern const Profiler::ScopeNameKey kInspectorDraw;
+extern const Profiler::ScopeNameKey kCommandHistoryDraw;
+extern const Profiler::ScopeNameKey kViewportGizmoUpdate;
+extern const Profiler::ScopeNameKey kEditorCommandExecute;
+extern const Profiler::ScopeNameKey kEditorCommandUndo;
+extern const Profiler::ScopeNameKey kEditorCommandRedo;
+extern const Profiler::ScopeNameKey kEditorCommandMoveTo;
+
 // Material
 extern const Profiler::ScopeNameKey kMaterialFSProbe;
 

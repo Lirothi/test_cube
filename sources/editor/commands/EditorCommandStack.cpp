@@ -4,6 +4,8 @@
 #include <utility>
 
 #include "app/scene/Scene.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
 
 namespace
@@ -24,6 +26,7 @@ namespace
 
 bool EditorCommandStack::Execute(EditorContext& ctx, std::unique_ptr<EditorCommand> command)
 {
+    CPU_SCOPE(ProfilerScopes::kEditorCommandExecute);
     if (!command)
     {
         return false;
@@ -45,6 +48,7 @@ bool EditorCommandStack::Execute(EditorContext& ctx, std::unique_ptr<EditorComma
 
 void EditorCommandStack::Undo(EditorContext& ctx)
 {
+    CPU_SCOPE(ProfilerScopes::kEditorCommandUndo);
     if (!CanUndo())
     {
         return;
@@ -58,6 +62,7 @@ void EditorCommandStack::Undo(EditorContext& ctx)
 
 void EditorCommandStack::Redo(EditorContext& ctx)
 {
+    CPU_SCOPE(ProfilerScopes::kEditorCommandRedo);
     if (!CanRedo())
     {
         return;
@@ -73,6 +78,7 @@ void EditorCommandStack::Redo(EditorContext& ctx)
 
 bool EditorCommandStack::MoveTo(EditorContext& ctx, std::size_t appliedCommandCount)
 {
+    CPU_SCOPE(ProfilerScopes::kEditorCommandMoveTo);
     if (appliedCommandCount > history_.size())
     {
         return false;

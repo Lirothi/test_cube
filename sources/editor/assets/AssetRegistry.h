@@ -88,6 +88,9 @@ public:
 
     const std::vector<EditorAssetRecord>& Assets() const { return assets_; }
     const std::vector<EditorAssetFolder>& Folders() const { return folders_; }
+    // Changes after every completed Refresh. Consumers can amortize derived
+    // metadata validation until the registry has actually changed.
+    std::uint64_t Revision() const { return revision_; }
 
     // Returns records whose display name or path contains `text`
     // (case-insensitive). Pass EditorAssetType::Unknown for no type filter.
@@ -109,6 +112,7 @@ private:
     std::vector<EditorAssetFolder> folders_;
     uint64_t contentSignature_ = 0;
     bool contentSignatureInitialized_ = false;
+    std::uint64_t revision_ = 0;
 
     uint64_t ComputeContentSignature() const;
 };

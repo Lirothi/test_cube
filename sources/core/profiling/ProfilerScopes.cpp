@@ -8,6 +8,30 @@ const Profiler::ScopeNameKey kAppControllerTick = Profiler::RegisterTraceLiteral
 const Profiler::ScopeNameKey kBuildDeveloperWindow = Profiler::RegisterTraceLiteral(L"DeveloperWindow::Draw");
 const Profiler::ScopeNameKey kTextureDebugViewerDraw = Profiler::RegisterTraceLiteral(L"TextureDebugViewer::Draw");
 
+const Profiler::ScopeNameKey kEditorDraw = Profiler::RegisterTraceLiteral(L"EditorController::Draw");
+const Profiler::ScopeNameKey kEditorAssetRegistryPoll = Profiler::RegisterTraceLiteral(L"EditorController::AssetRegistryPoll");
+const Profiler::ScopeNameKey kEditorSyncSceneSelection = Profiler::RegisterTraceLiteral(L"EditorController::SyncSceneSelection");
+const Profiler::ScopeNameKey kEditorPanelStateSync = Profiler::RegisterTraceLiteral(L"EditorController::PanelStateSync");
+const Profiler::ScopeNameKey kEditorPanelStateCapture = Profiler::RegisterTraceLiteral(L"EditorController::PanelStateCapture");
+const Profiler::ScopeNameKey kEditorPanelStateBuildJson = Profiler::RegisterTraceLiteral(L"EditorController::PanelStateBuildJson");
+const Profiler::ScopeNameKey kEditorPanelStateSave = Profiler::RegisterTraceLiteral(L"EditorController::PanelStateSave");
+const Profiler::ScopeNameKey kAssetRegistryRefresh = Profiler::RegisterTraceLiteral(L"AssetRegistry::Refresh");
+const Profiler::ScopeNameKey kAssetRegistryHasChangedOnDisk = Profiler::RegisterTraceLiteral(L"AssetRegistry::HasChangedOnDisk");
+const Profiler::ScopeNameKey kContentBrowserDraw = Profiler::RegisterTraceLiteral(L"ContentBrowserPanel::Draw");
+const Profiler::ScopeNameKey kContentBrowserDrawSources = Profiler::RegisterTraceLiteral(L"ContentBrowserPanel::DrawSources");
+const Profiler::ScopeNameKey kContentBrowserBuildVisibleEntries = Profiler::RegisterTraceLiteral(L"ContentBrowserPanel::BuildVisibleEntries");
+const Profiler::ScopeNameKey kContentBrowserDrawAssetView = Profiler::RegisterTraceLiteral(L"ContentBrowserPanel::DrawAssetView");
+const Profiler::ScopeNameKey kAssetThumbnailRequest = Profiler::RegisterTraceLiteral(L"AssetThumbnailCache::Request");
+const Profiler::ScopeNameKey kAssetThumbnailProcessPending = Profiler::RegisterTraceLiteral(L"AssetThumbnailCache::ProcessPending");
+const Profiler::ScopeNameKey kSceneOutlinerDraw = Profiler::RegisterTraceLiteral(L"SceneOutlinerPanel::Draw");
+const Profiler::ScopeNameKey kInspectorDraw = Profiler::RegisterTraceLiteral(L"InspectorPanel::Draw");
+const Profiler::ScopeNameKey kCommandHistoryDraw = Profiler::RegisterTraceLiteral(L"CommandHistoryPanel::Draw");
+const Profiler::ScopeNameKey kViewportGizmoUpdate = Profiler::RegisterTraceLiteral(L"ViewportGizmo::Update");
+const Profiler::ScopeNameKey kEditorCommandExecute = Profiler::RegisterTraceLiteral(L"EditorCommandStack::Execute");
+const Profiler::ScopeNameKey kEditorCommandUndo = Profiler::RegisterTraceLiteral(L"EditorCommandStack::Undo");
+const Profiler::ScopeNameKey kEditorCommandRedo = Profiler::RegisterTraceLiteral(L"EditorCommandStack::Redo");
+const Profiler::ScopeNameKey kEditorCommandMoveTo = Profiler::RegisterTraceLiteral(L"EditorCommandStack::MoveTo");
+
 const Profiler::ScopeNameKey kMaterialFSProbe = Profiler::RegisterTraceLiteral(L"Material::FSProbeAndFlagPending");
 
 const Profiler::ScopeNameKey kRendererWaitForFrame = Profiler::RegisterTraceLiteral(L"Renderer::WaitForFrame");

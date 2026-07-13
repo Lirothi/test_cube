@@ -13,6 +13,8 @@
 
 #include <wincodec.h>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/assets/AssetRegistry.h"
 #include "materials/MaterialData.h"
 #include "materials/TextureCube.h"
@@ -492,8 +494,9 @@ void AssetThumbnailCache::BeginFrame()
 }
 
 AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
-    const EditorAssetRecord& record)
+    const EditorAssetRecord& record, std::uint64_t assetRegistryRevision)
 {
+    CPU_SCOPE(ProfilerScopes::kAssetThumbnailRequest);
     View view;
 
     PendingLoad::Kind kind;
@@ -510,27 +513,51 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
         return view; // Levels, shaders, unknown: no preview.
     }
 
-    const DiskCacheInfo diskCache = BuildDiskCacheInfo(record);
     const std::string& key = record.id.key;
     auto it = entries_.find(key);
-    if (it != entries_.end() &&
-        (it->second.sourceWriteTime != record.fileWriteTime ||
-            it->second.cacheSignature != diskCache.signature ||
-            diskCache.discardedInvalidFile))
+    DiskCacheInfo diskCache;
+    bool hasDiskCacheInfo = false;
+
+    if (it != entries_.end())
     {
-        // The source or one of its tracked dependencies changed. Drop the GPU
-        // thumbnail and lazily replace the stale on-disk PNG on the next load.
-        ReleaseEntry(renderer, it->second);
-        entries_.erase(it);
-        it = entries_.end();
+        Entry& entry = it->second;
+        const bool sourceChanged = entry.sourceWriteTime != record.fileWriteTime;
+        const bool registryChanged = entry.registryRevision != assetRegistryRevision;
+        if (sourceChanged || registryChanged)
+        {
+            // Disk/cache dependency probing can involve filesystem metadata and
+            // materials.json parsing. Do it only when the registry has changed,
+            // not once per visible item every editor frame.
+            diskCache = BuildDiskCacheInfo(record);
+            hasDiskCacheInfo = true;
+            const bool cacheChanged = entry.cacheSignature != diskCache.signature ||
+                diskCache.discardedInvalidFile;
+            if (sourceChanged || cacheChanged)
+            {
+                // The source or one of its tracked dependencies changed. Drop the
+                // GPU thumbnail and lazily replace the stale on-disk PNG.
+                ReleaseEntry(renderer, entry);
+                entries_.erase(it);
+                it = entries_.end();
+            }
+            else
+            {
+                entry.registryRevision = assetRegistryRevision;
+            }
+        }
     }
 
     if (it == entries_.end())
     {
+        if (!hasDiskCacheInfo)
+        {
+            diskCache = BuildDiskCacheInfo(record);
+        }
         Entry entry;
         entry.state = State::Queued;
         entry.sourceWriteTime = record.fileWriteTime;
         entry.cacheSignature = diskCache.signature;
+        entry.registryRevision = assetRegistryRevision;
         entry.cachePath = diskCache.path;
         entry.lastRequestedFrame = frameCounter_;
         entries_.emplace(key, std::move(entry));
@@ -585,6 +612,7 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
 
 void AssetThumbnailCache::ProcessPending(Renderer& renderer)
 {
+    CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
     if (queue_.empty())
     {
         return;

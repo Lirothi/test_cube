@@ -3121,12 +3121,15 @@ void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx,
         GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
         renderer->RecordBindDefaultsNoClear(t.cl);
 
+        renderer->RenderImGui(t.cl);
+        renderer->RestoreGraphicsStateAfterExternalDraw(t.cl);
+
         if (auto* tm = renderer->GetTextManager())
         {
             tm->Draw(renderer, t.cl);
         }
 
-        renderer->RenderImGui(t.cl);
+        //renderer->RenderImGui(t.cl);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);

@@ -14,6 +14,9 @@
 
 #include <dxgiformat.h>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
+
 // nlohmann/json — single header
 #pragma warning(push)
 #pragma warning(disable: 26819)
@@ -555,6 +558,7 @@ namespace
 
 void AssetRegistry::Refresh()
 {
+    CPU_SCOPE(ProfilerScopes::kAssetRegistryRefresh);
     assets_.clear();
     folders_.clear();
 
@@ -709,10 +713,12 @@ void AssetRegistry::Refresh()
     ComputeRecursiveAssetCount(folders_, kVirtualRoot);
     contentSignature_ = ComputeContentSignature();
     contentSignatureInitialized_ = true;
+    ++revision_;
 }
 
 bool AssetRegistry::HasChangedOnDisk() const
 {
+    CPU_SCOPE(ProfilerScopes::kAssetRegistryHasChangedOnDisk);
     return !contentSignatureInitialized_ ||
         ComputeContentSignature() != contentSignature_;
 }

@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "app/scene/Scene.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
@@ -563,6 +565,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
     const EditorExtensionRegistry& extensions,
     bool* open)
 {
+    CPU_SCOPE(ProfilerScopes::kInspectorDraw);
     ImGui::SetNextWindowSize(ImVec2(340.0f, 460.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Inspector", open))
     {

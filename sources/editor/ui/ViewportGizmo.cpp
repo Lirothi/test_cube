@@ -15,6 +15,8 @@
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
@@ -444,6 +446,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
     const AssetRegistry& registry,
     const EditorExtensionRegistry& extensions)
 {
+    CPU_SCOPE(ProfilerScopes::kViewportGizmoUpdate);
     ImGuiIO& io = ImGui::GetIO();
 
     const float width = static_cast<float>(ctx.renderer.GetWidth());

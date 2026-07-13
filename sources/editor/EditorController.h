@@ -69,6 +69,20 @@ private:
         New
     };
 
+    struct PanelStateSnapshot
+    {
+        bool showContentBrowser = true;
+        bool showOutliner = true;
+        bool showInspector = true;
+        bool showCommandHistory = true;
+        ContentBrowserPanel::PersistentState contentBrowser;
+        SceneOutlinerPanel::PersistentState outliner;
+        ViewportGizmo::PersistentState viewportGizmo;
+    };
+
+    PanelStateSnapshot CapturePanelState() const;
+    static bool PanelStateMatches(const PanelStateSnapshot& a, const PanelStateSnapshot& b);
+
     bool open_ = false;
     bool firstOpenInitialized_ = false;
     bool extensionsRegistered_ = false;
@@ -109,6 +123,7 @@ private:
     bool confirmOpenLevelPreserveCamera_ = false;
     std::string confirmOpenLevelPath_;
     nlohmann::json lastObservedPanelState_;
+    PanelStateSnapshot lastObservedPanelStateSnapshot_;
     bool panelStateLoaded_ = false;
     bool panelStateDirty_ = false;
     double nextPanelStateSaveTimeSec_ = 0.0;
