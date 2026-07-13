@@ -71,11 +71,24 @@ namespace
         bool directory = false;
     };
 
-    struct LevelCameraState
+    constexpr std::size_t kCameraBookmarkCount = 9;
+
+    struct CameraPose
     {
         Math::float3 position{ 0.0f, 0.0f, 0.0f };
         float yaw = 0.0f;
         float pitch = 0.0f;
+    };
+
+    struct CameraBookmark
+    {
+        bool stored = false;
+        CameraPose pose{};
+    };
+
+    struct LevelCameraState : CameraPose
+    {
+        std::array<CameraBookmark, kCameraBookmarkCount> bookmarks{};
     };
 
     std::string DefaultLevelsDirectory()
@@ -398,7 +411,7 @@ namespace
         return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
     }
 
-    bool IsReasonableLevelCameraState(const LevelCameraState& cameraState)
+    bool IsReasonableCameraPose(const CameraPose& cameraState)
     {
         constexpr float kMaxCameraDistance = 1000000.0f;
         constexpr float kMaxStoredYawPitch = Math::TWO_PI * 1024.0f;
@@ -412,7 +425,11 @@ namespace
 
     LevelCameraState CaptureLevelCameraState(const Camera& camera)
     {
-        return LevelCameraState{ camera.GetPosition(), camera.GetYaw(), camera.GetPitch() };
+        LevelCameraState state;
+        state.position = camera.GetPosition();
+        state.yaw = camera.GetYaw();
+        state.pitch = camera.GetPitch();
+        return state;
     }
 
     bool CameraStateMatches(const LevelCameraState& lhs, const LevelCameraState& rhs)
@@ -425,10 +442,9 @@ namespace
             std::fabs(lhs.pitch - rhs.pitch) <= kEpsilon;
     }
 
-    nlohmann::json LevelCameraStateToJson(const std::string& levelPath, const LevelCameraState& cameraState)
+    nlohmann::json CameraPoseToJson(const CameraPose& cameraState)
     {
         return {
-            { "level", levelPath },
             { "position", nlohmann::json::array({
                 cameraState.position.x,
                 cameraState.position.y,
@@ -440,14 +456,14 @@ namespace
         };
     }
 
-    bool TryReadLevelCameraState(const nlohmann::json& stateJson, LevelCameraState& out)
+    bool TryReadCameraPose(const nlohmann::json& stateJson, CameraPose& out)
     {
         if (!stateJson.is_object())
         {
             return false;
         }
 
-        LevelCameraState parsed;
+        CameraPose parsed;
         const auto positionIt = stateJson.find("position");
         if (positionIt == stateJson.end() || !TryReadFloat3(*positionIt, parsed.position))
         {
@@ -465,14 +481,68 @@ namespace
         if (yawIt == orientationIt->end() ||
             pitchIt == orientationIt->end() ||
             !TryReadFloat(*yawIt, parsed.yaw) ||
-            !TryReadFloat(*pitchIt, parsed.pitch))
+            !TryReadFloat(*pitchIt, parsed.pitch) ||
+            !IsReasonableCameraPose(parsed))
         {
             return false;
         }
 
-        if (!IsReasonableLevelCameraState(parsed))
+        out = parsed;
+        return true;
+    }
+
+    nlohmann::json LevelCameraStateToJson(const std::string& levelPath, const LevelCameraState& cameraState)
+    {
+        nlohmann::json stateJson = CameraPoseToJson(cameraState);
+        stateJson["level"] = levelPath;
+
+        nlohmann::json bookmarks = nlohmann::json::object();
+        for (std::size_t index = 0; index < cameraState.bookmarks.size(); ++index)
+        {
+            const CameraBookmark& bookmark = cameraState.bookmarks[index];
+            if (bookmark.stored)
+            {
+                bookmarks[std::to_string(index + 1)] = CameraPoseToJson(bookmark.pose);
+            }
+        }
+        if (!bookmarks.empty())
+        {
+            stateJson["bookmarks"] = std::move(bookmarks);
+        }
+        return stateJson;
+    }
+
+    bool TryReadLevelCameraState(const nlohmann::json& stateJson, LevelCameraState& out)
+    {
+        if (!stateJson.is_object())
         {
             return false;
+        }
+
+        LevelCameraState parsed;
+        CameraPose primaryPose;
+        if (!TryReadCameraPose(stateJson, primaryPose))
+        {
+            return false;
+        }
+        parsed.position = primaryPose.position;
+        parsed.yaw = primaryPose.yaw;
+        parsed.pitch = primaryPose.pitch;
+
+        const auto bookmarksIt = stateJson.find("bookmarks");
+        if (bookmarksIt != stateJson.end() && bookmarksIt->is_object())
+        {
+            for (std::size_t index = 0; index < parsed.bookmarks.size(); ++index)
+            {
+                const auto bookmarkIt = bookmarksIt->find(std::to_string(index + 1));
+                CameraPose bookmarkPose;
+                if (bookmarkIt != bookmarksIt->end() &&
+                    TryReadCameraPose(*bookmarkIt, bookmarkPose))
+                {
+                    parsed.bookmarks[index].stored = true;
+                    parsed.bookmarks[index].pose = bookmarkPose;
+                }
+            }
         }
 
         out = parsed;
@@ -1174,7 +1244,23 @@ namespace
         return false;
     }
 
-    bool SaveLevelCameraState(const std::string& levelPath, const Camera& camera)
+    std::array<bool, kCameraBookmarkCount> LoadCameraBookmarkSlots(const std::string& levelPath)
+    {
+        std::array<bool, kCameraBookmarkCount> slots{};
+        LevelCameraState state;
+        if (!LoadLevelCameraState(levelPath, state))
+        {
+            return slots;
+        }
+
+        for (std::size_t index = 0; index < slots.size(); ++index)
+        {
+            slots[index] = state.bookmarks[index].stored;
+        }
+        return slots;
+    }
+
+    bool WriteLevelCameraState(const std::string& levelPath, const LevelCameraState& cameraState)
     {
         const std::string normalizedPath = NormalizeLevelPath(levelPath);
         if (normalizedPath.empty())
@@ -1194,10 +1280,81 @@ namespace
             levelEditor["levelCameraStates"] = nlohmann::json::object();
         }
 
-        const nlohmann::json stateJson = LevelCameraStateToJson(normalizedPath, CaptureLevelCameraState(camera));
+        const nlohmann::json stateJson = LevelCameraStateToJson(normalizedPath, cameraState);
         levelEditor["levelCameraStates"][normalizedPath] = stateJson;
         levelEditor["lastLevelCamera"] = stateJson;
         return SaveEditorStateJson(root);
+    }
+
+    bool SaveLevelCameraState(const std::string& levelPath, const Camera& camera)
+    {
+        const std::string normalizedPath = NormalizeLevelPath(levelPath);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+
+        LevelCameraState state;
+        LoadLevelCameraState(normalizedPath, state);
+        const LevelCameraState current = CaptureLevelCameraState(camera);
+        state.position = current.position;
+        state.yaw = current.yaw;
+        state.pitch = current.pitch;
+        return WriteLevelCameraState(normalizedPath, state);
+    }
+
+    bool StoreCameraBookmark(const std::string& levelPath, int slot, const Camera& camera)
+    {
+        if (slot < 0 || static_cast<std::size_t>(slot) >= kCameraBookmarkCount)
+        {
+            return false;
+        }
+
+        const std::string normalizedPath = NormalizeLevelPath(levelPath);
+        if (normalizedPath.empty())
+        {
+            return false;
+        }
+
+        LevelCameraState state;
+        LoadLevelCameraState(normalizedPath, state);
+        const LevelCameraState current = CaptureLevelCameraState(camera);
+        state.position = current.position;
+        state.yaw = current.yaw;
+        state.pitch = current.pitch;
+        state.bookmarks[static_cast<std::size_t>(slot)].stored = true;
+        state.bookmarks[static_cast<std::size_t>(slot)].pose = current;
+        return WriteLevelCameraState(normalizedPath, state);
+    }
+
+    bool RecallCameraBookmark(Renderer& renderer,
+        Scene& scene,
+        const std::string& levelPath,
+        int slot)
+    {
+        if (slot < 0 || static_cast<std::size_t>(slot) >= kCameraBookmarkCount)
+        {
+            return false;
+        }
+
+        LevelCameraState state;
+        if (!LoadLevelCameraState(levelPath, state))
+        {
+            return false;
+        }
+
+        const CameraBookmark& bookmark = state.bookmarks[static_cast<std::size_t>(slot)];
+        if (!bookmark.stored)
+        {
+            return false;
+        }
+
+        Camera& camera = scene.CameraRef();
+        camera.SetPosition(bookmark.pose.position);
+        camera.SetYawPitch(bookmark.pose.yaw, bookmark.pose.pitch);
+        camera.CalcMatrices(&renderer);
+        camera.ResetHistory();
+        return true;
     }
 
     bool RestoreLevelCameraState(Renderer& renderer, Scene& scene, const std::string& levelPath)
@@ -1476,6 +1633,20 @@ namespace
         camera.CalcMatrices(&renderer);
         camera.ResetHistory();
         return true;
+    }
+
+    bool FrameVisibleScene(Renderer& renderer, Scene& scene, const EditorSceneDocument& document)
+    {
+        EditorSelection visibleObjects;
+        for (const EditorObject& object : document.Objects())
+        {
+            const RenderableObjectBase* runtime = scene.FindEditorObject(object.id.value);
+            if (object.enabled && runtime && runtime->IsVisible())
+            {
+                visibleObjects.Add(object.id, false);
+            }
+        }
+        return FrameSelection(renderer, scene, document, visibleObjects);
     }
 
     std::string DropSelectionToGround(EditorContext& ctx, EditorCommandStack& commandStack)
@@ -1897,6 +2068,7 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     {
         ResetDocumentFromGeneratedLevel(document_, std::string(), pendingNewLevelJson_);
         pendingNewLevelJson_ = nlohmann::json();
+        cameraBookmarkSlots_.fill(false);
         levelStatus_ = "New unsaved level";
         lastSavedCameraStateValid_ = false;
         return;
@@ -1905,6 +2077,7 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     pendingNewLevelJson_ = nlohmann::json();
 
     const std::string levelPath = NormalizeLevelPath(document_.LevelPath());
+    cameraBookmarkSlots_ = LoadCameraBookmarkSlots(levelPath);
     if (RememberRecentLevel(recentLevelPaths_, levelPath))
     {
         SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
@@ -2037,6 +2210,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             {
                 markCameraStateSaved(document_.LevelPath(), CaptureLevelCameraState(scene.CameraRef()));
             }
+            cameraBookmarkSlots_ = LoadCameraBookmarkSlots(document_.LevelPath());
             levelStatus_ = "Loaded " + NormalizeLevelPath(document_.LevelPath());
         }
         firstOpenInitialized_ = true;
@@ -2286,6 +2460,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             markCameraStateSaved(normalizedPath, CaptureLevelCameraState(scene.CameraRef()));
         }
+        cameraBookmarkSlots_ = LoadCameraBookmarkSlots(normalizedPath);
 
         levelStatus_ = "Saved " + normalizedPath;
         return true;
@@ -2324,6 +2499,26 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     {
         PasteObjectFromClipboard(ctx, commandStack_, objectClipboard_, levelStatus_);
     };
+    const auto recallCameraBookmark = [&](int slot)
+    {
+        const std::string levelPath = NormalizeLevelPath(document_.LevelPath());
+        if (levelPath.empty())
+        {
+            levelStatus_ = "Save the level before recalling camera bookmarks";
+        }
+        else if (RecallCameraBookmark(renderer, scene, levelPath, slot))
+        {
+            if (SaveLevelCameraState(levelPath, scene.CameraRef()))
+            {
+                markCameraStateSaved(levelPath, CaptureLevelCameraState(scene.CameraRef()));
+            }
+            levelStatus_ = "Recalled camera bookmark " + std::to_string(slot + 1);
+        }
+        else
+        {
+            levelStatus_ = "Camera bookmark " + std::to_string(slot + 1) + " is empty";
+        }
+    };
 
     const EditorHotkeyActions hotkeyActions = hotkeys_.Poll(viewportGizmo_);
     if (hotkeyActions.undo)
@@ -2344,6 +2539,29 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             saveLevel(document_.LevelPath());
         }
+    }
+    if (hotkeyActions.storeCameraBookmark >= 0)
+    {
+        const std::string levelPath = NormalizeLevelPath(document_.LevelPath());
+        const int slot = hotkeyActions.storeCameraBookmark;
+        if (levelPath.empty())
+        {
+            levelStatus_ = "Save the level before storing camera bookmarks";
+        }
+        else if (StoreCameraBookmark(levelPath, slot, scene.CameraRef()))
+        {
+            cameraBookmarkSlots_[static_cast<std::size_t>(slot)] = true;
+            markCameraStateSaved(levelPath, CaptureLevelCameraState(scene.CameraRef()));
+            levelStatus_ = "Stored camera bookmark " + std::to_string(slot + 1);
+        }
+        else
+        {
+            levelStatus_ = "Failed to store camera bookmark " + std::to_string(slot + 1);
+        }
+    }
+    if (hotkeyActions.recallCameraBookmark >= 0)
+    {
+        recallCameraBookmark(hotkeyActions.recallCameraBookmark);
     }
     if (hotkeyActions.duplicateSelection)
     {
@@ -2366,6 +2584,13 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         if (!FrameSelection(renderer, scene, document_, selection_))
         {
             levelStatus_ = "Nothing to frame";
+        }
+    }
+    if (hotkeyActions.frameScene)
+    {
+        if (!FrameVisibleScene(renderer, scene, document_))
+        {
+            levelStatus_ = "No visible objects to frame";
         }
     }
     if (hotkeyActions.dropSelectionToGround)
@@ -2585,6 +2810,41 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             ImGui::TextDisabled("%s", levelStatus_.c_str());
         }
 
+        std::size_t visibleBookmarkCount = 0;
+        for (bool stored : cameraBookmarkSlots_)
+        {
+            visibleBookmarkCount += stored ? 1 : 0;
+        }
+        if (visibleBookmarkCount > 0)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Camera Bookmarks");
+            std::size_t displayedBookmarkCount = 0;
+            for (std::size_t index = 0; index < cameraBookmarkSlots_.size(); ++index)
+            {
+                if (!cameraBookmarkSlots_[index])
+                {
+                    continue;
+                }
+
+                if (displayedBookmarkCount > 0)
+                {
+                    ImGui::SameLine();
+                }
+                char label[16];
+                std::snprintf(label, sizeof(label), "%zu", index + 1);
+                if (ImGui::Button(label, ImVec2(28.0f, 0.0f)))
+                {
+                    recallCameraBookmark(static_cast<int>(index));
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Recall camera bookmark %zu", index + 1);
+                }
+                ++displayedBookmarkCount;
+            }
+        }
+
 
         if (levelFileDialogMode_ != LevelFileDialogMode::None)
         {
@@ -2750,16 +3010,6 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }
             ImGui::EndPopup();
         }
-
-        ImGui::BeginDisabled(!commandStack_.CanUndo());
-        if (ImGui::Button("Undo")) { commandStack_.Undo(ctx); }
-        ImGui::EndDisabled();
-        ShowDisabledItemTooltip(!commandStack_.CanUndo(), "No command is available to undo.");
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!commandStack_.CanRedo());
-        if (ImGui::Button("Redo")) { commandStack_.Redo(ctx); }
-        ImGui::EndDisabled();
-        ShowDisabledItemTooltip(!commandStack_.CanRedo(), "No command is available to redo.");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Windows");

@@ -30,8 +30,11 @@ namespace
         Redo,
         Save,
         FocusSelection,
+        FrameScene,
         DropSelectionToGround,
-        ClearSelection
+        ClearSelection,
+        StoreCameraBookmark,
+        RecallCameraBookmark
     };
 
     struct ShortcutBinding
@@ -41,6 +44,7 @@ namespace
         ShortcutModifiers modifiers;
         ShortcutAction action;
         bool blockedWhileFlying = false;
+        int bookmarkSlot = -1;
     };
 
     // Editor shortcut bindings live in one place. To retune a key, edit this table
@@ -61,8 +65,27 @@ namespace
         { "Ctrl+Shift+Z Redo",     ImGuiKey_Z,      ShortcutModifiers::CtrlShift, ShortcutAction::Redo },
         { "Ctrl+S Save",           ImGuiKey_S,      ShortcutModifiers::Ctrl,      ShortcutAction::Save },
         { "F Frame",               ImGuiKey_F,      ShortcutModifiers::Plain,     ShortcutAction::FocusSelection },
+        { "Home Frame Scene",      ImGuiKey_Home,   ShortcutModifiers::Plain,     ShortcutAction::FrameScene,          true },
         { "End Drop",              ImGuiKey_End,    ShortcutModifiers::Plain,     ShortcutAction::DropSelectionToGround },
-        { "Esc Clear",             ImGuiKey_Escape, ShortcutModifiers::Plain,     ShortcutAction::ClearSelection }
+        { "Esc Clear",             ImGuiKey_Escape, ShortcutModifiers::Plain,     ShortcutAction::ClearSelection },
+        { "Ctrl+1 Store Camera 1", ImGuiKey_1,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 0 },
+        { "Ctrl+2 Store Camera 2", ImGuiKey_2,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 1 },
+        { "Ctrl+3 Store Camera 3", ImGuiKey_3,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 2 },
+        { "Ctrl+4 Store Camera 4", ImGuiKey_4,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 3 },
+        { "Ctrl+5 Store Camera 5", ImGuiKey_5,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 4 },
+        { "Ctrl+6 Store Camera 6", ImGuiKey_6,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 5 },
+        { "Ctrl+7 Store Camera 7", ImGuiKey_7,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 6 },
+        { "Ctrl+8 Store Camera 8", ImGuiKey_8,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 7 },
+        { "Ctrl+9 Store Camera 9", ImGuiKey_9,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 8 },
+        { "1 Recall Camera 1",     ImGuiKey_1,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 0 },
+        { "2 Recall Camera 2",     ImGuiKey_2,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 1 },
+        { "3 Recall Camera 3",     ImGuiKey_3,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 2 },
+        { "4 Recall Camera 4",     ImGuiKey_4,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 3 },
+        { "5 Recall Camera 5",     ImGuiKey_5,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 4 },
+        { "6 Recall Camera 6",     ImGuiKey_6,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 5 },
+        { "7 Recall Camera 7",     ImGuiKey_7,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 6 },
+        { "8 Recall Camera 8",     ImGuiKey_8,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 7 },
+        { "9 Recall Camera 9",     ImGuiKey_9,      ShortcutModifiers::Plain,     ShortcutAction::RecallCameraBookmark, true, 8 }
     };
 
     bool Pressed(const ShortcutBinding& binding)
@@ -87,6 +110,7 @@ namespace
 
     void ApplyShortcutAction(
         ShortcutAction action,
+        int bookmarkSlot,
         ViewportGizmo& viewportGizmo,
         EditorHotkeyActions& actions)
     {
@@ -131,11 +155,20 @@ namespace
         case ShortcutAction::FocusSelection:
             actions.focusSelection = true;
             break;
+        case ShortcutAction::FrameScene:
+            actions.frameScene = true;
+            break;
         case ShortcutAction::DropSelectionToGround:
             actions.dropSelectionToGround = true;
             break;
         case ShortcutAction::ClearSelection:
             actions.clearSelection = true;
+            break;
+        case ShortcutAction::StoreCameraBookmark:
+            actions.storeCameraBookmark = bookmarkSlot;
+            break;
+        case ShortcutAction::RecallCameraBookmark:
+            actions.recallCameraBookmark = bookmarkSlot;
             break;
         default:
             break;
@@ -164,7 +197,7 @@ EditorHotkeyActions EditorHotkeys::Poll(ViewportGizmo& viewportGizmo)
         }
         if (Pressed(binding))
         {
-            ApplyShortcutAction(binding.action, viewportGizmo, actions);
+            ApplyShortcutAction(binding.action, binding.bookmarkSlot, viewportGizmo, actions);
         }
     }
 
@@ -173,6 +206,8 @@ EditorHotkeyActions EditorHotkeys::Poll(ViewportGizmo& viewportGizmo)
 
 const char* EditorHotkeys::HintText()
 {
+    return nullptr;
+
     static std::string hint;
     if (hint.empty())
     {

@@ -13,8 +13,11 @@ struct EditorHotkeyActions
     bool redo = false;
     bool save = false;
     bool focusSelection = false;
+    bool frameScene = false;
     bool dropSelectionToGround = false;
     bool clearSelection = false;
+    int storeCameraBookmark = -1;
+    int recallCameraBookmark = -1;
 };
 
 class EditorHotkeys

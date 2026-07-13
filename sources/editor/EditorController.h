@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,7 @@ private:
     Math::float3 lastSavedCameraPosition_{ 0.0f, 0.0f, 0.0f };
     float lastSavedCameraYaw_ = 0.0f;
     float lastSavedCameraPitch_ = 0.0f;
+    std::array<bool, 9> cameraBookmarkSlots_{};
     bool lastSavedCameraStateValid_ = false;
     double nextCameraStateSaveTimeSec_ = 0.0;
     PendingLevelAction pendingLevelAction_ = PendingLevelAction::None;

@@ -10,7 +10,7 @@ for a larger batch.
 ## Current Baseline (updated 2026-07-13)
 
 Steps 1 through 15 — including 5A, 11A, and 12A through 12E — are implemented
-and committed. Steps 16 through 19 are also implemented. The editor currently provides:
+and committed. Steps 16 through 20 are also implemented. The editor currently provides:
 
 - A UE-style Content Browser: navigation bar with back/forward and breadcrumbs,
   a resizable Sources panel (folder tree, Favorites, Collections), additive type
@@ -34,11 +34,11 @@ and committed. Steps 16 through 19 are also implemented. The editor currently pr
 - Object and environment creation through a Create menu (camera, mesh, lights,
   ocean), all command-backed (Step 13).
 - Persistent UI state in `editor_state.json` (panel visibility, outliner state,
-  Content Browser folder/view/filters, Favorites/Collections, per-level camera).
+  Content Browser folder/view/filters, Favorites/Collections, per-level camera,
+  and per-level camera bookmarks).
 
-Known limitations that the next wave of steps (12F and 20 through 23) addresses:
+Known limitations that the next wave of steps (12F and 21 through 23) addresses:
 
-- There are no camera bookmarks.
 - The asset registry refreshes only on demand.
 - Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
   outliner but are effectively read-only.
@@ -1348,6 +1348,10 @@ Validation:
 
 ## Step 20: Camera Bookmarks And Scene Framing
 
+Status (2026-07-13): implemented. Ctrl+1 through Ctrl+9 store per-level camera
+bookmarks, 1 through 9 recall them, and Home frames visible editor objects.
+`Debug|x64` builds and launches successfully.
+
 Goal: fast navigation around a level during editing.
 
 Primary files:
@@ -1457,16 +1461,15 @@ Validation:
 
 ## Suggested Execution Order
 
-Steps 1 through 19 (including 5A, 11A, 12A-12E) are complete. Recommended order
+Steps 1 through 20 (including 5A, 11A, 12A-12E) are complete. Recommended order
 for the next wave:
 
 1. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
    Content Browser thumbnail family.
-2. Step 20: Camera Bookmarks And Scene Framing.
-3. Step 21: Asset Registry Auto-Refresh.
-4. Step 22: Generator Entity Editing — needs a new gated Scene helper and
+2. Step 21: Asset Registry Auto-Refresh.
+3. Step 22: Generator Entity Editing — needs a new gated Scene helper and
    respawn churn care; keep it late and stress-test it.
-5. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
+4. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
    wants a runtime/GBV pass, so schedule it when one is planned anyway.
 
 Ordering rationale: finish the thumbnail work first, then add camera workflow
