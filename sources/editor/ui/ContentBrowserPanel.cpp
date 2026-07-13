@@ -2105,6 +2105,11 @@ void ContentBrowserPanel::NavigateHistory(const AssetRegistry& registry, int del
     selectedFolder_ = target;
 }
 
+void ContentBrowserPanel::NotifyAutoRefresh(double timeSec)
+{
+    lastAutoRefreshTimeSec_ = timeSec;
+}
+
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     EditorAssetId& selectedAsset,
     const EditorExtensionRegistry& extensions,
@@ -2598,6 +2603,11 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         static_cast<int>(visibleFolders.size()),
         static_cast<int>(visibleAssets.size()),
         selectedFolder_.empty() ? "(none)" : selectedFolder_.c_str());
+    if (ImGui::GetTime() - lastAutoRefreshTimeSec_ < 4.0)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Auto-refreshed");
+    }
     if (const EditorAssetRecord* selectedRecord = FindById(registry, selectedAsset))
     {
         const std::string selectedLabel = TruncateLabel(selectedRecord->displayName, 48);

@@ -2198,6 +2198,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     if (!firstOpenInitialized_)
     {
         assetRegistry_.Refresh();
+        nextAssetRegistryPollTimeSec_ = ImGui::GetTime() + 2.0;
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
             contentBrowser_, outliner_, viewportGizmo_);
@@ -2231,6 +2232,21 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     if (!open_)
     {
         return;
+    }
+
+    const double now = ImGui::GetTime();
+    if (now >= nextAssetRegistryPollTimeSec_)
+    {
+        nextAssetRegistryPollTimeSec_ = now + 2.0;
+        if (assetRegistry_.HasChangedOnDisk())
+        {
+            assetRegistry_.Refresh();
+            if (!selectedAsset_.key.empty() && !assetRegistry_.FindById(selectedAsset_))
+            {
+                selectedAsset_ = {};
+            }
+            contentBrowser_.NotifyAutoRefresh(now);
+        }
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };

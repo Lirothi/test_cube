@@ -370,6 +370,9 @@ FodyWeavers.xsd
 # Traces
 traces/
 
+# Import
+import_staging/
+
 # Exclusions
 !/models/**
 !/third_party/**

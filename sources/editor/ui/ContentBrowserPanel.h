@@ -79,6 +79,10 @@ public:
         AssetThumbnailCache& thumbnails,
         bool* open);
 
+    // Records an external registry refresh so the browser can briefly surface
+    // the otherwise silent update without changing the user's current view.
+    void NotifyAutoRefresh(double timeSec);
+
     PersistentState GetPersistentState() const;
     void SetPersistentState(const PersistentState& state);
 
@@ -108,6 +112,7 @@ private:
     Texture2D iconAtlas_;
     bool iconAtlasTried_ = false;
     bool iconAtlasReady_ = false;
+    double lastAutoRefreshTimeSec_ = -1000.0;
 };
 
 #endif // WITH_EDITOR

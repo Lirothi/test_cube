@@ -10,7 +10,7 @@ for a larger batch.
 ## Current Baseline (updated 2026-07-13)
 
 Steps 1 through 15 — including 5A, 11A, and 12A through 12E — are implemented
-and committed. Steps 16 through 20 are also implemented. The editor currently provides:
+and committed. Steps 16 through 21 are also implemented. The editor currently provides:
 
 - A UE-style Content Browser: navigation bar with back/forward and breadcrumbs,
   a resizable Sources panel (folder tree, Favorites, Collections), additive type
@@ -36,10 +36,13 @@ and committed. Steps 16 through 20 are also implemented. The editor currently pr
 - Persistent UI state in `editor_state.json` (panel visibility, outliner state,
   Content Browser folder/view/filters, Favorites/Collections, per-level camera,
   and per-level camera bookmarks).
+- Asset Registry auto-refresh while the editor is open: a two-second,
+  metadata-only signature poll refreshes supported asset roots only when their
+  folder or file metadata changes, and the Content Browser briefly reports the
+  update.
 
-Known limitations that the next wave of steps (12F and 21 through 23) addresses:
+Known limitations that the remaining steps (12F and 22) address:
 
-- The asset registry refreshes only on demand.
 - Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
   outliner but are effectively read-only.
 - Disabled objects can still appear in RT reflections, which gather scene
@@ -1383,6 +1386,14 @@ Validation:
 
 ## Step 21: Asset Registry Auto-Refresh
 
+Status (2026-07-13): implemented. While the editor is open, the registry checks
+its supported roots every two seconds using deterministic directory/file metadata
+signatures. A changed signature triggers one full refresh, retains valid browser
+state through `EnsureSelectedFolder`, clears a deleted selected asset, and shows
+a brief `Auto-refreshed` status note. Existing `fileWriteTime` thumbnail cache
+invalidation and the manual Refresh button remain in use. `Debug|x64` builds
+and launches successfully.
+
 Goal: keep the Content Browser in sync with the filesystem without manual
 Refresh clicks.
 
@@ -1461,20 +1472,17 @@ Validation:
 
 ## Suggested Execution Order
 
-Steps 1 through 20 (including 5A, 11A, 12A-12E) are complete. Recommended order
+Steps 1 through 21 (including 5A, 11A, 12A-12E) are complete. Recommended order
 for the next wave:
 
 1. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
    Content Browser thumbnail family.
-2. Step 21: Asset Registry Auto-Refresh.
-3. Step 22: Generator Entity Editing — needs a new gated Scene helper and
-   respawn churn care; keep it late and stress-test it.
-4. Step 23: Visibility Consistency Hardening — small but ungated engine edit;
+2. Step 22: Visibility Consistency Hardening — small but ungated engine edit;
    wants a runtime/GBV pass, so schedule it when one is planned anyway.
 
 Ordering rationale: finish the thumbnail work first, then add camera workflow
-and asset-refresh quality-of-life. The generator and ungated renderer work remain
-last because they need broader regression coverage.
+and asset-refresh quality-of-life. The remaining ungated renderer work needs
+broader regression coverage.
 
 ## Stop Conditions
 

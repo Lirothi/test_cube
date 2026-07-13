@@ -101,6 +101,7 @@ private:
     std::array<bool, 9> cameraBookmarkSlots_{};
     bool lastSavedCameraStateValid_ = false;
     double nextCameraStateSaveTimeSec_ = 0.0;
+    double nextAssetRegistryPollTimeSec_ = 0.0;
     PendingLevelAction pendingLevelAction_ = PendingLevelAction::None;
     std::string pendingLevelPath_;
     nlohmann::json pendingNewLevelJson_;

@@ -353,6 +353,57 @@ namespace
         std::vector<std::string> extensions;
     };
 
+    const std::array<DirRoot, 4>& AssetRoots()
+    {
+        static const std::array<DirRoot, 4> roots = { {
+            { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt" } },
+            { "textures",    "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
+            { "data/levels", "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
+            { "shaders",     "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
+        } };
+        return roots;
+    }
+
+    void HashByte(uint64_t& hash, uint8_t value)
+    {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    }
+
+    void HashText(uint64_t& hash, std::string_view text)
+    {
+        for (const unsigned char ch : text)
+        {
+            HashByte(hash, ch);
+        }
+        HashByte(hash, 0xffu);
+    }
+
+    void HashValue(uint64_t& hash, uint64_t value)
+    {
+        for (int byte = 0; byte < 8; ++byte)
+        {
+            HashByte(hash, static_cast<uint8_t>((value >> (byte * 8)) & 0xffu));
+        }
+    }
+
+    uint64_t FileSizeOf(const fs::path& path)
+    {
+        std::error_code ec;
+        const uintmax_t size = fs::file_size(path, ec);
+        return ec ? 0 : static_cast<uint64_t>(size);
+    }
+
+    uint64_t FingerprintPath(const fs::path& path, uint64_t kind, uint64_t size = 0)
+    {
+        uint64_t hash = 14695981039346656037ull;
+        HashText(hash, path.generic_string());
+        HashValue(hash, kind);
+        HashValue(hash, WriteTimeOf(path));
+        HashValue(hash, size);
+        return hash;
+    }
+
     constexpr const char* kVirtualRoot = "/Game";
 
     std::string NormalizeVirtualPath(std::string path)
@@ -507,16 +558,9 @@ void AssetRegistry::Refresh()
     assets_.clear();
     folders_.clear();
 
-    const std::array<DirRoot, 4> roots = { {
-        { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt" } },
-        { "textures",    "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
-        { "data/levels", "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
-        { "shaders",     "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
-    } };
-
     EnsureFolder(folders_, kVirtualRoot);
 
-    for (const DirRoot& root : roots)
+    for (const DirRoot& root : AssetRoots())
     {
         EnsureFolder(folders_, root.virtualRoot);
 
@@ -663,6 +707,74 @@ void AssetRegistry::Refresh()
         std::sort(folder.childPaths.begin(), folder.childPaths.end());
     }
     ComputeRecursiveAssetCount(folders_, kVirtualRoot);
+    contentSignature_ = ComputeContentSignature();
+    contentSignatureInitialized_ = true;
+}
+
+bool AssetRegistry::HasChangedOnDisk() const
+{
+    return !contentSignatureInitialized_ ||
+        ComputeContentSignature() != contentSignature_;
+}
+
+uint64_t AssetRegistry::ComputeContentSignature() const
+{
+    std::vector<uint64_t> fingerprints;
+    fingerprints.reserve(128);
+
+    for (const DirRoot& root : AssetRoots())
+    {
+        const fs::path rootPath(root.dir);
+        std::error_code ec;
+        if (!fs::is_directory(rootPath, ec))
+        {
+            fingerprints.push_back(FingerprintPath(rootPath, 0));
+            continue;
+        }
+
+        fingerprints.push_back(FingerprintPath(rootPath, 1));
+        for (fs::recursive_directory_iterator it(rootPath,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec)
+            {
+                fingerprints.push_back(FingerprintPath(rootPath, 2));
+                break;
+            }
+
+            const fs::path& path = it->path();
+            std::error_code typeEc;
+            if (it->is_directory(typeEc))
+            {
+                fingerprints.push_back(FingerprintPath(path, 1));
+                continue;
+            }
+            if (typeEc || !it->is_regular_file(typeEc) ||
+                MatchExtension(path, root.extensions).empty())
+            {
+                continue;
+            }
+
+            fingerprints.push_back(FingerprintPath(path, 3, FileSizeOf(path)));
+        }
+    }
+
+    const fs::path materialsPath("data/materials.json");
+    std::error_code materialsEc;
+    fingerprints.push_back(FingerprintPath(materialsPath,
+        fs::is_regular_file(materialsPath, materialsEc) ? 4 : 5,
+        materialsEc ? 0 : FileSizeOf(materialsPath)));
+
+    std::sort(fingerprints.begin(), fingerprints.end());
+    uint64_t hash = 14695981039346656037ull;
+    for (const uint64_t fingerprint : fingerprints)
+    {
+        HashValue(hash, fingerprint);
+    }
+    HashValue(hash, static_cast<uint64_t>(fingerprints.size()));
+    return hash;
 }
 
 std::vector<const EditorAssetRecord*> AssetRegistry::Search(std::string_view text,

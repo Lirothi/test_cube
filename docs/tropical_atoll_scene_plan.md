@@ -12,11 +12,22 @@ Decisions locked with the user:
   the engine is CPU-submission-bound and the codebase direction is GPU-driven; GPU headroom
   exists after the VSM work.
 - **glTF import added to the engine** (cgltf), not manual Blender→OBJ conversion per asset.
+- **True multi-material submeshes in the renderer** (user choice over editor-side grouping or
+  a composite-of-N-objects workaround): one placed object = one glTF asset with per-slot
+  materials. Note this is identity/UX work, not perf — the queue already auto-instances by
+  collapsing contiguous (mesh, material) runs, so N objects and N submeshes cost the same draws.
 - **Skybox stays a DDS cubemap** — the HDRI is converted offline (no runtime .hdr reader).
   Verified: `sources/materials/TextureCube.cpp` passes the DX10-header `dxgiFormat` straight
   through (line ~291) and uploads via `GetCopyableFootprints` (format-agnostic), so a
   BC6H_UF16 (or RGBA16F) cubemap with mips loads with **zero engine changes**. Hard
   requirement: the DDS must carry a DX10 header (legacy-header HDR formats are rejected).
+- **In-editor asset importer owns all conversions** (user request): a content-browser Import
+  flow (Part H) turns staged raw downloads into engine-ready content (PNG→mipped BC DDS,
+  .hdr→BC6H cubemap, license→CREDITS.md). Neither the user nor the executor hand-runs
+  converters once it lands; the same backend is exposed as a CLI for headless/batch use.
+- **Simple in-editor material editor** (user request): parameter/texture-picker editing of
+  material presets with live scene preview and save to `data/materials.json` (Part I).
+  Explicitly NOT a node graph and NOT custom shader authoring.
 
 ## Current engine state (verified 2026-07-13)
 
@@ -40,11 +51,14 @@ Ready to use:
 
 Gaps this plan closes:
 1. No glTF/GLB import (Part A).
-2. No alpha-test (masked) or two-sided rendering — required for palm fronds (Part B).
-3. Emissive G-buffer target exists (`RT2` in `shaders/gbuffer_common.hlsl`, composed in
-   `shaders/compose_cs.hlsl`) but stock `shaders/gbuffer.hlsl` writes 0 (Part C).
-4. No particle/billboard system at all (Part D).
-5. No light flicker animation (Part E).
+2. One material per mesh everywhere — replaced by true multi-material submeshes (Part B).
+3. No alpha-test (masked) or two-sided rendering — required for palm fronds (Part C).
+4. Emissive G-buffer target exists (`RT2` in `shaders/gbuffer_common.hlsl`, composed in
+   `shaders/compose_cs.hlsl`) but stock `shaders/gbuffer.hlsl` writes 0 (Part D).
+5. No particle/billboard system at all (Part E).
+6. No light flicker animation (Part F).
+7. No asset conversion pipeline (raw PNG/HDR → mipped BC DDS) and no import UX (Part H).
+8. Material presets are hand-edited JSON only — no in-editor authoring/tweaking (Part I).
 
 Out of scope (explicitly): audio (no backend exists), global atmospheric fog (ocean height fog
 only), bloom, DLSS-RR, RT handling of masked geometry (fronds will reflect as opaque in RT
@@ -61,7 +75,7 @@ reflections — acceptable; optionally exclude fronds from BLAS).
 - New GPU buffers that grow or die with scene objects: remember the LightManager use-after-free
   lesson — never free/reallocate a buffer the in-flight frames still reference. Ring-buffer
   per-frame uploads (pattern already used for light buffers) and pre-size on load.
-- After Parts D and F, run the level-switch stress harness: `--scene-stress=30` cycling
+- After Parts B, E and G, run the level-switch stress harness: `--scene-stress=30` cycling
   `atoll` ↔ `demo` — new object types (particle emitters) must survive churn with 0 device hangs.
 - Headless run/verify recipe (no user present): launch exe, `FindWindow` by class+title to
   confirm alive, capture DBWIN/OutputDebugString for log verdict, screenshot for visual checks.
@@ -82,8 +96,9 @@ reflections — acceptable; optionally exclude fronds from BLAS).
   - Boulders: https://polyhaven.com/models (search `rock`)
   - Flipbooks: https://opengameart.org/art-search-advanced?keys=fire+flipbook ,
     https://kenney.nl/assets/particle-pack
-  While blocked on an asset, continue with whatever steps don't need it (engine parts A–E are
-  never asset-blocked; F0 island is procedural).
+  While blocked on an asset, continue with whatever steps don't need it (engine parts A–F are
+  never asset-blocked — the coconut palm already in `import_staging/` covers A–C testing;
+  G0 island is procedural).
 
 ---
 
@@ -100,9 +115,16 @@ project + filters). No behavior change; build-verify.
 - Walk the node hierarchy, bake node world transforms into vertices.
 - For each mesh primitive: positions, normals, uv0, tangents (if absent → reuse the existing
   tangent generation used for OBJ); indices u16/u32 → engine format; build `VertexPNTUV`.
-- **Sub-mesh addressing**: engine mesh = one material, so one glTF file yields N engine meshes.
-  Support `models/palm.glb#0`, `#1`, … (primitive groups merged by material). Plain
-  `models/palm.glb` = primitive 0 (or all merged, executor's call — but keep `#N` exact).
+- **Primitive handling**: parse all primitives, grouped/merged by material. Plain
+  `models/palm.glb` = the whole asset as ONE mesh carrying a submesh table (one index range per
+  material group) — consumed by Part B; until B lands, plain-path load falls back to group 0
+  with a warning. Keep `models/palm.glb#N` (one material group as a standalone mesh) as a
+  low-level/debug path — it is also how Part A is verified before Part B exists.
+- **Node-subtree filter**: also support `models/rocks.glb#node:Rock_1` — parse only that
+  top-level node's subtree (then merge by material within it). Rationale: prop PACKS (e.g. a
+  two-rocks Sketchfab asset) ship several independent objects in one file; merging by material
+  across top-level nodes would weld them together and kill independent placement. Merging must
+  never cross top-level node boundaries unless the whole-file path was explicitly requested.
 - Reuse `GenerateLods` (meshopt) exactly as for OBJ.
 - **Axis/winding gotcha**: glTF is right-handed Y-up; verify against engine handedness with a
   test asset that has readable chirality (text or an asymmetric prop). Expect a Z-flip +
@@ -115,56 +137,108 @@ project + filters). No behavior change; build-verify.
 - `metallicRoughnessTexture`: **glTF packs G=roughness, B=metallic; engine expects R=metal,
   G=rough.** Add a `mrLayout` flag (engine|gltf) to `MaterialParams` + a swizzle in
   `gbuffer_common.hlsl` sampling — do NOT re-encode pixels at load.
+- **Factors MULTIPLY texture channels — never skip them** (glTF spec: metallic =
+  tex.B × `metallicFactor`, roughness = tex.G × `roughnessFactor`, albedo =
+  tex × `baseColorFactor`; absent factor = 1.0). Real-world proof already in
+  `import_staging/coconut_palm/`: every MR texture has B=255 (and R=255) as filler with the
+  actual roughness in G, and every material sets `metallicFactor: 0.0` — ignore the factor and
+  the whole palm renders as polished metal. Use this asset as the A3 test case; it also
+  exercises everything else: 5 materials/5 primitives (single object with 5 material slots once
+  Part B lands), fronds material
+  with `alphaMode: MASK` + `alphaCutoff: 0.258` + `doubleSided: true` (feeds Part C), Z-up
+  root rotation + 0.01 FBX scale in node matrices (A2 transform bake), trunk UVs wrapping past
+  1.0 (V up to 10 — needs REPEAT sampler), CC-BY license → CREDITS.md (author evolveduk).
 - `normalTexture` (+ scale → `normalStrength`).
 - `alphaMode`/`alphaCutoff` + `doubleSided` → recorded now, consumed by Part B.
 - `emissiveFactor`/`emissiveTexture` → recorded now, consumed by Part C.
 - Runtime-only auto-materials (no writes to `data/materials.json`); the editor may later save a
   preset explicitly.
 
-**A4 — editor integration.** AssetRegistry: add `.gltf`/`.glb` to the models root extension
-list; enumerate primitives so the content browser can show `palm.glb#fronds`. Spawning a
-multi-primitive file = one `CompositeCommand` wrapping N `SpawnMeshCommand`s (one object per
-primitive, correct per-primitive material), so undo/redo is atomic and the group is selected
-after spawn. Verify: drop a downloaded GLB palm into `models/`, spawn it in the editor, undo,
-redo, save level, reload — round-trips clean.
+**A4 — registry + verification.** AssetRegistry: add `.gltf`/`.glb` to the models root
+extension list so assets show in the content browser. Editor spawn UX intentionally waits for
+Part B (one object with material slots — B4); do NOT build a composite-of-N-objects spawn
+workaround. Verify Part A by hand-authoring `staticMesh` entries with
+`models/coconut_palm/scene.gltf#N` in a test level: trunk vs fronds materials correct, factors
+applied (palm must NOT look metallic), node transforms baked (upright, ~5–6 m tall).
 
-**A5 (optional, do only if PNG shimmer is objectionable in F)** — generate mips for the WIC
-path, or batch-convert imported PNGs to BC7 DDS via texconv at import time.
+**A5 — dropped.** Mip generation / DDS conversion is owned by the importer (Part H, see
+H1/H2). Until H lands, WIC-loaded PNGs render unmipped — acceptable for A/B/C bring-up, not
+for the final scene.
 
-## Part B — masked + two-sided foliage
+## Part B — multi-material submeshes (renderer + editor)
 
-**B1 — masked G-buffer variant.** Add alpha-test to the G-buffer shader: either
+One placed object = one multi-material asset. Identity/UX work, not perf (draw calls end up
+identical — see Decisions). This is the **widest-touch part of the plan**: stage the commits so
+each one builds, runs the demo level unchanged, and keeps auto-instancing intact.
+
+**B1 — submesh plumbing (behavioral no-op).** `Mesh` gains a submesh table
+`{indexOffset, indexCount, materialSlot}`; OBJ/`.txt` loaders emit exactly one submesh, so
+nothing changes visually. **LOD gotcha**: `GenerateLods` simplifies the whole index buffer
+today — it must simplify each submesh range independently and rebuild the table per LOD level,
+or ranges go stale. Commit as a no-op; gate on demo level identical + instancing batch counts
+identical.
+
+**B2 — draw items in the queue.** `SceneRenderQueue` bucket entries become
+(object, submeshIndex) draw items; sort keys and `BuildInstancedBatches` keys extend to
+(mesh, submesh, material) — 15 palms must still collapse to ~5 instanced draws (one per part).
+Culling stays per-object on whole-mesh bounds (per-submesh bounds = future). `StaticMeshObject`
+grows material slots (slot 0 ≡ today's single material); level JSON gets a `"materials": [...]`
+array, with the scalar `"material"` kept as slot-0 back-compat. glTF plain-path load (A2) now
+returns the full multi-submesh mesh. Regression gates: demo level visuals + batch counts
+unchanged for single-submesh content.
+
+**B3 — downstream consumers.** Shadow paths (CSM, VSM caster data, point/spot) iterate
+submeshes — they are material-agnostic today so behavior is equivalent, but per-submesh items
+are what lets Part C masked shadows pick per-slot materials later. RT reflections: one BLAS per
+mesh, one geometry desc per submesh (enables per-slot masked/exclusion decisions later).
+Picking/selection stays per-object (submeshes are not individually selectable in v1). Keep the
+`instancedModels`/`ShadowGpuData` path single-submesh for now (see GI→VSM plan — don't tangle
+the two refactors).
+
+**B4 — editor UX + spawn.** `SpawnMeshCommand` spawns ONE object per glTF asset with slots
+auto-filled from A3 materials; `InspectorPanel` shows a material-slot list (per-slot preset
+picker, per-slot undo via a `SetMaterialSlotCommand`); outliner shows one node per asset.
+Verify with the coconut palm: spawn → one object with 5 slots; move/duplicate/undo/save/reload
+round-trips; `--scene-stress` clean.
+
+## Part C — masked + two-sided foliage
+
+**C1 — masked G-buffer variant.** Add alpha-test to the G-buffer shader: either
 `shaders/gbuffer_masked.hlsl` or a `#define ALPHA_TEST` permutation of `gbuffer.hlsl` —
-`clip(albedo.a - cutoff)`. Plumb `staticMesh` JSON knobs `"alphaTest": true`,
-`"alphaCutoff": 0.5`, `"twoSided": true` through `SceneObjectFactory` → material/pipeline
-(`Material.h` already exposes CullMode; two-sided = `D3D12_CULL_MODE_NONE`). glTF spawn (A4)
-sets these automatically from `alphaMode`/`doubleSided`. Note: alpha-tested foliage can shimmer
-under DLSS jitter — tune cutoff, accept for now (hashed alpha is a future item).
+`clip(albedo.a - cutoff)`. The knobs are **per material slot** (not per object):
+`alphaTest`/`alphaCutoff`/`twoSided` fields on material entries (level-JSON `materials[]`
+items and `data/materials.json` presets); pipeline variant + cull mode
+(`Material.h` already exposes CullMode; two-sided = `D3D12_CULL_MODE_NONE`) are chosen per
+draw item from its slot. glTF import (A3) fills them automatically from
+`alphaMode`/`alphaCutoff`/`doubleSided` — the coconut palm's fronds slot is the test case.
+Note: alpha-tested foliage can shimmer under DLSS jitter — tune cutoff, accept for now
+(hashed alpha is a future item).
 
-**B2 — masked shadow passes.** Depth-only shadow paths (CSM, VSM page render, point/spot) treat
+**C2 — masked shadow passes.** Depth-only shadow paths (CSM, VSM page render, point/spot) treat
 everything as opaque today → fronds would cast solid-blob shadows. Add a masked depth variant
 (bind albedo SRV + clip) for the **sun path (CSM + VSM) first** — palms are sunlit; point/spot
 masked shadows can lag behind (campfire is inside a cave of solid rocks). Watch VSM perf: fronds
 are static, so cached/per-page-culled pages keep the cost bounded. Acceptable interim state
-after B1 alone: solid shadows (visible but not blocking).
+after C1 alone: solid shadows (visible but not blocking).
 
-## Part C — emissive meshes
+## Part D — emissive meshes
 
-Extend `gbuffer.hlsl` (and the masked variant) with per-object `emissiveColor` (rgb) ×
+Extend `gbuffer.hlsl` (and the masked variant) with per-material-slot `emissiveColor` (rgb) ×
 `emissiveStrength`, optional `emissiveTexture` (from A3). Write into the existing emissive
-target (`RT2`); `compose_cs.hlsl` already adds it. JSON knobs on `staticMesh`:
-`"emissiveColor": [r,g,b]`, `"emissiveStrength": x`, `"emissiveTexture": "..."`. Default 0 =
+target (`RT2`); `compose_cs.hlsl` already adds it. JSON knobs on material entries (slot-level,
+same shape as C1's flags): `"emissiveColor": [r,g,b]`, `"emissiveStrength": x`,
+`"emissiveTexture": "..."`. Default 0 =
 zero-cost for existing content. Used for: campfire embers/coals, flame cards inside the mesh
-pile. Note: with no bloom pass the glow is subtle — the point light (Part E) carries the effect.
+pile. Note: with no bloom pass the glow is subtle — the point light (Part F) carries the effect.
 
-## Part D — particle system (GPU-simulated)
+## Part E — particle system (GPU-simulated)
 
 Scope: GPU sim (compute spawn + update) with an instanced billboard draw. Per-frame CPU cost per
 emitter = one CB update + 2 dispatches + 1 draw, regardless of particle count — consistent with
 the engine's GPU-driven direction and its known CPU-submission bottleneck. Budgets stay modest
 for the campfire (≤ ~2K particles per emitter), but the design scales.
 
-**D1 — GPU sim core.** `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
+**E1 — GPU sim core.** `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
 `shaders/particle_spawn_cs.hlsl`, `shaders/particle_update_cs.hlsl`:
 - `EmitterDesc` (JSON-serializable, unchanged by the GPU choice): `maxParticles`, `spawnRate`,
   `lifetime` [min,max], `initialSpeed` [min,max] + cone (direction, angle), `gravity`
@@ -175,7 +249,7 @@ for the campfire (≤ ~2K particles per emitter), but the design scales.
 - **Buffers per emitter** (DEFAULT heap, persistent): particle state buffer
   `Particle[maxParticles]` (UAV/SRV), dead-list `uint[maxParticles]` + atomic counter (small
   counter buffer). One-time init dispatch fills the dead list. **Slot-array + dead-list scheme;
-  no alive-list and no indirect draw needed** (see D2's degenerate-quad trick) — upgrade to
+  no alive-list and no indirect draw needed** (see E2's degenerate-quad trick) — upgrade to
   `ExecuteIndirect` later when GPU-driven submission infra (shadow Rung 0) lands.
 - **Spawn CS**: CPU accumulates fractional `spawnRate*dt` and passes an integer spawn count via
   root constants; CS consumes slots from the dead list, initializes particles. GPU RNG =
@@ -189,7 +263,7 @@ for the campfire (≤ ~2K particles per emitter), but the design scales.
   editor pause stops Ticks → sim freezes naturally. Add a `vfx::g_freeze` debug toggle and an
   optional alive-count readback (debug HUD) — GPU sims are otherwise opaque to debug.
 
-**D2 — rendering.** New renderable `ParticleEmitterObject` (subclass `RenderableObjectBase`,
+**E2 — rendering.** New renderable `ParticleEmitterObject` (subclass `RenderableObjectBase`,
 `IsTransparent()=true`, `RenderLayer::Transparent`) → lands in the sorted `TransparentSimple`
 bucket and draws inside `Pass_Transparent` (`SceneRenderer.cpp`, `Main_Transparent` — blending
 already runs in sorted-queue order there):
@@ -201,9 +275,9 @@ already runs in sorted-queue order there):
   fps); depth-test ON, depth-write OFF; additive or premultiplied-alpha blend state per emitter.
 - No per-frame CPU upload of particle data at all; only the emitter CB.
 - Particles are absent from G-buffer/shadow/RT — intended (no reflected/shadow-casting fire).
-- **D2b (optional polish)**: soft-particle depth fade using the scene depth SRV already
+- **E2b (optional polish)**: soft-particle depth fade using the scene depth SRV already
   available to the transparent pass.
-- **D2c — sorting for `alpha` emitters (smoke)**: single-workgroup bitonic sort of alive slots
+- **E2c — sorting for `alpha` emitters (smoke)**: single-workgroup bitonic sort of alive slots
   by view depth into a small index buffer, VS indexes through it (fine up to ~1–2K particles —
   enforce `maxParticles` ≤ sort capacity when `sortParticles` is set). Additive emitters (fire,
   sparks) skip it. Interim state before D2c lands: keep smoke opacity low — premultiplied alpha
@@ -214,14 +288,14 @@ already runs in sorted-queue order there):
   while a *previous frame's* draw may still read → either double-buffer the state buffer or
   prove the render-graph ordering makes it safe. `--scene-stress=30` is the gate.
 
-**D3 — authoring + editor.** Register `"particleEmitter"` in `SceneObjectRegistry` /
+**E3 — authoring + editor.** Register `"particleEmitter"` in `SceneObjectRegistry` /
 `SceneObjectFactory`. Level JSON mirrors the ocean pattern:
 `{"type":"particleEmitter", "preset":"data/particles/fire.json", "position":[...],
 "overrides":{...}}`. Editor: spawnable (SpawnMesh-style or via CreateEnvironmentCommand path),
 selectable, movable with the gizmo, properties in InspectorPanel, round-trips through document
 save/load like meshes do. Respect the editor ID model from the level-editor plan.
 
-**D4 — presets + tuning.** `data/particles/fire.json`, `smoke.json`, `sparks.json`:
+**E4 — presets + tuning.** `data/particles/fire.json`, `smoke.json`, `sparks.json`:
 - Fire: additive flame flipbook, buoyant (gravity ≈ −2..−4), lifetime 0.5–1.0 s, grows then
   shrinks, orange→deep-red gradient.
 - Smoke: alpha-blend, slow, long lifetime (2–4 s), grows steadily, gray with low alpha, mild
@@ -229,19 +303,19 @@ save/load like meshes do. Respect the editor ID model from the level-editor plan
 - Sparks: tiny additive dots (or 1×1 flipbook), high initial speed, real gravity, short life.
 Verify inside the actual cave lighting, not in the void.
 
-## Part E — flickering point light
+## Part F — flickering point light
 
 `pointLights[]` JSON: `"flicker": {"amplitude": 0.35, "frequencyHz": 7, "seed": 3}` —
 modulate intensity (and optionally radius ±10%) in a Tick using layered sines / value noise
 (NOT white noise per frame — that strobes). Editor inspector support. Keep `shadowsEnabled:
 true` for the campfire — pointlight shadows exist and are cheap for one light.
 
-## Part F — scene assembly (`data/levels/atoll.json`)
+## Part G — scene assembly (`data/levels/atoll.json`)
 
 Prefer assembling **in the editor** (this is the dogfooding goal), saving via the document
 pipeline; hand-edit JSON only for things the editor can't author yet.
 
-**F0 — procedural island mesh.** No good free atoll meshes exist; generate one:
+**G0 — procedural island mesh.** No good free atoll meshes exist; generate one:
 `tools/gen_island.py` (pure Python, writes OBJ directly — no Blender dependency): a ring-shaped
 heightfield (radial gaussian ring + low-frequency noise), gentle beach slope crossing y=0 (ocean
 shore-depth params need real underwater geometry to fade against), a flattened area for the
@@ -250,13 +324,11 @@ generate a simple lagoon-floor disc (sand, slightly below sea level) so the lago
 turquoise-over-sand rather than deep-ocean.
 **Sea level convention: ocean plane sits at y=0; author everything against that.**
 
-**F1 — environment.** Skybox pipeline (offline, scriptable — add `tools/hdri_to_cubemap.*`):
-1. equirect `.hdr` → 6 cube faces: cmft CLI, or a ~50-line Python script (executor-written;
-   simple gnomonic projection, keep float precision — write `.hdr`/`.exr` faces);
-2. faces → cubemap DDS: `texassemble cube -f R16G16B16A16_FLOAT ...` (DirectXTex reads `.hdr`);
-3. compress + mips: `texconv -f BC6H_UF16 -m 0` (BC6H needs the DX10 header — texconv writes
-   one automatically for BC6H; keep full mip chain, the skybox doubles as ambient/specular
-   source). Fallback if BC6H misbehaves: stay RGBA16F (loader takes both), 4× size.
+**G1 — environment.** Skybox conversion runs through the importer backend (H1 ".hdr → skybox"
+path, via UI or CLI):
+1. equirect `.hdr` → 6 cube faces (CPU projection, float precision preserved);
+2. cubemap assembly + full mip chain (skybox doubles as ambient/specular source);
+3. BC6H_UF16 encode with DX10 header (RGBA16F fallback if BC6H misbehaves, 4× size).
 Smoke-test first: load the converted cubemap in place of `textures/skybox.dds` on the demo
 level before building anything else on top. Cube face order/orientation mistakes are the
 classic failure — verify sun position matches the HDRI.
@@ -265,21 +337,98 @@ palm shadows rake across the beach. Ocean: enable with a copied+tuned preset
 `data/ocean/atoll.json` — lower wind, turquoise SSS/scatter tint, strong shore foam; check
 `GetShoreDepthParams` behavior against the island slope.
 
-**F2 — island dressing.** Island mesh (`renderLayer: "Terrain"`, sand material from the asset
-guide, tiled). Palms: imported GLB via A4 (trunk+fronds object pairs), 8–15 around the ring,
-varied yaw/scale; if count grows, switch repeated palms to `instancedModels`. Rocks: 5–10
+**G2 — island dressing.** Island mesh (`renderLayer: "Terrain"`, sand material from the asset
+guide, tiled). Palms: imported GLB spawned via B4 (one object, 5 material slots), 8–15 around
+the ring, varied yaw/scale; if count grows, switch repeated palms to `instancedModels`. Rocks: 5–10
 photoscanned boulders composed into an outcrop + walk-in cave (assembling this in the editor is
 the point); a dark interior "cap" rock kills skylight leaks.
 
-**F3 — campfire.** In the cave: logs+stones mesh (asset guide), embers with emissive material
-(Part C), three emitters — fire, smoke (drifting toward the cave mouth via cone direction),
-sparks — and the flickering shadowed point light (Part E) at flame height.
+**G3 — campfire.** In the cave: logs+stones mesh (asset guide), embers with emissive material
+(Part D), three emitters — fire, smoke (drifting toward the cave mouth via cone direction),
+sparks — and the flickering shadowed point light (Part F) at flame height.
 
-**F4 — polish + verification.** Camera start on the beach facing the cave. Tune: ocean foam at
-the shoreline, palm shadow quality (B2), fire readability from the beach at dusk-ish exposure.
+**G4 — polish + verification.** Camera start on the beach facing the cave. Tune: ocean foam at
+the shoreline, palm shadow quality (C2), fire readability from the beach at dusk-ish exposure.
 Screenshot set: beach wide shot / cave interior / fire close-up. Run `--scene-stress=30`
 (atoll↔demo). Confirm visuals with the user before calling it done (per screenshot-verification
 rule).
+
+## Part H — smart asset importer (editor UI)
+
+Owns every conversion from `import_staging/` raw downloads into engine-ready content — nobody
+hand-runs texconv, ever. **Ordering**: needs Part A (glTF parsing, for asset inspection);
+H1/H2 can run in parallel with B–F; must land before G2 (island dressing) so palms/rocks get
+mipped BC textures instead of raw WIC PNGs. The doc's part order is not strict execution order
+here.
+
+**H1 — conversion backend (no UI yet).** Vendor **DirectXTex** (source, MIT) into
+`third_party/` — prefer the library over shelling out to `texconv.exe` (in-process progress
+reporting, no binaries in the repo); keep the texconv-CLI route as a documented fallback if
+vcxproj integration fights back. Implement:
+- Texture import: PNG/JPG → BC7 DDS (sRGB flag for albedo, linear for normal/MR) with a full
+  mip chain; optional BC5 for RG normals. **No MR pixel repacking** — the `mrLayout` shader
+  flag (A3) already handles glTF channel order.
+- HDRI import: equirect `.hdr` → 6 faces → cubemap + mips → **BC6H_UF16 with a DX10 header**
+  (RGBA16F fallback), matching the verified TextureCube loader contract.
+- Compression on background threads (tbb is already in `third_party/`) — the editor must not
+  hitch; BC7 on a 2K texture costs seconds of CPU.
+- CLI entry point (e.g. `test_cube.exe --import <staging-dir> [--skybox <file.hdr>]`) for
+  headless/batch use and for the executor.
+
+**H2 — DDS-sibling resolution.** When resolving any texture path (glTF materials, material
+presets), prefer `<name>.dds` sitting next to the source file; fall back to the original
+PNG via WIC with a one-time "unmipped texture" log warning. This kills reference remapping
+entirely: the imported glTF stays byte-identical, DDS files just appear beside its textures.
+
+**H3 — importer UI.** Content browser "Import…" button → window that scans `import_staging/`
+and lists detected assets (glTF/GLB with texture sets, texture-only folders, `.hdr` files)
+with what was found: primitive/material counts, alphaMode/doubleSided flags, texture
+resolutions, and license/author pulled from `source.txt` **or the glTF `asset.extras`**
+(Sketchfab embeds author/license/source there — the coconut palm proves it; auto-harvest).
+Options stay minimal: target name, max texture size, fast/high BC quality, ".hdr → skybox"
+toggle, and **"import as: single asset / split by top-level nodes"** — split registers each
+top-level node as its own spawnable registry entry (`rocks.glb#node:Rock_1`, `...Rock_2`) for
+prop packs, while a palm stays one asset. (Fallback for packs authored as ONE primitive:
+a "separate loose parts" connected-components split — optional, H4-tier; Blender is the
+one-off workaround.) Import = copy gltf+bin into `models/<name>/`, write DDS siblings (H1),
+append a CREDITS.md entry, refresh AssetRegistry, completion toast. The imported asset is immediately
+spawnable via B4. Verify end-to-end with the coconut palm: Import → spawn → mipped BC textures
+confirmed (no shimmer at distance), CREDITS.md entry correct.
+
+**H4 (optional polish).** Reimport: detect a source newer than its DDS siblings, offer
+one-click reimport; per-asset import status badges in the content browser.
+
+## Part I — simple material editor
+
+Parameter-level editing of material presets — deliberately small: texture pickers + sliders +
+checkboxes. NOT a node graph, NOT shader authoring, no material-instance hierarchy. **Ordering**:
+needs B4 (slot list in the inspector); the C/D fields (alphaTest/twoSided, emissive) appear in
+the UI as those parts land; pairs naturally with H (pickers browse imported DDS). Needed during
+G2–G3 for tuning sand/rock/fronds/embers in place.
+
+**I1 — presets become writable assets.** AssetRegistry already harvests presets from
+`data/materials.json`; add the write path: create / duplicate / rename / delete preset,
+saved back to `data/materials.json`. Read-modify-write per preset (merge), preserving unknown
+keys and key order — hand-authored entries must survive round-trips with clean diffs.
+
+**I2 — editor window.** Opened by double-clicking a material in the content browser or from an
+"edit" button next to the slot's preset picker (B4 inspector). Fields: texture pickers for
+albedo / mr / normal / emissive (thumbnails from AssetRegistry, DDS preferred per H2), tint,
+metal/rough scalars, `normalStrength`, `normalIsRG`, `mrLayout`, `texOffsScale` tiling,
+`alphaTest`/`alphaCutoff`/`twoSided` (C1), `emissiveColor`/`emissiveStrength` (D). Edits apply
+**live to every scene object referencing the preset** — re-resolve + the same full GPU sync
+pattern SpawnMeshCommand uses (respect frame-in-flight: no swapping textures under an active
+frame). Undo/redo via a `SetMaterialPropertyCommand` on the editor command stack.
+
+**I3 — "Save as preset" on a slot.** glTF import (A3) produces runtime-only auto-materials;
+one click promotes a slot's effective material (auto-material or preset+overrides) into a named
+preset in `data/materials.json` and rebinds the slot to it. This is the bridge from imported
+assets to authorable content — verify with the palm fronds: tweak `alphaCutoff`, save as
+`palm_fronds`, reload level, slot still references it.
+
+**I4 (optional polish).** Sphere-preview thumbnails for materials in the content browser
+(offscreen render target); drag-and-drop a material from the browser onto a mesh/slot in the
+viewport.
 
 ## Risks / gotchas summary
 
@@ -288,8 +437,10 @@ rule).
   `mrLayout` flag, not pixel re-encode.
 - WIC-loaded PNG has **no mips** → distant shimmer; final textures should be BC7/BC5 DDS
   (texconv), or do A5.
-- One material per engine object — glTF multi-primitive spawn (A4) is the workaround; palm =
-  trunk object + fronds object grouped by CompositeCommand.
+- Submesh refactor (Part B) is the widest-touch step: LODs must re-simplify per submesh range,
+  instancing/sort keys change (regression-gate on demo-level visuals AND batch counts), shadow/
+  VSM/RT paths start iterating submeshes. Land B1 as a behavioral no-op commit before anything
+  else; don't tangle it with the `instancedModels` GI→VSM refactor.
 - Alpha-test + DLSS jitter shimmer; masked geometry opaque in RT reflections (accept/exclude).
 - Particle GPU buffers: frame-in-flight safety on destroy (deferred release), UAV↔SRV hazard
   between sim and last frame's draw (double-buffer or prove ordering), scene-stress the level
@@ -305,14 +456,17 @@ rule).
 # Гайд по ассетам (для человека)
 
 Всё складывай в `import_staging/<имя-ассета>/` как скачалось (glTF/GLB + текстуры, PNG/JPG/HDR
-как есть). Конвертацию в DDS, упаковку metal/rough в MR, разбиение по материалам — делает
-ИИ-исполнитель (texconv из DirectXTex + скрипты), тебе руками ничего конвертировать не нужно.
-Рядом кидай текстовый файл `source.txt` со ссылкой и лицензией — исполнитель соберёт CREDITS.md.
+как есть). Конвертацию (DDS с мипами и BC-сжатием, кубмапа из .hdr) делает **импортер прямо в
+редакторе** — кнопка Import в content browser (Part H); пока он не готов, исполнитель гоняет
+тот же бэкенд через CLI. Тебе руками ничего конвертировать не нужно. MR-каналы вообще не
+перепаковываются (шейдерный флаг). Рядом кидай текстовый файл `source.txt` со ссылкой и
+лицензией — импортер сам дополнит CREDITS.md (у Sketchfab-ассетов автор и лицензия ещё и зашиты
+внутри glTF, они подхватятся автоматически).
 
 Качать всё заранее не обязательно: если на каком-то шаге исполнителю не хватит ассета, он
 остановит шаг и попросит недостающее, повторив инструкцию и дав прямую ссылку (это прописано в
 конвенциях выше, «Asset gate»). Так что можно начинать с пустым `import_staging/` — движковые
-части A–E от ассетов не зависят.
+части A–F от ассетов не зависят (кокосовая пальма для тестов A–C уже лежит в staging).
 
 ## Что качать
 
@@ -369,6 +523,9 @@ CC0 — бери не думая. CC-BY — можно, но нужно указ
 NonCommercial-без-нужды лучше не брать, чтобы не разбираться.
 
 ## Порядок работ (рекомендация)
-Части A и B (glTF + листва) — до того, как понадобятся пальмы; часть D (частицы) можно делать
-параллельно со сбором ассетов. Минимальный первый визуальный результат: A + F0 + F1 (остров,
-океан, небо, солнце) — уже смотрибельно и мотивирует; дальше пальмы (B), пещера, костёр (C+D+E).
+Части A–C (glTF, сабмеши, листва) — до того, как пальмы встанут в сцену; часть E (частицы)
+можно делать параллельно со сбором ассетов; бэкенд импортера (H1–H2) тоже параллелится, а его
+UI (H3) нужен к моменту массовой расстановки ассетов (G2); редактор материалов (I) — к тюнингу
+песка/камня/листвы/углей в G2–G3. Минимальный первый визуальный
+результат: A + H1 (для неба) + G0 + G1 (остров, океан, небо, солнце) — уже смотрибельно и
+мотивирует; дальше пальмы (B+C), пещера, костёр (D+E+F).

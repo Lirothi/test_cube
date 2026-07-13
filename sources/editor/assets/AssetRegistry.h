@@ -78,8 +78,13 @@ struct EditorAssetFolder
 class AssetRegistry
 {
 public:
-    // Rescan all asset roots. Cheap: stats files only, no loading.
+    // Rebuild the registry from all asset roots, including the metadata needed
+    // by the Content Browser and its previews.
     void Refresh();
+
+    // Metadata-only scan of the asset roots. Used by the editor's throttled
+    // auto-refresh poll; it avoids parsing texture headers or material JSON.
+    bool HasChangedOnDisk() const;
 
     const std::vector<EditorAssetRecord>& Assets() const { return assets_; }
     const std::vector<EditorAssetFolder>& Folders() const { return folders_; }
@@ -102,6 +107,10 @@ public:
 private:
     std::vector<EditorAssetRecord> assets_;
     std::vector<EditorAssetFolder> folders_;
+    uint64_t contentSignature_ = 0;
+    bool contentSignatureInitialized_ = false;
+
+    uint64_t ComputeContentSignature() const;
 };
 
 #endif // WITH_EDITOR
