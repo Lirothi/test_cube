@@ -42,6 +42,32 @@ namespace
         std::memcpy(out, &f.m[0][0], sizeof(float) * 16);
     }
 
+    bool BuildViewportCursorRay(const Camera& camera,
+        const ImVec2& mousePosition,
+        const ImVec2& viewportOrigin,
+        float width,
+        float height,
+        Math::float3& outOrigin,
+        Math::float3& outDirection)
+    {
+        if (width <= 0.0f || height <= 0.0f)
+        {
+            return false;
+        }
+
+        const float localX = mousePosition.x - viewportOrigin.x;
+        const float localY = mousePosition.y - viewportOrigin.y;
+        const float ndcX = 2.0f * (localX / width) - 1.0f;
+        const float ndcY = 1.0f - 2.0f * (localY / height);
+        const Math::float3 viewPoint =
+            camera.GetInvProjMatrixNoJitter().TransformPoint(Math::float3(ndcX, ndcY, 1.0f));
+        const Math::float3 worldPoint = camera.GetInvViewMatrix().TransformPoint(viewPoint);
+
+        outOrigin = camera.GetPosition();
+        outDirection = (worldPoint - outOrigin).Normalized();
+        return outDirection.Length() > Math::EPS;
+    }
+
     ImGuizmo::OPERATION ToImGuizmo(ViewportGizmo::Op op)
     {
         switch (op)
@@ -188,8 +214,30 @@ namespace
                     ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
                     if (payload->IsDelivery())
                     {
+                        Math::float3 positionHint;
+                        const Math::float3* positionHintPtr = nullptr;
+                        Math::float3 rayOrigin;
+                        Math::float3 rayDirection;
+                        if (BuildViewportCursorRay(ctx.scene.CameraRef(),
+                                ImGui::GetIO().MousePos,
+                                viewport->Pos,
+                                width,
+                                height,
+                                rayOrigin,
+                                rayDirection))
+                        {
+                            float hitDistance = 0.0f;
+                            if (ctx.scene.RaycastEditorObject(
+                                    rayOrigin, rayDirection, &hitDistance) != 0 &&
+                                std::isfinite(hitDistance))
+                            {
+                                positionHint = rayOrigin + rayDirection * hitDistance;
+                                positionHintPtr = &positionHint;
+                            }
+                        }
+
                         nlohmann::json objectJson =
-                            factory->BuildDefaultJson(record, ctx, registry);
+                            factory->BuildDefaultJson(record, ctx, registry, positionHintPtr);
                         commandStack.Execute(ctx,
                             std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
                     }
@@ -745,12 +793,14 @@ void ViewportGizmo::Update(EditorContext& ctx,
         return;
     }
 
-    const float ndcX = 2.0f * (io.MousePos.x / width) - 1.0f;
-    const float ndcY = 1.0f - 2.0f * (io.MousePos.y / height);
-    const Math::float3 origin = camera.GetPosition();
-    const Math::float3 viewPt = camera.GetInvProjMatrixNoJitter().TransformPoint(Math::float3(ndcX, ndcY, 1.0f));
-    const Math::float3 worldPt = camera.GetInvViewMatrix().TransformPoint(viewPt);
-    const Math::float3 dir = (worldPt - origin).Normalized();
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    Math::float3 origin;
+    Math::float3 dir;
+    if (!viewport || !BuildViewportCursorRay(
+            camera, io.MousePos, viewport->Pos, width, height, origin, dir))
+    {
+        return;
+    }
 
     const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(origin, dir);
     if (hit != 0)

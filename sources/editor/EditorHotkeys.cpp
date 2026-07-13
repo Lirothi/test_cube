@@ -28,6 +28,7 @@ namespace
         Redo,
         Save,
         FocusSelection,
+        DropSelectionToGround,
         ClearSelection
     };
 
@@ -56,6 +57,7 @@ namespace
         { "Ctrl+Shift+Z Redo",     ImGuiKey_Z,      ShortcutModifiers::CtrlShift, ShortcutAction::Redo },
         { "Ctrl+S Save",           ImGuiKey_S,      ShortcutModifiers::Ctrl,      ShortcutAction::Save },
         { "F Frame",               ImGuiKey_F,      ShortcutModifiers::Plain,     ShortcutAction::FocusSelection },
+        { "End Drop",              ImGuiKey_End,    ShortcutModifiers::Plain,     ShortcutAction::DropSelectionToGround },
         { "Esc Clear",             ImGuiKey_Escape, ShortcutModifiers::Plain,     ShortcutAction::ClearSelection }
     };
 
@@ -118,6 +120,9 @@ namespace
             break;
         case ShortcutAction::FocusSelection:
             actions.focusSelection = true;
+            break;
+        case ShortcutAction::DropSelectionToGround:
+            actions.dropSelectionToGround = true;
             break;
         case ShortcutAction::ClearSelection:
             actions.clearSelection = true;

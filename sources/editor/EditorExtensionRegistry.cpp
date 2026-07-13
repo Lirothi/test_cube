@@ -23,8 +23,16 @@
 
 namespace
 {
-    nlohmann::json SpawnPositionJson(const Scene& scene)
+    nlohmann::json SpawnPositionJson(const Scene& scene, const Math::float3* worldPositionHint)
     {
+        if (worldPositionHint)
+        {
+            return nlohmann::json::array({
+                worldPositionHint->x,
+                worldPositionHint->y,
+                worldPositionHint->z });
+        }
+
         const Math::float3& camPos = scene.CameraRef().GetPosition();
         const Math::float3& camDir = scene.CameraRef().GetDirection();
         return nlohmann::json::array({
@@ -94,12 +102,13 @@ namespace
 
         nlohmann::json BuildDefaultJson(const EditorAssetRecord* sourceAsset,
             const EditorContext& ctx,
-            const AssetRegistry& registry) const override
+            const AssetRegistry& registry,
+            const Math::float3* worldPositionHint) const override
         {
             nlohmann::json o = nlohmann::json::object();
             o["type"] = std::string(Type());
             o["model"] = sourceAsset ? sourceAsset->id.key : std::string{};
-            o["position"] = SpawnPositionJson(ctx.scene);
+            o["position"] = SpawnPositionJson(ctx.scene, worldPositionHint);
             o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
             o["material"] = PickDefaultStaticMaterial(registry);
             o["shader"] = "shaders/gbuffer.hlsl";
@@ -121,14 +130,15 @@ namespace
 
         nlohmann::json BuildDefaultJson(const EditorAssetRecord* sourceAsset,
             const EditorContext& ctx,
-            const AssetRegistry& registry) const override
+            const AssetRegistry& registry,
+            const Math::float3* worldPositionHint) const override
         {
             (void)registry;
 
             nlohmann::json o = nlohmann::json::object();
             o["type"] = std::string(Type());
             o["model"] = sourceAsset ? sourceAsset->id.key : std::string{};
-            o["position"] = SpawnPositionJson(ctx.scene);
+            o["position"] = SpawnPositionJson(ctx.scene, worldPositionHint);
             o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
 
             // Default glass params: copy from an existing transparentMesh in the

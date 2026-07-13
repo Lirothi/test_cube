@@ -79,8 +79,12 @@ public:
     void SetEditorSelectionOutlineRadius(std::uint32_t radius) { selectionOutlineRadius_ = radius; }
 
     // Nearest editor-owned, visible object hit by the ray (CPU ray vs world AABB),
-    // or 0 if none. For viewport click-to-select.
-    SceneObjectId RaycastEditorObject(const Math::float3& origin, const Math::float3& dir) const;
+    // or 0 if none. Runtime generators and hidden objects are intentionally not
+    // editor picking or placement surfaces.
+    SceneObjectId RaycastEditorObject(const Math::float3& origin,
+        const Math::float3& dir,
+        float* outDistance = nullptr,
+        SceneObjectId ignoredObjectId = 0) const;
 #endif
 
     void Tick(float deltaTime);

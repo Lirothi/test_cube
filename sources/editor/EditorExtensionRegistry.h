@@ -36,7 +36,8 @@ public:
     virtual bool CanBuildFromAsset(const EditorAssetRecord* sourceAsset) const = 0;
     virtual nlohmann::json BuildDefaultJson(const EditorAssetRecord* sourceAsset,
         const EditorContext& ctx,
-        const AssetRegistry& registry) const = 0;
+        const AssetRegistry& registry,
+        const Math::float3* worldPositionHint = nullptr) const = 0;
 };
 
 class IEditorPropertyDrawer

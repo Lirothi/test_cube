@@ -552,16 +552,24 @@ const RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id) const
     return nullptr;
 }
 
-Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin, const Math::float3& dir) const
+Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
+    const Math::float3& dir,
+    float* outDistance,
+    SceneObjectId ignoredObjectId) const
 {
     SceneObjectId best = 0;
     float bestT = FLT_MAX;
+    if (outDistance)
+    {
+        *outDistance = bestT;
+    }
     const float o[3] = { origin.x, origin.y, origin.z };
     const float d[3] = { dir.x, dir.y, dir.z };
 
     for (size_t i = 0; i < objects_.size(); ++i)
     {
-        if (objectIds_[i] == 0 || !objects_[i] || !objects_[i]->IsVisible())
+        if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId ||
+            !objects_[i] || !objects_[i]->IsVisible())
         {
             continue; // editor-owned + visible only
         }
@@ -606,6 +614,10 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin, cons
         }
     }
 
+    if (outDistance)
+    {
+        *outDistance = bestT;
+    }
     return best;
 }
 #endif // WITH_EDITOR

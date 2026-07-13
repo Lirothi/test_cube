@@ -29,6 +29,7 @@
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
+#include "editor/commands/TransformObjectCommand.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
@@ -1432,6 +1433,46 @@ namespace
         camera.ResetHistory();
         return true;
     }
+
+    std::string DropSelectionToGround(EditorContext& ctx, EditorCommandStack& commandStack)
+    {
+        EditorObject* object = ctx.document.Find(ctx.selectedObject);
+        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(ctx.selectedObject.value);
+        if (!object || !runtime || !runtime->AsRenderableObject())
+        {
+            return "Select a mesh to drop to ground";
+        }
+
+        const AABB& bounds = runtime->GetWorldBounds();
+        if (!bounds.IsValid())
+        {
+            return "Selected mesh has no valid bounds";
+        }
+
+        const Math::float3 center = bounds.GetCenter();
+        const Math::float3 rayOrigin(center.x, bounds.GetMin().y, center.z);
+        const Math::float3 rayDirection(0.0f, -1.0f, 0.0f);
+        float hitDistance = 0.0f;
+        const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
+            rayOrigin, rayDirection, &hitDistance, ctx.selectedObject.value);
+        if (hit == 0 || !std::isfinite(hitDistance))
+        {
+            return "No visible editor object below selection";
+        }
+        if (hitDistance <= 1.0e-4f)
+        {
+            return "Selection is already resting on a surface";
+        }
+
+        EditorTransform after = object->transform;
+        after.position.y -= hitDistance;
+        if (!commandStack.Execute(ctx, std::make_unique<TransformObjectCommand>(
+                object->id, object->transform, after)))
+        {
+            return "Drop to ground failed";
+        }
+        return "Dropped selection to ground";
+    }
 }
 
 void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
@@ -1924,6 +1965,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             levelStatus_ = "Nothing to frame";
         }
+    }
+    if (hotkeyActions.dropSelectionToGround)
+    {
+        levelStatus_ = DropSelectionToGround(ctx, commandStack_);
     }
     if (hotkeyActions.clearSelection)
     {

@@ -11,6 +11,7 @@ struct EditorHotkeyActions
     bool redo = false;
     bool save = false;
     bool focusSelection = false;
+    bool dropSelectionToGround = false;
     bool clearSelection = false;
 };
 
