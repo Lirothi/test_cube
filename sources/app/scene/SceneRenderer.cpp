@@ -967,7 +967,10 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
         std::vector<RtInstanceDesc> descs; // reused across objects this frame
         for (const auto& obj : *frame_->objects)
         {
-            if (!obj) { continue; }
+            // The editor's Enabled command maps to visibility. In no-editor
+            // builds ordinary level objects retain their default visible state,
+            // so this only removes explicitly disabled editor objects from RT.
+            if (!obj || !obj->IsVisible()) { continue; }
             // GetRtInstances appends one desc for a single-mesh object, or one per GPU
             // instance for instanced renderables (S14: instanced models reflect).
             descs.clear();
@@ -1006,15 +1009,18 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
         // COMMON->NON_PIXEL_SHADER_RESOURCE promotion (this pass runs first, so
         // the buffers are fresh-decayed to COMMON).
         ID3D12GraphicsCommandList4* cl4 = renderer->AsCmdList4(t.cl);
-        if (cl4 && !rtInstances_.empty())
+        if (cl4)
         {
+            // BuildTlas records the zero count as well. That prevents a reused
+            // frame slot from exposing a previous frame's TLAS after the last
+            // visible RT instance is disabled.
             asManager_.BuildTlas(rtInstances_, cl4, renderer->GetCurrentFrameIndex());
             if (asManager_.HasPendingScratch())
             {
                 asScratchRetireFrame_ = frameNo + render::kFrameCount;
             }
             // S13: one-time AS VRAM accounting for visibility/budgeting.
-            if (!asVramLogged_ && !asManager_.BuildFailed())
+            if (!rtInstances_.empty() && !asVramLogged_ && !asManager_.BuildFailed())
             {
                 char buf[160];
                 std::snprintf(buf, sizeof(buf),

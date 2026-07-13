@@ -9,9 +9,10 @@
 namespace
 {
     // After a command applies, rebuild the shadow-caster GPU data + mega VB/IB if (and only if) the
-    // caster set actually changed (spawn/delete bump GetStaticSetVersion; transform/rename/select do
-    // not). Skipping this leaves VSM's per-page draw in the ~10ms per-group fallback (see
-    // Scene::RefreshShadowGpuForEditor). One choke point covers Execute/Undo/Redo.
+    // caster set actually changed (spawn/delete or a shadow-caster visibility toggle bump the version;
+    // transform/rename/select do not). Skipping this leaves VSM's per-page draw in the ~10ms
+    // per-group fallback (see Scene::RefreshShadowGpuForEditor). One choke point coalesces a whole
+    // composite command and covers Execute/Undo/Redo.
     void RefreshShadowsIfCasterSetChanged(EditorContext& ctx, std::uint32_t versionBefore)
     {
         if (ctx.scene.GetStaticSetVersion() != versionBefore)

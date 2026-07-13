@@ -97,8 +97,11 @@ reflections — acceptable; optionally exclude fronds from BLAS).
   - Flipbooks: https://opengameart.org/art-search-advanced?keys=fire+flipbook ,
     https://kenney.nl/assets/particle-pack
   While blocked on an asset, continue with whatever steps don't need it (engine parts A–F are
-  never asset-blocked — the coconut palm already in `import_staging/` covers A–C testing;
-  G0 island is procedural).
+  never asset-blocked; G0 island is procedural). Staged as of 2026-07-13: 3 palms (evolveduk,
+  CC-BY), 2 boulders (Pixel Life, CC-BY), rocks pack (Studio Lab — **NOT CC**, Sketchfab
+  standard license, prefer the Pixel Life boulders), coast_sand_01 + marble_cliff_05 texture
+  sets (Poly Haven, CC0), rustig_koppie_puresky_4k.hdr sky (CC0). **Still missing: campfire
+  model + fire/smoke flipbook sprites** — that's the only remaining asset gate before G3.
 
 ---
 
@@ -366,8 +369,18 @@ here.
 reporting, no binaries in the repo); keep the texconv-CLI route as a documented fallback if
 vcxproj integration fights back. Implement:
 - Texture import: PNG/JPG → BC7 DDS (sRGB flag for albedo, linear for normal/MR) with a full
-  mip chain; optional BC5 for RG normals. **No MR pixel repacking** — the `mrLayout` shader
-  flag (A3) already handles glTF channel order.
+  mip chain; optional BC5 for RG normals. **No MR pixel repacking for glTF assets** — the
+  `mrLayout` shader flag (A3) already handles glTF channel order. Handle 16-bit PNG sources
+  (Poly Haven ships some; WIC converts). Downscale to the max-size option (staged 4K rock
+  textures → 2K).
+- **Texture-set import** (Poly Haven-style folders with no glTF): synthesize an engine-layout
+  `mr` texture from the separate grayscale maps (R=metal — constant 0 when no metallic map
+  exists, which is the normal case for sand/rock; G=rough) and register a material preset for
+  the set.
+- **Normal-map Y convention**: pin down the engine's expected convention first (inspect how
+  the existing `*_normal` textures + shaders behave), then normalize on import with a
+  flip-green option. Staged reality: Poly Haven `_nor_dx` = DirectX-style (-Y), glTF normal
+  maps = OpenGL-style (+Y) — mixing them unnormalized turns bumps into dents in raking light.
 - HDRI import: equirect `.hdr` → 6 faces → cubemap + mips → **BC6H_UF16 with a DX10 header**
   (RGBA16F fallback), matching the verified TextureCube loader contract.
 - Compression on background threads (tbb is already in `third_party/`) — the editor must not

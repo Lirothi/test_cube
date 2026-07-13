@@ -203,13 +203,11 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
 
 bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
 {
-    // Mirror the CastsShadow() filter shadowCasterSource_.Bucketize uses. NOT filtered by
-    // IsVisible()/layer mask: the caster id must be STABLE across frames, and per-view
-    // visibility is the job of the GPU cull pass (Step 4), not of this buffer. Requires a
-    // mesh: a mesh-less "caster" draws nothing and has no mesh-group to slot into. GPU-instanced
-    // casters are excluded (one object → many GPU-side instances can't be a single entry); they
-    // keep drawing via their own RenderShadow (Step 6 draws them alongside the indirect path).
-    if (!obj || !obj->CastsShadow() || obj->IsGpuInstancedCaster()) { return false; }
+    // Match SceneRenderQueue's visibility and CastsShadow predicates. A visibility change
+    // changes the count seen by UpdateForFrame, which rebuilds this cache before VSM or
+    // indirect draws consume it. In no-editor builds ordinary level objects remain visible.
+    // GPU-instanced casters are handled separately by IsGiFoldable below.
+    if (!obj || !obj->IsVisible() || !obj->CastsShadow() || obj->IsGpuInstancedCaster()) { return false; }
     const RenderableObject* ro = obj->AsRenderableObject();
     return ro && ro->GetMesh() != nullptr;
 }
@@ -218,7 +216,7 @@ bool ShadowGpuData::IsGiFoldable(const RenderableObjectBase* obj)
 {
     // A GPU-instanced caster we can fold into the consolidated caster set (Step 3): it casts
     // shadow, exposes a per-instance transform SRV + non-zero instance count, and has a mesh.
-    if (!obj || !obj->CastsShadow() || !obj->IsGpuInstancedCaster()) { return false; }
+    if (!obj || !obj->IsVisible() || !obj->CastsShadow() || !obj->IsGpuInstancedCaster()) { return false; }
     if (obj->GetInstanceCasterSrv().ptr == 0 || obj->GetInstanceCasterCount() == 0) { return false; }
     const RenderableObject* ro = obj->AsRenderableObject();
     return ro && ro->GetMesh() != nullptr;

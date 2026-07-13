@@ -73,6 +73,9 @@ public:
     // change (spawn/delete). Runs on a fresh GPU-idle upload batch, so the VSM per-page draw keeps its
     // fast single-ExecuteIndirect-per-page path instead of the ~10ms per-group fallback until reload.
     void RefreshShadowGpuForEditor(Renderer& renderer);
+    // Marks the cached shadow caster set stale after an editor visibility toggle. The command stack
+    // coalesces this with other caster-set changes into one RefreshShadowGpuForEditor call.
+    void NotifyEditorShadowCasterVisibilityChanged() { BumpStaticSetVersion(); }
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
     const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
     void SetSelectedEditorObjectIds(const std::vector<SceneObjectId>& ids);
@@ -102,10 +105,10 @@ public:
 
     const SceneFrameData& FrameData() const { return frameData_; }
 
-    // Rung 1 (Step 11) foundation: monotonic version of the STATIC caster set — bumped when set
-    // membership changes (level load, object add/remove/clear). A shadow cache compares it to
-    // know its static atlas is stale. Dynamic movers do NOT bump it (their motion is tracked
-    // per-caster via RenderableObject::MovedThisFrame). No consumer yet.
+    // Rung 1 (Step 11) foundation: monotonic version of the shadow-caster set — bumped when its
+    // membership or editor visibility changes. A shadow cache compares it to know its data is
+    // stale. Dynamic movers do NOT bump it (their motion is tracked per-caster via
+    // RenderableObject::MovedThisFrame).
     std::uint32_t GetStaticSetVersion() const { return staticSetVersion_; }
 
 private:
@@ -155,7 +158,7 @@ private:
     Camera camera_;
 
     SceneRenderSettings renderSettings_{};
-    std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on static-caster-set membership changes
+    std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes
 
     DirectionalLight dirLight_;
 

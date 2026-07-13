@@ -10,7 +10,7 @@ for a larger batch.
 ## Current Baseline (updated 2026-07-13)
 
 Steps 1 through 15 — including 5A, 11A, and 12A through 12E — are implemented
-and committed. Steps 16 through 21 are also implemented. The editor currently provides:
+and committed. Steps 16 through 22 are also implemented. The editor currently provides:
 
 - A UE-style Content Browser: navigation bar with back/forward and breadcrumbs,
   a resizable Sources panel (folder tree, Favorites, Collections), additive type
@@ -40,13 +40,13 @@ and committed. Steps 16 through 21 are also implemented. The editor currently pr
   metadata-only signature poll refreshes supported asset roots only when their
   folder or file metadata changes, and the Content Browser briefly reports the
   update.
+- Enabled editor objects are excluded consistently from main rendering, legacy
+  and GPU-driven shadows, and RT reflection/debug TLAS builds.
 
-Known limitations that the remaining steps (12F and 22) address:
+Known limitation outside the remaining thumbnail work:
 
 - Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
   outliner but are effectively read-only.
-- Disabled objects can still appear in RT reflections, which gather scene
-  objects without the `IsVisible` check.
 
 Important source files:
 
@@ -1435,6 +1435,16 @@ Validation:
 
 ## Step 22: Visibility Consistency Hardening
 
+Status (2026-07-13): implemented. RT TLAS gathering now filters `IsVisible()`
+and records an empty current-frame TLAS count when no visible instances remain.
+The GPU-driven shadow/VSM caster cache now uses the same visibility predicate as
+`SceneRenderQueue`, so hide/show changes rebuild its caster data before indirect
+shadow draws consume it. `Debug|x64`, no-editor `Release|x64`, and
+`--scene-stress=30` all pass; the stress harness reports `CLEAN`.
+Editor enable/disable commands coalesce the required GPU-idle mega-buffer
+refresh at the command-stack boundary, preventing the persistent VSM per-group
+PageRender fallback after a visibility toggle.
+
 Goal: make the Enabled toggle authoritative in every render path, not just the
 bucketized ones.
 
@@ -1472,17 +1482,14 @@ Validation:
 
 ## Suggested Execution Order
 
-Steps 1 through 21 (including 5A, 11A, 12A-12E) are complete. Recommended order
-for the next wave:
+Steps 1 through 22 (including 5A, 11A, 12A-12E) are complete. The remaining
+planned step is:
 
 1. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
    Content Browser thumbnail family.
-2. Step 22: Visibility Consistency Hardening — small but ungated engine edit;
-   wants a runtime/GBV pass, so schedule it when one is planned anyway.
 
-Ordering rationale: finish the thumbnail work first, then add camera workflow
-and asset-refresh quality-of-life. The remaining ungated renderer work needs
-broader regression coverage.
+Ordering rationale: close the remaining Content Browser thumbnail work before
+expanding the plan with generator-entity editing.
 
 ## Stop Conditions
 
