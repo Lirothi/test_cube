@@ -90,6 +90,7 @@ private:
     EditorObjectId selectedObject_;
     EditorCommandStack commandStack_;
     std::vector<std::string> recentLevelPaths_;
+    std::string objectClipboard_;
     std::string levelStatus_;
     std::string lastSavedCameraLevelPath_;
     Math::float3 lastSavedCameraPosition_{ 0.0f, 0.0f, 0.0f };

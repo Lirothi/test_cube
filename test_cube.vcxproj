@@ -244,6 +244,7 @@
     <ClCompile Include="sources/editor/commands/SpawnMeshCommand.cpp" />
     <ClCompile Include="sources/editor/commands/DeleteObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/DuplicateObjectCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/PasteObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/RenameObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
@@ -385,6 +386,7 @@
     <ClInclude Include="sources/editor/commands/SpawnMeshCommand.h" />
     <ClInclude Include="sources/editor/commands/DeleteObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/DuplicateObjectCommand.h" />
+    <ClInclude Include="sources/editor/commands/PasteObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/RenameObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />

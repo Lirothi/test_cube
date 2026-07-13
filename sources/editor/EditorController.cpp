@@ -25,6 +25,7 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
+#include "editor/commands/PasteObjectCommand.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -1473,6 +1474,107 @@ namespace
         }
         return "Dropped selection to ground";
     }
+
+    const EditorObject* FindEnvironmentObject(
+        const EditorSceneDocument& document,
+        EditorObjectId id)
+    {
+        for (const EditorObject& environment : document.Environment())
+        {
+            if (environment.id.value == id.value)
+            {
+                return &environment;
+            }
+        }
+        return nullptr;
+    }
+
+    bool CopySelectionToClipboard(const EditorSceneDocument& document,
+        EditorObjectId selection,
+        std::string& editorClipboard,
+        std::string& outStatus)
+    {
+        nlohmann::json clipboardJson;
+        std::string copiedName;
+        if (const EditorObject* object = document.Find(selection))
+        {
+            if (object->type == "ocean")
+            {
+                outStatus = "Ocean objects cannot be copied";
+                return false;
+            }
+            clipboardJson = EditorSceneDocument::ObjectToJson(*object);
+            copiedName = object->name;
+        }
+        else if (const EditorObject* environment = FindEnvironmentObject(document, selection))
+        {
+            if (environment->type != "pointLight" && environment->type != "spotLight")
+            {
+                outStatus = environment->name.empty() ?
+                    "Selected environment entity cannot be copied" :
+                    environment->name + " cannot be copied";
+                return false;
+            }
+
+            clipboardJson = environment->properties;
+            clipboardJson["id"] = environment->id.value;
+            clipboardJson["name"] = environment->name;
+            clipboardJson["type"] = environment->type;
+            copiedName = environment->name;
+        }
+        else
+        {
+            outStatus = "Nothing selected to copy";
+            return false;
+        }
+
+        editorClipboard = clipboardJson.dump();
+        ImGui::SetClipboardText(editorClipboard.c_str());
+        outStatus = copiedName.empty() ? "Copied object" : "Copied " + copiedName;
+        return true;
+    }
+
+    bool PasteObjectFromClipboard(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        std::string& editorClipboard,
+        std::string& outStatus)
+    {
+        const char* osClipboard = ImGui::GetClipboardText();
+        std::string clipboardText = osClipboard && osClipboard[0] != '\0' ?
+            std::string(osClipboard) : editorClipboard;
+        if (clipboardText.empty())
+        {
+            outStatus = "Nothing to paste";
+            return false;
+        }
+
+        nlohmann::json objectJson =
+            nlohmann::json::parse(clipboardText, nullptr, false);
+        if (objectJson.is_discarded())
+        {
+            outStatus = "Paste failed: clipboard does not contain valid JSON";
+            return false;
+        }
+
+        std::string reason;
+        if (!PasteObjectCommand::Validate(objectJson, reason))
+        {
+            outStatus = "Paste failed: " + reason;
+            return false;
+        }
+
+        if (!commandStack.Execute(ctx,
+                std::make_unique<PasteObjectCommand>(objectJson)))
+        {
+            outStatus = "Paste failed: object could not be created";
+            return false;
+        }
+
+        editorClipboard = std::move(clipboardText);
+        const std::string type = objectJson.value("type", std::string("object"));
+        outStatus = "Pasted " + type;
+        return true;
+    }
 }
 
 void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
@@ -1930,6 +2032,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         pendingNewLevelJson_ = root;
         return queueLevelPathLoad(scratchPath, false, PendingLevelAction::New, "Creating new level");
     };
+    const auto copySelection = [&]()
+    {
+        CopySelectionToClipboard(document_, selectedObject_, objectClipboard_, levelStatus_);
+    };
+    const auto pasteObject = [&]()
+    {
+        PasteObjectFromClipboard(ctx, commandStack_, objectClipboard_, levelStatus_);
+    };
 
     const EditorHotkeyActions hotkeyActions = hotkeys_.Poll(viewportGizmo_);
     if (hotkeyActions.undo)
@@ -1954,6 +2064,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     if (hotkeyActions.duplicateSelection)
     {
         commandStack_.Execute(ctx, std::make_unique<DuplicateObjectCommand>(selectedObject_));
+    }
+    if (hotkeyActions.copySelection)
+    {
+        copySelection();
+    }
+    if (hotkeyActions.pasteObject)
+    {
+        pasteObject();
     }
     if (hotkeyActions.deleteSelection)
     {
@@ -2036,6 +2154,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     ImGui::EndMenu();
                 }
                 ShowDisabledItemTooltip(!hasRecentLevels, "No recently opened levels.");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Edit"))
+            {
+                if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                {
+                    copySelection();
+                }
+                if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                {
+                    pasteObject();
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Create"))

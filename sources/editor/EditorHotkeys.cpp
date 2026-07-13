@@ -24,6 +24,8 @@ namespace
         CycleTransformMode,
         DeleteSelection,
         DuplicateSelection,
+        CopySelection,
+        PasteObject,
         Undo,
         Redo,
         Save,
@@ -52,6 +54,8 @@ namespace
         { "Space Cycle",           ImGuiKey_Space,  ShortcutModifiers::Plain,     ShortcutAction::CycleTransformMode, true },
         { "Delete Delete",         ImGuiKey_Delete, ShortcutModifiers::Plain,     ShortcutAction::DeleteSelection },
         { "Ctrl+D Duplicate",      ImGuiKey_D,      ShortcutModifiers::Ctrl,      ShortcutAction::DuplicateSelection },
+        { "Ctrl+C Copy",           ImGuiKey_C,      ShortcutModifiers::Ctrl,      ShortcutAction::CopySelection },
+        { "Ctrl+V Paste",          ImGuiKey_V,      ShortcutModifiers::Ctrl,      ShortcutAction::PasteObject },
         { "Ctrl+Z Undo",           ImGuiKey_Z,      ShortcutModifiers::Ctrl,      ShortcutAction::Undo },
         { "Ctrl+Y Redo",           ImGuiKey_Y,      ShortcutModifiers::Ctrl,      ShortcutAction::Redo },
         { "Ctrl+Shift+Z Redo",     ImGuiKey_Z,      ShortcutModifiers::CtrlShift, ShortcutAction::Redo },
@@ -108,6 +112,12 @@ namespace
             break;
         case ShortcutAction::DuplicateSelection:
             actions.duplicateSelection = true;
+            break;
+        case ShortcutAction::CopySelection:
+            actions.copySelection = true;
+            break;
+        case ShortcutAction::PasteObject:
+            actions.pasteObject = true;
             break;
         case ShortcutAction::Undo:
             actions.undo = true;
