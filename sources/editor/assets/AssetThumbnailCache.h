@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -16,6 +17,17 @@
 
 struct EditorAssetRecord;
 class Renderer;
+namespace editor_thumbnail_detail
+{
+    enum class PreflightKind : std::uint32_t
+    {
+        Mesh,
+        Material,
+        Cube
+    };
+
+    struct PreflightState;
+}
 
 // Editor-owned cache of real asset thumbnails for the Content Browser (Step 12F).
 //
@@ -26,16 +38,18 @@ class Renderer;
 // Every resident thumbnail is left shader-readable and handed to ImGui via a
 // per-frame texture id.
 //
-// Lifetime / threading: every method runs inside the editor draw/tick window. All
-// GPU work (texture upload, offscreen render, resource release) is fenced with
-// Renderer::WaitForPreviousFrame, matching the rest of the editor. Nothing here
-// touches the Scene, selection, command history, or document dirty state.
+// Lifetime / threading: cache ownership and every GPU operation remain on the
+// editor thread. Preflight jobs use only copied paths and metadata, then publish
+// an immutable result for the editor thread to validate and commit.
 class AssetThumbnailCache
 {
 public:
+    AssetThumbnailCache();
+
     enum class State
     {
         Missing,     // never requested
+        Preflighting,// CPU cache/signature probe is running
         Queued,      // requested, waiting for a generation slot
         Generating,  // being generated this frame (transient)
         Ready,       // GPU thumbnail available
@@ -53,7 +67,7 @@ public:
 
     // Advance the internal frame counter (used for LRU eviction). Call once per
     // editor frame before issuing any Request.
-    void BeginFrame();
+    void BeginFrame(Renderer& renderer);
 
     // Request the thumbnail for a previewable asset (texture, mesh, material, or
     // cubemap)
@@ -73,22 +87,6 @@ public:
     void ReleaseAll(Renderer& renderer);
 
 private:
-    struct Entry
-    {
-        State state = State::Missing;
-        Microsoft::WRL::ComPtr<ID3D12Resource> resource; // loaded texture or rendered target
-        DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN;
-        std::uint32_t width = 0;
-        std::uint32_t height = 0;
-        std::uint32_t mipLevels = 1;
-        std::uint64_t sourceWriteTime = 0;
-        std::uint64_t cacheSignature = 0;
-        std::uint64_t registryRevision = 0;
-        std::string cachePath;
-        std::string failureReason;
-        std::uint64_t lastRequestedFrame = 0;
-    };
-
     struct PendingLoad
     {
         enum class Kind
@@ -111,13 +109,54 @@ private:
         Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB; // texture only
     };
 
+    struct Entry
+    {
+        State state = State::Missing;
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource; // loaded texture or rendered target
+        DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        std::uint32_t mipLevels = 1;
+        editor_thumbnail_detail::PreflightKind generationKind =
+            editor_thumbnail_detail::PreflightKind::Mesh;
+        std::uint64_t sourceWriteTime = 0;
+        std::uint64_t cacheSignature = 0;
+        std::uint64_t registryRevision = 0;
+        std::uint64_t preflightToken = 0;
+        bool preflightPending = false;
+        std::string cachePath;
+        std::string failureReason;
+        std::uint64_t lastRequestedFrame = 0;
+    };
+
+    struct PreflightRequest
+    {
+        std::string key;
+        std::string path;
+        editor_thumbnail_detail::PreflightKind generationKind =
+            editor_thumbnail_detail::PreflightKind::Mesh;
+        std::uint64_t sourceWriteTime = 0;
+        std::uint64_t registryRevision = 0;
+        std::uint64_t token = 0;
+        std::uint64_t epoch = 0;
+    };
+
+    void QueuePreflight(const EditorAssetRecord& record,
+        PendingLoad::Kind generationKind,
+        std::uint64_t assetRegistryRevision,
+        Entry& entry);
+    void LaunchPreflightJobs();
+    void CommitPreflightResults(Renderer& renderer);
     void EvictIfNeeded(Renderer& renderer);
     void ReleaseEntry(Renderer& renderer, Entry& entry);
 
     std::unordered_map<std::string, Entry> entries_;
     std::deque<PendingLoad> queue_;
+    std::deque<PreflightRequest> preflightQueue_;
+    std::shared_ptr<editor_thumbnail_detail::PreflightState> preflightState_;
     EditorPreviewRenderer preview_;
     std::uint64_t frameCounter_ = 0;
+    std::uint64_t preflightEpoch_ = 1;
 };
 
 #endif // WITH_EDITOR

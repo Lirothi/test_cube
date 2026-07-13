@@ -2163,7 +2163,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ContentBrowserAction action;
     BrowserIconAtlas icons;
     const ThumbnailProvider thumbs{ &renderer, &thumbnails, registry.Revision() };
-    thumbnails.BeginFrame();
+    thumbnails.BeginFrame(renderer);
 
     if (!iconAtlasTried_)
     {

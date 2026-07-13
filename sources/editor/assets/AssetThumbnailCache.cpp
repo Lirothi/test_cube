@@ -2,10 +2,12 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -15,6 +17,7 @@
 
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "core/task/TaskSystem.h"
 #include "editor/assets/AssetRegistry.h"
 #include "materials/MaterialData.h"
 #include "materials/TextureCube.h"
@@ -30,6 +33,44 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "windowscodecs.lib")
 
+namespace editor_thumbnail_detail
+{
+    struct DiskCacheInfo
+    {
+        bool enabled = false;
+        bool hit = false;
+        bool invalidFile = false;
+        std::uint64_t signature = 0;
+        std::string stablePrefix;
+        std::string path;
+    };
+
+    struct PreflightInput
+    {
+        std::string key;
+        std::string path;
+        PreflightKind kind = PreflightKind::Mesh;
+        std::uint64_t sourceWriteTime = 0;
+        std::uint64_t registryRevision = 0;
+        std::uint64_t token = 0;
+        std::uint64_t epoch = 0;
+    };
+
+    struct PreflightResult
+    {
+        PreflightInput input;
+        DiskCacheInfo cache;
+        std::vector<std::string> staleCachePaths;
+    };
+
+    struct PreflightState
+    {
+        std::mutex mutex;
+        std::deque<PreflightResult> completed;
+        std::atomic<std::size_t> jobsInFlight{ 0 };
+    };
+}
+
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
@@ -39,6 +80,10 @@ namespace
     // uploads/renders up to this many thumbnails, so opening a large folder fills
     // in over a few frames instead of stalling on open.
     constexpr std::size_t kMaxLoadsPerFrame = 3;
+
+    // The render graph already occupies the worker pool. Keep filesystem and JSON
+    // preflight work bounded so opening a large folder does not compete with it.
+    constexpr std::size_t kMaxPreflightJobsInFlight = 2;
 
     // LRU cap. Each resident thumbnail also holds kFrameCount ImGui preview
     // descriptors, so this stays comfortably under ImGuiLayer's editor SRV heap
@@ -53,6 +98,12 @@ namespace
 
     namespace fs = std::filesystem;
     using Microsoft::WRL::ComPtr;
+
+    using editor_thumbnail_detail::DiskCacheInfo;
+    using editor_thumbnail_detail::PreflightInput;
+    using editor_thumbnail_detail::PreflightKind;
+    using editor_thumbnail_detail::PreflightResult;
+    using editor_thumbnail_detail::PreflightState;
 
     class ScopedComInitialization
     {
@@ -81,16 +132,6 @@ namespace
     private:
         HRESULT result_ = E_FAIL;
         bool uninitialize_ = false;
-    };
-
-    struct DiskCacheInfo
-    {
-        bool enabled = false;
-        bool hit = false;
-        bool discardedInvalidFile = false;
-        std::uint64_t signature = 0;
-        std::string stablePrefix;
-        std::string path;
     };
 
     struct ThumbnailReadback
@@ -186,32 +227,28 @@ namespace
         }
     }
 
-    DiskCacheInfo BuildDiskCacheInfo(const EditorAssetRecord& record)
+    DiskCacheInfo BuildDiskCacheInfo(const PreflightInput& input)
     {
         DiskCacheInfo info;
-        const bool isPersistentPreview = record.id.type == EditorAssetType::Mesh ||
-            record.id.type == EditorAssetType::MaterialPreset ||
-            (record.id.type == EditorAssetType::Texture &&
-                record.texture.kind == EditorTextureKind::TextureCube);
-        if (!isPersistentPreview)
-        {
-            return info;
-        }
+        const std::uint32_t type = input.kind == PreflightKind::Mesh
+            ? static_cast<std::uint32_t>(EditorAssetType::Mesh)
+            : input.kind == PreflightKind::Material
+                ? static_cast<std::uint32_t>(EditorAssetType::MaterialPreset)
+                : static_cast<std::uint32_t>(EditorAssetType::Texture);
 
         std::uint64_t stableHash = kFnvOffset;
-        const std::uint32_t type = static_cast<std::uint32_t>(record.id.type);
         HashValue(stableHash, type);
-        HashText(stableHash, record.id.key);
+        HashText(stableHash, input.key);
 
         std::uint64_t signature = kFnvOffset;
         HashValue(signature, kThumbnailSchemaVersion);
         HashValue(signature, type);
-        HashText(signature, record.id.key);
-        HashText(signature, record.path);
-        HashValue(signature, record.fileWriteTime);
-        if (record.id.type == EditorAssetType::MaterialPreset)
+        HashText(signature, input.key);
+        HashText(signature, input.path);
+        HashValue(signature, input.sourceWriteTime);
+        if (input.kind == PreflightKind::Material)
         {
-            HashMaterialDependencies(signature, record.id.key);
+            HashMaterialDependencies(signature, input.key);
         }
 
         info.enabled = true;
@@ -226,21 +263,20 @@ namespace
             : 0;
         if (info.hit && !error && cacheSize == 0)
         {
-            // A previous interrupted/failed WIC encode is never a cache hit.
-            // Remove it here so the source renderer regenerates immediately.
-            std::error_code removeError;
-            fs::remove(fs::path(info.path), removeError);
+            // The main thread removes this after validating the async result. A
+            // worker must not race a later cache write for the same asset.
             info.hit = false;
-            info.discardedInvalidFile = true;
+            info.invalidFile = true;
         }
         return info;
     }
 
-    void PurgeStaleDiskCacheFiles(const DiskCacheInfo& info)
+    std::vector<std::string> FindStaleDiskCacheFiles(const DiskCacheInfo& info)
     {
+        std::vector<std::string> stalePaths;
         if (!info.enabled)
         {
-            return;
+            return stalePaths;
         }
 
         const fs::path cachePath(info.path);
@@ -259,10 +295,10 @@ namespace
             if (candidate != cachePath && filename.rfind(info.stablePrefix, 0) == 0 &&
                 candidate.extension() == ".png")
             {
-                std::error_code removeError;
-                fs::remove(candidate, removeError);
+                stalePaths.push_back(candidate.generic_string());
             }
         }
+        return stalePaths;
     }
 
     void RemoveDiskCacheFile(const std::string& path)
@@ -488,9 +524,181 @@ namespace
     }
 }
 
-void AssetThumbnailCache::BeginFrame()
+AssetThumbnailCache::AssetThumbnailCache()
+    : preflightState_(std::make_shared<PreflightState>())
+{
+}
+
+void AssetThumbnailCache::BeginFrame(Renderer& renderer)
 {
     ++frameCounter_;
+    CommitPreflightResults(renderer);
+    LaunchPreflightJobs();
+}
+
+void AssetThumbnailCache::QueuePreflight(const EditorAssetRecord& record,
+    PendingLoad::Kind generationKind,
+    std::uint64_t assetRegistryRevision,
+    Entry& entry)
+{
+    PreflightKind kind;
+    switch (generationKind)
+    {
+    case PendingLoad::Kind::Mesh:     kind = PreflightKind::Mesh; break;
+    case PendingLoad::Kind::Material: kind = PreflightKind::Material; break;
+    case PendingLoad::Kind::Cube:     kind = PreflightKind::Cube; break;
+    default:                          return;
+    }
+
+    entry.generationKind = kind;
+    entry.sourceWriteTime = record.fileWriteTime;
+    entry.registryRevision = assetRegistryRevision;
+    entry.preflightPending = true;
+    ++entry.preflightToken;
+    preflightQueue_.push_back({
+        record.id.key,
+        record.path,
+        kind,
+        record.fileWriteTime,
+        assetRegistryRevision,
+        entry.preflightToken,
+        preflightEpoch_
+    });
+}
+
+void AssetThumbnailCache::LaunchPreflightJobs()
+{
+    if (!preflightState_)
+    {
+        return;
+    }
+
+    while (!preflightQueue_.empty() &&
+           preflightState_->jobsInFlight.load(std::memory_order_acquire) <
+               kMaxPreflightJobsInFlight)
+    {
+        PreflightRequest request = std::move(preflightQueue_.front());
+        preflightQueue_.pop_front();
+
+        PreflightInput input;
+        input.key = std::move(request.key);
+        input.path = std::move(request.path);
+        input.kind = request.generationKind;
+        input.sourceWriteTime = request.sourceWriteTime;
+        input.registryRevision = request.registryRevision;
+        input.token = request.token;
+        input.epoch = request.epoch;
+
+        const std::shared_ptr<PreflightState> state = preflightState_;
+        state->jobsInFlight.fetch_add(1, std::memory_order_acq_rel);
+        auto job = [state, input = std::move(input)]() mutable
+        {
+            CPU_SCOPE(ProfilerScopes::kAssetThumbnailPreflight);
+            PreflightResult result;
+            result.input = std::move(input);
+            result.cache = BuildDiskCacheInfo(result.input);
+            result.staleCachePaths = FindStaleDiskCacheFiles(result.cache);
+
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->completed.push_back(std::move(result));
+            }
+            state->jobsInFlight.fetch_sub(1, std::memory_order_release);
+        };
+
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+        TaskSystem::Get().SubmitDetach(std::move(job));
+#else
+        job();
+#endif
+    }
+}
+
+void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
+{
+    CPU_SCOPE(ProfilerScopes::kAssetThumbnailCommitPreflight);
+    if (!preflightState_)
+    {
+        return;
+    }
+
+    std::deque<PreflightResult> completed;
+    {
+        std::lock_guard<std::mutex> lock(preflightState_->mutex);
+        completed.swap(preflightState_->completed);
+    }
+
+    for (PreflightResult& result : completed)
+    {
+        const PreflightInput& input = result.input;
+        if (input.epoch != preflightEpoch_)
+        {
+            continue;
+        }
+
+        const auto it = entries_.find(input.key);
+        if (it == entries_.end())
+        {
+            continue;
+        }
+
+        Entry& entry = it->second;
+        if (!entry.preflightPending ||
+            entry.preflightToken != input.token ||
+            entry.generationKind != input.kind ||
+            entry.sourceWriteTime != input.sourceWriteTime ||
+            entry.registryRevision != input.registryRevision)
+        {
+            continue;
+        }
+
+        entry.preflightPending = false;
+        if (result.cache.invalidFile)
+        {
+            RemoveDiskCacheFile(result.cache.path);
+        }
+        for (const std::string& stalePath : result.staleCachePaths)
+        {
+            RemoveDiskCacheFile(stalePath);
+        }
+
+        const bool cacheChanged = entry.cacheSignature != result.cache.signature ||
+            result.cache.invalidFile;
+        const bool needsLoad = entry.state == State::Preflighting ||
+            entry.state == State::Missing || cacheChanged;
+        entry.cacheSignature = result.cache.signature;
+        entry.cachePath = result.cache.path;
+        if (!needsLoad)
+        {
+            continue;
+        }
+
+        if (entry.resource)
+        {
+            ReleaseEntry(renderer, entry);
+        }
+
+        PendingLoad::Kind generationKind = PendingLoad::Kind::Mesh;
+        switch (input.kind)
+        {
+        case PreflightKind::Mesh:     generationKind = PendingLoad::Kind::Mesh; break;
+        case PreflightKind::Material: generationKind = PendingLoad::Kind::Material; break;
+        case PreflightKind::Cube:     generationKind = PendingLoad::Kind::Cube; break;
+        }
+
+        entry.state = State::Queued;
+        entry.failureReason.clear();
+        PendingLoad load;
+        load.key = input.key;
+        load.kind = result.cache.hit ? PendingLoad::Kind::DiskCache : generationKind;
+        load.generationKind = generationKind;
+        load.sourceWriteTime = input.sourceWriteTime;
+        load.cacheSignature = result.cache.signature;
+        load.path = input.path;
+        load.cachePath = result.cache.path;
+        load.presetKey = input.key;
+        queue_.push_back(std::move(load));
+    }
 }
 
 AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
@@ -513,71 +721,85 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
         return view; // Levels, shaders, unknown: no preview.
     }
 
+    const bool requiresPreflight = kind == PendingLoad::Kind::Mesh ||
+        kind == PendingLoad::Kind::Material || kind == PendingLoad::Kind::Cube;
     const std::string& key = record.id.key;
     auto it = entries_.find(key);
-    DiskCacheInfo diskCache;
-    bool hasDiskCacheInfo = false;
+    if (it == entries_.end())
+    {
+        Entry entry;
+        entry.state = requiresPreflight ? State::Preflighting : State::Queued;
+        entry.sourceWriteTime = record.fileWriteTime;
+        entry.registryRevision = assetRegistryRevision;
+        entry.lastRequestedFrame = frameCounter_;
+        it = entries_.emplace(key, std::move(entry)).first;
 
-    if (it != entries_.end())
+        if (requiresPreflight)
+        {
+            QueuePreflight(record, kind, assetRegistryRevision, it->second);
+        }
+        else
+        {
+            PendingLoad load;
+            load.key = key;
+            load.kind = kind;
+            load.generationKind = kind;
+            load.sourceWriteTime = record.fileWriteTime;
+            load.path = record.path;
+            load.presetKey = record.id.key;
+            load.usage = UsageForRecord(record);
+            queue_.push_back(std::move(load));
+        }
+    }
+    else
     {
         Entry& entry = it->second;
         const bool sourceChanged = entry.sourceWriteTime != record.fileWriteTime;
         const bool registryChanged = entry.registryRevision != assetRegistryRevision;
-        if (sourceChanged || registryChanged)
+        if (sourceChanged)
         {
-            // Disk/cache dependency probing can involve filesystem metadata and
-            // materials.json parsing. Do it only when the registry has changed,
-            // not once per visible item every editor frame.
-            diskCache = BuildDiskCacheInfo(record);
-            hasDiskCacheInfo = true;
-            const bool cacheChanged = entry.cacheSignature != diskCache.signature ||
-                diskCache.discardedInvalidFile;
-            if (sourceChanged || cacheChanged)
+            // Do not display a thumbnail from an edited source while a fresh
+            // preflight determines the cache and dependency signature.
+            ReleaseEntry(renderer, entry);
+            entry.state = requiresPreflight ? State::Preflighting : State::Queued;
+            entry.cacheSignature = 0;
+            entry.cachePath.clear();
+            if (requiresPreflight)
             {
-                // The source or one of its tracked dependencies changed. Drop the
-                // GPU thumbnail and lazily replace the stale on-disk PNG.
-                ReleaseEntry(renderer, entry);
-                entries_.erase(it);
-                it = entries_.end();
+                QueuePreflight(record, kind, assetRegistryRevision, entry);
+            }
+            else
+            {
+                entry.sourceWriteTime = record.fileWriteTime;
+                entry.registryRevision = assetRegistryRevision;
+                PendingLoad load;
+                load.key = key;
+                load.kind = kind;
+                load.generationKind = kind;
+                load.sourceWriteTime = record.fileWriteTime;
+                load.path = record.path;
+                load.presetKey = record.id.key;
+                load.usage = UsageForRecord(record);
+                queue_.push_back(std::move(load));
+            }
+        }
+        else if (registryChanged)
+        {
+            if (requiresPreflight)
+            {
+                // A queued source load must wait for the new dependency probe;
+                // ready previews remain drawable until a signature changes.
+                if (entry.state == State::Queued)
+                {
+                    entry.state = State::Preflighting;
+                }
+                QueuePreflight(record, kind, assetRegistryRevision, entry);
             }
             else
             {
                 entry.registryRevision = assetRegistryRevision;
             }
         }
-    }
-
-    if (it == entries_.end())
-    {
-        if (!hasDiskCacheInfo)
-        {
-            diskCache = BuildDiskCacheInfo(record);
-        }
-        Entry entry;
-        entry.state = State::Queued;
-        entry.sourceWriteTime = record.fileWriteTime;
-        entry.cacheSignature = diskCache.signature;
-        entry.registryRevision = assetRegistryRevision;
-        entry.cachePath = diskCache.path;
-        entry.lastRequestedFrame = frameCounter_;
-        entries_.emplace(key, std::move(entry));
-
-        PurgeStaleDiskCacheFiles(diskCache);
-
-        PendingLoad load;
-        load.key = key;
-        load.kind = diskCache.hit ? PendingLoad::Kind::DiskCache : kind;
-        load.generationKind = kind;
-        load.sourceWriteTime = record.fileWriteTime;
-        load.cacheSignature = diskCache.signature;
-        load.path = record.path;
-        load.cachePath = diskCache.path;
-        load.presetKey = record.id.key;
-        load.usage = UsageForRecord(record);
-        queue_.push_back(std::move(load));
-
-        view.state = State::Queued;
-        return view;
     }
 
     Entry& entry = it->second;
@@ -613,6 +835,8 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
 void AssetThumbnailCache::ProcessPending(Renderer& renderer)
 {
     CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
+    CommitPreflightResults(renderer);
+    LaunchPreflightJobs();
     if (queue_.empty())
     {
         return;
@@ -971,6 +1195,13 @@ void AssetThumbnailCache::ReleaseAll(Renderer& renderer)
     }
     entries_.clear();
     queue_.clear();
+    preflightQueue_.clear();
+    ++preflightEpoch_;
+    if (preflightState_)
+    {
+        std::lock_guard<std::mutex> lock(preflightState_->mutex);
+        preflightState_->completed.clear();
+    }
 }
 
 #endif // WITH_EDITOR

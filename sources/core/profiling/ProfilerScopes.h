@@ -26,6 +26,8 @@ extern const Profiler::ScopeNameKey kContentBrowserDrawSources;
 extern const Profiler::ScopeNameKey kContentBrowserBuildVisibleEntries;
 extern const Profiler::ScopeNameKey kContentBrowserDrawAssetView;
 extern const Profiler::ScopeNameKey kAssetThumbnailRequest;
+extern const Profiler::ScopeNameKey kAssetThumbnailPreflight;
+extern const Profiler::ScopeNameKey kAssetThumbnailCommitPreflight;
 extern const Profiler::ScopeNameKey kAssetThumbnailProcessPending;
 extern const Profiler::ScopeNameKey kSceneOutlinerDraw;
 extern const Profiler::ScopeNameKey kInspectorDraw;
