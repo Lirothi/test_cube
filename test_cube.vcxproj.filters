@@ -100,6 +100,9 @@
     <Filter Include="third_party">
       <UniqueIdentifier>{7a300746-b1e1-41ad-bbd4-6f265c38c41a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="third_party\cgltf">
+      <UniqueIdentifier>{ca3db394-f78d-43e5-b116-f5e38602972a}</UniqueIdentifier>
+    </Filter>
     <Filter Include="third_party\meshoptimizer">
       <UniqueIdentifier>{48bded15-5cb9-47bf-bf82-660efe28a98c}</UniqueIdentifier>
     </Filter>
@@ -970,6 +973,9 @@
     </ClInclude>
     <ClInclude Include="sources/ui/ImGuiWindowUtils.h">
       <Filter>sources\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\cgltf\cgltf.h">
+      <Filter>third_party\cgltf</Filter>
     </ClInclude>
     <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
       <Filter>third_party\enkiTS\src</Filter>

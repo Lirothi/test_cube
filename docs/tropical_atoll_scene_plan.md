@@ -78,8 +78,12 @@ reflections — acceptable; optionally exclude fronds from BLAS).
   - **GPT 5.6 terra** — self-contained scripts/data/config with build- or eyeball-verifiable
     output; no renderer internals.
   Escalation rule: two failed attempts or any unexplained regression → bump one tier.
-  Verification gates are identical for every tier. Lower-tier diffs touching
-  `sources/rendering` / `sources/app/scene` get a Fable review before commit.
+  Alternative escalation for GPT-tier steps that balloon into long-horizon/terminal-heavy work:
+  **GPT-5.6 Sol** instead of Opus (2.6× fewer output tokens than Terra → cheaper per solved
+  long task; strong terminal agentics). Sol is NOT a substitute for Opus on engine
+  implementation (no published SWE-bench numbers, pricier output than Opus) and NOT for code
+  review (low comment precision). Verification gates are identical for every tier. Lower-tier
+  diffs touching `sources/rendering` / `sources/app/scene` get a Fable review before commit.
 - **No `dynamic_cast`** — engine forbids it. Use the internal-RTTI virtual accessor pattern
   (`AsRenderableObject()`-style, add `AsParticleEmitter()` etc.).
 - New GPU buffers that grow or die with scene objects: remember the LightManager use-after-free
