@@ -338,12 +338,10 @@ namespace
     {
         BrowserThumbnail thumb;
 
-        // Textures (2D, not cube), meshes, and material presets get a real
-        // preview from the thumbnail cache. Cube textures still need a sampling
-        // pass; everything else falls back to its Step 12C icon/badge.
+        // Textures, meshes, and material presets get a real preview from the
+        // thumbnail cache. Cubemaps are sampled to their +X face by Step 12F.
         const bool previewable =
-            (record.id.type == EditorAssetType::Texture &&
-                record.texture.kind != EditorTextureKind::TextureCube) ||
+            record.id.type == EditorAssetType::Texture ||
             record.id.type == EditorAssetType::Mesh ||
             record.id.type == EditorAssetType::MaterialPreset;
         if (previewable && thumbs.cache && thumbs.renderer)

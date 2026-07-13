@@ -9,6 +9,7 @@
 
 #include "core/math/AABB.h"
 #include "materials/MaterialData.h"
+#include "materials/TextureCube.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/Mesh.h"
@@ -75,7 +76,10 @@ bool EditorPreviewRenderer::EnsureInitialized(Renderer& renderer)
 
     ComPtr<ID3DBlob> vs = CompilePreviewShader("VSMain", "vs_5_0");
     ComPtr<ID3DBlob> ps = CompilePreviewShader("PSMain", "ps_5_0");
-    if (!vs || !ps)
+    ComPtr<ID3DBlob> cubeVs = CompilePreviewShader("CubeVSMain", "vs_5_0");
+    ComPtr<ID3DBlob> cubePs = CompilePreviewShader("CubePSMain", "ps_5_0");
+    ComPtr<ID3DBlob> cubeArrayPs = CompilePreviewShader("CubeArrayPSMain", "ps_5_0");
+    if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs)
     {
         return false;
     }
@@ -157,6 +161,35 @@ bool EditorPreviewRenderer::EnsureInitialized(Renderer& renderer)
     pso.DSVFormat = kDepthFormat;
     pso.SampleDesc.Count = 1;
     if (FAILED(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&pipeline_))))
+    {
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC cubePso{};
+    cubePso.pRootSignature = rootSignature_.Get();
+    cubePso.VS = { cubeVs->GetBufferPointer(), cubeVs->GetBufferSize() };
+    cubePso.PS = { cubePs->GetBufferPointer(), cubePs->GetBufferSize() };
+    cubePso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    cubePso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    cubePso.RasterizerState.DepthClipEnable = TRUE;
+    cubePso.BlendState.RenderTarget[0].RenderTargetWriteMask =
+        D3D12_COLOR_WRITE_ENABLE_ALL;
+    cubePso.DepthStencilState.DepthEnable = FALSE;
+    cubePso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    cubePso.DepthStencilState.StencilEnable = FALSE;
+    cubePso.SampleMask = UINT_MAX;
+    cubePso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    cubePso.NumRenderTargets = 1;
+    cubePso.RTVFormats[0] = kColorFormat;
+    cubePso.DSVFormat = DXGI_FORMAT_UNKNOWN;
+    cubePso.SampleDesc.Count = 1;
+    if (FAILED(device->CreateGraphicsPipelineState(&cubePso, IID_PPV_ARGS(&cubePipeline_))))
+    {
+        return false;
+    }
+
+    cubePso.PS = { cubeArrayPs->GetBufferPointer(), cubeArrayPs->GetBufferSize() };
+    if (FAILED(device->CreateGraphicsPipelineState(&cubePso, IID_PPV_ARGS(&cubeArrayPipeline_))))
     {
         return false;
     }
@@ -311,6 +344,13 @@ void EditorPreviewRenderer::EnsurePresets()
     materials_.LoadPresetsFromJsonFile(L"data/materials.json");
 }
 
+void EditorPreviewRenderer::ReloadPresets()
+{
+    materials_.ClearAll();
+    presetsLoaded_ = false;
+    EnsurePresets();
+}
+
 std::shared_ptr<Mesh> EditorPreviewRenderer::EnsureSphere(Renderer& renderer,
     UploadBatch& load)
 {
@@ -454,6 +494,90 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     barrier(depthTarget_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
         D3D12_RESOURCE_STATE_COMMON);
 
+    return color;
+}
+
+Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnail(
+    Renderer& renderer,
+    ID3D12GraphicsCommandList* cl,
+    const TextureCube& cube,
+    std::uint32_t size)
+{
+    ID3D12Device* device = renderer.GetDevice();
+    if (!initialized_ || !device || !cl || size == 0 || !cube.GetResource())
+    {
+        return nullptr;
+    }
+
+    ComPtr<ID3D12Resource> color = CreateColorTarget(device, size);
+    if (!color)
+    {
+        return nullptr;
+    }
+
+    D3D12_RENDER_TARGET_VIEW_DESC rtv{};
+    rtv.Format = kColorFormat;
+    rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    device->CreateRenderTargetView(color.Get(), &rtv, rtvHandle_);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = cube.GetFormat();
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    if (cube.IsArray())
+    {
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+        srv.TextureCubeArray.MostDetailedMip = 0;
+        srv.TextureCubeArray.MipLevels = cube.GetMips();
+        srv.TextureCubeArray.First2DArrayFace = 0;
+        srv.TextureCubeArray.NumCubes = cube.GetArraySize() / 6;
+        srv.TextureCubeArray.ResourceMinLODClamp = 0.0f;
+    }
+    else
+    {
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+        srv.TextureCube.MostDetailedMip = 0;
+        srv.TextureCube.MipLevels = cube.GetMips();
+        srv.TextureCube.ResourceMinLODClamp = 0.0f;
+    }
+    device->CreateShaderResourceView(cube.GetResource(), &srv, srvCpuHandle_);
+
+    PreviewConstants constants{};
+    std::memcpy(constantBufferMapped_, &constants, sizeof(constants));
+
+    auto barrier = [cl](ID3D12Resource* resource,
+        D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+    {
+        D3D12_RESOURCE_BARRIER transition{};
+        transition.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        transition.Transition.pResource = resource;
+        transition.Transition.StateBefore = before;
+        transition.Transition.StateAfter = after;
+        transition.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cl->ResourceBarrier(1, &transition);
+    };
+
+    barrier(color.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    cl->OMSetRenderTargets(1, &rtvHandle_, FALSE, nullptr);
+    D3D12_VIEWPORT viewport{ 0.0f, 0.0f,
+        static_cast<float>(size), static_cast<float>(size), 0.0f, 1.0f };
+    cl->RSSetViewports(1, &viewport);
+    D3D12_RECT scissor{ 0, 0, static_cast<LONG>(size), static_cast<LONG>(size) };
+    cl->RSSetScissorRects(1, &scissor);
+
+    const float clearColor[4] = { 0.14f, 0.14f, 0.16f, 1.0f };
+    cl->ClearRenderTargetView(rtvHandle_, clearColor, 0, nullptr);
+    cl->SetGraphicsRootSignature(rootSignature_.Get());
+    cl->SetPipelineState(cube.IsArray() ? cubeArrayPipeline_.Get() : cubePipeline_.Get());
+    ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
+    cl->SetDescriptorHeaps(1, heaps);
+    cl->SetGraphicsRootConstantBufferView(0, constantBuffer_->GetGPUVirtualAddress());
+    cl->SetGraphicsRootDescriptorTable(1, srvGpuHandle_);
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cl->DrawInstanced(3, 1, 0, 0);
+
+    barrier(color.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     return color;
 }
 

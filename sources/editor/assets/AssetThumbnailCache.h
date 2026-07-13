@@ -17,13 +17,14 @@
 struct EditorAssetRecord;
 class Renderer;
 
-// Editor-owned cache of real asset thumbnails for the Content Browser (Step 12D/E).
+// Editor-owned cache of real asset thumbnails for the Content Browser (Step 12F).
 //
 // Texture assets are previewed by loading the source image on the GPU; mesh and
-// material assets are previewed by rendering them offscreen through
-// EditorPreviewRenderer. Every generated thumbnail is a GPU resource left in a
-// shader-read state and handed to ImGui via a per-frame texture id. Cube textures
-// are not previewed (the browser leaves them on their badge).
+// material and cubemap assets are previewed by rendering them offscreen through
+// EditorPreviewRenderer. Rendered previews are also persisted as 256px PNGs in
+// editor_cache/thumbnails, so later editor sessions can upload them directly.
+// Every resident thumbnail is left shader-readable and handed to ImGui via a
+// per-frame texture id.
 //
 // Lifetime / threading: every method runs inside the editor draw/tick window. All
 // GPU work (texture upload, offscreen render, resource release) is fenced with
@@ -54,7 +55,8 @@ public:
     // editor frame before issuing any Request.
     void BeginFrame();
 
-    // Request the thumbnail for a previewable asset (texture, mesh, or material)
+    // Request the thumbnail for a previewable asset (texture, mesh, material, or
+    // cubemap)
     // and, when Ready, obtain a drawable per-frame ImGui id for it. Marks the
     // asset used this frame. Non-previewable records return State::Missing.
     View Request(Renderer& renderer, const EditorAssetRecord& record);
@@ -79,6 +81,8 @@ private:
         std::uint32_t height = 0;
         std::uint32_t mipLevels = 1;
         std::uint64_t sourceWriteTime = 0;
+        std::uint64_t cacheSignature = 0;
+        std::string cachePath;
         std::string failureReason;
         std::uint64_t lastRequestedFrame = 0;
     };
@@ -89,12 +93,18 @@ private:
         {
             Texture,
             Mesh,
-            Material
+            Material,
+            Cube,
+            DiskCache
         };
 
         std::string key;
         Kind kind = Kind::Texture;
+        Kind generationKind = Kind::Texture; // source kind when `kind` is DiskCache
+        std::uint64_t sourceWriteTime = 0;
+        std::uint64_t cacheSignature = 0;
         std::string path;                   // texture / mesh source file
+        std::string cachePath;              // rendered cache PNG, if any
         std::string presetKey;              // material preset name
         Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB; // texture only
     };

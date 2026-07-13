@@ -59,3 +59,48 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 lit = albedo * (gAmbient.rgb + ndl);
     return float4(lit, 1.0);
 }
+
+// Cubemap thumbnails intentionally show the +X face. A fullscreen triangle
+// keeps the result in the same 2D target layout as mesh/material previews.
+TextureCube gCube : register(t0);
+
+struct CubeVSOutput
+{
+    float4 position : SV_POSITION;
+    float2 uv       : TEXCOORD;
+};
+
+CubeVSOutput CubeVSMain(uint vertexId : SV_VertexID)
+{
+    const float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2(-1.0,  3.0),
+        float2( 3.0, -1.0)
+    };
+    const float2 uvs[3] = {
+        float2(0.0, 1.0),
+        float2(0.0, -1.0),
+        float2(2.0, 1.0)
+    };
+
+    CubeVSOutput output;
+    output.position = float4(positions[vertexId], 0.0, 1.0);
+    output.uv = uvs[vertexId];
+    return output;
+}
+
+float4 CubePSMain(CubeVSOutput input) : SV_TARGET
+{
+    const float2 faceUv = input.uv * 2.0 - 1.0;
+    const float3 direction = normalize(float3(1.0, -faceUv.y, faceUv.x));
+    return float4(gCube.SampleLevel(gSampler, direction, 0.0).rgb, 1.0);
+}
+
+TextureCubeArray gCubeArray : register(t0);
+
+float4 CubeArrayPSMain(CubeVSOutput input) : SV_TARGET
+{
+    const float2 faceUv = input.uv * 2.0 - 1.0;
+    const float3 direction = normalize(float3(1.0, -faceUv.y, faceUv.x));
+    return float4(gCubeArray.SampleLevel(gSampler, float4(direction, 0.0), 0.0).rgb, 1.0);
+}

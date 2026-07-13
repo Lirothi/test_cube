@@ -6,6 +6,7 @@
 # User-specific files
 imgui.ini
 editor_state.json
+editor_cache/
 rt_smoke.txt
 crash_stack.txt
 *.rsuser

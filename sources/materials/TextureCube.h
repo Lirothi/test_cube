@@ -28,6 +28,7 @@ public:
     UINT            GetWidth()   const { return width_; }
     UINT            GetHeight()  const { return height_; }
     UINT            GetMips()    const { return mipLevels_; }
+    UINT            GetArraySize() const { return arraySize_; }
     DXGI_FORMAT     GetFormat()  const { return format_; }
     bool            IsArray()    const { return arraySize_ > 6; }
 

@@ -70,6 +70,16 @@ reflections — acceptable; optionally exclude fronds from BLAS).
   Build from PowerShell (never bash):
   `msbuild test_cube.sln /p:Configuration=Release /p:Platform=x64 /m /v:m`
   (match existing configuration names in the sln if they differ).
+- **Executor model per step** — every step below carries an `exec:` tag:
+  - **Fable** — cross-cutting renderer refactors, GPU lifetime/sync hazards, perf-regression-
+    prone queue/shadow/RT work, gnarly debugging.
+  - **Opus 4.8** — well-specified engineering with a contained blast radius: shader variants,
+    tool backends, editor windows. The step text in this doc is the spec.
+  - **GPT 5.6 terra** — self-contained scripts/data/config with build- or eyeball-verifiable
+    output; no renderer internals.
+  Escalation rule: two failed attempts or any unexplained regression → bump one tier.
+  Verification gates are identical for every tier. Lower-tier diffs touching
+  `sources/rendering` / `sources/app/scene` get a Fable review before commit.
 - **No `dynamic_cast`** — engine forbids it. Use the internal-RTTI virtual accessor pattern
   (`AsRenderableObject()`-style, add `AsParticleEmitter()` etc.).
 - New GPU buffers that grow or die with scene objects: remember the LightManager use-after-free
@@ -100,8 +110,10 @@ reflections — acceptable; optionally exclude fronds from BLAS).
   never asset-blocked; G0 island is procedural). Staged as of 2026-07-13: 3 palms (evolveduk,
   CC-BY), 2 boulders (Pixel Life, CC-BY), rocks pack (Studio Lab — **NOT CC**, Sketchfab
   standard license, prefer the Pixel Life boulders), coast_sand_01 + marble_cliff_05 texture
-  sets (Poly Haven, CC0), rustig_koppie_puresky_4k.hdr sky (CC0). **Still missing: campfire
-  model + fire/smoke flipbook sprites** — that's the only remaining asset gate before G3.
+  sets (Poly Haven, CC0), rustig_koppie_puresky_4k.hdr sky (CC0), campfire (filthycent, CC-BY,
+  1.4k tris, MR B-channel=0 so the default metallicFactor=1 is harmless), Kenney Particle Pack
+  (CC0 — covers fire/smoke/sparks sprites). **All asset gates are clear as of 2026-07-13**;
+  optional later add: a Mantaflow-baked flame flipbook (self-made, see E4).
 
 ---
 
@@ -110,11 +122,12 @@ reflections — acceptable; optionally exclude fronds from BLAS).
 Rationale: nearly all free realistic assets ship as glTF/GLB. One-time engine work kills the
 per-asset Blender routine.
 
-**A1 — vendor cgltf.** Add `third_party/cgltf/cgltf.h` (single header, MIT). Wire include path
+**A1 — vendor cgltf.** *(exec: GPT 5.6 terra — header drop + vcxproj, build verifies)* Add `third_party/cgltf/cgltf.h` (single header, MIT). Wire include path
 into `test_cube.vcxproj` (`third_party` is already on the include path — just add the file to the
 project + filters). No behavior change; build-verify.
 
-**A2 — geometry import.** In `MeshManager::Load`, dispatch `.gltf`/`.glb` → `ParseGltfFile`:
+**A2 — geometry import.** *(exec: Opus 4.8; escalate to Fable if handedness/winding debugging
+drags)* In `MeshManager::Load`, dispatch `.gltf`/`.glb` → `ParseGltfFile`:
 - Walk the node hierarchy, bake node world transforms into vertices.
 - For each mesh primitive: positions, normals, uv0, tangents (if absent → reuse the existing
   tangent generation used for OBJ); indices u16/u32 → engine format; build `VertexPNTUV`.
@@ -135,7 +148,7 @@ project + filters). No behavior change; build-verify.
 - Embedded GLB textures: decode via the existing WIC path from memory blob (WIC supports
   `IWICImagingFactory::CreateDecoderFromStream`); external URIs resolve relative to the file.
 
-**A3 — material import.** From each primitive's material, extract into `MaterialParams`:
+**A3 — material import.** *(exec: Opus 4.8)* From each primitive's material, extract into `MaterialParams`:
 - `baseColorTexture`/`baseColorFactor` → albedo/tint.
 - `metallicRoughnessTexture`: **glTF packs G=roughness, B=metallic; engine expects R=metal,
   G=rough.** Add a `mrLayout` flag (engine|gltf) to `MaterialParams` + a swizzle in
@@ -157,7 +170,7 @@ project + filters). No behavior change; build-verify.
 - Runtime-only auto-materials (no writes to `data/materials.json`); the editor may later save a
   preset explicitly.
 
-**A4 — registry + verification.** AssetRegistry: add `.gltf`/`.glb` to the models root
+**A4 — registry + verification.** *(exec: GPT 5.6 terra)* AssetRegistry: add `.gltf`/`.glb` to the models root
 extension list so assets show in the content browser. Editor spawn UX intentionally waits for
 Part B (one object with material slots — B4); do NOT build a composite-of-N-objects spawn
 workaround. Verify Part A by hand-authoring `staticMesh` entries with
@@ -174,14 +187,15 @@ One placed object = one multi-material asset. Identity/UX work, not perf (draw c
 identical — see Decisions). This is the **widest-touch part of the plan**: stage the commits so
 each one builds, runs the demo level unchanged, and keeps auto-instancing intact.
 
-**B1 — submesh plumbing (behavioral no-op).** `Mesh` gains a submesh table
+**B1 — submesh plumbing (behavioral no-op).** *(exec: Opus 4.8 — mechanical, but the per-range
+LOD rebuild must be exactly right)* `Mesh` gains a submesh table
 `{indexOffset, indexCount, materialSlot}`; OBJ/`.txt` loaders emit exactly one submesh, so
 nothing changes visually. **LOD gotcha**: `GenerateLods` simplifies the whole index buffer
 today — it must simplify each submesh range independently and rebuild the table per LOD level,
 or ranges go stale. Commit as a no-op; gate on demo level identical + instancing batch counts
 identical.
 
-**B2 — draw items in the queue.** `SceneRenderQueue` bucket entries become
+**B2 — draw items in the queue.** *(exec: Fable — sort/instancing keys, perf-regression risk)* `SceneRenderQueue` bucket entries become
 (object, submeshIndex) draw items; sort keys and `BuildInstancedBatches` keys extend to
 (mesh, submesh, material) — 15 palms must still collapse to ~5 instanced draws (one per part).
 Culling stays per-object on whole-mesh bounds (per-submesh bounds = future). `StaticMeshObject`
@@ -190,7 +204,7 @@ array, with the scalar `"material"` kept as slot-0 back-compat. glTF plain-path 
 returns the full multi-submesh mesh. Regression gates: demo level visuals + batch counts
 unchanged for single-submesh content.
 
-**B3 — downstream consumers.** Shadow paths (CSM, VSM caster data, point/spot) iterate
+**B3 — downstream consumers.** *(exec: Fable — VSM caster data + RT BLAS are the gnarly zones)* Shadow paths (CSM, VSM caster data, point/spot) iterate
 submeshes — they are material-agnostic today so behavior is equivalent, but per-submesh items
 are what lets Part C masked shadows pick per-slot materials later. RT reflections: one BLAS per
 mesh, one geometry desc per submesh (enables per-slot masked/exclusion decisions later).
@@ -198,7 +212,7 @@ Picking/selection stays per-object (submeshes are not individually selectable in
 `instancedModels`/`ShadowGpuData` path single-submesh for now (see GI→VSM plan — don't tangle
 the two refactors).
 
-**B4 — editor UX + spawn.** `SpawnMeshCommand` spawns ONE object per glTF asset with slots
+**B4 — editor UX + spawn.** *(exec: Opus 4.8)* `SpawnMeshCommand` spawns ONE object per glTF asset with slots
 auto-filled from A3 materials; `InspectorPanel` shows a material-slot list (per-slot preset
 picker, per-slot undo via a `SetMaterialSlotCommand`); outliner shows one node per asset.
 Verify with the coconut palm: spawn → one object with 5 slots; move/duplicate/undo/save/reload
@@ -206,7 +220,7 @@ round-trips; `--scene-stress` clean.
 
 ## Part C — masked + two-sided foliage
 
-**C1 — masked G-buffer variant.** Add alpha-test to the G-buffer shader: either
+**C1 — masked G-buffer variant.** *(exec: Opus 4.8)* Add alpha-test to the G-buffer shader: either
 `shaders/gbuffer_masked.hlsl` or a `#define ALPHA_TEST` permutation of `gbuffer.hlsl` —
 `clip(albedo.a - cutoff)`. The knobs are **per material slot** (not per object):
 `alphaTest`/`alphaCutoff`/`twoSided` fields on material entries (level-JSON `materials[]`
@@ -217,7 +231,8 @@ draw item from its slot. glTF import (A3) fills them automatically from
 Note: alpha-tested foliage can shimmer under DLSS jitter — tune cutoff, accept for now
 (hashed alpha is a future item).
 
-**C2 — masked shadow passes.** Depth-only shadow paths (CSM, VSM page render, point/spot) treat
+**C2 — masked shadow passes.** *(exec: Fable — CSM + VSM page render + point paths, easy to
+regress)* Depth-only shadow paths (CSM, VSM page render, point/spot) treat
 everything as opaque today → fronds would cast solid-blob shadows. Add a masked depth variant
 (bind albedo SRV + clip) for the **sun path (CSM + VSM) first** — palms are sunlit; point/spot
 masked shadows can lag behind (campfire is inside a cave of solid rocks). Watch VSM perf: fronds
@@ -226,7 +241,7 @@ after C1 alone: solid shadows (visible but not blocking).
 
 ## Part D — emissive meshes
 
-Extend `gbuffer.hlsl` (and the masked variant) with per-material-slot `emissiveColor` (rgb) ×
+*(exec: Opus 4.8)* Extend `gbuffer.hlsl` (and the masked variant) with per-material-slot `emissiveColor` (rgb) ×
 `emissiveStrength`, optional `emissiveTexture` (from A3). Write into the existing emissive
 target (`RT2`); `compose_cs.hlsl` already adds it. JSON knobs on material entries (slot-level,
 same shape as C1's flags): `"emissiveColor": [r,g,b]`, `"emissiveStrength": x`,
@@ -241,7 +256,7 @@ emitter = one CB update + 2 dispatches + 1 draw, regardless of particle count �
 the engine's GPU-driven direction and its known CPU-submission bottleneck. Budgets stay modest
 for the campfire (≤ ~2K particles per emitter), but the design scales.
 
-**E1 — GPU sim core.** `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
+**E1 — GPU sim core.** *(exec: Fable — buffer lifetime + dispatch plumbing, hazard-prone)* `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
 `shaders/particle_spawn_cs.hlsl`, `shaders/particle_update_cs.hlsl`:
 - `EmitterDesc` (JSON-serializable, unchanged by the GPU choice): `maxParticles`, `spawnRate`,
   `lifetime` [min,max], `initialSpeed` [min,max] + cone (direction, angle), `gravity`
@@ -266,7 +281,7 @@ for the campfire (≤ ~2K particles per emitter), but the design scales.
   editor pause stops Ticks → sim freezes naturally. Add a `vfx::g_freeze` debug toggle and an
   optional alive-count readback (debug HUD) — GPU sims are otherwise opaque to debug.
 
-**E2 — rendering.** New renderable `ParticleEmitterObject` (subclass `RenderableObjectBase`,
+**E2 — rendering.** *(exec: Fable — transparent-pass/queue integration)* New renderable `ParticleEmitterObject` (subclass `RenderableObjectBase`,
 `IsTransparent()=true`, `RenderLayer::Transparent`) → lands in the sorted `TransparentSimple`
 bucket and draws inside `Pass_Transparent` (`SceneRenderer.cpp`, `Main_Transparent` — blending
 already runs in sorted-queue order there):
@@ -278,9 +293,10 @@ already runs in sorted-queue order there):
   fps); depth-test ON, depth-write OFF; additive or premultiplied-alpha blend state per emitter.
 - No per-frame CPU upload of particle data at all; only the emitter CB.
 - Particles are absent from G-buffer/shadow/RT — intended (no reflected/shadow-casting fire).
-- **E2b (optional polish)**: soft-particle depth fade using the scene depth SRV already
+- **E2b (optional polish)** *(exec: Opus 4.8)*: soft-particle depth fade using the scene depth SRV already
   available to the transparent pass.
-- **E2c — sorting for `alpha` emitters (smoke)**: single-workgroup bitonic sort of alive slots
+- **E2c — sorting for `alpha` emitters (smoke)** *(exec: Opus 4.8 — textbook algorithm,
+  self-contained)*: single-workgroup bitonic sort of alive slots
   by view depth into a small index buffer, VS indexes through it (fine up to ~1–2K particles —
   enforce `maxParticles` ≤ sort capacity when `sortParticles` is set). Additive emitters (fire,
   sparks) skip it. Interim state before D2c lands: keep smoke opacity low — premultiplied alpha
@@ -291,14 +307,27 @@ already runs in sorted-queue order there):
   while a *previous frame's* draw may still read → either double-buffer the state buffer or
   prove the render-graph ordering makes it safe. `--scene-stress=30` is the gate.
 
-**E3 — authoring + editor.** Register `"particleEmitter"` in `SceneObjectRegistry` /
+**E3 — authoring + editor.** *(exec: Opus 4.8)* Register `"particleEmitter"` in `SceneObjectRegistry` /
 `SceneObjectFactory`. Level JSON mirrors the ocean pattern:
 `{"type":"particleEmitter", "preset":"data/particles/fire.json", "position":[...],
 "overrides":{...}}`. Editor: spawnable (SpawnMesh-style or via CreateEnvironmentCommand path),
 selectable, movable with the gizmo, properties in InspectorPanel, round-trips through document
 save/load like meshes do. Respect the editor ID model from the level-editor plan.
 
-**E4 — presets + tuning.** `data/particles/fire.json`, `smoke.json`, `sparks.json`:
+**E4 — presets + tuning.** *(exec: GPT 5.6 terra — JSON iteration, user judges visuals)*
+`data/particles/fire.json`, `smoke.json`, `sparks.json`.
+**Primary textures = the user's AI-generated 8-frame flipbooks** (verified visually, staged):
+- `import_staging/white_flame_frames_separate_png/` — flame silhouette with licking tongues,
+  grayscale/white, base anchored bottom-center. Additive, orange→deep-red tint via
+  `colorOverLife`, ~12 fps + `frameBlend`. This is the fire emitter's flipbook.
+- `import_staging/smoke_frames_separate_png/` — frames of a rising smoke COLUMN (not a puff):
+  use 2–4 large, slow, low-alpha particles → an animated plume over the fire, cheap. Optional
+  edge haze: a second emitter with Kenney `smoke_01..08` round puffs.
+Frames are 444×444 RGBA → H1's frame-sequence importer resamples to 512 and packs a 4×2
+2048×1024 atlas (premultiplied alpha). From Kenney (CC0) still in use: sparks/embers =
+`circle_05` or `star_05` (additive, gravity-pulled); `scorch_01..03` = Part D emissive
+ember-bed candidates. AVOID from Kenney: `flame_05/06` (candle flames), `spark_XX` (lightning).
+Mantaflow-baked flipbook remains the escalation path if the flame set falls short in the cave:
 - Fire: additive flame flipbook, buoyant (gravity ≈ −2..−4), lifetime 0.5–1.0 s, grows then
   shrinks, orange→deep-red gradient.
 - Smoke: alpha-blend, slow, long lifetime (2–4 s), grows steadily, gray with low alpha, mild
@@ -308,7 +337,7 @@ Verify inside the actual cave lighting, not in the void.
 
 ## Part F — flickering point light
 
-`pointLights[]` JSON: `"flicker": {"amplitude": 0.35, "frequencyHz": 7, "seed": 3}` —
+*(exec: GPT 5.6 terra — tiny Tick + JSON knob)* `pointLights[]` JSON: `"flicker": {"amplitude": 0.35, "frequencyHz": 7, "seed": 3}` —
 modulate intensity (and optionally radius ±10%) in a Tick using layered sines / value noise
 (NOT white noise per frame — that strobes). Editor inspector support. Keep `shadowsEnabled:
 true` for the campfire — pointlight shadows exist and are cheap for one light.
@@ -318,7 +347,7 @@ true` for the campfire — pointlight shadows exist and are cheap for one light.
 Prefer assembling **in the editor** (this is the dogfooding goal), saving via the document
 pipeline; hand-edit JSON only for things the editor can't author yet.
 
-**G0 — procedural island mesh.** No good free atoll meshes exist; generate one:
+**G0 — procedural island mesh.** *(exec: GPT 5.6 terra — standalone script, eyeball-verifiable)* No good free atoll meshes exist; generate one:
 `tools/gen_island.py` (pure Python, writes OBJ directly — no Blender dependency): a ring-shaped
 heightfield (radial gaussian ring + low-frequency noise), gentle beach slope crossing y=0 (ocean
 shore-depth params need real underwater geometry to fade against), a flattened area for the
@@ -327,7 +356,8 @@ generate a simple lagoon-floor disc (sand, slightly below sea level) so the lago
 turquoise-over-sand rather than deep-ocean.
 **Sea level convention: ocean plane sits at y=0; author everything against that.**
 
-**G1 — environment.** Skybox conversion runs through the importer backend (H1 ".hdr → skybox"
+**G1 — environment.** *(exec: GPT 5.6 terra — runs H1 CLI + tunes ocean preset with the user)*
+Skybox conversion runs through the importer backend (H1 ".hdr → skybox"
 path, via UI or CLI):
 1. equirect `.hdr` → 6 cube faces (CPU projection, float precision preserved);
 2. cubemap assembly + full mip chain (skybox doubles as ambient/specular source);
@@ -340,17 +370,18 @@ palm shadows rake across the beach. Ocean: enable with a copied+tuned preset
 `data/ocean/atoll.json` — lower wind, turquoise SSS/scatter tint, strong shore foam; check
 `GetShoreDepthParams` behavior against the island slope.
 
-**G2 — island dressing.** Island mesh (`renderLayer: "Terrain"`, sand material from the asset
+**G2 — island dressing.** *(exec: user in the editor + GPT 5.6 terra for JSON chores)* Island mesh (`renderLayer: "Terrain"`, sand material from the asset
 guide, tiled). Palms: imported GLB spawned via B4 (one object, 5 material slots), 8–15 around
 the ring, varied yaw/scale; if count grows, switch repeated palms to `instancedModels`. Rocks: 5–10
 photoscanned boulders composed into an outcrop + walk-in cave (assembling this in the editor is
 the point); a dark interior "cap" rock kills skylight leaks.
 
-**G3 — campfire.** In the cave: logs+stones mesh (asset guide), embers with emissive material
+**G3 — campfire.** *(exec: user in the editor + GPT 5.6 terra for JSON chores)* In the cave: logs+stones mesh (asset guide), embers with emissive material
 (Part D), three emitters — fire, smoke (drifting toward the cave mouth via cone direction),
 sparks — and the flickering shadowed point light (Part F) at flame height.
 
-**G4 — polish + verification.** Camera start on the beach facing the cave. Tune: ocean foam at
+**G4 — polish + verification.** *(exec: Opus 4.8 — scene-stress verdicts and shadow/foam tuning
+need judgment)* Camera start on the beach facing the cave. Tune: ocean foam at
 the shoreline, palm shadow quality (C2), fire readability from the beach at dusk-ish exposure.
 Screenshot set: beach wide shot / cave interior / fire close-up. Run `--scene-stress=30`
 (atoll↔demo). Confirm visuals with the user before calling it done (per screenshot-verification
@@ -364,7 +395,7 @@ H1/H2 can run in parallel with B–F; must land before G2 (island dressing) so p
 mipped BC textures instead of raw WIC PNGs. The doc's part order is not strict execution order
 here.
 
-**H1 — conversion backend (no UI yet).** Vendor **DirectXTex** (source, MIT) into
+**H1 — conversion backend (no UI yet).** *(exec: Opus 4.8)* Vendor **DirectXTex** (source, MIT) into
 `third_party/` — prefer the library over shelling out to `texconv.exe` (in-process progress
 reporting, no binaries in the repo); keep the texconv-CLI route as a documented fallback if
 vcxproj integration fights back. Implement:
@@ -377,6 +408,10 @@ vcxproj integration fights back. Implement:
   `mr` texture from the separate grayscale maps (R=metal — constant 0 when no metallic map
   exists, which is the normal case for sand/rock; G=rough) and register a material preset for
   the set.
+- **Frame-sequence → flipbook atlas**: detect `*_frame_NN.png` / `*_NN.png` sequences,
+  resample frames to a power-of-two cell (e.g. 444→512), pack a grid atlas (8 frames → 4×2),
+  premultiply alpha, emit flipbook metadata (cols/rows/frames) alongside for the particle
+  presets (E4). Staged ChatGPT-generated flame/smoke sets are the first consumers.
 - **Normal-map Y convention**: pin down the engine's expected convention first (inspect how
   the existing `*_normal` textures + shaders behave), then normalize on import with a
   flip-green option. Staged reality: Poly Haven `_nor_dx` = DirectX-style (-Y), glTF normal
@@ -388,12 +423,13 @@ vcxproj integration fights back. Implement:
 - CLI entry point (e.g. `test_cube.exe --import <staging-dir> [--skybox <file.hdr>]`) for
   headless/batch use and for the executor.
 
-**H2 — DDS-sibling resolution.** When resolving any texture path (glTF materials, material
+**H2 — DDS-sibling resolution.** *(exec: GPT 5.6 terra — small resolver change; escalation rule
+applies since it touches texture loading)* When resolving any texture path (glTF materials, material
 presets), prefer `<name>.dds` sitting next to the source file; fall back to the original
 PNG via WIC with a one-time "unmipped texture" log warning. This kills reference remapping
 entirely: the imported glTF stays byte-identical, DDS files just appear beside its textures.
 
-**H3 — importer UI.** Content browser "Import…" button → window that scans `import_staging/`
+**H3 — importer UI.** *(exec: Opus 4.8 — ImGui + background jobs)* Content browser "Import…" button → window that scans `import_staging/`
 and lists detected assets (glTF/GLB with texture sets, texture-only folders, `.hdr` files)
 with what was found: primitive/material counts, alphaMode/doubleSided flags, texture
 resolutions, and license/author pulled from `source.txt` **or the glTF `asset.extras`**
@@ -408,7 +444,7 @@ append a CREDITS.md entry, refresh AssetRegistry, completion toast. The imported
 spawnable via B4. Verify end-to-end with the coconut palm: Import → spawn → mipped BC textures
 confirmed (no shimmer at distance), CREDITS.md entry correct.
 
-**H4 (optional polish).** Reimport: detect a source newer than its DDS siblings, offer
+**H4 (optional polish).** *(exec: GPT 5.6 terra)* Reimport: detect a source newer than its DDS siblings, offer
 one-click reimport; per-asset import status badges in the content browser.
 
 ## Part I — simple material editor
@@ -419,12 +455,13 @@ needs B4 (slot list in the inspector); the C/D fields (alphaTest/twoSided, emiss
 the UI as those parts land; pairs naturally with H (pickers browse imported DDS). Needed during
 G2–G3 for tuning sand/rock/fronds/embers in place.
 
-**I1 — presets become writable assets.** AssetRegistry already harvests presets from
+**I1 — presets become writable assets.** *(exec: Opus 4.8 — round-trip-preserving JSON writes)* AssetRegistry already harvests presets from
 `data/materials.json`; add the write path: create / duplicate / rename / delete preset,
 saved back to `data/materials.json`. Read-modify-write per preset (merge), preserving unknown
 keys and key order — hand-authored entries must survive round-trips with clean diffs.
 
-**I2 — editor window.** Opened by double-clicking a material in the content browser or from an
+**I2 — editor window.** *(exec: Opus 4.8; escalate to Fable if the live-apply GPU sync fights
+back)* Opened by double-clicking a material in the content browser or from an
 "edit" button next to the slot's preset picker (B4 inspector). Fields: texture pickers for
 albedo / mr / normal / emissive (thumbnails from AssetRegistry, DDS preferred per H2), tint,
 metal/rough scalars, `normalStrength`, `normalIsRG`, `mrLayout`, `texOffsScale` tiling,
@@ -433,13 +470,13 @@ metal/rough scalars, `normalStrength`, `normalIsRG`, `mrLayout`, `texOffsScale` 
 pattern SpawnMeshCommand uses (respect frame-in-flight: no swapping textures under an active
 frame). Undo/redo via a `SetMaterialPropertyCommand` on the editor command stack.
 
-**I3 — "Save as preset" on a slot.** glTF import (A3) produces runtime-only auto-materials;
+**I3 — "Save as preset" on a slot.** *(exec: Opus 4.8)* glTF import (A3) produces runtime-only auto-materials;
 one click promotes a slot's effective material (auto-material or preset+overrides) into a named
 preset in `data/materials.json` and rebinds the slot to it. This is the bridge from imported
 assets to authorable content — verify with the palm fronds: tweak `alphaCutoff`, save as
 `palm_fronds`, reload level, slot still references it.
 
-**I4 (optional polish).** Sphere-preview thumbnails for materials in the content browser
+**I4 (optional polish).** *(exec: GPT 5.6 terra)* Sphere-preview thumbnails for materials in the content browser
 (offscreen render target); drag-and-drop a material from the browser onto a mesh/slot in the
 viewport.
 

@@ -17,8 +17,8 @@ and committed. Steps 16 through 22 are also implemented. The editor currently pr
   filters, search, list/tile views, empty-folder create/delete, drag-and-drop to
   the viewport and Inspector, delayed hover hints, and a real thumbnail pipeline
   (`AssetThumbnailCache` + `EditorPreviewRenderer`) covering textures, meshes,
-  and material presets. Cube-texture previews and an on-disk thumbnail cache
-  remain open (Step 12F).
+  material presets, and cubemaps. Rendered mesh/material/cubemap previews reuse
+  a dependency-keyed PNG cache across editor restarts (Step 12F).
 - A Scene Outliner with search, type filters, sorting, collapsible groups, row
   context actions (delete, duplicate, rename, frame, enable), and environment
   entities (lights, camera, skybox, ocean) with enable toggles.
@@ -43,7 +43,7 @@ and committed. Steps 16 through 22 are also implemented. The editor currently pr
 - Enabled editor objects are excluded consistently from main rendering, legacy
   and GPU-driven shadows, and RT reflection/debug TLAS builds.
 
-Known limitation outside the remaining thumbnail work:
+Known limitation:
 
 - Generator entities (`metalRoughGrid`, `instancedModels`) appear in the
   outliner but are effectively read-only.
@@ -1017,7 +1017,15 @@ Validation:
 - Navigate a folder with many previewable assets while watching frame time and
   ImGui descriptor usage.
 
-## Step 12F: Thumbnail Disk Cache And Cubemap Previews
+## Step 12F: Thumbnail Disk Cache And Cubemap Previews (Done)
+
+Status (2026-07-13): implemented. Mesh, material, cubemap, and cube-array
+previews use a 256px PNG disk cache under `editor_cache/thumbnails/`. Cache
+keys include the source metadata, schema version, and material preset/map
+dependencies. Disk hits use the ordinary texture-upload path; corrupted PNGs
+are removed and regenerated. Cubemap thumbnails sample the +X face. The
+Content Browser now requests them as real previews, and `editor_cache/` is
+ignored by Git. `Debug|x64` and no-editor `Release|x64` build successfully.
 
 Goal: finish the two items Step 12E deferred — reuse thumbnails across editor
 restarts through an on-disk cache, and preview cube textures with a
@@ -1482,14 +1490,9 @@ Validation:
 
 ## Suggested Execution Order
 
-Steps 1 through 22 (including 5A, 11A, 12A-12E) are complete. The remaining
-planned step is:
-
-1. Step 12F: Thumbnail Disk Cache And Cubemap Previews — closes out the
-   Content Browser thumbnail family.
-
-Ordering rationale: close the remaining Content Browser thumbnail work before
-expanding the plan with generator-entity editing.
+Steps 1 through 22, including 5A, 11A, and 12A through 12F, are complete.
+The Content Browser thumbnail family is closed out; future planning can focus
+on generator-entity editing.
 
 ## Stop Conditions
 

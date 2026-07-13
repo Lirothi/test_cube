@@ -16,10 +16,11 @@
 class Mesh;
 class MaterialData;
 class Renderer;
+class TextureCube;
 class UploadBatch;
 
 // Self-contained offscreen renderer that produces Content Browser thumbnails for
-// mesh and material assets (Step 12E). It owns a tiny forward pipeline (one PSO,
+// mesh, material, and cubemap assets. It owns a tiny forward pipeline (two PSOs,
 // one root signature, a shared depth target, a reusable constant buffer) plus a
 // private MeshManager / MaterialDataManager so it never touches the edited scene.
 //
@@ -45,6 +46,10 @@ public:
     // Load material presets from data/materials.json once. Safe to call repeatedly.
     void EnsurePresets();
 
+    // Drop the preview-only material cache after materials.json or one of its
+    // referenced maps changed. The next EnsurePresets/GetOrCreate reloads them.
+    void ReloadPresets();
+
     // Ensure the shared unit sphere used for material previews is resident.
     // Records upload work into `load` on first use; returns null on failure.
     std::shared_ptr<Mesh> EnsureSphere(Renderer& renderer, UploadBatch& load);
@@ -60,6 +65,13 @@ public:
         bool hasAlbedo,
         std::uint32_t size);
 
+    // Render the +X face of a cube texture into the standard 2D thumbnail
+    // target. The caller submits `cl` and owns the returned color target.
+    Microsoft::WRL::ComPtr<ID3D12Resource> RecordCubeThumbnail(Renderer& renderer,
+        ID3D12GraphicsCommandList* cl,
+        const TextureCube& cube,
+        std::uint32_t size);
+
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource> CreateColorTarget(ID3D12Device* device,
         std::uint32_t size);
@@ -71,6 +83,8 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> cubePipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // shader-visible, 1 slot
