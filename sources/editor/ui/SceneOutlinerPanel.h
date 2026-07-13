@@ -2,9 +2,12 @@
 #if WITH_EDITOR
 
 #include <string>
+#include <vector>
 
 #include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
+
+struct ImGuiTableSortSpecs;
 
 // A delete request raised by the outliner; the editor turns it into a command.
 struct OutlinerAction
@@ -48,6 +51,17 @@ public:
     void SetPersistentState(const PersistentState& state);
 
 private:
+    // One filtered row (a document object or an environment entry). Bucketed into
+    // the per-group scratch vectors below during Draw.
+    struct OutlinerRowRef
+    {
+        EditorObject* object = nullptr;
+        bool environment = false;
+    };
+
+    static void SortRows(std::vector<OutlinerRowRef>& rows,
+        const ImGuiTableSortSpecs* sortSpecs);
+
     char searchBuffer_[256] = {};
     bool showObjects_ = true;
     bool showEnvironment_ = true;
@@ -61,6 +75,15 @@ private:
     EditorObjectId renamingObject_{};
     char renameBuffer_[256] = {};
     bool renameFocusRequested_ = false;
+
+    // Per-frame scratch, reused across Draw calls (cleared each frame, capacity
+    // retained) so the row buckets and display order don't reallocate every frame.
+    std::vector<OutlinerRowRef> scratchMeshes_;
+    std::vector<OutlinerRowRef> scratchLights_;
+    std::vector<OutlinerRowRef> scratchCameras_;
+    std::vector<OutlinerRowRef> scratchEnvironment_;
+    std::vector<OutlinerRowRef> scratchOther_;
+    std::vector<EditorObjectId> scratchDisplayedOrder_;
 };
 
 #endif // WITH_EDITOR

@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "core/StringMatch.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
@@ -44,12 +45,6 @@ namespace
         Cameras,
         Environment,
         Other
-    };
-
-    struct OutlinerRowRef
-    {
-        EditorObject* object = nullptr;
-        bool environment = false;
     };
 
     struct TypeFilterOption
@@ -91,7 +86,7 @@ namespace
 
     bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
     {
-        return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+        return textmatch::ContainsCaseInsensitive(haystack, lowerNeedle);
     }
 
     void DrawSearchInputWithClear(const char* id, const char* hint, char* buffer, size_t bufferSize)
@@ -287,17 +282,7 @@ namespace
 
     int CompareCaseInsensitive(const std::string& a, const std::string& b)
     {
-        const std::string lowerA = LowerCopy(a);
-        const std::string lowerB = LowerCopy(b);
-        if (lowerA < lowerB)
-        {
-            return -1;
-        }
-        if (lowerA > lowerB)
-        {
-            return 1;
-        }
-        return 0;
+        return textmatch::CompareCaseInsensitive(a, b);
     }
 
     int CompareRows(const EditorObject* a,
@@ -346,38 +331,39 @@ namespace
         return result;
     }
 
-    void SortRows(std::vector<OutlinerRowRef>& rows,
-        const ImGuiTableSortSpecs* sortSpecs)
-    {
-        if (!sortSpecs || sortSpecs->SpecsCount <= 0)
-        {
-            return;
-        }
+}
 
-        std::stable_sort(rows.begin(), rows.end(),
-            [sortSpecs](const OutlinerRowRef& a, const OutlinerRowRef& b)
-            {
-                for (int n = 0; n < sortSpecs->SpecsCount; ++n)
-                {
-                    const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[n];
-                    int result = CompareRows(a.object,
-                        a.environment,
-                        b.object,
-                        b.environment,
-                        spec.ColumnUserID);
-                    if (result == 0)
-                    {
-                        continue;
-                    }
-                    if (spec.SortDirection == ImGuiSortDirection_Descending)
-                    {
-                        result = -result;
-                    }
-                    return result < 0;
-                }
-                return false;
-            });
+void SceneOutlinerPanel::SortRows(std::vector<OutlinerRowRef>& rows,
+    const ImGuiTableSortSpecs* sortSpecs)
+{
+    if (!sortSpecs || sortSpecs->SpecsCount <= 0)
+    {
+        return;
     }
+
+    std::stable_sort(rows.begin(), rows.end(),
+        [sortSpecs](const OutlinerRowRef& a, const OutlinerRowRef& b)
+        {
+            for (int n = 0; n < sortSpecs->SpecsCount; ++n)
+            {
+                const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[n];
+                int result = CompareRows(a.object,
+                    a.environment,
+                    b.object,
+                    b.environment,
+                    spec.ColumnUserID);
+                if (result == 0)
+                {
+                    continue;
+                }
+                if (spec.SortDirection == ImGuiSortDirection_Descending)
+                {
+                    result = -result;
+                }
+                return result < 0;
+            }
+            return false;
+        });
 }
 
 SceneOutlinerPanel::PersistentState SceneOutlinerPanel::GetPersistentState() const
@@ -456,11 +442,16 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     };
 
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
-    std::vector<OutlinerRowRef> meshes;
-    std::vector<OutlinerRowRef> lights;
-    std::vector<OutlinerRowRef> cameras;
-    std::vector<OutlinerRowRef> environmentRows;
-    std::vector<OutlinerRowRef> other;
+    std::vector<OutlinerRowRef>& meshes = scratchMeshes_;
+    std::vector<OutlinerRowRef>& lights = scratchLights_;
+    std::vector<OutlinerRowRef>& cameras = scratchCameras_;
+    std::vector<OutlinerRowRef>& environmentRows = scratchEnvironment_;
+    std::vector<OutlinerRowRef>& other = scratchOther_;
+    meshes.clear();
+    lights.clear();
+    cameras.clear();
+    environmentRows.clear();
+    other.clear();
     bool selectedExists = false;
     bool selectedVisible = false;
     std::string selectedName;
@@ -555,7 +546,8 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         SortRows(environmentRows, sortSpecs);
         SortRows(other, sortSpecs);
 
-        std::vector<EditorObjectId> displayedOrder;
+        std::vector<EditorObjectId>& displayedOrder = scratchDisplayedOrder_;
+        displayedOrder.clear();
         displayedOrder.reserve(static_cast<std::size_t>(visibleRows));
         const auto appendDisplayedRows = [&](const std::vector<OutlinerRowRef>& rows, bool groupOpen)
         {
@@ -819,9 +811,33 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             {
                 return;
             }
-            for (const OutlinerRowRef& row : rows)
+
+            // Only emit the rows actually scrolled into view. Group headers stay
+            // unclipped (there are at most five), and each open group clips its
+            // own uniform-height data rows independently.
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(rows.size()));
+            // An in-progress rename must keep being submitted even if it scrolls
+            // out of view, or its text field loses focus and the edit is dropped.
+            if (renamingObject_.value != 0)
             {
-                drawRow(row);
+                for (std::size_t i = 0; i < rows.size(); ++i)
+                {
+                    const OutlinerRowRef& row = rows[i];
+                    if (row.object && !row.environment &&
+                        row.object->id.value == renamingObject_.value)
+                    {
+                        clipper.IncludeItemByIndex(static_cast<int>(i));
+                        break;
+                    }
+                }
+            }
+            while (clipper.Step())
+            {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+                {
+                    drawRow(rows[static_cast<std::size_t>(i)]);
+                }
             }
         };
 

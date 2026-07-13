@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -113,6 +114,20 @@ private:
     bool iconAtlasTried_ = false;
     bool iconAtlasReady_ = false;
     double lastAutoRefreshTimeSec_ = -1000.0;
+
+    // Cached asset-view filter result. The full-registry scan (and the per-child
+    // folder rescans in FolderMatchesAssetViewFilter) runs only when the registry
+    // revision or a filter input changes; otherwise it is skipped and these are
+    // redrawn as-is. The cached pointers reference registry-owned storage, which
+    // Refresh reallocates — so the registry revision is part of the cache key.
+    std::vector<const EditorAssetFolder*> visibleFolders_;
+    std::vector<const EditorAssetRecord*> visibleAssets_;
+    bool assetViewCacheValid_ = false;
+    std::uint64_t assetViewCacheRevision_ = 0;
+    std::string assetViewCacheFolder_;
+    std::string assetViewCacheSearch_;
+    bool assetViewCacheIncludeSubfolders_ = false;
+    std::array<bool, 5> assetViewCacheTypeFilters_{};
 };
 
 #endif // WITH_EDITOR

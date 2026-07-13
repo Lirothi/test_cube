@@ -43,6 +43,12 @@ private:
     {
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> cpu{};
         std::array<D3D12_GPU_DESCRIPTOR_HANDLE, render::kFrameCount> gpu{};
+        // Last SRV written into each per-frame slot, so CreateTextureIdForSrv can
+        // skip the driver CreateShaderResourceView when nothing changed (previews
+        // are stable across frames once Ready). Reset implicitly: releasing a
+        // resource erases its whole map entry.
+        std::array<D3D12_SHADER_RESOURCE_VIEW_DESC, render::kFrameCount> writtenSrv{};
+        std::array<bool, render::kFrameCount> srvWritten{};
     };
 
     void ApplyPendingRightClickFocusClear();

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <stdexcept>
 
 #include "imgui.h"
@@ -233,9 +234,19 @@ ImTextureID ImGuiLayer::CreateTextureIdForSrv(ID3D12Device* device,
             GpuHandleForCpuHandle(descriptors.cpu[frameIndex]);
     }
 
-    device->CreateShaderResourceView(resource,
-        &srvDesc,
-        descriptors.cpu[frameIndex]);
+    // The slot, resource, and srvDesc are stable across frames once a preview is
+    // Ready, so only touch the driver when the descriptor is new or actually
+    // changed. This turns the steady-state per-thumbnail cost into a map lookup
+    // instead of a CreateShaderResourceView every frame.
+    if (!descriptors.srvWritten[frameIndex] ||
+        std::memcmp(&descriptors.writtenSrv[frameIndex], &srvDesc, sizeof(srvDesc)) != 0)
+    {
+        device->CreateShaderResourceView(resource,
+            &srvDesc,
+            descriptors.cpu[frameIndex]);
+        descriptors.writtenSrv[frameIndex] = srvDesc;
+        descriptors.srvWritten[frameIndex] = true;
+    }
     return static_cast<ImTextureID>(descriptors.gpu[frameIndex].ptr);
 }
 

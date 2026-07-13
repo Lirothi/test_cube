@@ -14,6 +14,7 @@
 
 #include <dxgiformat.h>
 
+#include "core/StringMatch.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 
@@ -522,9 +523,9 @@ namespace
         }
         if (!lowerNeedle.empty())
         {
-            if (ToLower(record.displayName).find(lowerNeedle) == std::string::npos &&
-                ToLower(record.path).find(lowerNeedle) == std::string::npos &&
-                ToLower(record.virtualPath).find(lowerNeedle) == std::string::npos)
+            if (!textmatch::ContainsCaseInsensitive(record.displayName, lowerNeedle) &&
+                !textmatch::ContainsCaseInsensitive(record.path, lowerNeedle) &&
+                !textmatch::ContainsCaseInsensitive(record.virtualPath, lowerNeedle))
             {
                 return false;
             }

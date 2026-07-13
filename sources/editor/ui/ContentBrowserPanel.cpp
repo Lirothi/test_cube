@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/StringMatch.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorExtensionRegistry.h"
@@ -737,7 +738,7 @@ namespace
 
     bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
     {
-        return LowerCopy(haystack).find(lowerNeedle) != std::string::npos;
+        return textmatch::ContainsCaseInsensitive(haystack, lowerNeedle);
     }
 
     bool IsSameOrChildVirtualPath(const std::string& path, const char* root)
@@ -2611,35 +2612,65 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         ImVec2(0.0f, workspaceSize.y),
         false);
 
-    const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_);
-    std::vector<const EditorAssetFolder*> visibleFolders;
-    std::vector<const EditorAssetRecord*> visibleAssets;
-    std::optional<Profiler::ScopedCpu> buildVisibleEntriesScope(
-        std::in_place, ProfilerScopes::kContentBrowserBuildVisibleEntries);
-    if (selectedFolder)
     {
-        for (const std::string& childPath : selectedFolder->childPaths)
+        std::optional<Profiler::ScopedCpu> buildVisibleEntriesScope(
+            std::in_place, ProfilerScopes::kContentBrowserBuildVisibleEntries);
+
+        // Rebuild the filtered folder/asset lists only when an input actually
+        // changed. In steady state this skips the full-registry scan in
+        // SearchInFolder and the per-child-folder rescans in
+        // FolderMatchesAssetViewFilter entirely. The cached pointers reference
+        // registry-owned storage, which Refresh reallocates, so the revision
+        // (bumped by every Refresh) is part of the key and invalidates them.
+        const std::uint64_t revision = registry.Revision();
+        const bool cacheHit = assetViewCacheValid_ &&
+            assetViewCacheRevision_ == revision &&
+            assetViewCacheIncludeSubfolders_ == includeSubfolders_ &&
+            assetViewCacheFolder_ == selectedFolder_ &&
+            assetViewCacheSearch_ == searchBuffer_ &&
+            std::equal(std::begin(activeTypeFilters_), std::end(activeTypeFilters_),
+                assetViewCacheTypeFilters_.begin());
+        if (!cacheHit)
         {
-            const EditorAssetFolder* child = registry.FindFolder(childPath);
-            if (child && FolderMatchesAssetViewFilter(registry, *child,
-                    searchBuffer_, activeTypeFilters_))
+            visibleFolders_.clear();
+            visibleAssets_.clear();
+
+            if (const EditorAssetFolder* selectedFolder = registry.FindFolder(selectedFolder_))
             {
-                visibleFolders.push_back(child);
+                for (const std::string& childPath : selectedFolder->childPaths)
+                {
+                    const EditorAssetFolder* child = registry.FindFolder(childPath);
+                    if (child && FolderMatchesAssetViewFilter(registry, *child,
+                            searchBuffer_, activeTypeFilters_))
+                    {
+                        visibleFolders_.push_back(child);
+                    }
+                }
             }
+
+            const std::vector<const EditorAssetRecord*> assetCandidates =
+                registry.SearchInFolder(selectedFolder_, includeSubfolders_,
+                    searchBuffer_, EditorAssetType::Unknown);
+            for (const EditorAssetRecord* record : assetCandidates)
+            {
+                if (record && MatchesActiveTypeFilters(*record, activeTypeFilters_))
+                {
+                    visibleAssets_.push_back(record);
+                }
+            }
+
+            assetViewCacheValid_ = true;
+            assetViewCacheRevision_ = revision;
+            assetViewCacheIncludeSubfolders_ = includeSubfolders_;
+            assetViewCacheFolder_ = selectedFolder_;
+            assetViewCacheSearch_ = searchBuffer_;
+            std::copy(std::begin(activeTypeFilters_), std::end(activeTypeFilters_),
+                assetViewCacheTypeFilters_.begin());
         }
     }
 
-    const std::vector<const EditorAssetRecord*> assetCandidates =
-        registry.SearchInFolder(selectedFolder_, includeSubfolders_,
-            searchBuffer_, EditorAssetType::Unknown);
-    for (const EditorAssetRecord* record : assetCandidates)
-    {
-        if (record && MatchesActiveTypeFilters(*record, activeTypeFilters_))
-        {
-            visibleAssets.push_back(record);
-        }
-    }
-    buildVisibleEntriesScope.reset();
+    const std::vector<const EditorAssetFolder*>& visibleFolders = visibleFolders_;
+    const std::vector<const EditorAssetRecord*>& visibleAssets = visibleAssets_;
 
     std::optional<Profiler::ScopedCpu> drawAssetViewScope(
         std::in_place, ProfilerScopes::kContentBrowserDrawAssetView);
