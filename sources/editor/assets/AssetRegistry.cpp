@@ -360,7 +360,7 @@ namespace
     const std::array<DirRoot, 4>& AssetRoots()
     {
         static const std::array<DirRoot, 4> roots = { {
-            { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt" } },
+            { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb" } },
             { "textures",    "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
             { "data/levels", "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
             { "shaders",     "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
