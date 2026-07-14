@@ -16,35 +16,68 @@ using namespace DirectX;
 
 namespace
 {
-// Step 6: generate coarser LODs as reduced index buffers (meshopt_simplify, over the same
-// vertices) and append them to the mesh. Called once at load on the upload command list.
+// Step 6 / Part B: generate coarser LODs as reduced index buffers (meshopt_simplify, over the
+// same vertices) and append them to the mesh. Each submesh range is simplified INDEPENDENTLY and
+// the LOD carries its own rebuilt submesh table — simplifying the whole buffer as one blob would
+// dissolve the per-material boundaries. Single-submesh meshes reduce to the original behavior.
+// Called once at load on the upload command list.
 void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive,
     const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
 {
     const size_t baseIdx = indices.size();
-    constexpr size_t kMinIndicesForLod = 384; // ~128 tris; skip tiny meshes (box = 6 tris)
+    constexpr size_t kMinIndicesForLod = 384;  // ~128 tris; skip tiny meshes (box = 6 tris)
+    constexpr size_t kMinRangeIndices  = 96;    // per-range floor; smaller ranges copy through
     if (!mesh || verts.empty() || baseIdx < kMinIndicesForLod) { return; }
+
+    const std::vector<Mesh::Submesh>& baseSubs = mesh->GetSubmeshes();
+    if (baseSubs.empty()) { return; }
 
     const float ratios[] = { 0.5f, 0.25f, 0.12f };
     const float errors[] = { 0.02f, 0.05f, 0.12f };
-    std::vector<uint32_t> simplified(baseIdx);
+
+    std::vector<uint32_t> lodIdx;
+    std::vector<Mesh::Submesh> lodSubs;
+    std::vector<uint32_t> simplified;
     size_t prevCount = baseIdx;
+
     for (int i = 0; i < 3; ++i)
     {
-        size_t target = static_cast<size_t>(baseIdx * ratios[i]);
-        target -= target % 3;
-        if (target < 12) { break; }
+        lodIdx.clear();
+        lodSubs.clear();
 
-        float resultError = 0.0f;
-        const size_t n = meshopt_simplify(simplified.data(), indices.data(), baseIdx,
-            &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
-            target, errors[i], 0, &resultError);
+        for (const Mesh::Submesh& s : baseSubs)
+        {
+            const uint32_t* src = indices.data() + s.indexOffset;
+            const size_t srcCount = s.indexCount;
+            const uint32_t outOffset = static_cast<uint32_t>(lodIdx.size());
 
-        if (n == 0 || n + (n / 10) >= prevCount) { break; } // < ~10% shrink -> stop adding LODs
-        mesh->AddLod(device, uploadCmdList, keepAlive, simplified.data(), static_cast<UINT>(n));
-        prevCount = n;
-        (void)resultError;
+            size_t n = srcCount;
+            bool didSimplify = false;
+            size_t target = static_cast<size_t>(srcCount * ratios[i]);
+            target -= target % 3;
+            if (srcCount >= kMinRangeIndices && target >= 12)
+            {
+                simplified.resize(srcCount);
+                float resultError = 0.0f;
+                n = meshopt_simplify(simplified.data(), src, srcCount,
+                    &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                    target, errors[i], 0, &resultError);
+                if (n == 0) { n = srcCount; }  // simplify gave up -> keep the range as-is
+                else { didSimplify = true; }
+                (void)resultError;
+            }
+
+            const uint32_t* from = didSimplify ? simplified.data() : src;
+            lodIdx.insert(lodIdx.end(), from, from + n);
+            lodSubs.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(n), s.materialSlot });
+        }
+
+        // Overall shrink gate (same spirit as before): stop once a level is < ~10% smaller.
+        if (lodIdx.empty() || lodIdx.size() + (lodIdx.size() / 10) >= prevCount) { break; }
+        mesh->AddLod(device, uploadCmdList, keepAlive,
+            lodIdx.data(), static_cast<UINT>(lodIdx.size()), lodSubs);
+        prevCount = lodIdx.size();
     }
 }
 } // namespace

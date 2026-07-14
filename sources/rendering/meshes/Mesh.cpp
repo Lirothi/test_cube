@@ -21,6 +21,10 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     vertexStride_ = vertexStride;
     indexFormat_ = indexFormat;
 
+    // Default single submesh spanning the whole buffer (material slot 0). CreateGPU_PNTUV may
+    // replace this with a multi-material table; every other caller keeps the single submesh.
+    submeshes_ = { Submesh{ 0u, indexCount, 0u } };
+
     bounds_.Reset();
 
     UploadManager up(device, uploadCmdList);
@@ -60,7 +64,8 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
     std::vector<VertexPNTUV>& verts,
     const uint32_t* indices, UINT indexCount,
-    bool generateTangentSpace)
+    bool generateTangentSpace,
+    const std::vector<Submesh>* submeshes)
 {
     if (generateTangentSpace) {
         GenerateNormalsTangents(verts, indices, indexCount);
@@ -69,6 +74,11 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
     CreateGPUFlexible(device, uploadCmdList, uploadKeepAlive,
         verts.data(), (UINT)verts.size(), sizeof(VertexPNTUV),
         indices, indexCount, DXGI_FORMAT_R32_UINT);
+
+    // Override the default single submesh with the caller's multi-material table (B2 glTF path).
+    if (submeshes && !submeshes->empty()) {
+        submeshes_ = *submeshes;
+    }
 
     AABB bounds = AABB::Empty();
     for (const auto& vert : verts)
@@ -99,7 +109,8 @@ void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
 
 void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
-    const uint32_t* indices, UINT indexCount) {
+    const uint32_t* indices, UINT indexCount,
+    const std::vector<Submesh>& submeshes) {
     if (!indices || indexCount == 0) { return; }
     UploadManager up(device, uploadCmdList);
     LodLevel lod;
@@ -110,8 +121,21 @@ void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList
     lod.indexBufferView.SizeInBytes = ibSize;
     lod.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
     lod.indexCount = indexCount;
+    lod.submeshes = submeshes.empty() ? std::vector<Submesh>{ Submesh{ 0u, indexCount, 0u } } : submeshes;
     extraLods_.push_back(std::move(lod));
     up.StealKeepAlive(uploadKeepAlive);
+}
+
+const std::vector<Mesh::Submesh>& Mesh::SubmeshesForLod(UINT lod) const {
+    // Mirror SelectLod's resolution: 0 (or LODs disabled/none) -> base table; else clamp to the
+    // coarsest available extra LOD.
+    UINT effectiveLod = lod;
+    if (!render::g_lodEnabled) { effectiveLod = 0u; }
+    else if (render::g_forcedLod >= 0) { effectiveLod = static_cast<UINT>(render::g_forcedLod); }
+
+    if (effectiveLod == 0 || extraLods_.empty()) { return submeshes_; }
+    const UINT idx = std::min(effectiveLod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
+    return extraLods_[idx].submeshes;
 }
 
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the

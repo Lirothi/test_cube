@@ -23,7 +23,17 @@ struct VertexPNTUV {
 class Mesh {
 public:
     Mesh() = default;
-    
+
+    // Part B: a contiguous run of the index buffer that shares one material slot. Every mesh has
+    // at least one (covering the whole buffer). LODs carry their own tables (ranges re-simplified
+    // per level, see MeshManager::GenerateLods). Draw() still draws the whole buffer in B1; the
+    // render queue starts iterating submeshes in B2.
+    struct Submesh {
+        uint32_t indexOffset  = 0; // first index into the (lod-specific) index buffer
+        uint32_t indexCount   = 0;
+        uint32_t materialSlot = 0; // index into the owner object's material-slot array
+    };
+
     // Flexible upload of an arbitrary vertex format (specify the stride explicitly)
     void CreateGPUFlexible(ID3D12Device* device,
         ID3D12GraphicsCommandList* uploadCmdList,
@@ -32,13 +42,16 @@ public:
         const void* indices, UINT indexCount,
         DXGI_FORMAT indexFormat = DXGI_FORMAT_R16_UINT);
 
-    // Upload the new format and optionally generate normals/tangents on the CPU
+    // Upload the new format and optionally generate normals/tangents on the CPU.
+    // submeshes: optional multi-material table over `indices` (B2 glTF path); null => a single
+    // submesh spanning the whole buffer (materialSlot 0) — the behavior every current caller gets.
     void CreateGPU_PNTUV(ID3D12Device* device,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
         std::vector<VertexPNTUV>& verts,       // by reference so we can modify it
         const uint32_t* indices, UINT indexCount,
-        bool generateTangentSpace = true);
+        bool generateTangentSpace = true,
+        const std::vector<Submesh>* submeshes = nullptr);
 
     // Rendering. lod 0 = full detail (the base buffers); higher indices select coarser LODs,
     // clamped to what's available (Step 6). With no extra LODs, any lod draws full detail.
@@ -50,10 +63,17 @@ public:
 
     // Step 6: append a coarser LOD as a reduced 32-bit index buffer over the SAME vertex
     // buffer (meshopt_simplify output references the base verts). Call after the base
-    // CreateGPU*, on the same upload command list.
+    // CreateGPU*, on the same upload command list. submeshes: this LOD's per-range table (ranges
+    // into `indices`); pass the whole-buffer single submesh for single-material meshes.
     void AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
-        const uint32_t* indices, UINT indexCount);
+        const uint32_t* indices, UINT indexCount,
+        const std::vector<Submesh>& submeshes);
+
+    // Part B plumbing (consumed by the queue in B2). lod 0 = base table; higher clamps like Draw.
+    const std::vector<Submesh>& GetSubmeshes() const { return submeshes_; }
+    const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
+    size_t GetSubmeshCount() const { return submeshes_.size(); }
 
     ID3D12Resource* GetVertexBufferResource() const { return vertexBuffer_.Get(); }
     ID3D12Resource* GetIndexBufferResource()  const { return indexBuffer_.Get(); }
@@ -69,6 +89,7 @@ private:
         Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
         D3D12_INDEX_BUFFER_VIEW  indexBufferView = {};
         UINT indexCount = 0;
+        std::vector<Submesh> submeshes; // ranges into this LOD's index buffer
     };
 
     // Resolve a lod index to its buffer views + index count (lod 0 -> base members;
@@ -94,5 +115,6 @@ private:
     UINT  indexCount_ = 0;
     AABB bounds_;
 
+    std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs
 };
