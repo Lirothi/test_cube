@@ -19,6 +19,13 @@ public:
     virtual Material* InstancedGraphicsMaterial() const = 0;
     virtual Material* InstancedShadowMaterial() const = 0;
 
+    // C1b: per-slot instanced gbuffer PSO (slot defines: sampling swizzles, ALPHA_TEST, cull).
+    // Default = the single instanced material (single-slot objects and non-slot renderables).
+    virtual Material* InstancedGraphicsMaterialForSlot(size_t /*slot*/) const
+    {
+        return InstancedGraphicsMaterial();
+    }
+
     // Write this object's per-instance payload (world/prevWorld + material params).
     virtual void FillInstanceData(render::InstancePerObject& out) const = 0;
 

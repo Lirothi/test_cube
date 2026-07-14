@@ -1,67 +1,488 @@
 {
-  "camera": { "hfovDeg": 90.0, "zFar": 10000.0, "zNear": 0.01 },
+  "camera": {
+    "hfovDeg": 90.0,
+    "zFar": 10000.0,
+    "zNear": 0.01
+  },
   "directionalLight": {
     "ambient": 0.15,
-    "color": [1.0, 0.95, 0.9],
-    "direction": [-1.5, -0.7, -0.5],
+    "color": [
+      1.0,
+      0.95,
+      0.9
+    ],
+    "direction": [
+      -1.5,
+      -0.7,
+      -0.5
+    ],
     "enabled": true,
     "exposure": 1.0
   },
-  "skybox": { "texture": "textures/skybox.dds" },
   "objects": [
     {
-      "type": "freeCameraStart", "id": 1, "name": "FreeCameraStart",
-      "position": [7.0, 4.5, 9.0], "rotationDeg": [12.0, -140.0, 0.0], "scale": [1.0, 1.0, 1.0],
-      "enabled": true
+      "enabled": true,
+      "id": 1,
+      "name": "FreeCameraStart",
+      "position": [
+        7.0,
+        4.5,
+        9.0
+      ],
+      "rotationDeg": [
+        12.0,
+        -140.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
     },
     {
-      "type": "staticMesh", "id": 2, "name": "ground", "material": "sandstone_cracks",
-      "model": "models/box.obj", "position": [0.0, -0.5, 0.0], "scale": [40.0, 1.0, 40.0],
-      "renderLayer": "Terrain", "texOffsScale": [0, 0, 20, 20], "enabled": true
+      "enabled": true,
+      "id": 2,
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "name": "ground",
+      "position": [
+        0.0,
+        -0.5,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        40.0,
+        1.0,
+        40.0
+      ],
+      "texOffsScale": [
+        0,
+        0,
+        20,
+        20
+      ],
+      "type": "staticMesh"
     },
-
-    { "type": "staticMesh", "id": 10, "name": "palm.whole.ONE_OBJECT", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-
-    { "type": "staticMesh", "id": 11, "name": "palm.whole.clone", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-8.0, 0.0, -4.0], "rotationDeg": [0.0, 70.0, 0.0], "scale": [0.9, 0.9, 0.9], "enabled": true },
-
-    { "type": "staticMesh", "id": 20, "name": "part.g0.trunk.single", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf#0", "position": [-16.0, 0.0, 4.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-    { "type": "staticMesh", "id": 22, "name": "part.g2.fronds.single", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf#2", "position": [-24.0, 0.0, 4.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-
-    { "type": "staticMesh", "id": 30, "name": "date_palm.whole", "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf", "position": [14.0, 0.0, -2.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-
-    { "type": "staticMesh", "id": 31, "name": "palm.mixed.slots", "material": "auto",
-      "materials": ["sandstone_cracks", "auto", "auto", "auto", "auto"],
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [8.0, 0.0, -10.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-
-    { "type": "staticMesh", "id": 50, "name": "palm.grove.0", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-2.0, 0.0, -18.0], "rotationDeg": [0.0, 30.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-    { "type": "staticMesh", "id": 51, "name": "palm.grove.1", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-7.0, 0.0, -16.0], "rotationDeg": [0.0, 110.0, 0.0], "scale": [0.85, 0.85, 0.85], "enabled": true },
-    { "type": "staticMesh", "id": 52, "name": "palm.grove.2", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-12.0, 0.0, -19.0], "rotationDeg": [0.0, 200.0, 0.0], "scale": [1.1, 1.1, 1.1], "enabled": true },
-    { "type": "staticMesh", "id": 53, "name": "palm.grove.3", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-17.0, 0.0, -15.0], "rotationDeg": [0.0, 285.0, 0.0], "scale": [0.95, 0.95, 0.95], "enabled": true },
-    { "type": "staticMesh", "id": 54, "name": "palm.grove.4", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [3.0, 0.0, -20.0], "rotationDeg": [0.0, 55.0, 0.0], "scale": [1.05, 1.05, 1.05], "enabled": true },
-    { "type": "staticMesh", "id": 55, "name": "palm.grove.5", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [8.0, 0.0, -17.0], "rotationDeg": [0.0, 140.0, 0.0], "scale": [0.9, 0.9, 0.9], "enabled": true },
-    { "type": "staticMesh", "id": 56, "name": "palm.grove.6", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [-22.0, 0.0, -18.0], "rotationDeg": [0.0, 320.0, 0.0], "scale": [1.15, 1.15, 1.15], "enabled": true },
-    { "type": "staticMesh", "id": 57, "name": "palm.grove.7", "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf", "position": [13.0, 0.0, -21.0], "rotationDeg": [0.0, 15.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-
-    { "type": "staticMesh", "id": 60, "name": "rt.mirror", "material": "bronze",
-      "model": "models/box.obj", "position": [0.0, 3.0, -26.0], "scale": [14.0, 6.0, 0.3],
-      "metalRough": [1.0, 0.05], "useMR": false, "enabled": true },
-
-    { "type": "staticMesh", "id": 40, "name": "rock.node1", "material": "auto",
-      "model": "import_staging/rocks/scene.gltf#node:Rock01_Rock01Shader_0", "position": [20.0, 0.0, 6.0], "scale": [0.02, 0.02, 0.02], "enabled": true },
-    { "type": "staticMesh", "id": 41, "name": "boulder", "material": "auto",
-      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf", "position": [22.0, 0.0, -8.0], "scale": [0.015, 0.015, 0.015], "enabled": true }
-  ]
+    {
+      "enabled": true,
+      "id": 10,
+      "material": "auto",
+      "materials": [
+        "auto",
+        "auto",
+        "auto",
+        "auto",
+        "auto"
+      ],
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.whole.ONE_OBJECT",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 11,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.whole.clone",
+      "position": [
+        -8.0,
+        0.0,
+        -4.0
+      ],
+      "rotationDeg": [
+        0.0,
+        70.0,
+        0.0
+      ],
+      "scale": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 20,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf#0",
+      "name": "part.g0.trunk.single",
+      "position": [
+        -16.0,
+        0.0,
+        4.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 22,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf#2",
+      "name": "part.g2.fronds.single",
+      "position": [
+        -24.0,
+        0.0,
+        4.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 30,
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "date_palm.whole",
+      "position": [
+        14.0,
+        0.0,
+        -2.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 31,
+      "material": "auto",
+      "materials": [
+        "sandstone_cracks",
+        "auto",
+        "auto",
+        "auto",
+        "auto"
+      ],
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.mixed.slots",
+      "position": [
+        8.0,
+        0.0,
+        -10.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 50,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.0",
+      "position": [
+        -2.0,
+        0.0,
+        -18.0
+      ],
+      "rotationDeg": [
+        0.0,
+        30.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 51,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.1",
+      "position": [
+        -7.0,
+        0.0,
+        -16.0
+      ],
+      "rotationDeg": [
+        0.0,
+        110.0,
+        0.0
+      ],
+      "scale": [
+        0.8500000238418579,
+        0.8500000238418579,
+        0.8500000238418579
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 52,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.2",
+      "position": [
+        -12.0,
+        0.0,
+        -19.0
+      ],
+      "rotationDeg": [
+        0.0,
+        200.0,
+        0.0
+      ],
+      "scale": [
+        1.100000023841858,
+        1.100000023841858,
+        1.100000023841858
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 53,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.3",
+      "position": [
+        -17.0,
+        0.0,
+        -15.0
+      ],
+      "rotationDeg": [
+        0.0,
+        285.0,
+        0.0
+      ],
+      "scale": [
+        0.949999988079071,
+        0.949999988079071,
+        0.949999988079071
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 54,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.4",
+      "position": [
+        3.0,
+        0.0,
+        -20.0
+      ],
+      "rotationDeg": [
+        0.0,
+        55.0,
+        0.0
+      ],
+      "scale": [
+        1.0499999523162842,
+        1.0499999523162842,
+        1.0499999523162842
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 55,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.5",
+      "position": [
+        8.0,
+        0.0,
+        -17.0
+      ],
+      "rotationDeg": [
+        0.0,
+        140.0,
+        0.0
+      ],
+      "scale": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 56,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.6",
+      "position": [
+        -22.0,
+        0.0,
+        -18.0
+      ],
+      "rotationDeg": [
+        0.0,
+        320.0,
+        0.0
+      ],
+      "scale": [
+        1.149999976158142,
+        1.149999976158142,
+        1.149999976158142
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 57,
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "palm.grove.7",
+      "position": [
+        13.0,
+        0.0,
+        -21.0
+      ],
+      "rotationDeg": [
+        0.0,
+        15.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 60,
+      "material": "bronze",
+      "metalRough": [
+        1.0,
+        0.05
+      ],
+      "model": "models/box.obj",
+      "name": "rt.mirror",
+      "position": [
+        0.0,
+        3.0,
+        -26.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        14.0,
+        6.0,
+        0.30000001192092896
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 40,
+      "material": "auto",
+      "model": "import_staging/rocks/scene.gltf#node:Rock01_Rock01Shader_0",
+      "name": "rock.node1",
+      "position": [
+        20.0,
+        0.0,
+        6.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.019999999552965164,
+        0.019999999552965164,
+        0.019999999552965164
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 41,
+      "material": "auto",
+      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "name": "boulder",
+      "position": [
+        22.0,
+        0.0,
+        -8.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.014999999664723873,
+        0.014999999664723873,
+        0.014999999664723873
+      ],
+      "type": "staticMesh"
+    }
+  ],
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  }
 }

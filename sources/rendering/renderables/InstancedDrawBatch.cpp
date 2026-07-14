@@ -183,6 +183,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             ctx.cbv[0] = alloc.gpu; // b0: per-instance array (shared by every submesh)
             ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
 
+            Material* slotMaterial = material;
             if (gbuffer)
             {
                 if (slot < slotCbScratch_.size())
@@ -193,9 +194,18 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
                 {
                     md->StageGBufferBindings(renderer, ctx, 0, 0);
                 }
+                // C1b: each slot draws with its own instanced PSO (sampling defines, ALPHA_TEST,
+                // cull). Members are slot-identical to the lead (SameInstanceSlots), so the
+                // lead's materials speak for the run; falls back to the run material when the
+                // slot variant is missing. Shadow draws (gbuffer=false) keep the single
+                // depth-only PSO until C2.
+                if (Material* sm = leadInst_->InstancedGraphicsMaterialForSlot(slot))
+                {
+                    slotMaterial = sm;
+                }
             }
 
-            material->Bind(cl, ctx, wireframe);
+            slotMaterial->Bind(cl, ctx, wireframe);
             mesh_->DrawSubmeshInstanced(cl, static_cast<UINT>(s), count, lod);
         }
     }

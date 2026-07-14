@@ -150,6 +150,12 @@ public:
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
     virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
+
+    // C1b: the material actually BOUND for the draw being recorded. Defaults to the object's
+    // graphics material; GBufferRenderable overrides it to return the current slot's per-slot
+    // PSO inside the multi-slot submesh loop. CB field handles still come from
+    // GetGraphicsMaterial() (slot 0) — all slot permutations share the PerObject layout.
+    virtual Material* CurrentGraphicsMaterial() const { return graphicsMaterial_.get(); }
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
     void UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod = 0);

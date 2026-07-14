@@ -115,7 +115,11 @@ void RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsC
     {
         uniformBinder_->UpdateMainCB(*this, renderer, camera, cbData);
     }
-    graphicsMaterial_->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
+    // C1b: bind the per-draw material (slot PSO for multi-slot submesh draws; the object's own
+    // graphics material everywhere else — the default override keeps this a no-op).
+    Material* bindMat = CurrentGraphicsMaterial();
+    if (!bindMat) { bindMat = graphicsMaterial_.get(); }
+    bindMat->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
 void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)

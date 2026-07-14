@@ -150,7 +150,63 @@ void GBufferRenderable::Init(Renderer* renderer,
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
+    BuildSlotMaterials(renderer);
     BuildInstancedMaterials(renderer);
+}
+
+void GBufferRenderable::ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const
+{
+    // C1b: a slot's pipeline identity. Sampling defines are erase+re-add (ConfigureDefines...),
+    // so patching a desc that already carries another slot's values is safe. Pre-Init calls
+    // (empty matDatas_, e.g. IsTransparent's speculative desc) leave the desc untouched — same
+    // as the old null-matData path.
+    if (slot >= matDatas_.size() || !matDatas_[slot])
+    {
+        return;
+    }
+    const MaterialData& md = *matDatas_[slot];
+    md.ConfigureDefinesForGBuffer(desc); // NORMALMAP_IS_RG / USE_TBN / MR_LAYOUT_GLTF
+
+    auto& defs = desc.defines;
+    defs.erase(std::remove_if(defs.begin(), defs.end(),
+        [](const auto& p) { return p.first == "ALPHA_TEST"; }), defs.end());
+    if (md.alphaMask)
+    {
+        defs.emplace_back("ALPHA_TEST", "1");
+    }
+    desc.raster.CullMode = md.doubleSided ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+}
+
+void GBufferRenderable::BuildSlotMaterials(Renderer* renderer)
+{
+    slotGraphicsMaterials_.clear();
+    if (!renderer || matDatas_.size() <= 1 || !GetGraphicsMaterial())
+    {
+        return; // single-slot: the base material path, byte-identical to pre-C1b
+    }
+
+    slotGraphicsMaterials_.resize(matDatas_.size());
+    slotGraphicsMaterials_[0] = graphicsMaterial_; // slot 0 == the object's own material
+
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+    const UINT baseCbSize = graphicsMaterial_->GetCBSizeBytesAligned(0, kAlign);
+
+    for (size_t i = 1; i < matDatas_.size(); ++i)
+    {
+        Material::GraphicsDesc gd = BuildGraphicsDesc(renderer); // slot-0 configured desc
+        ApplySlotPipelineOverrides(gd, i);
+        auto m = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        // The uniform binder writes b0 through slot-0 field handles — every slot permutation
+        // must share the PerObject layout (defines never change the cbuffer struct). Guard it:
+        // a mismatching (or failed) slot PSO falls back to slot 0, i.e. the pre-C1b behavior.
+        const bool usable = m && m->GetPipelineState() &&
+            m->GetCBSizeBytesAligned(0, kAlign) == baseCbSize;
+        if (!usable && m)
+        {
+            OutputDebugStringA("[gbuffer] slot material unusable (PSO/CB layout); falling back to slot 0\n");
+        }
+        slotGraphicsMaterials_[i] = usable ? m : graphicsMaterial_;
+    }
 }
 
 void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
@@ -211,21 +267,8 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         matParamses_[i].alphaCutoff = (md && md->alphaMask) ? md->alphaCutoff : -1.0f;
     }
 
-    // One PSO per object: shader defines come from slot 0's MaterialData. Mixed defines across
-    // slots would render slots 1+ with slot 0's permutation — warn so it's diagnosable.
-    if (const MaterialData* m0 = matDatas_[0].get())
-    {
-        for (size_t i = 1; i < slotCount; ++i)
-        {
-            const MaterialData* mi = matDatas_[i].get();
-            if (mi && (mi->normalIsRG != m0->normalIsRG || mi->useTBN != m0->useTBN ||
-                       mi->mrLayoutGltf != m0->mrLayoutGltf))
-            {
-                OutputDebugStringA("[gbuffer] material slots mix shader defines; slot 0's PSO wins\n");
-                break;
-            }
-        }
-    }
+    // C1b: mixed defines across slots are fully supported now — each slot gets its own PSO in
+    // BuildSlotMaterials (the old "slot 0's PSO wins" warning is obsolete).
 }
 
 void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -302,6 +345,23 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
 
     instancedGraphicsMaterial_ = std::move(gfx);
     instancedShadowMaterial_ = std::move(shadow);
+
+    // C1b: per-slot instanced PSOs (same desc, slot defines/cull patched per slot). The batch
+    // binds these inside its submesh loop; a failed slot build falls back to the slot-0 variant.
+    slotInstancedGraphicsMaterials_.clear();
+    if (MultiSlotDraw())
+    {
+        slotInstancedGraphicsMaterials_.resize(matDatas_.size());
+        slotInstancedGraphicsMaterials_[0] = instancedGraphicsMaterial_;
+        for (size_t i = 1; i < matDatas_.size(); ++i)
+        {
+            Material::GraphicsDesc sgd = gd; // instcb + INSTCB_SLOT_PARAMS, slot-0 configured
+            ApplySlotPipelineOverrides(sgd, i);
+            auto sm = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sgd);
+            slotInstancedGraphicsMaterials_[i] =
+                (sm && sm->GetPipelineState()) ? sm : instancedGraphicsMaterial_;
+        }
+    }
 }
 
 void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
@@ -354,34 +414,10 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
         desc.dsvFormat = renderer->GetDeferredDepthFormat();
     }
 
-    if (MaterialData* md = GetMaterialData())
-    {
-        md->ConfigureDefinesForGBuffer(desc); // slot 0 defines the sampling permutation
-    }
-
-    // C1: alpha test + two-sided are per-slot flags, but the object has ONE PSO. Take the UNION
-    // across slots — ALPHA_TEST on if ANY slot is masked (opaque slots pass alphaCutoff=-1 so they
-    // never clip), cull NONE if ANY slot is two-sided (opaque slots are unaffected: a closed mesh
-    // renders identically two-sided). The per-slot cutoff/flags travel in the b0/b2 CB.
-    bool anyMasked = false;
-    bool anyTwoSided = false;
-    for (const std::shared_ptr<MaterialData>& md : matDatas_)
-    {
-        if (!md) { continue; }
-        anyMasked |= md->alphaMask;
-        anyTwoSided |= md->doubleSided;
-    }
-    if (anyMasked)
-    {
-        auto& defs = desc.defines;
-        defs.erase(std::remove_if(defs.begin(), defs.end(),
-            [](const auto& p) { return p.first == "ALPHA_TEST"; }), defs.end());
-        defs.emplace_back("ALPHA_TEST", "1");
-    }
-    if (anyTwoSided)
-    {
-        desc.raster.CullMode = D3D12_CULL_MODE_NONE;
-    }
+    // C1b: the object's base material IS slot 0's pipeline — sampling defines + ALPHA_TEST +
+    // cull mode come from slot 0's MaterialData (per-slot PSOs replace C1's union-of-flags;
+    // slots 1+ get their own materials in BuildSlotMaterials).
+    ApplySlotPipelineOverrides(desc, 0);
 
     desc.depth.StencilEnable = TRUE;
     desc.depth.StencilReadMask = 0x80;

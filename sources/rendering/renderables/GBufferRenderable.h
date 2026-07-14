@@ -90,6 +90,16 @@ public:
     }
     Material* InstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
     Material* InstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
+
+    // C1b: per-slot instanced PSO (built in BuildInstancedMaterials for multi-slot objects).
+    Material* InstancedGraphicsMaterialForSlot(size_t slot) const override
+    {
+        if (slot < slotInstancedGraphicsMaterials_.size() && slotInstancedGraphicsMaterials_[slot])
+        {
+            return slotInstancedGraphicsMaterials_[slot].get();
+        }
+        return InstancedGraphicsMaterial();
+    }
     void FillInstanceData(render::InstancePerObject& out) const override;
 
     // B2b: slot identity consumed by the queue's batch-compat check and by the multi-slot
@@ -114,6 +124,17 @@ protected:
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
+    // C1b: bind the current slot's PSO inside the multi-slot submesh loop (slot 0 == the base
+    // graphics material, so single-slot objects take the untouched default path).
+    Material* CurrentGraphicsMaterial() const override
+    {
+        if (currentDrawSlot_ < slotGraphicsMaterials_.size() && slotGraphicsMaterials_[currentDrawSlot_])
+        {
+            return slotGraphicsMaterials_[currentDrawSlot_].get();
+        }
+        return RenderableObject::CurrentGraphicsMaterial();
+    }
+
     const std::string& MatPreset() const { return slotPresets_[0]; }
 
     // A3: subclasses whose model is a glTF/GLB with "material":"auto" return the selector
@@ -126,6 +147,11 @@ private:
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    // C1b: patch a graphics desc with slot i's pipeline identity: sampling defines
+    // (NORMALMAP_IS_RG/USE_TBN/MR_LAYOUT_GLTF), ALPHA_TEST, and cull mode (two-sided).
+    void ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const;
+    // C1b: build slotGraphicsMaterials_ (per-slot PSOs; [0] aliases graphicsMaterial_).
+    void BuildSlotMaterials(Renderer* renderer);
 
     // B2: parallel per-slot arrays (size >= 1 after Init; matParamses_ always has slot 0 so the
     // factory can write params before Init). slotPresets_[i] = preset name or "auto" (glTF).
@@ -139,4 +165,11 @@ private:
     // across all objects of the same material by MaterialManager.
     std::shared_ptr<Material> instancedGraphicsMaterial_;
     std::shared_ptr<Material> instancedShadowMaterial_;
+
+    // C1b: per-slot PSOs for multi-slot objects (empty for single-slot => base-material path).
+    // [0] aliases graphicsMaterial_/instancedGraphicsMaterial_; a failed slot build falls back
+    // to the slot-0 material (the pre-C1b behavior). MaterialManager desc-caching dedups these
+    // across objects, so all palms share the same opaque + masked pipelines.
+    std::vector<std::shared_ptr<Material>> slotGraphicsMaterials_;
+    std::vector<std::shared_ptr<Material>> slotInstancedGraphicsMaterials_;
 };

@@ -269,24 +269,50 @@ round-trips; `--scene-stress` clean.
 
 ## Part C — masked + two-sided foliage
 
-**C1 — masked G-buffer variant.** *(exec: Opus 4.8)* Add alpha-test to the G-buffer shader: either
-`shaders/gbuffer_masked.hlsl` or a `#define ALPHA_TEST` permutation of `gbuffer.hlsl` —
-`clip(albedo.a - cutoff)`. The knobs are **per material slot** (not per object):
-`alphaTest`/`alphaCutoff`/`twoSided` fields on material entries (level-JSON `materials[]`
-items and `data/materials.json` presets); pipeline variant + cull mode
-(`Material.h` already exposes CullMode; two-sided = `D3D12_CULL_MODE_NONE`) are chosen per
-draw item from its slot. glTF import (A3) fills them automatically from
-`alphaMode`/`alphaCutoff`/`doubleSided` — the coconut palm's fronds slot is the test case.
-Note: alpha-tested foliage can shimmer under DLSS jitter — tune cutoff, accept for now
-(hashed alpha is a future item).
+**C1 — masked G-buffer variant.** *(exec: Opus 4.8; DONE 2026-07-14)* As landed: `ALPHA_TEST`
+define permutation + `AlphaTestClip` helper in `gbuffer_common.hlsl` (early clip of
+`baseColor.a * albedo.a - cutoff`), per-slot `alphaCutoff` threaded through every CB via
+existing padding (b0 `PerObject`, `InstancePerObject`, `SlotParams` b2) with **sentinel −1 =
+slot never clips**. Because the object had ONE PSO, C1 shipped with a **union-of-flags interim**:
+ALPHA_TEST/cull-NONE applied object-wide if ANY slot is masked/two-sided; correctness held via
+the −1 sentinel, but slots 1+ still render with slot-0's sampling defines (mixed preset+glTF
+objects shade fronds with the wrong MR/normal swizzle). glTF import (A3) fills
+`alphaMask`/`alphaCutoff`/`doubleSided`. Verified: fronds are clean cutouts, two-sided, trunks
+intact. Alpha shimmer under DLSS jitter accepted (hashed alpha = future item).
+
+**C1b — per-slot pipeline materials.** *(exec: Fable — draw-loop/batching restructure; user
+decision 2026-07-14: kill the one-PSO-per-object limitation before shadows build on it)*
+Each material slot gets its OWN graphics `Material` (PSO): per-slot defines
+(`NORMALMAP_IS_RG` / `USE_TBN` / `MR_LAYOUT_GLTF` / `ALPHA_TEST`) and per-slot raster state
+(cull NONE only on genuinely two-sided slots) — replacing C1's union-of-flags. Scope:
+- `GBufferRenderable`: `slotGraphicsMaterials_[i]` built from slot i's `MaterialData` + flags;
+  keep the base-class `graphicsMaterial_` as the slot-0 alias so every single-slot object and
+  non-GBuffer renderable path stays byte-identical. Same treatment for the instanced variants
+  (per-slot `INSTCB_SLOT_PARAMS` materials). ONE shadow material for now (depth-only is
+  slot-agnostic until C2). Drop the "slot 0's PSO wins" warning.
+- Multi-slot `Render()` loop: bind the slot's material per submesh (bind cache already elides
+  redundant PSO sets; optionally sort submeshes by material). UniformBinder CB handles come from
+  slot-0 reflection — all gbuffer permutations share the PerObject layout; assert offsets match
+  across slot materials rather than recomputing per slot.
+- `InstancedDrawBatch` multi-slot: bind the lead's slot-i instanced material inside the existing
+  submesh loop (batch compatibility already guarantees identical slot sets via
+  `SameInstanceSlots`; PSO switches are per-slot-per-batch, not per-instance).
+- MaterialManager desc-caching dedups identical slot PSOs across objects (all palms share the
+  same 2 pipelines: opaque + masked).
+- Gates: demo byte-identical (single-slot alias path untouched); palm grove still instances;
+  **acceptance = `palm.mixed.slots` renders fronds with CORRECT glTF sampling while trunk uses
+  the sandstone preset**; opaque-only glTF objects (boulder) lose the needless ALPHA_TEST/cull-
+  NONE they inherited from the union.
 
 **C2 — masked shadow passes.** *(exec: Fable — CSM + VSM page render + point paths, easy to
 regress)* Depth-only shadow paths (CSM, VSM page render, point/spot) treat
-everything as opaque today → fronds would cast solid-blob shadows. Add a masked depth variant
-(bind albedo SRV + clip) for the **sun path (CSM + VSM) first** — palms are sunlit; point/spot
-masked shadows can lag behind (campfire is inside a cave of solid rocks). Watch VSM perf: fronds
-are static, so cached/per-page-culled pages keep the cost bounded. Acceptable interim state
-after C1 alone: solid shadows (visible but not blocking).
+everything as opaque today → fronds would cast solid-blob shadows. Builds on C1b: masked slots
+get a per-slot masked SHADOW material (albedo SRV + `AlphaTestClip`), opaque slots keep the
+shared depth-only pipeline — no union hacks. Do the **sun path (CSM + VSM) first** — palms are
+sunlit; point/spot masked shadows can lag behind (campfire is inside a cave of solid rocks).
+Watch VSM perf: fronds are static, so cached/per-page-culled pages keep the cost bounded. Also
+covers the indirect-shadow path interplay (ShadowGpuData folded submeshes in B3). Acceptable
+interim state after C1/C1b: solid shadows (visible but not blocking).
 
 ## Part D — emissive meshes
 
