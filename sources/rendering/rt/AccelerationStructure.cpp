@@ -1,6 +1,8 @@
 #include "rendering/rt/AccelerationStructure.h"
 
+#include <algorithm>
 #include <atomic>
+#include <vector>
 
 #include "rendering/meshes/Mesh.h"
 
@@ -74,25 +76,39 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12Graph
     // so derive it from the (exactly sized) vertex buffer.
     const UINT vertexCount = static_cast<UINT>(vb->GetDesc().Width / stride);
 
-    D3D12_RAYTRACING_GEOMETRY_DESC geom{};
-    geom.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-    geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
-    geom.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress();
-    geom.Triangles.VertexBuffer.StrideInBytes = stride;
-    geom.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-    geom.Triangles.VertexCount = vertexCount;
-    if (ib && mesh->GetIndexCount() > 0) {
-        geom.Triangles.IndexBuffer = ib->GetGPUVirtualAddress();
-        geom.Triangles.IndexFormat = mesh->GetIndexFormat();
-        geom.Triangles.IndexCount = mesh->GetIndexCount();
+    // B3: one geometry desc per submesh (LOD0 table; every mesh has >= 1 spanning the buffer).
+    // Same triangles as the old whole-buffer desc, but hits report GeometryIndex() so per-slot
+    // decisions (Part C: masked/exclusion flags, per-slot materials) become possible. The hit
+    // shaders index the bindless geometry-info table with InstanceID + GeometryIndex.
+    const std::vector<Mesh::Submesh>& subs = mesh->GetSubmeshes();
+    const UINT idxBytes = (mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 4u : 2u;
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms(std::max<size_t>(subs.size(), 1));
+    for (size_t s = 0; s < geoms.size(); ++s) {
+        D3D12_RAYTRACING_GEOMETRY_DESC& geom = geoms[s];
+        geom = {};
+        geom.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+        geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        geom.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress();
+        geom.Triangles.VertexBuffer.StrideInBytes = stride;
+        geom.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+        geom.Triangles.VertexCount = vertexCount;
+        if (ib && mesh->GetIndexCount() > 0) {
+            const UINT indexOffset = (s < subs.size()) ? subs[s].indexOffset : 0u;
+            const UINT indexCount = (s < subs.size()) ? subs[s].indexCount
+                                                      : static_cast<UINT>(mesh->GetIndexCount());
+            geom.Triangles.IndexBuffer = ib->GetGPUVirtualAddress() +
+                                         static_cast<UINT64>(indexOffset) * idxBytes;
+            geom.Triangles.IndexFormat = mesh->GetIndexFormat();
+            geom.Triangles.IndexCount = indexCount;
+        }
     }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
     inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-    inputs.NumDescs = 1;
-    inputs.pGeometryDescs = &geom;
+    inputs.NumDescs = static_cast<UINT>(geoms.size());
+    inputs.pGeometryDescs = geoms.data();
 
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
     device5_->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);

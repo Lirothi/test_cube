@@ -119,7 +119,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE CasterGroupSrv() const;
     // Per-caster dynamic flag SRV (static, region 0; 1 = animating). The VSM page-cache marks a page
     // dirty when a dynamic caster overlaps it. {0} until Rebuild.
-    D3D12_CPU_DESCRIPTOR_HANDLE CasterDynamicSrv() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE CasterMetaSrv() const;
 
     // GI→VSM (Step 2): SRVs onto the DEFAULT-heap "unified" instance/bounds buffers for ring region
     // `frameIndex`. RecordCull copies the upload ring's region into these each frame (a compute
@@ -230,8 +230,8 @@ private:
     Ring bounds_;        // per-caster CasterBounds
     Ring viewFrustums_;  // per-view ShadowViewFrustum
     Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
-    Ring casterDynamic_; // per-caster dynamic flag (uint; 1=animating) for VSM page-cache invalidation; static, region 0 only
-    Ring perGroup_;      // per-group {base, indexCount} (uint2); static, region 0 only
+    Ring casterMeta_;    // per-caster meta (uint: bit0=dynamic, bits1+=object slot count on its FIRST slot); static, region 0 only
+    Ring perGroup_;      // per-group {base, indexCount, startIndex, 0} (uint4); static, region 0 only
 
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
@@ -286,10 +286,11 @@ private:
     // GPU copy has run (one-shot, success or fail); megaReady_ = built + usable.
     Microsoft::WRL::ComPtr<ID3D12Resource> megaVB_;
     Microsoft::WRL::ComPtr<ID3D12Resource> megaIB_;
-    std::vector<std::uint32_t> baseVertex_;   // per group: vertex offset into megaVB_
-    std::vector<std::uint32_t> startIndex_;   // per group: index offset into megaIB_
-    std::vector<std::uint32_t> groupVBBytes_; // per group: source VB byte size (copy length)
-    std::vector<std::uint32_t> groupIBBytes_; // per group: source IB byte size (copy length)
+    std::vector<std::uint32_t> baseVertex_;   // per group: its MESH's vertex offset into megaVB_ (B3: submesh groups share it)
+    std::vector<std::uint32_t> startIndex_;   // per group: its MESH's index offset into megaIB_ (the group's submesh range rides in the args)
+    // B3: mega copy list per UNIQUE mesh (submesh groups share one VB/IB slice).
+    struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT ibBytes = 0; };
+    std::vector<MegaCopy> megaCopy_;
     UINT megaVBBytes_ = 0, megaIBBytes_ = 0, megaStride_ = 0;
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;

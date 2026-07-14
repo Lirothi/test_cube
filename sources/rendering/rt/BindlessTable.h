@@ -27,7 +27,7 @@ struct GeometryInfoGPU
     float    roughness = 1.0f;
     float    metalness = 0.0f;
     uint32_t mrTexIndex = 0xFFFFFFFFu; // ~0 = no MR texture (use flat roughness/metalness)
-    uint32_t _pad1 = 0u;
+    uint32_t firstTri = 0u; // B3: this record's first triangle in the IB (submesh indexOffset/3)
     // Row 2 (16B)
     float    baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f }; // material tint / fallback
 };
@@ -61,8 +61,10 @@ public:
     ID3D12DescriptorHeap* Heap() const { return heap_.Get(); }
 
     // Register a mesh (idempotent): creates its VB/IB raw SRVs (+ albedo texture
-    // SRV if albedoSrv is valid) in the heap and a geometry-info record. Returns
-    // the geometry index (used as TLAS InstanceID). baseColor4 may be null (white).
+    // SRV if albedoSrv is valid) in the heap and one geometry-info record PER SUBMESH
+    // (contiguous, sharing the descriptors; B3 — the BLAS has one geometry per submesh, so the
+    // hit shaders index geom[InstanceID + GeometryIndex]). Returns the FIRST record's index
+    // (used as TLAS InstanceID). baseColor4 may be null (white).
     uint32_t GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                const float* baseColor4, float roughness, float metalness);

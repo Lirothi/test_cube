@@ -12,9 +12,14 @@ struct GeometryInfo
     float  roughness;
     float  metalness;
     uint   mrTexIndex;     // 0xFFFFFFFF = none (use flat roughness/metalness)
-    uint   _pad1;
+    uint   firstTri;       // B3: first triangle of this record's submesh range in the IB
     float4 baseColor;
 };
+
+// B3: records are per (instance, submesh) — the BLAS carries one geometry per submesh, so the
+// record index is InstanceID (the mesh's FIRST record) + the committed GeometryIndex, and
+// PrimitiveIndex is LOCAL to the geometry (offset by the record's firstTri when loading).
+uint GeometryRecordIndex(uint instanceId, uint geometryIndex) { return instanceId + geometryIndex; }
 
 static const uint kRtVertexStride = 48u; // VertexPNTUV
 static const uint kRtNormalOffset = 12u;

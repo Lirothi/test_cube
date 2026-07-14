@@ -229,13 +229,37 @@ instanced draws total (camera path; shadows were already 1 draw). Verified: 10-p
 excluded (differing slot-0 matData ≠ BatchKey); demo level clean (no batch line, no errors,
 user-confirmed visuals).
 
-**B3 — downstream consumers.** *(exec: Fable — VSM caster data + RT BLAS are the gnarly zones)* Shadow paths (CSM, VSM caster data, point/spot) iterate
-submeshes — they are material-agnostic today so behavior is equivalent, but per-submesh items
-are what lets Part C masked shadows pick per-slot materials later. RT reflections: one BLAS per
-mesh, one geometry desc per submesh (enables per-slot masked/exclusion decisions later).
-Picking/selection stays per-object (submeshes are not individually selectable in v1). Keep the
-`instancedModels`/`ShadowGpuData` path single-submesh for now (see GI→VSM plan — don't tangle
-the two refactors).
+**B3 — downstream consumers.** *(exec: Fable; DONE 2026-07-14 — GI→VSM plan complete, so the
+"keep ShadowGpuData single-submesh" caveat was lifted and the GPU-driven path went per-submesh
+too.)* As landed:
+- **ShadowGpuData** (the main path — Rung 0 indirect + VSM caster data): one caster SLOT per
+  (object, submesh) and one mesh-group per (mesh, submesh) — a mesh's groups are contiguous
+  (`group = meshToGroup[mesh] + ordinal`), all its slots share the object's instance/bounds
+  (per-submesh AABBs = future cull refinement). `PerGroup` widened to uint4 `{visibleBase,
+  indexCount, startIndex, 0}`; the cull-clear CS seeds the args' StartIndexLocation, so both
+  ExecuteIndirect consumers (per-view CSM + VSM per-page draws) draw submesh ranges with ZERO
+  changes to the VSM setup shader (its mega rebase ADDS the mesh's mega offsets on top). Mega
+  buffer lays out per UNIQUE mesh (one VB/IB copy shared by its submesh groups — also dedupes
+  a mesh used by several groups, which previously copied twice). UpdateForFrame counts/updates
+  slots (movers duplicate across their slots). One-time warning when groups exceed the VSM
+  setup cap (64). Verified: demo layout byte-identical (282 casters/6 groups), atoll goes
+  18 objs/7 groups → 65 slots/14 groups with `cull validation PASS` (GPU matches CPU reference).
+- **CPU fallback shadow paths**: `RenderableObject::RenderShadow` + `InstancedDrawBatch`
+  (shadow side) loop `DrawSubmesh(Instanced)` for multi-submesh meshes — depth-only equivalent
+  (ranges tile the buffer); this loop is where C2 binds per-slot masked materials.
+- **RT**: BLAS = one geometry desc per submesh (LOD0 table); bindless geometry-info records are
+  per (instance, submesh), contiguous, sharing one VB/IB/albedo/MR descriptor set, with a new
+  `firstTri` field; hit shaders index `geom[InstanceID + GeometryIndex()]` and fetch triangles
+  at `firstTri + PrimitiveIndex()`. Every record still carries the object's slot-0 material —
+  per-slot RT materials (correct per-slot albedo in reflections) are now a small follow-up.
+- Picking/selection stays per-object as planned.
+- **Perf follow-up (same day):** the submesh split multiplied the VSM per-page cull's plane
+  tests (2 loops × pages × casters; atoll 18→65 slots → a couple ms in Debug while moving).
+  Fixed by a per-OBJECT dedupe: `casterDynamic_` became `casterMeta_` (bit0 = dynamic, bits 1+
+  = the object's slot count on its FIRST slot), and `vsm_page_setup_cs` tests bounds once per
+  object, applying the result to its consecutive slots — test count back to pre-B3. NOTE: this
+  deliberately keeps slots sharing the OBJECT's bounds; switching to tight per-submesh AABBs
+  (finer page culling) would trade the dedupe away — measure before doing it.
 
 **B4 — editor UX + spawn.** *(exec: Opus 4.8)* `SpawnMeshCommand` spawns ONE object per glTF asset with slots
 auto-filled from A3 materials; `InspectorPanel` shows a material-slot list (per-slot preset

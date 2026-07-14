@@ -725,11 +725,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // (OOM edge) rather than binding a null descriptor.
     const D3D12_CPU_DESCRIPTOR_HANDLE boundsSrv = shadowGpu->UnifiedBoundsSrv(f);
     const D3D12_CPU_DESCRIPTOR_HANDLE casterGroupSrv = shadowGpu->CasterGroupSrv();
-    // The setup shader always reads physOwnerPrev (t4) + casterDynamic (t5) + writes perPageDirty (u3),
+    // The setup shader always reads physOwnerPrev (t4) + casterMeta (t5) + writes perPageDirty (u3),
     // so those must be non-null whenever it dispatches (bail otherwise, like the other inputs).
-    const D3D12_CPU_DESCRIPTOR_HANDLE casterDynamicSrv = shadowGpu->CasterDynamicSrv();
+    const D3D12_CPU_DESCRIPTOR_HANDLE casterMetaSrv = shadowGpu->CasterMetaSrv();
     if (boundsSrv.ptr == 0 || casterGroupSrv.ptr == 0 || pageVisibleListUav_.ptr == 0 ||
-        physOwnerPrevSrv_.ptr == 0 || casterDynamicSrv.ptr == 0 || perPageDirtyUav_.ptr == 0) { return; }
+        physOwnerPrevSrv_.ptr == 0 || casterMetaSrv.ptr == 0 || perPageDirtyUav_.ptr == 0) { return; }
     const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
 
     // Page cache: active only when the clear PSO + dirty SRV are ready (the inputs above are already
@@ -792,7 +792,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },
-        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterDynamicSrv },
+        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv },
         { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,

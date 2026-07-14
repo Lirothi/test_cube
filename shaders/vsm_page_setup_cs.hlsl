@@ -39,7 +39,7 @@ ByteAddressBuffer              Rung0Args     : register(t1); // D3D12_DRAW_INDEX
 StructuredBuffer<CasterBounds> Bounds        : register(t2); // per-caster world AABB (the unified buffer)
 StructuredBuffer<uint>         CasterGroup   : register(t3); // per-caster mesh-group id
 StructuredBuffer<uint>         PhysOwnerPrev : register(t4); // physical page -> last frame's owner (new-page detect)
-StructuredBuffer<uint>         CasterDynamic : register(t5); // per-caster dynamic flag (1 = animating)
+StructuredBuffer<uint>         CasterMeta    : register(t5); // per-caster: bit0=dynamic, bits1+=object slot count on its FIRST slot (0 on continuation slots)
 
 RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
@@ -120,19 +120,28 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[5] = pt[3] - pt[2]; // far
 
     // Pass 1: count the casters visible in THIS page, per mesh-group, and note whether any DYNAMIC
-    // caster overlaps (page-cache invalidation).
+    // caster overlaps (page-cache invalidation). B3: an object's submesh slots are CONSECUTIVE and
+    // share its bounds, so test once per OBJECT (CasterMeta slot count) and apply the result to all
+    // its slots — otherwise the (pages x casters) plane tests scale with the submesh split.
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
     for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
     bool dynamicOverlap = false;
-    for (uint c = 0u; c < gNumCasters; ++c)
+    for (uint c = 0u; c < gNumCasters; )
     {
+        const uint meta = CasterMeta[c];
+        uint n = meta >> 1;
+        if (n == 0u) { n = 1u; } // safety: a continuation slot can't lead the loop by construction
         CasterBounds b = Bounds[c];
         if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
         {
-            uint g = CasterGroup[c];
-            if (g < gNumGroups) { perGroupCount[g] += 1u; }
-            if (CasterDynamic[c] != 0u) { dynamicOverlap = true; }
+            for (uint s = 0u; s < n; ++s)
+            {
+                uint g = CasterGroup[c + s];
+                if (g < gNumGroups) { perGroupCount[g] += 1u; }
+            }
+            if ((meta & 1u) != 0u) { dynamicOverlap = true; }
         }
+        c += n;
     }
 
     // Cache decision: dirty pages clear + redraw; clean pages keep their cached depth (draw nothing).
@@ -173,17 +182,24 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     // Pass 2: scatter the visible caster ids into the page's slice, grouped (perGroupBase = cursor).
-    for (uint c2 = 0u; c2 < gNumCasters; ++c2)
+    // Same once-per-object test as pass 1.
+    for (uint c2 = 0u; c2 < gNumCasters; )
     {
+        uint n2 = CasterMeta[c2] >> 1;
+        if (n2 == 0u) { n2 = 1u; }
         CasterBounds b = Bounds[c2];
         if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
         {
-            uint g = CasterGroup[c2];
-            if (g < gNumGroups)
+            for (uint s2 = 0u; s2 < n2; ++s2)
             {
-                PageVisibleList[pageBase + perGroupBase[g]] = c2;
-                perGroupBase[g] += 1u;
+                uint g = CasterGroup[c2 + s2];
+                if (g < gNumGroups)
+                {
+                    PageVisibleList[pageBase + perGroupBase[g]] = c2 + s2;
+                    perGroupBase[g] += 1u;
+                }
             }
         }
+        c2 += n2;
     }
 }

@@ -14,8 +14,9 @@ cbuffer CullParams : register(b0)
     uint gPad;
 };
 
-// x = base offset (this group's slice within a view's visible-list region), y = mesh index count.
-StructuredBuffer<uint2> PerGroup : register(t0);
+// x = base offset (this group's slice within a view's visible-list region), y = index count,
+// z = start index (B3: a group is a (mesh, submesh) range; whole-mesh groups carry z = 0).
+StructuredBuffer<uint4> PerGroup : register(t0);
 
 RWByteAddressBuffer      Args   : register(u0); // D3D12_DRAW_INDEXED_ARGUMENTS[view*numGroups + group]
 RWStructuredBuffer<uint> Counts : register(u1); // per-view ExecuteIndirect command count
@@ -35,12 +36,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     uint v = idx / gNumGroups;
     uint g = idx % gNumGroups;
-    uint2 pg = PerGroup[g];
+    uint4 pg = PerGroup[g];
 
     uint base = idx * kArgStride;
-    Args.Store(base + 0u,  pg.y);                        // IndexCountPerInstance = mesh index count
+    Args.Store(base + 0u,  pg.y);                        // IndexCountPerInstance = group (submesh) index count
     Args.Store(base + 4u,  0u);                          // InstanceCount (bumped by the cull)
-    Args.Store(base + 8u,  0u);                          // StartIndexLocation
+    Args.Store(base + 8u,  pg.z);                        // StartIndexLocation = submesh range start (B3)
     Args.Store(base + 12u, 0u);                          // BaseVertexLocation
     Args.Store(base + 16u, v * gNumCasters + pg.x);      // StartInstanceLocation -> visible-list slice
 

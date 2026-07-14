@@ -29,7 +29,7 @@ struct ViewFrustum
 StructuredBuffer<CasterBounds> Bounds      : register(t0);
 StructuredBuffer<ViewFrustum>  Frustums    : register(t1);
 StructuredBuffer<uint>         CasterGroup : register(t2); // per-caster mesh-group id
-StructuredBuffer<uint2>        PerGroup    : register(t3); // x = base offset within a view's region
+StructuredBuffer<uint4>        PerGroup    : register(t3); // x = base offset within a view's region
 
 RWByteAddressBuffer      Args        : register(u0); // InterlockedAdd on InstanceCount
 RWStructuredBuffer<uint> VisibleList : register(u1); // appended caster ids

@@ -77,11 +77,11 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
 
     // --- Bindless geometry + material at the hit ---
     StructuredBuffer<GeometryInfo> geom = ResourceDescriptorHeap[geomInfoIndex];
-    GeometryInfo g = geom[q.CommittedInstanceID()];
+    GeometryInfo g = geom[GeometryRecordIndex(q.CommittedInstanceID(), q.CommittedGeometryIndex())];
     ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
     ByteAddressBuffer ib = ResourceDescriptorHeap[g.ibIndex];
 
-    uint3 tri = LoadTriangle(ib, q.CommittedPrimitiveIndex(), g.indexIs32);
+    uint3 tri = LoadTriangle(ib, g.firstTri + q.CommittedPrimitiveIndex(), g.indexIs32);
     float2 bary = q.CommittedTriangleBarycentrics();
     float  bw = 1.0f - bary.x - bary.y;
     float3 nObj = normalize(LoadNormal(vb, tri.x) * bw + LoadNormal(vb, tri.y) * bary.x + LoadNormal(vb, tri.z) * bary.y);

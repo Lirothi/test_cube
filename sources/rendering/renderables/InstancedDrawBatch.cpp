@@ -102,12 +102,16 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
 
     // B2b: multi-slot gbuffer draws loop the LOD's submeshes; each slot's params upload once
     // per call (not per chunk/instance) into a b2 slice read by the INSTCB_SLOT_PARAMS PS.
-    // Shadows (gbuffer=false) keep the whole-buffer single draw — depth-only, material-agnostic.
-    const bool multiSlot = gbuffer && leadInst_ != nullptr;
+    // B3: the shadow path loops the same ranges (no per-slot bindings — depth-only and the
+    // ranges tile the buffer, so coverage is identical; Part C hooks masked slots here).
+    const bool multiSlot = leadInst_ != nullptr;
     const std::vector<Mesh::Submesh>* subs = nullptr;
     if (multiSlot)
     {
         subs = &mesh_->SubmeshesForLod(lod);
+    }
+    if (multiSlot && gbuffer)
+    {
         const size_t slotCount = leadInst_->InstanceSlotCount();
         slotCbScratch_.assign(slotCount, 0);
         const MaterialParams defaults{};
@@ -166,21 +170,29 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
 
         // One ranged instanced draw per submesh; the instance array (b0) is shared across the
         // loop, only b2 + the SRV/sampler tables change (redundant rebinds elided by the bind
-        // cache). Null slot materials draw flat: texFlags gate all sampling in the PS.
+        // cache). Null slot materials draw flat: texFlags gate all sampling in the PS. The
+        // shadow path (gbuffer=false) draws the same ranges with no per-slot bindings (B3).
+        const size_t slotCount = leadInst_->InstanceSlotCount();
         for (size_t s = 0; s < subs->size(); ++s)
         {
             size_t slot = (*subs)[s].materialSlot;
-            if (slot >= slotCbScratch_.size()) { slot = slotCbScratch_.size() - 1; } // per-object clamp mirrored
+            if (slot >= slotCount) { slot = slotCount > 0 ? slotCount - 1 : 0; } // per-object clamp mirrored
 
             auto h = renderer->GetRenderContextPool()->Acquire();
             auto& ctx = h.ref();
             ctx.cbv[0] = alloc.gpu; // b0: per-instance array (shared by every submesh)
             ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
-            ctx.cbv[2] = slotCbScratch_[slot]; // b2: this slot's material params
 
-            if (MaterialData* md = leadInst_->InstanceSlotData(slot))
+            if (gbuffer)
             {
-                md->StageGBufferBindings(renderer, ctx, 0, 0);
+                if (slot < slotCbScratch_.size())
+                {
+                    ctx.cbv[2] = slotCbScratch_[slot]; // b2: this slot's material params
+                }
+                if (MaterialData* md = leadInst_->InstanceSlotData(slot))
+                {
+                    md->StageGBufferBindings(renderer, ctx, 0, 0);
+                }
             }
 
             material->Bind(cl, ctx, wireframe);

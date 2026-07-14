@@ -55,6 +55,10 @@
     { "type": "staticMesh", "id": 57, "name": "palm.grove.7", "material": "auto",
       "model": "import_staging/coconut_palm/scene.gltf", "position": [13.0, 0.0, -21.0], "rotationDeg": [0.0, 15.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
 
+    { "type": "staticMesh", "id": 60, "name": "rt.mirror", "material": "bronze",
+      "model": "models/box.obj", "position": [0.0, 3.0, -26.0], "scale": [14.0, 6.0, 0.3],
+      "metalRough": [1.0, 0.05], "useMR": false, "enabled": true },
+
     { "type": "staticMesh", "id": 40, "name": "rock.node1", "material": "auto",
       "model": "import_staging/rocks/scene.gltf#node:Rock01_Rock01Shader_0", "position": [20.0, 0.0, 6.0], "scale": [0.02, 0.02, 0.02], "enabled": true },
     { "type": "staticMesh", "id": 41, "name": "boulder", "material": "auto",

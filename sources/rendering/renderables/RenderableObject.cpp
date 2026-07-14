@@ -256,7 +256,23 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     }
 
     RecordShadow(renderer, cl, lightView, lightProj, ctx);
-    DrawGeometry(cl, lod); // Step 6c: caller passes the per-cascade LOD floor
+    // B3: multi-submesh meshes draw per range — byte-identical coverage today (depth-only, the
+    // ranges tile the buffer), but this loop is where Part C binds per-slot masked materials
+    // between ranges. Single-submesh meshes keep the whole-buffer DrawGeometry, which stays
+    // virtual for instanced casters (GpuInstancedModels overrides it; its mesh is single-submesh).
+    const Mesh* mesh = GetMesh();
+    const std::vector<Mesh::Submesh>* subs = mesh ? &mesh->SubmeshesForLod(lod) : nullptr;
+    if (subs && subs->size() > 1)
+    {
+        for (UINT s = 0; s < static_cast<UINT>(subs->size()); ++s)
+        {
+            mesh->DrawSubmesh(cl, s, lod);
+        }
+    }
+    else
+    {
+        DrawGeometry(cl, lod); // Step 6c: caller passes the per-cascade LOD floor
+    }
 }
 
 void RenderableObject::SetGraphicsMaterial(Material* m)

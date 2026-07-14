@@ -74,11 +74,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             // Bindless per-hit geometry fetch (S9): InstanceID -> geometry record
             // -> raw VB/IB -> interpolate the hit triangle's vertex normals.
             StructuredBuffer<GeometryInfo> geom = ResourceDescriptorHeap[geomInfoIndex];
-            GeometryInfo g = geom[q.CommittedInstanceID()];
+            GeometryInfo g = geom[GeometryRecordIndex(q.CommittedInstanceID(), q.CommittedGeometryIndex())];
             ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
             ByteAddressBuffer ib = ResourceDescriptorHeap[g.ibIndex];
 
-            uint3 tri = LoadTriangle(ib, q.CommittedPrimitiveIndex(), g.indexIs32);
+            uint3 tri = LoadTriangle(ib, g.firstTri + q.CommittedPrimitiveIndex(), g.indexIs32);
             float3 n0 = LoadNormal(vb, tri.x);
             float3 n1 = LoadNormal(vb, tri.y);
             float3 n2 = LoadNormal(vb, tri.z);

@@ -201,6 +201,18 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
 
 // ---- Caster filtering + fills ----------------------------------------------
 
+// B3: a caster object registers one caster SLOT per submesh of its mesh — the cull/args/draw
+// pipeline works on (mesh, submesh-range) groups so the depth passes issue ranged draws (what
+// lets Part C bind per-slot masked materials). Single-submesh meshes (every OBJ/.txt mesh)
+// keep the exact pre-B3 one-slot layout.
+static size_t CasterSlots(const RenderableObjectBase* obj)
+{
+    const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+    const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+    const size_t n = mesh ? mesh->GetSubmeshCount() : 1u;
+    return n > 0 ? n : 1u;
+}
+
 bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
 {
     // Match SceneRenderQueue's visibility and CastsShadow predicates. A visibility change
@@ -267,7 +279,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceSrv(UINT frameIndex) const { 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { return bounds_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
-D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterDynamicSrv() const { return casterDynamic_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return casterMeta_.Srv(0); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
 {
@@ -316,7 +328,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     size_t casterCount = 0;
     for (const auto& obj : objects)
     {
-        if (IsCaster(obj.get())) { ++casterCount; }
+        if (IsCaster(obj.get())) { casterCount += CasterSlots(obj.get()); }
     }
 
     if (!EnsureRing(renderer, instances_, casterCount, sizeof(render::InstancePerObject), L"ShadowGpuData.Instances") ||
@@ -335,28 +347,44 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     pending_.assign(casterCount, 0);
 
     // (1) STATIC casters: fill per-caster data + assign mesh-groups (the cull groups draws by mesh,
-    // so the indirect arg/count buffers are sized per (view, mesh-group)). Group ids dense, first-seen.
-    std::unordered_map<const Mesh*, std::uint32_t> meshToGroup;
+    // so the indirect arg/count buffers are sized per (view, mesh-group)). B3: one caster SLOT per
+    // (object, submesh) and one group per (mesh, submesh) — a mesh's groups are allocated
+    // contiguously first-seen, so group(mesh, s) = meshToGroup[mesh] + s. All of an object's slots
+    // share its instance data/bounds (per-submesh bounds are a future refinement).
+    std::unordered_map<const Mesh*, std::uint32_t> meshToGroup; // mesh -> FIRST group id
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
+    std::vector<std::uint32_t> casterSub(casterCount, 0u);      // submesh ordinal within casterMesh
     std::vector<std::uint32_t> staticDynamic(casterCount, 0u); // per static caster: IsDynamicCaster (VSM page-cache invalidation)
+    std::uint32_t nextGroup = 0;
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
         const RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
-        FillInstance(obj, cpuInstances_[idx]);
-        FillBounds(obj, cpuBounds_[idx]);
         const RenderableObject* ro = obj->AsRenderableObject();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsCaster requires it
-        casterMesh[idx] = mesh;
-        staticDynamic[idx] = obj->IsDynamicCaster() ? 1u : 0u;
+        const size_t slots = CasterSlots(obj);
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
-            meshToGroup.emplace(mesh, static_cast<std::uint32_t>(meshToGroup.size()));
+            meshToGroup.emplace(mesh, nextGroup);
+            nextGroup += static_cast<std::uint32_t>(slots);
         }
-        ++idx;
+        render::InstancePerObject inst{};
+        render::CasterBounds bnd{};
+        FillInstance(obj, inst);
+        FillBounds(obj, bnd);
+        const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
+        for (size_t s = 0; s < slots; ++s)
+        {
+            cpuInstances_[idx] = inst;
+            cpuBounds_[idx] = bnd;
+            casterMesh[idx] = mesh;
+            casterSub[idx] = static_cast<std::uint32_t>(s);
+            staticDynamic[idx] = dyn;
+            ++idx;
+        }
     }
-    const std::uint32_t staticGroups = static_cast<std::uint32_t>(meshToGroup.size());
+    const std::uint32_t staticGroups = nextGroup;
 
     // (2) GI→VSM reservation (Step 3): fold each GPU-instanced caster's instances into the caster
     // set as an id sub-range [giBase, giBase+count) after the static casters, one mesh-group per GI
@@ -405,41 +433,70 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     count_ = totalCount;
     numMeshGroups_ = numGroups;
 
-    // (3) group id -> Mesh*: static groups from the first-seen map, then one per folded GI object.
+    // (3) group id -> Mesh*: static groups from the first-seen map (B3: a mesh's submesh groups
+    // are contiguous and all map to it), then one per folded GI object.
     groupMesh_.assign(numMeshGroups_, nullptr);
     for (const auto& kv : meshToGroup)
     {
-        if (kv.second < staticGroups) { groupMesh_[kv.second] = kv.first; }
+        const size_t slots = std::max<size_t>(kv.first->GetSubmeshCount(), 1u);
+        for (size_t s = 0; s < slots && kv.second + s < staticGroups; ++s)
+        {
+            groupMesh_[kv.second + s] = kv.first;
+        }
     }
     for (size_t j = 0; j < giGroupMesh.size(); ++j)
     {
         groupMesh_[staticGroups + j] = giGroupMesh[j];
     }
 
-    // (4) Per-group caster count + index count, per-caster group id, and per-caster dynamic flag
+    // (4) Per-group caster count + index range, per-caster group id, and per-caster dynamic flag
     // (all sized to the TOTAL count_). casterDynamicId feeds the VSM page-cache invalidation: 1 for
     // GI (always animating) + any static caster whose object reports IsDynamicCaster.
+    // B3: static groups are (mesh, submesh) ranges — index count + START come from the LOD0
+    // submesh table (the GPU shadow paths always draw LOD0). GI groups stay whole-buffer.
     std::vector<std::uint32_t> groupCount(numMeshGroups_, 0);
     std::vector<std::uint32_t> groupIndexCount(numMeshGroups_, 0);
+    std::vector<std::uint32_t> groupStartIndex(numMeshGroups_, 0);
     std::vector<std::uint32_t> casterGroupId(std::max<std::uint32_t>(count_, 1u), 0);
-    std::vector<std::uint32_t> casterDynamicId(std::max<std::uint32_t>(count_, 1u), 0);
+    // Per-caster meta word: bit0 = dynamic (VSM page-cache invalidation); bits 1+ = the object's
+    // slot count, stored ONLY on its FIRST slot (0 on continuation slots). The VSM per-page cull
+    // tests bounds once per OBJECT and applies the result to all its slots — B3 multiplied the
+    // caster count by submeshes, and without this the (pages x casters) plane tests scale with it.
+    std::vector<std::uint32_t> casterMeta(std::max<std::uint32_t>(count_, 1u), 0);
     for (size_t i = 0; i < casterCount; ++i)
     {
         const Mesh* mesh = casterMesh[i];
-        const std::uint32_t g = mesh ? meshToGroup[mesh] : 0u;
+        const std::uint32_t g = (mesh ? meshToGroup[mesh] : 0u) + casterSub[i];
         casterGroupId[i] = g;
-        casterDynamicId[i] = staticDynamic[i];
-        if (g < numMeshGroups_)
+        const std::uint32_t slots = (casterSub[i] == 0u && mesh)
+            ? static_cast<std::uint32_t>(std::max<size_t>(mesh->GetSubmeshCount(), 1u))
+            : 0u;
+        casterMeta[i] = (slots << 1) | (staticDynamic[i] & 1u);
+        if (g < numMeshGroups_) { ++groupCount[g]; }
+    }
+    for (const auto& kv : meshToGroup)
+    {
+        const auto& subs = kv.first->GetSubmeshes();
+        const size_t slots = std::max<size_t>(subs.size(), 1u);
+        for (size_t s = 0; s < slots && kv.second + s < staticGroups; ++s)
         {
-            ++groupCount[g];
-            if (mesh) { groupIndexCount[g] = static_cast<std::uint32_t>(mesh->GetIndexCount()); }
+            const std::uint32_t g = kv.second + static_cast<std::uint32_t>(s);
+            if (s < subs.size())
+            {
+                groupIndexCount[g] = subs[s].indexCount;
+                groupStartIndex[g] = subs[s].indexOffset;
+            }
+            else
+            {
+                groupIndexCount[g] = static_cast<std::uint32_t>(kv.first->GetIndexCount());
+            }
         }
     }
     for (size_t j = 0; j < giCasters_.size(); ++j)
     {
         const std::uint32_t g = staticGroups + static_cast<std::uint32_t>(j);
         const GiCaster& gc = giCasters_[j];
-        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; casterDynamicId[gc.giBase + c] = 1u; }
+        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; casterMeta[gc.giBase + c] = (1u << 1) | 1u; } // each GI instance: own 1-slot object, dynamic
         groupCount[g] = gc.count;
         groupIndexCount[g] = giGroupIndexCount[j];
     }
@@ -459,20 +516,24 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         std::memcpy(casterGroup_.Region(0), casterGroupId.data(), count_ * sizeof(std::uint32_t));
     }
-    // Per-caster dynamic flag for VSM page-cache invalidation (region 0; static after Rebuild).
-    if (EnsureRing(renderer, casterDynamic_, std::max<std::uint32_t>(count_, 1u), sizeof(std::uint32_t), L"ShadowGpuData.CasterDynamic") &&
+    // Per-caster meta (dynamic flag + first-slot object slot count; region 0, static after Rebuild).
+    if (EnsureRing(renderer, casterMeta_, std::max<std::uint32_t>(count_, 1u), sizeof(std::uint32_t), L"ShadowGpuData.CasterMeta") &&
         count_ > 0)
     {
-        std::memcpy(casterDynamic_.Region(0), casterDynamicId.data(), count_ * sizeof(std::uint32_t));
+        std::memcpy(casterMeta_.Region(0), casterMeta.data(), count_ * sizeof(std::uint32_t));
     }
-    if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 2 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
+    // B3: uint4 per group — {visible-list base, index count, start index, 0}. The clear CS seeds
+    // the indirect args' StartIndexLocation from .z so submesh groups draw their range.
+    if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 4 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
         numMeshGroups_ > 0)
     {
         auto* pg = reinterpret_cast<std::uint32_t*>(perGroup_.Region(0));
         for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
         {
-            pg[g * 2 + 0] = groupBase[g];
-            pg[g * 2 + 1] = groupIndexCount[g];
+            pg[g * 4 + 0] = groupBase[g];
+            pg[g * 4 + 1] = groupIndexCount[g];
+            pg[g * 4 + 2] = groupStartIndex[g];
+            pg[g * 4 + 3] = 0u;
         }
     }
 
@@ -490,41 +551,70 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     baseVertex_.assign(numMeshGroups_, 0u);
     startIndex_.assign(numMeshGroups_, 0u);
-    groupVBBytes_.assign(numMeshGroups_, 0u);
-    groupIBBytes_.assign(numMeshGroups_, 0u);
+    megaCopy_.clear();
     constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
+    if (numMeshGroups_ > kMaxMegaGroups)
+    {
+        // Over the VSM setup shader's per-group CB cap: the mega path stays off (per-group
+        // binding fallback still draws correctly), but flag it — B3's per-submesh groups make
+        // this reachable with far fewer meshes than before.
+        char warn[128];
+        std::snprintf(warn, sizeof(warn),
+            "[ShadowGpuData] WARNING: %u mesh-groups exceeds the VSM setup cap (%u); mega path disabled.\n",
+            numMeshGroups_, kMaxMegaGroups);
+        OutputDebugStringA(warn);
+    }
     if (numMeshGroups_ > 0 && numMeshGroups_ <= kMaxMegaGroups)
     {
+        // B3: submesh groups share their mesh's buffers — lay the mega buffer out per UNIQUE
+        // mesh (one VB/IB copy each) and point every group at its mesh's base offsets. The
+        // group's own submesh range rides in the indirect args' StartIndexLocation (seeded by
+        // the cull-clear from PerGroup), and the VSM setup ADDS these mesh-base offsets on top.
         bool uniform = true;
         UINT stride0 = 0;
         DXGI_FORMAT fmt0 = DXGI_FORMAT_UNKNOWN;
+        std::unordered_map<const Mesh*, std::uint32_t> meshSlot; // mesh -> megaCopy_ ordinal
         for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
         {
             const Mesh* m = groupMesh_[g];
             ID3D12Resource* vb = m ? m->GetVertexBufferResource() : nullptr;
             ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr;
             if (!vb || !ib) { uniform = false; break; }
-            if (g == 0) { stride0 = m->GetVertexStride(); fmt0 = m->GetIndexFormat(); }
+            if (meshSlot.empty()) { stride0 = m->GetVertexStride(); fmt0 = m->GetIndexFormat(); }
             else if (m->GetVertexStride() != stride0 || m->GetIndexFormat() != fmt0) { uniform = false; break; }
+            if (meshSlot.find(m) == meshSlot.end())
+            {
+                meshSlot.emplace(m, static_cast<std::uint32_t>(megaCopy_.size()));
+                megaCopy_.push_back(MegaCopy{ m,
+                    static_cast<UINT>(vb->GetDesc().Width), static_cast<UINT>(ib->GetDesc().Width) });
+            }
         }
         if (uniform && stride0 > 0 && fmt0 == DXGI_FORMAT_R32_UINT) // consolidated path is R32-only
         {
             const UINT idxBytes = 4u;
+            std::vector<std::uint32_t> meshBaseVertex(megaCopy_.size(), 0u);
+            std::vector<std::uint32_t> meshStartIndex(megaCopy_.size(), 0u);
             UINT voff = 0, ioff = 0;
+            for (size_t m = 0; m < megaCopy_.size(); ++m)
+            {
+                meshBaseVertex[m] = voff / stride0;  // exact: widths are stride*count
+                meshStartIndex[m] = ioff / idxBytes; // exact: widths are 4*count
+                voff += megaCopy_[m].vbBytes;
+                ioff += megaCopy_[m].ibBytes;
+            }
             for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
             {
-                const Mesh* m = groupMesh_[g];
-                const UINT vbw = static_cast<UINT>(m->GetVertexBufferResource()->GetDesc().Width);
-                const UINT ibw = static_cast<UINT>(m->GetIndexBufferResource()->GetDesc().Width);
-                baseVertex_[g] = voff / stride0;   // exact: widths are stride*count
-                startIndex_[g] = ioff / idxBytes;  // exact: widths are 4*count
-                groupVBBytes_[g] = vbw;
-                groupIBBytes_[g] = ibw;
-                voff += vbw; ioff += ibw;
+                const std::uint32_t m = meshSlot[groupMesh_[g]];
+                baseVertex_[g] = meshBaseVertex[m];
+                startIndex_[g] = meshStartIndex[m];
             }
             megaVBBytes_ = voff; megaIBBytes_ = ioff;
             megaStride_ = stride0; megaIndexFormat_ = fmt0;
             megaWanted_ = (megaVBBytes_ > 0 && megaIBBytes_ > 0);
+        }
+        else
+        {
+            megaCopy_.clear();
         }
     }
 
@@ -577,11 +667,11 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
 {
     if (!renderer) { return 0; }
 
-    size_t newStatic = 0;
+    size_t newStatic = 0; // caster SLOTS (B3: one per (object, submesh)) — must match Rebuild's count
     std::uint32_t newGiInstances = 0;
     for (const auto& obj : objects)
     {
-        if (IsCaster(obj.get())) { ++newStatic; }
+        if (IsCaster(obj.get())) { newStatic += CasterSlots(obj.get()); }
         else if (IsGiFoldable(obj.get())) { newGiInstances += obj->GetInstanceCasterCount(); }
     }
 
@@ -609,6 +699,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     {
         const RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
+        const size_t slots = CasterSlots(obj); // B3: an object owns `slots` consecutive caster ids
 
         // Step 7: only movers are recomputed + re-uploaded. A static caster is skipped entirely
         // (no fill, no compare) — the per-frame cost is O(movers), not O(casters). The move
@@ -618,18 +709,29 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         {
             FillInstance(obj, cpuInstances_[idx]);
             FillBounds(obj, cpuBounds_[idx]);
-            pending_[idx] = static_cast<std::uint8_t>(render::kFrameCount);
+            for (size_t s = 1; s < slots; ++s) // duplicate across the object's submesh slots
+            {
+                cpuInstances_[idx + s] = cpuInstances_[idx];
+                cpuBounds_[idx + s] = cpuBounds_[idx];
+            }
+            for (size_t s = 0; s < slots; ++s)
+            {
+                pending_[idx + s] = static_cast<std::uint8_t>(render::kFrameCount);
+            }
         }
         // pending>0 propagates a recent change across all kFrameCount ring regions (even after
         // the object stops moving), so every region converges to the latest transform.
-        if (pending_[idx] > 0)
+        for (size_t s = 0; s < slots; ++s)
         {
-            instBase[idx] = cpuInstances_[idx];
-            boundBase[idx] = cpuBounds_[idx];
-            --pending_[idx];
-            ++uploaded;
+            if (pending_[idx + s] > 0)
+            {
+                instBase[idx + s] = cpuInstances_[idx + s];
+                boundBase[idx + s] = cpuBounds_[idx + s];
+                --pending_[idx + s];
+                ++uploaded;
+            }
         }
-        ++idx;
+        idx += static_cast<std::uint32_t>(slots);
     }
 
     if (logFramesRemaining_ > 0)
@@ -1139,6 +1241,7 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     cl->IASetVertexBuffers(1, 1, &visVBV);
 
     const UINT64 argRegionBase = static_cast<UINT64>(f) * indirectArgs_.regionBytes;
+    const Mesh* boundMesh = nullptr; // B3: a mesh's submesh groups are contiguous — bind once
     for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
     {
         const Mesh* mesh = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
@@ -1147,20 +1250,25 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
         ID3D12Resource* ib = mesh->GetIndexBufferResource();
         if (!vb || !ib) { continue; }
 
-        D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = vb->GetGPUVirtualAddress();
-        vbv.SizeInBytes = static_cast<UINT>(vb->GetDesc().Width);
-        vbv.StrideInBytes = mesh->GetVertexStride();
-        cl->IASetVertexBuffers(0, 1, &vbv);
+        if (mesh != boundMesh)
+        {
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = vb->GetGPUVirtualAddress();
+            vbv.SizeInBytes = static_cast<UINT>(vb->GetDesc().Width);
+            vbv.StrideInBytes = mesh->GetVertexStride();
+            cl->IASetVertexBuffers(0, 1, &vbv);
 
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = ib->GetGPUVirtualAddress();
-        ibv.SizeInBytes = static_cast<UINT>(ib->GetDesc().Width);
-        ibv.Format = mesh->GetIndexFormat();
-        cl->IASetIndexBuffer(&ibv);
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            ibv.BufferLocation = ib->GetGPUVirtualAddress();
+            ibv.SizeInBytes = static_cast<UINT>(ib->GetDesc().Width);
+            ibv.Format = mesh->GetIndexFormat();
+            cl->IASetIndexBuffer(&ibv);
+            boundMesh = mesh;
+        }
 
         // One indirect draw per (view, mesh-group). InstanceCount (from the cull) may be 0 -> a
-        // free no-op, so empty groups cost nothing beyond the binding.
+        // free no-op, so empty groups cost nothing beyond the binding. B3: the args carry the
+        // group's submesh StartIndexLocation (seeded by the cull-clear from PerGroup).
         const UINT64 argOffset = argRegionBase +
             static_cast<UINT64>(viewSlot * numMeshGroups_ + g) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
         renderer->ExecuteIndirect(cl, sig, 1, indirectArgs_.buffer.Get(), argOffset, nullptr, 0);
@@ -1207,19 +1315,19 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
     // promotion — no barriers, and robust whether a mesh is fresh this load or a cached reuse. The
     // load CL's execute+fence (before any frame renders) is the write->read sync; the mega buffers
     // decay back to COMMON and the per-page draw's IA bind promotes them to VERTEX_/INDEX_BUFFER.
+    // B3: one copy per UNIQUE mesh (submesh groups share their mesh's slice).
     UINT voff = 0, ioff = 0;
-    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    for (const MegaCopy& mc : megaCopy_)
     {
-        const Mesh* m = groupMesh_[g];
-        ID3D12Resource* vb = m ? m->GetVertexBufferResource() : nullptr;
-        ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr;
+        ID3D12Resource* vb = mc.mesh ? mc.mesh->GetVertexBufferResource() : nullptr;
+        ID3D12Resource* ib = mc.mesh ? mc.mesh->GetIndexBufferResource() : nullptr;
         if (vb && ib)
         {
-            cl->CopyBufferRegion(megaVB_.Get(), voff, vb, 0, groupVBBytes_[g]);
-            cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, groupIBBytes_[g]);
+            cl->CopyBufferRegion(megaVB_.Get(), voff, vb, 0, mc.vbBytes);
+            cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, mc.ibBytes);
         }
-        voff += groupVBBytes_[g];
-        ioff += groupIBBytes_[g];
+        voff += mc.vbBytes;
+        ioff += mc.ibBytes;
     }
     megaReady_ = true;
 }
@@ -1311,6 +1419,7 @@ void ShadowGpuData::Reset()
     groupMesh_.clear();
     giCasters_.clear();            // GI reservation dropped; next Rebuild re-enumerates + refreshes obj*
     giFoldableInstances_ = 0;
+    megaCopy_.clear();             // mesh pointers dangle across a level unload
     megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
     valState_ = 0;
     logFramesRemaining_ = 5;

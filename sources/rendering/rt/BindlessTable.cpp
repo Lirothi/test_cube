@@ -126,8 +126,20 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDL
         rec.mrTexIndex = mrSlot;
     }
 
+    // B3: one record per submesh (contiguous, all sharing the descriptors above) so hits in
+    // BLAS geometry g resolve via geom[InstanceID + g] and fetch triangles from firstTri on.
+    // Every record currently carries the object's slot-0 material (per-slot RT materials are a
+    // follow-up); descriptor slots of records 1..n-1 stay unused (kDescPerGeom-spaced holes).
     geomCache_.emplace(key, geomIndex);
-    geomInfo_.push_back(rec);
+    if (mesh && mesh->GetSubmeshCount() > 1) {
+        for (const Mesh::Submesh& sub : mesh->GetSubmeshes()) {
+            rec.firstTri = sub.indexOffset / 3u;
+            geomInfo_.push_back(rec);
+        }
+    } else {
+        rec.firstTri = 0u;
+        geomInfo_.push_back(rec);
+    }
     return geomIndex;
 }
 
