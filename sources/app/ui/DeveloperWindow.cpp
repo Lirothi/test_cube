@@ -181,7 +181,7 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 ImGui::Text("FPS: %.1f (%.2f ms)", fps, frameMs);
                 ImGui::Text("Display: %ux%u", renderer.GetWidth(), renderer.GetHeight());
                 ImGui::Text("Render: %ux%u (scale %.2f)", renderer.GetRenderWidth(), renderer.GetRenderHeight(), renderer.GetRenderResolutionScale());
-                ImGui::Text("Draw calls: %u   Primitives: %.2fM",
+                ImGui::Text("Draw calls: %u   Primitives: %.3fM",
                     render::g_renderStats.lastDrawCalls,
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
 
