@@ -16,6 +16,10 @@
 #include "app/AppController.h"
 #include "core/task/TaskSystem.h"
 
+// Optional boot-level override (set from the "--level=<path>" command line). Empty = the default
+// demo level. Used for headless verification of specific levels (see docs atoll plan A2+).
+extern std::string g_bootLevelPath;
+
 class App {
 public:
     ~App();

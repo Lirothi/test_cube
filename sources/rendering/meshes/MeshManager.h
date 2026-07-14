@@ -36,6 +36,16 @@ public:
                                   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                   const MeshLoadOptions& opt = {});
 
+    // glTF/GLB (cgltf). Path may carry a fragment selector:
+    //   "models/foo.glb"            -> whole file, material group 0 (+ warning until Part B)
+    //   "models/foo.glb#2"          -> material group index 2 (across the whole file)
+    //   "models/foo.glb#node:Rock_1"-> only that node's subtree, merged by material
+    std::shared_ptr<Mesh> LoadGltf(const std::string& path,
+                                   Renderer* renderer,
+                                   ID3D12GraphicsCommandList* uploadCmdList,
+                                   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
+                                   const MeshLoadOptions& opt = {});
+
     // From memory (when verts/indices are already available)
     std::shared_ptr<Mesh> CreateFromMemory(const std::string& key,
                                            Renderer* renderer,
@@ -59,6 +69,13 @@ private:
                       std::vector<VertexPNTUV>& outVerts,
                       std::vector<uint32_t>& outIndices,
                       const MeshLoadOptions& opt);
+
+    // Parses a glTF/GLB (fragment selector honored) into one flat vertex/index buffer for the
+    // selected material group. Bakes node world transforms; flips winding for mirrored nodes.
+    bool ParseGltfFile(const std::string& fullPath,
+                       std::vector<VertexPNTUV>& outVerts,
+                       std::vector<uint32_t>& outIndices,
+                       const MeshLoadOptions& opt);
 
 private:
     robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>> cache_;

@@ -513,6 +513,9 @@
     <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
       <Filter>third_party\imgui</Filter>
     </ClCompile>
+    <ClCompile Include="third_party\cgltf\cgltf.cpp">
+      <Filter>third_party\cgltf</Filter>
+    </ClCompile>
     <ClCompile Include="third_party\ImGuizmo\ImGuizmo.cpp">
       <Filter>third_party\ImGuizmo</Filter>
     </ClCompile>

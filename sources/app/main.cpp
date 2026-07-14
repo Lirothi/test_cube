@@ -15,6 +15,7 @@
 #include "rendering/rt/RtSmoke.h"
 #include "text/TextManager.h"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -156,6 +157,16 @@ int WINAPI WinMain(
                 GraphicsDevice::EnableGbvForStress(true);
             }
             return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv);
+        }
+    }
+
+    // "--level=<path>" overrides the boot level (headless verification of a specific level).
+    if (lpCmdLine) {
+        if (const char* flag = std::strstr(lpCmdLine, "--level=")) {
+            const char* p = flag + std::strlen("--level=");
+            std::string path;
+            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
+            g_bootLevelPath = path;
         }
     }
 

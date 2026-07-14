@@ -10,6 +10,9 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+// Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
+std::string g_bootLevelPath;
+
 #include "app/levels/JsonLevel.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -305,7 +308,8 @@ void App::InitScene()
 
     if (!levelManager.HasLevel(JsonLevel::kName))
     {
-        levelManager.RegisterLevel<JsonLevel>("data/levels/demo.json");
+        const std::string bootLevel = g_bootLevelPath.empty() ? "data/levels/demo.json" : g_bootLevelPath;
+        levelManager.RegisterLevel<JsonLevel>(bootLevel);
     }
 
     const bool levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);

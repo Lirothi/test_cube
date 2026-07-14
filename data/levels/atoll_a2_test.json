@@ -1,0 +1,49 @@
+{
+  "camera": { "hfovDeg": 90.0, "zFar": 10000.0, "zNear": 0.01 },
+  "directionalLight": {
+    "ambient": 0.15,
+    "color": [1.0, 0.95, 0.9],
+    "direction": [-1.5, -0.7, -0.5],
+    "enabled": true,
+    "exposure": 1.0
+  },
+  "skybox": { "texture": "textures/skybox.dds" },
+  "objects": [
+    {
+      "type": "freeCameraStart", "id": 1, "name": "FreeCameraStart",
+      "position": [10.0, 4.0, 10.0], "rotationDeg": [10.0, -135.0, 0.0], "scale": [1.0, 1.0, 1.0],
+      "enabled": true
+    },
+    {
+      "type": "staticMesh", "id": 2, "name": "ground", "material": "sandstone_cracks",
+      "model": "models/box.obj", "position": [0.0, -0.5, 0.0], "scale": [40.0, 1.0, 40.0],
+      "renderLayer": "Terrain", "texOffsScale": [0, 0, 20, 20], "enabled": true
+    },
+
+    { "type": "staticMesh", "id": 10, "name": "palm.assembled.g0", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#0", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 11, "name": "palm.assembled.g1", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#1", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 12, "name": "palm.assembled.g2", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#2", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 13, "name": "palm.assembled.g3", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#3", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 14, "name": "palm.assembled.g4", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#4", "position": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+
+    { "type": "staticMesh", "id": 20, "name": "part.g0", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#0", "position": [-16.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 21, "name": "part.g1", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#1", "position": [-24.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 22, "name": "part.g2", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf#2", "position": [-32.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+
+    { "type": "staticMesh", "id": 30, "name": "wholefile.fallback.g0", "material": "sandstone_cracks",
+      "model": "import_staging/coconut_palm/scene.gltf", "position": [16.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+
+    { "type": "staticMesh", "id": 40, "name": "rock.node1", "material": "sandstone_cracks",
+      "model": "import_staging/rocks/scene.gltf#node:Rock01_Rock01Shader_0", "position": [24.0, 0.0, 4.0], "scale": [0.02, 0.02, 0.02], "enabled": true },
+    { "type": "staticMesh", "id": 41, "name": "rock.node2", "material": "sandstone_cracks",
+      "model": "import_staging/rocks/scene.gltf#node:Rock02_Rock02Shader_0", "position": [24.0, 0.0, -4.0], "scale": [0.02, 0.02, 0.02], "enabled": true }
+  ]
+}
