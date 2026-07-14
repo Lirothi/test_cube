@@ -662,7 +662,8 @@ void Profiler::EndFrame() {
         // A) Reduce samples into stats_ (lock-free) + EMA/lastCount
         auto accumulateSamples = [&](const std::vector<ScopeSample>& src,
                                      auto& statsMap,
-                                     uint32_t& nextOverlayId) {
+                                     uint32_t& nextOverlayId,
+                                     bool commitEmptyFrame) {
             for (const auto& s : src) {
                 auto [it, inserted] = statsMap.try_emplace(s.key);
                 auto& entry = it->second;
@@ -673,16 +674,24 @@ void Profiler::EndFrame() {
                 }
                 entry.stats.Accumulate(s.ms);
             }
-            for (auto& kv : statsMap) {
-                kv.second.stats.CommitFrame(emaAlpha_);
+            // GPU timestamps are resolved asynchronously. An empty CPU frame
+            // therefore means "no completed readback yet", not "the GPU did
+            // no work". Do not clear lastCount in that case or the whole GPU
+            // overlay disappears until a later batch arrives. Once a resolved
+            // batch is present, still commit every entry so inactive passes
+            // (including VSM) receive a zero usage count and sort below active work.
+            if (commitEmptyFrame || !src.empty()) {
+                for (auto& kv : statsMap) {
+                    kv.second.stats.CommitFrame(emaAlpha_);
+                }
             }
         };
 
-        accumulateSamples(asyncCpuSamples_, stats_, nextOverlayId_);
+        accumulateSamples(asyncCpuSamples_, stats_, nextOverlayId_, /*commitEmptyFrame=*/true);
         asyncCpuSamples_.clear();
 
 #if PROF_GPU_ENABLED
-        accumulateSamples(asyncGpuSamples_, gpuStats_, nextGpuOverlayId_);
+        accumulateSamples(asyncGpuSamples_, gpuStats_, nextGpuOverlayId_, /*commitEmptyFrame=*/false);
         asyncGpuSamples_.clear();
 #endif
 
@@ -697,10 +706,9 @@ void Profiler::EndFrame() {
             entryPtrs.reserve(statsMap.size());
             for (auto& kv : statsMap) {
                 if (kv.second.overlayId == 0) { continue; }
-                // Drop scopes not recorded this frame (lastCount == 0): CommitFrame freezes their
-                // avg/max, so otherwise they linger forever with stale values (e.g. VSM passes in
-                // Legacy mode). The entry stays in statsMap, so it reappears seamlessly if it resumes.
-                if (kv.second.stats.lastCount == 0) { continue; }
+                // Keep inactive entries so a conditional pass (notably VSM) retains its row and
+                // stable placement when it resumes. The sort puts zero-usage rows below active
+                // work, where the overlay's line cap naturally hides them.
                 entryPtrs.push_back(&kv.second);
             }
             const size_t count = entryPtrs.size();
@@ -769,6 +777,9 @@ void Profiler::EndFrame() {
             auto cmpIdx = [&](size_t a, size_t b) {
                 const auto& ra = overlayScratchRows_[a];
                 const auto& rb = overlayScratchRows_[b];
+                if ((ra.usages == 0) != (rb.usages == 0)) {
+                    return ra.usages != 0;
+                }
                 if (ra.avgMs == rb.avgMs) {
                     return ra.entryId < rb.entryId;
                 }
@@ -784,6 +795,9 @@ void Profiler::EndFrame() {
             auto gcmpIdx = [&](size_t a, size_t b) {
                 const auto& ra = gpuOverlayScratchRows_[a];
                 const auto& rb = gpuOverlayScratchRows_[b];
+                if ((ra.usages == 0) != (rb.usages == 0)) {
+                    return ra.usages != 0;
+                }
                 if (ra.avgMs == rb.avgMs) {
                     return ra.entryId < rb.entryId;
                 }
