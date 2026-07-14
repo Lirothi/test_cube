@@ -1,5 +1,6 @@
 #include "rendering/renderables/GBufferRenderable.h"
 
+#include <algorithm>
 #include <cstdint>
 
 #include "app/camera/Camera.h"
@@ -31,6 +32,7 @@ public:
             cbHandles_.prevWorld = material->ComputeCBFieldHandle(0, "prevWorld");
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
+            cbHandles_.alphaCutoff = material->ComputeCBFieldHandle(0, "alphaCutoff");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
@@ -57,6 +59,7 @@ public:
         const auto& p = gb ? gb->CurrentDrawParams() : defaults;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
         UpdateUniform(owner, cbHandles_.metalRough, material, p.metalRough, cbData);
+        UpdateUniform(owner, cbHandles_.alphaCutoff, material, p.alphaCutoff, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
         UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
@@ -78,6 +81,7 @@ private:
         Material::CBFieldHandle prevWorld;
         Material::CBFieldHandle baseColor;
         Material::CBFieldHandle metalRough;
+        Material::CBFieldHandle alphaCutoff;
         Material::CBFieldHandle texOffsScale;
         Material::CBFieldHandle texFlags;
         Material::CBFieldHandle objectId;
@@ -199,6 +203,14 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         }
     }
 
+    // C1: per-slot alpha-test cutoff. Masked slots clip at the glTF alphaCutoff; every other slot
+    // uses -1 so it never clips even when the object's PSO carries ALPHA_TEST (union across slots).
+    for (size_t i = 0; i < slotCount; ++i)
+    {
+        const MaterialData* md = matDatas_[i].get();
+        matParamses_[i].alphaCutoff = (md && md->alphaMask) ? md->alphaCutoff : -1.0f;
+    }
+
     // One PSO per object: shader defines come from slot 0's MaterialData. Mixed defines across
     // slots would render slots 1+ with slot 0's permutation — warn so it's diagnosable.
     if (const MaterialData* m0 = matDatas_[0].get())
@@ -302,8 +314,8 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     const MaterialParams& p = matParamses_[0];
     out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
     out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
-    out._pad0[0] = 0.0f;
-    out._pad0[1] = 0.0f;
+    out.alphaCutoff = p.alphaCutoff; // C1 (single-slot instanced; multi-slot uses b2)
+    out._pad0 = 0.0f;
     out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
     out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
     out.objectId = ToObjectId32(GetEditorObjectId());
@@ -344,7 +356,31 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
 
     if (MaterialData* md = GetMaterialData())
     {
-        md->ConfigureDefinesForGBuffer(desc); // slot 0 defines the PSO (see ResolveMaterialSlots)
+        md->ConfigureDefinesForGBuffer(desc); // slot 0 defines the sampling permutation
+    }
+
+    // C1: alpha test + two-sided are per-slot flags, but the object has ONE PSO. Take the UNION
+    // across slots — ALPHA_TEST on if ANY slot is masked (opaque slots pass alphaCutoff=-1 so they
+    // never clip), cull NONE if ANY slot is two-sided (opaque slots are unaffected: a closed mesh
+    // renders identically two-sided). The per-slot cutoff/flags travel in the b0/b2 CB.
+    bool anyMasked = false;
+    bool anyTwoSided = false;
+    for (const std::shared_ptr<MaterialData>& md : matDatas_)
+    {
+        if (!md) { continue; }
+        anyMasked |= md->alphaMask;
+        anyTwoSided |= md->doubleSided;
+    }
+    if (anyMasked)
+    {
+        auto& defs = desc.defines;
+        defs.erase(std::remove_if(defs.begin(), defs.end(),
+            [](const auto& p) { return p.first == "ALPHA_TEST"; }), defs.end());
+        defs.emplace_back("ALPHA_TEST", "1");
+    }
+    if (anyTwoSided)
+    {
+        desc.raster.CullMode = D3D12_CULL_MODE_NONE;
     }
 
     desc.depth.StencilEnable = TRUE;

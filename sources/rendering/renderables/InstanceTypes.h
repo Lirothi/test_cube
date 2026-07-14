@@ -14,7 +14,8 @@ struct alignas(16) InstancePerObject
     DirectX::XMFLOAT4X4 prevWorld;    // 64
     DirectX::XMFLOAT4   baseColor;    // 128
     DirectX::XMFLOAT2   metalRough;   // 144
-    float               _pad0[2];     // 152
+    float               alphaCutoff;  // 152 (C1 alpha test; -1 disables)
+    float               _pad0;        // 156
     DirectX::XMFLOAT4   texOffsScale; // 160
     DirectX::XMFLOAT4   texFlags;     // 176
     uint32_t            objectId;     // 192
@@ -31,7 +32,8 @@ struct alignas(16) InstanceSlotParams
 {
     DirectX::XMFLOAT4 baseColor;    // 0
     DirectX::XMFLOAT2 metalRough;   // 16
-    float             _pad0[2];     // 24
+    float             alphaCutoff;  // 24 (C1 alpha test; -1 disables)
+    float             _pad0;        // 28
     DirectX::XMFLOAT4 texOffsScale; // 32
     DirectX::XMFLOAT4 texFlags;     // 48
 };                                  // 64

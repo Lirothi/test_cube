@@ -24,7 +24,8 @@ cbuffer SlotParams : register(b2)
 {
     float4 slotBaseColor;
     float2 slotMetalRough;
-    float2 _slotPad0;
+    float slotAlphaCutoff; // C1 alpha test (-1 disables)
+    float _slotPad0;
     float4 slotTexOffsScale;
     float4 slotTexFlags;
 };
@@ -85,12 +86,16 @@ PSOut PSMain(VSOutInst i)
     const float2 mMetalRough   = slotMetalRough;
     const float4 mTexOffsScale = slotTexOffsScale;
     const float4 mTexFlags     = slotTexFlags;
+    const float  mAlphaCutoff  = slotAlphaCutoff;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
     const float4 mTexOffsScale = d.texOffsScale;
     const float4 mTexFlags     = d.texFlags;
+    const float  mAlphaCutoff  = d.alphaCutoff;
 #endif
+
+    AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
 
     float3 NNorm = normalize(i.NWS);
 

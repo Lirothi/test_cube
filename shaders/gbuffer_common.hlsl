@@ -16,7 +16,8 @@ struct InstancePerObject
     float4x4 prevWorld;
     float4 baseColor;
     float2 metalRough;
-    float2 _instPad0;
+    float alphaCutoff; // C1 alpha test (-1 disables)
+    float _instPad0;
     float4 texOffsScale;
     float4 texFlags;
     uint objectId;
@@ -29,8 +30,10 @@ cbuffer PerObject : register(b0)
     float4x4 world;
     float4x4 prevWorld;
 
-    float4 baseColor; // fallback Albedo (linear)
+    float4 baseColor; // fallback Albedo (linear); .a = alpha factor (glTF)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
+    float alphaCutoff; // C1 alpha test (-1 disables)
+    float _alphaPad;
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
     uint objectId;
@@ -194,5 +197,20 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
     FetchShadingValuesP(txAlbedo, txMR, txNorm, samp, uv, TWS, texOffsScale, texFlags, albedo, mr, norm);
 }
 #endif
+
+// C1 masked foliage: discard the fragment when baseColor.a * albedo.a < cutoff. A negative
+// cutoff disables the test for this slot (so an opaque submesh sharing an ALPHA_TEST PSO never
+// clips). Compiled out entirely unless the material's PSO defines ALPHA_TEST.
+inline void AlphaTestClip(Texture2D txAlbedo, SamplerState samp, float2 uv,
+                          float4 texOffsScaleV, float baseAlpha, float cutoff)
+{
+#if defined(ALPHA_TEST) && ALPHA_TEST
+    if (cutoff >= 0.0)
+    {
+        float a = txAlbedo.Sample(samp, tfUVp(uv, texOffsScaleV)).a * baseAlpha;
+        clip(a - cutoff);
+    }
+#endif
+}
 
 #endif

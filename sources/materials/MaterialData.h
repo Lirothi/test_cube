@@ -19,8 +19,11 @@ class Renderer;
 struct MaterialParams
 {
     // Linear values; the SRV handles sRGB sampling for albedo
-    float4 baseColor   = {1.f, 1.f, 1.f, 1.f};  // .rgb — tint
+    float4 baseColor   = {1.f, 1.f, 1.f, 1.f};  // .rgb — tint, .a — alpha factor (glTF)
     float2 metalRough  = {0.0f, 0.35f};         // x=metallic, y=roughness
+    // C1 alpha test cutoff: fragment discarded when baseColor.a*albedo.a < cutoff. -1 disables
+    // the test for this slot (the shader skips clip); set to the glTF alphaCutoff on MASK slots.
+    float  alphaCutoff = -1.0f;
     float4 texOffsScale = { 0.0f, 0.0f, 1.0f, 1.0f };
     // x=useAlbedo, y=useMR, z=useNormal, w=normalStrength (XY before reconstructing Z)
     float4 texFlags    = {1.f, 1.f, 1.f, 1.f};

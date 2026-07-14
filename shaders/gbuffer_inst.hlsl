@@ -36,8 +36,10 @@ VSOut VSMain(VSInInst i)
 [RootSignature(GBUFFER_INST_RS)]
 PSOut PSMain(VSOut i)
 {
+    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, baseColor.a, alphaCutoff);
+
     float3 NNorm = normalize(i.NWS);
-    
+
     float3 albedo;
     float2 mr;
     float3 N = NNorm;
