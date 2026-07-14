@@ -39,6 +39,15 @@ public:
                                               std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
                                               const std::string& name);
 
+    // A3: get or create a runtime auto-material from a glTF material selector ("path.gltf#N").
+    // Loads the glTF's textures (glTF MR channel layout, RGB normals), stashes the imported
+    // per-object defaults on MaterialData::gltfDefaultParams and the alpha/emissive fields for
+    // Parts C/D. Cached by the selector string. Returns nullptr if the glTF has no material.
+    std::shared_ptr<MaterialData> GetOrCreateFromGltf(Renderer* renderer,
+                                                      ID3D12GraphicsCommandList* uploadCmdList,
+                                                      std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
+                                                      const std::string& gltfSelector);
+
     // Direct access to an already loaded instance (or nullptr)
     std::shared_ptr<MaterialData> FindLoaded(const std::string& name) const;
 

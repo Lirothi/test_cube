@@ -43,8 +43,13 @@ PSOut PSMain(VSOut i)
     float3 N = NNorm;
     FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, albedo, mr, N);
 
+#if MR_LAYOUT_GLTF
+    albedo = texFlags.x > 0.5 ? albedo * baseColor.rgb : baseColor.rgb;
+    mr     = texFlags.y > 0.5 ? mr * metalRough.xy     : metalRough.xy;
+#else
     albedo = lerp(baseColor.rgb, albedo, texFlags.x);
     mr = lerp(metalRough.xy, mr, texFlags.y);
+#endif
     if (texFlags.z < 0.5)
     {
         N = NNorm;

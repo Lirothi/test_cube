@@ -439,7 +439,12 @@ with what was found: primitive/material counts, alphaMode/doubleSided flags, tex
 resolutions, and license/author pulled from `source.txt` **or the glTF `asset.extras`**
 (Sketchfab embeds author/license/source there — the coconut palm proves it; auto-harvest).
 Options stay minimal: target name, max texture size, fast/high BC quality, ".hdr → skybox"
-toggle, and **"import as: single asset / split by top-level nodes"** — split registers each
+toggle, a **unit/scale normalizer** (show the asset's baked world-space bounding size and offer
+"normalize longest axis to N meters" → bake a uniform scale, or write a default `scale` into
+spawned entries) — glTF has no reliable 1-unit=1-meter guarantee and Sketchfab assets vary wildly
+(measured in `import_staging/`: coconut_palm ~6 m upright but rock_boulder ~115 m, campfire ~120 m,
+all at scale 1.0 — cm-authored with no meter conversion), and **"import as: single asset / split
+by top-level nodes"** — split registers each
 top-level node as its own spawnable registry entry (`rocks.glb#node:Rock_1`, `...Rock_2`) for
 prop packs, while a palm stays one asset. (Fallback for packs authored as ONE primitive:
 a "separate loose parts" connected-components split — optional, H4-tier; Blender is the

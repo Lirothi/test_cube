@@ -39,6 +39,18 @@ public:
     // Feature flags (can be passed as defines when building shader permutations)
     bool normalIsRG = true; // RG/BC5 vs RGB(A)
     bool useTBN     = true; // TBN path (otherwise derivatives)
+    bool mrLayoutGltf = false; // true => MR texture is glTF-packed (B=metal, G=rough); emits MR_LAYOUT_GLTF
+
+    // glTF auto-material (A3): when built from a glTF material, these carry the imported per-object
+    // defaults (seeded into GBufferRenderable::matParams_ at Init) plus fields consumed later:
+    // alpha* + doubleSided by Part C (masked/two-sided foliage), emissive* by Part D.
+    bool          fromGltf = false;
+    MaterialParams gltfDefaultParams;      // baseColor tint, metalRough, texFlags from the glTF material
+    bool          alphaMask = false;       // alphaMode == MASK (Part C)
+    float         alphaCutoff = 0.5f;      // (Part C)
+    bool          doubleSided = false;     // (Part C)
+    float3        emissiveFactor = {0.0f, 0.0f, 0.0f}; // (Part D)
+    std::string   emissiveTexPath;         // resolved path, empty if none (Part D loads it)
 
     // Texture ownership
     bool      hasAlbedo = false;

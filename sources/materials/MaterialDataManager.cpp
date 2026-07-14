@@ -1,5 +1,6 @@
 #include "materials/MaterialDataManager.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/meshes/MeshManager.h" // GltfMaterialDesc + DescribeGltfMaterial (A3)
 
 #include <fstream>
 #include <sstream>
@@ -87,6 +88,55 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     if (!p.normalPath.empty()) { (void)md->LoadNormal(renderer, uploadCmdList, p.normalPath, uploadKeepAlive); }
 
     cache_[name] = md;
+    return md;
+}
+
+std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer* renderer,
+    ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
+    const std::string& gltfSelector)
+{
+    const std::string key = "gltf::" + gltfSelector;
+    if (auto it = cache_.find(key); it != cache_.end()) {
+        return it->second;
+    }
+
+    const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(gltfSelector);
+    if (!d.valid) {
+        return {}; // no material on this group
+    }
+
+    const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+
+    auto md = std::make_shared<MaterialData>();
+    md->fromGltf = true;
+    md->mrLayoutGltf = true;     // glTF packs MR as B=metal, G=rough
+    md->normalIsRG = false;      // glTF normal maps are RGB
+    md->useTBN = true;
+
+    if (!d.albedoPath.empty()) { (void)md->LoadAlbedo(renderer, uploadCmdList, widen(d.albedoPath), uploadKeepAlive); }
+    if (!d.mrPath.empty())     { (void)md->LoadMR    (renderer, uploadCmdList, widen(d.mrPath),     uploadKeepAlive); }
+    if (!d.normalPath.empty()) { (void)md->LoadNormal(renderer, uploadCmdList, widen(d.normalPath), uploadKeepAlive); }
+
+    // Imported per-object defaults (seeded into GBufferRenderable::matParams_ at Init). Factors
+    // MULTIPLY the texture channels in-shader, so baseColorFactor -> tint and metallic/roughness
+    // factors -> the metalRough fallback/scale; texFlags gate which textures are actually sampled.
+    MaterialParams& p = md->gltfDefaultParams;
+    p.baseColor  = float4(d.baseColor[0], d.baseColor[1], d.baseColor[2], d.baseColor[3]);
+    p.metalRough = float2(d.metallic, d.roughness);
+    p.SetUseAlbedo(md->hasAlbedo);
+    p.SetUseMR(md->hasMR);
+    p.SetUseNormal(md->hasNormal);
+    p.SetNormalStrength(d.normalScale);
+
+    // Recorded for later parts (not applied in A3).
+    md->alphaMask = d.alphaMask;
+    md->alphaCutoff = d.alphaCutoff;
+    md->doubleSided = d.doubleSided;
+    md->emissiveFactor = float3(d.emissive[0], d.emissive[1], d.emissive[2]);
+    md->emissiveTexPath = d.emissivePath;
+
+    cache_[key] = md;
     return md;
 }
 

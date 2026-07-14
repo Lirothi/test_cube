@@ -15,6 +15,10 @@ public:
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return true; }
 
+protected:
+    // A3: a glTF model with "material":"auto" (or no preset) sources its material from the glTF.
+    std::string GetGltfMaterialSourcePath() const override;
+
 private:
     std::string modelName_;
 };

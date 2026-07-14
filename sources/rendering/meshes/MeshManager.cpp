@@ -472,6 +472,106 @@ void GltfLog(const std::string& msg) {
     OutputDebugStringA(("[gltf] " + msg + "\n").c_str());
 }
 
+constexpr cgltf_size kNoMat = static_cast<cgltf_size>(-1);
+
+struct PrimRef { const cgltf_primitive* prim; float world[16]; };
+struct GltfGroup { cgltf_size materialIndex = kNoMat; std::vector<PrimRef> prims; };
+
+// Shared selector -> group resolution used by BOTH geometry load and material describe, so "#N"
+// addresses the same group in both. Traverses the selected node subtree (or every root), buckets
+// primitives by material, and orders groups by ascending glTF material index. No geometry read.
+bool ResolveGltfGroups(cgltf_data* data, const GltfSelector& sel,
+    std::vector<GltfGroup>& outGroups, std::string& err)
+{
+    outGroups.clear();
+
+    std::vector<const cgltf_node*> stack;
+    if (!sel.nodeName.empty()) {
+        const cgltf_node* found = nullptr;
+        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+            if (data->nodes[i].name && sel.nodeName == data->nodes[i].name) { found = &data->nodes[i]; break; }
+        }
+        if (!found) { err = "node not found: '" + sel.nodeName + "'"; return false; }
+        stack.push_back(found);
+    } else {
+        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+            if (data->nodes[i].parent == nullptr) { stack.push_back(&data->nodes[i]); }
+        }
+    }
+
+    auto groupOf = [&](const cgltf_material* mat) -> GltfGroup& {
+        const cgltf_size mi = mat ? static_cast<cgltf_size>(mat - data->materials) : kNoMat;
+        for (GltfGroup& g : outGroups) { if (g.materialIndex == mi) { return g; } }
+        outGroups.push_back(GltfGroup{ mi, {} });
+        return outGroups.back();
+    };
+
+    while (!stack.empty()) {
+        const cgltf_node* n = stack.back();
+        stack.pop_back();
+        if (n->mesh) {
+            float w[16];
+            cgltf_node_transform_world(n, w);
+            for (cgltf_size p = 0; p < n->mesh->primitives_count; ++p) {
+                const cgltf_primitive* prim = &n->mesh->primitives[p];
+                if (prim->type != cgltf_primitive_type_triangles) { continue; }
+                PrimRef pr; pr.prim = prim; std::memcpy(pr.world, w, sizeof(w));
+                groupOf(prim->material).prims.push_back(pr);
+            }
+        }
+        for (cgltf_size c = 0; c < n->children_count; ++c) { stack.push_back(n->children[c]); }
+    }
+
+    if (outGroups.empty()) { err = "no triangle geometry in selection"; return false; }
+
+    // Stable, intuitive "#N": order by ascending material index (null-material sorts last).
+    std::sort(outGroups.begin(), outGroups.end(),
+        [](const GltfGroup& a, const GltfGroup& b) { return a.materialIndex < b.materialIndex; });
+    return true;
+}
+
+// Which group index does the selector address (clamped, with a diagnostic note)?
+size_t SelectGltfGroup(const GltfSelector& sel, const std::string& fullPath, size_t groupCount) {
+    if (sel.wholeFile) {
+        if (groupCount > 1) {
+            GltfLog("whole-file load has " + std::to_string(groupCount) +
+                " material groups; using group 0 until Part B (submeshes). Use '#N' to pick one: " + sel.file);
+        }
+        return 0;
+    }
+    if (!sel.nodeName.empty()) {
+        if (groupCount > 1) {
+            GltfLog("node '" + sel.nodeName + "' has " + std::to_string(groupCount) +
+                " material groups; using group 0 until Part B: " + sel.file);
+        }
+        return 0;
+    }
+    if (sel.groupIndex < 0 || static_cast<size_t>(sel.groupIndex) >= groupCount) {
+        GltfLog("group index " + std::to_string(sel.groupIndex) + " out of range (" +
+            std::to_string(groupCount) + " groups); using 0: " + fullPath);
+        return 0;
+    }
+    return static_cast<size_t>(sel.groupIndex);
+}
+
+// Directory prefix (with trailing separator) of a file path, or "" if none.
+std::string DirOf(const std::string& path) {
+    const size_t s = path.find_last_of("/\\");
+    return (s == std::string::npos) ? std::string{} : path.substr(0, s + 1);
+}
+
+// Resolve a glTF texture's image URI to a path relative to the glTF file (URI-decoded). Returns
+// "" for absent textures and for embedded data:/GLB-buffer images (not handled in A3).
+std::string ResolveTexUri(const cgltf_texture* tex, const std::string& dir) {
+    if (!tex || !tex->image || !tex->image->uri) { return {}; }
+    std::string uri = tex->image->uri;
+    if (uri.rfind("data:", 0) == 0) { return {}; }
+    std::vector<char> buf(uri.begin(), uri.end());
+    buf.push_back('\0');
+    cgltf_decode_uri(buf.data());
+    return dir + std::string(buf.data());
+}
+
 } // namespace
 
 bool MeshManager::ParseGltfFile(const std::string& fullPath,
@@ -496,65 +596,18 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         return false;
     }
 
-    // 1) Collect mesh-bearing nodes (with their baked world transforms) under the selection.
-    //    node selector -> just that node's subtree; otherwise every root's subtree.
-    struct PrimRef { const cgltf_primitive* prim; float world[16]; };
-    std::vector<const cgltf_node*> stack;
-    if (!sel.nodeName.empty()) {
-        const cgltf_node* found = nullptr;
-        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
-            if (data->nodes[i].name && sel.nodeName == data->nodes[i].name) {
-                found = &data->nodes[i];
-                break;
-            }
-        }
-        if (!found) {
-            GltfLog("node not found: '" + sel.nodeName + "' in " + sel.file);
-            cgltf_free(data);
-            return false;
-        }
-        stack.push_back(found);
-    } else {
-        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
-            if (data->nodes[i].parent == nullptr) { stack.push_back(&data->nodes[i]); }
-        }
+    std::vector<GltfGroup> groups;
+    std::string err;
+    if (!ResolveGltfGroups(data, sel, groups, err)) {
+        GltfLog(err + ": " + fullPath);
+        cgltf_free(data);
+        return false;
     }
+    const size_t want = SelectGltfGroup(sel, fullPath, groups.size());
 
-    std::vector<PrimRef> prims;
-    while (!stack.empty()) {
-        const cgltf_node* n = stack.back();
-        stack.pop_back();
-        if (n->mesh) {
-            float w[16];
-            cgltf_node_transform_world(n, w);
-            for (cgltf_size p = 0; p < n->mesh->primitives_count; ++p) {
-                const cgltf_primitive* prim = &n->mesh->primitives[p];
-                if (prim->type != cgltf_primitive_type_triangles) { continue; }
-                PrimRef pr;
-                pr.prim = prim;
-                std::memcpy(pr.world, w, sizeof(w));
-                prims.push_back(pr);
-            }
-        }
-        for (cgltf_size c = 0; c < n->children_count; ++c) { stack.push_back(n->children[c]); }
-    }
-
-    // 2) Group primitives by material (group 0 = first material encountered). Part B will
-    //    consume the full group list as submeshes; A2 selects a single group.
-    const cgltf_size kNoMat = static_cast<cgltf_size>(-1);
-    std::vector<cgltf_size> groupMat;
-    std::vector<std::vector<VertexPNTUV>> groupV;
-    std::vector<std::vector<uint32_t>> groupI;
-    auto groupOf = [&](const cgltf_material* mat) -> size_t {
-        const cgltf_size mi = mat ? static_cast<cgltf_size>(mat - data->materials) : kNoMat;
-        for (size_t g = 0; g < groupMat.size(); ++g) { if (groupMat[g] == mi) { return g; } }
-        groupMat.push_back(mi);
-        groupV.emplace_back();
-        groupI.emplace_back();
-        return groupMat.size() - 1;
-    };
-
-    for (const PrimRef& pr : prims) {
+    // Read geometry for the selected group only (bake node transforms; flip winding for mirrored
+    // nodes). glTF normals are kept; tangents are regenerated downstream from UVs.
+    for (const PrimRef& pr : groups[want].prims) {
         const cgltf_primitive* prim = pr.prim;
 
         // glTF stores column-major matrices; copying those bytes into an XMFLOAT4X4 (row-major)
@@ -579,11 +632,7 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         }
         if (!accPos) { continue; }
 
-        const size_t g = groupOf(prim->material);
-        std::vector<VertexPNTUV>& vOut = groupV[g];
-        std::vector<uint32_t>& iOut = groupI[g];
-        const uint32_t base = static_cast<uint32_t>(vOut.size());
-
+        const uint32_t base = static_cast<uint32_t>(outVerts.size());
         const size_t vc = accPos->count;
         for (size_t i = 0; i < vc; ++i) {
             VertexPNTUV v;
@@ -608,7 +657,7 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
                 cgltf_accessor_read_float(accUV, i, uv, 2);
                 v.uv = DirectX::XMFLOAT2(uv[0], uv[1]);
             }
-            vOut.push_back(v);
+            outVerts.push_back(v);
         }
 
         if (prim->indices) {
@@ -617,68 +666,78 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
                 const uint32_t a = static_cast<uint32_t>(cgltf_accessor_read_index(prim->indices, i + 0));
                 const uint32_t b = static_cast<uint32_t>(cgltf_accessor_read_index(prim->indices, i + 1));
                 const uint32_t c = static_cast<uint32_t>(cgltf_accessor_read_index(prim->indices, i + 2));
-                addTri(iOut, base + a, base + b, base + c, wantCW);
+                addTri(outIndices, base + a, base + b, base + c, wantCW);
             }
         } else {
             for (size_t i = 0; i + 2 < vc; i += 3) {
-                addTri(iOut, base + static_cast<uint32_t>(i), base + static_cast<uint32_t>(i + 1),
+                addTri(outIndices, base + static_cast<uint32_t>(i), base + static_cast<uint32_t>(i + 1),
                     base + static_cast<uint32_t>(i + 2), wantCW);
             }
         }
     }
 
-    if (groupMat.empty()) {
-        GltfLog("no triangle geometry in selection: " + fullPath);
-        cgltf_free(data);
-        return false;
-    }
-
-    // Order groups by ascending glTF material index so "#N" is a stable, intuitive contract
-    // (#0 = first material in the file, not whatever node traversal hit first). Null-material
-    // (kNoMat == max) sorts last.
-    {
-        std::vector<size_t> order(groupMat.size());
-        for (size_t i = 0; i < order.size(); ++i) { order[i] = i; }
-        std::sort(order.begin(), order.end(),
-            [&](size_t a, size_t b) { return groupMat[a] < groupMat[b]; });
-        std::vector<cgltf_size> sMat;
-        std::vector<std::vector<VertexPNTUV>> sV;
-        std::vector<std::vector<uint32_t>> sI;
-        sMat.reserve(order.size()); sV.reserve(order.size()); sI.reserve(order.size());
-        for (size_t idx : order) {
-            sMat.push_back(groupMat[idx]);
-            sV.push_back(std::move(groupV[idx]));
-            sI.push_back(std::move(groupI[idx]));
-        }
-        groupMat.swap(sMat); groupV.swap(sV); groupI.swap(sI);
-    }
-
-    // 3) Select one group. Whole-file/node paths default to group 0 (submesh table is Part B).
-    size_t want = 0;
-    if (sel.wholeFile) {
-        if (groupMat.size() > 1) {
-            GltfLog("whole-file load has " + std::to_string(groupMat.size()) +
-                " material groups; showing group 0 until Part B (submeshes). Use '#N' to pick one: " + sel.file);
-        }
-    } else if (sel.nodeName.empty()) {
-        if (sel.groupIndex < 0 || static_cast<size_t>(sel.groupIndex) >= groupMat.size()) {
-            GltfLog("group index " + std::to_string(sel.groupIndex) + " out of range (" +
-                std::to_string(groupMat.size()) + " groups); using 0: " + fullPath);
-        } else {
-            want = static_cast<size_t>(sel.groupIndex);
-        }
-    } else if (groupMat.size() > 1) {
-        GltfLog("node '" + sel.nodeName + "' has " + std::to_string(groupMat.size()) +
-            " material groups; showing group 0 until Part B: " + sel.file);
-    }
-
-    outVerts = std::move(groupV[want]);
-    outIndices = std::move(groupI[want]);
-
     GltfLog("loaded '" + fullPath + "': group " + std::to_string(want) + "/" +
-        std::to_string(groupMat.size()) + ", " + std::to_string(outVerts.size()) + " verts, " +
+        std::to_string(groups.size()) + ", " + std::to_string(outVerts.size()) + " verts, " +
         std::to_string(outIndices.size() / 3) + " tris");
 
     cgltf_free(data);
     return !outVerts.empty() && !outIndices.empty();
+}
+
+GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFragment)
+{
+    GltfMaterialDesc out;
+    const GltfSelector sel = ParseGltfSelector(pathWithFragment);
+
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) {
+        GltfLog("material parse failed: " + sel.file);
+        return out; // valid=false
+    }
+    // No cgltf_load_buffers: material + image URIs don't need buffer data.
+
+    std::vector<GltfGroup> groups;
+    std::string err;
+    if (!ResolveGltfGroups(data, sel, groups, err)) {
+        GltfLog("material " + err + ": " + pathWithFragment);
+        cgltf_free(data);
+        return out;
+    }
+    const size_t want = SelectGltfGroup(sel, pathWithFragment, groups.size());
+    const cgltf_size mi = groups[want].materialIndex;
+    if (mi == kNoMat || mi >= data->materials_count) {
+        cgltf_free(data);
+        return out; // null-material group -> valid stays false
+    }
+
+    const cgltf_material& m = data->materials[mi];
+    const std::string dir = DirOf(sel.file);
+
+    if (m.has_pbr_metallic_roughness) {
+        const cgltf_pbr_metallic_roughness& pbr = m.pbr_metallic_roughness;
+        for (int i = 0; i < 4; ++i) { out.baseColor[i] = pbr.base_color_factor[i]; }
+        out.metallic = pbr.metallic_factor;
+        out.roughness = pbr.roughness_factor;
+        out.albedoPath = ResolveTexUri(pbr.base_color_texture.texture, dir);
+        out.mrPath = ResolveTexUri(pbr.metallic_roughness_texture.texture, dir);
+    }
+    out.normalPath = ResolveTexUri(m.normal_texture.texture, dir);
+    out.normalScale = (m.normal_texture.texture ? m.normal_texture.scale : 1.0f);
+    for (int i = 0; i < 3; ++i) { out.emissive[i] = m.emissive_factor[i]; }
+    out.emissivePath = ResolveTexUri(m.emissive_texture.texture, dir);
+    out.alphaMask = (m.alpha_mode == cgltf_alpha_mode_mask);
+    out.alphaCutoff = m.alpha_cutoff;
+    out.doubleSided = (m.double_sided != 0);
+    out.valid = true;
+
+    GltfLog("material '" + pathWithFragment + "': group " + std::to_string(want) +
+        ", metal=" + std::to_string(out.metallic) + " rough=" + std::to_string(out.roughness) +
+        (out.alphaMask ? " MASK" : "") + (out.doubleSided ? " 2sided" : "") +
+        " albedo=" + (out.albedoPath.empty() ? "-" : "y") +
+        " mr=" + (out.mrPath.empty() ? "-" : "y") +
+        " nrm=" + (out.normalPath.empty() ? "-" : "y"));
+
+    cgltf_free(data);
+    return out;
 }

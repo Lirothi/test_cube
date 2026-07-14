@@ -109,7 +109,23 @@ void GBufferRenderable::Init(Renderer* renderer,
 
     if (!matData_)
     {
-        matData_ = renderer->GetMaterialDataManager()->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, matPreset_);
+        const std::string gltfSrc = GetGltfMaterialSourcePath();
+        if (!gltfSrc.empty())
+        {
+            matData_ = renderer->GetMaterialDataManager()->GetOrCreateFromGltf(renderer, uploadCmdList, uploadKeepAlive, gltfSrc);
+            // Seed per-object params from the glTF material defaults. NOTE: this runs after the
+            // factory's ApplyStaticMeshJsonProperties, so explicit JSON param overrides on a
+            // glTF-"auto" object are currently clobbered (acceptable for A3; the editor path in
+            // B4 will layer overrides on top).
+            if (matData_ && matData_->fromGltf)
+            {
+                matParams_ = matData_->gltfDefaultParams;
+            }
+        }
+        if (!matData_)
+        {
+            matData_ = renderer->GetMaterialDataManager()->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, matPreset_);
+        }
     }
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);

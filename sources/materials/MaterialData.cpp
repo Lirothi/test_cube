@@ -46,9 +46,11 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
     };
     eraseKey("NORMALMAP_IS_RG");
     eraseKey("USE_TBN");
+    eraseKey("MR_LAYOUT_GLTF");
 
-    defs.emplace_back("NORMALMAP_IS_RG", normalIsRG ? "1" : "0");
-    defs.emplace_back("USE_TBN",         useTBN     ? "1" : "0");
+    defs.emplace_back("NORMALMAP_IS_RG", normalIsRG   ? "1" : "0");
+    defs.emplace_back("USE_TBN",         useTBN       ? "1" : "0");
+    defs.emplace_back("MR_LAYOUT_GLTF",  mrLayoutGltf ? "1" : "0");
 }
 
 size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset) const

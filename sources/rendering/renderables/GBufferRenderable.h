@@ -62,6 +62,13 @@ protected:
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
+    const std::string& MatPreset() const { return matPreset_; }
+
+    // A3: subclasses whose model is a glTF/GLB with "material":"auto" return the selector
+    // ("path.gltf#N") here so Init builds a runtime auto-material from the glTF instead of a
+    // named preset. Empty (default) => use matPreset_.
+    virtual std::string GetGltfMaterialSourcePath() const { return {}; }
+
 private:
     void BuildInstancedMaterials(Renderer* renderer);
 

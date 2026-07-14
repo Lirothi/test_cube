@@ -14,8 +14,31 @@ struct MeshLoadOptions {
     int  iBase  = 0;                  // Index base used in "i a b c"
 };
 
+// A3: plain (cgltf-free) description of the glTF material for a given selector, resolved with the
+// SAME group ordering as the geometry load (so "#N" addresses one consistent group). Texture
+// paths are resolved relative to the glTF file (URI-decoded); empty when the channel is absent.
+struct GltfMaterialDesc {
+    bool  valid = false;          // false => no material (null-material group) or unresolved
+    std::string albedoPath;
+    std::string mrPath;
+    std::string normalPath;
+    std::string emissivePath;
+    float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f}; // baseColorFactor (multiplies albedo texture)
+    float metallic     = 1.0f;    // metallicFactor  (multiplies MR.B)
+    float roughness    = 1.0f;    // roughnessFactor (multiplies MR.G)
+    float normalScale  = 1.0f;
+    float emissive[3]  = {0.0f, 0.0f, 0.0f};
+    bool  alphaMask    = false;   // alphaMode == MASK
+    float alphaCutoff  = 0.5f;
+    bool  doubleSided  = false;
+};
+
 class MeshManager {
 public:
+    // A3: parse a glTF/GLB material for the selector's group (CPU-only, no GPU, no buffer load).
+    // Consistent with LoadGltf's "#N" group ordering. Returns desc.valid=false if none.
+    static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment);
+
     // Auto-detect by extension (.obj | .mesh.txt | .txt)
     std::shared_ptr<Mesh> Load(const std::string& path,
                                Renderer* renderer,

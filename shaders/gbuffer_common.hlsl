@@ -161,7 +161,13 @@ inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D tx
                                 out float3 albedo, out float2 mr, inout float3 norm)
 {
     albedo = txAlbedo.Sample(samp, tfUVp(uv, texOffsScale)).rgb;
-    mr = txMR.Sample(samp, tfUVp(uv, texOffsScale)).rg;
+#if MR_LAYOUT_GLTF
+    // glTF packs metallic in B, roughness in G. Swizzle to the engine's (metal, rough) order
+    // WITHOUT re-encoding the texture at load. (undefined MR_LAYOUT_GLTF -> 0 -> engine layout.)
+    mr = txMR.Sample(samp, tfUVp(uv, texOffsScale)).bg;
+#else
+    mr = txMR.Sample(samp, tfUVp(uv, texOffsScale)).rg; // engine: R=metal, G=rough
+#endif
 
 #if NORMALMAP_IS_RG
     // --- RG (BC5/R8G8_UNORM): n.xy in [-1..1], reconstruct n.z ---
