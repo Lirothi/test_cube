@@ -447,58 +447,108 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     std::vector<OutlinerRowRef>& cameras = scratchCameras_;
     std::vector<OutlinerRowRef>& environmentRows = scratchEnvironment_;
     std::vector<OutlinerRowRef>& other = scratchOther_;
-    meshes.clear();
-    lights.clear();
-    cameras.clear();
-    environmentRows.clear();
-    other.clear();
+
+    // Rebuild the filtered row buckets only when something they depend on changed.
+    // Snapshotting the vectors' storage (data + size) makes stale EditorObject*
+    // impossible across add/remove/realloc; the content version catches in-place
+    // rename/enable edits; the rest are the filter inputs. Steady-state frames skip
+    // the whole O(N) filter scan and the sort below.
+    const void* objectsData = static_cast<const void*>(document.Objects().data());
+    const void* environmentData = static_cast<const void*>(document.Environment().data());
+    const std::uint64_t contentVersion = document.ContentVersion();
+    const bool bucketsDirty = !bucketCacheValid_ ||
+        cacheContentVersion_ != contentVersion ||
+        cacheObjectsData_ != objectsData ||
+        cacheObjectsSize_ != document.Objects().size() ||
+        cacheEnvironmentData_ != environmentData ||
+        cacheEnvironmentSize_ != document.Environment().size() ||
+        cacheTypeFilterIndex_ != typeFilterIndex_ ||
+        cacheShowObjects_ != showObjects_ ||
+        cacheShowEnvironment_ != showEnvironment_ ||
+        cacheSearch_ != searchBuffer_;
+
+    if (bucketsDirty)
+    {
+        meshes.clear();
+        lights.clear();
+        cameras.clear();
+        environmentRows.clear();
+        other.clear();
+        const auto addVisibleRow = [&](EditorObject& object, bool environment)
+        {
+            std::vector<OutlinerRowRef>* group = nullptr;
+            switch (GroupForObject(object))
+            {
+            case OutlinerGroup::Meshes:      group = &meshes; break;
+            case OutlinerGroup::Lights:      group = &lights; break;
+            case OutlinerGroup::Cameras:     group = &cameras; break;
+            case OutlinerGroup::Environment: group = &environmentRows; break;
+            case OutlinerGroup::Other:       group = &other; break;
+            }
+            if (group)
+            {
+                group->push_back(OutlinerRowRef{ &object, environment });
+            }
+        };
+
+        for (EditorObject& obj : document.Objects())
+        {
+            if (rowVisible(obj, false))
+            {
+                addVisibleRow(obj, false);
+            }
+        }
+        for (EditorObject& env : document.Environment())
+        {
+            if (rowVisible(env, true))
+            {
+                addVisibleRow(env, true);
+            }
+        }
+
+        bucketCacheValid_ = true;
+        cacheContentVersion_ = contentVersion;
+        cacheObjectsData_ = objectsData;
+        cacheObjectsSize_ = document.Objects().size();
+        cacheEnvironmentData_ = environmentData;
+        cacheEnvironmentSize_ = document.Environment().size();
+        cacheTypeFilterIndex_ = typeFilterIndex_;
+        cacheShowObjects_ = showObjects_;
+        cacheShowEnvironment_ = showEnvironment_;
+        cacheSearch_ = searchBuffer_;
+    }
+
+    // Selection footer info, recomputed every frame (selection changes independently
+    // of the bucket cache). This is a cheap id-compare scan plus one visibility test
+    // on the selected object, not the full filter pass.
     bool selectedExists = false;
     bool selectedVisible = false;
     std::string selectedName;
     const EditorObjectId primarySelection = selection.Primary();
-    const auto addVisibleRow = [&](EditorObject& object, bool environment)
+    if (primarySelection.value != 0)
     {
-        std::vector<OutlinerRowRef>* group = nullptr;
-        switch (GroupForObject(object))
+        for (EditorObject& obj : document.Objects())
         {
-        case OutlinerGroup::Meshes:      group = &meshes; break;
-        case OutlinerGroup::Lights:      group = &lights; break;
-        case OutlinerGroup::Cameras:     group = &cameras; break;
-        case OutlinerGroup::Environment: group = &environmentRows; break;
-        case OutlinerGroup::Other:       group = &other; break;
+            if (obj.id.value == primarySelection.value)
+            {
+                selectedExists = true;
+                selectedVisible = rowVisible(obj, false);
+                selectedName = obj.name;
+                break;
+            }
         }
-        if (group)
+        if (!selectedExists)
         {
-            group->push_back(OutlinerRowRef{ &object, environment });
-        }
-    };
-
-    for (EditorObject& obj : document.Objects())
-    {
-        const bool visible = rowVisible(obj, false);
-        if (visible)
-        {
-            addVisibleRow(obj, false);
-        }
-        if (primarySelection.value == obj.id.value)
-        {
-            selectedExists = true;
-            selectedVisible = visible;
-            selectedName = obj.name;
-        }
-    }
-    for (EditorObject& env : document.Environment())
-    {
-        const bool visible = rowVisible(env, true);
-        if (visible)
-        {
-            addVisibleRow(env, true);
-        }
-        if (primarySelection.value == env.id.value)
-        {
-            selectedExists = true;
-            selectedVisible = visible;
-            selectedName = env.name;
+            for (EditorObject& env : document.Environment())
+            {
+                if (env.id.value == primarySelection.value)
+                {
+                    selectedExists = true;
+                    selectedVisible = rowVisible(env, true);
+                    selectedName = env.name;
+                    break;
+                }
+            }
         }
     }
 
@@ -539,12 +589,22 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        const ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
-        SortRows(meshes, sortSpecs);
-        SortRows(lights, sortSpecs);
-        SortRows(cameras, sortSpecs);
-        SortRows(environmentRows, sortSpecs);
-        SortRows(other, sortSpecs);
+        // Re-sort only when the buckets were rebuilt this frame or the user changed
+        // the sort column/direction (ImGui flags that via SpecsDirty). Otherwise the
+        // member buckets keep their prior sorted order.
+        ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+        if (bucketsDirty || (sortSpecs && sortSpecs->SpecsDirty))
+        {
+            SortRows(meshes, sortSpecs);
+            SortRows(lights, sortSpecs);
+            SortRows(cameras, sortSpecs);
+            SortRows(environmentRows, sortSpecs);
+            SortRows(other, sortSpecs);
+            if (sortSpecs)
+            {
+                sortSpecs->SpecsDirty = false;
+            }
+        }
 
         std::vector<EditorObjectId>& displayedOrder = scratchDisplayedOrder_;
         displayedOrder.clear();

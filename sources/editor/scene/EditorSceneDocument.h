@@ -63,7 +63,22 @@ public:
     const std::vector<EditorObject>& Environment() const { return environment_; }
 
     bool IsDirty() const { return dirty_; }
-    void SetDirty(bool dirty) { dirty_ = dirty; }
+    void SetDirty(bool dirty)
+    {
+        dirty_ = dirty;
+        // Any edit that marks the document dirty also advances a monotonic content
+        // version, so views (e.g. the Scene Outliner) can cache derived state and
+        // rebuild only when the document actually changed. This covers in-place
+        // field edits (rename/enable) done through Find(); structural add/remove is
+        // additionally observable via the object/environment vectors' storage.
+        if (dirty)
+        {
+            ++contentVersion_;
+        }
+    }
+
+    // Monotonic counter advanced on every dirtying edit (see SetDirty).
+    uint64_t ContentVersion() const { return contentVersion_; }
 
     // Replace document contents with object metadata parsed from a level JSON
     // file. Returns false if the file cannot be read or parsed. Common fields are
@@ -112,6 +127,7 @@ private:
     std::vector<EditorObject> environment_;
     uint64_t nextId_ = 1;
     bool dirty_ = false;
+    uint64_t contentVersion_ = 0;
     std::string levelPath_;
     nlohmann::json rootJson_;
 };

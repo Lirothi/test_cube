@@ -1,6 +1,8 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -84,6 +86,22 @@ private:
     std::vector<OutlinerRowRef> scratchEnvironment_;
     std::vector<OutlinerRowRef> scratchOther_;
     std::vector<EditorObjectId> scratchDisplayedOrder_;
+
+    // Filtered-bucket cache. The buckets hold EditorObject* into the document's
+    // vectors, so the key snapshots those vectors' storage identity (data + size)
+    // for pointer safety across add/remove/realloc, plus the document content
+    // version for in-place field edits (rename/enable) and the filter inputs.
+    // Sorting is re-applied only when the buckets change or the user re-sorts.
+    bool bucketCacheValid_ = false;
+    std::uint64_t cacheContentVersion_ = 0;
+    const void* cacheObjectsData_ = nullptr;
+    std::size_t cacheObjectsSize_ = 0;
+    const void* cacheEnvironmentData_ = nullptr;
+    std::size_t cacheEnvironmentSize_ = 0;
+    int cacheTypeFilterIndex_ = -1;
+    bool cacheShowObjects_ = false;
+    bool cacheShowEnvironment_ = false;
+    std::string cacheSearch_;
 };
 
 #endif // WITH_EDITOR
