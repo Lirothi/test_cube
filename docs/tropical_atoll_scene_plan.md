@@ -280,6 +280,23 @@ objects shade fronds with the wrong MR/normal swizzle). glTF import (A3) fills
 `alphaMask`/`alphaCutoff`/`doubleSided`. Verified: fronds are clean cutouts, two-sided, trunks
 intact. Alpha shimmer under DLSS jitter accepted (hashed alpha = future item).
 
+**Shimmer follow-up (Fable, DONE 2026-07-15):** the dominant shimmer cause was UNMIPPED WIC
+PNGs (minification aliasing that jitter animates), not the alpha test itself. Landed: (1)
+Texture2D builds a CPU box-filter mip chain for every WIC load (sRGB-aware averaging for
+albedo; DDS keeps its file mips) with **alpha-test coverage preservation** per mip (Castano
+percentile rescale, boost-only clamped [1,8] — plain box filtering erodes masked foliage with
+distance); `CreateDesc.alphaCoverageCutoff`, wired from glTF alphaMask/alphaCutoff in
+MaterialDataManager (set BEFORE LoadAlbedo). (2) NVIDIA-recommended DLSS texture mip bias —
+`Renderer::GetDlssMipBias()` = clamp(log2(renderW/displayW), −2, 0) quantized to 0.25 steps —
+on the gbuffer material samplers (MaterialData::StageGBufferBindings + GpuInstancedModels), so
+the new mips don't go soft under upscaling. fwidth-sharpened alpha was considered and REJECTED
+(mathematical no-op for a binary clip; only helps blended coverage). Residual in-motion edge
+flicker is the DLSS-resolvable kind; hashed alpha stays the escalation. Superseded for imported
+content once H1 ships BC DDS with offline mips. Also landed same day: **per-slot RT materials**
+(B3 follow-up) — BindlessTable registers one record per submesh with THAT slot's albedo/MR/
+params (`SlotMaterial` overload; Pass_BuildAS builds the slot array from GBufferRenderable),
+so palms reflect bark + green fronds instead of slot-0 everywhere; hit shaders unchanged.
+
 **C1b — per-slot pipeline materials.** *(exec: Fable — draw-loop/batching restructure; user
 decision 2026-07-14: kill the one-PSO-per-object limitation before shadows build on it)*
 Each material slot gets its OWN graphics `Material` (PSO): per-slot defines

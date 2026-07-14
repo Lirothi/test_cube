@@ -167,7 +167,9 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     srvs[count++] = instanceBuffer_.GetSRVCPU();
     if (auto* data = GetMaterialData()) { data->AppendGBufferSRVs(srvs.data(), count); }
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs, count).gpu;
-    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::AnisoWrap(16));
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    aniso.MipLODBias = renderer->GetDlssMipBias(); // match the material path's DLSS mip bias
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
 
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;

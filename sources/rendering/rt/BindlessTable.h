@@ -60,11 +60,23 @@ public:
     bool Ready() const { return heap_ != nullptr; }
     ID3D12DescriptorHeap* Heap() const { return heap_.Get(); }
 
-    // Register a mesh (idempotent): creates its VB/IB raw SRVs (+ albedo texture
-    // SRV if albedoSrv is valid) in the heap and one geometry-info record PER SUBMESH
-    // (contiguous, sharing the descriptors; B3 — the BLAS has one geometry per submesh, so the
-    // hit shaders index geom[InstanceID + GeometryIndex]). Returns the FIRST record's index
-    // (used as TLAS InstanceID). baseColor4 may be null (white).
+    // Per-slot material inputs for a multi-submesh registration (mirrors what the single-
+    // material overload takes). baseColor4 may be null (white).
+    struct SlotMaterial
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv{};
+        D3D12_CPU_DESCRIPTOR_HANDLE mrSrv{};
+        const float* baseColor4 = nullptr;
+        float roughness = 1.0f;
+        float metalness = 0.0f;
+    };
+
+    // Register a mesh (idempotent): one geometry-info record PER SUBMESH (contiguous — the BLAS
+    // has one geometry per submesh, so hit shaders index geom[InstanceID + GeometryIndex]), each
+    // with its own VB/IB/albedo/MR descriptors. Submesh s uses slots[min(s, slotCount-1)], so a
+    // single-slot call replicates its material (pre-per-slot behavior). Returns the FIRST
+    // record's index (the TLAS InstanceID).
+    uint32_t GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots, size_t slotCount);
     uint32_t GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                const float* baseColor4, float roughness, float metalness);

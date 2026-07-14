@@ -2,6 +2,7 @@
 
 #include "rendering/meshes/Mesh.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace rt {
@@ -71,28 +72,30 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDL
                                           D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                           const float* baseColor4, float roughness, float metalness)
 {
-    const uint64_t key = MakeGeomKey(mesh, albedoSrv.ptr, mrSrv.ptr, baseColor4, roughness, metalness);
+    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness };
+    return GetOrRegisterMesh(mesh, &one, 1);
+}
+
+uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots, size_t slotCount)
+{
+    static const SlotMaterial kDefaultSlot{};
+    if (!slots || slotCount == 0) { slots = &kDefaultSlot; slotCount = 1; }
+
+    // Key = mesh + every slot's material (two objects sharing a mesh but overriding a slot get
+    // distinct record runs).
+    uint64_t key = MakeGeomKey(mesh, slots[0].albedoSrv.ptr, slots[0].mrSrv.ptr,
+                               slots[0].baseColor4, slots[0].roughness, slots[0].metalness);
+    for (size_t s = 1; s < slotCount; ++s) {
+        key ^= MakeGeomKey(mesh, slots[s].albedoSrv.ptr, slots[s].mrSrv.ptr,
+                           slots[s].baseColor4, slots[s].roughness, slots[s].metalness) + s;
+    }
     auto it = geomCache_.find(key);
     if (it != geomCache_.end()) {
         return it->second;
     }
 
-    const uint32_t geomIndex = static_cast<uint32_t>(geomInfo_.size());
     ID3D12Resource* vb = mesh ? mesh->GetVertexBufferResource() : nullptr;
     ID3D12Resource* ib = mesh ? mesh->GetIndexBufferResource() : nullptr;
-    const UINT geoSlot = kGeoBase + kDescPerGeom * geomIndex;
-
-    GeometryInfoGPU rec{};
-    rec.vbIndex = geoSlot;
-    rec.ibIndex = geoSlot + 1u;
-    rec.indexIs32 = (mesh && mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 1u : 0u;
-    rec.albedoTexIndex = 0xFFFFFFFFu;
-    rec.roughness = roughness;
-    rec.metalness = metalness;
-    if (baseColor4) {
-        rec.baseColor[0] = baseColor4[0]; rec.baseColor[1] = baseColor4[1];
-        rec.baseColor[2] = baseColor4[2]; rec.baseColor[3] = baseColor4[3];
-    }
 
     // Raw (ByteAddressBuffer) SRVs over the whole VB/IB.
     auto makeRawSrv = [&](ID3D12Resource* res, UINT slot) {
@@ -109,38 +112,51 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDL
         srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
         device_->CreateShaderResourceView(res, &srv, CpuHandle(slot));
     };
-    makeRawSrv(vb, rec.vbIndex);
-    makeRawSrv(ib, rec.ibIndex);
 
-    // Albedo + MR texture SRVs (copied from the material's CPU SRVs) at slots 2 and 3.
-    if (albedoSrv.ptr != 0 && heap_) {
-        const UINT albedoSlot = geoSlot + 2u;
-        device_->CopyDescriptorsSimple(1, CpuHandle(albedoSlot), albedoSrv,
-                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        rec.albedoTexIndex = albedoSlot;
-    }
-    if (mrSrv.ptr != 0 && heap_) {
-        const UINT mrSlot = geoSlot + 3u;
-        device_->CopyDescriptorsSimple(1, CpuHandle(mrSlot), mrSrv,
-                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        rec.mrTexIndex = mrSlot;
-    }
+    // One record per submesh (contiguous — hits resolve via geom[InstanceID + GeometryIndex]),
+    // each with its OWN kDescPerGeom descriptor block (VB/IB duplicated per record for uniform
+    // spacing; albedo/MR from that submesh's slot — palms reflect per-slot, not slot-0).
+    const uint32_t base = static_cast<uint32_t>(geomInfo_.size());
+    const size_t submeshCount = mesh ? std::max<size_t>(mesh->GetSubmeshCount(), 1u) : 1u;
+    static const std::vector<Mesh::Submesh> kNoSubs;
+    const std::vector<Mesh::Submesh>& subs = mesh ? mesh->GetSubmeshes() : kNoSubs;
+    for (size_t s = 0; s < submeshCount; ++s) {
+        const SlotMaterial& sm = slots[s < slotCount ? s : slotCount - 1];
+        const uint32_t geomIndex = static_cast<uint32_t>(geomInfo_.size());
+        const UINT geoSlot = kGeoBase + kDescPerGeom * geomIndex;
 
-    // B3: one record per submesh (contiguous, all sharing the descriptors above) so hits in
-    // BLAS geometry g resolve via geom[InstanceID + g] and fetch triangles from firstTri on.
-    // Every record currently carries the object's slot-0 material (per-slot RT materials are a
-    // follow-up); descriptor slots of records 1..n-1 stay unused (kDescPerGeom-spaced holes).
-    geomCache_.emplace(key, geomIndex);
-    if (mesh && mesh->GetSubmeshCount() > 1) {
-        for (const Mesh::Submesh& sub : mesh->GetSubmeshes()) {
-            rec.firstTri = sub.indexOffset / 3u;
-            geomInfo_.push_back(rec);
+        GeometryInfoGPU rec{};
+        rec.vbIndex = geoSlot;
+        rec.ibIndex = geoSlot + 1u;
+        rec.indexIs32 = (mesh && mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 1u : 0u;
+        rec.albedoTexIndex = 0xFFFFFFFFu;
+        rec.roughness = sm.roughness;
+        rec.metalness = sm.metalness;
+        if (sm.baseColor4) {
+            rec.baseColor[0] = sm.baseColor4[0]; rec.baseColor[1] = sm.baseColor4[1];
+            rec.baseColor[2] = sm.baseColor4[2]; rec.baseColor[3] = sm.baseColor4[3];
         }
-    } else {
-        rec.firstTri = 0u;
+        rec.firstTri = (s < subs.size()) ? subs[s].indexOffset / 3u : 0u;
+
+        makeRawSrv(vb, rec.vbIndex);
+        makeRawSrv(ib, rec.ibIndex);
+        if (sm.albedoSrv.ptr != 0 && heap_) {
+            const UINT albedoSlot = geoSlot + 2u;
+            device_->CopyDescriptorsSimple(1, CpuHandle(albedoSlot), sm.albedoSrv,
+                                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            rec.albedoTexIndex = albedoSlot;
+        }
+        if (sm.mrSrv.ptr != 0 && heap_) {
+            const UINT mrSlot = geoSlot + 3u;
+            device_->CopyDescriptorsSimple(1, CpuHandle(mrSlot), sm.mrSrv,
+                                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            rec.mrTexIndex = mrSlot;
+        }
         geomInfo_.push_back(rec);
     }
-    return geomIndex;
+
+    geomCache_.emplace(key, base);
+    return base;
 }
 
 void BindlessTable::UploadGeometryInfo()

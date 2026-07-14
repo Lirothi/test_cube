@@ -114,6 +114,10 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     md->mrLayoutGltf = true;     // glTF packs MR as B=metal, G=rough
     md->normalIsRG = false;      // glTF normal maps are RGB
     md->useTBN = true;
+    // Set the mask fields BEFORE LoadAlbedo: the WIC mip build preserves alpha-test coverage
+    // for masked slots (LoadAlbedo reads alphaMask/alphaCutoff).
+    md->alphaMask = d.alphaMask;
+    md->alphaCutoff = d.alphaCutoff;
 
     if (!d.albedoPath.empty()) { (void)md->LoadAlbedo(renderer, uploadCmdList, widen(d.albedoPath), uploadKeepAlive); }
     if (!d.mrPath.empty())     { (void)md->LoadMR    (renderer, uploadCmdList, widen(d.mrPath),     uploadKeepAlive); }
@@ -130,9 +134,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     p.SetUseNormal(md->hasNormal);
     p.SetNormalStrength(d.normalScale);
 
-    // Recorded for later parts (not applied in A3).
-    md->alphaMask = d.alphaMask;
-    md->alphaCutoff = d.alphaCutoff;
+    // Recorded for later parts (not applied in A3). alphaMask/alphaCutoff moved above LoadAlbedo.
     md->doubleSided = d.doubleSided;
     md->emissiveFactor = float3(d.emissive[0], d.emissive[1], d.emissive[2]);
     md->emissiveTexPath = d.emissivePath;

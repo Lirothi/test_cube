@@ -12,6 +12,9 @@ bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, co
     Texture2D::CreateDesc d{};
     d.path  = path;
     d.usage = Texture2D::Usage::AlbedoSRGB;
+    // Masked slots: preserve alpha-test coverage across the WIC-built mip chain (requires the
+    // caller to set alphaMask/alphaCutoff BEFORE loading — see MaterialDataManager).
+    d.alphaCoverageCutoff = (alphaMask && alphaCutoff >= 0.0f) ? alphaCutoff : -1.0f;
     if (albedo.CreateFromFile(r, upload, d, keepAlive)) { hasAlbedo = true; return true; }
     return false;
 }
@@ -92,6 +95,9 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
             gbufferSrvCache_.gpu = tbl.gpu;
         }
     }
-    const D3D12_SAMPLER_DESC* aniso = SamplerManager::AnisoWrap(16);
-    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, *aniso);
+    // DLSS: bias material sampling toward sharper mips when rendering below display res (the
+    // sampler cache keys by desc; the bias is quantized so mode changes reuse a few variants).
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    aniso.MipLODBias = r->GetDlssMipBias();
+    ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, aniso);
 }

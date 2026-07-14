@@ -21,7 +21,11 @@ public:
                 std::wstring path; // Path to the file (PNG/JPG/TIFF/BMP via WIC; DDS directly)
                 Usage usage = Usage::LinearData;
                 bool normalIsRG = false; // When Usage::NormalMap and the texture stores only RG (BC5/RG8 or RG in an RGBA container)
-                bool generateMips = false; // Reserved (currently 1 mip for WIC, from DDS — whatever the file contains)
+                // WIC loads always get a CPU-built box-filter mip chain (DDS keeps the file's own
+                // mips). >= 0: preserve the alpha-test coverage at this cutoff across the chain
+                // (Castano) — without it, averaged alpha sinks below the cutoff and masked
+                // foliage erodes/vanishes with distance.
+                float alphaCoverageCutoff = -1.0f;
         };
 
 public:
@@ -52,6 +56,17 @@ private:
         bool LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH);
         void UploadRGBA8_(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmd,
                 const void* rgba8, UINT width, UINT height,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
+                DXGI_FORMAT resourceFmt);
+
+        // C follow-up (DLSS shimmer): CPU box-filter mip chain for WIC loads. mips[0] must hold
+        // the base level; appends levels down to 1x1. srgbColor averages RGB in linear space
+        // (albedo); alpha always averages linearly. alphaCoverageCutoff >= 0 rescales each
+        // level's alpha to keep its alpha-test coverage equal to mip 0's.
+        static void BuildMipChainRGBA8_(std::vector<std::vector<uint8_t>>& mips, UINT width, UINT height,
+                bool srgbColor, float alphaCoverageCutoff);
+        void UploadRGBA8Mips_(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmd,
+                const std::vector<std::vector<uint8_t>>& mips, UINT width, UINT height,
                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
                 DXGI_FORMAT resourceFmt);
 

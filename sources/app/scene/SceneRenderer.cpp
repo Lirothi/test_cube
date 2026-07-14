@@ -18,6 +18,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
+#include "rendering/renderables/GBufferRenderable.h" // per-slot RT materials (B3 follow-up)
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
@@ -975,6 +976,30 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
             // instance for instanced renderables (S14: instanced models reflect).
             descs.clear();
             obj->GetRtInstances(descs);
+            // Per-slot RT materials (B3 follow-up): a multi-slot object registers one record per
+            // submesh with THAT slot's albedo/MR/params, so palms reflect bark + green fronds
+            // instead of slot-0 everywhere. Hit shaders already index per (InstanceID +
+            // GeometryIndex). Single-slot objects and GI instance clouds keep the slot-0 path.
+            GBufferRenderable* gb = obj->AsGBufferRenderable();
+            const bool perSlot = bindless_.Ready() && gb && gb->MultiSlotDraw();
+            std::vector<rt::BindlessTable::SlotMaterial> slotMats;
+            if (perSlot)
+            {
+                slotMats.resize(gb->SlotCount());
+                for (size_t s = 0; s < slotMats.size(); ++s)
+                {
+                    MaterialData* md = gb->GetMaterialDataForSlot(s);
+                    const MaterialParams* p = gb->InstanceSlotParams(s);
+                    if (md && md->hasAlbedo) { slotMats[s].albedoSrv = md->albedo.GetSRVCPU(); }
+                    if (md && md->hasMR && p && p->texFlags.y > 0.5f) { slotMats[s].mrSrv = md->mr.GetSRVCPU(); }
+                    if (p)
+                    {
+                        slotMats[s].baseColor4 = &p->baseColor.x;
+                        slotMats[s].roughness = p->metalRough.y;
+                        slotMats[s].metalness = p->metalRough.x;
+                    }
+                }
+            }
             for (const RtInstanceDesc& desc : descs)
             {
                 rt::InstanceEntry entry;
@@ -984,10 +1009,17 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 // can index the geometry/material table directly. Same mesh+material ->
                 // same index (all instances of a cloud share one record). Falls back to
                 // a running index if the bindless table isn't up.
-                entry.instanceId = bindless_.Ready()
-                    ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
-                                                  /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x)
-                    : instanceId;
+                if (perSlot && desc.mesh == gb->GetMesh())
+                {
+                    entry.instanceId = bindless_.GetOrRegisterMesh(desc.mesh, slotMats.data(), slotMats.size());
+                }
+                else
+                {
+                    entry.instanceId = bindless_.Ready()
+                        ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
+                                                      /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x)
+                        : instanceId;
+                }
                 rtInstances_.push_back(entry);
                 ++instanceId;
             }

@@ -3,6 +3,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -194,6 +195,19 @@ public:
     UINT GetRenderHeight() const { return renderHeight_; }
     float GetRenderResolutionScale() const { return renderResolutionScale_; }
     Math::float2 GetCameraJitter() const;
+
+    // NVIDIA-recommended texture mip bias when rendering below display resolution for DLSS:
+    // log2(renderWidth / displayWidth), negative — the upscaler reconstructs display-res detail,
+    // so sampling one mip sharper keeps textures from going soft. Quantized to 0.25 steps
+    // (sampler-cache friendly; the render scale changes with DLSS mode) and clamped to [-2, 0].
+    float GetDlssMipBias() const
+    {
+        const float rw = static_cast<float>(renderWidth_ ? renderWidth_ : 1u);
+        const float dw = static_cast<float>(width_ ? width_ : 1u);
+        const float bias = std::log2(rw / dw);
+        const float q = std::floor(bias * 4.0f + 0.5f) / 4.0f;
+        return std::min(0.0f, std::max(-2.0f, q));
+    }
 
     ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < render::kFrameCount ? swapchain_.Backbuffer(currentFrameIndex_) : nullptr; }
 

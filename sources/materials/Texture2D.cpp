@@ -6,6 +6,8 @@
 #include <wrl.h>
 #include <wincodec.h>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <fstream>
 #include <cstring>
 #include <cwctype>
@@ -394,11 +396,17 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     DXGI_FORMAT srvFmt = (desc.usage == Usage::AlbedoSRGB) ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         : DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    // 4) Upload
-    UploadRGBA8_(renderer, uploadCmd, rgba.data(), w, h, keepAlive, resourceFmt);
-    CreateCpuSrv_(renderer, srvFmt, /*mips*/1);
+    // 4) WIC files carry no mips — build a CPU box-filter chain so minified sampling stops
+    // aliasing (DLSS jitter turns unmipped foliage/normal/MR into shimmer). Masked albedo
+    // preserves its alpha-test coverage per level, else the cutouts erode with distance.
+    // H1's importer (BC DDS with offline mips) supersedes this for imported content.
+    std::vector<std::vector<uint8_t>> mips;
+    mips.emplace_back(std::move(rgba));
+    BuildMipChainRGBA8_(mips, w, h, desc.usage == Usage::AlbedoSRGB, desc.alphaCoverageCutoff);
+    UploadRGBA8Mips_(renderer, uploadCmd, mips, w, h, keepAlive, resourceFmt);
+    CreateCpuSrv_(renderer, srvFmt, static_cast<UINT>(mips.size()));
 
-    width_ = w; height_ = h; mipLevels_ = 1;
+    width_ = w; height_ = h; mipLevels_ = static_cast<UINT>(mips.size());
     resourceFormat_ = resourceFmt; srvFormat_ = srvFmt;
 
     // Reset the staged cache
@@ -438,6 +446,114 @@ D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)
     srvGPU_ = h.gpu;
     stagedFrame_ = r->GetCurrentFrameIndex();
     return srvGPU_;
+}
+
+// ================== Internal: CPU mip chain (WIC fallback) ==================
+
+namespace
+{
+// sRGB <-> linear for mip averaging (albedo RGB only; alpha and linear usages average raw bytes).
+float SrgbByteToLinear(uint8_t v)
+{
+    static const auto table = []
+    {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i)
+        {
+            const float s = i / 255.0f;
+            t[i] = (s <= 0.04045f) ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f);
+        }
+        return t;
+    }();
+    return table[v];
+}
+uint8_t LinearToSrgbByte(float v)
+{
+    v = std::min(std::max(v, 0.0f), 1.0f);
+    const float s = (v <= 0.0031308f) ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+    return static_cast<uint8_t>(s * 255.0f + 0.5f);
+}
+} // namespace
+
+void Texture2D::BuildMipChainRGBA8_(std::vector<std::vector<uint8_t>>& mips, UINT width, UINT height,
+    bool srgbColor, float alphaCoverageCutoff)
+{
+    if (mips.empty() || width == 0 || height == 0) { return; }
+
+    // Alpha-test coverage of mip 0 (Castano): the fraction of texels that survive the cutoff.
+    // Each downsampled level rescales its alpha so the same fraction survives — a plain box
+    // filter pulls edge alphas toward the mean and the foliage silhouette thins per mip.
+    const bool preserveCoverage = alphaCoverageCutoff >= 0.0f;
+    const uint8_t cutoffByte = static_cast<uint8_t>(std::min(std::max(alphaCoverageCutoff, 0.0f), 1.0f) * 255.0f + 0.5f);
+    double coverage0 = 0.0;
+    if (preserveCoverage)
+    {
+        const std::vector<uint8_t>& base = mips[0];
+        size_t covered = 0;
+        for (size_t i = 3; i < base.size(); i += 4) { covered += (base[i] > cutoffByte) ? 1u : 0u; }
+        coverage0 = base.empty() ? 0.0 : static_cast<double>(covered) / (base.size() / 4);
+    }
+
+    UINT w = width, h = height;
+    while (w > 1 || h > 1)
+    {
+        const std::vector<uint8_t>& src = mips.back();
+        const UINT sw = w, sh = h;
+        w = std::max(1u, w >> 1);
+        h = std::max(1u, h >> 1);
+        std::vector<uint8_t> dst(static_cast<size_t>(w) * h * 4);
+
+        for (UINT y = 0; y < h; ++y)
+        {
+            const UINT sy0 = std::min(2 * y, sh - 1), sy1 = std::min(2 * y + 1, sh - 1);
+            for (UINT x = 0; x < w; ++x)
+            {
+                const UINT sx0 = std::min(2 * x, sw - 1), sx1 = std::min(2 * x + 1, sw - 1);
+                const size_t i00 = (static_cast<size_t>(sy0) * sw + sx0) * 4;
+                const size_t i10 = (static_cast<size_t>(sy0) * sw + sx1) * 4;
+                const size_t i01 = (static_cast<size_t>(sy1) * sw + sx0) * 4;
+                const size_t i11 = (static_cast<size_t>(sy1) * sw + sx1) * 4;
+                const size_t o = (static_cast<size_t>(y) * w + x) * 4;
+                for (int c = 0; c < 3; ++c)
+                {
+                    if (srgbColor)
+                    {
+                        const float lin = 0.25f * (SrgbByteToLinear(src[i00 + c]) + SrgbByteToLinear(src[i10 + c]) +
+                                                   SrgbByteToLinear(src[i01 + c]) + SrgbByteToLinear(src[i11 + c]));
+                        dst[o + c] = LinearToSrgbByte(lin);
+                    }
+                    else
+                    {
+                        dst[o + c] = static_cast<uint8_t>((src[i00 + c] + src[i10 + c] + src[i01 + c] + src[i11 + c] + 2u) / 4u);
+                    }
+                }
+                dst[o + 3] = static_cast<uint8_t>((src[i00 + 3] + src[i10 + 3] + src[i01 + 3] + src[i11 + 3] + 2u) / 4u);
+            }
+        }
+
+        if (preserveCoverage && coverage0 > 0.0 && coverage0 < 1.0)
+        {
+            // Percentile match: find the alpha at the (1 - coverage0) quantile, then scale so
+            // that value lands exactly at the cutoff. Boost-only (clamped [1, 8]): the box
+            // filter only ever ERODES sparse coverage, and never darkening avoids halos.
+            std::vector<uint8_t> alphas(dst.size() / 4);
+            for (size_t i = 0; i < alphas.size(); ++i) { alphas[i] = dst[i * 4 + 3]; }
+            const size_t k = std::min(alphas.size() - 1,
+                static_cast<size_t>((1.0 - coverage0) * static_cast<double>(alphas.size())));
+            std::nth_element(alphas.begin(), alphas.begin() + k, alphas.end());
+            const uint8_t t = std::max<uint8_t>(alphas[k], 1);
+            const float scale = std::min(std::max(static_cast<float>(cutoffByte) / t, 1.0f), 8.0f);
+            if (scale > 1.0f)
+            {
+                for (size_t i = 3; i < dst.size(); i += 4)
+                {
+                    dst[i] = static_cast<uint8_t>(std::min(dst[i] * scale, 255.0f));
+                }
+            }
+        }
+
+        mips.push_back(std::move(dst));
+    }
 }
 
 // ========================= Internal: upload & SRV =========================
@@ -531,6 +647,95 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     }
 
     // Record the state in the tracker
+    r->SetResourceState(tex_.Get(), kShaderReadStates);
+}
+
+void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
+    const std::vector<std::vector<uint8_t>>& mips, UINT width, UINT height,
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive,
+    DXGI_FORMAT resourceFmt)
+{
+    auto* device = r->GetDevice();
+    const UINT n = static_cast<UINT>(mips.size());
+
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC td{};
+    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    td.Width = width;
+    td.Height = height;
+    td.DepthOrArraySize = 1;
+    td.MipLevels = static_cast<UINT16>(n);
+    td.Format = resourceFmt; // TYPELESS
+    td.SampleDesc.Count = 1;
+    td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    td.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
+    tex_->SetName(L"Tex2D_RESOURCE");
+
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(n);
+    std::vector<UINT> numRows(n);
+    std::vector<UINT64> rowSizes(n);
+    UINT64 total = 0;
+    device->GetCopyableFootprints(&td, 0, n, 0, fps.data(), numRows.data(), rowSizes.data(), &total);
+
+    D3D12_HEAP_PROPERTIES hpUp{}; hpUp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC upDesc{};
+    upDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    upDesc.Width = total;
+    upDesc.Height = 1;
+    upDesc.DepthOrArraySize = 1;
+    upDesc.MipLevels = 1;
+    upDesc.Format = DXGI_FORMAT_UNKNOWN;
+    upDesc.SampleDesc.Count = 1;
+    upDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ComPtr<ID3D12Resource> upload;
+    ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+
+    uint8_t* mapped = nullptr;
+    D3D12_RANGE rge{ 0, 0 };
+    ThrowIfFailed(upload->Map(0, &rge, reinterpret_cast<void**>(&mapped)));
+    for (UINT m = 0; m < n; ++m)
+    {
+        const UINT mw = std::max(1u, width >> m);
+        const size_t srcPitch = static_cast<size_t>(mw) * 4;
+        const uint8_t* src = mips[m].data();
+        for (UINT y = 0; y < numRows[m]; ++y)
+        {
+            std::memcpy(mapped + fps[m].Offset + static_cast<size_t>(y) * fps[m].Footprint.RowPitch,
+                        src + static_cast<size_t>(y) * srcPitch, srcPitch);
+        }
+    }
+    upload->Unmap(0, nullptr);
+
+    for (UINT m = 0; m < n; ++m)
+    {
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource = tex_.Get();
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = m;
+        D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+        srcLoc.pResource = upload.Get();
+        srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        srcLoc.PlacedFootprint = fps[m];
+        uploadCmd->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+    }
+
+    constexpr D3D12_RESOURCE_STATES kShaderReadStates =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = tex_.Get();
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    b.Transition.StateAfter = kShaderReadStates;
+    uploadCmd->ResourceBarrier(1, &b);
+
+    if (keepAlive) { keepAlive->push_back(upload); }
     r->SetResourceState(tex_.Get(), kShaderReadStates);
 }
 
