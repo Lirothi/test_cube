@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -14,6 +15,7 @@
 #include "editor/EditorContext.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
+#include "editor/commands/SetMaterialSlotCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "imgui.h"
 #include "rendering/RenderLayers.h"
@@ -39,6 +41,18 @@ namespace
             camPos.x + camDir.x * 5.0f,
             camPos.y + camDir.y * 5.0f,
             camPos.z + camDir.z * 5.0f });
+    }
+
+    bool IsGltfModel(const std::string& model)
+    {
+        const size_t frag = model.find('#'); // strip a "#N"/"#node:" selector before matching
+        std::string ext = (frag == std::string::npos) ? model : model.substr(0, frag);
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const auto ends = [&](const char* s, size_t n) {
+            return ext.size() >= n && ext.compare(ext.size() - n, n, s) == 0;
+        };
+        return ends(".gltf", 5) || ends(".glb", 4);
     }
 
     std::string PickDefaultStaticMaterial(const AssetRegistry& registry)
@@ -107,10 +121,13 @@ namespace
         {
             nlohmann::json o = nlohmann::json::object();
             o["type"] = std::string(Type());
-            o["model"] = sourceAsset ? sourceAsset->id.key : std::string{};
+            const std::string model = sourceAsset ? sourceAsset->id.key : std::string{};
+            o["model"] = model;
             o["position"] = SpawnPositionJson(ctx.scene, worldPositionHint);
             o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
-            o["material"] = PickDefaultStaticMaterial(registry);
+            // B4: glTF assets carry their own PBR materials — spawn with "auto" so every submesh
+            // gets one slot from the glTF (B2). OBJ/text meshes keep a default preset.
+            o["material"] = IsGltfModel(model) ? std::string("auto") : PickDefaultStaticMaterial(registry);
             o["shader"] = "shaders/gbuffer.hlsl";
             o["inputLayout"] = "PosNormTanUV";
             return o;
@@ -175,22 +192,78 @@ namespace
             const AssetRegistry& registry,
             EditorObject& obj) const override
         {
-            const std::string current = obj.properties.value("material", std::string());
-            if (ImGui::BeginCombo("Material", current.empty() ? "(none)" : current.c_str()))
-            {
-                for (const EditorAssetRecord& rec : registry.Assets())
+            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
+            GBufferRenderable* gbMat = runtime ? runtime->AsGBufferRenderable() : nullptr;
+            const size_t slotCount = gbMat ? gbMat->SlotCount() : 0;
+
+            // Per-slot material list for multi-material (glTF) objects; a single "Material" combo
+            // otherwise (back-compat). "auto" = pull the slot's material from the glTF (B2).
+            const bool multiSlot = slotCount > 1;
+            const auto& materialsProp = obj.properties.contains("materials") &&
+                                        obj.properties["materials"].is_array()
+                ? obj.properties["materials"] : nlohmann::json::array();
+            auto slotCurrent = [&](size_t i) -> std::string {
+                if (i < materialsProp.size() && materialsProp[i].is_string())
                 {
-                    if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
-                    const bool selected = (rec.id.key == current);
-                    if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
-                    {
-                        commandStack.Execute(ctx, std::make_unique<SetMaterialCommand>(obj.id, rec.id.key));
-                    }
+                    return materialsProp[i].get<std::string>();
                 }
-                ImGui::EndCombo();
+                return i == 0 ? obj.properties.value("material", std::string("auto"))
+                              : std::string("auto");
+            };
+
+            if (multiSlot)
+            {
+                ImGui::TextDisabled("Material slots (%zu)", slotCount);
+                for (size_t i = 0; i < slotCount; ++i)
+                {
+                    const std::string cur = slotCurrent(i);
+                    ImGui::PushID(static_cast<int>(i));
+                    char label[32];
+                    std::snprintf(label, sizeof(label), "Slot %zu", i);
+                    if (ImGui::BeginCombo(label, cur.c_str()))
+                    {
+                        if (ImGui::Selectable("auto (from glTF)", cur == "auto") && cur != "auto")
+                        {
+                            commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
+                                obj.id, static_cast<int>(i), "auto"));
+                        }
+                        for (const EditorAssetRecord& rec : registry.Assets())
+                        {
+                            if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
+                            const bool selected = (rec.id.key == cur);
+                            if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                            {
+                                commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
+                                    obj.id, static_cast<int>(i), rec.id.key));
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::PopID();
+                }
+            }
+            else
+            {
+                const std::string current = obj.properties.value("material", std::string());
+                if (ImGui::BeginCombo("Material", current.empty() ? "(none)" : current.c_str()))
+                {
+                    for (const EditorAssetRecord& rec : registry.Assets())
+                    {
+                        if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
+                        const bool selected = (rec.id.key == current);
+                        if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                        {
+                            commandStack.Execute(ctx, std::make_unique<SetMaterialCommand>(obj.id, rec.id.key));
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
             }
 
-            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
+            // A material command above respawns the object (materials load at Init, no live
+            // setter), which frees the runtime fetched at the top — re-fetch before using it for
+            // the render layer + live params below, or we dereference a dangling pointer.
+            runtime = ctx.scene.FindEditorObject(obj.id.value);
 
             const std::string currentLayer = obj.properties.value("renderLayer", std::string("Default"));
             if (ImGui::BeginCombo("Render Layer", currentLayer.c_str()))

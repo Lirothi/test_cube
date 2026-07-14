@@ -357,13 +357,16 @@ namespace
         std::vector<std::string> extensions;
     };
 
-    const std::array<DirRoot, 4>& AssetRoots()
+    const std::array<DirRoot, 5>& AssetRoots()
     {
-        static const std::array<DirRoot, 4> roots = { {
-            { "models",      "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb" } },
-            { "textures",    "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
-            { "data/levels", "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
-            { "shaders",     "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
+        static const std::array<DirRoot, 5> roots = { {
+            { "models",         "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb" } },
+            { "textures",       "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
+            { "data/levels",    "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
+            { "shaders",        "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
+            // Raw drop zone: spawn glTF/GLB straight from staging until the H importer converts
+            // them into models/ (they're gitignored; harmless if the folder is absent).
+            { "import_staging", "/Game/Staging",  EditorAssetType::Mesh,    { ".gltf", ".glb" } },
         } };
         return roots;
     }
