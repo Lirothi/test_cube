@@ -61,5 +61,5 @@ PSOut PSMain(VSOut i)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion, i.objectId);
+    return FinalizeGBuffer(albedo, mr, N, float4(emissive, 0), motion, i.objectId);
 }

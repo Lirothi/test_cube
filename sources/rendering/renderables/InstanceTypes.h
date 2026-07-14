@@ -19,7 +19,7 @@ struct alignas(16) InstancePerObject
     DirectX::XMFLOAT4   texOffsScale; // 160
     DirectX::XMFLOAT4   texFlags;     // 176
     uint32_t            objectId;     // 192
-    uint32_t            _pad1[3];     // 196
+    DirectX::XMFLOAT3   emissive;     // 196 (D: premultiplied color*strength)
 };                                    // 208
 static_assert(sizeof(InstancePerObject) == 208,
     "InstancePerObject must match the HLSL cbuffer layout (208 bytes)");
@@ -36,9 +36,11 @@ struct alignas(16) InstanceSlotParams
     float             _pad0;        // 28
     DirectX::XMFLOAT4 texOffsScale; // 32
     DirectX::XMFLOAT4 texFlags;     // 48
-};                                  // 64
-static_assert(sizeof(InstanceSlotParams) == 64,
-    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (64 bytes)");
+    DirectX::XMFLOAT3 emissive;     // 64 (D: premultiplied color*strength)
+    float             _pad1;        // 76
+};                                  // 80
+static_assert(sizeof(InstanceSlotParams) == 80,
+    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (80 bytes)");
 
 // Per-caster world bounds for GPU shadow culling (Rung 0, Step 2). center.xyz = world-space
 // AABB center (w = bounding radius, for a cheap sphere pre-test); halfExtents.xyz = world-space

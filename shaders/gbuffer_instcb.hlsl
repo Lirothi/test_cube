@@ -28,6 +28,8 @@ cbuffer SlotParams : register(b2)
     float _slotPad0;
     float4 slotTexOffsScale;
     float4 slotTexFlags;
+    float3 slotEmissive; // D: premultiplied color*strength
+    float _slotPad1;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -87,12 +89,14 @@ PSOut PSMain(VSOutInst i)
     const float4 mTexOffsScale = slotTexOffsScale;
     const float4 mTexFlags     = slotTexFlags;
     const float  mAlphaCutoff  = slotAlphaCutoff;
+    const float3 mEmissive     = slotEmissive;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
     const float4 mTexOffsScale = d.texOffsScale;
     const float4 mTexFlags     = d.texFlags;
     const float  mAlphaCutoff  = d.alphaCutoff;
+    const float3 mEmissive     = d.emissive;
 #endif
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
@@ -119,5 +123,5 @@ PSOut PSMain(VSOutInst i)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(0, 0, 0, 0), motion, i.objectId);
+    return FinalizeGBuffer(albedo, mr, N, float4(mEmissive, 0), motion, i.objectId);
 }

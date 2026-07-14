@@ -35,6 +35,7 @@ public:
             cbHandles_.alphaCutoff = material->ComputeCBFieldHandle(0, "alphaCutoff");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
+            cbHandles_.emissive = material->ComputeCBFieldHandle(0, "emissive");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
         }
 
@@ -62,6 +63,7 @@ public:
         UpdateUniform(owner, cbHandles_.alphaCutoff, material, p.alphaCutoff, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
+        UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
         UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
     }
 
@@ -84,6 +86,7 @@ private:
         Material::CBFieldHandle alphaCutoff;
         Material::CBFieldHandle texOffsScale;
         Material::CBFieldHandle texFlags;
+        Material::CBFieldHandle emissive;
         Material::CBFieldHandle objectId;
     } cbHandles_{};
 
@@ -379,9 +382,8 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
     out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
     out.objectId = ToObjectId32(GetEditorObjectId());
-    out._pad1[0] = 0;
-    out._pad1[1] = 0;
-    out._pad1[2] = 0;
+    const auto e = p.EmissiveLinear();
+    out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
 }
 
 void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)

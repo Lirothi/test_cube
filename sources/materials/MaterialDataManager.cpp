@@ -133,6 +133,10 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     p.SetUseMR(md->hasMR);
     p.SetUseNormal(md->hasNormal);
     p.SetNormalStrength(d.normalScale);
+    // D: glTF emissiveFactor drives self-illumination (strength 1; KHR_emissive_strength not
+    // parsed — no staged asset uses it). emissiveTexture recorded below but not sampled yet.
+    p.emissiveColor = float3(d.emissive[0], d.emissive[1], d.emissive[2]);
+    p.emissiveStrength = (d.emissive[0] != 0.0f || d.emissive[1] != 0.0f || d.emissive[2] != 0.0f) ? 1.0f : 0.0f;
 
     // Recorded for later parts (not applied in A3). alphaMask/alphaCutoff moved above LoadAlbedo.
     md->doubleSided = d.doubleSided;

@@ -21,7 +21,7 @@ struct InstancePerObject
     float4 texOffsScale;
     float4 texFlags;
     uint objectId;
-    uint3 _instPad1;
+    float3 emissive; // D: premultiplied color*strength
 };
 
 #ifndef GBUFFER_SKIP_PEROBJECT
@@ -37,7 +37,7 @@ cbuffer PerObject : register(b0)
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
     uint objectId;
-    uint3 _objectIdPad;
+    float3 emissive; // D: premultiplied color*strength, added to RT2
 };
 #else
 // Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).

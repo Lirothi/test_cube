@@ -27,6 +27,17 @@ struct MaterialParams
     float4 texOffsScale = { 0.0f, 0.0f, 1.0f, 1.0f };
     // x=useAlbedo, y=useMR, z=useNormal, w=normalStrength (XY before reconstructing Z)
     float4 texFlags    = {1.f, 1.f, 1.f, 1.f};
+    // D: self-illumination added to the emissive G-buffer target (RT2) and re-added at compose.
+    // emissiveColor * emissiveStrength; default 0 => zero-cost for existing content.
+    float3 emissiveColor    = {0.f, 0.f, 0.f};
+    float  emissiveStrength = 0.f;
+
+    float3 EmissiveLinear() const
+    {
+        return float3(emissiveColor.x * emissiveStrength,
+                      emissiveColor.y * emissiveStrength,
+                      emissiveColor.z * emissiveStrength);
+    }
 
     void SetUseAlbedo(bool b){ texFlags.x = b ? 1.f : 0.f; }
     void SetUseMR(bool b)    { texFlags.y = b ? 1.f : 0.f; }

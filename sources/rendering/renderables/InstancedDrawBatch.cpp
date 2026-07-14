@@ -128,6 +128,9 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             sp->_pad0 = 0.0f;
             sp->texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
             sp->texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
+            const auto e = p.EmissiveLinear();
+            sp->emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
+            sp->_pad1 = 0.0f;
             slotCbScratch_[slot] = cb.gpu;
         }
     }

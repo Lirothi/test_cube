@@ -54,6 +54,10 @@ namespace SceneObjectFactory
         if (o.contains("texOffsScale")) { mp.texOffsScale = ToFloat4(o["texOffsScale"], mp.texOffsScale); }
         if (o.contains("normalStrength")) { mp.texFlags.w = o["normalStrength"].get<float>(); }
         if (o.contains("useMR")) { mp.SetUseMR(o["useMR"].get<bool>()); }
+        // D: self-illumination on slot 0 (glowing embers etc). Survives Init for non-glTF meshes
+        // (glTF "auto" slots seed from the material — a known A3/B2 layering limit).
+        if (o.contains("emissiveColor")) { mp.emissiveColor = ToFloat3(o["emissiveColor"], mp.emissiveColor); }
+        if (o.contains("emissiveStrength")) { mp.emissiveStrength = o["emissiveStrength"].get<float>(); }
         if (o.contains("metalRough"))
         {
             const json& mr = o["metalRough"];
