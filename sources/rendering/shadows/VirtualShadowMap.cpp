@@ -864,7 +864,19 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
-    ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
+    if (shadowGpu->MaskedShadowsActive())
+    {
+        // C2: masked PSO — t0..t2 = instances + casterGroup + groupMask, t3.. = masked albedos.
+        ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f),
+                                                       shadowGpu->CasterGroupSrv(),
+                                                       shadowGpu->GroupMaskSrv() }).gpu;
+        ctx.srvTable[3] = renderer->StageSrvUavTable(shadowGpu->MaskedAlbedoSrvs(),
+                                                     shadowGpu->MaskedAlbedoCount()).gpu;
+    }
+    else
+    {
+        ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
+    }
     indirectMat->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 

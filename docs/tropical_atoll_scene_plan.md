@@ -314,6 +314,26 @@ Watch VSM perf: fronds are static, so cached/per-page-culled pages keep the cost
 covers the indirect-shadow path interplay (ShadowGpuData folded submeshes in B3). Acceptable
 interim state after C1/C1b: solid shadows (visible but not blocking).
 
+**C2 as landed *(Fable; DONE 2026-07-14)*:** ONE masked variant of `shadow_indirect_csm.hlsl`
+(`SHADOW_MASKED=1`) covers **every GPU-driven shadow consumer** — the per-view CSM/spot/point
+ExecuteIndirect path AND the VSM per-page draws — because both bind
+`ShadowGpuData::IndirectShadowMaterial()`, which returns the masked PSO whenever the caster set
+contains any alpha-masked group. It deliberately diverges from the per-slot-material sketch
+above: the GPU-driven paths draw whole (mesh, submesh) GROUPS via ExecuteIndirect, so the mask
+is per GROUP, and one PSO serves the WHOLE set (opaque groups carry texSlot=~0 and its PS
+early-outs before sampling) — preserving the single-ExecuteIndirect structure with no per-class
+arg partitioning and no second VSM page loop. Data: per-group `groupMask_` uint2 {albedo table
+slot (~0=opaque), asuint(alphaCutoff)} built in Rebuild from the FIRST object's slot
+MaterialData (shared-mesh semantics like the mega buffer / RT BLAS); masked albedos are a
+bounded 16-entry descriptor table (t3.., overflow warns + those groups cast solid); the VS
+(`PosUV_InstCasterId` layout, UV at offset 40 of VertexPNTUV) forwards UV + the group's mask
+data, the PS clips; CULL_NONE (fronds are double-sided). Levels with no masked groups keep the
+null-PS fast path (demo byte-identical). Legacy CPU fallback paths (per-object RenderShadow +
+instanced batch) still cast solid — the B3 submesh loop is the hook if that ever matters (the
+Rung0 indirect path is the default everywhere). Verified: atoll palm shadows = serrated
+per-leaflet silhouettes in BOTH VSM and Legacy (scene luma 99.7→102.6 = less over-shadowed
+area), cull validation PASS, demo unchanged, scene-stress=15 CLEAN.
+
 ## Part D — emissive meshes
 
 *(exec: Opus 4.8)* Extend `gbuffer.hlsl` (and the masked variant) with per-material-slot `emissiveColor` (rgb) ×

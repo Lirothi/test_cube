@@ -7,9 +7,11 @@
 #include <vector>
 
 #include "core/math/Frustum.h"
+#include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/meshes/Mesh.h"
+#include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
 
@@ -298,6 +300,18 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedBoundsUav(UINT f) const
     return (f < render::kFrameCount) ? unifiedDescr_[3 * render::kFrameCount + f] : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }
 
+// C2: the masked variant serves the whole caster set whenever any group is alpha-masked (its PS
+// early-outs for opaque groups); falls back to the null-PS PSO otherwise or when it failed.
+Material* ShadowGpuData::IndirectShadowMaterial() const
+{
+    return MaskedShadowsActive() ? indirectShadowMaskedMat_.get() : indirectShadowMat_.get();
+}
+
+bool ShadowGpuData::MaskedShadowsActive() const
+{
+    return hasMaskedGroups_ && indirectShadowMaskedMat_ && indirectShadowMaskedMat_->GetPipelineState();
+}
+
 bool ShadowGpuData::IsGiIndirectActive() const
 {
     return render::g_giIndirectShadowsEnabled && !giCasters_.empty() &&
@@ -355,11 +369,18 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
     std::vector<std::uint32_t> casterSub(casterCount, 0u);      // submesh ordinal within casterMesh
     std::vector<std::uint32_t> staticDynamic(casterCount, 0u); // per static caster: IsDynamicCaster (VSM page-cache invalidation)
+    // C2: per-group shadow-mask table, filled when a mesh is FIRST seen — the first object using
+    // a (mesh, slot) defines the group's mask (an object overriding a shared mesh's slot keeps
+    // the first object's shadow mask; same shared-mesh semantics as the mega buffer / RT BLAS).
+    std::vector<DirectX::XMUINT2> groupMaskCpu; // per group: {albedo slot (~0 = opaque), asuint(cutoff)}
+    maskedAlbedoSrvs_.fill({});
+    maskedAlbedoCount_ = 0;
+    bool maskedOverflow = false;
     std::uint32_t nextGroup = 0;
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
-        const RenderableObjectBase* obj = objPtr.get();
+        RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
         const RenderableObject* ro = obj->AsRenderableObject();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsCaster requires it
@@ -367,6 +388,27 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
             meshToGroup.emplace(mesh, nextGroup);
+            GBufferRenderable* gb = obj->AsGBufferRenderable();
+            for (size_t s = 0; s < slots; ++s)
+            {
+                DirectX::XMUINT2 gm{ 0xFFFFFFFFu, 0u };
+                const MaterialData* md = gb ? gb->GetMaterialDataForSlot(s) : nullptr;
+                if (md && md->alphaMask && md->hasAlbedo)
+                {
+                    if (maskedAlbedoCount_ < kMaxMaskedGroups)
+                    {
+                        maskedAlbedoSrvs_[maskedAlbedoCount_] = md->albedo.GetSRVCPU();
+                        gm.x = maskedAlbedoCount_++;
+                        const float cutoff = md->alphaCutoff;
+                        std::memcpy(&gm.y, &cutoff, sizeof(gm.y));
+                    }
+                    else
+                    {
+                        maskedOverflow = true; // over the t3 table cap -> this group casts solid
+                    }
+                }
+                groupMaskCpu.push_back(gm);
+            }
             nextGroup += static_cast<std::uint32_t>(slots);
         }
         render::InstancePerObject inst{};
@@ -535,6 +577,20 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             pg[g * 4 + 2] = groupStartIndex[g];
             pg[g * 4 + 3] = 0u;
         }
+    }
+
+    // C2: per-group shadow-mask table (uint2; region 0, static like perGroup_). GI groups (and
+    // any group past the static set) are opaque.
+    groupMaskCpu.resize(numMeshGroups_, DirectX::XMUINT2{ 0xFFFFFFFFu, 0u });
+    hasMaskedGroups_ = maskedAlbedoCount_ > 0;
+    if (maskedOverflow)
+    {
+        OutputDebugStringA("[ShadowGpuData] WARNING: masked shadow groups exceed the albedo table cap; excess groups cast solid shadows.\n");
+    }
+    if (EnsureRing(renderer, groupMask_, std::max<size_t>(numMeshGroups_, 1), sizeof(DirectX::XMUINT2), L"ShadowGpuData.GroupMask") &&
+        numMeshGroups_ > 0)
+    {
+        std::memcpy(groupMask_.Region(0), groupMaskCpu.data(), numMeshGroups_ * sizeof(DirectX::XMUINT2));
     }
 
     // Rung 2 mega-buffer layout: concatenate all group meshes into one VB + one IB so the VSM
@@ -842,6 +898,21 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         gd.raster.CullMode = D3D12_CULL_MODE_BACK;
         gd.blend.RenderTarget[0].BlendEnable = FALSE;
         indirectShadowMat_ = mm->GetOrCreateGraphics(renderer, gd);
+
+        // C2: the SHADOW_MASKED variant — selected by IndirectShadowMaterial() whenever the
+        // caster set contains alpha-masked groups (opaque groups early-out in its PS, so ONE
+        // PSO serves the whole set and the single-ExecuteIndirect structure stays). CULL_NONE:
+        // masked foliage is authored double-sided, and depth-only backface culling would drop
+        // casters. Failure is non-fatal — masked groups just cast solid shadows.
+        gd.inputLayoutKey = "PosUV_InstCasterId";
+        gd.defines.emplace_back("SHADOW_MASKED", "1");
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        indirectShadowMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowMaskedMat_ || !indirectShadowMaskedMat_->GetPipelineState())
+        {
+            OutputDebugStringA("[ShadowGpuData] masked indirect shadow PSO FAILED (masked casters cast solid shadows).\n");
+            indirectShadowMaskedMat_.reset();
+        }
     }
 
     const bool cullOk = cullClearMat_ && cullClearMat_->GetPipelineState() &&
@@ -1223,12 +1294,21 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     if (!sig) { return false; }
 
     // Bind the depth-only indirect PSO + root args: b1 = light viewProj, t0 = instance buffer
-    // SRV for this frame's region.
+    // SRV for this frame's region. C2: with masked groups present, the masked PSO also reads
+    // casterGroup (t1) + groupMask (t2) + the masked albedo table (t3..).
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = viewCB;
-    ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
-    indirectShadowMat_->Bind(cl, ctx, false);
+    if (MaskedShadowsActive())
+    {
+        ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), CasterGroupSrv(), GroupMaskSrv() }).gpu;
+        ctx.srvTable[3] = renderer->StageSrvUavTable(maskedAlbedoSrvs_, maskedAlbedoCount_).gpu;
+    }
+    else
+    {
+        ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
+    }
+    IndirectShadowMaterial()->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Slot 1 = this frame's visible-list region as a per-instance stream; each draw's
@@ -1420,6 +1500,9 @@ void ShadowGpuData::Reset()
     giCasters_.clear();            // GI reservation dropped; next Rebuild re-enumerates + refreshes obj*
     giFoldableInstances_ = 0;
     megaCopy_.clear();             // mesh pointers dangle across a level unload
+    maskedAlbedoSrvs_.fill({});    // C2: MaterialData-owned SRV handles dangle across a level unload
+    maskedAlbedoCount_ = 0;
+    hasMaskedGroups_ = false;
     megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
     valState_ = 0;
     logFramesRemaining_ = 5;

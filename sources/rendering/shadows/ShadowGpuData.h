@@ -148,8 +148,19 @@ public:
     size_t IndirectCountsRegionBytes() const { return indirectCounts_.regionBytes; }
 
     // The depth-only indirect shadow PSO (Step 5); the ExecuteIndirect draws bind it in Step 6.
-    // Null until the shader resources are created (first RecordCull). Unused in Step 5.
-    Material* IndirectShadowMaterial() const { return indirectShadowMat_.get(); }
+    // Null until the shader resources are created (first RecordCull). C2: when the caster set
+    // contains masked (alphaMode=MASK) groups, this returns the SHADOW_MASKED variant instead —
+    // one PSO for the whole set (opaque groups early-out in the PS), so the single-ExecuteIndirect
+    // structure of both consumers (per-view CSM + VSM per-page) is preserved.
+    Material* IndirectShadowMaterial() const; // defined in the .cpp (needs Material's definition)
+
+    // C2: masked-shadow bindings for the indirect draw call sites. When active, srvTable[0] must
+    // carry {instances, casterGroup, groupMask} and srvTable[3] the masked albedo table.
+    static constexpr std::uint32_t kMaxMaskedGroups = 16; // matches gMaskAlbedo[16] in shadow_indirect_csm.hlsl
+    bool MaskedShadowsActive() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE GroupMaskSrv() const { return groupMask_.Srv(0); }
+    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups>& MaskedAlbedoSrvs() const { return maskedAlbedoSrvs_; }
+    std::uint32_t MaskedAlbedoCount() const { return maskedAlbedoCount_; }
 
     // Rung 2 / Step 22: mesh-group id -> Mesh* (VB/IB for the per-page indirect draws, reusing this
     // frame's per-view cull output). Empty until Rebuild.
@@ -255,8 +266,19 @@ private:
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
     std::shared_ptr<Material> cullMat_;          // shadow_cull_cs.hlsl
     std::shared_ptr<Material> indirectShadowMat_; // shadow_indirect_csm.hlsl (Step 5; used in Step 6)
+    std::shared_ptr<Material> indirectShadowMaskedMat_; // C2: SHADOW_MASKED=1 variant (alpha-tested groups)
     std::shared_ptr<Material> giScatterMat_;     // shadow_gi_scatter_cs.hlsl (Step 4)
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
+
+    // C2: per-group mask data — groupMask_ holds uint2 {albedo slot (~0 = opaque), asuint(cutoff)}
+    // per mesh-group (region 0, static after Rebuild); maskedAlbedoSrvs_ are the masked groups'
+    // albedo SRV CPU handles, staged into the masked PSO's t3 table by the draw call sites. The
+    // handles point into MaterialData-owned descriptors — Rebuild refreshes them, Reset drops them
+    // (they dangle across a level unload, same contract as groupMesh_).
+    Ring groupMask_;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups> maskedAlbedoSrvs_{};
+    std::uint32_t maskedAlbedoCount_ = 0;
+    bool hasMaskedGroups_ = false;
 
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow
