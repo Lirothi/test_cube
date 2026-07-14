@@ -198,13 +198,15 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
 
     std::vector<VertexPNTUV> verts;
     std::vector<uint32_t>    inds;
-    if (!ParseGltfFile(path, verts, inds, opt)) {
+    std::vector<Mesh::Submesh> submeshes;
+    if (!ParseGltfFile(path, verts, inds, submeshes, opt)) {
         return std::shared_ptr<Mesh>();
     }
 
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace);
+        verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace,
+        submeshes.size() > 1 ? &submeshes : nullptr);
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
     cache_[path] = m;
     return m;
@@ -563,20 +565,10 @@ bool ResolveGltfGroups(cgltf_data* data, const GltfSelector& sel,
     return true;
 }
 
-// Which group index does the selector address (clamped, with a diagnostic note)?
+// Which group index does the selector address (clamped, with a diagnostic note)? Only meaningful
+// for "#N" selectors; whole-file/#node paths load ALL groups since B2 (multi-submesh).
 size_t SelectGltfGroup(const GltfSelector& sel, const std::string& fullPath, size_t groupCount) {
-    if (sel.wholeFile) {
-        if (groupCount > 1) {
-            GltfLog("whole-file load has " + std::to_string(groupCount) +
-                " material groups; using group 0 until Part B (submeshes). Use '#N' to pick one: " + sel.file);
-        }
-        return 0;
-    }
-    if (!sel.nodeName.empty()) {
-        if (groupCount > 1) {
-            GltfLog("node '" + sel.nodeName + "' has " + std::to_string(groupCount) +
-                " material groups; using group 0 until Part B: " + sel.file);
-        }
+    if (sel.wholeFile || !sel.nodeName.empty()) {
         return 0;
     }
     if (sel.groupIndex < 0 || static_cast<size_t>(sel.groupIndex) >= groupCount) {
@@ -610,10 +602,12 @@ std::string ResolveTexUri(const cgltf_texture* tex, const std::string& dir) {
 bool MeshManager::ParseGltfFile(const std::string& fullPath,
     std::vector<VertexPNTUV>& outVerts,
     std::vector<uint32_t>& outIndices,
+    std::vector<Mesh::Submesh>& outSubmeshes,
     const MeshLoadOptions& opt)
 {
     outVerts.clear();
     outIndices.clear();
+    outSubmeshes.clear();
 
     const GltfSelector sel = ParseGltfSelector(fullPath);
 
@@ -636,11 +630,19 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         cgltf_free(data);
         return false;
     }
-    const size_t want = SelectGltfGroup(sel, fullPath, groups.size());
 
-    // Read geometry for the selected group only (bake node transforms; flip winding for mirrored
+    // B2: "#N" loads that single group; whole-file/#node selectors load EVERY group,
+    // concatenated in group order, with one submesh range per group (materialSlot = ordinal).
+    const bool allGroups = sel.wholeFile || !sel.nodeName.empty();
+    const size_t firstGroup = allGroups ? 0 : SelectGltfGroup(sel, fullPath, groups.size());
+    const size_t lastGroup = allGroups ? groups.size() : firstGroup + 1;
+
+    for (size_t g = firstGroup; g < lastGroup; ++g) {
+    const uint32_t submeshFirstIndex = static_cast<uint32_t>(outIndices.size());
+
+    // Read geometry for this group (bake node transforms; flip winding for mirrored
     // nodes). glTF normals are kept; tangents are regenerated downstream from UVs.
-    for (const PrimRef& pr : groups[want].prims) {
+    for (const PrimRef& pr : groups[g].prims) {
         const cgltf_primitive* prim = pr.prim;
 
         // glTF stores column-major matrices; copying those bytes into an XMFLOAT4X4 (row-major)
@@ -709,15 +711,21 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         }
     }
 
-    GltfLog("loaded '" + fullPath + "': group " + std::to_string(want) + "/" +
-        std::to_string(groups.size()) + ", " + std::to_string(outVerts.size()) + " verts, " +
-        std::to_string(outIndices.size() / 3) + " tris");
+    outSubmeshes.push_back(Mesh::Submesh{ submeshFirstIndex,
+        static_cast<uint32_t>(outIndices.size()) - submeshFirstIndex,
+        static_cast<uint32_t>(g - firstGroup) });
+    } // per-group loop
+
+    GltfLog("loaded '" + fullPath + "': " + std::to_string(outSubmeshes.size()) + "/" +
+        std::to_string(groups.size()) + " group(s), " + std::to_string(outVerts.size()) +
+        " verts, " + std::to_string(outIndices.size() / 3) + " tris");
 
     cgltf_free(data);
     return !outVerts.empty() && !outIndices.empty();
 }
 
-GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFragment)
+GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFragment,
+    int groupOrdinal)
 {
     GltfMaterialDesc out;
     const GltfSelector sel = ParseGltfSelector(pathWithFragment);
@@ -737,7 +745,11 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         cgltf_free(data);
         return out;
     }
-    const size_t want = SelectGltfGroup(sel, pathWithFragment, groups.size());
+    size_t want = SelectGltfGroup(sel, pathWithFragment, groups.size());
+    if (groupOrdinal >= 0) {
+        // B2: explicit ordinal = submesh index of a multi-submesh load (same ordered group list).
+        want = std::min(static_cast<size_t>(groupOrdinal), groups.size() - 1);
+    }
     const cgltf_size mi = groups[want].materialIndex;
     if (mi == kNoMat || mi >= data->materials_count) {
         cgltf_free(data);

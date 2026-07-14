@@ -79,6 +79,18 @@ namespace SceneObjectFactory
         const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto mesh = std::make_unique<StaticMesh>(model, material, layout, shader);
+        // B2: optional per-slot material list for multi-submesh assets: "materials": ["a","auto",...]
+        // (slot i = entry i; missing slots default to "auto" for glTF models). The scalar
+        // "material" stays as slot 0 back-compat.
+        if (o.contains("materials") && o["materials"].is_array())
+        {
+            std::vector<std::string> slots;
+            for (const auto& e : o["materials"])
+            {
+                if (e.is_string()) { slots.push_back(e.get<std::string>()); }
+            }
+            mesh->SetSlotPresets(std::move(slots));
+        }
         mesh->SetPosition(pos);
         mesh->SetScale(scale);
         ApplyStaticMeshJsonProperties(*mesh, o);

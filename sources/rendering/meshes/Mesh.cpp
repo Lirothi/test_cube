@@ -167,6 +167,29 @@ void Mesh::Draw(ID3D12GraphicsCommandList* cmdList, UINT lod) const {
     render::g_renderStats.AddDraw(indexCount, 1);
 }
 
+void Mesh::DrawSubmesh(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal, UINT lod) const {
+    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
+    SelectLod(lod, vbv, ibv, indexCount);
+    const std::vector<Submesh>& subs = SubmeshesForLod(lod); // same lod resolution as SelectLod
+    if (submeshOrdinal >= subs.size()) { return; }
+    const Submesh& s = subs[submeshOrdinal];
+    BindIA(cmdList, *vbv, *ibv); // repeated binds across submeshes are elided by the bind cache
+    cmdList->DrawIndexedInstanced(s.indexCount, 1, s.indexOffset, 0, 0);
+    render::g_renderStats.AddDraw(s.indexCount, 1);
+}
+
+void Mesh::DrawSubmeshInstanced(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal,
+    UINT instanceCount, UINT lod) const {
+    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
+    SelectLod(lod, vbv, ibv, indexCount);
+    const std::vector<Submesh>& subs = SubmeshesForLod(lod); // same lod resolution as SelectLod
+    if (submeshOrdinal >= subs.size()) { return; }
+    const Submesh& s = subs[submeshOrdinal];
+    BindIA(cmdList, *vbv, *ibv); // repeated binds across submeshes are elided by the bind cache
+    cmdList->DrawIndexedInstanced(s.indexCount, instanceCount, s.indexOffset, 0, 0);
+    render::g_renderStats.AddDraw(s.indexCount, instanceCount);
+}
+
 void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount, UINT lod) const {
     const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
     SelectLod(lod, vbv, ibv, indexCount);

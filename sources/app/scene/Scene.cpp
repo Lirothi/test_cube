@@ -104,6 +104,9 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // this at GPU idle in Scene::Render. (The mega-buffer above stays built regardless — it's tiny
     // and lets a runtime switch to VSM use the fast per-page draw path immediately.)
     if (render::VsmActive()) { vsm_.EnsureResources(renderer); }
+    // Fresh level = every resident VSM page is stale (same view slots, different level content).
+    // Drop all mappings so the first frames re-request/re-render cleanly.
+    vsm_.InvalidateAllPages();
 }
 
 void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)

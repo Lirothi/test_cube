@@ -169,6 +169,12 @@ public:
     // Resources + views for the future VSM passes; null/{0} until allocated.
     ID3D12Resource* PagePool() const { return pagePool_.Get(); }
     ID3D12Resource* PageTable() const { return pageTable_.Get(); }
+    // Level switch: drop every page mapping — the next RecordPageAllocate re-runs the one-shot
+    // init (page table zeroed, all physical pages freed). Cross-level pool content is garbage:
+    // the new level's views reuse the same view slots, so its virtual page ids collide with
+    // resident entries whose depths were rendered under the OLD level's viewProj/casters.
+    void InvalidateAllPages() { allocInitialized_ = false; }
+
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolDsv() const { return poolDsv_; }     // render pages (Step 22)
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolSrv() const { return poolSrv_; }     // sample (Step 21)
     D3D12_CPU_DESCRIPTOR_HANDLE PageTableSrv() const { return pageTableSrv_; }

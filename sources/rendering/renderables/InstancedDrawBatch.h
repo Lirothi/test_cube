@@ -3,6 +3,7 @@
 #include <array>
 #include <vector>
 
+class IInstanceable;
 class Material;
 class MaterialData;
 class Mesh;
@@ -57,6 +58,12 @@ private:
     Mesh* mesh_ = nullptr;
     bool simple_ = true;
     AABB bounds_ = AABB::Empty();
+    // B2b: non-null when the run is multi-slot (multi-submesh mesh + >1 material slot) — the
+    // gbuffer path then loops submeshes, binding each slot's textures + a b2 params slice from
+    // this lead (run members are slot-identical by SameInstanceSlots). Shadows stay whole-mesh.
+    const IInstanceable* leadInst_ = nullptr;
     // Per-instance LOD buckets, reused each Render (pooled batch -> retains capacity).
     std::array<std::vector<RenderableObjectBase*>, kMaxLodTiers> lodBuckets_;
+    // B2b scratch: per-slot param CB GPU addresses for the current RecordInstanced call.
+    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slotCbScratch_;
 };

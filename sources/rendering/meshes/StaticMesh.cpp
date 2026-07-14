@@ -24,14 +24,10 @@ namespace
 
 std::string StaticMesh::GetGltfMaterialSourcePath() const
 {
-    // Use the glTF's own material when the model is a glTF and no explicit preset was requested
-    // ("auto" or empty). A named preset in the level JSON overrides (placeholder/testing).
-    const std::string& preset = MatPreset();
-    if (IsGltfPath(modelName_) && (preset.empty() || preset == "auto"))
-    {
-        return modelName_;
-    }
-    return {};
+    // B2: this is a SOURCE path, not a decision — per-slot "auto vs named preset" is resolved in
+    // GBufferRenderable::ResolveMaterialSlots (slots whose preset is "auto"/absent pull from the
+    // glTF; named presets win for their slot).
+    return IsGltfPath(modelName_) ? modelName_ : std::string{};
 }
 
 StaticMesh::StaticMesh(const std::string& modelName,
@@ -45,14 +41,12 @@ StaticMesh::StaticMesh(const std::string& modelName,
 
 void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);
-    if (!renderer)
-    {
-        return;
-    }
-
-    if (!modelName_.empty())
+    // B2: load the mesh BEFORE the base Init — material-slot resolution needs the submesh count
+    // (one slot per glTF material group).
+    if (renderer && !modelName_.empty())
     {
         SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
     }
+
+    GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);
 }

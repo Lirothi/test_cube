@@ -23,6 +23,21 @@ struct alignas(16) InstancePerObject
 static_assert(sizeof(InstancePerObject) == 208,
     "InstancePerObject must match the HLSL cbuffer layout (208 bytes)");
 
+// B2b multi-slot instancing: CPU mirror of HLSL `SlotParams` (b2) in shaders/gbuffer_instcb.hlsl
+// (INSTCB_SLOT_PARAMS variant). One upload per material slot per batch — the slot's
+// MaterialParams, shared by every instance of the batch (member params are verified equal by
+// IInstanceable::SameInstanceSlots before objects merge into a run).
+struct alignas(16) InstanceSlotParams
+{
+    DirectX::XMFLOAT4 baseColor;    // 0
+    DirectX::XMFLOAT2 metalRough;   // 16
+    float             _pad0[2];     // 24
+    DirectX::XMFLOAT4 texOffsScale; // 32
+    DirectX::XMFLOAT4 texFlags;     // 48
+};                                  // 64
+static_assert(sizeof(InstanceSlotParams) == 64,
+    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (64 bytes)");
+
 // Per-caster world bounds for GPU shadow culling (Rung 0, Step 2). center.xyz = world-space
 // AABB center (w = bounding radius, for a cheap sphere pre-test); halfExtents.xyz = world-space
 // half-extents (w spare). Matches the positive-vertex AABB test in Frustum::Intersects that the

@@ -94,14 +94,15 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
 std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
-    const std::string& gltfSelector)
+    const std::string& gltfSelector,
+    int groupOrdinal)
 {
-    const std::string key = "gltf::" + gltfSelector;
+    const std::string key = "gltf::" + gltfSelector + "@" + std::to_string(groupOrdinal);
     if (auto it = cache_.find(key); it != cache_.end()) {
         return it->second;
     }
 
-    const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(gltfSelector);
+    const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(gltfSelector, groupOrdinal);
     if (!d.valid) {
         return {}; // no material on this group
     }

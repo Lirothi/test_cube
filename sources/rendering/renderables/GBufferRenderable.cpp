@@ -16,7 +16,7 @@ uint32_t ToObjectId32(std::uint64_t id)
 class GBufferUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
-    explicit GBufferUniformBinder(MaterialParams& params) : params_(params) {}
+    GBufferUniformBinder() = default;
 
     void RebuildHandles(RenderableObject& owner) override
     {
@@ -51,7 +51,10 @@ public:
         UpdateUniform(owner, cbHandles_.world, material, owner.GetModelMatrix(), cbData);
         UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
 
-        const auto& p = params_;
+        // B2: pull the params of the slot being recorded (slot 0 outside the multi-slot loop).
+        const GBufferRenderable* gb = owner.AsGBufferRenderable();
+        const MaterialParams defaults{};
+        const auto& p = gb ? gb->CurrentDrawParams() : defaults;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
         UpdateUniform(owner, cbHandles_.metalRough, material, p.metalRough, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
@@ -84,18 +87,47 @@ private:
     {
         Material::CBFieldHandle world;
     } shadowHandles_{};
-
-    MaterialParams& params_;
 };
 } // namespace
+
+// B2b: batch-compat predicate for the queue's run extension (declared on IInstanceable; defined
+// here for MaterialParams' definition). Multi-slot batches bind slot textures and upload slot
+// params ONCE from the run's lead, so members must match it exactly. Single-slot pairs always
+// pass — their params travel in the per-instance array instead.
+bool IInstanceable::SameInstanceSlots(const IInstanceable& other) const
+{
+    const size_t n = InstanceSlotCount();
+    if (n != other.InstanceSlotCount()) { return false; }
+    if (n <= 1) { return true; }
+
+    const auto eq4 = [](const float4& a, const float4& b)
+    { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+    const auto eq2 = [](const float2& a, const float2& b)
+    { return a.x == b.x && a.y == b.y; };
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (InstanceSlotData(i) != other.InstanceSlotData(i)) { return false; }
+        const MaterialParams* a = InstanceSlotParams(i);
+        const MaterialParams* b = other.InstanceSlotParams(i);
+        if (!a || !b) { if (a != b) { return false; } continue; }
+        if (!eq4(a->baseColor, b->baseColor) || !eq2(a->metalRough, b->metalRough) ||
+            !eq4(a->texOffsScale, b->texOffsScale) || !eq4(a->texFlags, b->texFlags))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 GBufferRenderable::GBufferRenderable(const std::string& matPreset,
     const std::string& inputLayout,
     const std::wstring& graphicsShader)
     : RenderableObject(inputLayout, graphicsShader)
-    , matPreset_(matPreset)
 {
-    SetUniformBinder(std::make_unique<GBufferUniformBinder>(matParams_));
+    slotPresets_ = { matPreset };
+    matParamses_.resize(1); // slot 0 exists pre-Init so the factory can write params
+    SetUniformBinder(std::make_unique<GBufferUniformBinder>());
 }
 
 void GBufferRenderable::Init(Renderer* renderer,
@@ -107,30 +139,120 @@ void GBufferRenderable::Init(Renderer* renderer,
         return;
     }
 
-    if (!matData_)
+    if (matDatas_.empty())
     {
-        const std::string gltfSrc = GetGltfMaterialSourcePath();
-        if (!gltfSrc.empty())
-        {
-            matData_ = renderer->GetMaterialDataManager()->GetOrCreateFromGltf(renderer, uploadCmdList, uploadKeepAlive, gltfSrc);
-            // Seed per-object params from the glTF material defaults. NOTE: this runs after the
-            // factory's ApplyStaticMeshJsonProperties, so explicit JSON param overrides on a
-            // glTF-"auto" object are currently clobbered (acceptable for A3; the editor path in
-            // B4 will layer overrides on top).
-            if (matData_ && matData_->fromGltf)
-            {
-                matParams_ = matData_->gltfDefaultParams;
-            }
-        }
-        if (!matData_)
-        {
-            matData_ = renderer->GetMaterialDataManager()->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, matPreset_);
-        }
+        ResolveMaterialSlots(renderer, uploadCmdList, uploadKeepAlive);
     }
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     BuildInstancedMaterials(renderer);
+}
+
+void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
+    ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
+{
+    MaterialDataManager* mgr = renderer->GetMaterialDataManager();
+    const std::string gltfSrc = GetGltfMaterialSourcePath(); // "" unless the model is a glTF
+    const Mesh* mesh = GetMesh();
+    const size_t submeshCount = mesh ? std::max<size_t>(mesh->GetSubmeshCount(), 1u) : 1u;
+
+    // glTF meshes get one slot per submesh (requires the mesh to be loaded BEFORE Init — see
+    // StaticMesh::Init); everything else keeps the explicit preset list (usually 1).
+    const size_t slotCount = !gltfSrc.empty()
+        ? std::max<size_t>(submeshCount, slotPresets_.size())
+        : std::max<size_t>(slotPresets_.size(), 1u);
+
+    matDatas_.assign(slotCount, nullptr);
+    matParamses_.resize(slotCount); // slot 0 keeps factory-applied values; new slots default
+
+    for (size_t i = 0; i < slotCount; ++i)
+    {
+        const std::string name = i < slotPresets_.size() ? slotPresets_[i] : std::string("auto");
+        const bool wantsGltf = !gltfSrc.empty() && (name.empty() || name == "auto");
+        if (wantsGltf)
+        {
+            // Multi-submesh: ordinal i addresses submesh/group i. Single-submesh: honor the
+            // selector embedded in the path (e.g. "#2") instead of forcing ordinal 0.
+            const int ordinal = submeshCount > 1 ? static_cast<int>(i) : -1;
+            matDatas_[i] = mgr->GetOrCreateFromGltf(renderer, uploadCmdList, uploadKeepAlive, gltfSrc, ordinal);
+            if (matDatas_[i] && matDatas_[i]->fromGltf)
+            {
+                // Seed slot params from the glTF material. NOTE: runs after the factory's
+                // ApplyStaticMeshJsonProperties, so explicit JSON param overrides on a
+                // glTF-"auto" object are clobbered (known A3 limitation; B4 layers overrides).
+                matParamses_[i] = matDatas_[i]->gltfDefaultParams;
+            }
+            else if (!matDatas_[i])
+            {
+                // Null-material group: draw flat, sample nothing.
+                matParamses_[i] = MaterialParams{};
+                matParamses_[i].SetUseAlbedo(false);
+                matParamses_[i].SetUseMR(false);
+                matParamses_[i].SetUseNormal(false);
+            }
+        }
+        else
+        {
+            matDatas_[i] = mgr->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, name);
+        }
+    }
+
+    // One PSO per object: shader defines come from slot 0's MaterialData. Mixed defines across
+    // slots would render slots 1+ with slot 0's permutation — warn so it's diagnosable.
+    if (const MaterialData* m0 = matDatas_[0].get())
+    {
+        for (size_t i = 1; i < slotCount; ++i)
+        {
+            const MaterialData* mi = matDatas_[i].get();
+            if (mi && (mi->normalIsRG != m0->normalIsRG || mi->useTBN != m0->useTBN ||
+                       mi->mrLayoutGltf != m0->mrLayoutGltf))
+            {
+                OutputDebugStringA("[gbuffer] material slots mix shader defines; slot 0's PSO wins\n");
+                break;
+            }
+        }
+    }
+}
+
+void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    Mesh* mesh = GetMesh();
+    if (!MultiSlotDraw())
+    {
+        currentDrawSlot_ = 0;
+        RenderableObject::Render(renderer, cl, camera, viewCB);
+        return;
+    }
+    if (!renderer || !cl || !GetGraphicsMaterial()) { return; }
+
+    // Per-submesh recording: each submesh gets its own b0 slice (slot params), its slot's SRV
+    // table, and a ranged draw. World/prevWorld repeat per slice — simple and correct; a shared
+    // per-object CB split is a later optimization if palms ever multiply.
+    const UINT lod = GetCameraLod();
+    const auto& subs = mesh->SubmeshesForLod(lod);
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+    const UINT cbSizeBytes = GetGraphicsMaterial()->GetCBSizeBytesAligned(0, kAlign);
+
+    for (size_t s = 0; s < subs.size(); ++s)
+    {
+        currentDrawSlot_ = subs[s].materialSlot < matDatas_.size()
+            ? subs[s].materialSlot
+            : static_cast<uint32_t>(matDatas_.size() - 1);
+
+        auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
+        uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& ctx = h.ref();
+        ctx.cbv[0] = alloc.gpu;
+        ctx.cbv[1] = viewCB;
+
+        RecordGraphics(renderer, cl, ctx, camera, cbData); // stages the slot's SRVs + binds
+        mesh->DrawSubmesh(cl, static_cast<UINT>(s), lod);
+    }
+    currentDrawSlot_ = 0;
 }
 
 void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
@@ -146,16 +268,25 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
 
     Material::GraphicsDesc gd = BuildGraphicsDesc(renderer);
     gd.shaderFile = L"shaders/gbuffer_instcb.hlsl";
-    auto gfx = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
-    if (!gfx || !gfx->GetPipelineState()) { return; }
 
     std::shared_ptr<Material> shadow;
     if (CastsShadow())
     {
+        // Shadow desc built BEFORE the slot-params define: depth-only ignores materials, so
+        // multi- and single-slot objects share one instanced CSM PSO per define set.
         Material::GraphicsDesc sd = BuildShadowDesc(renderer, gd); // -> gbuffer_instcb_csm.hlsl
         shadow = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
         if (!shadow || !shadow->GetPipelineState()) { return; }
     }
+
+    // B2b: multi-slot objects instance through the per-slot-CB variant (the batch loops
+    // submeshes, binding each slot's textures + a b2 params slice — see InstancedDrawBatch).
+    if (MultiSlotDraw())
+    {
+        gd.defines.emplace_back("INSTCB_SLOT_PARAMS", "1");
+    }
+    auto gfx = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    if (!gfx || !gfx->GetPipelineState()) { return; }
 
     instancedGraphicsMaterial_ = std::move(gfx);
     instancedShadowMaterial_ = std::move(shadow);
@@ -166,7 +297,9 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.world = GetModelMatrix().m;
     out.prevWorld = GetPreviousModelMatrix().m;
 
-    const MaterialParams& p = matParams_;
+    // Slot 0 params. Multi-slot instanced draws (B2b) ignore these material fields — the PS
+    // reads the per-slot CB (b2) instead — but world/prevWorld/objectId stay per-instance.
+    const MaterialParams& p = matParamses_[0];
     out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
     out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
     out._pad0[0] = 0.0f;
@@ -186,9 +319,9 @@ void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommand
         return;
     }
 
-    if (matData_)
+    if (MaterialData* md = GetMaterialDataForSlot(currentDrawSlot_))
     {
-        matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+        md->StageGBufferBindings(renderer, ctx, 0, 0);
     }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
@@ -209,9 +342,9 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
         desc.dsvFormat = renderer->GetDeferredDepthFormat();
     }
 
-    if (matData_)
+    if (MaterialData* md = GetMaterialData())
     {
-        matData_->ConfigureDefinesForGBuffer(desc);
+        md->ConfigureDefinesForGBuffer(desc); // slot 0 defines the PSO (see ResolveMaterialSlots)
     }
 
     desc.depth.StencilEnable = TRUE;

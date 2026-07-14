@@ -11,12 +11,39 @@ Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
 SamplerState gSmp : register(s0);
 
+// B2b multi-slot instancing: material params come from a per-SUBMESH-draw CB (b2, one upload
+// per slot per batch) instead of the per-instance entry — instances share slot materials, so
+// carrying them per instance would waste the array and forbid per-slot textures anyway.
+#ifndef INSTCB_SLOT_PARAMS
+#define INSTCB_SLOT_PARAMS 0
+#endif
+
+#if INSTCB_SLOT_PARAMS
+// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 64 bytes, cbuffer packing.
+cbuffer SlotParams : register(b2)
+{
+    float4 slotBaseColor;
+    float2 slotMetalRough;
+    float2 _slotPad0;
+    float4 slotTexOffsScale;
+    float4 slotTexFlags;
+};
+
+#define GBUFFER_INSTCB_RS \
+    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
+    "CBV(b0)," \
+    "CBV(b1)," \
+    "CBV(b2)," \
+    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#else
 #define GBUFFER_INSTCB_RS \
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
     "CBV(b0)," \
     "CBV(b1)," \
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#endif
 
 struct VSOutInst
 {
@@ -53,21 +80,33 @@ PSOut PSMain(VSOutInst i)
 {
     InstancePerObject d = inst[i.IID];
 
+#if INSTCB_SLOT_PARAMS
+    const float4 mBaseColor    = slotBaseColor;
+    const float2 mMetalRough   = slotMetalRough;
+    const float4 mTexOffsScale = slotTexOffsScale;
+    const float4 mTexFlags     = slotTexFlags;
+#else
+    const float4 mBaseColor    = d.baseColor;
+    const float2 mMetalRough   = d.metalRough;
+    const float4 mTexOffsScale = d.texOffsScale;
+    const float4 mTexFlags     = d.texFlags;
+#endif
+
     float3 NNorm = normalize(i.NWS);
 
     float3 albedo;
     float2 mr;
     float3 N = NNorm;
-    FetchShadingValuesP(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, d.texOffsScale, d.texFlags, albedo, mr, N);
+    FetchShadingValuesP(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, mTexOffsScale, mTexFlags, albedo, mr, N);
 
 #if MR_LAYOUT_GLTF
-    albedo = d.texFlags.x > 0.5 ? albedo * d.baseColor.rgb : d.baseColor.rgb;
-    mr     = d.texFlags.y > 0.5 ? mr * d.metalRough.xy     : d.metalRough.xy;
+    albedo = mTexFlags.x > 0.5 ? albedo * mBaseColor.rgb : mBaseColor.rgb;
+    mr     = mTexFlags.y > 0.5 ? mr * mMetalRough.xy     : mMetalRough.xy;
 #else
-    albedo = lerp(d.baseColor.rgb, albedo, d.texFlags.x);
-    mr = lerp(d.metalRough.xy, mr, d.texFlags.y);
+    albedo = lerp(mBaseColor.rgb, albedo, mTexFlags.x);
+    mr = lerp(mMetalRough.xy, mr, mTexFlags.y);
 #endif
-    if (d.texFlags.z < 0.5)
+    if (mTexFlags.z < 0.5)
     {
         N = NNorm;
     }

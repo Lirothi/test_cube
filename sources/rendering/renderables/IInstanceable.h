@@ -2,6 +2,8 @@
 #include "rendering/renderables/InstanceTypes.h"
 
 class Material;
+class MaterialData;
+struct MaterialParams;
 
 // Optional capability (Step 5c): a renderable that can be drawn instanced exposes this via
 // RenderableObjectBase::AsInstanceable(). Keeps the instancing surface off the base
@@ -19,4 +21,17 @@ public:
 
     // Write this object's per-instance payload (world/prevWorld + material params).
     virtual void FillInstanceData(render::InstancePerObject& out) const = 0;
+
+    // B2b: material-slot identity for multi-submesh batching. Single-slot objects keep the
+    // defaults. RenderBatchKey only carries slot 0, and a multi-slot batch binds slot 1+
+    // textures AND all slots' params from the run's LEAD (per-slot CB uploads once per batch,
+    // not per instance) — so members whose slot sets or slot params differ must not merge.
+    virtual size_t InstanceSlotCount() const { return 1; }
+    virtual MaterialData* InstanceSlotData(size_t /*slot*/) const { return nullptr; }
+    virtual const MaterialParams* InstanceSlotParams(size_t /*slot*/) const { return nullptr; }
+
+    // True when `other` can join a run led by this object (slot sets + params identical).
+    // Single-slot pairs always pass: their params ride the per-instance array instead.
+    // Defined in GBufferRenderable.cpp (needs MaterialParams' definition).
+    bool SameInstanceSlots(const IInstanceable& other) const;
 };

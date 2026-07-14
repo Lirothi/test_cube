@@ -199,14 +199,35 @@ today — it must simplify each submesh range independently and rebuild the tabl
 or ranges go stale. Commit as a no-op; gate on demo level identical + instancing batch counts
 identical.
 
-**B2 — draw items in the queue.** *(exec: Fable — sort/instancing keys, perf-regression risk)* `SceneRenderQueue` bucket entries become
-(object, submeshIndex) draw items; sort keys and `BuildInstancedBatches` keys extend to
-(mesh, submesh, material) — 15 palms must still collapse to ~5 instanced draws (one per part).
-Culling stays per-object on whole-mesh bounds (per-submesh bounds = future). `StaticMeshObject`
-grows material slots (slot 0 ≡ today's single material); level JSON gets a `"materials": [...]`
-array, with the scalar `"material"` kept as slot-0 back-compat. glTF plain-path load (A2) now
-returns the full multi-submesh mesh. Regression gates: demo level visuals + batch counts
-unchanged for single-submesh content.
+**B2 — multi-material draw path.** *(exec: Fable; DONE 2026-07-14 — implemented at the OBJECT
+level, not as queue draw items: reading the code showed SortOpaque already orders by BatchKey
+(mesh, material, matData) and batching gates on AsInstanceable(), so restructuring buckets was
+needless churn.)* As landed: `GBufferRenderable` grew per-slot arrays (matDatas_/matParamses_/
+slotPresets_, slot 0 ≡ legacy single material — factory/editor accessors unchanged); a
+multi-slot object overrides `Render()` and records per submesh (own b0 slice via AllocDynamic +
+its slot's SRV table + `Mesh::DrawSubmesh` ranged draw); the uniform binder pulls
+`CurrentDrawParams()`. glTF plain-path/#node loads now return the FULL multi-submesh mesh (all
+material groups concatenated, per-group submesh table); `#N` still loads one group. Level JSON:
+`"materials": [...]` per-slot array ("auto" = from glTF), scalar `"material"` = slot-0
+back-compat. Shadows draw the whole buffer in one draw (fine, depth-only).
+Culling stays per-object. Known limits: one PSO per object = slot-0 defines win (mixing engine
+presets with glTF slots renders the glTF slots wrong — warned in debug output; use homogeneous
+slots); RT instance uses slot-0 albedo.
+
+**B2b — instanced multi-submesh batches.** *(exec: Fable; DONE 2026-07-14)* Multi-slot objects
+now auto-instance: `gbuffer_instcb.hlsl` gained an `INSTCB_SLOT_PARAMS` variant (per-slot
+material params in a b2 CB, mirrored by `render::InstanceSlotParams`; world/prevWorld/objectId
+stay per-instance in b0), `BuildInstancedMaterials` builds it for multi-slot objects (instanced
+CSM shadow PSO stays shared/define-free), and `InstancedDrawBatch` loops the LOD's submeshes —
+one `DrawSubmeshInstanced` per range with that slot's SRVs + b2 slice; the instance array
+uploads once per chunk. Batch identity: `IInstanceable::SameInstanceSlots` (all slots'
+MaterialData pointers + params equal) guards the queue's run extension, since slot textures and
+params bind once from the run's lead — BatchKey alone only carries slot 0. N palms = ~5
+instanced draws total (camera path; shadows were already 1 draw). Verified: 10-palm grove in
+`atoll_a2_test.json` logs `[instancing] multi-slot batch active: 10 instances x 5 submeshes`
+(one-time debug line), renders per-slot correctly (user-confirmed); mixed-slot palm correctly
+excluded (differing slot-0 matData ≠ BatchKey); demo level clean (no batch line, no errors,
+user-confirmed visuals).
 
 **B3 — downstream consumers.** *(exec: Fable — VSM caster data + RT BLAS are the gnarly zones)* Shadow paths (CSM, VSM caster data, point/spot) iterate
 submeshes — they are material-agnostic today so behavior is equivalent, but per-submesh items

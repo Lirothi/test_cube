@@ -252,7 +252,8 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
 
         // Extend a run of identical instanceable objects. The bucket is pre-sorted by
         // BatchKey(), so objects with the same draw identity (mesh + material + textures)
-        // are contiguous. One key = correct grouping by construction.
+        // are contiguous. BatchKey only carries slot 0, so multi-slot objects (B2b) must
+        // additionally match the lead's full slot set (textures + params bind once per batch).
         const RenderBatchKey leadKey = lead ? lead->BatchKey() : RenderBatchKey{};
         const IInstanceable* leadInst = lead ? lead->AsInstanceable() : nullptr;
         size_t j = i + 1;
@@ -261,7 +262,8 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
             while (j < bucket.size())
             {
                 RenderableObjectBase* o = bucket[j];
-                if (!o || !o->AsInstanceable() || o->BatchKey() != leadKey)
+                const IInstanceable* oInst = o ? o->AsInstanceable() : nullptr;
+                if (!oInst || o->BatchKey() != leadKey || !leadInst->SameInstanceSlots(*oInst))
                 {
                     break;
                 }

@@ -766,7 +766,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
-    const std::uint32_t argBaseElems = f * render::kMaxShadowViews * groups; // region f, 5-uint arg units
+    // Region base in 5-uint arg units. MUST come from the ring's PHYSICAL region stride: the args
+    // ring is grow-only (EnsureUavRing reuses a larger prior-level allocation), so after a level
+    // switch regionBytes can exceed kMaxShadowViews*groups*20 — recomputing the base from the live
+    // counts made frame regions 1..kFrameCount-1 read misaligned args (VSM shadow flicker on every
+    // level switch that shrank the mesh-group count).
+    const std::uint32_t argBaseElems = f * static_cast<std::uint32_t>(
+        shadowGpu->IndirectArgsRegionBytes() / sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
     RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
         [&](std::uint8_t* dst)
         {

@@ -57,6 +57,12 @@ public:
     // clamped to what's available (Step 6). With no extra LODs, any lod draws full detail.
     void Draw(ID3D12GraphicsCommandList* cmdList, UINT lod = 0) const;
     void DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount, UINT lod = 0) const;
+    // Part B2: draw one submesh (ordinal into SubmeshesForLod(lod)) — an offset ranged draw
+    // over the same buffers. Out-of-range ordinals are skipped.
+    void DrawSubmesh(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal, UINT lod = 0) const;
+    // B2b: instanced ranged draw of one submesh (multi-slot auto-instancing).
+    void DrawSubmeshInstanced(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal,
+        UINT instanceCount, UINT lod = 0) const;
 
     UINT GetIndexCount() const { return indexCount_; }
     UINT GetLodCount() const { return 1u + static_cast<UINT>(extraLods_.size()); }

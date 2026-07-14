@@ -1,6 +1,7 @@
 #include "rendering/renderables/InstancedDrawBatch.h"
 
 #include <algorithm>
+#include <cstdio>
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
@@ -22,6 +23,28 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_ite
     matData_ = matData;
     mesh_ = mesh;
     simple_ = simple;
+
+    // B2b: a multi-slot lead switches the gbuffer path to a per-submesh loop (each range draws
+    // with its slot's textures + params). Members are slot-identical to the lead — the queue's
+    // run extension enforces SameInstanceSlots — so the lead speaks for the whole run.
+    leadInst_ = nullptr;
+    if (mesh_ && mesh_->GetSubmeshCount() > 1 && !members_.empty() && members_[0])
+    {
+        const IInstanceable* inst = members_[0]->AsInstanceable();
+        if (inst && inst->InstanceSlotCount() > 1)
+        {
+            leadInst_ = inst;
+            static bool loggedOnce = false; // diagnosable without stats HUD (headless runs)
+            if (!loggedOnce)
+            {
+                loggedOnce = true;
+                char buf[128];
+                sprintf_s(buf, "[instancing] multi-slot batch active: %zu instances x %zu submeshes\n",
+                          members_.size(), mesh_->GetSubmeshCount());
+                OutputDebugStringA(buf);
+            }
+        }
+    }
 
     // Step 6d: union of member world bounds -> the run picks ONE LOD per view (camera screen
     // size for gbuffer / cascade floor for shadows). Members are already visible (post-cull).
@@ -77,6 +100,34 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
     const size_t total = members.size();
     const bool wireframe = gbuffer && renderer->GetWireframeMode();
 
+    // B2b: multi-slot gbuffer draws loop the LOD's submeshes; each slot's params upload once
+    // per call (not per chunk/instance) into a b2 slice read by the INSTCB_SLOT_PARAMS PS.
+    // Shadows (gbuffer=false) keep the whole-buffer single draw — depth-only, material-agnostic.
+    const bool multiSlot = gbuffer && leadInst_ != nullptr;
+    const std::vector<Mesh::Submesh>* subs = nullptr;
+    if (multiSlot)
+    {
+        subs = &mesh_->SubmeshesForLod(lod);
+        const size_t slotCount = leadInst_->InstanceSlotCount();
+        slotCbScratch_.assign(slotCount, 0);
+        const MaterialParams defaults{};
+        for (size_t slot = 0; slot < slotCount; ++slot)
+        {
+            auto cb = renderer->GetFrameResource()->AllocDynamic(
+                sizeof(render::InstanceSlotParams), render::kConstantBufferAlignment);
+            const MaterialParams* src = leadInst_->InstanceSlotParams(slot);
+            const MaterialParams& p = src ? *src : defaults;
+            auto* sp = static_cast<render::InstanceSlotParams*>(cb.cpu);
+            sp->baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
+            sp->metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
+            sp->_pad0[0] = 0.0f;
+            sp->_pad0[1] = 0.0f;
+            sp->texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
+            sp->texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
+            slotCbScratch_[slot] = cb.gpu;
+        }
+    }
+
     // Split runs larger than the shader's instance-array capacity into multiple draws.
     for (size_t base = 0; base < total; base += render::kMaxInstancesPerDraw)
     {
@@ -94,19 +145,46 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             }
         }
 
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& ctx = h.ref();
-        ctx.cbv[0] = alloc.gpu; // b0: per-instance array
-        ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
-
-        if (gbuffer && matData_)
+        if (!multiSlot)
         {
-            // Shared material textures (t0..t2) + sampler (s0); instances live in b0, so no
-            // t0 conflict with the GpuInstancedModels structured-buffer path.
-            matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            auto& ctx = h.ref();
+            ctx.cbv[0] = alloc.gpu; // b0: per-instance array
+            ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
+
+            if (gbuffer && matData_)
+            {
+                // Shared material textures (t0..t2) + sampler (s0); instances live in b0, so no
+                // t0 conflict with the GpuInstancedModels structured-buffer path.
+                matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+            }
+
+            material->Bind(cl, ctx, wireframe);
+            mesh_->DrawInstanced(cl, count, lod);
+            continue;
         }
 
-        material->Bind(cl, ctx, wireframe);
-        mesh_->DrawInstanced(cl, count, lod);
+        // One ranged instanced draw per submesh; the instance array (b0) is shared across the
+        // loop, only b2 + the SRV/sampler tables change (redundant rebinds elided by the bind
+        // cache). Null slot materials draw flat: texFlags gate all sampling in the PS.
+        for (size_t s = 0; s < subs->size(); ++s)
+        {
+            size_t slot = (*subs)[s].materialSlot;
+            if (slot >= slotCbScratch_.size()) { slot = slotCbScratch_.size() - 1; } // per-object clamp mirrored
+
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            auto& ctx = h.ref();
+            ctx.cbv[0] = alloc.gpu; // b0: per-instance array (shared by every submesh)
+            ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
+            ctx.cbv[2] = slotCbScratch_[slot]; // b2: this slot's material params
+
+            if (MaterialData* md = leadInst_->InstanceSlotData(slot))
+            {
+                md->StageGBufferBindings(renderer, ctx, 0, 0);
+            }
+
+            material->Bind(cl, ctx, wireframe);
+            mesh_->DrawSubmeshInstanced(cl, static_cast<UINT>(s), count, lod);
+        }
     }
 }

@@ -35,9 +35,12 @@ struct GltfMaterialDesc {
 
 class MeshManager {
 public:
-    // A3: parse a glTF/GLB material for the selector's group (CPU-only, no GPU, no buffer load).
-    // Consistent with LoadGltf's "#N" group ordering. Returns desc.valid=false if none.
-    static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment);
+    // A3/B2: parse a glTF/GLB material (CPU-only, no GPU, no buffer load). groupOrdinal >= 0
+    // picks that group within the selector's resolved, material-index-ordered group list
+    // (submesh i of a multi-submesh load == ordinal i); -1 = the selector's own group choice.
+    // Returns desc.valid=false if the group has no material.
+    static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment,
+                                                 int groupOrdinal = -1);
 
     // Auto-detect by extension (.obj | .mesh.txt | .txt)
     std::shared_ptr<Mesh> Load(const std::string& path,
@@ -93,11 +96,15 @@ private:
                       std::vector<uint32_t>& outIndices,
                       const MeshLoadOptions& opt);
 
-    // Parses a glTF/GLB (fragment selector honored) into one flat vertex/index buffer for the
-    // selected material group. Bakes node world transforms; flips winding for mirrored nodes.
+    // Parses a glTF/GLB (fragment selector honored) into one flat vertex/index buffer. B2: the
+    // whole-file and #node paths load ALL material groups (concatenated in material-index order)
+    // and fill outSubmeshes with one range per group (materialSlot = group ordinal); "#N" loads
+    // that single group (outSubmeshes left empty => default whole-buffer submesh). Bakes node
+    // world transforms; flips winding for mirrored nodes.
     bool ParseGltfFile(const std::string& fullPath,
                        std::vector<VertexPNTUV>& outVerts,
                        std::vector<uint32_t>& outIndices,
+                       std::vector<Mesh::Submesh>& outSubmeshes,
                        const MeshLoadOptions& opt);
 
 private:
