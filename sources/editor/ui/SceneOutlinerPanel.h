@@ -43,6 +43,7 @@ public:
         bool camerasGroupOpen = true;
         bool environmentGroupOpen = true;
         bool otherGroupOpen = true;
+        bool trackSelection = true;
     };
 
     // Draws the panel as its own ImGui window. `open` backs the window's close
@@ -72,7 +73,9 @@ private:
     bool camerasGroupOpen_ = true;
     bool environmentGroupOpen_ = true;
     bool otherGroupOpen_ = true;
+    bool trackSelection_ = true;
     int typeFilterIndex_ = 0;
+    EditorObjectId lastTrackedPrimary_{};
     EditorObjectId rangeAnchor_{};
     EditorObjectId renamingObject_{};
     char renameBuffer_[256] = {};
@@ -101,6 +104,8 @@ private:
     int cacheTypeFilterIndex_ = -1;
     bool cacheShowObjects_ = false;
     bool cacheShowEnvironment_ = false;
+    bool cacheTrackSelection_ = false;
+    EditorObjectId cacheTrackedPrimary_{};
     std::string cacheSearch_;
 };
 

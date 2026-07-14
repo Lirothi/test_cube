@@ -1071,7 +1071,8 @@ namespace
             { "lightsExpanded", state.lightsGroupOpen },
             { "camerasExpanded", state.camerasGroupOpen },
             { "environmentExpanded", state.environmentGroupOpen },
-            { "otherExpanded", state.otherGroupOpen }
+            { "otherExpanded", state.otherGroupOpen },
+            { "trackSelection", state.trackSelection }
         };
     }
 
@@ -1088,6 +1089,7 @@ namespace
         ReadBoolMember(value, "camerasExpanded", state.camerasGroupOpen);
         ReadBoolMember(value, "environmentExpanded", state.environmentGroupOpen);
         ReadBoolMember(value, "otherExpanded", state.otherGroupOpen);
+        ReadBoolMember(value, "trackSelection", state.trackSelection);
         panel.SetPersistentState(state);
     }
 
@@ -1214,7 +1216,8 @@ namespace
             a.lightsGroupOpen == b.lightsGroupOpen &&
             a.camerasGroupOpen == b.camerasGroupOpen &&
             a.environmentGroupOpen == b.environmentGroupOpen &&
-            a.otherGroupOpen == b.otherGroupOpen;
+            a.otherGroupOpen == b.otherGroupOpen &&
+            a.trackSelection == b.trackSelection;
     }
 
     bool ViewportGizmoStatesMatch(const ViewportGizmo::PersistentState& a,

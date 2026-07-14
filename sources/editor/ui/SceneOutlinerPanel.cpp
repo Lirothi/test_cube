@@ -373,7 +373,8 @@ SceneOutlinerPanel::PersistentState SceneOutlinerPanel::GetPersistentState() con
         lightsGroupOpen_,
         camerasGroupOpen_,
         environmentGroupOpen_,
-        otherGroupOpen_
+        otherGroupOpen_,
+        trackSelection_
     };
 }
 
@@ -384,6 +385,7 @@ void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
     camerasGroupOpen_ = state.camerasGroupOpen;
     environmentGroupOpen_ = state.environmentGroupOpen;
     otherGroupOpen_ = state.otherGroupOpen;
+    trackSelection_ = state.trackSelection;
 }
 
 OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open)
@@ -409,7 +411,11 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     ImGui::Checkbox("Objects", &showObjects_);
     ImGui::SameLine();
     ImGui::Checkbox("Environment", &showEnvironment_);
-    ImGui::SameLine();
+    ImGui::Checkbox("Track in Outliner", &trackSelection_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Keep the primary selection visible and centered in the outliner.");
+    }
     ImGui::TextUnformatted("Type");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1.0f);
@@ -441,6 +447,59 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         return MatchesTypeFilter(object, typeFilter) && MatchesSearch(object, lowerNeedle);
     };
 
+    const EditorObjectId primarySelection = selection.Primary();
+    EditorObject* selectedObject = nullptr;
+    bool selectedEnvironment = false;
+    if (primarySelection.value != 0)
+    {
+        for (EditorObject& obj : document.Objects())
+        {
+            if (obj.id.value == primarySelection.value)
+            {
+                selectedObject = &obj;
+                break;
+            }
+        }
+        if (!selectedObject)
+        {
+            for (EditorObject& env : document.Environment())
+            {
+                if (env.id.value == primarySelection.value)
+                {
+                    selectedObject = &env;
+                    selectedEnvironment = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    const bool selectedExists = selectedObject != nullptr;
+    const bool selectedVisible = selectedObject && rowVisible(*selectedObject, selectedEnvironment);
+    const bool forcePrimaryVisible = trackSelection_ && selectedExists;
+    bool scrollToPrimary = forcePrimaryVisible &&
+        lastTrackedPrimary_.value != primarySelection.value;
+    if (trackSelection_)
+    {
+        lastTrackedPrimary_ = primarySelection;
+    }
+    else
+    {
+        lastTrackedPrimary_ = {};
+    }
+
+    if (forcePrimaryVisible)
+    {
+        switch (GroupForObject(*selectedObject))
+        {
+        case OutlinerGroup::Meshes:      meshesGroupOpen_ = true; break;
+        case OutlinerGroup::Lights:      lightsGroupOpen_ = true; break;
+        case OutlinerGroup::Cameras:     camerasGroupOpen_ = true; break;
+        case OutlinerGroup::Environment: environmentGroupOpen_ = true; break;
+        case OutlinerGroup::Other:       otherGroupOpen_ = true; break;
+        }
+    }
+
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
     std::vector<OutlinerRowRef>& meshes = scratchMeshes_;
     std::vector<OutlinerRowRef>& lights = scratchLights_;
@@ -465,6 +524,8 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         cacheTypeFilterIndex_ != typeFilterIndex_ ||
         cacheShowObjects_ != showObjects_ ||
         cacheShowEnvironment_ != showEnvironment_ ||
+        cacheTrackSelection_ != trackSelection_ ||
+        cacheTrackedPrimary_.value != (forcePrimaryVisible ? primarySelection.value : 0) ||
         cacheSearch_ != searchBuffer_;
 
     if (bucketsDirty)
@@ -493,14 +554,16 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
 
         for (EditorObject& obj : document.Objects())
         {
-            if (rowVisible(obj, false))
+            if (rowVisible(obj, false) ||
+                (forcePrimaryVisible && obj.id.value == primarySelection.value))
             {
                 addVisibleRow(obj, false);
             }
         }
         for (EditorObject& env : document.Environment())
         {
-            if (rowVisible(env, true))
+            if (rowVisible(env, true) ||
+                (forcePrimaryVisible && env.id.value == primarySelection.value))
             {
                 addVisibleRow(env, true);
             }
@@ -515,42 +578,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         cacheTypeFilterIndex_ = typeFilterIndex_;
         cacheShowObjects_ = showObjects_;
         cacheShowEnvironment_ = showEnvironment_;
+        cacheTrackSelection_ = trackSelection_;
+        cacheTrackedPrimary_ = forcePrimaryVisible ? primarySelection : EditorObjectId{};
         cacheSearch_ = searchBuffer_;
     }
 
-    // Selection footer info, recomputed every frame (selection changes independently
-    // of the bucket cache). This is a cheap id-compare scan plus one visibility test
-    // on the selected object, not the full filter pass.
-    bool selectedExists = false;
-    bool selectedVisible = false;
-    std::string selectedName;
-    const EditorObjectId primarySelection = selection.Primary();
-    if (primarySelection.value != 0)
-    {
-        for (EditorObject& obj : document.Objects())
-        {
-            if (obj.id.value == primarySelection.value)
-            {
-                selectedExists = true;
-                selectedVisible = rowVisible(obj, false);
-                selectedName = obj.name;
-                break;
-            }
-        }
-        if (!selectedExists)
-        {
-            for (EditorObject& env : document.Environment())
-            {
-                if (env.id.value == primarySelection.value)
-                {
-                    selectedExists = true;
-                    selectedVisible = rowVisible(env, true);
-                    selectedName = env.name;
-                    break;
-                }
-            }
-        }
-    }
+    const std::string selectedName = selectedObject ? selectedObject->name : std::string{};
 
     const int visibleRows = static_cast<int>(
         meshes.size() +
@@ -840,6 +873,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 }
             }
 
+            if (scrollToPrimary && obj->id.value == primarySelection.value)
+            {
+                ImGui::SetScrollHereY(0.5f);
+                scrollToPrimary = false;
+            }
+
             ImGui::PopID();
         };
 
@@ -892,6 +931,18 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                     }
                 }
             }
+            if (scrollToPrimary)
+            {
+                for (std::size_t i = 0; i < rows.size(); ++i)
+                {
+                    const OutlinerRowRef& row = rows[i];
+                    if (row.object && row.object->id.value == primarySelection.value)
+                    {
+                        clipper.IncludeItemByIndex(static_cast<int>(i));
+                        break;
+                    }
+                }
+            }
             while (clipper.Step())
             {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
@@ -910,7 +961,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         ImGui::EndTable();
     }
 
-    if (primarySelection.value != 0 && selectedExists && !selectedVisible)
+    if (primarySelection.value != 0 && selectedExists && !selectedVisible && !trackSelection_)
     {
         ImGui::TextDisabled("Selected ID %llu is hidden by the current filters.",
             static_cast<unsigned long long>(primarySelection.value));
