@@ -17,6 +17,7 @@
 #include "rendering/debug/DebugGrid.h"
 #include "rendering/meshes/GpuInstancedModels.h"
 #include "rendering/meshes/StaticMesh.h"
+#include "vfx/ParticleEmitterObject.h"
 
 using namespace Math;
 using nlohmann::json;
@@ -211,6 +212,48 @@ SceneObjectRegistry::ObjectList CreateOcean(SceneObjectRegistry::CreationContext
     return objects;
 }
 
+// Part E1: GPU particle emitter with inline desc fields (E3 moves these into data/particles/
+// preset files). Minimal schema: position + sim knobs.
+SceneObjectRegistry::ObjectList CreateParticleEmitter(SceneObjectRegistry::CreationContext& ctx, const json& o)
+{
+    (void)ctx;
+
+    const auto readF3 = [&o](const char* key, const float3& def) {
+        const auto it = o.find(key);
+        if (it != o.end() && it->is_array() && it->size() >= 3)
+        {
+            return float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+        }
+        return def;
+    };
+    const auto readRange = [&o](const char* key, float& lo, float& hi) {
+        const auto it = o.find(key);
+        if (it != o.end() && it->is_array() && it->size() >= 2)
+        {
+            lo = (*it)[0].get<float>();
+            hi = (*it)[1].get<float>();
+        }
+    };
+
+    vfx::EmitterDesc d;
+    d.maxParticles = o.value("maxParticles", d.maxParticles);
+    d.spawnRate = o.value("spawnRate", d.spawnRate);
+    readRange("lifetime", d.lifetimeMin, d.lifetimeMax);
+    d.coneDir = readF3("coneDir", d.coneDir);
+    d.coneAngleDeg = o.value("coneAngleDeg", d.coneAngleDeg);
+    readRange("speed", d.speedMin, d.speedMax);
+    d.gravity = o.value("gravity", d.gravity);
+    d.drag = o.value("drag", d.drag);
+    d.seed = o.value("seed", d.seed);
+
+    auto emitter = std::make_unique<ParticleEmitterObject>(d);
+    emitter->SetPosition(readF3("position", float3(0.0f, 0.0f, 0.0f)));
+
+    SceneObjectRegistry::ObjectList objects;
+    objects.push_back(std::move(emitter));
+    return objects;
+}
+
 SceneObjectRegistry::ObjectList CreateDebugGrid(SceneObjectRegistry::CreationContext& ctx, const json& o)
 {
     (void)ctx;
@@ -256,5 +299,6 @@ SceneObjectRegistry SceneObjectRegistry::CreateWithBuiltins()
     registry.Register("instancedModels", CreateInstancedModels);
     registry.Register("ocean", CreateOcean);
     registry.Register("debugGrid", CreateDebugGrid);
+    registry.Register("particleEmitter", CreateParticleEmitter);
     return registry;
 }

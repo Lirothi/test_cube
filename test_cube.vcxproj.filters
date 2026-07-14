@@ -7,6 +7,9 @@
     <Filter Include="sources\app">
       <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\vfx">
+      <UniqueIdentifier>{7d1c3a92-4b6e-48f1-9c0d-2e5a8b7f6a31}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\ui">
       <UniqueIdentifier>{10b794f9-6252-4338-a7cf-a17c4396881f}</UniqueIdentifier>
     </Filter>
@@ -353,6 +356,9 @@
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanSimulation.cpp">
       <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp">
+      <Filter>sources\vfx</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp">
       <Filter>sources\ocean</Filter>
@@ -802,6 +808,12 @@
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanSimulation.h">
       <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/vfx/ParticleEmitterObject.h">
+      <Filter>sources\vfx</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/vfx/ParticleTypes.h">
+      <Filter>sources\vfx</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h">
       <Filter>sources\ocean</Filter>

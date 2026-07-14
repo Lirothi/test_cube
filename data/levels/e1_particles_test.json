@@ -1,0 +1,27 @@
+{
+  "camera": { "hfovDeg": 90.0, "zFar": 10000.0, "zNear": 0.01 },
+  "directionalLight": {
+    "ambient": 0.1, "color": [1.0, 0.95, 0.9], "direction": [-1.5, -0.7, -0.5],
+    "enabled": true, "exposure": 1.0
+  },
+  "skybox": { "texture": "textures/skybox.dds" },
+  "objects": [
+    { "type": "freeCameraStart", "id": 1, "name": "FreeCameraStart",
+      "position": [0.0, 2.0, 6.0], "rotationDeg": [10.0, 180.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
+    { "type": "staticMesh", "id": 2, "name": "ground", "material": "sandstone_cracks",
+      "model": "models/box.obj", "position": [0.0, -0.5, 0.0], "scale": [20.0, 1.0, 20.0],
+      "renderLayer": "Terrain", "texOffsScale": [0, 0, 10, 10], "enabled": true },
+
+    { "type": "particleEmitter", "id": 10, "name": "fire.sim",
+      "position": [0.0, 0.5, 0.0],
+      "maxParticles": 512, "spawnRate": 200.0, "lifetime": [0.5, 1.0],
+      "coneDir": [0.0, 1.0, 0.0], "coneAngleDeg": 25.0, "speed": [1.0, 2.0],
+      "gravity": -2.5, "drag": 0.5, "seed": 7, "enabled": true },
+
+    { "type": "particleEmitter", "id": 11, "name": "smoke.sim",
+      "position": [3.0, 0.5, 0.0],
+      "maxParticles": 512, "spawnRate": 30.0, "lifetime": [2.0, 4.0],
+      "coneDir": [0.0, 1.0, 0.0], "coneAngleDeg": 15.0, "speed": [0.4, 0.9],
+      "gravity": -1.0, "drag": 0.2, "seed": 21, "enabled": true }
+  ]
+}

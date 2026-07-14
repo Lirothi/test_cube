@@ -286,6 +286,7 @@
     <ClCompile Include="sources/ocean/OceanRenderable.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationConfig.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
+    <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp" />
     <ClCompile Include="sources/ocean/OceanSpectrum.cpp" />
@@ -438,6 +439,8 @@
     <ClInclude Include="sources/ocean/OceanRenderable.h" />
     <ClInclude Include="sources/ocean/OceanSimulationConfig.h" />
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
+    <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
+    <ClInclude Include="sources/vfx/ParticleTypes.h" />
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
     <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
     <ClInclude Include="sources/ocean/OceanSpectrum.h" />
@@ -514,6 +517,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
+    <None Include="shaders\particle_common.hlsl" />
+    <None Include="shaders\particle_spawn_cs.hlsl" />
+    <None Include="shaders\particle_update_cs.hlsl" />
     <None Include="shaders\editor_preview.hlsl" />
     <None Include="shaders\reflection_blur_cs.hlsl" />
     <None Include="shaders\selection_outline_cs.hlsl" />
