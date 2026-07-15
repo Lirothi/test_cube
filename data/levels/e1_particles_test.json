@@ -19,18 +19,15 @@
     "enabled": true,
     "exposure": 1.0
   },
-  "skybox": {
-    "texture": "textures/skybox.dds"
-  },
   "objects": [
     {
-      "type": "freeCameraStart",
+      "enabled": true,
       "id": 1,
       "name": "FreeCameraStart",
       "position": [
         0.0,
-        0.9,
-        3.2
+        0.8999999761581421,
+        3.200000047683716
       ],
       "rotationDeg": [
         6.0,
@@ -42,17 +39,23 @@
         1.0,
         1.0
       ],
-      "enabled": true
+      "type": "freeCameraStart"
     },
     {
-      "type": "staticMesh",
+      "enabled": true,
       "id": 2,
-      "name": "ground",
       "material": "sandstone_cracks",
       "model": "models/box.obj",
+      "name": "ground",
       "position": [
         0.0,
         -0.5,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
         0.0
       ],
       "scale": [
@@ -60,111 +63,88 @@
         1.0,
         20.0
       ],
-      "renderLayer": "Terrain",
       "texOffsScale": [
         0,
         0,
         10,
         10
       ],
-      "enabled": true
+      "type": "staticMesh"
     },
     {
-      "type": "particleEmitter",
-      "id": 10,
-      "name": "fire",
-      "position": [
-        0.0,
-        0.2,
-        0.0
+      "additive": true,
+      "colorKeys": [
+        [
+          1.0,
+          0.3146067261695862,
+          0.0,
+          0.0
+        ],
+        [
+          0.9363296031951904,
+          0.4681057631969452,
+          0.11923301219940186,
+          0.8999999761581421
+        ],
+        [
+          0.9812734127044678,
+          0.3535602390766144,
+          0.07350360602140427,
+          0.6000000238418579
+        ],
+        [
+          0.6000000238418579,
+          0.07999999821186066,
+          0.009999999776482582,
+          0.0
+        ]
       ],
-      "maxParticles": 512,
-      "spawnRate": 140.0,
-      "lifetime": [
-        0.5,
-        1.0
-      ],
+      "coneAngleDeg": 22.0,
       "coneDir": [
         0.0,
         1.0,
         0.0
       ],
-      "coneAngleDeg": 22.0,
-      "speed": [
-        1.2,
-        2.4
-      ],
+      "drag": 3.9700000286102295,
+      "enabled": true,
       "gravity": -2.5,
-      "drag": 0.6,
+      "id": 10,
+      "lifetime": [
+        0.5,
+        1.0
+      ],
+      "maxParticles": 512,
+      "name": "fire",
+      "position": [
+        -0.10000000149011612,
+        0.0,
+        -0.4000000059604645
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
       "seed": 7,
       "size": [
         0.55,
         0.15
       ],
-      "additive": true,
-      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/fire_01.png",
-      "colorKeys": [
-        [
-          1.0,
-          0.95,
-          0.55,
-          0.0
-        ],
-        [
-          1.0,
-          0.75,
-          0.25,
-          0.9
-        ],
-        [
-          1.0,
-          0.35,
-          0.06,
-          0.6
-        ],
-        [
-          0.6,
-          0.08,
-          0.01,
-          0.0
-        ]
+      "spawnRate": 33.0,
+      "speed": [
+        0.3400000035762787,
+        1.1200000047683716
       ],
-      "enabled": true
+      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/fire_01.png",
+      "type": "particleEmitter"
     },
     {
-      "type": "particleEmitter",
-      "id": 11,
-      "name": "smoke",
-      "position": [
-        0.0,
-        0.9,
-        0.0
-      ],
-      "maxParticles": 256,
-      "spawnRate": 18.0,
-      "lifetime": [
-        2.0,
-        3.5
-      ],
-      "coneDir": [
-        0.15,
-        1.0,
-        0.0
-      ],
-      "coneAngleDeg": 14.0,
-      "speed": [
-        0.5,
-        1.0
-      ],
-      "gravity": -0.8,
-      "drag": 0.3,
-      "seed": 21,
-      "size": [
-        0.5,
-        1.6
-      ],
       "additive": false,
-      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/smoke_07.png",
       "colorKeys": [
         [
           0.25,
@@ -191,40 +171,51 @@
           0.0
         ]
       ],
-      "enabled": true
-    },
-    {
-      "type": "particleEmitter",
-      "id": 12,
-      "name": "sparks.procedural",
-      "position": [
-        0.0,
-        0.3,
-        0.0
-      ],
-      "maxParticles": 128,
-      "spawnRate": 25.0,
-      "lifetime": [
-        0.4,
-        1.1
-      ],
+      "coneAngleDeg": 14.0,
       "coneDir": [
-        0.0,
+        0.15,
         1.0,
         0.0
       ],
-      "coneAngleDeg": 40.0,
-      "speed": [
+      "drag": 0.3,
+      "enabled": true,
+      "gravity": -0.8,
+      "id": 11,
+      "lifetime": [
         2.0,
-        4.0
+        3.5
       ],
-      "gravity": 3.5,
-      "drag": 0.4,
-      "seed": 33,
+      "maxParticles": 256,
+      "name": "smoke",
+      "position": [
+        -0.10000000149011612,
+        0.699999988079071,
+        -0.4000000059604645
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "seed": 21,
       "size": [
-        0.06,
-        0.02
+        0.5,
+        1.6
       ],
+      "spawnRate": 18.0,
+      "speed": [
+        0.5,
+        1.0
+      ],
+      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/smoke_07.png",
+      "type": "particleEmitter"
+    },
+    {
       "additive": true,
       "colorKeys": [
         [
@@ -252,7 +243,51 @@
           0.0
         ]
       ],
-      "enabled": true
+      "coneAngleDeg": 40.0,
+      "coneDir": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "drag": 0.4,
+      "enabled": true,
+      "gravity": 3.5,
+      "id": 12,
+      "lifetime": [
+        0.4,
+        1.1
+      ],
+      "maxParticles": 128,
+      "name": "sparks.procedural",
+      "position": [
+        -0.10000000149011612,
+        0.10000000894069672,
+        -0.4000000059604645
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "seed": 33,
+      "size": [
+        0.06,
+        0.02
+      ],
+      "spawnRate": 25.0,
+      "speed": [
+        2.0,
+        4.0
+      ],
+      "type": "particleEmitter"
     }
-  ]
+  ],
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  }
 }

@@ -22,6 +22,7 @@
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
+#include "vfx/ParticleEmitterObject.h"
 
 namespace
 {
@@ -402,6 +403,138 @@ namespace
         }
     };
 
+    class ParticleEmitterPropertyDrawer final : public IEditorPropertyDrawer
+    {
+    public:
+        std::string_view Type() const override { return "particleEmitter"; }
+
+        void Draw(EditorContext& ctx,
+            EditorCommandStack& commandStack,
+            const AssetRegistry& registry,
+            EditorObject& obj) const override
+        {
+            (void)commandStack;
+            (void)registry;
+
+            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
+            ParticleEmitterObject* emitter = runtime ? runtime->AsParticleEmitter() : nullptr;
+            if (!emitter)
+            {
+                ImGui::TextDisabled("Particle properties editable on spawned emitters.");
+                return;
+            }
+
+            // Preset-based emitters keep the preset as the base and store per-instance tweaks in
+            // "overrides"; inline emitters edit top-level fields. Either way the runtime desc is
+            // edited live (RecordCompute refills the CB from it every frame).
+            const bool preset = obj.properties.contains("preset");
+            auto setProp = [&](const char* key, nlohmann::json value) {
+                if (preset) { obj.properties["overrides"][key] = std::move(value); }
+                else { obj.properties[key] = std::move(value); }
+                ctx.document.SetDirty(true);
+            };
+
+            vfx::EmitterDesc& d = emitter->DescRef();
+
+            if (preset && obj.properties["preset"].is_string())
+            {
+                ImGui::TextDisabled("Preset: %s", obj.properties["preset"].get<std::string>().c_str());
+            }
+
+            float spawnRate = d.spawnRate;
+            if (ImGui::DragFloat("Spawn Rate", &spawnRate, 1.0f, 0.0f, 100000.0f))
+            {
+                d.spawnRate = spawnRate; setProp("spawnRate", spawnRate);
+            }
+
+            float lifetime[2] = { d.lifetimeMin, d.lifetimeMax };
+            if (ImGui::DragFloat2("Lifetime (min/max)", lifetime, 0.02f, 0.0f, 60.0f))
+            {
+                d.lifetimeMin = lifetime[0]; d.lifetimeMax = lifetime[1];
+                setProp("lifetime", nlohmann::json::array({ lifetime[0], lifetime[1] }));
+            }
+
+            float speed[2] = { d.speedMin, d.speedMax };
+            if (ImGui::DragFloat2("Speed (min/max)", speed, 0.02f))
+            {
+                d.speedMin = speed[0]; d.speedMax = speed[1];
+                setProp("speed", nlohmann::json::array({ speed[0], speed[1] }));
+            }
+
+            float gravity = d.gravity;
+            if (ImGui::DragFloat("Gravity (- = buoyant)", &gravity, 0.05f))
+            {
+                d.gravity = gravity; setProp("gravity", gravity);
+            }
+
+            float drag = d.drag;
+            if (ImGui::DragFloat("Drag", &drag, 0.01f, 0.0f, 20.0f))
+            {
+                d.drag = drag; setProp("drag", drag);
+            }
+
+            float coneAngle = d.coneAngleDeg;
+            if (ImGui::DragFloat("Cone Angle (deg)", &coneAngle, 0.5f, 0.0f, 180.0f))
+            {
+                d.coneAngleDeg = coneAngle; setProp("coneAngleDeg", coneAngle);
+            }
+
+            float coneDir[3] = { d.coneDir.x, d.coneDir.y, d.coneDir.z };
+            if (ImGui::DragFloat3("Cone Dir", coneDir, 0.02f))
+            {
+                d.coneDir = Math::float3(coneDir[0], coneDir[1], coneDir[2]);
+                setProp("coneDir", nlohmann::json::array({ coneDir[0], coneDir[1], coneDir[2] }));
+            }
+
+            float size[2] = { d.sizeStart, d.sizeEnd };
+            if (ImGui::DragFloat2("Size (start/end)", size, 0.01f, 0.0f, 100.0f))
+            {
+                d.sizeStart = size[0]; d.sizeEnd = size[1];
+                setProp("size", nlohmann::json::array({ size[0], size[1] }));
+            }
+
+            float softFade = d.softFade;
+            if (ImGui::DragFloat("Soft Fade", &softFade, 0.01f, 0.0f, 10.0f))
+            {
+                d.softFade = softFade; setProp("softFade", softFade);
+            }
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Color over life (RGBA; A fades)");
+            bool colorChanged = false;
+            for (int k = 0; k < 4; ++k)
+            {
+                float c[4] = { d.colorKeys[k].x, d.colorKeys[k].y, d.colorKeys[k].z, d.colorKeys[k].w };
+                ImGui::PushID(k);
+                if (ImGui::ColorEdit4("##colorKey", c,
+                        ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_Float))
+                {
+                    d.colorKeys[k] = Math::float4(c[0], c[1], c[2], c[3]);
+                    colorChanged = true;
+                }
+                ImGui::PopID();
+            }
+            if (colorChanged)
+            {
+                nlohmann::json keys = nlohmann::json::array();
+                for (int k = 0; k < 4; ++k)
+                {
+                    keys.push_back(nlohmann::json::array({
+                        d.colorKeys[k].x, d.colorKeys[k].y, d.colorKeys[k].z, d.colorKeys[k].w }));
+                }
+                setProp("colorKeys", std::move(keys));
+            }
+
+            // Structural fields (buffer sizes / PSO / sprite) are baked at spawn; show read-only.
+            ImGui::Separator();
+            ImGui::TextDisabled("Max particles: %u  |  blend: %s%s",
+                d.maxParticles, d.additive ? "additive" : "alpha",
+                d.sortParticles ? " (sorted)" : "");
+            ImGui::TextDisabled("Texture: %s", d.texture.empty() ? "(procedural disc)" : d.texture.c_str());
+            ImGui::TextDisabled("(re-create the emitter to change the above)");
+        }
+    };
+
     class FreeCameraStartPropertyDrawer final : public IEditorPropertyDrawer
     {
     public:
@@ -542,6 +675,7 @@ void EditorExtensionRegistry::RegisterBuiltins(EditorExtensionRegistry& registry
     registry.RegisterObjectFactory(std::make_unique<TransparentMeshObjectFactory>());
     registry.RegisterPropertyDrawer(std::make_unique<StaticMeshPropertyDrawer>());
     registry.RegisterPropertyDrawer(std::make_unique<TransparentMeshPropertyDrawer>());
+    registry.RegisterPropertyDrawer(std::make_unique<ParticleEmitterPropertyDrawer>());
     registry.RegisterPropertyDrawer(std::make_unique<FreeCameraStartPropertyDrawer>());
 }
 

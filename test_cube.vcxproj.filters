@@ -360,6 +360,9 @@
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp">
       <Filter>sources\vfx</Filter>
     </ClCompile>
+    <ClCompile Include="sources/vfx/ParticlePresets.cpp">
+      <Filter>sources\vfx</Filter>
+    </ClCompile>
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
@@ -810,6 +813,9 @@
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h">
+      <Filter>sources\vfx</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/vfx/ParticlePresets.h">
       <Filter>sources\vfx</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticleTypes.h">

@@ -42,6 +42,8 @@ public:
     // slots collapse to zero-w degenerate quads (no alive-list / indirect args).
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
+    ParticleEmitterObject* AsParticleEmitter() override { return this; } // E3: editor inspector
+
     const vfx::EmitterDesc& Desc() const { return desc_; }
     vfx::EmitterDesc& DescRef() { return desc_; } // live tweaks: consumed at the next CB fill
 

@@ -6,6 +6,8 @@
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
+#include "vfx/ParticleEmitterObject.h"
+#include "vfx/ParticlePresets.h"
 
 using namespace Math;
 using nlohmann::json;
@@ -117,5 +119,18 @@ namespace SceneObjectFactory
         if (o.contains("ior")) { glass->SetIor(o["ior"].get<float>()); }
         if (o.contains("normalMap")) { glass->SetNormalMap(Widen(o["normalMap"].get<std::string>())); }
         return glass;
+    }
+
+    std::unique_ptr<RenderableObjectBase> CreateParticleEmitterFromJson(const json& o)
+    {
+        // Resolve the emitter desc (preset < overrides < inline), then place it. The emitter
+        // only reads its object position for spawning, but the full transform is set so gizmo
+        // edits + save round-trip like any other object.
+        vfx::EmitterDesc d = vfx::ResolveEmitterDesc(o);
+        auto emitter = std::make_unique<ParticleEmitterObject>(d);
+        emitter->SetPosition(ToFloat3(o.value("position", json::array())));
+        if (o.contains("rotationDeg")) { emitter->SetRotationEulerDeg(ToFloat3(o["rotationDeg"])); }
+        if (o.contains("scale")) { emitter->SetScale(ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f))); }
+        return emitter;
     }
 }

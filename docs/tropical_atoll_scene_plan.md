@@ -419,12 +419,33 @@ already runs in sorted-queue order there):
   while a *previous frame's* draw may still read → either double-buffer the state buffer or
   prove the render-graph ordering makes it safe. `--scene-stress=30` is the gate.
 
-**E3 — authoring + editor.** *(exec: Opus 4.8)* Register `"particleEmitter"` in `SceneObjectRegistry` /
-`SceneObjectFactory`. Level JSON mirrors the ocean pattern:
-`{"type":"particleEmitter", "preset":"data/particles/fire.json", "position":[...],
-"overrides":{...}}`. Editor: spawnable (SpawnMesh-style or via CreateEnvironmentCommand path),
-selectable, movable with the gizmo, properties in InspectorPanel, round-trips through document
-save/load like meshes do. Respect the editor ID model from the level-editor plan.
+**E3 — authoring + editor.** *(exec: Opus 4.8; DONE 2026-07-15)* As landed:
+- **Shared schema/parser** `sources/vfx/ParticlePresets.{h,cpp}`: `ApplyEmitterJson(json,
+  EmitterDesc&)` (all sim+render fields) + `ResolveEmitterDesc(objectJson)` with precedence
+  **defaults < `preset` file < `overrides` object < top-level inline** (inline = the pre-E3
+  back-compat path). Alpha (non-additive) emitters still auto-`sort` unless `sort` is set
+  explicitly. `position` is NOT read here — the runtime emitter reads its object position.
+- **Shared factory** `SceneObjectFactory::CreateParticleEmitterFromJson` (resolve + set
+  transform); `SceneObjectRegistry`'s creator now delegates to it, and the editor spawn
+  (`SpawnMeshCommand::CreateRuntime`) dispatches `particleEmitter` to the same factory — one
+  code path for level-load and editor-spawn.
+- **Editor** (all generic mechanisms already type-agnostic — reused, not rebuilt): outliner
+  listing, selection, gizmo move (`GetPosition()` is read every frame by the sim), and
+  save/load round-trip (document stores `type`+`properties` verbatim) work with no
+  particle-specific code. Added: **Create ▸ VFX ▸ Particle Emitter** (inline default puff via
+  `BuildParticleEmitterObjectJson`), and a `ParticleEmitterPropertyDrawer` (via the extension
+  registry) that live-edits the tuning fields through `DescRef()` — the sim refills its CB from
+  the desc every frame, so edits are instant — and mirrors each change into `obj.properties`
+  (into `overrides` for preset-based emitters, top-level for inline) so it round-trips.
+  Structural fields (maxParticles / blend / sprite, baked at Init) are shown read-only.
+- **`AsParticleEmitter()`** internal-RTTI accessor (no `dynamic_cast`); `data/particles/fire.json`
+  seeds the preset path (E4 tunes the full fire/smoke/sparks set).
+- Known limits: `coneDir` is a LOCAL axis not rotated by the object transform (gizmo rotation
+  doesn't steer emission — position is what matters); structural field changes need a re-create.
+  Verified: `e3_particle_test.json` loads a preset+overrides fire (rate 180→220) beside an inline
+  sorted-alpha smoke — both simulate at the authored rates and render distinctly (additive orange
+  flame vs grey alpha dome); Release + Release_Editor build clean; scene-stress=30 with the
+  emitter level in the churn cycle CLEAN.
 
 **E4 — presets + tuning.** *(exec: GPT 5.6 terra — JSON iteration, user judges visuals)*
 `data/particles/fire.json`, `smoke.json`, `sparks.json`.

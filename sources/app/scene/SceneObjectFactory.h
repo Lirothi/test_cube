@@ -32,4 +32,9 @@ namespace SceneObjectFactory
 
     // Create a TransparentStaticMesh from a level/editor object JSON entry.
     std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const nlohmann::json& objectJson);
+
+    // E3: create a GPU particle emitter from a level/editor object JSON entry. Resolves the
+    // EmitterDesc from preset/overrides/inline (vfx::ResolveEmitterDesc) and applies the
+    // position/rotation/scale transform. Shared by level loading and editor spawn.
+    std::unique_ptr<RenderableObjectBase> CreateParticleEmitterFromJson(const nlohmann::json& objectJson);
 }

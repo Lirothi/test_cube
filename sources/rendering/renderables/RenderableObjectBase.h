@@ -35,6 +35,7 @@ class RenderableObject;
 class GBufferRenderable;
 class TransparentStaticMesh;
 class OceanRenderable;
+class ParticleEmitterObject;
 
 enum class SceneObjectSyncReason
 {
@@ -159,6 +160,7 @@ public:
     virtual GBufferRenderable* AsGBufferRenderable() { return nullptr; }
     virtual TransparentStaticMesh* AsTransparentStaticMesh() { return nullptr; }
     virtual OceanRenderable* AsOceanRenderable() { return nullptr; }
+    virtual ParticleEmitterObject* AsParticleEmitter() { return nullptr; } // E3: editor inspector
 
     virtual const AABB& GetWorldBounds() const
     {

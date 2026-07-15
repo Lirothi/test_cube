@@ -25,6 +25,10 @@ namespace
         {
             return SceneObjectFactory::CreateStaticMeshFromJson(objectJson);
         }
+        if (type == "particleEmitter")
+        {
+            return SceneObjectFactory::CreateParticleEmitterFromJson(objectJson);
+        }
         return nullptr;
     }
 }

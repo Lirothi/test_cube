@@ -248,6 +248,32 @@ namespace
         return o;
     }
 
+    nlohmann::json BuildParticleEmitterObjectJson(const Scene& scene)
+    {
+        // Inline default: a small buoyant additive puff (no texture -> procedural disc), so a
+        // freshly created emitter is immediately visible for tuning. E4 supplies the fire/smoke/
+        // sparks presets referenced via "preset" in level JSON.
+        nlohmann::json o = nlohmann::json::object();
+        o["name"] = "Particle Emitter";
+        o["type"] = "particleEmitter";
+        o["position"] = SpawnPositionJson(scene);
+        o["maxParticles"] = 1024;
+        o["spawnRate"] = 120.0f;
+        o["lifetime"] = nlohmann::json::array({ 0.6f, 1.2f });
+        o["speed"] = nlohmann::json::array({ 0.6f, 1.4f });
+        o["gravity"] = -2.0f;
+        o["coneAngleDeg"] = 25.0f;
+        o["size"] = nlohmann::json::array({ 0.5f, 0.15f });
+        o["additive"] = true;
+        o["colorKeys"] = nlohmann::json::array({
+            nlohmann::json::array({ 1.0f, 0.7f, 0.3f, 0.85f }),
+            nlohmann::json::array({ 1.0f, 0.45f, 0.12f, 0.7f }),
+            nlohmann::json::array({ 0.6f, 0.12f, 0.05f, 0.4f }),
+            nlohmann::json::array({ 0.2f, 0.05f, 0.02f, 0.0f }),
+        });
+        return o;
+    }
+
     EditorObject BuildPointLightObject(const Scene& scene)
     {
         EditorObject light;
@@ -2853,6 +2879,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildSkyboxObject(assetRegistry_)));
+                }
+                if (ImGui::BeginMenu("VFX"))
+                {
+                    if (ImGui::MenuItem("Particle Emitter"))
+                    {
+                        commandStack_.Execute(ctx, std::make_unique<SpawnMeshCommand>(
+                            BuildParticleEmitterObjectJson(scene)));
+                    }
+                    ImGui::EndMenu();
                 }
                 ImGui::EndMenu();
             }

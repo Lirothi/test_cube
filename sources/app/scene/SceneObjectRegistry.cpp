@@ -212,69 +212,14 @@ SceneObjectRegistry::ObjectList CreateOcean(SceneObjectRegistry::CreationContext
     return objects;
 }
 
-// Part E1: GPU particle emitter with inline desc fields (E3 moves these into data/particles/
-// preset files). Minimal schema: position + sim knobs.
+// Part E: GPU particle emitter. E3 moved the schema/parse into the shared factory
+// (SceneObjectFactory::CreateParticleEmitterFromJson via vfx::ResolveEmitterDesc), so level
+// loading and editor spawn build identical objects from "preset"/"overrides"/inline fields.
 SceneObjectRegistry::ObjectList CreateParticleEmitter(SceneObjectRegistry::CreationContext& ctx, const json& o)
 {
     (void)ctx;
-
-    const auto readF3 = [&o](const char* key, const float3& def) {
-        const auto it = o.find(key);
-        if (it != o.end() && it->is_array() && it->size() >= 3)
-        {
-            return float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
-        }
-        return def;
-    };
-    const auto readRange = [&o](const char* key, float& lo, float& hi) {
-        const auto it = o.find(key);
-        if (it != o.end() && it->is_array() && it->size() >= 2)
-        {
-            lo = (*it)[0].get<float>();
-            hi = (*it)[1].get<float>();
-        }
-    };
-
-    vfx::EmitterDesc d;
-    d.maxParticles = o.value("maxParticles", d.maxParticles);
-    d.spawnRate = o.value("spawnRate", d.spawnRate);
-    readRange("lifetime", d.lifetimeMin, d.lifetimeMax);
-    d.coneDir = readF3("coneDir", d.coneDir);
-    d.coneAngleDeg = o.value("coneAngleDeg", d.coneAngleDeg);
-    readRange("speed", d.speedMin, d.speedMax);
-    d.gravity = o.value("gravity", d.gravity);
-    d.drag = o.value("drag", d.drag);
-    d.seed = o.value("seed", d.seed);
-
-    // E2 rendering fields.
-    readRange("size", d.sizeStart, d.sizeEnd);
-    d.texture = o.value("texture", d.texture);
-    d.additive = o.value("additive", d.additive);
-    d.softFade = o.value("softFade", d.softFade);
-    d.sortParticles = o.value("sort", !d.additive); // alpha emitters sort back-to-front by default
-    d.flipbookCols = o.value("flipCols", d.flipbookCols);
-    d.flipbookRows = o.value("flipRows", d.flipbookRows);
-    d.flipbookFps = o.value("flipFps", d.flipbookFps);
-    d.flipbookRandomStart = o.value("flipRandomStart", d.flipbookRandomStart);
-    d.frameBlend = o.value("frameBlend", d.frameBlend);
-    if (const auto it = o.find("colorKeys"); it != o.end() && it->is_array())
-    {
-        for (size_t k = 0; k < 4 && k < it->size(); ++k)
-        {
-            const auto& key = (*it)[k];
-            if (key.is_array() && key.size() >= 4)
-            {
-                d.colorKeys[k] = float4(key[0].get<float>(), key[1].get<float>(),
-                                        key[2].get<float>(), key[3].get<float>());
-            }
-        }
-    }
-
-    auto emitter = std::make_unique<ParticleEmitterObject>(d);
-    emitter->SetPosition(readF3("position", float3(0.0f, 0.0f, 0.0f)));
-
     SceneObjectRegistry::ObjectList objects;
-    objects.push_back(std::move(emitter));
+    objects.push_back(SceneObjectFactory::CreateParticleEmitterFromJson(o));
     return objects;
 }
 
