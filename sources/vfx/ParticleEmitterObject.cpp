@@ -86,6 +86,9 @@ void ParticleEmitterObject::Init(Renderer* renderer,
         gd.rtvFormats[2] = renderer->GetDlssBiasFormat();
         gd.rtvFormats[3] = renderer->GetObjectIdFormat();
         gd.dsvFormat = renderer->GetDsvFormat();
+        // The ocean is submitted before particles and writes depth, so the regular depth test
+        // resolves their overlap per pixel: foreground particles survive while particles genuinely
+        // behind the water are culled. The PS separately uses the opaque depth copy for soft fades.
         gd.depth.DepthEnable = TRUE;
         gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
         gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
@@ -397,7 +400,10 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     // there). Disable the fade if it is somehow unavailable.
     const auto& D = renderer->GetDeferredForFrame();
     const bool haveDepth = D.depthCopy.Get() != nullptr && D.depthCopySRV.ptr != 0;
-    dp.softFadeDist = haveDepth ? desc_.softFade : 0.0f;
+    // depthOcclude drives PS occlusion against the opaque snapshot; the hardware depth test
+    // handles the ocean separately. softFade is the fade width; 0 = a hard opaque cutoff.
+    dp.depthOcclude = haveDepth ? 1.0f : 0.0f;
+    dp.softFadeDist = desc_.softFade;
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(dp), render::kConstantBufferAlignment);
     std::memcpy(cb.cpu, &dp, sizeof(dp));

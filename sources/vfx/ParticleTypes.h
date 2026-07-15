@@ -41,7 +41,9 @@ struct alignas(16) GpuEmitterDrawParams
     float sizeStart; float sizeEnd; uint32_t flipCols; uint32_t flipRows;         // 0
     float flipFps; uint32_t flipRandomStart; uint32_t frameBlend; uint32_t hasTexture; // 16
     float colorKeys[4][4];                                                        // 32
-    uint32_t maxParticles; float softFadeDist; float _pad[2];                     // 96 (E2b)
+    // depthOcclude: 1 = occlude/soft-fade against the opaque depth copy in the PS; transparent
+    // surfaces are handled by the hardware depth test. softFadeDist = fade width.
+    uint32_t maxParticles; float softFadeDist; float depthOcclude; float _pad;    // 96
 };
 static_assert(sizeof(GpuEmitterDrawParams) == 112, "GpuEmitterDrawParams must match HLSL");
 

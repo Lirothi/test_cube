@@ -210,6 +210,8 @@ public:
     }
 
     ID3D12Resource* GetCurrentBackbuffer() const { return currentFrameIndex_ < render::kFrameCount ? swapchain_.Backbuffer(currentFrameIndex_) : nullptr; }
+    // The backbuffer that was most recently Present()ed (the one on screen) — for screenshots.
+    ID3D12Resource* GetLastPresentedBackbuffer() const { return lastPresentedIndex_ < render::kFrameCount ? swapchain_.Backbuffer(lastPresentedIndex_) : nullptr; }
 
     // Access the global descriptor allocator and current frame
     DescriptorAllocator& GetDescAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetDescAlloc(); }
@@ -403,6 +405,7 @@ private:
     FrameScheduler                    frameScheduler_;
 
     UINT                              currentFrameIndex_ = 0;                   // 0..render::kFrameCount-1
+    UINT                              lastPresentedIndex_ = 0;                  // backbuffer last shown (screenshots)
     FrameResource*                    currentFrameResource_ = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};

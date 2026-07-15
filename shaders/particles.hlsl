@@ -34,7 +34,10 @@ cbuffer DrawParams : register(b2)
     float sizeStart; float sizeEnd; uint flipCols; uint flipRows;
     float flipFps; uint flipRandomStart; uint frameBlend; uint hasTexture;
     float4 colorKeys[4];
-    uint maxParticles; float softFadeDist; float2 _dpPad; // E2b: depth-fade distance (0 disables)
+    // depthOcclude: 1 = occlude/soft-fade against the OPAQUE depth copy in the PS. Transparent
+    // surfaces are handled by the hardware depth test after they render. softFadeDist is the
+    // soft-fade width (0 = hard cutoff at the opaque surface).
+    uint maxParticles; float softFadeDist; float depthOcclude; float _dpPad;
 };
 
 StructuredBuffer<Particle> gParticles : register(t0);
@@ -167,14 +170,18 @@ float4 PSMain(VSOut i) : SV_Target0
 
     float4 c = i.color * tex;
 
-    // E2b soft particles: fade where the billboard nears opaque geometry (fire base into the
-    // ground/logs, smoke against walls). depthCopy = the opaque depth snapshotted before this
-    // pass, sampled at this pixel; compare linear view depths.
-    if (softFadeDist > 0.0)
+    // Depth occlusion + E2b soft particles, done in the PS against the OPAQUE depth copy (the
+    // depth snapshotted before this pass — i.e. BEFORE the ocean/glass draw, so only real opaque
+    // geometry drives the soft intersection fade rather than the transparent water surface).
+    // The hardware depth test still handles the current scene depth, including water rendered
+    // before particles. dz > 0 => particle is IN FRONT of the opaque surface (visible; soft-faded
+    // near it); dz <= 0 => behind opaque geometry (fully occluded).
+    if (depthOcclude > 0.0)
     {
         float sceneNdc = gSceneDepth.Load(int3(int2(i.H.xy), 0)).r;
-        float dz = abs(ViewZFromNdc(sceneNdc) - ViewZFromNdc(i.H.z));
-        c.a *= saturate(dz / softFadeDist);
+        float dz = ViewZFromNdc(sceneNdc) - ViewZFromNdc(i.H.z);
+        float fade = softFadeDist > 0.0 ? saturate(dz / softFadeDist) : (dz > 0.0 ? 1.0 : 0.0);
+        c.a *= fade;
     }
 
     return float4(c.rgb * c.a, c.a); // premultiplied; additive blend ignores dest alpha

@@ -12,8 +12,12 @@
 
 // Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
 std::string g_bootLevelPath;
+// One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
+std::string g_shotPath;
+double g_shotDelaySec = 7.0;
 
 #include "app/levels/JsonLevel.h"
+#include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
 
@@ -506,6 +510,20 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
                 appController_.WaitForHudBuild();
                 scene.Render(&renderer);
+            }
+
+            // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
+            // just-presented backbuffer to a PNG and quit. Reliable on the flip-model swapchain.
+            if (!g_shotPath.empty())
+            {
+                static double shotStart = GetTimeSeconds();
+                if (GetTimeSeconds() - shotStart >= g_shotDelaySec)
+                {
+                    const bool ok = Screenshot::SaveBackbufferPng(renderer, g_shotPath);
+                    OutputDebugStringA(ok ? "[shot] saved\n" : "[shot] FAILED\n");
+                    g_shotPath.clear();
+                    isRunning_ = false;
+                }
             }
 
             Profiler::Get().EndFrame();

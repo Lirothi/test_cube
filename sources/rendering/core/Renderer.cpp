@@ -836,6 +836,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     {
         CPU_SCOPE(ProfilerScopes::kService4);
+        lastPresentedIndex_ = currentFrameIndex_; // the buffer about to be shown (screenshots)
         swapchain_.Present();
     }
     SignalFrame(currentFrameIndex_);

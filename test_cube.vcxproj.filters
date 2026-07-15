@@ -405,6 +405,9 @@
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/Screenshot.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>

@@ -867,7 +867,8 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     bool bindGbufOrScene,
     bool bindVelocity,
     size_t chunkSize,
-    D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+    D3D12_GPU_VIRTUAL_ADDRESS viewCB,
+    uint32_t localOrderBase)
 {
     if (objects.empty()) {
         return;
@@ -878,7 +879,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB](std::size_t jobIndex)
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB, localOrderBase](std::size_t jobIndex)
     {
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
@@ -891,9 +892,10 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     obj->Render(renderer, b.cl, camera, viewCB);
                 }
             }
-            // Chunk index is the deterministic submit order within the batch's
+            // Base + chunk index is the deterministic submit order within the batch's
             // bundle namespace (transparents must blend in sorted-queue order).
-            renderer->EndThreadCommandBundle(b, batchIndex, static_cast<uint32_t>(jobIndex));
+            renderer->EndThreadCommandBundle(b, batchIndex,
+                localOrderBase + static_cast<uint32_t>(jobIndex));
         }
         else {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -924,9 +926,10 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     }
                 }
             }
-            // Chunk index is the deterministic submit order within the batch's
+            // Base + chunk index is the deterministic submit order within the batch's
             // direct namespace (transparents must blend in sorted-queue order).
-            renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(jobIndex));
+            renderer->EndThreadCommandList(t, batchIndex,
+                localOrderBase + static_cast<uint32_t>(jobIndex));
         }
     };
 
@@ -2874,21 +2877,39 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    [[maybe_unused]] const size_t pTransparentSimple = rgTr.AddPass(RenderPass::Transparent_Simple, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
-        const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
-        if (!transparentSimple.empty())
-        {
-            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/true, false, true, 32, viewCB);
-        }
-        });
+    // Draw the COMPLEX bucket (ocean, glass) BEFORE the SIMPLE bucket (particles). Both buckets
+    // must use direct lists here: bundles are executed inside the pass driver before every direct
+    // list, regardless of render-graph dependencies, which made the direct-list ocean composite
+    // over particle bundles. Reserve the first local-order range for complex chunks and place the
+    // simple chunks immediately after it so SubmitTimeline preserves this order on the GPU.
+    constexpr size_t kTransparentChunkSize = 32;
+    const auto& visibleBuckets = mainView.queue.VisibleBuckets();
+    const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
+    const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
+    const size_t complexChunkCount =
+        (transparentComplex.size() + kTransparentChunkSize - 1) / kTransparentChunkSize;
+    const size_t simpleChunkCount =
+        (transparentSimple.size() + kTransparentChunkSize - 1) / kTransparentChunkSize;
+    assert(complexChunkCount + simpleChunkCount <= UINT32_MAX);
+    const uint32_t simpleLocalOrderBase = static_cast<uint32_t>(complexChunkCount);
 
     [[maybe_unused]] const size_t pTransparentComplex = rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
         if (!transparentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false, false, true, 32, viewCB);
+            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false,
+                false, true, kTransparentChunkSize, viewCB);
+        }
+        });
+
+    [[maybe_unused]] const size_t pTransparentSimple = rgTr.AddPass(RenderPass::Transparent_Simple, { pTransparentComplex }, [this, renderer, &camera, &mainView, viewCB, simpleLocalOrderBase](RenderGraphPassContext sub) {
+        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
+        const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
+        if (!transparentSimple.empty())
+        {
+            RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, camera, /*useBundles=*/false,
+                false, true, kTransparentChunkSize, viewCB, simpleLocalOrderBase);
         }
         });
 

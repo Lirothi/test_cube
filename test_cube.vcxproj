@@ -298,6 +298,7 @@
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/core/Screenshot.cpp" />
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
@@ -461,6 +462,7 @@
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
+    <ClInclude Include="sources/rendering/core/Screenshot.h" />
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />

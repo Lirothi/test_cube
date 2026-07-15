@@ -20,6 +20,12 @@
 // demo level. Used for headless verification of specific levels (see docs atoll plan A2+).
 extern std::string g_bootLevelPath;
 
+// "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented
+// backbuffer to a PNG (reliable on the flip-model swapchain, unlike GDI/PrintWindow) and exit.
+// The delay lets the ocean FFT + particle sim warm up before the grab. "--shot-delay=<sec>".
+extern std::string g_shotPath;
+extern double g_shotDelaySec;
+
 class App {
 public:
     ~App();
