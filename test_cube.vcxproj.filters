@@ -246,6 +246,9 @@
     <ClCompile Include="sources/editor/commands/SetMaterialSlotCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetParticlePresetCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -681,6 +684,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetMaterialSlotCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetParticlePresetCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h">

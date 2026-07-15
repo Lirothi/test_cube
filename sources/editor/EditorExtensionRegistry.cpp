@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
@@ -16,6 +17,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
+#include "editor/commands/SetParticlePresetCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "imgui.h"
 #include "rendering/RenderLayers.h"
@@ -91,6 +93,37 @@ namespace
             return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
         }
         return def;
+    }
+
+    std::vector<std::string> ListParticlePresetPaths()
+    {
+        std::vector<std::string> paths;
+        std::error_code ec;
+        std::filesystem::directory_iterator it("data/particles", ec);
+        if (ec)
+        {
+            return paths;
+        }
+
+        const std::filesystem::directory_iterator end;
+        while (it != end)
+        {
+            const std::filesystem::directory_entry& entry = *it;
+            std::error_code entryEc;
+            if (entry.is_regular_file(entryEc) && entry.path().extension() == ".json")
+            {
+                paths.push_back(entry.path().generic_string());
+            }
+
+            it.increment(ec);
+            if (ec)
+            {
+                break;
+            }
+        }
+
+        std::sort(paths.begin(), paths.end());
+        return paths;
     }
 
     struct LayerOption { const char* name; RenderLayer layer; };
@@ -334,7 +367,6 @@ namespace
             const AssetRegistry& registry,
             EditorObject& obj) const override
         {
-            (void)commandStack;
             (void)registry;
 
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
@@ -424,6 +456,37 @@ namespace
                 return;
             }
 
+            const std::string selectedPreset = obj.properties.value("preset", std::string());
+            const std::vector<std::string> presetPaths = ListParticlePresetPaths();
+            bool assignedPreset = false;
+            if (ImGui::BeginCombo("Preset", selectedPreset.empty() ? "(inline emitter)" : selectedPreset.c_str()))
+            {
+                for (const std::string& presetPath : presetPaths)
+                {
+                    const bool selected = presetPath == selectedPreset;
+                    if (ImGui::Selectable(presetPath.c_str(), selected) && !selected)
+                    {
+                        assignedPreset = commandStack.Execute(ctx,
+                            std::make_unique<SetParticlePresetCommand>(obj.id, presetPath));
+                    }
+                    if (selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                if (presetPaths.empty())
+                {
+                    ImGui::TextDisabled("No JSON presets found in data/particles.");
+                }
+                ImGui::EndCombo();
+            }
+
+            // Assigning respawns this object, so the current runtime pointer is no longer valid.
+            if (assignedPreset)
+            {
+                return;
+            }
+
             // Preset-based emitters keep the preset as the base and store per-instance tweaks in
             // "overrides"; inline emitters edit top-level fields. Either way the runtime desc is
             // edited live (RecordCompute refills the CB from it every frame).
@@ -438,7 +501,7 @@ namespace
 
             if (preset && obj.properties["preset"].is_string())
             {
-                ImGui::TextDisabled("Preset: %s", obj.properties["preset"].get<std::string>().c_str());
+                ImGui::TextDisabled("Selecting a preset resets old per-instance overrides.");
             }
 
             float spawnRate = d.spawnRate;

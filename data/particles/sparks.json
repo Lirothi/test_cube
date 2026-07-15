@@ -1,0 +1,23 @@
+{
+  "_comment": "E4 campfire sparks/embers. Kenney Particle Pack (CC0) circle_05 is a small additive dot; positive gravity pulls sparks back into the fire.",
+  "maxParticles": 256,
+  "spawnRate": 16.0,
+  "lifetime": [0.45, 0.9],
+  "coneDir": [0.0, 1.0, 0.0],
+  "coneAngleDeg": 48.0,
+  "speed": [1.4, 3.3],
+  "gravity": 5.5,
+  "drag": 0.45,
+  "rotation": [0.0, 6.2831853],
+  "spin": [-7.0, 7.0],
+  "size": [0.075, 0.018],
+  "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/circle_05.png",
+  "additive": true,
+  "softFade": 0.12,
+  "colorKeys": [
+    [1.0, 0.88, 0.42, 0.95],
+    [1.0, 0.42, 0.08, 0.78],
+    [0.82, 0.14, 0.02, 0.35],
+    [0.34, 0.025, 0.005, 0.0]
+  ]
+}
