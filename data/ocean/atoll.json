@@ -1,0 +1,130 @@
+{
+  "settings": {
+    "resolution": 256,
+    "cascadeCount": 4,
+    "anisotropyLevel": 6,
+    "simulateFoam": true,
+    "updateSpectrum": false,
+    "readbackCascades": "None",
+    "samplingIterations": 3,
+    "domains": {
+      "mode": "Auto",
+      "simulationScale": 600.0,
+      "allowOverlap": true,
+      "minWavesInCascade": 6.0,
+      "manualLengthScales": [
+        65.72,
+        12.0,
+        12.84,
+        5.62
+      ]
+    }
+  },
+  "render": {
+    "deepScatterColor": [
+      0.0,
+      0.055,
+      0.072,
+      1.0
+    ],
+    "sssColor": [
+      0.08,
+      0.92,
+      0.72,
+      1.0
+    ],
+    "diffuseColor": [
+      0.0,
+      0.07,
+      0.065,
+      1.0
+    ],
+    "foamTint": [
+      0.92,
+      1.0,
+      0.97,
+      1.0
+    ],
+    "contactFoamStrength": 0.28
+  },
+  "scene": {
+    "localWindDirectionDegrees": 25.0,
+    "swellDirectionDegrees": 12.0,
+    "windForce01": 0.4
+  },
+  "inputs": {
+    "mode": "Fixed",
+    "timeScale": 0.85,
+    "depth": 40.0,
+    "defaultEqualizer": {
+      "scaleFilters": [
+        {
+          "type": "Lowshelf",
+          "center": -1.5,
+          "value": -0.55,
+          "width": 2.38
+        }
+      ],
+      "chopFilters": [
+        {
+          "type": "Bell",
+          "center": 0.0,
+          "value": 0.35,
+          "width": 0.77
+        }
+      ]
+    },
+    "swell": {
+      "referenceWaveHeight": 0.12,
+      "spectrum": {
+        "energySpectrum": "PM",
+        "windSpeed": 2.0,
+        "fetch": 100.0,
+        "peaking": 3.0,
+        "scale": 0.15,
+        "cutoffWavelength": 0.01,
+        "alignment": 0.8,
+        "extraAlignment": 0.5
+      }
+    },
+    "localPresetIndex": 0,
+    "localPresets": [
+      {
+        "windForce": 1.0,
+        "referenceWaveHeight": 0.48,
+        "chop": 1.15,
+        "spectrum": {
+          "energySpectrum": "PM",
+          "windSpeed": 3.0,
+          "fetch": 100.0,
+          "peaking": 3.2,
+          "scale": 0.55,
+          "cutoffWavelength": 0.01,
+          "alignment": 1.0,
+          "extraAlignment": 0.0
+        },
+        "foam": {
+          "decayRate": 0.16,
+          "coverage": 0.72,
+          "density": 14.0,
+          "sharpness": 1.1,
+          "persistence": 0.82,
+          "trail": 0.0,
+          "trailTextureStrength": 0.5,
+          "trailTextureSize": [
+            50.0,
+            25.0
+          ],
+          "underwater": 0.42,
+          "cascadesWeights": [
+            1.0,
+            0.9,
+            0.45,
+            0.2
+          ]
+        },
+        "equalizer": "default"
+      }
+    ]
+  }
+}

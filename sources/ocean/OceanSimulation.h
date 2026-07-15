@@ -41,6 +41,8 @@ public:
     bool SaveConfig(const std::wstring& path) const;
     void ApplyConfig(Renderer* renderer, const OceanSimulationConfig& config);
     OceanSimulationConfig GetConfigCopy() const;
+    const OceanRenderConfig& GetRenderConfig() const { return config_.render; }
+    void SetRenderConfig(const OceanRenderConfig& render) { config_.render = render; }
     const std::wstring& GetConfigPath() const { return configPath_; }
     OceanSimulationInputsProvider& GetInputsProvider() { return inputsProvider_; }
     const OceanSimulationInputsProvider& GetInputsProvider() const { return inputsProvider_; }

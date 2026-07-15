@@ -1,0 +1,296 @@
+{
+  "camera": {
+    "hfovDeg": 90.0,
+    "zFar": 10000.0,
+    "zNear": 0.01
+  },
+  "directionalLight": {
+    "ambient": 0.07,
+    "color": [
+      1.0,
+      0.84,
+      0.68
+    ],
+    "direction": [
+      -0.557,
+      -0.682,
+      -0.473
+    ],
+    "enabled": true,
+    "exposure": 1.2
+  },
+  "objects": [
+    {
+      "enabled": true,
+      "id": 1,
+      "name": "AtollCameraStart",
+      "position": [
+        6.0,
+        31.0,
+        146.0
+      ],
+      "rotationDeg": [
+        10.0,
+        180.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
+    },
+    {
+      "enabled": true,
+      "id": 2,
+      "inputLayout": "PosNormTanUV",
+      "material": "sandstone_cracks",
+      "model": "models/atoll_island.obj",
+      "name": "AtollIsland",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "texOffsScale": [
+        0.0,
+        0.0,
+        10.0,
+        10.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 3,
+      "inputLayout": "PosNormTanUV",
+      "material": "sandstone_cracks",
+      "model": "models/atoll_lagoon_floor.obj",
+      "name": "AtollLagoonFloor",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "texOffsScale": [
+        0.0,
+        0.0,
+        10.0,
+        10.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 8,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "staticMesh #8",
+      "position": [
+        40.52806854248047,
+        0.7960619926452637,
+        82.17115783691406
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 9,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "staticMesh #9",
+      "position": [
+        39.721099853515625,
+        2.096060276031494,
+        74.06896209716797
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 10,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "staticMesh #10",
+      "position": [
+        31.1207275390625,
+        2.096062183380127,
+        77.59576416015625
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 11,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "staticMesh #11",
+      "position": [
+        45.1362190246582,
+        0.7960630059242249,
+        79.73365783691406
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 12,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "name": "staticMesh #12",
+      "position": [
+        46.95258331298828,
+        1.2960618734359741,
+        75.22663116455078
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 13,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/rock_boulder_2_game_ready_asset/scene.gltf",
+      "name": "staticMesh #13",
+      "position": [
+        44.98234176635742,
+        1.796062707901001,
+        74.18226623535156
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 14,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/rocks/scene.gltf",
+      "name": "staticMesh #14",
+      "position": [
+        44.84239196777344,
+        1.0960623025894165,
+        77.79582977294922
+      ],
+      "rotationDeg": [
+        0.0,
+        44.960426330566406,
+        0.0
+      ],
+      "scale": [
+        0.10000000149011612,
+        0.10000000149011612,
+        0.10000000149011612
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    }
+  ],
+  "ocean": {
+    "enabled": true,
+    "preset": "data/ocean/default.json",
+    "swellDirectionDeg": 12.0,
+    "windDirectionDeg": 25.0,
+    "windForce": 0.6000000238418579
+  },
+  "pointLights": [],
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  },
+  "spotLights": []
+}

@@ -1004,6 +1004,42 @@ namespace
         return changed;
     }
 
+    bool DrawOceanRenderControls(OceanSimulation& ocean)
+    {
+        OceanRenderConfig render = ocean.GetRenderConfig();
+        bool changed = false;
+
+        const auto drawColor = [&changed](const char* label, Math::float4& color)
+        {
+            float values[3] = { color.x, color.y, color.z };
+            if (!ImGui::ColorEdit3(label, values, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+            {
+                return;
+            }
+
+            color = Math::float4(values[0], values[1], values[2], color.w);
+            changed = true;
+        };
+
+        drawColor("Deep scatter tint", render.deepScatterColor);
+        drawColor("Subsurface tint", render.sssColor);
+        drawColor("Diffuse tint", render.diffuseColor);
+        drawColor("Foam tint", render.foamTint);
+
+        float contactFoamStrength = render.contactFoamStrength;
+        if (ImGui::DragFloat("Contact foam strength", &contactFoamStrength, 0.005f, 0.0f, 1.0f, "%.3f"))
+        {
+            render.contactFoamStrength = Math::Saturate(contactFoamStrength);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            ocean.SetRenderConfig(render);
+        }
+        return changed;
+    }
+
     void SanitizeConfigSelection(OceanSimulationConfig& config)
     {
         if (!config.defaultEqualizer)
@@ -1336,6 +1372,14 @@ namespace
         {
             ImGui::PushItemWidth(CalculateOceanControlItemWidth());
             configChanged |= DrawOceanSceneControls(renderer, ocean);
+            ImGui::PopItemWidth();
+            ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNodeEx("Rendering", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::PushItemWidth(CalculateOceanControlItemWidth());
+            configChanged |= DrawOceanRenderControls(ocean);
             ImGui::PopItemWidth();
             ImGui::TreePop();
         }

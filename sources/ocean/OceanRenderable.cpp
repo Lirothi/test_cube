@@ -34,9 +34,6 @@ namespace
 
     constexpr int kOverlap = 2;
 
-    const Math::float4 kDeepScatterColor(0.0f, 0.012745098f, 0.04019608f, 1.0f);
-    const Math::float4 kSssColor(0.13333334f, 0.9411765f, 0.6039216f, 1.0f);
-    const Math::float4 kDiffuseColor(0.0f, 0.025490196f, 0.02745098f, 1.0f);
     const Math::float4 kAbsorptionGradientParams(4.0f, 0.0f, 0.0f, 0.0f);
     const std::array<Math::float4, 4> kAbsorptionColors = {
         Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),
@@ -45,7 +42,6 @@ namespace
         Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
     };
 
-    const Math::float4 kFoamTintColor(1.0f, 1.0f, 1.0f, 1.0f);
     const Math::float4 kWindParams0(12.0f, 1.0f, 0.5f, 0.2f);
 
     int ClipLevelHalfSize(uint32_t vertexDensity)
@@ -956,17 +952,17 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
 
 Math::float4 OceanRenderable::GetDeepScatterColor() const
 {
-    return kDeepScatterColor;
+    return simulation_ ? simulation_->GetRenderConfig().deepScatterColor : OceanRenderConfig{}.deepScatterColor;
 }
 
 Math::float4 OceanRenderable::GetSssColor() const
 {
-    return kSssColor;
+    return simulation_ ? simulation_->GetRenderConfig().sssColor : OceanRenderConfig{}.sssColor;
 }
 
 Math::float4 OceanRenderable::GetDiffuseColor() const
 {
-    return kDiffuseColor;
+    return simulation_ ? simulation_->GetRenderConfig().diffuseColor : OceanRenderConfig{}.diffuseColor;
 }
 
 Math::float4 OceanRenderable::GetAbsorptionGradientParams() const
@@ -1029,16 +1025,15 @@ Math::float4 OceanRenderable::GetFoamTrailParams1() const
 
 Math::float4 OceanRenderable::GetFoamParams2() const
 {
-    FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
     const float blendValue = Math::Clamp(foamTrailBlendValue_, 0.0f, 1.0f);
-    const float contactFoam = 0.1f;
+    const float contactFoam = simulation_ ? simulation_->GetRenderConfig().contactFoamStrength : 0.1f;
     const float underwaterParallax = 1.6f;
     return Math::float4(blendValue, contactFoam, underwaterParallax, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamTint() const
 {
-    return kFoamTintColor;
+    return simulation_ ? simulation_->GetRenderConfig().foamTint : OceanRenderConfig{}.foamTint;
 }
 
 Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) const

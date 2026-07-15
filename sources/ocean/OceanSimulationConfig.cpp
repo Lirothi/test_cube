@@ -368,6 +368,16 @@ namespace
         return foam;
     }
 
+    void ReadRender(const json& object, OceanRenderConfig& render)
+    {
+        render.deepScatterColor = ReadFloat4Member(object, "deepScatterColor", render.deepScatterColor);
+        render.sssColor = ReadFloat4Member(object, "sssColor", render.sssColor);
+        render.diffuseColor = ReadFloat4Member(object, "diffuseColor", render.diffuseColor);
+        render.foamTint = ReadFloat4Member(object, "foamTint", render.foamTint);
+        render.contactFoamStrength = std::max(0.0f,
+            ReadFloatMember(object, "contactFoamStrength", render.contactFoamStrength));
+    }
+
     std::vector<EqualizerPreset::Filter> ReadFilters(const json& object, const char* key)
     {
         std::vector<EqualizerPreset::Filter> filters;
@@ -449,6 +459,17 @@ namespace
         out["trailTextureSize"] = WriteFloat2(foam.trailTextureSize);
         out["underwater"] = foam.underwater;
         out["cascadesWeights"] = WriteFloat4(foam.cascadesWeights);
+        return out;
+    }
+
+    json WriteRender(const OceanRenderConfig& render)
+    {
+        json out;
+        out["deepScatterColor"] = WriteFloat4(render.deepScatterColor);
+        out["sssColor"] = WriteFloat4(render.sssColor);
+        out["diffuseColor"] = WriteFloat4(render.diffuseColor);
+        out["foamTint"] = WriteFloat4(render.foamTint);
+        out["contactFoamStrength"] = std::max(0.0f, render.contactFoamStrength);
         return out;
     }
 
@@ -750,6 +771,7 @@ OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& co
 {
     OceanSimulationConfig clone;
     clone.settings = config.settings;
+    clone.render = config.render;
     clone.localWindDirectionDegrees = config.localWindDirectionDegrees;
     clone.swellDirectionDegrees = config.swellDirectionDegrees;
     clone.windForce01 = config.windForce01;
@@ -807,6 +829,11 @@ bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulation
         ReadSettings(*settings, config.settings);
     }
 
+    if (const json* render = FindObject(root, "render"))
+    {
+        ReadRender(*render, config.render);
+    }
+
     if (const json* scene = FindObject(root, "scene"))
     {
         config.localWindDirectionDegrees = ReadFloatMember(*scene, "localWindDirectionDegrees", config.localWindDirectionDegrees);
@@ -829,6 +856,7 @@ bool SaveOceanSimulationConfigToFile(const std::wstring& path, const OceanSimula
 
     json root;
     root["settings"] = WriteSettings(safeConfig.settings);
+    root["render"] = WriteRender(safeConfig.render);
 
     json scene;
     scene["localWindDirectionDegrees"] = safeConfig.localWindDirectionDegrees;

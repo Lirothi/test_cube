@@ -4,12 +4,23 @@
 #include <string>
 #include <vector>
 
+#include "core/math/Math.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
+
+struct OceanRenderConfig
+{
+    Math::float4 deepScatterColor = Math::float4(0.0f, 0.012745098f, 0.04019608f, 1.0f);
+    Math::float4 sssColor = Math::float4(0.13333334f, 0.9411765f, 0.6039216f, 1.0f);
+    Math::float4 diffuseColor = Math::float4(0.0f, 0.025490196f, 0.02745098f, 1.0f);
+    Math::float4 foamTint = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
+    float contactFoamStrength = 0.1f;
+};
 
 struct OceanSimulationConfig
 {
     OceanSimulationSettings settings;
+    OceanRenderConfig render;
 
     float localWindDirectionDegrees = 0.0f;
     float swellDirectionDegrees = 0.0f;
