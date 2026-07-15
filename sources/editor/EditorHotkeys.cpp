@@ -31,7 +31,7 @@ namespace
         Save,
         FocusSelection,
         FrameScene,
-        DropSelectionToGround,
+        SnapSelectionToSurfaceBelow,
         ClearSelection,
         StoreCameraBookmark,
         RecallCameraBookmark
@@ -66,7 +66,7 @@ namespace
         { "Ctrl+S Save",           ImGuiKey_S,      ShortcutModifiers::Ctrl,      ShortcutAction::Save },
         { "F Frame",               ImGuiKey_F,      ShortcutModifiers::Plain,     ShortcutAction::FocusSelection },
         { "Home Frame Scene",      ImGuiKey_Home,   ShortcutModifiers::Plain,     ShortcutAction::FrameScene,          true },
-        { "End Drop",              ImGuiKey_End,    ShortcutModifiers::Plain,     ShortcutAction::DropSelectionToGround },
+        { "End Snap Below",        ImGuiKey_End,    ShortcutModifiers::Plain,     ShortcutAction::SnapSelectionToSurfaceBelow },
         { "Esc Clear",             ImGuiKey_Escape, ShortcutModifiers::Plain,     ShortcutAction::ClearSelection },
         { "Ctrl+1 Store Camera 1", ImGuiKey_1,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 0 },
         { "Ctrl+2 Store Camera 2", ImGuiKey_2,      ShortcutModifiers::Ctrl,      ShortcutAction::StoreCameraBookmark, true, 1 },
@@ -158,8 +158,8 @@ namespace
         case ShortcutAction::FrameScene:
             actions.frameScene = true;
             break;
-        case ShortcutAction::DropSelectionToGround:
-            actions.dropSelectionToGround = true;
+        case ShortcutAction::SnapSelectionToSurfaceBelow:
+            actions.snapSelectionToSurfaceBelow = true;
             break;
         case ShortcutAction::ClearSelection:
             actions.clearSelection = true;

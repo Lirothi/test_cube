@@ -5,6 +5,8 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <cstring>
 
 using namespace DirectX;
@@ -20,6 +22,11 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     indexCount_ = indexCount;
     vertexStride_ = vertexStride;
     indexFormat_ = indexFormat;
+
+#if WITH_EDITOR
+    raycastPositions_.clear();
+    raycastIndices_.clear();
+#endif
 
     // Default single submesh spanning the whole buffer (material slot 0). CreateGPU_PNTUV may
     // replace this with a multi-material table; every other caller keeps the single submesh.
@@ -86,7 +93,91 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
         bounds.Expand(Math::float3(vert.position.x, vert.position.y, vert.position.z));
     }
     bounds_ = bounds;
+
+#if WITH_EDITOR
+    raycastPositions_.reserve(verts.size());
+    for (const VertexPNTUV& vert : verts)
+    {
+        raycastPositions_.emplace_back(vert.position.x, vert.position.y, vert.position.z);
+    }
+    if (indices && indexCount >= 3)
+    {
+        raycastIndices_.assign(indices, indices + indexCount);
+    }
+#endif
 }
+
+#if WITH_EDITOR
+bool Mesh::RaycastLocal(const Math::float3& origin, const Math::float3& direction,
+    float* outDistance) const
+{
+    float bestDistance = FLT_MAX;
+    if (outDistance)
+    {
+        *outDistance = bestDistance;
+    }
+    if (!HasRaycastTriangles() || direction.Dot(direction) < 1.0e-16f)
+    {
+        return false;
+    }
+
+    constexpr float kDeterminantEpsilon = 1.0e-8f;
+    constexpr float kBarycentricEpsilon = 1.0e-6f;
+    for (size_t i = 0; i + 2 < raycastIndices_.size(); i += 3)
+    {
+        const uint32_t i0 = raycastIndices_[i];
+        const uint32_t i1 = raycastIndices_[i + 1];
+        const uint32_t i2 = raycastIndices_[i + 2];
+        if (i0 >= raycastPositions_.size() ||
+            i1 >= raycastPositions_.size() ||
+            i2 >= raycastPositions_.size())
+        {
+            continue;
+        }
+
+        const Math::float3& v0 = raycastPositions_[i0];
+        const Math::float3 edge1 = raycastPositions_[i1] - v0;
+        const Math::float3 edge2 = raycastPositions_[i2] - v0;
+        const Math::float3 p = direction.Cross(edge2);
+        const float determinant = edge1.Dot(p);
+        if (std::fabs(determinant) < kDeterminantEpsilon)
+        {
+            continue;
+        }
+
+        const float inverseDeterminant = 1.0f / determinant;
+        const Math::float3 fromV0 = origin - v0;
+        const float u = fromV0.Dot(p) * inverseDeterminant;
+        if (u < -kBarycentricEpsilon || u > 1.0f + kBarycentricEpsilon)
+        {
+            continue;
+        }
+
+        const Math::float3 q = fromV0.Cross(edge1);
+        const float v = direction.Dot(q) * inverseDeterminant;
+        if (v < -kBarycentricEpsilon || u + v > 1.0f + kBarycentricEpsilon)
+        {
+            continue;
+        }
+
+        const float distance = edge2.Dot(q) * inverseDeterminant;
+        if (distance >= 0.0f && distance < bestDistance)
+        {
+            bestDistance = distance;
+        }
+    }
+
+    if (bestDistance == FLT_MAX)
+    {
+        return false;
+    }
+    if (outDistance)
+    {
+        *outDistance = bestDistance;
+    }
+    return true;
+}
+#endif
 
 void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
     const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {

@@ -585,7 +585,8 @@ void Scene::SetSelectedEditorObjectIds(const std::vector<SceneObjectId>& ids)
 Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
     const Math::float3& dir,
     float* outDistance,
-    SceneObjectId ignoredObjectId) const
+    SceneObjectId ignoredObjectId,
+    const std::vector<SceneObjectId>* ignoredObjectIds) const
 {
     SceneObjectId best = 0;
     float bestT = FLT_MAX;
@@ -598,7 +599,9 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
 
     for (size_t i = 0; i < objects_.size(); ++i)
     {
-        if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId ||
+        const bool ignoredBySet = ignoredObjectIds &&
+            std::find(ignoredObjectIds->begin(), ignoredObjectIds->end(), objectIds_[i]) != ignoredObjectIds->end();
+        if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId || ignoredBySet ||
             !objects_[i] || !objects_[i]->IsVisible() || !objects_[i]->IsRaycastPickable())
         {
             continue; // editor-owned + visible + pickable only (skip emitters/helpers)
@@ -637,9 +640,35 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
             }
         }
 
-        if (hit && tmin < bestT)
+        if (!hit || tmin >= bestT)
         {
-            bestT = tmin;
+            continue;
+        }
+
+        float candidateT = tmin;
+        RtInstanceDesc instance{};
+        if (objects_[i]->GetRtInstance(instance) && instance.mesh &&
+            instance.mesh->HasRaycastTriangles())
+        {
+            const Math::mat4 inverseWorld = Math::mat4::Inverse(instance.world);
+            const Math::float3 localOrigin = inverseWorld.TransformPoint(origin);
+            const Math::float3 localDirection = inverseWorld.TransformDirection(dir);
+            const bool validLocalRay =
+                std::isfinite(localOrigin.x) && std::isfinite(localOrigin.y) && std::isfinite(localOrigin.z) &&
+                std::isfinite(localDirection.x) && std::isfinite(localDirection.y) && std::isfinite(localDirection.z) &&
+                localDirection.Dot(localDirection) >= 1.0e-16f;
+            if (validLocalRay)
+            {
+                if (!instance.mesh->RaycastLocal(localOrigin, localDirection, &candidateT))
+                {
+                    continue; // The ray crossed the AABB but missed the actual mesh surface.
+                }
+            }
+        }
+
+        if (candidateT < bestT)
+        {
+            bestT = candidateT;
             best = objectIds_[i];
         }
     }

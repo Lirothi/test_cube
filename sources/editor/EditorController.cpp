@@ -1751,45 +1751,110 @@ namespace
         return FrameSelection(renderer, scene, document, visibleObjects);
     }
 
-    std::string DropSelectionToGround(EditorContext& ctx, EditorCommandStack& commandStack)
+    std::string SnapSelectionToSurfaceBelow(EditorContext& ctx, EditorCommandStack& commandStack)
     {
-        const EditorObjectId primary = ctx.selection.Primary();
-        EditorObject* object = ctx.document.Find(primary);
-        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(primary.value);
-        if (!object || !runtime || !runtime->AsRenderableObject())
+        if (ctx.selection.Empty())
         {
-            return "Select a mesh to drop to ground";
+            return "Select a mesh to snap below";
         }
 
-        const AABB& bounds = runtime->GetWorldBounds();
-        if (!bounds.IsValid())
+        std::vector<Scene::SceneObjectId> ignoredObjectIds;
+        ignoredObjectIds.reserve(ctx.selection.Size());
+        for (const EditorObjectId id : ctx.selection.Ordered())
         {
-            return "Selected mesh has no valid bounds";
+            ignoredObjectIds.push_back(id.value);
         }
 
-        const Math::float3 center = bounds.GetCenter();
-        const Math::float3 rayOrigin(center.x, bounds.GetMin().y, center.z);
         const Math::float3 rayDirection(0.0f, -1.0f, 0.0f);
-        float hitDistance = 0.0f;
-        const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
-            rayOrigin, rayDirection, &hitDistance, primary.value);
-        if (hit == 0 || !std::isfinite(hitDistance))
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(ctx.selection.Size());
+        std::size_t meshCount = 0;
+        std::size_t alreadyRestingCount = 0;
+        std::size_t noSurfaceCount = 0;
+
+        for (const EditorObjectId id : ctx.selection.Ordered())
         {
-            return "No visible editor object below selection";
-        }
-        if (hitDistance <= 1.0e-4f)
-        {
-            return "Selection is already resting on a surface";
+            EditorObject* object = ctx.document.Find(id);
+            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
+            if (!object || !runtime || !runtime->AsRenderableObject())
+            {
+                continue;
+            }
+            ++meshCount;
+
+            const AABB& bounds = runtime->GetWorldBounds();
+            if (!bounds.IsValid())
+            {
+                ++noSurfaceCount;
+                continue;
+            }
+
+            const Math::float3 center = bounds.GetCenter();
+            const Math::float3 rayOrigin(center.x, bounds.GetMin().y, center.z);
+            float hitDistance = 0.0f;
+            const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
+                rayOrigin, rayDirection, &hitDistance, 0, &ignoredObjectIds);
+            if (hit == 0 || !std::isfinite(hitDistance))
+            {
+                ++noSurfaceCount;
+                continue;
+            }
+            if (hitDistance <= 1.0e-4f)
+            {
+                ++alreadyRestingCount;
+                continue;
+            }
+
+            EditorTransform after = object->transform;
+            after.position.y -= hitDistance;
+            commands.push_back(std::make_unique<TransformObjectCommand>(
+                object->id, object->transform, after));
         }
 
-        EditorTransform after = object->transform;
-        after.position.y -= hitDistance;
-        if (!commandStack.Execute(ctx, std::make_unique<TransformObjectCommand>(
-                object->id, object->transform, after)))
+        if (meshCount == 0)
         {
-            return "Drop to ground failed";
+            return "Select one or more meshes to snap below";
         }
-        return "Dropped selection to ground";
+        if (commands.empty())
+        {
+            if (alreadyRestingCount == meshCount)
+            {
+                return meshCount == 1 ?
+                    "Selection is already resting on a surface" :
+                    "Selected meshes are already resting on surfaces";
+            }
+            return "No visible editor object below selected meshes";
+        }
+
+        const std::size_t snappedCount = commands.size();
+        bool snapped = false;
+        if (commands.size() == 1)
+        {
+            snapped = commandStack.Execute(ctx, std::move(commands.front()));
+        }
+        else
+        {
+            auto composite = std::make_unique<CompositeCommand>(
+                "Snap " + std::to_string(commands.size()) + " Objects to Surface Below");
+            for (std::unique_ptr<EditorCommand>& command : commands)
+            {
+                composite->Add(std::move(command));
+            }
+            snapped = commandStack.Execute(ctx, std::move(composite));
+        }
+        if (!snapped)
+        {
+            return "Snap to surface below failed";
+        }
+
+        std::string status = "Snapped " + std::to_string(snappedCount) +
+            (snappedCount == 1 ? " object" : " objects") + " to surfaces below";
+        const std::size_t skippedCount = alreadyRestingCount + noSurfaceCount;
+        if (skippedCount > 0)
+        {
+            status += "; skipped " + std::to_string(skippedCount);
+        }
+        return status;
     }
 
     const EditorObject* FindEnvironmentObject(
@@ -2740,9 +2805,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             levelStatus_ = "No visible objects to frame";
         }
     }
-    if (hotkeyActions.dropSelectionToGround)
+    if (hotkeyActions.snapSelectionToSurfaceBelow)
     {
-        levelStatus_ = DropSelectionToGround(ctx, commandStack_);
+        levelStatus_ = SnapSelectionToSurfaceBelow(ctx, commandStack_);
     }
     if (hotkeyActions.clearSelection)
     {
@@ -2822,6 +2887,23 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     pasteObject();
                 }
+                ImGui::Separator();
+                bool canSnapBelow = false;
+                for (const EditorObjectId id : selection_.Ordered())
+                {
+                    const EditorObject* snapObject = document_.Find(id);
+                    const RenderableObjectBase* snapRuntime = scene.FindEditorObject(id.value);
+                    if (snapObject && snapRuntime && snapRuntime->AsRenderableObject())
+                    {
+                        canSnapBelow = true;
+                        break;
+                    }
+                }
+                if (ImGui::MenuItem("Snap to Surface Below", "End", false, canSnapBelow))
+                {
+                    levelStatus_ = SnapSelectionToSurfaceBelow(ctx, commandStack_);
+                }
+                ShowDisabledItemTooltip(!canSnapBelow, "Select a mesh to snap to the nearest surface below it.");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Create"))

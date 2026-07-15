@@ -119,7 +119,7 @@
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        -60.0,
         0.0
       ],
       "scale": [
@@ -163,19 +163,19 @@
       "model": "import_staging/date_palm/scene.gltf",
       "name": "staticMesh #10",
       "position": [
-        31.1207275390625,
-        2.096062183380127,
-        77.59576416015625
+        31.12073516845703,
+        2.096061944961548,
+        77.59577178955078
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        60.0,
         0.0
       ],
       "scale": [
+        1.0000001192092896,
         1.0,
-        1.0,
-        1.0
+        1.0000001192092896
       ],
       "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
@@ -276,6 +276,156 @@
         0.10000000149011612,
         0.10000000149011612,
         0.10000000149011612
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 19,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "staticMesh #9 Copy",
+      "position": [
+        48.321102142333984,
+        1.8322287797927856,
+        71.96895599365234
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 20,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "staticMesh #10 Copy",
+      "position": [
+        42.720645904541016,
+        2.3516156673431396,
+        72.19559478759766
+      ],
+      "rotationDeg": [
+        0.0,
+        -45.0,
+        0.0
+      ],
+      "scale": [
+        0.9999998807907104,
+        1.0,
+        0.9999998807907104
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 21,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "staticMesh #8 Copy",
+      "position": [
+        49.12807083129883,
+        0.13327233493328094,
+        80.07115173339844
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 22,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/rock_boulder_2_game_ready_asset/scene.gltf",
+      "name": "staticMesh #13 Copy",
+      "position": [
+        47.60773849487305,
+        1.7849925756454468,
+        72.65681457519531
+      ],
+      "rotationDeg": [
+        0.0,
+        -59.98023986816406,
+        0.0
+      ],
+      "scale": [
+        0.009999998845160007,
+        0.009999999776482582,
+        0.009999998845160007
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 23,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "name": "staticMesh #12 Copy",
+      "position": [
+        49.24107360839844,
+        1.30836021900177,
+        74.1749267578125
+      ],
+      "rotationDeg": [
+        0.0,
+        60.039512634277344,
+        0.0
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 24,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "staticMesh #11 Copy",
+      "position": [
+        42.43621826171875,
+        1.1406837701797485,
+        79.43365478515625
+      ],
+      "rotationDeg": [
+        0.0,
+        -59.99999237060547,
+        0.0
+      ],
+      "scale": [
+        1.3000000715255737,
+        1.3000000715255737,
+        1.3000000715255737
       ],
       "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"

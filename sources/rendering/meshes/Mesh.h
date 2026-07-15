@@ -89,6 +89,14 @@ public:
 
     const AABB& GetBoundingBox() const { return bounds_; }
 
+#if WITH_EDITOR
+    // Editor picking/placement narrow phase. Geometry stays in mesh-local space;
+    // callers transform the ray so its parameter remains a world-ray distance.
+    bool HasRaycastTriangles() const { return !raycastPositions_.empty() && raycastIndices_.size() >= 3; }
+    bool RaycastLocal(const Math::float3& origin, const Math::float3& direction,
+        float* outDistance) const;
+#endif
+
 private:
     // Step 6: a coarser LOD = a reduced index buffer over the SAME (base) vertex buffer.
     struct LodLevel {
@@ -123,4 +131,11 @@ private:
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs
+
+#if WITH_EDITOR
+    // Position-only CPU copy of base LOD geometry. This avoids GPU readback and retains
+    // substantially less data than the complete PNTUV vertex stream.
+    std::vector<Math::float3> raycastPositions_;
+    std::vector<uint32_t> raycastIndices_;
+#endif
 };
