@@ -246,6 +246,30 @@ SceneObjectRegistry::ObjectList CreateParticleEmitter(SceneObjectRegistry::Creat
     d.drag = o.value("drag", d.drag);
     d.seed = o.value("seed", d.seed);
 
+    // E2 rendering fields.
+    readRange("size", d.sizeStart, d.sizeEnd);
+    d.texture = o.value("texture", d.texture);
+    d.additive = o.value("additive", d.additive);
+    d.softFade = o.value("softFade", d.softFade);
+    d.sortParticles = o.value("sort", !d.additive); // alpha emitters sort back-to-front by default
+    d.flipbookCols = o.value("flipCols", d.flipbookCols);
+    d.flipbookRows = o.value("flipRows", d.flipbookRows);
+    d.flipbookFps = o.value("flipFps", d.flipbookFps);
+    d.flipbookRandomStart = o.value("flipRandomStart", d.flipbookRandomStart);
+    d.frameBlend = o.value("frameBlend", d.frameBlend);
+    if (const auto it = o.find("colorKeys"); it != o.end() && it->is_array())
+    {
+        for (size_t k = 0; k < 4 && k < it->size(); ++k)
+        {
+            const auto& key = (*it)[k];
+            if (key.is_array() && key.size() >= 4)
+            {
+                d.colorKeys[k] = float4(key[0].get<float>(), key[1].get<float>(),
+                                        key[2].get<float>(), key[3].get<float>());
+            }
+        }
+    }
+
     auto emitter = std::make_unique<ParticleEmitterObject>(d);
     emitter->SetPosition(readF3("position", float3(0.0f, 0.0f, 0.0f)));
 

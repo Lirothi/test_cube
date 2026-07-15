@@ -518,8 +518,10 @@
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
     <None Include="shaders\particle_common.hlsl" />
+    <None Include="shaders\particle_sort_cs.hlsl" />
     <None Include="shaders\particle_spawn_cs.hlsl" />
     <None Include="shaders\particle_update_cs.hlsl" />
+    <None Include="shaders\particles.hlsl" />
     <None Include="shaders\editor_preview.hlsl" />
     <None Include="shaders\reflection_blur_cs.hlsl" />
     <None Include="shaders\selection_outline_cs.hlsl" />

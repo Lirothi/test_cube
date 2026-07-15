@@ -7,10 +7,15 @@
 
 #include <Windows.h>
 
+#include "app/camera/Camera.h"
 #include "core/Helpers.h"
+#include "core/math/Math.h"
+#include "materials/Material.h"
+#include "rendering/core/CommandListBindState.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
+#include "rendering/descriptors/SamplerManager.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -18,6 +23,7 @@ namespace
 {
     constexpr UINT kThreadsPerGroup = 64;
     constexpr UINT kReadbackSlots = 4; // >= frames in flight, so the oldest slot is settled
+    constexpr uint32_t kSortMax = 1024; // == SORT_N in particle_sort_cs.hlsl (single group)
 
     uint32_t HashU32(uint32_t v)
     {
@@ -51,8 +57,64 @@ void ParticleEmitterObject::Init(Renderer* renderer,
     updateCs_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, L"shaders/particle_update_cs.hlsl");
     spawnCs_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, L"shaders/particle_spawn_cs.hlsl");
 
+    // E2c: alpha (smoke) emitters sort back-to-front. Single-group bitonic caps the count.
+    sortEnabled_ = desc_.sortParticles && desc_.maxParticles <= kSortMax;
+    if (desc_.sortParticles && !sortEnabled_)
+    {
+        OutputDebugStringA("[vfx] emitter maxParticles > sort cap (1024); back-to-front sort disabled\n");
+    }
+    if (sortEnabled_)
+    {
+        sortCs_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, L"shaders/particle_sort_cs.hlsl");
+    }
+
     CreateBuffers(renderer, uploadCmdList, uploadKeepAlive);
     CreateDescriptors(renderer->GetDevice());
+
+    // E2: billboard pipeline. Vertexless ("None" resolves to an empty input layout); draws into
+    // the transparent pass targets — RT0 (scene color) blends, the velocity/bias/objectId
+    // targets are write-masked off (a soft quad must not stomp motion vectors or picking ids
+    // under the fire). Reversed-Z depth test, no depth write, no culling (billboards).
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/particles.hlsl";
+        gd.inputLayoutKey = "None";
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.numRT = 4;
+        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
+        gd.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
+        gd.rtvFormats[2] = renderer->GetDlssBiasFormat();
+        gd.rtvFormats[3] = renderer->GetObjectIdFormat();
+        gd.dsvFormat = renderer->GetDsvFormat();
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        gd.blend.IndependentBlendEnable = TRUE;
+        gd.blend.RenderTarget[0].BlendEnable = TRUE;
+        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE; // PS outputs premultiplied rgb
+        gd.blend.RenderTarget[0].DestBlend = desc_.additive ? D3D12_BLEND_ONE : D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        gd.blend.RenderTarget[0].DestBlendAlpha = desc_.additive ? D3D12_BLEND_ONE : D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        for (int rt = 1; rt < 4; ++rt)
+        {
+            gd.blend.RenderTarget[rt].BlendEnable = FALSE;
+            gd.blend.RenderTarget[rt].RenderTargetWriteMask = 0; // untouched under the quad
+        }
+        if (sortEnabled_) { gd.defines.emplace_back("PARTICLE_SORTED", "1"); }
+        drawMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+    }
+
+    hasSprite_ = false;
+    if (!desc_.texture.empty())
+    {
+        Texture2D::CreateDesc td{};
+        td.path = std::wstring(desc_.texture.begin(), desc_.texture.end());
+        td.usage = Texture2D::Usage::AlbedoSRGB;
+        hasSprite_ = sprite_.CreateFromFile(renderer, uploadCmdList, td, uploadKeepAlive);
+    }
 }
 
 void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
@@ -80,6 +142,14 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     deadCount_ = up.CreateBufferWithData(initCount, sizeof(initCount),
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    if (sortEnabled_)
+    {
+        std::vector<uint32_t> initSorted(n);
+        for (uint32_t i = 0; i < n; ++i) { initSorted[i] = i; }
+        sorted_ = up.CreateBufferWithData(initSorted.data(), sizeof(uint32_t) * n,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
     up.StealKeepAlive(uploadKeepAlive);
 
     renderer->SetResourceState(particles_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -89,6 +159,11 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     particles_->SetName(L"vfx.particles");
     deadList_->SetName(L"vfx.deadList");
     deadCount_->SetName(L"vfx.deadCount");
+    if (sorted_)
+    {
+        renderer->SetResourceState(sorted_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        sorted_->SetName(L"vfx.sorted");
+    }
 
     // Debug alive-count readback ring (tiny, persistently mapped).
     D3D12_HEAP_PROPERTIES hp{};
@@ -112,7 +187,7 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
 void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
 {
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.NumDescriptors = 4;
+    hd.NumDescriptors = 6;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
     ThrowIfFailed(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpuHeap_)));
@@ -123,7 +198,9 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
     particlesUav_ = h; h.ptr += inc;
     deadListUav_ = h; h.ptr += inc;
     deadCountUav_ = h; h.ptr += inc;
-    particlesSrv_ = h;
+    particlesSrv_ = h; h.ptr += inc;
+    sortedUav_ = h; h.ptr += inc;
+    sortedSrv_ = h;
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
     uav.Format = DXGI_FORMAT_UNKNOWN;
@@ -147,10 +224,29 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
     srv.Buffer.NumElements = desc_.maxParticles;
     srv.Buffer.StructureByteStride = sizeof(vfx::GpuParticle);
     device->CreateShaderResourceView(particles_.Get(), &srv, particlesSrv_);
+
+    if (sorted_)
+    {
+        uav.Buffer.NumElements = desc_.maxParticles;
+        uav.Buffer.StructureByteStride = sizeof(uint32_t);
+        device->CreateUnorderedAccessView(sorted_.Get(), nullptr, &uav, sortedUav_);
+        srv.Buffer.NumElements = desc_.maxParticles;
+        srv.Buffer.StructureByteStride = sizeof(uint32_t);
+        device->CreateShaderResourceView(sorted_.Get(), &srv, sortedSrv_);
+    }
 }
 
 void ParticleEmitterObject::Tick(float dt)
 {
+    // Conservative swept bounds for culling/sorting: max travel + sprite radius, gravity drift
+    // included. Cheap enough to refresh every frame (position may be animated/gizmo-dragged).
+    const Math::float3 pos = GetPosition();
+    const float travel = desc_.speedMax * desc_.lifetimeMax +
+        0.5f * std::abs(desc_.gravity) * desc_.lifetimeMax * desc_.lifetimeMax;
+    const float r = travel + std::max(desc_.sizeStart, desc_.sizeEnd);
+    worldBounds_ = AABB(Math::float3(pos.x - r, pos.y - r, pos.z - r),
+                        Math::float3(pos.x + r, pos.y + r, pos.z + r));
+
     if (vfx::g_freeze)
     {
         dt_ = 0.0f;
@@ -220,6 +316,24 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
         renderer->UAVBarrier(cl, deadCount_.Get());
     }
 
+    // E2c: bitonic sort into `sorted_` (far-to-near) using the previous frame's camera position.
+    // Runs after the particle state is final; the VS reads `sorted_` in the transparent pass.
+    if (sortEnabled_ && sortCs_ && sorted_)
+    {
+        renderer->Transition(cl, sorted_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        auto sortTbl = renderer->StageSrvUavTable({ particlesUav_, sortedUav_ });
+        auto sh = renderer->GetRenderContextPool()->Acquire();
+        auto& sctx = sh.ref();
+        const uint32_t cx = Math::FloatToUint32(lastCamPos_.x);
+        const uint32_t cy = Math::FloatToUint32(lastCamPos_.y);
+        const uint32_t cz = Math::FloatToUint32(lastCamPos_.z);
+        sctx.constants[0] = { cx, cy, cz, desc_.maxParticles };
+        sctx.uavTable[0] = sortTbl.gpu;
+        sortCs_->Bind(cl, sctx);
+        cl->Dispatch(1, 1, 1); // single workgroup
+        renderer->UAVBarrier(cl, sorted_.Get());
+    }
+
     if (vfx::g_debugAliveLog && readbackPtr_)
     {
         renderer->Transition(cl, deadCount_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -239,4 +353,82 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
             OutputDebugStringA(buf);
         }
     }
+}
+
+void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    if (!renderer || !cl || !drawMaterial_ || !drawMaterial_->GetPipelineState() || !particles_)
+    {
+        return;
+    }
+
+    // E2c: cache the camera for the NEXT frame's compute-pass sort (a one-frame lag in sort
+    // order is imperceptible; keeps the sort in the compute pass, not interleaved into graphics).
+    lastCamPos_ = camera.GetPosition();
+
+    // The VS reads the sim buffer (and the sorted index buffer); the compute pass left both in UAV.
+    renderer->Transition(cl, particles_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (sortEnabled_ && sorted_)
+    {
+        renderer->Transition(cl, sorted_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    vfx::GpuEmitterDrawParams dp{};
+    dp.sizeStart = desc_.sizeStart;
+    dp.sizeEnd = desc_.sizeEnd;
+    dp.flipCols = std::max(desc_.flipbookCols, 1u);
+    dp.flipRows = std::max(desc_.flipbookRows, 1u);
+    dp.flipFps = desc_.flipbookFps;
+    dp.flipRandomStart = desc_.flipbookRandomStart ? 1u : 0u;
+    dp.frameBlend = desc_.frameBlend ? 1u : 0u;
+    dp.hasTexture = hasSprite_ ? 1u : 0u;
+    for (int k = 0; k < 4; ++k)
+    {
+        dp.colorKeys[k][0] = desc_.colorKeys[k].x;
+        dp.colorKeys[k][1] = desc_.colorKeys[k].y;
+        dp.colorKeys[k][2] = desc_.colorKeys[k].z;
+        dp.colorKeys[k][3] = desc_.colorKeys[k].w;
+    }
+    dp.maxParticles = desc_.maxParticles;
+
+    // E2b: the depthCopy (opaque depth snapshotted at the start of Pass_Transparent) is the
+    // soft-particle source. It always exists; make it a pixel SRV (the tracker no-ops if already
+    // there). Disable the fade if it is somehow unavailable.
+    const auto& D = renderer->GetDeferredForFrame();
+    const bool haveDepth = D.depthCopy.Get() != nullptr && D.depthCopySRV.ptr != 0;
+    dp.softFadeDist = haveDepth ? desc_.softFade : 0.0f;
+
+    auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(dp), render::kConstantBufferAlignment);
+    std::memcpy(cb.cpu, &dp, sizeof(dp));
+
+    if (haveDepth)
+    {
+        renderer->Transition(cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    auto& ctx = h.ref();
+    ctx.cbv[1] = viewCB;   // Pass_Transparent's shared per-view CB (GlassView layout)
+    ctx.cbv[2] = cb.gpu;   // DrawParams
+    // t0 = particle buffer, t1 = sprite atlas (self-aliased when absent; PS won't sample it),
+    // t2 = scene depth copy for the soft fade, t3 = sorted order (self-aliased + unread when the
+    // PSO has no PARTICLE_SORTED define).
+    ctx.srvTable[0] = renderer->StageSrvUavTable(
+        { particlesSrv_, hasSprite_ ? sprite_.GetSRVCPU() : particlesSrv_,
+          haveDepth ? D.depthCopySRV : particlesSrv_,
+          (sortEnabled_ && sorted_) ? sortedSrv_ : particlesSrv_ }).gpu;
+    ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
+
+    drawMaterial_->Bind(cl, ctx, false);
+
+    // Vertexless draw: 6 verts per slot, dead slots emit zero-w degenerate quads. Keep the
+    // IA bind cache coherent with the direct topology set.
+    render::CommandListBindState& cache = render::g_clBindState;
+    if (!render::g_bindBatchingEnabled || cache.topology != D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
+    {
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (render::g_bindBatchingEnabled) { cache.topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST; }
+    }
+    cl->DrawInstanced(6u * desc_.maxParticles, 1, 0, 0);
 }

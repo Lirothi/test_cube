@@ -3,6 +3,8 @@
 #include <vector>
 #include <wrl/client.h>
 
+#include "core/math/AABB.h"
+#include "materials/Texture2D.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "vfx/ParticleTypes.h"
 
@@ -26,6 +28,15 @@ public:
 
     bool CastsShadow() const override { return false; }
     bool IsSimpleRender() const override { return true; }
+    // E2: draws in the sorted TransparentSimple bucket of Pass_Transparent.
+    bool IsTransparent() const override { return true; }
+    // Conservative swept bounds (position ± max travel + sprite size), updated in Tick — the
+    // base implementation needs a mesh, which an emitter doesn't have.
+    const AABB& GetWorldBounds() const override { return worldBounds_; }
+
+    // E2: billboard draw — 6*maxParticles vertices straight from the sim buffer (t0); dead
+    // slots collapse to zero-w degenerate quads (no alive-list / indirect args).
+    void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
     const vfx::EmitterDesc& Desc() const { return desc_; }
     vfx::EmitterDesc& DescRef() { return desc_; } // live tweaks: consumed at the next CB fill
@@ -49,6 +60,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> particles_; // GpuParticle[maxParticles], UAV+SRV
     Microsoft::WRL::ComPtr<ID3D12Resource> deadList_;  // uint[maxParticles], UAV
     Microsoft::WRL::ComPtr<ID3D12Resource> deadCount_; // uint[4] ([0] used), UAV
+    Microsoft::WRL::ComPtr<ID3D12Resource> sorted_;    // E2c: uint[maxParticles] back-to-front order
     Microsoft::WRL::ComPtr<ID3D12Resource> readback_;  // 4-slot ring of the dead counter
     const uint32_t* readbackPtr_ = nullptr;            // persistently mapped
 
@@ -57,7 +69,18 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE deadListUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE deadCountUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE particlesSrv_{}; // consumed by the E2 billboard draw
+    D3D12_CPU_DESCRIPTOR_HANDLE sortedUav_{};    // E2c sort output (compute)
+    D3D12_CPU_DESCRIPTOR_HANDLE sortedSrv_{};    // E2c: read by the billboard VS
 
     std::shared_ptr<Material> updateCs_;
     std::shared_ptr<Material> spawnCs_;
+    std::shared_ptr<Material> sortCs_; // E2c (only for sorted emitters)
+    bool sortEnabled_ = false;         // desc_.sortParticles && maxParticles <= SORT_N
+    Math::float3 lastCamPos_{0.0f, 0.0f, 0.0f}; // cached in Render for the next compute-pass sort
+
+    // --- E2 rendering ---
+    std::shared_ptr<Material> drawMaterial_; // particles.hlsl PSO (blend per desc_.additive)
+    Texture2D sprite_;                       // optional atlas; procedural disc when absent
+    bool hasSprite_ = false;
+    AABB worldBounds_ = AABB::Empty();
 };

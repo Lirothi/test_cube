@@ -1,27 +1,258 @@
 {
-  "camera": { "hfovDeg": 90.0, "zFar": 10000.0, "zNear": 0.01 },
-  "directionalLight": {
-    "ambient": 0.1, "color": [1.0, 0.95, 0.9], "direction": [-1.5, -0.7, -0.5],
-    "enabled": true, "exposure": 1.0
+  "camera": {
+    "hfovDeg": 90.0,
+    "zFar": 10000.0,
+    "zNear": 0.01
   },
-  "skybox": { "texture": "textures/skybox.dds" },
+  "directionalLight": {
+    "ambient": 0.04,
+    "color": [
+      0.4,
+      0.45,
+      0.6
+    ],
+    "direction": [
+      -1.5,
+      -0.7,
+      -0.5
+    ],
+    "enabled": true,
+    "exposure": 1.0
+  },
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  },
   "objects": [
-    { "type": "freeCameraStart", "id": 1, "name": "FreeCameraStart",
-      "position": [0.0, 2.0, 6.0], "rotationDeg": [10.0, 180.0, 0.0], "scale": [1.0, 1.0, 1.0], "enabled": true },
-    { "type": "staticMesh", "id": 2, "name": "ground", "material": "sandstone_cracks",
-      "model": "models/box.obj", "position": [0.0, -0.5, 0.0], "scale": [20.0, 1.0, 20.0],
-      "renderLayer": "Terrain", "texOffsScale": [0, 0, 10, 10], "enabled": true },
-
-    { "type": "particleEmitter", "id": 10, "name": "fire.sim",
-      "position": [0.0, 0.5, 0.0],
-      "maxParticles": 512, "spawnRate": 200.0, "lifetime": [0.5, 1.0],
-      "coneDir": [0.0, 1.0, 0.0], "coneAngleDeg": 25.0, "speed": [1.0, 2.0],
-      "gravity": -2.5, "drag": 0.5, "seed": 7, "enabled": true },
-
-    { "type": "particleEmitter", "id": 11, "name": "smoke.sim",
-      "position": [3.0, 0.5, 0.0],
-      "maxParticles": 512, "spawnRate": 30.0, "lifetime": [2.0, 4.0],
-      "coneDir": [0.0, 1.0, 0.0], "coneAngleDeg": 15.0, "speed": [0.4, 0.9],
-      "gravity": -1.0, "drag": 0.2, "seed": 21, "enabled": true }
+    {
+      "type": "freeCameraStart",
+      "id": 1,
+      "name": "FreeCameraStart",
+      "position": [
+        0.0,
+        0.9,
+        3.2
+      ],
+      "rotationDeg": [
+        6.0,
+        180.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "enabled": true
+    },
+    {
+      "type": "staticMesh",
+      "id": 2,
+      "name": "ground",
+      "material": "sandstone_cracks",
+      "model": "models/box.obj",
+      "position": [
+        0.0,
+        -0.5,
+        0.0
+      ],
+      "scale": [
+        20.0,
+        1.0,
+        20.0
+      ],
+      "renderLayer": "Terrain",
+      "texOffsScale": [
+        0,
+        0,
+        10,
+        10
+      ],
+      "enabled": true
+    },
+    {
+      "type": "particleEmitter",
+      "id": 10,
+      "name": "fire",
+      "position": [
+        0.0,
+        0.2,
+        0.0
+      ],
+      "maxParticles": 512,
+      "spawnRate": 140.0,
+      "lifetime": [
+        0.5,
+        1.0
+      ],
+      "coneDir": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "coneAngleDeg": 22.0,
+      "speed": [
+        1.2,
+        2.4
+      ],
+      "gravity": -2.5,
+      "drag": 0.6,
+      "seed": 7,
+      "size": [
+        0.55,
+        0.15
+      ],
+      "additive": true,
+      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/fire_01.png",
+      "colorKeys": [
+        [
+          1.0,
+          0.95,
+          0.55,
+          0.0
+        ],
+        [
+          1.0,
+          0.75,
+          0.25,
+          0.9
+        ],
+        [
+          1.0,
+          0.35,
+          0.06,
+          0.6
+        ],
+        [
+          0.6,
+          0.08,
+          0.01,
+          0.0
+        ]
+      ],
+      "enabled": true
+    },
+    {
+      "type": "particleEmitter",
+      "id": 11,
+      "name": "smoke",
+      "position": [
+        0.0,
+        0.9,
+        0.0
+      ],
+      "maxParticles": 256,
+      "spawnRate": 18.0,
+      "lifetime": [
+        2.0,
+        3.5
+      ],
+      "coneDir": [
+        0.15,
+        1.0,
+        0.0
+      ],
+      "coneAngleDeg": 14.0,
+      "speed": [
+        0.5,
+        1.0
+      ],
+      "gravity": -0.8,
+      "drag": 0.3,
+      "seed": 21,
+      "size": [
+        0.5,
+        1.6
+      ],
+      "additive": false,
+      "texture": "import_staging/kenney_particle-pack/PNG (Transparent)/smoke_07.png",
+      "colorKeys": [
+        [
+          0.25,
+          0.24,
+          0.23,
+          0.0
+        ],
+        [
+          0.3,
+          0.29,
+          0.28,
+          0.35
+        ],
+        [
+          0.34,
+          0.33,
+          0.32,
+          0.22
+        ],
+        [
+          0.4,
+          0.4,
+          0.4,
+          0.0
+        ]
+      ],
+      "enabled": true
+    },
+    {
+      "type": "particleEmitter",
+      "id": 12,
+      "name": "sparks.procedural",
+      "position": [
+        0.0,
+        0.3,
+        0.0
+      ],
+      "maxParticles": 128,
+      "spawnRate": 25.0,
+      "lifetime": [
+        0.4,
+        1.1
+      ],
+      "coneDir": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "coneAngleDeg": 40.0,
+      "speed": [
+        2.0,
+        4.0
+      ],
+      "gravity": 3.5,
+      "drag": 0.4,
+      "seed": 33,
+      "size": [
+        0.06,
+        0.02
+      ],
+      "additive": true,
+      "colorKeys": [
+        [
+          1.0,
+          0.85,
+          0.4,
+          1.0
+        ],
+        [
+          1.0,
+          0.7,
+          0.25,
+          1.0
+        ],
+        [
+          1.0,
+          0.4,
+          0.1,
+          0.8
+        ],
+        [
+          0.8,
+          0.2,
+          0.03,
+          0.0
+        ]
+      ],
+      "enabled": true
+    }
   ]
 }

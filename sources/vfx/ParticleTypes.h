@@ -35,6 +35,16 @@ struct alignas(16) GpuEmitterParams
 };
 static_assert(sizeof(GpuEmitterParams) == 80, "GpuEmitterParams must match the HLSL cbuffer");
 
+// Per-emitter draw constants — mirrors `DrawParams` (b2) in shaders/particles.hlsl (E2).
+struct alignas(16) GpuEmitterDrawParams
+{
+    float sizeStart; float sizeEnd; uint32_t flipCols; uint32_t flipRows;         // 0
+    float flipFps; uint32_t flipRandomStart; uint32_t frameBlend; uint32_t hasTexture; // 16
+    float colorKeys[4][4];                                                        // 32
+    uint32_t maxParticles; float softFadeDist; float _pad[2];                     // 96 (E2b)
+};
+static_assert(sizeof(GpuEmitterDrawParams) == 112, "GpuEmitterDrawParams must match HLSL");
+
 // CPU-side emitter description. E1 consumes the sim fields; size/color/flipbook/blend/texture
 // are stored now (one JSON schema) and consumed by the E2 renderer / E3 presets.
 struct EmitterDesc
@@ -71,6 +81,7 @@ struct EmitterDesc
     bool flipbookRandomStart = false;
     bool frameBlend = false;
     bool additive = true;              // blendMode: additive | (premultiplied) alpha
+    float softFade = 0.3f;             // E2b depth-fade distance in world units (0 disables)
     bool sortParticles = false;        // back-to-front within the emitter (alpha smoke, E2c)
     bool localSpace = false;           // particles follow the emitter transform
     std::string texture;               // flipbook/sprite atlas path
