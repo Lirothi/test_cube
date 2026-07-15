@@ -21,88 +21,6 @@
   "objects": [
     {
       "enabled": true,
-      "id": 1,
-      "inputLayout": "PosNormTanUV",
-      "material": "sandstone_cracks",
-      "model": "models/box.obj",
-      "name": "Floor",
-      "position": [
-        0.0,
-        -0.10000000149011612,
-        0.0
-      ],
-      "renderLayer": "Terrain",
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        40.0,
-        0.10000000149011612,
-        40.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "texOffsScale": [
-        0.0,
-        0.0,
-        20.0,
-        20.0
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 2,
-      "inputLayout": "PosNormTanUV",
-      "material": "brick",
-      "model": "models/corgi.obj",
-      "name": "staticMesh #2",
-      "position": [
-        -0.6419304609298706,
-        0.6362488269805908,
-        -5.665625095367432
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 3,
-      "inputLayout": "PosNormTanUV",
-      "material": "bronze",
-      "model": "models/teapot.obj",
-      "name": "staticMesh #3",
-      "position": [
-        -1.0184082984924316,
-        1.1197786331176758,
-        3.511849880218506
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 7,
       "name": "FreeCameraStart",
       "position": [
@@ -121,8 +39,65 @@
         1.0
       ],
       "type": "freeCameraStart"
+    },
+    {
+      "enabled": true,
+      "id": 11,
+      "inputLayout": "PosNormTanUV",
+      "material": "sandstone_cracks",
+      "model": "models/atoll_island.obj",
+      "name": "staticMesh #11",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 12,
+      "inputLayout": "PosNormTanUV",
+      "material": "sandstone_cracks",
+      "model": "models/atoll_lagoon_floor.obj",
+      "name": "staticMesh #12",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
     }
   ],
+  "ocean": {
+    "enabled": true,
+    "preset": "data/ocean/default.json",
+    "windForce": 0.6000000238418579
+  },
   "pointLights": [],
   "skybox": {
     "texture": "textures/skybox.dds"

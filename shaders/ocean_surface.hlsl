@@ -418,6 +418,24 @@ float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
     return NormalFromCombinedDerivatives(combined);
 }
 
+float GetAttenuation(float2 worldUV)
+{
+    float attenuation = 1.0f;
+    float2 shoreUV = ShoreDepthUV(worldUV);
+    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
+    {
+        float shoreDepth = SampleShoreDepth(shoreUV);
+        if (shoreDepth > 0.0f)
+        {
+            float viewDepth = ShoreViewDepth(shoreDepth);
+            float terrainHeight = shoreViewParams.z - viewDepth;
+            float waterDepth = -terrainHeight;
+            attenuation = max(saturate(waterDepth * 0.15f), 0.05f);
+        }
+    }
+    return attenuation;
+}
+
 [RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {
@@ -448,19 +466,7 @@ VSOutput VSMain(VSInput input)
     float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
     //float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
 
-    float attenuation = 1.0f;
-    float2 shoreUV = ShoreDepthUV(worldUV);
-    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
-    {
-        float shoreDepth = SampleShoreDepth(shoreUV);
-        if (shoreDepth > 0.0f)
-        {
-            float viewDepth = ShoreViewDepth(shoreDepth);
-            float terrainHeight = shoreViewParams.z - viewDepth;
-            float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth * 0.15f);
-        }
-    }
+    float attenuation = GetAttenuation(worldUV);
 
     displacement *= attenuation;
     //prevDisplacement *= attenuation;
@@ -942,20 +948,8 @@ PSOut PSMain(VSOutput input)
     float viewDist = length(viewVector);
     float2 screenUV = ComputeScreenUV(input.positionNDCJitter);
 
-    float attenuation = 1.0f;
-    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
-    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
-    {
-        float shoreDepth = SampleShoreDepth(shoreUV);
-        if (shoreDepth > 0.0f)
-        {
-            float viewDepth = ShoreViewDepth(shoreDepth);
-            float terrainHeight = shoreViewParams.z - viewDepth;
-            float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth * 0.5f);
-        }
-    }
-
+    float attenuation = GetAttenuation(baseWorld.xz);
+    
     float4 weights = LodWeights(viewDist, clipMapParams.w);
     DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
