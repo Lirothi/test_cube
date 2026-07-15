@@ -41,6 +41,25 @@ namespace
         return def;
     }
 
+    void ParsePointLightFlicker(const nlohmann::json& source, PointLightDesc& desc)
+    {
+        const auto it = source.find("flicker");
+        if (it == source.end() || !it->is_object())
+        {
+            return;
+        }
+
+        const nlohmann::json& flicker = *it;
+        desc.flicker.amplitude = JF(flicker, "amplitude", desc.flicker.amplitude);
+        desc.flicker.frequencyHz = JF(flicker, "frequencyHz", desc.flicker.frequencyHz);
+        const auto seedIt = flicker.find("seed");
+        if (seedIt != flicker.end() && seedIt->is_number_integer())
+        {
+            const std::int64_t seed = seedIt->get<std::int64_t>();
+            desc.flicker.seed = seed > 0 ? static_cast<std::uint32_t>(seed) : 0u;
+        }
+    }
+
     // Map an env light entity to its LightManager index. JsonLevel skips disabled
     // lights, so count only enabled same-type entities before the target; -1 if the
     // target is disabled / absent (then it is saved but has no live runtime light).
@@ -101,6 +120,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.color = JF3(p, "color", d.color);
         d.intensity = JF(p, "intensity", d.intensity);
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+        ParsePointLightFlicker(p, d);
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -269,6 +289,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.color = JF3(p, "color", d.color);
             d.intensity = JF(p, "intensity", d.intensity);
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+            ParsePointLightFlicker(p, d);
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }

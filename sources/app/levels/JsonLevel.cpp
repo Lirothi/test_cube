@@ -48,6 +48,25 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
 }
 
+void ParsePointLightFlicker(const json& source, PointLightDesc& desc)
+{
+    const auto it = source.find("flicker");
+    if (it == source.end() || !it->is_object())
+    {
+        return;
+    }
+
+    const json& flicker = *it;
+    desc.flicker.amplitude = flicker.value("amplitude", desc.flicker.amplitude);
+    desc.flicker.frequencyHz = flicker.value("frequencyHz", desc.flicker.frequencyHz);
+    const auto seedIt = flicker.find("seed");
+    if (seedIt != flicker.end() && seedIt->is_number_integer())
+    {
+        const std::int64_t seed = seedIt->get<std::int64_t>();
+        desc.flicker.seed = seed > 0 ? static_cast<std::uint32_t>(seed) : 0u;
+    }
+}
+
 bool IsFreeCameraStart(const json& o)
 {
     return o.value("type", std::string()) == "freeCameraStart";
@@ -223,6 +242,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.color = ToFloat3(pl.value("color", json::array()), desc.color);
             desc.intensity = pl.value("intensity", desc.intensity);
             desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
+            ParsePointLightFlicker(pl, desc);
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }

@@ -372,6 +372,47 @@ namespace
             dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             checkB("Cast Shadows", "shadowsEnabled", false);
+
+            bool flickerEnabled = p.contains("flicker") && p["flicker"].is_object();
+            if (ImGui::Checkbox("Flicker", &flickerEnabled))
+            {
+                nlohmann::json after = p;
+                if (flickerEnabled)
+                {
+                    after["flicker"] = {
+                        { "amplitude", 0.35f },
+                        { "frequencyHz", 7.0f },
+                        { "seed", 3 }
+                    };
+                }
+                else
+                {
+                    after.erase("flicker");
+                }
+                executeChange(std::move(after), "Toggle Point Light Flicker");
+            }
+
+            if (flickerEnabled)
+            {
+                ImGui::SeparatorText("Flicker");
+                auto dragFlicker = [&](const char* label, const char* key,
+                    float def, float speed, float lo, float hi)
+                {
+                    const nlohmann::json beforeItem = p;
+                    float value = JsonFloat(p["flicker"], key, def);
+                    const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi);
+                    if (changed) { p["flicker"][key] = value; }
+                    trackContinuousEdit(beforeItem, changed);
+                };
+                dragFlicker("Amplitude", "amplitude", 0.35f, 0.01f, 0.0f, 1.0f);
+                dragFlicker("Frequency (Hz)", "frequencyHz", 7.0f, 0.1f, 0.0f, 60.0f);
+
+                const nlohmann::json beforeItem = p;
+                int seed = p["flicker"].value("seed", 3);
+                const bool seedChanged = ImGui::DragInt("Seed", &seed, 1.0f, 0, 1000000);
+                if (seedChanged) { p["flicker"]["seed"] = std::max(seed, 0); }
+                trackContinuousEdit(beforeItem, seedChanged);
+            }
         }
         else if (env.type == "spotLight")
         {

@@ -2,6 +2,7 @@
 #include "rendering/core/Renderer.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 using namespace Math;
 
@@ -41,6 +42,63 @@ static D3D12_DEPTH_STENCIL_DESC MakeColor_DS()
     ds.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
     ds.BackFace = ds.FrontFace;
     return ds;
+}
+
+namespace
+{
+    constexpr float kTwoPi = 6.28318530718f;
+
+    float SeedPhase(std::uint32_t seed, std::uint32_t salt)
+    {
+        // A compact integer hash gives each light stable but distinct phases.
+        std::uint32_t v = seed ^ salt;
+        v ^= v >> 16;
+        v *= 0x7feb352du;
+        v ^= v >> 15;
+        v *= 0x846ca68bu;
+        v ^= v >> 16;
+        return static_cast<float>(v & 0x00ffffffu) * (kTwoPi / 16777215.0f);
+    }
+}
+
+void PointLight::SetDesc(const PointLightDesc& d)
+{
+    baseDesc_ = d;
+    ApplyFlicker();
+    ++transformVersion_;
+}
+
+void PointLight::Tick(float deltaTime)
+{
+    const PointLightFlickerDesc& flicker = baseDesc_.flicker;
+    if (deltaTime <= 0.0f || flicker.amplitude <= 0.0f || flicker.frequencyHz <= 0.0f)
+    {
+        return;
+    }
+
+    flickerTime_ += deltaTime;
+    ApplyFlicker();
+}
+
+void PointLight::ApplyFlicker()
+{
+    desc_ = baseDesc_;
+    const PointLightFlickerDesc& flicker = baseDesc_.flicker;
+    const float amplitude = std::clamp(flicker.amplitude, 0.0f, 1.0f);
+    const float frequencyHz = std::max(flicker.frequencyHz, 0.0f);
+    if (amplitude <= 0.0f || frequencyHz <= 0.0f)
+    {
+        return;
+    }
+
+    // The weights sum to one, keeping the authored amplitude an upper bound while
+    // the incommensurate waves avoid the mechanical regularity of one pure sine.
+    const float cycle = kTwoPi * frequencyHz * flickerTime_;
+    const float signal =
+        0.58f * std::sin(cycle + SeedPhase(flicker.seed, 0x68bc21ebu)) +
+        0.28f * std::sin(cycle * 1.73f + SeedPhase(flicker.seed, 0x02e5be93u)) +
+        0.14f * std::sin(cycle * 0.37f + SeedPhase(flicker.seed, 0x9e3779b9u));
+    desc_.intensity = std::max(0.0f, baseDesc_.intensity * (1.0f + amplitude * signal));
 }
 
 mat4 PointLight::BuildModel() const

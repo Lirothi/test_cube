@@ -6,12 +6,21 @@
 
 class Renderer;
 
+// Authorable fire-like variation. A zero amplitude or frequency leaves the light
+// steady, so existing point-light JSON keeps its exact current behavior.
+struct PointLightFlickerDesc {
+    float         amplitude = 0.0f;  // intensity multiplier varies by +/- this amount
+    float         frequencyHz = 0.0f;
+    std::uint32_t seed = 0;
+};
+
 struct PointLightDesc {
     Math::float3 position = Math::float3(0, 0, 0);
     float        radius   = 1.0f;
     Math::float3 color    = Math::float3(1, 1, 1);
     float        intensity= 1.0f;
     bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
+    PointLightFlickerDesc flicker{};
 };
 
 class PointLight {
@@ -19,12 +28,17 @@ public:
     void Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive);
 
-    void SetDesc(const PointLightDesc& d) { desc_ = d; ++transformVersion_; }
+    void SetDesc(const PointLightDesc& d);
     const PointLightDesc& GetDesc() const { return desc_; }
+
+    // Smooth, deterministic modulation for fire-like lights. This deliberately uses
+    // layered sine waves rather than frame-random values, which would visibly strobe.
+    void Tick(float deltaTime);
 
     // Rung 1 (Step 11) foundation: monotonic version bumped on any SetDesc (conservative — a
     // shadow cache compares it to detect a moved/changed light). PointLight has no dirty_, so
-    // it mirrors SpotLight's version. No consumer yet.
+    // it mirrors SpotLight's version. No consumer yet. Flicker changes intensity only, not
+    // the shadow transform or coverage, so it deliberately does not bump this version.
     std::uint32_t GetTransformVersion() const { return transformVersion_; }
 
     // TWO SEPARATE FUNCTIONS:
@@ -41,6 +55,7 @@ public:
     void OnMaterialHotReload();
 
 private:
+    void ApplyFlicker();
     Math::mat4 BuildModel() const;
 
     std::shared_ptr<Mesh> sphere_ = nullptr;
@@ -75,6 +90,8 @@ private:
 
     void RebuildHandleCache();
 
-    PointLightDesc desc_{};
+    PointLightDesc baseDesc_{};
+    PointLightDesc desc_{}; // effective desc after flicker modulation
+    float flickerTime_ = 0.0f;
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDesc
 };

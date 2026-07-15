@@ -655,6 +655,11 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
+    for (PointLight& light : lightManager_.PointLights())
+    {
+        light.Tick(deltaTime);
+    }
+
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     size_t batchSize = 32;
     TaskSystem::ParallelFor(objects_.size(),
