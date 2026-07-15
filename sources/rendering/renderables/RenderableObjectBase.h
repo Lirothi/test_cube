@@ -95,6 +95,11 @@ public:
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0) = 0;
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;
+    // Editor: does the viewport ray-vs-bounds pick consider this object? False for helpers that
+    // have no solid surface (e.g. particle emitters, whose swept culling AABB is huge and would
+    // hijack drag-drop placement raycasts / click selection). Such objects are selected via the
+    // outliner instead.
+    virtual bool IsRaycastPickable() const { return true; }
     // RT/SSR (S15b): true only for renderables that SAMPLE the off-screen glass reflection
     // (glass / TransparentStaticMesh). The glass-reflection G-buffer prepass rasterizes only
     // these — NOT every transparent object (e.g. the ocean has its own reflection path and

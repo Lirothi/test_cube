@@ -599,9 +599,9 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
     for (size_t i = 0; i < objects_.size(); ++i)
     {
         if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId ||
-            !objects_[i] || !objects_[i]->IsVisible())
+            !objects_[i] || !objects_[i]->IsVisible() || !objects_[i]->IsRaycastPickable())
         {
-            continue; // editor-owned + visible only
+            continue; // editor-owned + visible + pickable only (skip emitters/helpers)
         }
 
         const AABB& bounds = objects_[i]->GetWorldBounds();

@@ -30,6 +30,10 @@ public:
     bool IsSimpleRender() const override { return true; }
     // E2: draws in the sorted TransparentSimple bucket of Pass_Transparent.
     bool IsTransparent() const override { return true; }
+    // The swept culling AABB is huge and has no solid surface — keep it out of viewport picking
+    // so it never hijacks drag-drop placement (bug: mesh spawned at the camera). Select via the
+    // outliner. Same rationale as GetWorldBounds' conservative swept box.
+    bool IsRaycastPickable() const override { return false; }
     // Conservative swept bounds (position ± max travel + sprite size), updated in Tick — the
     // base implementation needs a mesh, which an emitter doesn't have.
     const AABB& GetWorldBounds() const override { return worldBounds_; }
