@@ -165,7 +165,9 @@ bool FinishTextureDds(ScratchImage work, bool srgb, DXGI_FORMAT target, const Im
                          srgb ? TEX_FILTER_SRGB : TEX_FILTER_DEFAULT, 0, mipped);
     if (FAILED(hr)) { log.Line("  FAIL mips " + Hex(hr) + "  " + label); return false; }
 
-    TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT;
+    // TEX_COMPRESS_PARALLEL spreads BC blocks across cores (DirectXTex OpenMP path, enabled per-TU
+    // in the vcxproj). The per-file loop below runs serially so this doesn't nest-oversubscribe.
+    TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL;
     if (!opts.highQuality) { cflags |= TEX_COMPRESS_BC7_QUICK; }
     ScratchImage bc;
     hr = Compress(mipped.GetImages(), mipped.GetImageCount(), mipped.GetMetadata(),
@@ -485,7 +487,7 @@ bool BuildFlipbook(const fs::path& dir, const Sequence& seq, const ImportOptions
 
     // BC7 sRGB, NO mip chain (mips would bleed color across cell boundaries in a packed atlas).
     atlas.OverrideFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
-    TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT;
+    TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL;
     if (!opts.highQuality) { cflags |= TEX_COMPRESS_BC7_QUICK; }
     ScratchImage bc;
     if (FAILED(Compress(*ai, DXGI_FORMAT_BC7_UNORM_SRGB, cflags, TEX_THRESHOLD_DEFAULT, bc)))
@@ -560,41 +562,6 @@ XMFLOAT3 CubeFaceDir(int face, float u, float v)
     }
 }
 
-// Compress a cube ScratchImage across its subresources in parallel (BC6H is very slow serially;
-// DirectXTex's own TEX_COMPRESS_PARALLEL needs OpenMP, so fan the per-face/per-mip images out over
-// tbb ourselves and reassemble the compressed cube).
-bool CompressCubeParallel(const ScratchImage& src, DXGI_FORMAT fmt, ScratchImage& out)
-{
-    const TexMetadata& md = src.GetMetadata();
-    if (FAILED(out.InitializeCube(fmt, md.width, md.height, md.arraySize / 6, md.mipLevels))) { return false; }
-
-    struct Sub { size_t item, mip; };
-    std::vector<Sub> subs;
-    for (size_t item = 0; item < md.arraySize; ++item)
-    {
-        for (size_t mip = 0; mip < md.mipLevels; ++mip) { subs.push_back({ item, mip }); }
-    }
-
-    std::atomic<bool> okAll{true};
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, subs.size()),
-        [&](const tbb::blocked_range<size_t>& r)
-        {
-            for (size_t i = r.begin(); i != r.end(); ++i)
-            {
-                const Image* s = src.GetImage(subs[i].mip, subs[i].item, 0);
-                const Image* d = out.GetImage(subs[i].mip, subs[i].item, 0);
-                ScratchImage tmp;
-                if (!s || !d || FAILED(Compress(*s, fmt, TEX_COMPRESS_DEFAULT, TEX_THRESHOLD_DEFAULT, tmp)))
-                {
-                    okAll = false; continue;
-                }
-                const Image* c = tmp.GetImage(0, 0, 0);
-                std::memcpy(d->pixels, c->pixels, std::min(d->slicePitch, c->slicePitch));
-            }
-        });
-    return okAll.load();
-}
-
 bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
 {
     const std::wstring w = in.wstring();
@@ -654,7 +621,8 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
 
     fs::path out = in; out.replace_extension(L".dds");
     ScratchImage bc;
-    hr = CompressCubeParallel(cubeMips, DXGI_FORMAT_BC6H_UF16, bc) ? S_OK : E_FAIL;
+    hr = Compress(cubeMips.GetImages(), cubeMips.GetImageCount(), cubeMips.GetMetadata(),
+                  DXGI_FORMAT_BC6H_UF16, TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL, TEX_THRESHOLD_DEFAULT, bc);
     if (SUCCEEDED(hr))
     {
         hr = SaveToDDSFile(bc.GetImages(), bc.GetImageCount(), bc.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
@@ -770,26 +738,19 @@ int RunImport(const ImportOptions& opts)
         jobs.push_back({ p, Narrow(fs::relative(p, opts.stagingDir, ec).wstring()) });
     }
 
-    std::atomic<int> converted{0};
-    std::atomic<int> texFailures{0};
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, jobs.size()),
-        [&](const tbb::blocked_range<size_t>& r)
-        {
-            const bool threadCo = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
-            for (size_t i = r.begin(); i != r.end(); ++i)
-            {
-                if (ConvertTexture(jobs[i].path, opts, log, jobs[i].rel)) { ++converted; }
-                else { ++texFailures; }
-            }
-            if (threadCo) { CoUninitialize(); }
-        });
-
-    failures += texFailures.load();
+    // Serial across textures — each Compress already parallelizes its blocks across cores via
+    // TEX_COMPRESS_PARALLEL (OpenMP), so a tbb fan-out here would nest and oversubscribe.
+    int converted = 0;
+    for (const auto& job : jobs)
+    {
+        if (ConvertTexture(job.path, opts, log, job.rel)) { ++converted; }
+        else { ++failures; }
+    }
 
     // Register the texture-set presets in one read-modify-write of data/materials.json.
     WritePresets(presets, log);
 
-    log.Line("converted: " + std::to_string(converted.load()) + " loose + " + std::to_string(presets.size()) +
+    log.Line("converted: " + std::to_string(converted) + " loose + " + std::to_string(presets.size()) +
              " sets + " + std::to_string(flipbooks) + " flipbooks, failures: " + std::to_string(failures));
     log.Line("=== done ===");
 

@@ -539,9 +539,14 @@ MR synth R=metal(0)/G=rough + preset registered to `data/materials.json` via nlo
 frame-sequence→flipbook atlas (`_frame_NN`/single-base `_NN`, wide grid 8→4×2, POT cell, premult
 alpha, BC7, `<base>.flipbook.json` sidecar); equirect `.hdr`→6-face cube→BC6H_UF16 DX10 (parallel
 per-subresource compress, RGBA16F fallback). Verified: palm (15 loose), coast_sand set, smoke+flame
-flipbooks, 1024 skybox all render correctly in-engine; glTF palm not mis-detected. Notes: BC7 default
-is FAST mode-6 (~10s/1024²; `--high` exhaustive ~219s); DirectXTex `TEX_COMPRESS_PARALLEL` needs
-OpenMP (unused) so parallelism is ours; normal-Y convention left as `--flip-green` opt (sand `_nor_dx`
+flipbooks, 1024 skybox all render correctly in-engine; glTF palm not mis-detected. Perf: OpenMP
+enabled per-TU on DirectXTex (vcxproj `OpenMPSupport`, adds vcomp140 dep) + `TEX_COMPRESS_PARALLEL`
+→ block-parallel compression across cores. Measured on 32c: FAST BC7 1024² ~9s→<1s, `--high`
+215s→21s (~10×), palm folder 13s→6s, 1024 BC6H skybox 141s→63s. Per-file loop is serial (each
+Compress already saturates cores via OpenMP; a tbb fan-out would nest-oversubscribe). Still ~20-60×
+slower than a GPU BC encoder — good-enough for offline; option (2) = wire DirectXTexCompressGPU/
+BCDirectCompute (needs a D3D device) if sub-second high-quality ever needed. BC7 default = FAST
+mode-6; `--high` = exhaustive. normal-Y convention left as `--flip-green` opt (sand `_nor_dx`
 rendered fine unflipped — convention not yet pinned). *(original spec below)* Vendor **DirectXTex** (source, MIT) into
 `third_party/` — prefer the library over shelling out to `texconv.exe` (in-process progress
 reporting, no binaries in the repo); keep the texconv-CLI route as a documented fallback if
