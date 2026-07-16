@@ -33,7 +33,8 @@ struct ContentBrowserAction
         AssignMaterial,
         OpenLevel,
         OpenLevelPreservingCamera,
-        OpenImportWindow
+        OpenImportWindow,
+        ReimportAsset
     };
 
     Type type = Type::None;

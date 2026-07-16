@@ -301,6 +301,7 @@ bool GatherTextureSet(const fs::path& dir, fs::path& diff, fs::path& rough, fs::
 
 bool ImportTextureSet(const fs::path& dir, const fs::path& diff, const fs::path& rough,
                       const fs::path& metal, const fs::path& nor, const ImportOptions& opts,
+                      bool importAlbedo, bool importMr, bool importNormal,
                       Log& log, PresetEntry& out)
 {
     // Set name = the map prefix before its role token (e.g. coast_sand_01_diff_2k -> coast_sand_01).
@@ -314,13 +315,24 @@ bool ImportTextureSet(const fs::path& dir, const fs::path& diff, const fs::path&
     log.Line("texture-set '" + name + "'");
     out.name = name;
 
-    ScratchImage a;
-    if (!LoadRgba8(diff, a, log, name + " albedo")) { return false; }
-    const fs::path aOut = dir / (name + "_albedo.dds");
-    if (!FinishTextureDds(std::move(a), true, DXGI_FORMAT_BC7_UNORM_SRGB, opts, aOut, log, name + " [albedo]")) { return false; }
-    out.albedo = PresetPath(aOut);
+    bool success = true;
+    if (importAlbedo)
+    {
+        ScratchImage a;
+        const fs::path aOut = dir / (name + "_albedo.dds");
+        if (!LoadRgba8(diff, a, log, name + " albedo") ||
+            !FinishTextureDds(std::move(a), true, DXGI_FORMAT_BC7_UNORM_SRGB,
+                opts, aOut, log, name + " [albedo]"))
+        {
+            success = false;
+        }
+        else
+        {
+            out.albedo = PresetPath(aOut);
+        }
+    }
 
-    if (!nor.empty())
+    if (importNormal && !nor.empty())
     {
         ScratchImage n;
         if (LoadRgba8(nor, n, log, name + " normal"))
@@ -340,13 +352,22 @@ bool ImportTextureSet(const fs::path& dir, const fs::path& diff, const fs::path&
             {
                 out.normal = PresetPath(nOut);
             }
+            else { success = false; }
         }
+        else { success = false; }
     }
 
-    const fs::path mrOut = dir / (name + "_mr.dds");
-    if (SynthesizeMR(rough, metal.empty() ? nullptr : &metal, opts, mrOut, log)) { out.mr = PresetPath(mrOut); }
+    if (importMr)
+    {
+        const fs::path mrOut = dir / (name + "_mr.dds");
+        if (SynthesizeMR(rough, metal.empty() ? nullptr : &metal, opts, mrOut, log))
+        {
+            out.mr = PresetPath(mrOut);
+        }
+        else { success = false; }
+    }
 
-    return true;
+    return success;
 }
 
 // Register texture-set presets in data/materials.json. The file is already in nlohmann-canonical
@@ -369,13 +390,13 @@ void WritePresets(const std::vector<PresetEntry>& entries, Log& log)
 
     for (const auto& e : entries)
     {
-        nlohmann::json p;
-        p["albedo"] = e.albedo;
+        nlohmann::json& p = j["presets"][e.name];
+        if (!p.is_object()) { p = nlohmann::json::object(); }
+        if (!e.albedo.empty()) { p["albedo"] = e.albedo; }
         if (!e.mr.empty()) { p["mr"] = e.mr; }
         if (!e.normal.empty()) { p["normal"] = e.normal; }
         p["normalIsRG"] = false;
         p["useTBN"] = true;
-        j["presets"][e.name] = p;
         log.Line("registered preset '" + e.name + "'");
     }
 
@@ -732,17 +753,30 @@ int RunImport(const ImportOptions& opts)
         {
             fs::path diff, rough, metal, nor;
             if (!GatherTextureSet(d, diff, rough, metal, nor)) { continue; }
-            // Honor the dialog's per-map selection.
-            if (!diff.empty()  && !included(diff))  { diff.clear(); }
-            if (!rough.empty() && !included(rough)) { rough.clear(); }
-            if (!metal.empty() && !included(metal)) { metal.clear(); }
-            if (!nor.empty()   && !included(nor))   { nor.clear(); }
-            if (diff.empty()) { continue; } // no albedo selected -> not a usable set
+            // Each generated texture is an independent import resource. A
+            // partial reimport selects only the maps required by that output.
+            const bool importAlbedo = includeSet.empty() || included(diff);
+            const bool importMr = includeSet.empty() || included(rough) ||
+                (!metal.empty() && included(metal));
+            const bool importNormal = !nor.empty() &&
+                (includeSet.empty() || included(nor));
+            if (!importAlbedo && !importMr && !importNormal) { continue; }
             PresetEntry pe;
-            if (ImportTextureSet(d, diff, rough, metal, nor, opts, log, pe)) { presets.push_back(pe); setDirs.insert(d); }
+            if (ImportTextureSet(d, diff, rough, metal, nor, opts,
+                    importAlbedo, importMr, importNormal, log, pe))
+            {
+                presets.push_back(pe);
+                setDirs.insert(d);
+            }
             else { ++failures; }
-            for (const fs::path* m : { &diff, &rough, &metal, &nor }) { if (!m->empty()) { consumedFiles.insert(*m); } }
-            bumpProgress((!diff.empty()) + (!rough.empty()) + (!metal.empty()) + (!nor.empty()));
+            if (importAlbedo) { consumedFiles.insert(diff); }
+            if (importMr)
+            {
+                consumedFiles.insert(rough);
+                if (!metal.empty()) { consumedFiles.insert(metal); }
+            }
+            if (importNormal) { consumedFiles.insert(nor); }
+            bumpProgress(importAlbedo + importMr + importNormal);
         }
     }
 

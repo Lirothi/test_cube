@@ -33,6 +33,25 @@ enum class EditorTextureKind
 
 const char* ToString(EditorTextureKind kind);
 
+// H4 import freshness for assets that have a corresponding source under
+// import_staging/. Untracked assets are authored directly in the project tree.
+enum class EditorAssetImportStatus
+{
+    Untracked,
+    Staged,
+    UpToDate,
+    SourceNewer,
+    Incomplete
+};
+
+const char* ToString(EditorAssetImportStatus status);
+
+// Compares an import source (directory, or one .hdr) with its project output.
+// Manifest-backed imports compare exact source/output inventories and source
+// content hashes; older imports fall back to timestamps and DDS inspection.
+EditorAssetImportStatus InspectAssetImportStatus(std::string_view sourcePath,
+    std::string_view projectPath);
+
 struct EditorTextureInfo
 {
     bool scanned = false;
@@ -62,6 +81,11 @@ struct EditorAssetRecord
     std::string extension;
     uint64_t fileWriteTime = 0;
     EditorTextureInfo texture;
+    EditorAssetImportStatus importStatus = EditorAssetImportStatus::Untracked;
+    std::string importSourcePath;
+    // Staging-relative files that produce this specific resource. This keeps
+    // freshness badges and reimport work at resource granularity.
+    std::vector<std::string> importSourceFiles;
 };
 
 struct EditorAssetFolder

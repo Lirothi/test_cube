@@ -8,7 +8,11 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
+#include <set>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -358,6 +362,729 @@ namespace
         return rootType;
     }
 
+    bool IsImportImageExtension(const std::string& ext)
+    {
+        return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+            ext == ".tga" || ext == ".bmp";
+    }
+
+    bool IsCopiedImportExtension(const std::string& ext)
+    {
+        return ext == ".gltf" || ext == ".glb" || ext == ".bin";
+    }
+
+    bool IsImportSourceExtension(const std::string& ext)
+    {
+        return IsImportImageExtension(ext) || IsCopiedImportExtension(ext) || ext == ".hdr";
+    }
+
+    bool RelativePathUnder(const fs::path& path,
+        const fs::path& root,
+        fs::path& relativeOut)
+    {
+        std::error_code ec;
+        const fs::path absolutePath = fs::absolute(path, ec).lexically_normal();
+        if (ec) { return false; }
+        const fs::path absoluteRoot = fs::absolute(root, ec).lexically_normal();
+        if (ec) { return false; }
+
+        relativeOut = absolutePath.lexically_relative(absoluteRoot);
+        if (relativeOut.empty() || relativeOut == ".") { return false; }
+        const auto first = relativeOut.begin();
+        return first != relativeOut.end() && *first != "..";
+    }
+
+    bool ResolveImportPaths(const EditorAssetRecord& record,
+        fs::path& sourceOut,
+        fs::path& projectOut)
+    {
+        fs::path relative;
+        const fs::path recordPath(record.path);
+
+        if (RelativePathUnder(recordPath, "import_staging", relative))
+        {
+            const auto first = relative.begin();
+            if (first == relative.end()) { return false; }
+            sourceOut = fs::path("import_staging") / *first;
+            projectOut = fs::path("models") / *first;
+            return true;
+        }
+
+        if (RelativePathUnder(recordPath, "models", relative))
+        {
+            const auto first = relative.begin();
+            if (first == relative.end() || std::next(first) == relative.end())
+            {
+                return false; // loose project-authored mesh, not an imported asset folder
+            }
+            sourceOut = fs::path("import_staging") / *first;
+            projectOut = fs::path("models") / *first;
+            return true;
+        }
+
+        if (RelativePathUnder(recordPath, "textures", relative))
+        {
+            const auto first = relative.begin();
+            if (first == relative.end()) { return false; }
+            if (std::next(first) != relative.end())
+            {
+                sourceOut = fs::path("import_staging") / *first;
+                projectOut = fs::path("textures") / *first;
+                return true;
+            }
+
+            // A top-level imported skybox is textures/<name>.dds paired with
+            // import_staging/<name>.hdr.
+            const fs::path sourceHdr = fs::path("import_staging") /
+                (recordPath.stem().string() + ".hdr");
+            std::error_code ec;
+            if (fs::is_regular_file(sourceHdr, ec))
+            {
+                sourceOut = sourceHdr;
+                projectOut = recordPath;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    uint64_t ImportFileSize(const fs::path& path)
+    {
+        std::error_code ec;
+        const uintmax_t size = fs::file_size(path, ec);
+        return ec ? 0 : static_cast<uint64_t>(size);
+    }
+
+    uint64_t HashImportFile(const fs::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) { return 0; }
+
+        uint64_t hash = 14695981039346656037ull;
+        std::vector<char> buffer(1024 * 1024);
+        while (file)
+        {
+            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize count = file.gcount();
+            for (std::streamsize i = 0; i < count; ++i)
+            {
+                hash ^= static_cast<unsigned char>(buffer[static_cast<size_t>(i)]);
+                hash *= 1099511628211ull;
+            }
+        }
+        return hash;
+    }
+
+    std::string NormalizeImportRelativePath(const fs::path& path)
+    {
+        return ToLower(path.lexically_normal().generic_string());
+    }
+
+    bool IsSafeImportRelativePath(const fs::path& path)
+    {
+        if (path.empty() || path.is_absolute()) { return false; }
+        return std::none_of(path.begin(), path.end(),
+            [](const fs::path& component) { return component == ".."; });
+    }
+
+    fs::path ImportManifestPath(const fs::path& project)
+    {
+        std::error_code ec;
+        if (fs::is_regular_file(project, ec))
+        {
+            return project.parent_path() /
+                (project.stem().string() + ".assetimport.json");
+        }
+        return project / ".assetimport.json";
+    }
+
+    bool InspectImportManifest(const fs::path& source,
+        const fs::path& project,
+        EditorAssetImportStatus& statusOut)
+    {
+        const fs::path manifestPath = ImportManifestPath(project);
+        std::ifstream file(manifestPath);
+        if (!file) { return false; }
+
+        nlohmann::json manifest = nlohmann::json::parse(file, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object() ||
+            manifest.value("version", 0) != 1 ||
+            !manifest.contains("sources") || !manifest["sources"].is_array() ||
+            !manifest.contains("outputs") || !manifest["outputs"].is_array())
+        {
+            statusOut = EditorAssetImportStatus::Incomplete;
+            return true;
+        }
+
+        std::error_code ec;
+        const bool sourceIsFile = fs::is_regular_file(source, ec);
+        const bool projectIsFile = fs::is_regular_file(project, ec);
+        const uint64_t recordedRootWriteTime = manifest.value("sourceRootWriteTime", 0ull);
+        const bool rootWriteTimeChanged = WriteTimeOf(source) != recordedRootWriteTime;
+
+        std::set<std::string> recordedSources;
+        for (const nlohmann::json& entry : manifest["sources"])
+        {
+            if (!entry.is_object() || !entry.contains("path") || !entry["path"].is_string())
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+            const fs::path relative(entry["path"].get<std::string>());
+            if (!IsSafeImportRelativePath(relative))
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+            recordedSources.insert(NormalizeImportRelativePath(relative));
+
+            const fs::path current = sourceIsFile ? source : (source / relative);
+            std::error_code currentEc;
+            if (!fs::is_regular_file(current, currentEc))
+            {
+                statusOut = EditorAssetImportStatus::SourceNewer;
+                return true;
+            }
+
+            const uint64_t recordedSize = entry.value("size", 0ull);
+            const uint64_t recordedWriteTime = entry.value("writeTime", 0ull);
+            if (rootWriteTimeChanged || ImportFileSize(current) != recordedSize ||
+                WriteTimeOf(current) != recordedWriteTime)
+            {
+                if (HashImportFile(current) != entry.value("hash", 0ull))
+                {
+                    statusOut = EditorAssetImportStatus::SourceNewer;
+                    return true;
+                }
+            }
+        }
+
+        if (manifest.value("trackAllSources", false))
+        {
+            std::set<std::string> currentSources;
+            if (sourceIsFile)
+            {
+                currentSources.insert(NormalizeImportRelativePath(source.filename()));
+            }
+            else
+            {
+                ec.clear();
+                for (fs::recursive_directory_iterator it(source,
+                         fs::directory_options::skip_permission_denied, ec), end;
+                     it != end;
+                     it.increment(ec))
+                {
+                    if (ec) { break; }
+                    std::error_code fileEc;
+                    if (!it->is_regular_file(fileEc)) { continue; }
+                    const std::string ext = ToLower(it->path().extension().string());
+                    if (!IsImportImageExtension(ext) && !IsCopiedImportExtension(ext))
+                    {
+                        continue;
+                    }
+                    std::error_code relativeEc;
+                    const fs::path relative = fs::relative(it->path(), source, relativeEc);
+                    if (!relativeEc)
+                    {
+                        currentSources.insert(NormalizeImportRelativePath(relative));
+                    }
+                }
+            }
+            if (currentSources != recordedSources)
+            {
+                statusOut = EditorAssetImportStatus::SourceNewer;
+                return true;
+            }
+        }
+
+        std::set<std::string> recordedOutputs;
+        for (const nlohmann::json& outputEntry : manifest["outputs"])
+        {
+            if (!outputEntry.is_string())
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+            const fs::path relative(outputEntry.get<std::string>());
+            if (!IsSafeImportRelativePath(relative))
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+            recordedOutputs.insert(NormalizeImportRelativePath(relative));
+            const fs::path current = projectIsFile ?
+                (project.parent_path() / relative) : (project / relative);
+            std::error_code outputEc;
+            if (!fs::is_regular_file(current, outputEc))
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+        }
+
+        if (!projectIsFile)
+        {
+            std::set<std::string> currentOutputs;
+            ec.clear();
+            for (fs::recursive_directory_iterator it(project,
+                     fs::directory_options::skip_permission_denied, ec), end;
+                 it != end;
+                 it.increment(ec))
+            {
+                if (ec) { break; }
+                std::error_code fileEc;
+                if (!it->is_regular_file(fileEc)) { continue; }
+                const std::string ext = ToLower(it->path().extension().string());
+                if (ext != ".dds" && !IsCopiedImportExtension(ext)) { continue; }
+                std::error_code relativeEc;
+                const fs::path relative = fs::relative(it->path(), project, relativeEc);
+                if (!relativeEc)
+                {
+                    currentOutputs.insert(NormalizeImportRelativePath(relative));
+                }
+            }
+            if (currentOutputs != recordedOutputs)
+            {
+                statusOut = EditorAssetImportStatus::Incomplete;
+                return true;
+            }
+        }
+
+        statusOut = EditorAssetImportStatus::UpToDate;
+        return true;
+    }
+
+    struct ImportSourceFingerprint
+    {
+        uint64_t size = 0;
+        uint64_t writeTime = 0;
+        uint64_t hash = 0;
+    };
+
+    struct ResourceImportInspection
+    {
+        EditorAssetImportStatus status = EditorAssetImportStatus::Untracked;
+        std::vector<std::string> sourceFiles;
+    };
+
+    bool IsDiffuseImportStem(const std::string& stem)
+    {
+        return stem.find("_diff") != std::string::npos ||
+            stem.find("_albedo") != std::string::npos ||
+            stem.find("_col") != std::string::npos ||
+            stem.find("basecolor") != std::string::npos;
+    }
+
+    std::string TextureSetNameFromDiffuse(std::string stem)
+    {
+        for (const char* token : { "_diff", "_albedo", "_col", "basecolor" })
+        {
+            const size_t position = stem.find(token);
+            if (position != std::string::npos)
+            {
+                stem.resize(position);
+                break;
+            }
+        }
+        return stem;
+    }
+
+    std::string FlipbookSequenceBase(std::string stem)
+    {
+        size_t end = stem.size();
+        while (end > 0 && std::isdigit(static_cast<unsigned char>(stem[end - 1]))) { --end; }
+        if (end == stem.size() || end == 0) { return {}; }
+        std::string base = stem.substr(0, end);
+        while (!base.empty() && base.back() == '_') { base.pop_back(); }
+        if (base.size() >= 6 && ToLower(base.substr(base.size() - 6)) == "_frame")
+        {
+            base.resize(base.size() - 6);
+            while (!base.empty() && base.back() == '_') { base.pop_back(); }
+        }
+        return ToLower(base);
+    }
+
+    ResourceImportInspection InspectImportResource(const fs::path& source,
+        const fs::path& project,
+        const fs::path& resource)
+    {
+        ResourceImportInspection result;
+        std::error_code ec;
+        if (!fs::exists(source, ec)) { return result; }
+        ec.clear();
+        if (!fs::exists(resource, ec))
+        {
+            result.status = EditorAssetImportStatus::Incomplete;
+            return result;
+        }
+
+        const bool sourceIsFile = fs::is_regular_file(source, ec);
+        const bool projectIsFile = fs::is_regular_file(project, ec);
+        fs::path outputRelative = projectIsFile ? resource.filename() :
+            resource.lexically_relative(project);
+        if (!IsSafeImportRelativePath(outputRelative))
+        {
+            result.status = EditorAssetImportStatus::Untracked;
+            return result;
+        }
+
+        std::unordered_map<std::string, ImportSourceFingerprint> recorded;
+        std::set<std::string> recordedOutputs;
+        std::vector<fs::path> sourceCandidates;
+        bool hasManifest = false;
+        const fs::path manifestPath = ImportManifestPath(project);
+        std::ifstream manifestFile(manifestPath);
+        if (manifestFile)
+        {
+            hasManifest = true;
+            nlohmann::json manifest = nlohmann::json::parse(
+                manifestFile, nullptr, false, true);
+            if (manifest.is_discarded() || !manifest.is_object() ||
+                manifest.value("version", 0) != 1 ||
+                !manifest.contains("sources") || !manifest["sources"].is_array() ||
+                !manifest.contains("outputs") || !manifest["outputs"].is_array())
+            {
+                result.status = EditorAssetImportStatus::Incomplete;
+                return result;
+            }
+            for (const nlohmann::json& entry : manifest["sources"])
+            {
+                if (!entry.is_object() || !entry.contains("path") ||
+                    !entry["path"].is_string())
+                {
+                    result.status = EditorAssetImportStatus::Incomplete;
+                    return result;
+                }
+                const fs::path relative(entry["path"].get<std::string>());
+                if (!IsSafeImportRelativePath(relative))
+                {
+                    result.status = EditorAssetImportStatus::Incomplete;
+                    return result;
+                }
+                const std::string key = NormalizeImportRelativePath(relative);
+                recorded[key] = {
+                    entry.value("size", 0ull),
+                    entry.value("writeTime", 0ull),
+                    entry.value("hash", 0ull)
+                };
+                sourceCandidates.push_back(relative);
+            }
+            for (const nlohmann::json& entry : manifest["outputs"])
+            {
+                if (!entry.is_string())
+                {
+                    result.status = EditorAssetImportStatus::Incomplete;
+                    return result;
+                }
+                const fs::path relative(entry.get<std::string>());
+                if (!IsSafeImportRelativePath(relative))
+                {
+                    result.status = EditorAssetImportStatus::Incomplete;
+                    return result;
+                }
+                recordedOutputs.insert(NormalizeImportRelativePath(relative));
+            }
+        }
+
+        if (sourceIsFile)
+        {
+            sourceCandidates.push_back(source.filename());
+        }
+        else
+        {
+            ec.clear();
+            for (fs::recursive_directory_iterator it(source,
+                     fs::directory_options::skip_permission_denied, ec), end;
+                 it != end;
+                 it.increment(ec))
+            {
+                if (ec) { break; }
+                std::error_code fileEc;
+                if (!it->is_regular_file(fileEc) ||
+                    !IsImportSourceExtension(ToLower(it->path().extension().string())))
+                {
+                    continue;
+                }
+                std::error_code relativeEc;
+                const fs::path relative = fs::relative(it->path(), source, relativeEc);
+                if (!relativeEc) { sourceCandidates.push_back(relative); }
+            }
+        }
+
+        std::sort(sourceCandidates.begin(), sourceCandidates.end(),
+            [](const fs::path& a, const fs::path& b)
+            {
+                return NormalizeImportRelativePath(a) < NormalizeImportRelativePath(b);
+            });
+        sourceCandidates.erase(std::unique(sourceCandidates.begin(), sourceCandidates.end(),
+            [](const fs::path& a, const fs::path& b)
+            {
+                return NormalizeImportRelativePath(a) == NormalizeImportRelativePath(b);
+            }), sourceCandidates.end());
+
+        std::vector<fs::path> dependencies;
+        if (sourceIsFile)
+        {
+            dependencies.push_back(source.filename());
+        }
+        else
+        {
+            const std::string outputExt = ToLower(outputRelative.extension().string());
+            const std::string outputStem = ToLower(outputRelative.stem().string());
+            const fs::path outputDirectory = outputRelative.parent_path();
+            if (IsCopiedImportExtension(outputExt))
+            {
+                for (const fs::path& candidate : sourceCandidates)
+                {
+                    if (NormalizeImportRelativePath(candidate) ==
+                        NormalizeImportRelativePath(outputRelative))
+                    {
+                        dependencies.push_back(candidate);
+                    }
+                }
+            }
+            else if (outputExt == ".dds")
+            {
+                std::string flipbookBase = outputStem;
+                constexpr std::string_view suffix = "_flipbook";
+                if (flipbookBase.size() > suffix.size() &&
+                    flipbookBase.compare(flipbookBase.size() - suffix.size(),
+                        suffix.size(), suffix) == 0)
+                {
+                    flipbookBase.resize(flipbookBase.size() - suffix.size());
+                    for (const fs::path& candidate : sourceCandidates)
+                    {
+                        if (candidate.parent_path() == outputDirectory &&
+                            IsImportImageExtension(ToLower(candidate.extension().string())) &&
+                            FlipbookSequenceBase(candidate.stem().string()) == flipbookBase)
+                        {
+                            dependencies.push_back(candidate);
+                        }
+                    }
+                }
+
+                if (dependencies.empty())
+                {
+                    for (const fs::path& diffuse : sourceCandidates)
+                    {
+                        if (diffuse.parent_path() != outputDirectory ||
+                            !IsImportImageExtension(ToLower(diffuse.extension().string())))
+                        {
+                            continue;
+                        }
+                        const std::string diffuseStem = ToLower(diffuse.stem().string());
+                        if (!IsDiffuseImportStem(diffuseStem)) { continue; }
+                        const std::string setName = TextureSetNameFromDiffuse(diffuseStem);
+                        if (outputStem == setName + "_albedo")
+                        {
+                            dependencies.push_back(diffuse);
+                        }
+                        else if (outputStem == setName + "_normal")
+                        {
+                            for (const fs::path& candidate : sourceCandidates)
+                            {
+                                const std::string stem = ToLower(candidate.stem().string());
+                                if (candidate.parent_path() == outputDirectory &&
+                                    IsImportImageExtension(ToLower(candidate.extension().string())) &&
+                                    (stem.find("_nor") != std::string::npos ||
+                                     stem.find("normal") != std::string::npos))
+                                {
+                                    dependencies.push_back(candidate);
+                                }
+                            }
+                        }
+                        else if (outputStem == setName + "_mr")
+                        {
+                            for (const fs::path& candidate : sourceCandidates)
+                            {
+                                const std::string stem = ToLower(candidate.stem().string());
+                                if (candidate.parent_path() == outputDirectory &&
+                                    IsImportImageExtension(ToLower(candidate.extension().string())) &&
+                                    (stem.find("_rough") != std::string::npos ||
+                                     stem.find("_metal") != std::string::npos ||
+                                     stem.find("metallic") != std::string::npos))
+                                {
+                                    dependencies.push_back(candidate);
+                                }
+                            }
+                        }
+                        if (!dependencies.empty()) { break; }
+                    }
+                }
+
+                if (dependencies.empty())
+                {
+                    for (const fs::path& candidate : sourceCandidates)
+                    {
+                        if (candidate.parent_path() == outputDirectory &&
+                            IsImportImageExtension(ToLower(candidate.extension().string())) &&
+                            ToLower(candidate.stem().string()) == outputStem)
+                        {
+                            dependencies.push_back(candidate);
+                        }
+                    }
+                }
+            }
+        }
+
+        std::sort(dependencies.begin(), dependencies.end(),
+            [](const fs::path& a, const fs::path& b)
+            {
+                return NormalizeImportRelativePath(a) < NormalizeImportRelativePath(b);
+            });
+        dependencies.erase(std::unique(dependencies.begin(), dependencies.end(),
+            [](const fs::path& a, const fs::path& b)
+            {
+                return NormalizeImportRelativePath(a) == NormalizeImportRelativePath(b);
+            }), dependencies.end());
+        for (const fs::path& dependency : dependencies)
+        {
+            result.sourceFiles.push_back(dependency.generic_string());
+        }
+
+        // An output with no producing source is an orphan. Keep the status on
+        // that resource alone so a deleted source never dirties its siblings.
+        if (dependencies.empty())
+        {
+            result.status = EditorAssetImportStatus::SourceNewer;
+            return result;
+        }
+        if (hasManifest && recordedOutputs.count(
+                NormalizeImportRelativePath(outputRelative)) == 0)
+        {
+            result.status = EditorAssetImportStatus::SourceNewer;
+            return result;
+        }
+
+        for (const fs::path& dependency : dependencies)
+        {
+            const fs::path current = sourceIsFile ? source : (source / dependency);
+            std::error_code currentEc;
+            if (!fs::is_regular_file(current, currentEc))
+            {
+                result.status = EditorAssetImportStatus::SourceNewer;
+                return result;
+            }
+            if (hasManifest)
+            {
+                const auto found = recorded.find(NormalizeImportRelativePath(dependency));
+                if (found == recorded.end())
+                {
+                    result.status = EditorAssetImportStatus::SourceNewer;
+                    return result;
+                }
+                const ImportSourceFingerprint& fingerprint = found->second;
+                if ((ImportFileSize(current) != fingerprint.size ||
+                     WriteTimeOf(current) != fingerprint.writeTime) &&
+                    HashImportFile(current) != fingerprint.hash)
+                {
+                    result.status = EditorAssetImportStatus::SourceNewer;
+                    return result;
+                }
+            }
+            else if (WriteTimeOf(current) > WriteTimeOf(resource))
+            {
+                result.status = EditorAssetImportStatus::SourceNewer;
+                return result;
+            }
+        }
+
+        result.status = EditorAssetImportStatus::UpToDate;
+        return result;
+    }
+
+    bool LegacyTextureSetHasOrphanOutput(const fs::path& source,
+        const fs::path& project)
+    {
+        std::unordered_map<std::string, std::vector<fs::path>> imagesByDirectory;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(source,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc) ||
+                !IsImportImageExtension(ToLower(it->path().extension().string())))
+            {
+                continue;
+            }
+            imagesByDirectory[it->path().parent_path().generic_string()].push_back(it->path());
+        }
+
+        for (const auto& [directoryText, images] : imagesByDirectory)
+        {
+            fs::path diffuse;
+            fs::path roughness;
+            fs::path normal;
+            for (const fs::path& image : images)
+            {
+                const std::string stem = ToLower(image.stem().string());
+                const auto has = [&stem](const char* token)
+                {
+                    return stem.find(token) != std::string::npos;
+                };
+                if (diffuse.empty() &&
+                    (has("_diff") || has("_albedo") || has("_col") || has("basecolor")))
+                {
+                    diffuse = image;
+                }
+                else if (roughness.empty() && has("_rough"))
+                {
+                    roughness = image;
+                }
+                else if (normal.empty() && (has("_nor") || has("normal")))
+                {
+                    normal = image;
+                }
+            }
+            if (diffuse.empty() || roughness.empty()) { continue; }
+
+            std::string setName = ToLower(diffuse.stem().string());
+            for (const char* token : { "_diff", "_albedo", "_col", "basecolor" })
+            {
+                const size_t position = setName.find(token);
+                if (position != std::string::npos)
+                {
+                    setName.resize(position);
+                    break;
+                }
+            }
+
+            std::set<std::string> expectedNames;
+            for (const fs::path& image : images)
+            {
+                expectedNames.insert(ToLower(image.stem().string()) + ".dds");
+            }
+            expectedNames.insert(setName + "_albedo.dds");
+            expectedNames.insert(setName + "_mr.dds");
+            if (!normal.empty()) { expectedNames.insert(setName + "_normal.dds"); }
+
+            const fs::path sourceDirectory(directoryText);
+            const fs::path relativeDirectory = sourceDirectory.lexically_relative(source);
+            const fs::path projectDirectory = project / relativeDirectory;
+            ec.clear();
+            if (!fs::is_directory(projectDirectory, ec)) { continue; }
+            for (const fs::directory_entry& entry : fs::directory_iterator(projectDirectory, ec))
+            {
+                if (ec) { break; }
+                std::error_code fileEc;
+                if (!entry.is_regular_file(fileEc) ||
+                    ToLower(entry.path().extension().string()) != ".dds")
+                {
+                    continue;
+                }
+                if (expectedNames.count(ToLower(entry.path().filename().string())) == 0)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     struct DirRoot
     {
         const char* dir;
@@ -569,6 +1296,139 @@ namespace
     }
 }
 
+EditorAssetImportStatus InspectAssetImportStatus(std::string_view sourcePath,
+    std::string_view projectPath)
+{
+    const fs::path source(sourcePath);
+    const fs::path project(projectPath);
+    std::error_code ec;
+    if (!fs::exists(source, ec))
+    {
+        return EditorAssetImportStatus::Untracked;
+    }
+    ec.clear();
+    if (!fs::exists(project, ec))
+    {
+        return EditorAssetImportStatus::Staged;
+    }
+
+    EditorAssetImportStatus manifestStatus = EditorAssetImportStatus::Untracked;
+    if (InspectImportManifest(source, project, manifestStatus))
+    {
+        return manifestStatus;
+    }
+
+    ec.clear();
+    if (fs::is_regular_file(source, ec))
+    {
+        ec.clear();
+        if (!fs::is_regular_file(project, ec))
+        {
+            return EditorAssetImportStatus::Incomplete;
+        }
+        return WriteTimeOf(source) > WriteTimeOf(project) ?
+            EditorAssetImportStatus::SourceNewer :
+            EditorAssetImportStatus::UpToDate;
+    }
+
+    ec.clear();
+    if (!fs::is_directory(source, ec))
+    {
+        return EditorAssetImportStatus::Untracked;
+    }
+    ec.clear();
+    if (!fs::is_directory(project, ec))
+    {
+        return EditorAssetImportStatus::Incomplete;
+    }
+
+    bool hasRelevantSource = false;
+    bool hasImageSource = false;
+    bool missingOutput = false;
+    bool sourceIsNewer = false;
+    uint64_t newestImageSource = 0;
+
+    for (fs::recursive_directory_iterator it(source,
+             fs::directory_options::skip_permission_denied, ec), end;
+         it != end;
+         it.increment(ec))
+    {
+        if (ec) { break; }
+        std::error_code fileEc;
+        if (!it->is_regular_file(fileEc)) { continue; }
+
+        const fs::path& path = it->path();
+        const std::string ext = ToLower(path.extension().string());
+        if (IsImportImageExtension(ext))
+        {
+            hasRelevantSource = true;
+            hasImageSource = true;
+            newestImageSource = std::max(newestImageSource, WriteTimeOf(path));
+            continue;
+        }
+        if (!IsCopiedImportExtension(ext)) { continue; }
+
+        hasRelevantSource = true;
+        std::error_code relativeEc;
+        const fs::path relative = fs::relative(path, source, relativeEc);
+        const fs::path output = project / relative;
+        std::error_code outputEc;
+        if (relativeEc || !fs::is_regular_file(output, outputEc))
+        {
+            missingOutput = true;
+        }
+        else if (WriteTimeOf(path) > WriteTimeOf(output))
+        {
+            sourceIsNewer = true;
+        }
+    }
+
+    if (hasImageSource)
+    {
+        bool hasDds = false;
+        uint64_t oldestDds = std::numeric_limits<uint64_t>::max();
+        ec.clear();
+        for (fs::recursive_directory_iterator it(project,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc) ||
+                ToLower(it->path().extension().string()) != ".dds")
+            {
+                continue;
+            }
+            hasDds = true;
+            oldestDds = std::min(oldestDds, WriteTimeOf(it->path()));
+        }
+        if (!hasDds)
+        {
+            missingOutput = true;
+        }
+        else if (newestImageSource > oldestDds)
+        {
+            sourceIsNewer = true;
+        }
+    }
+
+    if (!hasRelevantSource)
+    {
+        return EditorAssetImportStatus::Untracked;
+    }
+    if (LegacyTextureSetHasOrphanOutput(source, project))
+    {
+        sourceIsNewer = true;
+    }
+    if (missingOutput)
+    {
+        return EditorAssetImportStatus::Incomplete;
+    }
+    return sourceIsNewer ? EditorAssetImportStatus::SourceNewer :
+        EditorAssetImportStatus::UpToDate;
+}
+
 void AssetRegistry::Refresh()
 {
     CPU_SCOPE(ProfilerScopes::kAssetRegistryRefresh);
@@ -693,10 +1553,87 @@ void AssetRegistry::Refresh()
                         record.virtualPath = record.virtualFolder + "/" + it.key();
                         record.displayName = it.key();
                         record.fileWriteTime = writeTime;
+
+                        // Imported texture-set presets point at
+                        // textures/<staging-folder>/... . Carry the same import
+                        // status as their generated texture records so the
+                        // badge and one-click reimport also work from Materials.
+                        if (it.value().is_object())
+                        {
+                            for (const char* textureKey : { "albedo", "mr", "normal" })
+                            {
+                                const auto textureIt = it.value().find(textureKey);
+                                if (textureIt == it.value().end() || !textureIt->is_string())
+                                {
+                                    continue;
+                                }
+                                fs::path relativeTexture;
+                                if (!RelativePathUnder(fs::path(textureIt->get<std::string>()),
+                                        "textures", relativeTexture))
+                                {
+                                    continue;
+                                }
+                                const auto first = relativeTexture.begin();
+                                if (first == relativeTexture.end() ||
+                                    std::next(first) == relativeTexture.end())
+                                {
+                                    continue;
+                                }
+                                const fs::path source = fs::path("import_staging") / *first;
+                                const fs::path project = fs::path("textures") / *first;
+                                record.importStatus = InspectAssetImportStatus(
+                                    source.generic_string(), project.generic_string());
+                                if (record.importStatus != EditorAssetImportStatus::Untracked)
+                                {
+                                    record.importSourcePath = source.generic_string();
+                                }
+                                break;
+                            }
+                        }
                         assets_.push_back(std::move(record));
                     }
                 }
             }
+        }
+    }
+
+    // Resolve freshness per project resource. Generated siblings can depend on
+    // different source maps, so editing/deleting one map must not dirty every
+    // DDS in its import folder.
+    for (EditorAssetRecord& record : assets_)
+    {
+        fs::path source;
+        fs::path project;
+        if (!ResolveImportPaths(record, source, project)) { continue; }
+
+        bool isProjectResource = false;
+        std::error_code ec;
+        if (fs::is_regular_file(project, ec))
+        {
+            ec.clear();
+            isProjectResource = fs::equivalent(fs::path(record.path), project, ec);
+        }
+        else
+        {
+            fs::path outputRelative;
+            isProjectResource = RelativePathUnder(fs::path(record.path), project, outputRelative);
+        }
+
+        if (isProjectResource)
+        {
+            ResourceImportInspection inspection = InspectImportResource(
+                source, project, fs::path(record.path));
+            record.importStatus = inspection.status;
+            record.importSourceFiles = std::move(inspection.sourceFiles);
+        }
+        else
+        {
+            record.importStatus = InspectAssetImportStatus(
+                source.generic_string(), project.generic_string());
+        }
+        if (record.importStatus != EditorAssetImportStatus::Untracked)
+        {
+            record.importSourcePath = source.generic_string();
         }
     }
 
@@ -777,6 +1714,28 @@ uint64_t AssetRegistry::ComputeContentSignature() const
             }
 
             fingerprints.push_back(FingerprintPath(path, 3, FileSizeOf(path)));
+        }
+    }
+
+    // The staging registry intentionally indexes only glTF/GLB assets, but H4
+    // freshness must also react when a raw image, HDR, or external glTF buffer
+    // changes. Include those source files in the lightweight disk signature
+    // without flooding /Game/Staging with every texture in a download.
+    const fs::path stagingPath("import_staging");
+    std::error_code stagingEc;
+    if (fs::is_directory(stagingPath, stagingEc))
+    {
+        for (fs::recursive_directory_iterator it(stagingPath,
+                 fs::directory_options::skip_permission_denied, stagingEc), end;
+             it != end;
+             it.increment(stagingEc))
+        {
+            if (stagingEc) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc)) { continue; }
+            const std::string ext = ToLower(it->path().extension().string());
+            if (!IsImportSourceExtension(ext)) { continue; }
+            fingerprints.push_back(FingerprintPath(it->path(), 6, FileSizeOf(it->path())));
         }
     }
 
@@ -912,6 +1871,19 @@ const char* ToString(EditorTextureKind kind)
     case EditorTextureKind::Unknown:     return "Unknown";
     }
     return "Unknown";
+}
+
+const char* ToString(EditorAssetImportStatus status)
+{
+    switch (status)
+    {
+    case EditorAssetImportStatus::Untracked:   return "Untracked";
+    case EditorAssetImportStatus::Staged:      return "Staged";
+    case EditorAssetImportStatus::UpToDate:    return "Up to date";
+    case EditorAssetImportStatus::SourceNewer: return "Source changed";
+    case EditorAssetImportStatus::Incomplete:  return "Incomplete";
+    }
+    return "Untracked";
 }
 
 #endif // WITH_EDITOR

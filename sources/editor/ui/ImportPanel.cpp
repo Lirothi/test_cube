@@ -4,12 +4,18 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "assets/AssetImporter.h"
 #include "editor/assets/AssetRegistry.h"
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
+
+#pragma warning(push)
+#pragma warning(disable: 26819)
+#include "third_party/json/json.hpp"
+#pragma warning(pop)
 
 namespace fs = std::filesystem;
 
@@ -18,6 +24,50 @@ namespace
     constexpr const char* kStagingRoot = "import_staging";
     constexpr const char* kModelsRoot = "models";
     constexpr const char* kTexturesRoot = "textures";
+
+    const char* ImportStatusBadge(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:      return "STAGED";
+        case EditorAssetImportStatus::UpToDate:    return "CURRENT";
+        case EditorAssetImportStatus::SourceNewer: return "CHANGED";
+        case EditorAssetImportStatus::Incomplete:  return "MISSING";
+        case EditorAssetImportStatus::Untracked:   return "--";
+        }
+        return "--";
+    }
+
+    ImVec4 ImportStatusColor(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:      return ImVec4(0.55f, 0.80f, 1.00f, 1.0f);
+        case EditorAssetImportStatus::UpToDate:    return ImVec4(0.45f, 0.85f, 0.50f, 1.0f);
+        case EditorAssetImportStatus::SourceNewer: return ImVec4(1.00f, 0.72f, 0.24f, 1.0f);
+        case EditorAssetImportStatus::Incomplete:  return ImVec4(1.00f, 0.38f, 0.28f, 1.0f);
+        case EditorAssetImportStatus::Untracked:   return ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+        }
+        return ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+    }
+
+    const char* ImportStatusHint(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:
+            return "Source is staged but no project output exists yet.";
+        case EditorAssetImportStatus::UpToDate:
+            return "Project output is at least as new as every staged source.";
+        case EditorAssetImportStatus::SourceNewer:
+            return "The staged source contents or file inventory changed. Re-import recommended.";
+        case EditorAssetImportStatus::Incomplete:
+            return "The project output is missing a DDS or copied mesh file. Re-import recommended.";
+        case EditorAssetImportStatus::Untracked:
+            return "No tracked import source.";
+        }
+        return "No tracked import source.";
+    }
 
     std::string LowerExt(const fs::path& p)
     {
@@ -37,6 +87,327 @@ namespace
     bool IsEngineReady(const std::string& ext)
     {
         return ext == ".dds" || ext == ".gltf" || ext == ".glb" || ext == ".bin";
+    }
+
+    bool IsManifestSource(const std::string& ext)
+    {
+        return IsConvertibleTexture(ext) || ext == ".gltf" || ext == ".glb" || ext == ".bin";
+    }
+
+    uint64_t FileWriteTime(const fs::path& path)
+    {
+        std::error_code ec;
+        const fs::file_time_type time = fs::last_write_time(path, ec);
+        return ec ? 0 : static_cast<uint64_t>(time.time_since_epoch().count());
+    }
+
+    uint64_t FileSize(const fs::path& path)
+    {
+        std::error_code ec;
+        const uintmax_t size = fs::file_size(path, ec);
+        return ec ? 0 : static_cast<uint64_t>(size);
+    }
+
+    uint64_t HashFile(const fs::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) { return 0; }
+
+        uint64_t hash = 14695981039346656037ull;
+        std::vector<char> buffer(1024 * 1024);
+        while (file)
+        {
+            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize count = file.gcount();
+            for (std::streamsize i = 0; i < count; ++i)
+            {
+                hash ^= static_cast<unsigned char>(buffer[static_cast<size_t>(i)]);
+                hash *= 1099511628211ull;
+            }
+        }
+        return hash;
+    }
+
+    std::string NormalizeRelativePath(const fs::path& path)
+    {
+        std::string normalized = path.lexically_normal().generic_string();
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return normalized;
+    }
+
+    std::string BuildSourceManifestJson(const fs::path& source,
+        const std::vector<std::string>& includeRel)
+    {
+        nlohmann::json manifest;
+        manifest["version"] = 1;
+        manifest["source"] = source.lexically_normal().generic_string();
+        manifest["sourceRootWriteTime"] = FileWriteTime(source);
+        manifest["sources"] = nlohmann::json::array();
+
+        std::error_code ec;
+        if (fs::is_regular_file(source, ec))
+        {
+            nlohmann::json entry;
+            entry["path"] = source.filename().generic_string();
+            entry["size"] = FileSize(source);
+            entry["writeTime"] = FileWriteTime(source);
+            entry["hash"] = HashFile(source);
+            manifest["sources"].push_back(std::move(entry));
+            manifest["trackAllSources"] = true;
+            return manifest.dump();
+        }
+
+        std::set<std::string> includeSet;
+        for (const std::string& rel : includeRel)
+        {
+            includeSet.insert(NormalizeRelativePath(rel));
+        }
+
+        std::vector<std::pair<fs::path, fs::path>> selected;
+        size_t sourceCount = 0;
+        size_t selectedSourceCount = 0;
+        for (fs::recursive_directory_iterator it(source,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc)) { continue; }
+            const std::string ext = LowerExt(it->path());
+            if (!IsManifestSource(ext)) { continue; }
+
+            std::error_code relativeEc;
+            const fs::path relative = fs::relative(it->path(), source, relativeEc);
+            if (relativeEc) { continue; }
+
+            ++sourceCount;
+            const bool included = includeSet.empty() ||
+                includeSet.count(NormalizeRelativePath(relative)) != 0;
+            if (!included) { continue; }
+            ++selectedSourceCount;
+            selected.emplace_back(it->path(), relative);
+        }
+
+        std::sort(selected.begin(), selected.end(),
+            [](const auto& a, const auto& b)
+            {
+                return a.second.generic_string() < b.second.generic_string();
+            });
+        for (const auto& [path, relative] : selected)
+        {
+            nlohmann::json entry;
+            entry["path"] = relative.generic_string();
+            entry["size"] = FileSize(path);
+            entry["writeTime"] = FileWriteTime(path);
+            entry["hash"] = HashFile(path);
+            manifest["sources"].push_back(std::move(entry));
+        }
+        manifest["trackAllSources"] = includeSet.empty() ||
+            selectedSourceCount == sourceCount;
+        return manifest.dump();
+    }
+
+    fs::path ImportManifestPath(const fs::path& projectOutput, bool outputIsFile)
+    {
+        if (!outputIsFile)
+        {
+            return projectOutput / ".assetimport.json";
+        }
+        return projectOutput.parent_path() /
+            (projectOutput.stem().string() + ".assetimport.json");
+    }
+
+    bool IsSafeRelativePath(const fs::path& path)
+    {
+        if (path.empty() || path.is_absolute()) { return false; }
+        return std::none_of(path.begin(), path.end(),
+            [](const fs::path& component) { return component == ".."; });
+    }
+
+    void RemoveStaleProjectOutputs(const fs::path& projectRoot,
+        const std::set<std::string>& newOutputs)
+    {
+        std::vector<fs::path> stale;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(projectRoot,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc) || !IsEngineReady(LowerExt(it->path())))
+            {
+                continue;
+            }
+            std::error_code relativeEc;
+            const fs::path relative = fs::relative(it->path(), projectRoot, relativeEc);
+            if (!relativeEc && IsSafeRelativePath(relative) &&
+                newOutputs.count(NormalizeRelativePath(relative)) == 0)
+            {
+                stale.push_back(it->path());
+            }
+        }
+        for (const fs::path& path : stale)
+        {
+            std::error_code removeEc;
+            fs::remove(path, removeEc);
+        }
+    }
+
+    std::set<std::string> EnumerateProjectOutputs(const fs::path& projectRoot)
+    {
+        std::set<std::string> outputs;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(projectRoot,
+                 fs::directory_options::skip_permission_denied, ec), end;
+             it != end;
+             it.increment(ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!it->is_regular_file(fileEc) || !IsEngineReady(LowerExt(it->path())))
+            {
+                continue;
+            }
+            std::error_code relativeEc;
+            const fs::path relative = fs::relative(it->path(), projectRoot, relativeEc);
+            if (!relativeEc && IsSafeRelativePath(relative))
+            {
+                outputs.insert(NormalizeRelativePath(relative));
+            }
+        }
+        return outputs;
+    }
+
+    bool WriteImportManifest(const std::string& sourceManifestJson,
+        const std::set<std::string>& outputs,
+        const fs::path& source,
+        const fs::path& manifestPath,
+        bool partial,
+        const std::vector<std::string>& removedSources)
+    {
+        nlohmann::json manifest = nlohmann::json::parse(
+            sourceManifestJson, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object()) { return false; }
+
+        if (partial)
+        {
+            std::ifstream existingFile(manifestPath);
+            if (existingFile)
+            {
+                nlohmann::json existing = nlohmann::json::parse(
+                    existingFile, nullptr, false, true);
+                if (!existing.is_discarded() && existing.is_object() &&
+                    existing.value("version", 0) == 1 &&
+                    existing.contains("sources") && existing["sources"].is_array())
+                {
+                    std::set<std::string> replaced;
+                    for (const nlohmann::json& entry : manifest["sources"])
+                    {
+                        if (entry.is_object() && entry.contains("path") &&
+                            entry["path"].is_string())
+                        {
+                            replaced.insert(NormalizeRelativePath(
+                                entry["path"].get<std::string>()));
+                        }
+                    }
+                    for (const std::string& path : removedSources)
+                    {
+                        replaced.insert(NormalizeRelativePath(path));
+                    }
+
+                    nlohmann::json merged = nlohmann::json::array();
+                    for (const nlohmann::json& entry : existing["sources"])
+                    {
+                        if (!entry.is_object() || !entry.contains("path") ||
+                            !entry["path"].is_string() ||
+                            replaced.count(NormalizeRelativePath(
+                                entry["path"].get<std::string>())) != 0)
+                        {
+                            continue;
+                        }
+                        merged.push_back(entry);
+                    }
+                    for (const nlohmann::json& entry : manifest["sources"])
+                    {
+                        merged.push_back(entry);
+                    }
+                    manifest["sources"] = std::move(merged);
+                    manifest["trackAllSources"] = existing.value(
+                        "trackAllSources", false);
+                }
+            }
+        }
+
+        // RunImport temporarily creates DDS siblings in staging. Snapshot the
+        // source-root timestamp only after those generated files were removed.
+        manifest["sourceRootWriteTime"] = FileWriteTime(source);
+        manifest["outputs"] = nlohmann::json::array();
+        for (const std::string& output : outputs)
+        {
+            manifest["outputs"].push_back(output);
+        }
+        std::error_code ec;
+        fs::create_directories(manifestPath.parent_path(), ec);
+        std::ofstream out(manifestPath, std::ios::trunc);
+        if (!out) { return false; }
+        out << manifest.dump(2) << '\n';
+        return static_cast<bool>(out);
+    }
+
+    bool RemoveOutputFromManifest(const fs::path& manifestPath,
+        const std::string& outputRelative,
+        const std::vector<std::string>& removedSources)
+    {
+        std::ifstream file(manifestPath);
+        if (!file) { return true; } // Legacy imports have no manifest to update.
+        nlohmann::json manifest = nlohmann::json::parse(file, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object() ||
+            !manifest.contains("outputs") || !manifest["outputs"].is_array() ||
+            !manifest.contains("sources") || !manifest["sources"].is_array())
+        {
+            return false;
+        }
+
+        const std::string normalizedOutput = NormalizeRelativePath(outputRelative);
+        nlohmann::json outputs = nlohmann::json::array();
+        for (const nlohmann::json& entry : manifest["outputs"])
+        {
+            if (!entry.is_string() ||
+                NormalizeRelativePath(entry.get<std::string>()) == normalizedOutput)
+            {
+                continue;
+            }
+            outputs.push_back(entry);
+        }
+        manifest["outputs"] = std::move(outputs);
+
+        std::set<std::string> removed;
+        for (const std::string& path : removedSources)
+        {
+            removed.insert(NormalizeRelativePath(path));
+        }
+        nlohmann::json sources = nlohmann::json::array();
+        for (const nlohmann::json& entry : manifest["sources"])
+        {
+            if (!entry.is_object() || !entry.contains("path") ||
+                !entry["path"].is_string() ||
+                removed.count(NormalizeRelativePath(
+                    entry["path"].get<std::string>())) != 0)
+            {
+                continue;
+            }
+            sources.push_back(entry);
+        }
+        manifest["sources"] = std::move(sources);
+
+        std::ofstream out(manifestPath, std::ios::trunc);
+        if (!out) { return false; }
+        out << manifest.dump(2) << '\n';
+        return static_cast<bool>(out);
     }
 
     // Best-effort role guess from the filename, for the import dialog's display only (the backend
@@ -174,6 +545,108 @@ std::string ImportPanel::ProjectDest(const Item& item) const
     return (fs::path(kModelsRoot) / item.name).string();
 }
 
+bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& registry)
+{
+    if (running_.load())
+    {
+        status_ = "Another asset import is already running.";
+        return false;
+    }
+    if (asset.importSourcePath.empty())
+    {
+        status_ = "This asset has no source under import_staging/.";
+        return false;
+    }
+
+    Rescan();
+    const fs::path requested(asset.importSourcePath);
+    for (const Item& item : items_)
+    {
+        std::error_code ec;
+        bool matches = fs::equivalent(fs::path(item.path), requested, ec);
+        if (ec)
+        {
+            ec.clear();
+            const fs::path itemAbsolute = fs::absolute(item.path, ec).lexically_normal();
+            ec.clear();
+            const fs::path requestedAbsolute = fs::absolute(requested, ec).lexically_normal();
+            matches = !ec && itemAbsolute == requestedAbsolute;
+        }
+        if (!matches) { continue; }
+
+        const fs::path destination(ProjectDest(item));
+        fs::path outputRelative;
+        bool isProjectResource = false;
+        ec.clear();
+        if (item.kind == Kind::Skybox)
+        {
+            isProjectResource = fs::equivalent(fs::path(asset.path), destination, ec);
+            if (isProjectResource) { outputRelative = destination.filename(); }
+        }
+        else
+        {
+            ec.clear();
+            outputRelative = fs::absolute(asset.path, ec).lexically_normal().lexically_relative(
+                fs::absolute(destination, ec).lexically_normal());
+            isProjectResource = !ec && IsSafeRelativePath(outputRelative);
+        }
+
+        // Material presets and staging records represent the whole import. The
+        // texture/mesh records below are true per-resource reimports.
+        if (!isProjectResource)
+        {
+            BeginImport(item, {}, true);
+            return true;
+        }
+
+        std::vector<std::string> existingSources;
+        std::vector<std::string> missingSources;
+        for (const std::string& relative : asset.importSourceFiles)
+        {
+            std::error_code sourceEc;
+            const fs::path sourceFile = item.kind == Kind::Skybox ?
+                fs::path(item.path) : (fs::path(item.path) / relative);
+            if (fs::is_regular_file(sourceFile, sourceEc))
+            {
+                existingSources.push_back(relative);
+            }
+            else { missingSources.push_back(relative); }
+        }
+
+        // No producer remains (or this is a legacy orphan): remove this one
+        // mapped output, leaving every sibling in the folder untouched.
+        if (existingSources.empty())
+        {
+            std::error_code removeEc;
+            if (!fs::remove(fs::path(asset.path), removeEc) || removeEc)
+            {
+                status_ = "Could not remove stale output: " + asset.path;
+                return false;
+            }
+            if (!RemoveOutputFromManifest(
+                    ImportManifestPath(destination, item.kind == Kind::Skybox),
+                    outputRelative.generic_string(), asset.importSourceFiles))
+            {
+                status_ = "Removed output, but failed to update its import manifest.";
+                registry.Refresh();
+                Rescan();
+                return false;
+            }
+            status_ = "Removed stale output: " + asset.path;
+            registry.Refresh();
+            Rescan();
+            return true;
+        }
+
+        BeginImport(item, existingSources, true,
+            { outputRelative.generic_string() }, missingSources);
+        return true;
+    }
+
+    status_ = "Staged source is no longer available: " + asset.importSourcePath;
+    return false;
+}
+
 void ImportPanel::Rescan()
 {
     items_.clear();
@@ -195,6 +668,7 @@ void ImportPanel::Rescan()
             it.kind = Kind::Skybox;
             it.meta = "equirect HDRI -> BC6H cubemap";
             it.alreadyInProject = fs::exists(ProjectDest(it), ec);
+            it.importStatus = InspectAssetImportStatus(it.path, ProjectDest(it));
             items_.push_back(std::move(it));
             continue;
         }
@@ -235,6 +709,7 @@ void ImportPanel::Rescan()
             continue; // nothing importable
         }
         it.alreadyInProject = fs::exists(ProjectDest(it), ec);
+        it.importStatus = InspectAssetImportStatus(it.path, ProjectDest(it));
         items_.push_back(std::move(it));
     }
 
@@ -242,14 +717,26 @@ void ImportPanel::Rescan()
         [](const Item& a, const Item& b) { return a.name < b.name; });
 }
 
-void ImportPanel::BeginImport(const Item& item, const std::vector<std::string>& includeRel, bool registerPreset)
+void ImportPanel::BeginImport(const Item& item,
+    const std::vector<std::string>& includeRel,
+    bool registerPreset,
+    const std::vector<std::string>& targetOutputs,
+    const std::vector<std::string>& removedSources)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
+    activeTargetOutputs_.clear();
+    for (const std::string& output : targetOutputs)
+    {
+        activeTargetOutputs_.push_back(NormalizeRelativePath(output));
+    }
+    activeRemovedSources_ = removedSources;
+    activePartialImport_ = !activeTargetOutputs_.empty();
     running_.store(true);
     workerFailures_.store(0);
     progressDone_.store(0);
     progressTotal_.store(0);
+    workerManifestJson_.clear();
     joinPending_ = true;
     status_ = "Importing " + item.name + " ...";
 
@@ -267,9 +754,29 @@ void ImportPanel::BeginImport(const Item& item, const std::vector<std::string>& 
     if (item.kind == Kind::Skybox) { opt.skyboxHdr = item.path; }
     else { opt.stagingDir = item.path; }
 
-    worker_ = std::thread([this, opt]()
+    std::vector<std::string> manifestIncludeRel = includeRel;
+    if (activePartialImport_)
+    {
+        const fs::path destination(ProjectDest(item));
+        const fs::path manifestPath = ImportManifestPath(
+            destination, item.kind == Kind::Skybox);
+        std::error_code manifestEc;
+        if (!fs::is_regular_file(manifestPath, manifestEc))
+        {
+            // Establish a complete baseline for a legacy import so untouched
+            // sibling resources do not become dirty when the manifest appears.
+            manifestIncludeRel.clear();
+        }
+    }
+
+    const std::string sourcePath = item.path;
+    worker_ = std::thread([this, opt, sourcePath, manifestIncludeRel]()
     {
         const int failures = assets::RunImport(opt); // CPU-heavy BC7 — off the UI thread
+        if (failures == 0)
+        {
+            workerManifestJson_ = BuildSourceManifestJson(sourcePath, manifestIncludeRel);
+        }
         workerFailures_.store(failures);
         running_.store(false);
     });
@@ -390,6 +897,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         //   Skybox     -> textures/<name>.dds
         const fs::path dst = ProjectDest(activeItem_);
         std::string destLabel = "converted (kept in staging)";
+        bool finalizeFailed = false;
+        std::set<std::string> projectOutputs;
         if (moveIntoProject_)
         {
             if (activeItem_.kind == Kind::Skybox)
@@ -403,7 +912,16 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 {
                     ec.clear();
                     fs::copy_file(produced, dst, fs::copy_options::overwrite_existing, ec);
-                    fs::remove(produced);
+                    if (!ec)
+                    {
+                        std::error_code removeEc;
+                        fs::remove(produced, removeEc);
+                    }
+                }
+                finalizeFailed = static_cast<bool>(ec);
+                if (!finalizeFailed)
+                {
+                    projectOutputs.insert(NormalizeRelativePath(dst.filename()));
                 }
             }
             else
@@ -421,10 +939,33 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
 
                     std::error_code rec;
                     const fs::path rel = fs::relative(it->path(), activeItem_.path, rec);
+                    if (rec || !IsSafeRelativePath(rel))
+                    {
+                        finalizeFailed = true;
+                        continue;
+                    }
+                    const std::string normalizedRel = NormalizeRelativePath(rel);
+                    if (activePartialImport_ &&
+                        std::find(activeTargetOutputs_.begin(), activeTargetOutputs_.end(),
+                            normalizedRel) == activeTargetOutputs_.end())
+                    {
+                        continue;
+                    }
                     const fs::path target = dst / rel;
                     fs::create_directories(target.parent_path(), rec);
-                    fs::copy_file(it->path(), target, fs::copy_options::overwrite_existing, rec);
-                    if (ext == ".dds") { generatedDds.push_back(it->path()); }
+                    if (!rec)
+                    {
+                        fs::copy_file(it->path(), target, fs::copy_options::overwrite_existing, rec);
+                    }
+                    if (rec)
+                    {
+                        finalizeFailed = true;
+                    }
+                    else
+                    {
+                        projectOutputs.insert(normalizedRel);
+                        if (ext == ".dds") { generatedDds.push_back(it->path()); }
+                    }
                 }
                 for (const fs::path& d : generatedDds)
                 {
@@ -432,21 +973,45 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     fs::remove(d, rrec);
                 }
 
+                if (!finalizeFailed && !activePartialImport_)
+                {
+                    // The destination folder is importer-owned. Synchronize it
+                    // to this run so deleted/unselected sources cannot leave
+                    // stale DDS or mesh files behind.
+                    RemoveStaleProjectOutputs(dst, projectOutputs);
+                }
+                else if (!finalizeFailed)
+                {
+                    projectOutputs = EnumerateProjectOutputs(dst);
+                }
+
                 // A texture set's material preset was written by the backend pointing into
                 // import_staging/ — repoint it to the moved copy so it doesn't dangle.
-                if (activeItem_.kind == Kind::TextureSet)
+                if (!finalizeFailed && activeItem_.kind == Kind::TextureSet)
                 {
                     RepointPresetPaths("import_staging/" + activeItem_.name + "/",
                         "textures/" + activeItem_.name + "/");
                 }
             }
-            destLabel = ec ? ("COPY FAILED -> " + dst.string()) : ("-> " + dst.string());
+            if (!finalizeFailed)
+            {
+                const bool outputIsFile = activeItem_.kind == Kind::Skybox;
+                finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
+                    fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
+                    activePartialImport_, activeRemovedSources_);
+            }
+            destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
+                ("-> " + dst.string());
         }
-        WriteCreditsEntry(activeItem_.name, activeItem_.license);
+        if (!finalizeFailed)
+        {
+            WriteCreditsEntry(activeItem_.name, activeItem_.license);
+        }
         registry.Refresh();
         Rescan(); // pick up the new alreadyInProject state
-        status_ = "Imported " + activeItem_.name + "  " + destLabel;
-        finishedOut = true;
+        status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :
+            ("Imported " + activeItem_.name + "  " + destLabel);
+        finishedOut = !finalizeFailed;
     }
     else
     {
@@ -465,7 +1030,11 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         return finished;
     }
 
-    if (!scanned_) { Rescan(); }
+    if (!scanned_ || (!running_.load() && lastRegistryRevision_ != registry.Revision()))
+    {
+        Rescan();
+        lastRegistryRevision_ = registry.Revision();
+    }
 
     // --- Header -------------------------------------------------------------
     ImGui::TextWrapped(
@@ -521,11 +1090,12 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     {
         ImGui::TextDisabled("Nothing importable found in import_staging/.");
     }
-    else if (ImGui::BeginTable("##importItems", 4, tableFlags))
+    else if (ImGui::BeginTable("##importItems", 5, tableFlags))
     {
-        ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 0.44f);
-        ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch, 0.40f);
+        ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch, 0.34f);
         ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 72.0f);
         ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 96.0f);
         ImGui::TableHeadersRow();
 
@@ -572,8 +1142,20 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                 }
             }
 
-            // Action: Import, or Re-import if it is already in the project tree.
+            // Import freshness: source timestamps are compared against DDS/copies.
             ImGui::TableSetColumnIndex(3);
+            ImGui::TextColored(ImportStatusColor(it.importStatus), "%s",
+                ImportStatusBadge(it.importStatus));
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s\nSource: %s\nOutput: %s",
+                    ImportStatusHint(it.importStatus),
+                    it.path.c_str(),
+                    ProjectDest(it).c_str());
+            }
+
+            // Action: Import, or Re-import if it is already in the project tree.
+            ImGui::TableSetColumnIndex(4);
             ImGui::BeginDisabled(busy);
             if (ImGui::SmallButton(it.alreadyInProject ? "Re-import" : "Import"))
             {
@@ -584,7 +1166,8 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
             ImGui::EndDisabled();
             if (it.alreadyInProject && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
-                ImGui::SetTooltip("Already in project: %s", ProjectDest(it).c_str());
+                ImGui::SetTooltip("%s\nRe-import all source files to: %s",
+                    ImportStatusHint(it.importStatus), ProjectDest(it).c_str());
             }
 
             ImGui::PopID();

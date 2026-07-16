@@ -21,6 +21,13 @@
       "normalIsRG": false,
       "useTBN": true
     },
+    "marble_cliff_05": {
+      "albedo": "textures/marble_cliff_05_2k/textures/marble_cliff_05_albedo.dds",
+      "mr": "textures/marble_cliff_05_2k/textures/marble_cliff_05_mr.dds",
+      "normal": "textures/marble_cliff_05_2k/textures/marble_cliff_05_normal.dds",
+      "normalIsRG": false,
+      "useTBN": true
+    },
     "sandstone_cracks": {
       "albedo": "textures/sandstone_cracks_albedo.dds",
       "mr": "textures/sandstone_cracks_mr.dds",

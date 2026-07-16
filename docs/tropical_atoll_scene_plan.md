@@ -633,6 +633,31 @@ is the real problem). Move BC6H/BC7 compression onto the GPU so a 2K encode is s
   vs the CPU output and a large wall-clock win (target: 2K FAST well under 1s, `--high` a few
   seconds); confirm the device-less CLI fallback still produces valid DDS.
 
+**H6 — normalize glTF MR to engine layout on import (kill the MR_LAYOUT_GLTF permutation).**
+*(exec: Fable 5 — importer repack is H-tier, but it flips a convention the glTF material loader
+depends on; escalate to Sol only if the loader coupling bites)* Today the importer is convert-only
+for glTF packed metallicRoughness: the DDS keeps glTF's ORM channel order (R=AO, G=rough, B=metal)
+and the runtime reads it via the per-material `mrLayoutGltf` flag → `MR_LAYOUT_GLTF` shader define →
+a whole extra **PSO permutation** just to swizzle `.bg`. Meanwhile texture-**sets** already synth an
+engine-layout MR (R=metal, G=rough), so imported glTF assets are second-class vs sets/presets. Fix
+= tidy it at import so imported assets are first-class engine-native:
+- **Importer**: for MR-role textures (`metallicRoughness` / `_mr`), repack channels before BC
+  compress — `outR = inB` (metal), `outG = inG` (rough); AO (inR) is unused by the engine MR (`.rg`)
+  so drop it (or park it in B). Output DDS is engine-layout MR. (Texture-set path already does this;
+  this makes the glTF path match.)
+- **Convention**: *a `.dds` MR is always engine-layout; a raw `.png` MR is glTF-layout.* Clean and
+  documentable because our importer is the only producer of `.dds`.
+- **Loader**: `MaterialDataManager` (the glTF material path, currently hardcodes
+  `md->mrLayoutGltf = true`) instead sets it from the convention — `false` when the MR resolves to a
+  `.dds` sibling (path is available as `d.mrPath`; cheap `fs::exists` on the `.dds`). Raw-staging
+  glTF preview stays correct (still glTF-layout); imported assets stop emitting `MR_LAYOUT_GLTF`.
+- **Migration**: already-imported glTF assets must be **re-imported** — their existing MR DDS are
+  glTF-layout and would be misread as engine-layout after the convention flips (metal/rough swap).
+  Cheap for the atoll (a few palms/rocks).
+- **Verify**: re-import the palm, confirm its glTF material no longer emits the `MR_LAYOUT_GLTF`
+  define (uses the default gbuffer variant), metal/rough read correctly, and the scene looks
+  identical to before. Bonus: one fewer shader permutation for every imported asset.
+
 ## Part I — simple material editor
 
 Parameter-level editing of material presets — deliberately small: texture pickers + sliders +

@@ -2,12 +2,13 @@
 #if WITH_EDITOR
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
-class AssetRegistry;
+#include "editor/assets/AssetRegistry.h"
 
 // Part H3 — content-browser "Import Assets" window. Scans import_staging/ for raw downloads
 // (glTF/GLB folders, texture-set folders, .hdr skyboxes), shows what was detected + license, and
@@ -26,6 +27,10 @@ public:
     // frame (the caller refreshes the AssetRegistry).
     bool Draw(AssetRegistry& registry, bool* open);
 
+    // Reimports only the content-browser resource and its actual source
+    // dependencies. Deleted sources remove only their mapped output.
+    bool BeginReimport(const EditorAssetRecord& asset, AssetRegistry& registry);
+
 private:
     enum class Kind { Mesh, TextureSet, Skybox };
     struct Item
@@ -37,6 +42,7 @@ private:
         std::string meta;      // "5 materials, 6630 tris" etc.
         std::string license;   // first lines of source/license.txt or glTF copyright
         bool alreadyInProject = false;
+        EditorAssetImportStatus importStatus = EditorAssetImportStatus::Untracked;
     };
 
     // One selectable image row in the texture-import dialog.
@@ -49,7 +55,10 @@ private:
 
     void Rescan();
     // includeRel empty = convert everything; registerPreset=false skips MR synth + material preset.
-    void BeginImport(const Item& item, const std::vector<std::string>& includeRel, bool registerPreset);
+    void BeginImport(const Item& item, const std::vector<std::string>& includeRel,
+        bool registerPreset,
+        const std::vector<std::string>& targetOutputs = {},
+        const std::vector<std::string>& removedSources = {});
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
@@ -62,6 +71,7 @@ private:
 
     std::vector<Item> items_;
     bool scanned_ = false;
+    std::uint64_t lastRegistryRevision_ = 0;
 
     // Options (mirror assets::ImportOptions).
     int  maxTextureSize_ = 2048;
@@ -76,7 +86,11 @@ private:
     std::atomic<int> workerFailures_{ 0 };
     std::atomic<int> progressDone_{ 0 };   // textures converted so far (worker writes, UI reads)
     std::atomic<int> progressTotal_{ 0 };  // total convertible textures (0 until the worker scans)
+    std::string workerManifestJson_;       // source snapshot built by worker after successful import
     Item activeItem_;
+    std::vector<std::string> activeTargetOutputs_;
+    std::vector<std::string> activeRemovedSources_;
+    bool activePartialImport_ = false;
     bool joinPending_ = false;
     std::string status_;
 

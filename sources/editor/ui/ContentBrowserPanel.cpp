@@ -232,6 +232,50 @@ namespace
         return "[ASSET]";
     }
 
+    const char* ImportStatusBadge(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:      return "STAGED";
+        case EditorAssetImportStatus::UpToDate:    return "CURRENT";
+        case EditorAssetImportStatus::SourceNewer: return "CHANGED";
+        case EditorAssetImportStatus::Incomplete:  return "MISSING";
+        case EditorAssetImportStatus::Untracked:   return "";
+        }
+        return "";
+    }
+
+    const char* ImportStatusHint(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:
+            return "Source is staged but has not been imported into the project.";
+        case EditorAssetImportStatus::UpToDate:
+            return "Imported output is current with its staged source.";
+        case EditorAssetImportStatus::SourceNewer:
+            return "A staged source used by this resource changed or was deleted.";
+        case EditorAssetImportStatus::Incomplete:
+            return "This imported resource is incomplete.";
+        case EditorAssetImportStatus::Untracked:
+            return "This asset was authored directly in the project tree.";
+        }
+        return "This asset was authored directly in the project tree.";
+    }
+
+    ImVec4 ImportStatusColor(EditorAssetImportStatus status)
+    {
+        switch (status)
+        {
+        case EditorAssetImportStatus::Staged:      return ImVec4(0.35f, 0.68f, 0.95f, 1.0f);
+        case EditorAssetImportStatus::UpToDate:    return ImVec4(0.35f, 0.78f, 0.42f, 1.0f);
+        case EditorAssetImportStatus::SourceNewer: return ImVec4(0.96f, 0.62f, 0.16f, 1.0f);
+        case EditorAssetImportStatus::Incomplete:  return ImVec4(0.95f, 0.28f, 0.20f, 1.0f);
+        case EditorAssetImportStatus::Untracked:   return ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
+        }
+        return ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
+    }
+
     enum class BrowserIcon
     {
         None = -1,
@@ -539,6 +583,61 @@ namespace
         drawList->PopClipRect();
     }
 
+    void DrawTileImportStatus(const EditorAssetRecord& record)
+    {
+        if (record.importStatus == EditorAssetImportStatus::Untracked)
+        {
+            return;
+        }
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        const char* label = ImportStatusBadge(record.importStatus);
+        const ImVec2 textSize = ImGui::CalcTextSize(label);
+        const ImVec2 badgeMin(
+            itemMax.x - textSize.x - 12.0f,
+            itemMin.y + 5.0f);
+        const ImVec2 badgeMax(itemMax.x - 5.0f, badgeMin.y + textSize.y + 5.0f);
+        drawList->AddRectFilled(badgeMin, badgeMax,
+            ImGui::GetColorU32(ImportStatusColor(record.importStatus)), 3.0f);
+        drawList->AddText(ImVec2(badgeMin.x + 3.5f, badgeMin.y + 2.5f),
+            IM_COL32(255, 255, 255, 255), label);
+    }
+
+    bool DrawListImportStatus(const EditorAssetRecord& record)
+    {
+        bool requested = false;
+        ImGui::PushID(record.id.key.c_str());
+        ImGui::PushID("importStatus");
+        if (record.importStatus == EditorAssetImportStatus::Staged)
+        {
+            requested = ImGui::SmallButton("Import");
+        }
+        else if (record.importStatus == EditorAssetImportStatus::SourceNewer ||
+            record.importStatus == EditorAssetImportStatus::Incomplete)
+        {
+            requested = ImGui::SmallButton("Reimport");
+        }
+        else if (record.importStatus == EditorAssetImportStatus::UpToDate)
+        {
+            ImGui::TextColored(ImportStatusColor(record.importStatus), "CURRENT");
+        }
+        else
+        {
+            ImGui::TextDisabled("--");
+        }
+
+        if (record.importStatus != EditorAssetImportStatus::Untracked && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s\nSource: %s",
+                ImportStatusHint(record.importStatus), record.importSourcePath.c_str());
+        }
+        ImGui::PopID();
+        ImGui::PopID();
+        return requested;
+    }
+
     bool BeginDelayedResourceHint()
     {
         if (ImGui::GetDragDropPayload() != nullptr ||
@@ -628,6 +727,17 @@ namespace
         ImGui::TextDisabled("%s", ToString(record->id.type));
         ImGui::Separator();
         ImGui::TextWrapped("Virtual Path: %s", record->virtualPath.c_str());
+        if (record->importStatus != EditorAssetImportStatus::Untracked)
+        {
+            ImGui::TextColored(ImportStatusColor(record->importStatus),
+                "Import: %s", ToString(record->importStatus));
+            ImGui::TextWrapped("Staged Source: %s", record->importSourcePath.c_str());
+            if (record->importStatus == EditorAssetImportStatus::SourceNewer ||
+                record->importStatus == EditorAssetImportStatus::Incomplete)
+            {
+                ImGui::TextWrapped("%s", ImportStatusHint(record->importStatus));
+            }
+        }
 
         if (record->id.type == EditorAssetType::Texture)
         {
@@ -1685,6 +1795,27 @@ namespace
             wroteSpecificAction = true;
         }
 
+        if (record->importStatus != EditorAssetImportStatus::Untracked)
+        {
+            if (wroteSpecificAction)
+            {
+                ImGui::Separator();
+            }
+            const char* label = record->importStatus == EditorAssetImportStatus::Staged ?
+                "Import from Staging" : "Re-import from Staging";
+            if (ImGui::MenuItem(label))
+            {
+                action.type = ContentBrowserAction::Type::ReimportAsset;
+                action.asset = record->id;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s\n%s",
+                    ImportStatusHint(record->importStatus), record->importSourcePath.c_str());
+            }
+            wroteSpecificAction = true;
+        }
+
         if (wroteSpecificAction)
         {
             ImGui::Separator();
@@ -1750,7 +1881,7 @@ namespace
         const ImGuiTableFlags tableFlags =
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
             ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-        if (!ImGui::BeginTable("##assetTable", 3, tableFlags, ImVec2(0.0f, 0.0f)))
+        if (!ImGui::BeginTable("##assetTable", 4, tableFlags, ImVec2(0.0f, 0.0f)))
         {
             return;
         }
@@ -1758,6 +1889,7 @@ namespace
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 180.0f);
         ImGui::TableSetupColumn("Virtual Path", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Import", ImGuiTableColumnFlags_WidthFixed, 78.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -1795,6 +1927,8 @@ namespace
             ImGui::TextUnformatted(folder->name.c_str());
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(folder->path.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("--");
         };
 
         const auto drawAssetRow = [&](const EditorAssetRecord* record)
@@ -1841,6 +1975,12 @@ namespace
             ImGui::TextUnformatted(record->displayName.c_str());
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(record->virtualPath.c_str());
+            ImGui::TableNextColumn();
+            if (DrawListImportStatus(*record))
+            {
+                action.type = ContentBrowserAction::Type::ReimportAsset;
+                action.asset = record->id;
+            }
         };
 
         const int itemCount = static_cast<int>(folders.size() + assets.size());
@@ -1941,6 +2081,7 @@ namespace
                 icons,
                 AssetTypeBadge(record->id.type),
                 record->displayName);
+            DrawTileImportStatus(*record);
             std::string levelReason;
             if (ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&

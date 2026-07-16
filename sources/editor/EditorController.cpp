@@ -2479,7 +2479,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     return;
                 }
 
-                if (action.type == ContentBrowserAction::Type::SpawnObject)
+                if (action.type == ContentBrowserAction::Type::ReimportAsset)
+                {
+                    showImportPanel_ = true;
+                    importPanel_.BeginReimport(*asset, assetRegistry_);
+                }
+                else if (action.type == ContentBrowserAction::Type::SpawnObject)
                 {
                     const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
                     if (!factory || !factory->CanBuildFromAsset(asset))
