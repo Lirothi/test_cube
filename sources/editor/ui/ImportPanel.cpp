@@ -452,9 +452,15 @@ namespace
         return {};
     }
 
-    // Light cgltf parse for the row summary + copyright fallback. No buffers loaded.
-    void DescribeGltf(const fs::path& gltf, std::string& metaOut, std::string& copyrightOut)
+    // Light cgltf parse for the row summary + copyright fallback. No buffers loaded — the
+    // world-space size comes from POSITION accessor min/max (stored in the JSON) transformed
+    // by each referencing node's world matrix. glTF has no unit guarantee: Sketchfab assets
+    // are frequently cm-authored (a "rock" ends up ~115 m at scale 1.0), so the row surfaces
+    // the baked size and the table warns when it is implausible for a prop.
+    void DescribeGltf(const fs::path& gltf, std::string& metaOut, std::string& copyrightOut,
+        float& maxDimOut)
     {
+        maxDimOut = 0.0f;
         cgltf_options opt{};
         cgltf_data* data = nullptr;
         if (cgltf_parse_file(&opt, gltf.string().c_str(), &data) != cgltf_result_success)
@@ -471,9 +477,63 @@ namespace
                 if (prim.indices) { tris += prim.indices->count / 3; }
             }
         }
+
+        // World-space bounding box: union of every node-instanced primitive's
+        // POSITION min/max, transformed through the node's world matrix.
+        float bbMin[3] = { FLT_MAX, FLT_MAX, FLT_MAX };
+        float bbMax[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        bool anyBounds = false;
+        for (cgltf_size n = 0; n < data->nodes_count; ++n)
+        {
+            const cgltf_node& node = data->nodes[n];
+            if (!node.mesh) { continue; }
+            float world[16];
+            cgltf_node_transform_world(&node, world);
+            for (cgltf_size p = 0; p < node.mesh->primitives_count; ++p)
+            {
+                const cgltf_primitive& prim = node.mesh->primitives[p];
+                for (cgltf_size a = 0; a < prim.attributes_count; ++a)
+                {
+                    const cgltf_attribute& attr = prim.attributes[a];
+                    if (attr.type != cgltf_attribute_type_position || !attr.data ||
+                        !attr.data->has_min || !attr.data->has_max)
+                    {
+                        continue;
+                    }
+                    for (int corner = 0; corner < 8; ++corner)
+                    {
+                        const float local[3] = {
+                            (corner & 1) ? attr.data->max[0] : attr.data->min[0],
+                            (corner & 2) ? attr.data->max[1] : attr.data->min[1],
+                            (corner & 4) ? attr.data->max[2] : attr.data->min[2]
+                        };
+                        for (int axis = 0; axis < 3; ++axis)
+                        {
+                            const float v = world[0 + axis] * local[0] +
+                                            world[4 + axis] * local[1] +
+                                            world[8 + axis] * local[2] +
+                                            world[12 + axis];
+                            bbMin[axis] = std::min(bbMin[axis], v);
+                            bbMax[axis] = std::max(bbMax[axis], v);
+                            anyBounds = true;
+                        }
+                    }
+                }
+            }
+        }
+
         std::ostringstream os;
         os << data->materials_count << " material" << (data->materials_count == 1 ? "" : "s")
            << ", " << tris << " tris";
+        if (anyBounds)
+        {
+            const float dims[3] = { bbMax[0] - bbMin[0], bbMax[1] - bbMin[1], bbMax[2] - bbMin[2] };
+            maxDimOut = std::max(dims[0], std::max(dims[1], dims[2]));
+            char size[32];
+            if (maxDimOut >= 10.0f) { snprintf(size, sizeof(size), ", ~%.0f m", maxDimOut); }
+            else { snprintf(size, sizeof(size), ", ~%.1f m", maxDimOut); }
+            os << size;
+        }
         metaOut = os.str();
         if (data->asset.copyright) { copyrightOut = data->asset.copyright; }
         cgltf_free(data);
@@ -550,11 +610,13 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
     if (running_.load())
     {
         status_ = "Another asset import is already running.";
+        statusIsError_ = true;
         return false;
     }
     if (asset.importSourcePath.empty())
     {
         status_ = "This asset has no source under import_staging/.";
+        statusIsError_ = true;
         return false;
     }
 
@@ -621,6 +683,7 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
             if (!fs::remove(fs::path(asset.path), removeEc) || removeEc)
             {
                 status_ = "Could not remove stale output: " + asset.path;
+                statusIsError_ = true;
                 return false;
             }
             if (!RemoveOutputFromManifest(
@@ -628,11 +691,13 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
                     outputRelative.generic_string(), asset.importSourceFiles))
             {
                 status_ = "Removed output, but failed to update its import manifest.";
+                statusIsError_ = true;
                 registry.Refresh();
                 Rescan();
                 return false;
             }
             status_ = "Removed stale output: " + asset.path;
+            statusIsError_ = false;
             registry.Refresh();
             Rescan();
             return true;
@@ -644,6 +709,7 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
     }
 
     status_ = "Staged source is no longer available: " + asset.importSourcePath;
+    statusIsError_ = true;
     return false;
 }
 
@@ -718,7 +784,7 @@ void ImportPanel::Rescan()
             it.kind = Kind::Mesh;
             it.gltfFile = gltf.string();
             std::string copyright;
-            DescribeGltf(gltf, it.meta, copyright);
+            DescribeGltf(gltf, it.meta, copyright, it.worldSizeM);
             if (it.license.empty() && !copyright.empty()) { it.license = copyright + "\n"; }
         }
         else if (hasTex)
@@ -763,6 +829,7 @@ void ImportPanel::BeginImport(const Item& item,
     workerManifestJson_.clear();
     joinPending_ = true;
     status_ = "Importing " + item.name + " ...";
+    statusIsError_ = false;
 
     // Snapshot options for the worker (avoid racing the UI).
     assets::ImportOptions opt;
@@ -823,6 +890,14 @@ void ImportPanel::OpenImportDialog(const Item& item)
         DialogFile df;
         df.rel = fs::relative(it->path(), item.path, ec).generic_string();
         df.role = GuessTextureRole(it->path());
+        std::error_code sizeEc;
+        const uintmax_t bytes = fs::file_size(it->path(), sizeEc);
+        if (!sizeEc)
+        {
+            char sizeText[32];
+            snprintf(sizeText, sizeof(sizeText), "%.1f MB", double(bytes) / (1024.0 * 1024.0));
+            df.sizeText = sizeText;
+        }
         df.selected = true;
         dialogFiles_.push_back(std::move(df));
     }
@@ -867,6 +942,11 @@ void ImportPanel::DrawImportDialog()
         {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "[%s]", f.role.c_str());
+        }
+        if (!f.sizeText.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", f.sizeText.c_str());
         }
         ImGui::PopID();
     }
@@ -1044,11 +1124,13 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         Rescan(); // pick up the new alreadyInProject state
         status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :
             ("Imported " + activeItem_.name + "  " + destLabel);
+        statusIsError_ = finalizeFailed;
         finishedOut = !finalizeFailed;
     }
     else
     {
         status_ = "Import FAILED (" + std::to_string(failures) + ") — see asset_import.log";
+        statusIsError_ = true;
     }
 }
 
@@ -1057,6 +1139,8 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     bool finished = false;
     PollImport(registry, finished);
 
+    ImGui::SetNextWindowSize(ImVec2(860.0f, 440.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(560.0f, 260.0f), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Import Assets", open))
     {
         ImGui::End();
@@ -1088,6 +1172,14 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         {
             maxTextureSize_ = sizeIdx == 2 ? 4096 : (sizeIdx == 1 ? 2048 : 1024);
         }
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::SetNextItemWidth(120.0f);
+        const char* faces[] = { "512", "1024", "2048" };
+        int faceIdx = skyboxFaceSize_ >= 2048 ? 2 : (skyboxFaceSize_ >= 1024 ? 1 : 0);
+        if (ImGui::Combo("Skybox face size", &faceIdx, faces, 3))
+        {
+            skyboxFaceSize_ = faceIdx == 2 ? 2048 : (faceIdx == 1 ? 1024 : 512);
+        }
         ImGui::Checkbox("High-quality BC7 (slower)", &highQuality_);
         ImGui::SameLine(0.0f, 24.0f);
         ImGui::Checkbox("Move into project after import", &moveIntoProject_);
@@ -1108,14 +1200,16 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         }
     }
 
-    // --- Status -------------------------------------------------------------
+    // --- Status: blue while running, then green on success / red on failure --
     if (running_.load())
     {
         ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "%s", status_.c_str());
     }
     else if (!status_.empty())
     {
-        ImGui::TextUnformatted(status_.c_str());
+        const ImVec4 statusColor = statusIsError_ ?
+            ImVec4(1.00f, 0.42f, 0.34f, 1.0f) : ImVec4(0.50f, 0.85f, 0.50f, 1.0f);
+        ImGui::TextColored(statusColor, "%s", status_.c_str());
     }
 
     ImGui::Separator();
@@ -1158,9 +1252,25 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
             ImGui::SameLine();
             ImGui::TextUnformatted(it.name.c_str());
 
-            // Details.
+            // Details. A "prop" measured in tens/hundreds of meters is almost always a
+            // cm-authored glTF with no unit conversion — warn so the user expects to scale.
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextDisabled("%s", it.meta.c_str());
+            const bool implausiblyLarge = it.kind == Kind::Mesh && it.worldSizeM > 50.0f;
+            if (implausiblyLarge)
+            {
+                ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "%s", it.meta.c_str());
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(
+                        "Baked world size is ~%.0f m — likely centimeter-authored.\n"
+                        "Expect to scale it down after spawning (e.g. 0.01-0.02).",
+                        it.worldSizeM);
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("%s", it.meta.c_str());
+            }
 
             // Source / license status (hover for detail).
             ImGui::TableSetColumnIndex(2);
@@ -1195,20 +1305,27 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                     ProjectDest(it).c_str());
             }
 
-            // Action: Import, or Re-import if it is already in the project tree.
+            // Action: Import / Re-import; the row being imported shows live state instead.
             ImGui::TableSetColumnIndex(4);
-            ImGui::BeginDisabled(busy);
-            if (ImGui::SmallButton(it.alreadyInProject ? "Re-import" : "Import"))
+            if (busy && it.path == activeItem_.path)
             {
-                // Texture sets get a pick-files + preset dialog; meshes/skyboxes import directly.
-                if (it.kind == Kind::TextureSet) { OpenImportDialog(it); }
-                else { BeginImport(it, {}, true); }
+                ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "importing...");
             }
-            ImGui::EndDisabled();
-            if (it.alreadyInProject && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            else
             {
-                ImGui::SetTooltip("%s\nRe-import all source files to: %s",
-                    ImportStatusHint(it.importStatus), ProjectDest(it).c_str());
+                ImGui::BeginDisabled(busy);
+                if (ImGui::SmallButton(it.alreadyInProject ? "Re-import" : "Import"))
+                {
+                    // Texture sets get a pick-files + preset dialog; meshes/skyboxes import directly.
+                    if (it.kind == Kind::TextureSet) { OpenImportDialog(it); }
+                    else { BeginImport(it, {}, true); }
+                }
+                ImGui::EndDisabled();
+                if (it.alreadyInProject && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                {
+                    ImGui::SetTooltip("%s\nRe-import all source files to: %s",
+                        ImportStatusHint(it.importStatus), ProjectDest(it).c_str());
+                }
             }
 
             ImGui::PopID();

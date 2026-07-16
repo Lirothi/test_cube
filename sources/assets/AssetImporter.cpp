@@ -146,6 +146,18 @@ const char* RoleName(TexRole r)
                  default:                  return "linear"; }
 }
 
+// H6 — packed metallic-roughness textures (glTF "metallicRoughness", ORM/ARM packs). Their
+// channel order is G=rough, B=metal (R = AO or filler). The importer repacks them into the
+// ENGINE layout (R=metal, G=rough, AO parked in B) before compression, so imported DDS need
+// no MR_LAYOUT_GLTF shader permutation at runtime. Convention: a .dds MR is ALWAYS
+// engine-layout (this importer is the only .dds producer); a raw .png MR stays glTF-layout.
+bool IsPackedMrStem(const std::string& stemLower)
+{
+    const auto has = [&](const char* s) { return stemLower.find(s) != std::string::npos; };
+    return has("metallicroughness") || has("metalrough") || has("_mr") ||
+           has("_orm") || has("_arm");
+}
+
 TexRole ClassifyRole(const std::string& stemLower)
 {
     const auto has = [&](const char* s) { return stemLower.find(s) != std::string::npos; };
@@ -239,7 +251,8 @@ bool FinishTextureDds(ScratchImage work, bool srgb, DXGI_FORMAT target, const Im
 //=============================================================================
 bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, const std::string& rel)
 {
-    const TexRole role = ClassifyRole(Lower(in.stem().string()));
+    const std::string stemLower = Lower(in.stem().string());
+    const TexRole role = ClassifyRole(stemLower);
     const bool srgb = (role == TexRole::AlbedoSRGB);
 
     ScratchImage work;
@@ -258,12 +271,37 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
         }
     }
 
+    // H6: repack packed MR (glTF/ORM/ARM: G=rough, B=metal) into the engine layout
+    // (R=metal, G=rough; source AO/filler R parked in B). The resulting DDS is read
+    // WITHOUT the MR_LAYOUT_GLTF define — see MaterialDataManager's DDS convention.
+    const bool packedMr = role == TexRole::LinearData && IsPackedMrStem(stemLower);
+    if (packedMr)
+    {
+        ScratchImage t;
+        if (FAILED(TransformImage(work.GetImages(), work.GetImageCount(), work.GetMetadata(),
+            [](XMVECTOR* out, const XMVECTOR* in, size_t width, size_t)
+            {
+                for (size_t j = 0; j < width; ++j)
+                {
+                    // in = (AO, rough, metal, a) -> out = (metal, rough, AO, 1)
+                    out[j] = XMVectorSetW(XMVectorSwizzle<2, 1, 0, 3>(in[j]), 1.0f);
+                }
+            }, t)))
+        {
+            log.Line("  FAIL mr repack  " + rel);
+            return false;
+        }
+        work = std::move(t);
+    }
+
     DXGI_FORMAT target = DXGI_FORMAT_BC7_UNORM;
     if (srgb) { target = DXGI_FORMAT_BC7_UNORM_SRGB; }
     else if (role == TexRole::Normal && opts.bc5Normal) { target = DXGI_FORMAT_BC5_UNORM; }
 
     fs::path out = in; out.replace_extension(L".dds");
-    return FinishTextureDds(std::move(work), srgb, target, opts, out, log, rel + " [" + RoleName(role) + "]");
+    const std::string roleTag = packedMr ? std::string(" [mr gltf->engine]")
+                                         : (" [" + std::string(RoleName(role)) + "]");
+    return FinishTextureDds(std::move(work), srgb, target, opts, out, log, rel + roleTag);
 }
 
 //=============================================================================

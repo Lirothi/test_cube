@@ -2,6 +2,8 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h" // GltfMaterialDesc + DescribeGltfMaterial (A3)
 
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -111,7 +113,32 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
 
     auto md = std::make_shared<MaterialData>();
     md->fromGltf = true;
-    md->mrLayoutGltf = true;     // glTF packs MR as B=metal, G=rough
+    // H6 convention: a .dds MR is ALWAYS engine-layout (R=metal, G=rough) — the importer repacks
+    // glTF's G=rough/B=metal on conversion and is the only .dds producer. A raw png/jpg MR (an
+    // unimported staging asset previewed straight from the glTF) is still glTF-layout, so it
+    // keeps the MR_LAYOUT_GLTF shader swizzle. Texture2D::CreateFromFile (H2) prefers the
+    // sibling .dds, so mirror exactly that resolution here.
+    bool mrIsEngineLayoutDds = false;
+    if (!d.mrPath.empty())
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path mrPath(d.mrPath);
+        std::string ext = mrPath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".dds")
+        {
+            mrIsEngineLayoutDds = true;
+        }
+        else
+        {
+            fs::path sibling = mrPath;
+            sibling.replace_extension(".dds");
+            mrIsEngineLayoutDds = fs::exists(sibling, ec);
+        }
+    }
+    md->mrLayoutGltf = !mrIsEngineLayoutDds; // raw glTF MR packs B=metal, G=rough
     md->normalIsRG = false;      // glTF normal maps are RGB
     md->useTBN = true;
     // Set the mask fields BEFORE LoadAlbedo: the WIC mip build preserves alpha-test coverage

@@ -660,9 +660,16 @@ is the real problem). Move BC6H/BC7 compression onto the GPU so a 2K encode is s
   vs the CPU output and a large wall-clock win (target: 2K FAST well under 1s, `--high` a few
   seconds); confirm the device-less CLI fallback still produces valid DDS.
 
-**H6 — normalize glTF MR to engine layout on import (kill the MR_LAYOUT_GLTF permutation).**
-*(exec: Fable 5 — importer repack is H-tier, but it flips a convention the glTF material loader
-depends on; escalate to Sol only if the loader coupling bites)* Today the importer is convert-only
+**H6 — normalize glTF MR to engine layout on import (kill the MR_LAYOUT_GLTF permutation).
+— DONE (Fable 5, 2026-07-16), uncommitted.** Importer: packed-MR stems (`metallicroughness`,
+`metalrough`, `_mr`, `_orm`, `_arm` — all share G=rough/B=metal) are repacked via TransformImage
+swizzle (R=metal←B, G=rough←G, AO parked in B←R, A=1) before BC compress; log tag
+`[mr gltf->engine]`. Loader: `MaterialDataManager` sets `mrLayoutGltf` from the convention —
+false when the MR path is already `.dds` or a sibling `.dds` exists (mirrors H2's
+`Texture2D::CreateFromFile` resolution), true only for raw-png staging previews. Migration was
+free: models/ held no imported glTF at the time (palm had been deleted during H4 testing) — any
+future import is engine-layout from birth. Verified: campfire's real glTF MR converts with the
+repack tag, fmt/mips unchanged, exit 0. *(original spec below)* Today the importer is convert-only
 for glTF packed metallicRoughness: the DDS keeps glTF's ORM channel order (R=AO, G=rough, B=metal)
 and the runtime reads it via the per-material `mrLayoutGltf` flag → `MR_LAYOUT_GLTF` shader define →
 a whole extra **PSO permutation** just to swizzle `.bg`. Meanwhile texture-**sets** already synth an

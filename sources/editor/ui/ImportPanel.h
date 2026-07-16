@@ -39,8 +39,9 @@ private:
         std::string name;      // folder / file stem
         Kind kind = Kind::Mesh;
         std::string gltfFile;  // relative gltf/glb inside the folder (Mesh)
-        std::string meta;      // "5 materials, 6630 tris" etc.
+        std::string meta;      // "5 materials, 6630 tris, ~5.8 m" etc.
         std::string license;   // first lines of source/license.txt or glTF copyright
+        float worldSizeM = 0.0f; // Mesh: longest world-space bbox axis (0 = unknown)
         bool alreadyInProject = false;
         EditorAssetImportStatus importStatus = EditorAssetImportStatus::Untracked;
     };
@@ -48,8 +49,9 @@ private:
     // One selectable image row in the texture-import dialog.
     struct DialogFile
     {
-        std::string rel;   // path relative to the item folder (what the backend whitelists on)
-        std::string role;  // guessed role for display: albedo / normal / rough / metal / ao / ...
+        std::string rel;      // path relative to the item folder (what the backend whitelists on)
+        std::string role;     // guessed role for display: albedo / normal / rough / metal / ao / ...
+        std::string sizeText; // "12.4 MB" — helps judge the max-texture-size option
         bool selected = true;
     };
 
@@ -97,6 +99,7 @@ private:
     bool activeMergeManifest_ = false;
     bool joinPending_ = false;
     std::string status_;
+    bool statusIsError_ = false; // colors the status line red on failure, green on success
 
     // Import dialog (texture sets only): pick which images to convert + whether to make a preset.
     bool showImportDialog_ = false;
