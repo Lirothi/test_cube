@@ -615,6 +615,24 @@ confirmed (no shimmer at distance), CREDITS.md entry correct.
 **H4 (optional polish).** *(exec: GPT 5.6 terra)* Reimport: detect a source newer than its DDS siblings, offer
 one-click reimport; per-asset import status badges in the content browser.
 
+**H5 — GPU texture encoder (do before Part I).** *(exec: Fable 5 — touches the D3D12 device + a
+compute path; escalate to Sol if the encoder's block math fights back)* The CPU DirectXTex path is
+the bottleneck: even with OpenMP block-parallelism a 2K BC7 costs seconds and `--high` is ~20s, so
+importing a palm/rock pack stalls for many seconds (H3 now shows a progress bar, but the wall-clock
+is the real problem). Move BC6H/BC7 compression onto the GPU so a 2K encode is sub-second.
+- **Approach**: wire a compute-shader block encoder (candidates: `DirectXTexCompressGPU` /
+  BCDirectCompute reusing the engine's existing D3D12 device + a transient upload/readback path, or
+  a vendored HLSL BC7/BC6H encoder à la GPURealTimeBCn). BC7 for LDR albedo/MR/normal, BC6H_UF16
+  for the skybox cube. Keep the CPU path as a fallback (headless CLI with no device, or GPU encode
+  failure) behind a flag so `--import` still works device-less.
+- **Progress**: the atomic `progressDone`/`progressTotal` channel added in H3 stays the API — the
+  GPU path just advances it per-texture as dispatches retire.
+- **Contract**: byte-format identical to the CPU output (BC7_UNORM/_SRGB, BC5, BC6H_UF16 + DX10
+  header, full mip chain) so H2's DDS-sibling resolution and the loaders need no change.
+- **Verify**: re-import the palm + a Poly Haven 2K rock set, confirm identical in-engine appearance
+  vs the CPU output and a large wall-clock win (target: 2K FAST well under 1s, `--high` a few
+  seconds); confirm the device-less CLI fallback still produces valid DDS.
+
 ## Part I — simple material editor
 
 Parameter-level editing of material presets — deliberately small: texture pickers + sliders +

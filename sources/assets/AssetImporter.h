@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <string>
+#include <vector>
 
 // Part H1 — offline asset conversion backend (no editor UI). Turns raw downloads staged in
 // `import_staging/` into engine-ready content: PNG/JPG -> mipped BC7 DDS, texture-set MR
@@ -19,6 +21,18 @@ struct ImportOptions
     bool        bc5Normal = false;  // encode normal maps as BC5 (RG) instead of BC7 (RGB)
     int         skyboxFaceSize = 1024; // cube face edge for --skybox equirect -> cubemap
     std::string logPath = "asset_import.log";
+
+    // H3 import-dialog controls. registerPreset=false skips the texture-set pass (no MR synth / no
+    // material preset — every selected image is converted as a loose DDS). includeRel, when
+    // non-empty, whitelists which staging-relative files to convert (empty = convert everything).
+    bool                     registerPreset = true;
+    std::vector<std::string> includeRel;
+
+    // Optional live-progress channel for a UI progress bar (both null in the headless CLI).
+    // RunImport stores the convertible-texture count into *progressTotal after scanning, then
+    // bumps *progressDone as each texture/set/flipbook completes, snapping to total at the end.
+    std::atomic<int>* progressDone = nullptr;
+    std::atomic<int>* progressTotal = nullptr;
 };
 
 // Headless entry point for the `--import` CLI. Returns a process exit code

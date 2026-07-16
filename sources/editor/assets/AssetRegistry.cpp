@@ -349,6 +349,15 @@ namespace
         return {};
     }
 
+    // Texture files can live under any root — e.g. a mesh's sibling DDS in models/<name>/ — so type
+    // them as Texture by extension instead of inheriting the root's default (Mesh). Without this the
+    // palm's DDS siblings index as "Mesh" and never show as textures in the content browser.
+    EditorAssetType TypeForExtension(const std::string& ext, EditorAssetType rootType)
+    {
+        if (ext == ".dds" || ext == ".png") { return EditorAssetType::Texture; }
+        return rootType;
+    }
+
     struct DirRoot
     {
         const char* dir;
@@ -360,7 +369,7 @@ namespace
     const std::array<DirRoot, 5>& AssetRoots()
     {
         static const std::array<DirRoot, 5> roots = { {
-            { "models",         "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb" } },
+            { "models",         "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb", ".dds", ".png" } },
             { "textures",       "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
             { "data/levels",    "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
             { "shaders",        "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
@@ -627,7 +636,7 @@ void AssetRegistry::Refresh()
             }
 
             EditorAssetRecord record;
-            record.id.type = root.type;
+            record.id.type = TypeForExtension(ext, root.type);
             record.path = p.generic_string();
             record.id.key = record.path;
             record.virtualFolder = NormalizeVirtualPath(std::move(virtualFolder));

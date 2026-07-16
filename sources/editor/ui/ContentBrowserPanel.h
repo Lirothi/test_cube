@@ -32,7 +32,8 @@ struct ContentBrowserAction
         SpawnObject,
         AssignMaterial,
         OpenLevel,
-        OpenLevelPreservingCamera
+        OpenLevelPreservingCamera,
+        OpenImportWindow
     };
 
     Type type = Type::None;

@@ -192,6 +192,9 @@
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/ui/ImportPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -627,6 +630,9 @@
       <Filter>sources\editor\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/ImportPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/CommandHistoryPanel.h">

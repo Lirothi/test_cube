@@ -2466,6 +2466,13 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     return;
                 }
 
+                // Opening the importer needs no asset — handle before the asset lookup.
+                if (action.type == ContentBrowserAction::Type::OpenImportWindow)
+                {
+                    showImportPanel_ = true;
+                    return;
+                }
+
                 const EditorAssetRecord* asset = assetRegistry_.FindById(action.asset);
                 if (!asset)
                 {
@@ -2509,6 +2516,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera;
                     RequestOpenLevelPath(panelCtx.levelManager, asset->path, preserveCamera);
                 }
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "importAssets",
+            "Import Assets",
+            &showImportPanel_,
+            true,
+            [this](EditorContext& /*panelCtx*/)
+            {
+                // H3: importer window. It refreshes the AssetRegistry itself on completion; the
+                // 2s poll picks up the new DDS/models entries too.
+                importPanel_.Draw(assetRegistry_, &showImportPanel_);
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -3270,6 +3289,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         drawPanelToggle("sceneOutliner");
         drawPanelToggle("inspector");
         drawPanelToggle("commandHistory");
+        drawPanelToggle("importAssets");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Selection");
@@ -3301,6 +3321,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("contentBrowser");
     drawPanel("inspector");
     drawPanel("commandHistory");
+    drawPanel("importAssets");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {

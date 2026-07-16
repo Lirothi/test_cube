@@ -14,6 +14,7 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/CommandHistoryPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
+#include "editor/ui/ImportPanel.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
 #include "editor/ui/ViewportGizmo.h"
@@ -91,10 +92,12 @@ private:
     bool showOutliner_ = true;
     bool showInspector_ = true;
     bool showCommandHistory_ = true;
+    bool showImportPanel_ = false; // H3: import_staging -> engine assets window
     int selectionOutlineRadius_ = 1;
     AssetRegistry assetRegistry_;
     AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;
+    ImportPanel importPanel_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     CommandHistoryPanel commandHistory_;

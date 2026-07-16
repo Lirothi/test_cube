@@ -2217,7 +2217,14 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     ImGui::SameLine();
     DisabledButtonWithTooltip("Add", "Asset creation is planned for a later Content Browser step.");
     ImGui::SameLine();
-    DisabledButtonWithTooltip("Import", "Import is planned for a later Content Browser step.");
+    if (ImGui::Button("Import"))
+    {
+        action.type = ContentBrowserAction::Type::OpenImportWindow;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Open the Import Assets window (import_staging/ -> engine-ready assets).");
+    }
     ImGui::SameLine();
     DisabledButtonWithTooltip("Save All", "Assets are raw files; save integration is not available yet.");
 

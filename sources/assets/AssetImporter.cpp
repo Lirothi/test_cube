@@ -685,46 +685,91 @@ int RunImport(const ImportOptions& opts)
         return failures;
     }
 
-    // Find every directory holding convertible images (for texture-set detection).
+    // Optional file whitelist from the H3 import dialog (empty = convert everything). Matched on the
+    // staging-relative, normalized, lowercased path — the panel builds includeRel identically.
+    std::set<std::string> includeSet;
+    for (const auto& r : opts.includeRel)
+    {
+        includeSet.insert(Lower(fs::path(r).lexically_normal().generic_string()));
+    }
+    const auto included = [&](const fs::path& p) -> bool
+    {
+        if (includeSet.empty()) { return true; }
+        std::error_code rec;
+        const fs::path rel = fs::relative(p, opts.stagingDir, rec);
+        return includeSet.count(Lower(rel.lexically_normal().generic_string())) != 0;
+    };
+
+    // Find every directory holding convertible images (for texture-set detection), and count the
+    // convertible files so the UI progress bar knows the total workload.
     std::set<fs::path> imageDirs;
+    int convertibleCount = 0;
     for (auto it = fs::recursive_directory_iterator(opts.stagingDir, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec))
     {
         if (ec) { break; }
-        if (it->is_regular_file(ec) && IsConvertibleTexture(LowerExt(it->path())))
+        if (it->is_regular_file(ec) && IsConvertibleTexture(LowerExt(it->path())) && included(it->path()))
         {
             imageDirs.insert(it->path().parent_path());
+            ++convertibleCount;
+        }
+    }
+    if (opts.progressTotal) { opts.progressTotal->store(convertibleCount); }
+    if (opts.progressDone) { opts.progressDone->store(0); }
+    const auto bumpProgress = [&opts](int n)
+    {
+        if (opts.progressDone) { opts.progressDone->fetch_add(n, std::memory_order_relaxed); }
+    };
+
+    // H1c: texture-set pass (Poly Haven-style separate maps) — synth MR + register a preset. Skipped
+    // when the dialog unchecks "create preset" (every image then converts as a loose DDS instead).
+    std::vector<PresetEntry> presets;
+    std::set<fs::path> setDirs;       // dirs handled as a set (skip their extras in the loose pass)
+    std::set<fs::path> consumedFiles; // individual files already converted (set maps / flipbook frames)
+    if (opts.registerPreset)
+    {
+        for (const auto& d : imageDirs)
+        {
+            fs::path diff, rough, metal, nor;
+            if (!GatherTextureSet(d, diff, rough, metal, nor)) { continue; }
+            // Honor the dialog's per-map selection.
+            if (!diff.empty()  && !included(diff))  { diff.clear(); }
+            if (!rough.empty() && !included(rough)) { rough.clear(); }
+            if (!metal.empty() && !included(metal)) { metal.clear(); }
+            if (!nor.empty()   && !included(nor))   { nor.clear(); }
+            if (diff.empty()) { continue; } // no albedo selected -> not a usable set
+            PresetEntry pe;
+            if (ImportTextureSet(d, diff, rough, metal, nor, opts, log, pe)) { presets.push_back(pe); setDirs.insert(d); }
+            else { ++failures; }
+            for (const fs::path* m : { &diff, &rough, &metal, &nor }) { if (!m->empty()) { consumedFiles.insert(*m); } }
+            bumpProgress((!diff.empty()) + (!rough.empty()) + (!metal.empty()) + (!nor.empty()));
         }
     }
 
-    // H1c: texture-set pass (Poly Haven-style separate maps). Consumed dirs are excluded from the
-    // per-file pass so their source maps aren't also converted standalone.
-    std::vector<PresetEntry> presets;
-    std::set<fs::path> setDirs;
-    for (const auto& d : imageDirs)
-    {
-        fs::path diff, rough, metal, nor;
-        if (!GatherTextureSet(d, diff, rough, metal, nor)) { continue; }
-        PresetEntry pe;
-        if (ImportTextureSet(d, diff, rough, metal, nor, opts, log, pe)) { presets.push_back(pe); setDirs.insert(d); }
-        else { ++failures; }
-    }
-
     // H1d: flipbook pass (frame sequences). Consumed frame files are excluded from the per-file pass.
-    std::set<fs::path> consumedFiles;
     int flipbooks = 0;
     for (const auto& d : imageDirs)
     {
         if (setDirs.count(d)) { continue; }
-        for (const auto& seq : DetectSequences(d))
+        for (Sequence seq : DetectSequences(d))
         {
+            if (!includeSet.empty())
+            {
+                std::vector<fs::path> keep;
+                for (const auto& f : seq.frames) { if (included(f)) { keep.push_back(f); } }
+                seq.frames = std::move(keep);
+            }
+            if (seq.frames.empty()) { continue; }
             if (BuildFlipbook(d, seq, opts, log)) { ++flipbooks; for (const auto& f : seq.frames) { consumedFiles.insert(f); } }
             else { ++failures; }
+            bumpProgress(static_cast<int>(seq.frames.size()));
         }
     }
 
-    // Per-file pass (H1b): every image not consumed by a texture set or flipbook. BC7 is CPU-heavy,
-    // so one texture per task keeps every core busy (the plan's "background threads (tbb)").
+    // Per-file pass (H1b): every convertible image not consumed above. BC7 is CPU-heavy, so one
+    // texture per task keeps every core busy. With an explicit dialog selection (includeRel) the
+    // whole-set-dir skip is relaxed so hand-picked extras (AO, etc.) still convert; without it, a
+    // set dir's non-map files are skipped as before.
     struct Job { fs::path path; std::string rel; };
     std::vector<Job> jobs;
     for (auto it = fs::recursive_directory_iterator(opts.stagingDir, ec);
@@ -734,7 +779,9 @@ int RunImport(const ImportOptions& opts)
         const fs::path& p = it->path();
         if (!it->is_regular_file(ec)) { continue; }
         if (!IsConvertibleTexture(LowerExt(p))) { continue; }
-        if (setDirs.count(p.parent_path()) || consumedFiles.count(p)) { continue; }
+        if (!included(p)) { continue; }
+        if (consumedFiles.count(p)) { continue; }
+        if (includeSet.empty() && setDirs.count(p.parent_path())) { continue; }
         jobs.push_back({ p, Narrow(fs::relative(p, opts.stagingDir, ec).wstring()) });
     }
 
@@ -745,6 +792,13 @@ int RunImport(const ImportOptions& opts)
     {
         if (ConvertTexture(job.path, opts, log, job.rel)) { ++converted; }
         else { ++failures; }
+        bumpProgress(1);
+    }
+
+    // Snap the bar to 100% — set/flipbook dirs can hold extra files the per-unit bumps under-count.
+    if (opts.progressDone && opts.progressTotal)
+    {
+        opts.progressDone->store(opts.progressTotal->load(), std::memory_order_relaxed);
     }
 
     // Register the texture-set presets in one read-modify-write of data/materials.json.

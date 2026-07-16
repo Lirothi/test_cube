@@ -374,8 +374,12 @@ traces/
 # Import
 import_staging/
 
+# Imported / binary assets — kept out of git (regenerate via the in-editor importer).
+# Already-committed files under these stay tracked until explicitly `git rm --cached`'d.
+/models/
+/textures/
+
 # Exclusions
-!/models/**
 !/third_party/**
 !/sources/rendering/debug/
 !/sources/rendering/debug/**tasksystem_stress.log
