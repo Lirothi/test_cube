@@ -287,11 +287,19 @@ namespace
         const fs::path& source,
         const fs::path& manifestPath,
         bool partial,
-        const std::vector<std::string>& removedSources)
+        const std::vector<std::string>& removedSources,
+        float spawnScale)
     {
         nlohmann::json manifest = nlohmann::json::parse(
             sourceManifestJson, nullptr, false, true);
         if (manifest.is_discarded() || !manifest.is_object()) { return false; }
+
+        // Spawn-scale normalizer verdict: written on a full import; a partial/merge import
+        // preserves whatever the owning full import decided.
+        if (!partial && spawnScale > 0.0f)
+        {
+            manifest["spawnScale"] = spawnScale;
+        }
 
         if (partial)
         {
@@ -338,6 +346,10 @@ namespace
                     manifest["sources"] = std::move(merged);
                     manifest["trackAllSources"] = existing.value(
                         "trackAllSources", false);
+                    if (existing.contains("spawnScale"))
+                    {
+                        manifest["spawnScale"] = existing["spawnScale"];
+                    }
                 }
             }
         }
@@ -917,8 +929,10 @@ void ImportPanel::DrawImportDialog()
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 430.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 280.0f), ImVec2(FLT_MAX, FLT_MAX));
 
-    if (!ImGui::BeginPopupModal("Import Texture Set", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::BeginPopupModal("Import Texture Set", nullptr))
     {
         return;
     }
@@ -932,7 +946,10 @@ void ImportPanel::DrawImportDialog()
     ImGui::SameLine();
     if (ImGui::SmallButton("None")) { for (auto& f : dialogFiles_) { f.selected = false; } }
 
-    ImGui::BeginChild("##dlgFiles", ImVec2(440.0f, 220.0f), true);
+    // File list fills the dialog; the footer (preset checkbox + buttons) stays pinned below.
+    const float dialogFooterH = ImGui::GetFrameHeightWithSpacing() * 2.0f +
+        ImGui::GetTextLineHeightWithSpacing();
+    ImGui::BeginChild("##dlgFiles", ImVec2(0.0f, -dialogFooterH), true);
     for (size_t i = 0; i < dialogFiles_.size(); ++i)
     {
         DialogFile& f = dialogFiles_[i];
@@ -1109,9 +1126,18 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
             if (!finalizeFailed)
             {
                 const bool outputIsFile = activeItem_.kind == Kind::Skybox;
+                // Spawn-scale normalizer: only meaningful for meshes with a measured size,
+                // and only when normalizing would actually change things (>5% off target).
+                float spawnScale = 0.0f;
+                if (normalizeSpawn_ && activeItem_.kind == Kind::Mesh &&
+                    activeItem_.worldSizeM > 0.0f && spawnTargetM_ > 0.0f)
+                {
+                    const float s = spawnTargetM_ / activeItem_.worldSizeM;
+                    if (s < 0.95f || s > 1.05f) { spawnScale = s; }
+                }
                 finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
                     fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
-                    activeMergeManifest_, activeRemovedSources_);
+                    activeMergeManifest_, activeRemovedSources_, spawnScale);
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
@@ -1153,6 +1179,22 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         lastRegistryRevision_ = registry.Revision();
     }
 
+    // "Re-import all changed" queue pump — imports run one at a time, so start the
+    // next queued item as soon as the worker is idle and fully joined.
+    if (!running_.load() && !joinPending_ && !reimportQueue_.empty())
+    {
+        const std::string next = reimportQueue_.front();
+        reimportQueue_.erase(reimportQueue_.begin());
+        for (const Item& queued : items_)
+        {
+            if (queued.path == next)
+            {
+                BeginImport(queued, {}, true);
+                break;
+            }
+        }
+    }
+
     // --- Header -------------------------------------------------------------
     ImGui::TextWrapped(
         "Drop raw asset folders (glTF meshes, texture sets) or .hdr skyboxes into "
@@ -1161,6 +1203,38 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     ImGui::SameLine();
     ImGui::TextDisabled("%d item%s staged", static_cast<int>(items_.size()),
         items_.size() == 1 ? "" : "s");
+    int changedCount = 0;
+    for (const Item& it : items_)
+    {
+        if (it.importStatus == EditorAssetImportStatus::SourceNewer ||
+            it.importStatus == EditorAssetImportStatus::Incomplete)
+        {
+            ++changedCount;
+        }
+    }
+    if (changedCount > 0)
+    {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(running_.load() || !reimportQueue_.empty());
+        char reimportLabel[48];
+        snprintf(reimportLabel, sizeof(reimportLabel), "Re-import changed (%d)", changedCount);
+        if (ImGui::Button(reimportLabel))
+        {
+            for (const Item& it : items_)
+            {
+                if (it.importStatus == EditorAssetImportStatus::SourceNewer ||
+                    it.importStatus == EditorAssetImportStatus::Incomplete)
+                {
+                    reimportQueue_.push_back(it.path);
+                }
+            }
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("Queue a full re-import of every CHANGED/MISSING item, one at a time.");
+        }
+    }
 
     // --- Options (collapsible; the item list is the focus) ------------------
     if (ImGui::CollapsingHeader("Options", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1197,6 +1271,18 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
             ImGui::SetTooltip(
                 "Leave OFF for glTF meshes and plain textures.\n"
                 "Only enable if a normal-mapped surface ends up lit from the wrong side.");
+        }
+        ImGui::Checkbox("Normalize spawn size to", &normalizeSpawn_);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70.0f);
+        ImGui::InputFloat("m##spawnTarget", &spawnTargetM_, 0.0f, 0.0f, "%.1f");
+        spawnTargetM_ = std::clamp(spawnTargetM_, 0.1f, 1000.0f);
+        if (ImGui::IsItemHovered() || (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)))
+        {
+            ImGui::SetTooltip(
+                "Meshes often arrive centimeter-authored (a rock at ~115 m). On import this\n"
+                "records a default spawn scale (longest side -> target size) in the import\n"
+                "manifest; spawning from the content browser applies it. The glTF is untouched.");
         }
     }
 

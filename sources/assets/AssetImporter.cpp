@@ -12,6 +12,7 @@
 #include <tbb/blocked_range.h>
 
 #include "third_party/json/json.hpp"
+#include "third_party/cgltf/cgltf.h" // H6: harvest per-texture glTF factors for import-time baking
 
 #include <algorithm>
 #include <atomic>
@@ -148,14 +149,114 @@ const char* RoleName(TexRole r)
 
 // H6 — packed metallic-roughness textures (glTF "metallicRoughness", ORM/ARM packs). Their
 // channel order is G=rough, B=metal (R = AO or filler). The importer repacks them into the
-// ENGINE layout (R=metal, G=rough, AO parked in B) before compression, so imported DDS need
-// no MR_LAYOUT_GLTF shader permutation at runtime. Convention: a .dds MR is ALWAYS
-// engine-layout (this importer is the only .dds producer); a raw .png MR stays glTF-layout.
+// FINAL engine layout (R=metal, G=rough, B=0) before compression — including baking the glTF
+// material's metallic/roughness FACTORS into the channels — so imported DDS are plain engine
+// data needing no glTF-specific runtime semantics. Convention: a .dds MR is ALWAYS final
+// engine-layout (this importer is the only .dds producer); a raw .png MR stays glTF-layout
+// (the MR_LAYOUT_GLTF shader branch exists only for raw-staging previews).
 bool IsPackedMrStem(const std::string& stemLower)
 {
     const auto has = [&](const char* s) { return stemLower.find(s) != std::string::npos; };
     return has("metallicroughness") || has("metalrough") || has("_mr") ||
            has("_orm") || has("_arm");
+}
+
+//=============================================================================
+// H6 — glTF factor harvest. A light cgltf parse of every staged glTF maps each
+// referenced texture file to its material's factors, so ConvertTexture can bake
+// them (baseColorFactor into albedo RGB, metallic/roughnessFactor into MR).
+// The alpha factor is NOT baked — it feeds the runtime alpha test (baseColor.a)
+// identically for raw and imported assets.
+//=============================================================================
+struct GltfTexFactors
+{
+    bool  isAlbedo = false, isMr = false;
+    float baseColor[4] = { 1.f, 1.f, 1.f, 1.f };
+    float metallic = 1.f, roughness = 1.f;
+    bool  conflict = false;
+};
+
+std::string FactorKey(const fs::path& p)
+{
+    std::error_code ec;
+    const fs::path abs = fs::absolute(p, ec);
+    return Lower((ec ? p : abs).lexically_normal().generic_string());
+}
+
+void HarvestGltfFactors(const fs::path& stagingDir,
+                        std::map<std::string, GltfTexFactors>& out, Log& log)
+{
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(stagingDir, ec);
+         it != fs::recursive_directory_iterator(); it.increment(ec))
+    {
+        if (ec) { break; }
+        std::error_code fec;
+        if (!it->is_regular_file(fec)) { continue; }
+        const std::string ext = LowerExt(it->path());
+        if (ext != ".gltf" && ext != ".glb") { continue; }
+
+        cgltf_options opt{};
+        cgltf_data* data = nullptr;
+        if (cgltf_parse_file(&opt, it->path().string().c_str(), &data) != cgltf_result_success)
+        {
+            continue;
+        }
+        const fs::path gltfDir = it->path().parent_path();
+
+        const auto resolveKey = [&](const cgltf_texture_view& view) -> std::string
+        {
+            if (!view.texture || !view.texture->image || !view.texture->image->uri) { return {}; }
+            std::string uri = view.texture->image->uri;
+            if (uri.rfind("data:", 0) == 0) { return {}; } // embedded — never hits the loose pass
+            cgltf_decode_uri(uri.data());
+            uri.resize(std::strlen(uri.c_str()));
+            return FactorKey(gltfDir / uri);
+        };
+
+        for (cgltf_size m = 0; m < data->materials_count; ++m)
+        {
+            const cgltf_material& mat = data->materials[m];
+            if (!mat.has_pbr_metallic_roughness) { continue; }
+            const cgltf_pbr_metallic_roughness& pbr = mat.pbr_metallic_roughness;
+
+            const std::string albedoKey = resolveKey(pbr.base_color_texture);
+            if (!albedoKey.empty())
+            {
+                GltfTexFactors& f = out[albedoKey];
+                if (f.isAlbedo &&
+                    std::memcmp(f.baseColor, pbr.base_color_factor, sizeof(f.baseColor)) != 0)
+                {
+                    f.conflict = true;
+                }
+                f.isAlbedo = true;
+                std::memcpy(f.baseColor, pbr.base_color_factor, sizeof(f.baseColor));
+            }
+
+            const std::string mrKey = resolveKey(pbr.metallic_roughness_texture);
+            if (!mrKey.empty())
+            {
+                GltfTexFactors& f = out[mrKey];
+                if (f.isMr && (f.metallic != pbr.metallic_factor ||
+                               f.roughness != pbr.roughness_factor))
+                {
+                    f.conflict = true;
+                }
+                f.isMr = true;
+                f.metallic = pbr.metallic_factor;
+                f.roughness = pbr.roughness_factor;
+            }
+        }
+        cgltf_free(data);
+    }
+
+    for (const auto& [key, f] : out)
+    {
+        if (f.conflict)
+        {
+            log.Line("  WARN texture shared by materials with DIFFERENT factors (last wins): " + key);
+        }
+    }
 }
 
 TexRole ClassifyRole(const std::string& stemLower)
@@ -249,7 +350,8 @@ bool FinishTextureDds(ScratchImage work, bool srgb, DXGI_FORMAT target, const Im
 //=============================================================================
 // Core conversion: PNG/JPG/TGA -> mipped BC7 (or BC5) DDS sibling.
 //=============================================================================
-bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, const std::string& rel)
+bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, const std::string& rel,
+                    const std::map<std::string, GltfTexFactors>& gltfFactors)
 {
     const std::string stemLower = Lower(in.stem().string());
     const TexRole role = ClassifyRole(stemLower);
@@ -257,6 +359,9 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
 
     ScratchImage work;
     if (!LoadRgba8(in, work, log, rel)) { return false; }
+
+    const auto facIt = gltfFactors.find(FactorKey(in));
+    const GltfTexFactors* fac = facIt != gltfFactors.end() ? &facIt->second : nullptr;
 
     // Optional normal-map green flip (OpenGL +Y <-> DirectX -Y). Off by default until the engine's
     // convention is pinned; glTF normals ship +Y and currently render fine.
@@ -271,20 +376,27 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
         }
     }
 
-    // H6: repack packed MR (glTF/ORM/ARM: G=rough, B=metal) into the engine layout
-    // (R=metal, G=rough; source AO/filler R parked in B). The resulting DDS is read
-    // WITHOUT the MR_LAYOUT_GLTF define — see MaterialDataManager's DDS convention.
-    const bool packedMr = role == TexRole::LinearData && IsPackedMrStem(stemLower);
+    // H6: bake packed MR (glTF/ORM/ARM: G=rough, B=metal) into FINAL engine data:
+    // R = metal*metallicFactor, G = rough*roughnessFactor, B = 0. The DDS needs no
+    // glTF-specific runtime handling — it is byte-equivalent to a synthesized set MR.
+    std::string roleTag = " [" + std::string(RoleName(role)) + "]";
+    const bool packedMr = (fac && fac->isMr) ||
+        (role == TexRole::LinearData && IsPackedMrStem(stemLower));
     if (packedMr)
     {
+        const float metalF = fac ? fac->metallic : 1.0f;
+        const float roughF = fac ? fac->roughness : 1.0f;
         ScratchImage t;
         if (FAILED(TransformImage(work.GetImages(), work.GetImageCount(), work.GetMetadata(),
-            [](XMVECTOR* out, const XMVECTOR* in, size_t width, size_t)
+            [metalF, roughF](XMVECTOR* out, const XMVECTOR* in, size_t width, size_t)
             {
                 for (size_t j = 0; j < width; ++j)
                 {
-                    // in = (AO, rough, metal, a) -> out = (metal, rough, AO, 1)
-                    out[j] = XMVectorSetW(XMVectorSwizzle<2, 1, 0, 3>(in[j]), 1.0f);
+                    // in = (AO, rough, metal, a) -> out = (metal*mF, rough*rF, 0, 1)
+                    out[j] = XMVectorSet(
+                        XMVectorGetZ(in[j]) * metalF,
+                        XMVectorGetY(in[j]) * roughF,
+                        0.0f, 1.0f);
                 }
             }, t)))
         {
@@ -292,6 +404,33 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
             return false;
         }
         work = std::move(t);
+        char tag[64];
+        snprintf(tag, sizeof(tag), " [mr baked mF=%.2f rF=%.2f]", metalF, roughF);
+        roleTag = tag;
+    }
+    else if (fac && fac->isAlbedo &&
+             (fac->baseColor[0] != 1.0f || fac->baseColor[1] != 1.0f || fac->baseColor[2] != 1.0f))
+    {
+        // Bake baseColorFactor.rgb into the albedo. The texture is sRGB-encoded while the factor
+        // is linear, so decode -> multiply -> re-encode. Alpha is left untouched (the alpha factor
+        // stays a runtime parameter feeding the alpha test).
+        const XMVECTOR factor = XMVectorSet(fac->baseColor[0], fac->baseColor[1], fac->baseColor[2], 1.0f);
+        ScratchImage t;
+        if (FAILED(TransformImage(work.GetImages(), work.GetImageCount(), work.GetMetadata(),
+            [factor](XMVECTOR* out, const XMVECTOR* in, size_t width, size_t)
+            {
+                for (size_t j = 0; j < width; ++j)
+                {
+                    const XMVECTOR linear = XMVectorMultiply(XMColorSRGBToRGB(in[j]), factor);
+                    out[j] = XMVectorSetW(XMColorRGBToSRGB(linear), XMVectorGetW(in[j]));
+                }
+            }, t)))
+        {
+            log.Line("  FAIL albedo factor bake  " + rel);
+            return false;
+        }
+        work = std::move(t);
+        roleTag = " [albedo(sRGB) x factor]";
     }
 
     DXGI_FORMAT target = DXGI_FORMAT_BC7_UNORM;
@@ -299,8 +438,6 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
     else if (role == TexRole::Normal && opts.bc5Normal) { target = DXGI_FORMAT_BC5_UNORM; }
 
     fs::path out = in; out.replace_extension(L".dds");
-    const std::string roleTag = packedMr ? std::string(" [mr gltf->engine]")
-                                         : (" [" + std::string(RoleName(role)) + "]");
     return FinishTextureDds(std::move(work), srgb, target, opts, out, log, rel + roleTag);
 }
 
@@ -816,6 +953,10 @@ int RunImport(const ImportOptions& opts)
         return failures;
     }
 
+    // H6: harvest glTF material factors so converted textures come out FINAL (factors baked in).
+    std::map<std::string, GltfTexFactors> gltfTexFactors;
+    HarvestGltfFactors(opts.stagingDir, gltfTexFactors, log);
+
     // Optional file whitelist from the H3 import dialog (empty = convert everything). Matched on the
     // staging-relative, normalized, lowercased path — the panel builds includeRel identically.
     std::set<std::string> includeSet;
@@ -934,7 +1075,7 @@ int RunImport(const ImportOptions& opts)
     int converted = 0;
     for (const auto& job : jobs)
     {
-        if (ConvertTexture(job.path, opts, log, job.rel)) { ++converted; }
+        if (ConvertTexture(job.path, opts, log, job.rel, gltfTexFactors)) { ++converted; }
         else { ++failures; }
         bumpProgress(1);
     }

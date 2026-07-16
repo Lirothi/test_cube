@@ -131,6 +131,11 @@ public:
 
     size_t CountByType(EditorAssetType type) const;
 
+    // True when a file named `fileName` would be indexed under `virtualFolder`
+    // (the folder's root lists a matching extension). Used by content-browser
+    // file moves so an asset can't be dropped somewhere it would vanish from view.
+    bool IsFileIndexedUnder(std::string_view virtualFolder, std::string_view fileName) const;
+
 private:
     std::vector<EditorAssetRecord> assets_;
     std::vector<EditorAssetFolder> folders_;

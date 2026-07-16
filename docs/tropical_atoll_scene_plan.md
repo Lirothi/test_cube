@@ -660,16 +660,33 @@ is the real problem). Move BC6H/BC7 compression onto the GPU so a 2K encode is s
   vs the CPU output and a large wall-clock win (target: 2K FAST well under 1s, `--high` a few
   seconds); confirm the device-less CLI fallback still produces valid DDS.
 
-**H6 — normalize glTF MR to engine layout on import (kill the MR_LAYOUT_GLTF permutation).
+**H6 — normalize glTF MR to engine layout on import.
 — DONE (Fable 5, 2026-07-16), uncommitted.** Importer: packed-MR stems (`metallicroughness`,
 `metalrough`, `_mr`, `_orm`, `_arm` — all share G=rough/B=metal) are repacked via TransformImage
 swizzle (R=metal←B, G=rough←G, AO parked in B←R, A=1) before BC compress; log tag
 `[mr gltf->engine]`. Loader: `MaterialDataManager` sets `mrLayoutGltf` from the convention —
 false when the MR path is already `.dds` or a sibling `.dds` exists (mirrors H2's
-`Texture2D::CreateFromFile` resolution), true only for raw-png staging previews. Migration was
-free: models/ held no imported glTF at the time (palm had been deleted during H4 testing) — any
-future import is engine-layout from birth. Verified: campfire's real glTF MR converts with the
-repack tag, fmt/mips unchanged, exit 0. *(original spec below)* Today the importer is convert-only
+`Texture2D::CreateFromFile` resolution), true only for raw-png staging previews.
+**AMENDED TWICE.** (1) Real regression: imported palm rendered metallic/black — `MR_LAYOUT_GLTF`
+gated TWO things, the fetch swizzle AND the glTF factor-MULTIPLY semantics (A3); turning it off for
+imported DDS switched materials to engine `lerp(params, tex)` semantics, so `metallicFactor=0`
+stopped neutralizing the palm's metal=255 filler. Multiply-for-everyone is a NO-GO
+(`MaterialParams.metalRough` defaults {0.0, 0.35} + demo levels set params on textured meshes).
+(2) User verdict on the first fix (a second GLTF_FACTORS define): NO runtime defines, NO glTF-ish
+textures in the project — **the import step must produce FINAL engine data**. Final architecture:
+the importer BAKES the glTF material factors into the textures at conversion —
+`HarvestGltfFactors` (cgltf parse of every staged glTF) maps each referenced texture file to its
+material's factors; packed MR becomes `R = metal*metallicFactor, G = rough*roughnessFactor, B = 0`
+(log tag `[mr baked mF=… rF=…]`, palm shows mF=0.00 — filler neutralized IN the DDS, thumbnails
+green like set-synth MRs); albedo gets baseColorFactor.rgb baked sRGB-correctly (decode → linear
+multiply → re-encode; alpha factor NOT baked — it stays a runtime alpha-test parameter, applied
+identically for raw and imported). GLTF_FACTORS define REVERTED — shaders are back to the single
+pre-H6 `MR_LAYOUT_GLTF` branch, which now exists ONLY for raw-staging glTF previews; imported
+assets take the plain engine path (texture replaces params, factors already inside; absent
+textures still fall back to factor params — engine lerp gives exactly glTF semantics there).
+Texture shared by materials with different factors → WARN in log, last wins. Verified: palm
+converts with mF=0.00 tags, models/coconut_palm DDS refreshed with baked versions, scene-stress
+boot CLEAN. Re-import is required for anything imported before this landed (nothing else was). *(original spec below)* Today the importer is convert-only
 for glTF packed metallicRoughness: the DDS keeps glTF's ORM channel order (R=AO, G=rough, B=metal)
 and the runtime reads it via the per-material `mrLayoutGltf` flag → `MR_LAYOUT_GLTF` shader define →
 a whole extra **PSO permutation** just to swizzle `.bg`. Meanwhile texture-**sets** already synth an

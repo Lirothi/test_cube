@@ -8,6 +8,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <set>
@@ -1908,6 +1909,23 @@ size_t AssetRegistry::CountByType(EditorAssetType type) const
         }
     }
     return count;
+}
+
+bool AssetRegistry::IsFileIndexedUnder(std::string_view virtualFolder, std::string_view fileName) const
+{
+    const std::string folder(virtualFolder);
+    for (const DirRoot& root : AssetRoots())
+    {
+        const size_t rootLen = std::strlen(root.virtualRoot);
+        const bool underRoot = folder.compare(0, rootLen, root.virtualRoot) == 0 &&
+            (folder.size() == rootLen || folder[rootLen] == '/');
+        if (!underRoot)
+        {
+            continue;
+        }
+        return !MatchExtension(fs::path(std::string(fileName)), root.extensions).empty();
+    }
+    return false;
 }
 
 const char* ToString(EditorAssetType type)

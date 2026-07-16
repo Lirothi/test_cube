@@ -74,6 +74,7 @@ private:
     std::vector<Item> items_;
     bool scanned_ = false;
     std::uint64_t lastRegistryRevision_ = 0;
+    std::vector<std::string> reimportQueue_; // item paths pending "Re-import all changed" (one job at a time)
 
     // Options (mirror assets::ImportOptions).
     int  maxTextureSize_ = 2048;
@@ -82,6 +83,12 @@ private:
     bool moveIntoProject_ = true;
     bool useGpu_ = true; // H5: BC6H/BC7 on the GPU (auto CPU fallback)
     int  skyboxFaceSize_ = 1024;
+    // Spawn-scale normalizer: meshes are frequently cm-authored (a "rock" arrives ~115 m).
+    // When on, a full mesh import records spawnScale = target/bakedSize in the import
+    // manifest; the spawn factory reads it so the asset drops in at a sane size. The glTF
+    // itself is never modified.
+    bool  normalizeSpawn_ = true;
+    float spawnTargetM_ = 6.0f;
 
     // Background import job (one at a time).
     std::thread worker_;

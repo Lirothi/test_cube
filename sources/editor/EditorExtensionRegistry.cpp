@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -137,6 +138,24 @@ namespace
         { "Debug", RenderLayer::Debug },
     };
 
+    // H-importer spawn-scale normalizer: a mesh import can record a default spawn scale in
+    // its sibling `.assetimport.json` ("spawnScale" — longest side normalized to the panel's
+    // target size). cm-authored glTFs (a "rock" arriving ~115 m) then spawn at a sane size.
+    float ImportedSpawnScale(const std::string& modelKey)
+    {
+        namespace fs = std::filesystem;
+        std::string path = modelKey;
+        const size_t selector = path.find('#'); // strip "#node:"/"#N" mesh selectors
+        if (selector != std::string::npos) { path.resize(selector); }
+        if (path.empty()) { return 0.0f; }
+
+        std::ifstream file(fs::path(path).parent_path() / ".assetimport.json");
+        if (!file) { return 0.0f; }
+        const nlohmann::json manifest = nlohmann::json::parse(file, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object()) { return 0.0f; }
+        return manifest.value("spawnScale", 0.0f);
+    }
+
     class StaticMeshObjectFactory final : public IEditorObjectFactory
     {
     public:
@@ -158,7 +177,10 @@ namespace
             const std::string model = sourceAsset ? sourceAsset->id.key : std::string{};
             o["model"] = model;
             o["position"] = SpawnPositionJson(ctx.scene, worldPositionHint);
-            o["scale"] = nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
+            const float importScale = ImportedSpawnScale(model);
+            o["scale"] = importScale > 0.0f
+                ? nlohmann::json::array({ importScale, importScale, importScale })
+                : nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
             // B4: glTF assets carry their own PBR materials — spawn with "auto" so every submesh
             // gets one slot from the glTF (B2). OBJ/text meshes keep a default preset.
             o["material"] = IsGltfModel(model) ? std::string("auto") : PickDefaultStaticMaterial(registry);

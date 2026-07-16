@@ -53,7 +53,9 @@ public:
     // Feature flags (can be passed as defines when building shader permutations)
     bool normalIsRG = true; // RG/BC5 vs RGB(A)
     bool useTBN     = true; // TBN path (otherwise derivatives)
-    bool mrLayoutGltf = false; // true => MR texture is glTF-packed (B=metal, G=rough); emits MR_LAYOUT_GLTF
+    bool mrLayoutGltf = false; // true => RAW glTF preview: MR is glTF-packed + factors multiply; emits
+                               // MR_LAYOUT_GLTF. Imported assets stay false — the importer bakes both
+                               // the channel order AND the factors into the DDS (H6).
 
     // glTF auto-material (A3): when built from a glTF material, these carry the imported per-object
     // defaults (seeded into GBufferRenderable::matParams_ at Init) plus fields consumed later:

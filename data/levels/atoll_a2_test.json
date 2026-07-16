@@ -480,6 +480,56 @@
         0.014999999664723873
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 64,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "models/coconut_palm/scene.gltf",
+      "name": "staticMesh #64",
+      "position": [
+        -0.34886378049850464,
+        1.1920928955078125e-07,
+        2.4381792545318604
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 68,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "models/date_palm/scene.gltf",
+      "name": "staticMesh #68",
+      "position": [
+        7.474907875061035,
+        0.0,
+        1.4934501647949219
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.8175769448280334,
+        0.8175769448280334,
+        0.8175769448280334
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
     }
   ],
   "skybox": {

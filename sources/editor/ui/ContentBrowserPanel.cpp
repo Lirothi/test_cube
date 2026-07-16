@@ -57,13 +57,20 @@ namespace
         NewFolder,
         DeleteFolder,
         SelectFolder,
-        Refresh
+        Refresh,
+        DeleteAsset, // asset = file to delete (confirmation modal follows)
+        MoveAsset    // asset = file, folderPath = target virtual folder
     };
 
     struct ContentBrowserUiRequest
     {
         ContentBrowserRequestType type = ContentBrowserRequestType::None;
         std::string folderPath;
+        EditorAssetId asset;
+        // SelectFolder only: expand/scroll the Sources tree to the new selection. True for
+        // navigation outside the tree (tiles, breadcrumbs, reveal); the tree's own clicks
+        // pass false so the view doesn't jump under the cursor.
+        bool syncTree = true;
     };
 
     constexpr TypeFilterOption kTypeFilters[] = {
@@ -1248,23 +1255,65 @@ namespace
         ImGui::EndDragDropSource();
     }
 
-    void DrawDisabledFolderDropTarget()
+    // Drop target on a folder (tree node, list row, tile): accepts asset payloads and raises a
+    // MoveAsset request. Cheap refusals (presets, dropping into the file's own folder) show at
+    // hover; full validation (target mapping, extension indexability, collisions) runs when the
+    // request executes and reports through the "Move Failed" modal.
+    void DrawFolderDropTarget(const std::string& folderPath, ContentBrowserUiRequest& request)
     {
         if (!ImGui::BeginDragDropTarget())
         {
             return;
         }
 
-        constexpr ImGuiDragDropFlags flags =
+        if (const ImGuiPayload* assetPayload = ImGui::AcceptDragDropPayload(
+                EditorDragDrop::kAssetPayloadType, ImGuiDragDropFlags_AcceptBeforeDelivery))
+        {
+            EditorAssetId id;
+            if (EditorDragDrop::DecodeAssetPayload(assetPayload, id))
+            {
+                std::string refuse;
+                fs::path targetPhysical;
+                std::string mapReason;
+                const bool targetMaps =
+                    TryMapVirtualFolderToPhysical(folderPath, targetPhysical, mapReason);
+                if (id.type == EditorAssetType::MaterialPreset)
+                {
+                    refuse = "Material presets are entries in data/materials.json — nothing to move.";
+                }
+                else if (!targetMaps)
+                {
+                    refuse = mapReason;
+                }
+                else if (fs::path(id.key).lexically_normal().parent_path() ==
+                         targetPhysical.lexically_normal())
+                {
+                    refuse = "The file is already in this folder.";
+                }
+
+                if (!refuse.empty())
+                {
+                    ImGui::SetTooltip("%s", refuse.c_str());
+                }
+                else
+                {
+                    ImGui::SetTooltip("Move to %s", folderPath.c_str());
+                    if (assetPayload->IsDelivery() &&
+                        request.type == ContentBrowserRequestType::None)
+                    {
+                        request.type = ContentBrowserRequestType::MoveAsset;
+                        request.folderPath = folderPath;
+                        request.asset = id;
+                    }
+                }
+            }
+        }
+        constexpr ImGuiDragDropFlags folderFlags =
             ImGuiDragDropFlags_AcceptBeforeDelivery |
             ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
-        const ImGuiPayload* assetPayload =
-            ImGui::AcceptDragDropPayload(EditorDragDrop::kAssetPayloadType, flags);
-        const ImGuiPayload* folderPayload =
-            ImGui::AcceptDragDropPayload(EditorDragDrop::kFolderPayloadType, flags);
-        if (assetPayload || folderPayload)
+        if (ImGui::AcceptDragDropPayload(EditorDragDrop::kFolderPayloadType, folderFlags))
         {
-            ImGui::SetTooltip("Moving assets or folders is disabled until references can be repaired safely.");
+            ImGui::SetTooltip("Folder moving is not supported (asset references would break).");
         }
         ImGui::EndDragDropTarget();
     }
@@ -1512,11 +1561,23 @@ namespace
         std::vector<std::string>& favoriteFolders,
         std::vector<ContentBrowserCollection>& collections,
         bool& requestNewCollection,
-        const BrowserIconAtlas& icons)
+        const BrowserIconAtlas& icons,
+        bool syncToSelection)
     {
         if (!ShouldShowFolder(registry, folder, sourceSearch))
         {
             return;
+        }
+
+        // Sync pass (navigation happened outside the tree): force-open every ancestor of the
+        // selected folder so the selection is visible, and scroll it into view below.
+        const bool isAncestorOfSelection =
+            selectedFolder.size() > folder.path.size() &&
+            selectedFolder.compare(0, folder.path.size(), folder.path) == 0 &&
+            selectedFolder[folder.path.size()] == '/';
+        if (syncToSelection && isAncestorOfSelection)
+        {
+            ImGui::SetNextItemOpen(true);
         }
 
         ImGuiTreeNodeFlags flags =
@@ -1541,6 +1602,10 @@ namespace
             folder.recursiveAssetCount);
         const float nodeCursorX = ImGui::GetCursorScreenPos().x;
         const bool open = ImGui::TreeNodeEx(folder.path.c_str(), flags, "%s", label);
+        if (syncToSelection && selectedFolder == folder.path)
+        {
+            ImGui::SetScrollHereY(0.35f);
+        }
         if (icons.IsReady())
         {
             const ImVec2 itemMin = ImGui::GetItemRectMin();
@@ -1557,10 +1622,15 @@ namespace
         }
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
-            RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder.path);
+            if (request.type == ContentBrowserRequestType::None)
+            {
+                request.type = ContentBrowserRequestType::SelectFolder;
+                request.folderPath = folder.path;
+                request.syncTree = false; // the user is already IN the tree — don't jump the view
+            }
         }
         DrawFolderDragSource(folder);
-        DrawDisabledFolderDropTarget();
+        DrawFolderDropTarget(folder.path, request);
         if (ImGui::BeginPopupContextItem())
         {
             DrawFolderOrganizationMenu(folder.path,
@@ -1588,7 +1658,8 @@ namespace
                         favoriteFolders,
                         collections,
                         requestNewCollection,
-                        icons);
+                        icons,
+                        syncToSelection);
                 }
             }
             ImGui::TreePop();
@@ -1841,6 +1912,20 @@ namespace
         {
             RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
         }
+        ImGui::Separator();
+        if (record->id.type == EditorAssetType::MaterialPreset)
+        {
+            DisabledMenuItemWithTooltip("Delete File",
+                "Material presets are entries in data/materials.json — manage them in the material editor.");
+        }
+        else if (ImGui::MenuItem("Delete File"))
+        {
+            if (request.type == ContentBrowserRequestType::None)
+            {
+                request.type = ContentBrowserRequestType::DeleteAsset;
+                request.asset = record->id;
+            }
+        }
         ImGui::EndPopup();
     }
 
@@ -1914,7 +1999,7 @@ namespace
             }
             DrawSourceRowIcon(icons, BrowserIcon::Folder);
             DrawFolderDragSource(*folder);
-            DrawDisabledFolderDropTarget();
+            DrawFolderDropTarget(folder->path, request);
             DrawFolderContextMenu(*folder,
                 request,
                 favoriteFolders,
@@ -2046,7 +2131,7 @@ namespace
                 RequestIfUnset(request, ContentBrowserRequestType::SelectFolder, folder->path);
             }
             DrawFolderDragSource(*folder);
-            DrawDisabledFolderDropTarget();
+            DrawFolderDropTarget(folder->path, request);
             DrawFolderContextMenu(*folder,
                 request,
                 favoriteFolders,
@@ -2153,6 +2238,7 @@ void ContentBrowserPanel::SetPersistentState(const PersistentState& state)
 {
     std::copy(state.activeTypeFilters.begin(), state.activeTypeFilters.end(), std::begin(activeTypeFilters_));
     selectedFolder_ = state.selectedFolder.empty() ? "/Game" : state.selectedFolder;
+    syncFolderTreeToSelection_ = true; // reveal the restored folder on first draw
     folderHistory_.clear();
     folderHistoryIndex_ = 0;
     includeSubfolders_ = state.includeSubfolders;
@@ -2285,6 +2371,7 @@ void ContentBrowserPanel::NavigateHistory(const AssetRegistry& registry, int del
 
     folderHistoryIndex_ = static_cast<size_t>(next);
     selectedFolder_ = target;
+    syncFolderTreeToSelection_ = true; // reveal the history target in the Sources tree
 }
 
 void ContentBrowserPanel::NotifyAutoRefresh(double timeSec)
@@ -2436,6 +2523,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         SelectFolder(registry, breadcrumbRequest, true);
         selectedAsset = {};
+        syncFolderTreeToSelection_ = true; // keep the Sources tree in step with the path bar
     }
 
     DrawSearchInputWithClear("##search", "Search assets...", searchBuffer_,
@@ -2746,12 +2834,14 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             favoriteFolders_,
             collections_,
             requestNewCollection,
-            icons);
+            icons,
+            syncFolderTreeToSelection_);
     }
     else
     {
         ImGui::TextDisabled("No content roots.");
     }
+    syncFolderTreeToSelection_ = false; // one-shot: applied for exactly one tree pass
     ImGui::EndChild();
     drawSourcesScope.reset();
 
@@ -2900,6 +2990,10 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         SelectFolder(registry, uiRequest.folderPath, true);
         selectedAsset = {};
+        if (uiRequest.syncTree)
+        {
+            syncFolderTreeToSelection_ = true; // expand + reveal in the Sources tree next frame
+        }
     }
     else if (uiRequest.type == ContentBrowserRequestType::Refresh)
     {
@@ -2918,6 +3012,68 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         deleteFolderTarget_ = uiRequest.folderPath;
         folderOperationMessage_.clear();
         ImGui::OpenPopup("Delete Empty Folder###ContentBrowserDeleteFolder");
+    }
+    else if (uiRequest.type == ContentBrowserRequestType::DeleteAsset)
+    {
+        deleteAssetTarget_ = uiRequest.asset;
+        folderOperationMessage_.clear();
+        ImGui::OpenPopup("Delete File###ContentBrowserDeleteAsset");
+    }
+    else if (uiRequest.type == ContentBrowserRequestType::MoveAsset)
+    {
+        // Validate + execute. The drop tooltip already filtered the cheap refusals; this is the
+        // authoritative pass (target mapping, indexability under the target root, collisions).
+        const fs::path source(uiRequest.asset.key);
+        const fs::path fileName = source.filename();
+        fs::path targetDir;
+        std::string reason;
+        if (!TryMapVirtualFolderToPhysical(uiRequest.folderPath, targetDir, reason))
+        {
+        }
+        else if (!registry.IsFileIndexedUnder(uiRequest.folderPath, fileName.string()))
+        {
+            reason = "This file type is not shown under " + uiRequest.folderPath +
+                " — moving it there would hide it from the Content Browser.";
+        }
+        else
+        {
+            std::error_code ec;
+            const fs::path destination = targetDir / fileName;
+            if (!fs::is_regular_file(source, ec))
+            {
+                reason = "Source file no longer exists: " + source.generic_string();
+            }
+            else if (fs::exists(destination, ec))
+            {
+                reason = "A file with that name already exists in the target folder.";
+            }
+            else
+            {
+                fs::rename(source, destination, ec);
+                if (ec) // cross-volume rename — fall back to copy + delete
+                {
+                    ec.clear();
+                    fs::copy_file(source, destination, ec);
+                    if (!ec) { fs::remove(source, ec); }
+                }
+                if (ec)
+                {
+                    reason = "Move failed: " + ec.message();
+                }
+            }
+        }
+
+        if (reason.empty())
+        {
+            registry.Refresh();
+            EnsureSelectedFolder(registry);
+            selectedAsset = {}; // the record id (its path) changed
+        }
+        else
+        {
+            folderOperationMessage_ = reason;
+            ImGui::OpenPopup("Move Failed###ContentBrowserMoveFailed");
+        }
     }
 
     if (ImGui::BeginPopupModal("New Folder###ContentBrowserNewFolder",
@@ -3028,6 +3184,64 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel"))
+        {
+            folderOperationMessage_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Delete File###ContentBrowserDeleteAsset",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("Delete this file from disk? This cannot be undone.");
+        ImGui::Text("File: %s", deleteAssetTarget_.key.c_str());
+        if (!folderOperationMessage_.empty())
+        {
+            ImGui::TextWrapped("%s", folderOperationMessage_.c_str());
+        }
+
+        if (ImGui::Button("Delete"))
+        {
+            std::error_code ec;
+            const fs::path target(deleteAssetTarget_.key);
+            if (!fs::is_regular_file(target, ec))
+            {
+                folderOperationMessage_ = "File no longer exists.";
+            }
+            else if (!fs::remove(target, ec))
+            {
+                folderOperationMessage_ = ec ? ec.message() : "File could not be deleted.";
+            }
+            else
+            {
+                if (selectedAsset.type == deleteAssetTarget_.type &&
+                    selectedAsset.key == deleteAssetTarget_.key)
+                {
+                    selectedAsset = {};
+                }
+                registry.Refresh();
+                EnsureSelectedFolder(registry);
+                folderOperationMessage_.clear();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            folderOperationMessage_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Move Failed###ContentBrowserMoveFailed",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("%s", folderOperationMessage_.c_str());
+        if (ImGui::Button("OK"))
         {
             folderOperationMessage_.clear();
             ImGui::CloseCurrentPopup();
