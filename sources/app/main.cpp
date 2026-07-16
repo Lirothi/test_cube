@@ -5,6 +5,7 @@
 #include "mimalloc-new-delete.h"
 #pragma warning(pop)
 #include "app/App.h"
+#include "assets/AssetImporter.h"
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/SceneStress.h"
 #include "app/scene/SceneRenderQueue.h"
@@ -18,6 +19,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -28,6 +30,24 @@ int ForceMi() { return mi_version(); }
 
 namespace
 {
+// Extract a CLI value for `key`, accepting both "key=value" and "key value" (optionally quoted
+// for paths with spaces). Returns "" when the key is absent or has no value.
+std::string ExtractArgValue(const char* cmd, const char* key)
+{
+    const char* p = std::strstr(cmd, key);
+    if (!p) { return {}; }
+    p += std::strlen(key);
+    while (*p == '=' || std::isspace(static_cast<unsigned char>(*p))) { ++p; }
+    std::string v;
+    if (*p == '"') {
+        ++p;
+        while (*p && *p != '"') { v.push_back(*p); ++p; }
+    } else {
+        while (*p && !std::isspace(static_cast<unsigned char>(*p))) { v.push_back(*p); ++p; }
+    }
+    return v;
+}
+
 void EnableDpiAwareness()
 {
 #ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
@@ -129,6 +149,22 @@ int WINAPI WinMain(
     // exercised in the live app without actually exhausting VRAM.
     if (lpCmdLine && std::strstr(lpCmdLine, "rt-force-as-fail") != nullptr) {
         rt::AccelerationStructureManager::SetForceAllocFailureForTest(true);
+    }
+
+    // "--import <staging-dir> [--skybox <file.hdr>]" runs the offline asset conversion backend
+    // (Part H1) headless — PNG/JPG -> mipped BC7 DDS, texture-set MR synthesis, flipbook atlases,
+    // .hdr -> BC6H cubemap — then exits. Verdict in asset_import.log; exit code = failed count.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--import") != nullptr) {
+        assets::ImportOptions opts;
+        opts.stagingDir = ExtractArgValue(lpCmdLine, "--import");
+        opts.skyboxHdr  = ExtractArgValue(lpCmdLine, "--skybox");
+        if (const char* m = std::strstr(lpCmdLine, "--max-size=")) {
+            opts.maxTextureSize = std::atoi(m + std::strlen("--max-size="));
+        }
+        opts.highQuality = std::strstr(lpCmdLine, "--high") != nullptr; // opt-in exhaustive BC7
+        opts.flipGreen   = std::strstr(lpCmdLine, "--flip-green") != nullptr;
+        opts.bc5Normal   = std::strstr(lpCmdLine, "--bc5-normal") != nullptr;
+        return assets::RunImport(opts);
     }
 
     EnableDpiAwareness();

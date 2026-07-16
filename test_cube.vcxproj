@@ -336,6 +336,7 @@
     <ClCompile Include="sources/text/FontManager.cpp" />
     <ClCompile Include="sources/text/TextManager.cpp" />
     <ClCompile Include="sources/ui/ImGuiLayer.cpp" />
+    <ClCompile Include="sources/assets/AssetImporter.cpp" />
     <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp" />
@@ -366,9 +367,27 @@
     <ClCompile Include="third_party\meshoptimizer\src\vertexcodec.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
     <ClCompile Include="third_party\meshoptimizer\src\vertexfilter.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
     <ClCompile Include="third_party\meshoptimizer\src\vfetchoptimizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC4BC5.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC6HBC7.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexCompress.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexConvert.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexDDS.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexFlipRotate.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexHDR.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexImage.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexMipmaps.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexMisc.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexNormalMaps.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexPMAlpha.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexResize.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexTGA.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexUtil.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexWIC.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
+    <ClInclude Include="sources/assets/AssetImporter.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h" />
     <ClInclude Include="sources/app/AppController.h" />
