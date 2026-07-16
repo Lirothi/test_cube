@@ -60,10 +60,13 @@ private:
     void BeginImport(const Item& item, const std::vector<std::string>& includeRel,
         bool registerPreset,
         const std::vector<std::string>& targetOutputs = {},
-        const std::vector<std::string>& removedSources = {});
+        const std::vector<std::string>& removedSources = {},
+        float meshSpawnScale = -1.0f);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
+    void OpenMeshImportDialog(const Item& item);
+    void DrawMeshImportDialog();
 
     // Engine-tree destination for an item, by kind: models/<name> (Mesh), textures/<name>
     // (TextureSet), textures/<name>.dds (Skybox). Meshes go to models/ (their sibling DDS ride
@@ -83,12 +86,6 @@ private:
     bool moveIntoProject_ = true;
     bool useGpu_ = true; // H5: BC6H/BC7 on the GPU (auto CPU fallback)
     int  skyboxFaceSize_ = 1024;
-    // Spawn-scale normalizer: meshes are frequently cm-authored (a "rock" arrives ~115 m).
-    // When on, a full mesh import records spawnScale = target/bakedSize in the import
-    // manifest; the spawn factory reads it so the asset drops in at a sane size. The glTF
-    // itself is never modified.
-    bool  normalizeSpawn_ = true;
-    float spawnTargetM_ = 6.0f;
 
     // Background import job (one at a time).
     std::thread worker_;
@@ -104,6 +101,9 @@ private:
     // MERGED instead of replaced, and the destination folder is NOT synced — files produced by
     // earlier imports survive. Only a full import treats the folder as importer-owned.
     bool activeMergeManifest_ = false;
+    // >= 0 is the explicit choice from the mesh import dialog. -1 preserves
+    // an existing manifest value for non-interactive/bulk reimports.
+    float activeMeshSpawnScale_ = -1.0f;
     bool joinPending_ = false;
     std::string status_;
     bool statusIsError_ = false; // colors the status line red on failure, green on success
@@ -113,6 +113,13 @@ private:
     Item dialogItem_;
     std::vector<DialogFile> dialogFiles_;
     bool dialogCreatePreset_ = true;
+
+    // Mesh import confirmation. Size normalization is intentionally decided
+    // per mesh here rather than being a persistent global importer option.
+    bool showMeshImportDialog_ = false;
+    Item meshDialogItem_;
+    bool meshDialogNormalizeSpawn_ = false;
+    float meshDialogTargetM_ = 6.0f;
 };
 
 #endif // WITH_EDITOR

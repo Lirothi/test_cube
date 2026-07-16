@@ -219,6 +219,17 @@ namespace
             (projectOutput.stem().string() + ".assetimport.json");
     }
 
+    float ReadManifestSpawnScale(const fs::path& manifestPath)
+    {
+        std::ifstream file(manifestPath);
+        if (!file) { return 0.0f; }
+        const nlohmann::json manifest = nlohmann::json::parse(
+            file, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object()) { return 0.0f; }
+        const float scale = manifest.value("spawnScale", 0.0f);
+        return scale > 0.0f ? scale : 0.0f;
+    }
+
     bool IsSafeRelativePath(const fs::path& path)
     {
         if (path.empty() || path.is_absolute()) { return false; }
@@ -821,7 +832,8 @@ void ImportPanel::BeginImport(const Item& item,
     const std::vector<std::string>& includeRel,
     bool registerPreset,
     const std::vector<std::string>& targetOutputs,
-    const std::vector<std::string>& removedSources)
+    const std::vector<std::string>& removedSources,
+    float meshSpawnScale)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
@@ -834,6 +846,12 @@ void ImportPanel::BeginImport(const Item& item,
     // Any subset (dialog file selection or per-resource reimport) merges into the existing
     // manifest and must not delete sibling outputs; only a full import owns the whole folder.
     activeMergeManifest_ = !includeRel.empty() || !activeTargetOutputs_.empty();
+    activeMeshSpawnScale_ = 0.0f;
+    if (item.kind == Kind::Mesh)
+    {
+        activeMeshSpawnScale_ = meshSpawnScale >= 0.0f ? meshSpawnScale :
+            ReadManifestSpawnScale(ImportManifestPath(ProjectDest(item), false));
+    }
     running_.store(true);
     workerFailures_.store(0);
     progressDone_.store(0);
@@ -1003,6 +1021,99 @@ void ImportPanel::DrawImportDialog()
     ImGui::EndPopup();
 }
 
+void ImportPanel::OpenMeshImportDialog(const Item& item)
+{
+    meshDialogItem_ = item;
+    meshDialogNormalizeSpawn_ = false;
+    meshDialogTargetM_ = 6.0f;
+
+    const fs::path manifestPath = ImportManifestPath(ProjectDest(item), false);
+    const float existingScale = ReadManifestSpawnScale(manifestPath);
+    std::error_code ec;
+    if (fs::is_regular_file(manifestPath, ec))
+    {
+        meshDialogNormalizeSpawn_ = existingScale > 0.0f;
+    }
+    if (existingScale > 0.0f && item.worldSizeM > 0.0f)
+    {
+        meshDialogTargetM_ = item.worldSizeM * existingScale;
+    }
+    showMeshImportDialog_ = true;
+}
+
+void ImportPanel::DrawMeshImportDialog()
+{
+    if (showMeshImportDialog_)
+    {
+        ImGui::OpenPopup("Import Mesh");
+        showMeshImportDialog_ = false;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 center(
+        viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+        viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Import Mesh", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::Text("Import '%s'", meshDialogItem_.name.c_str());
+    ImGui::Separator();
+    if (meshDialogItem_.worldSizeM > 0.0f)
+    {
+        ImGui::Text("Detected longest side: %.3f m", meshDialogItem_.worldSizeM);
+    }
+    else
+    {
+        ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+            "Mesh size could not be determined from the glTF bounds.");
+        meshDialogNormalizeSpawn_ = false;
+    }
+
+    ImGui::BeginDisabled(meshDialogItem_.worldSizeM <= 0.0f);
+    ImGui::Checkbox("Normalize spawn size", &meshDialogNormalizeSpawn_);
+    ImGui::BeginDisabled(!meshDialogNormalizeSpawn_);
+    ImGui::SetNextItemWidth(110.0f);
+    ImGui::InputFloat("Target longest side (m)", &meshDialogTargetM_,
+        0.0f, 0.0f, "%.2f");
+    meshDialogTargetM_ = std::clamp(meshDialogTargetM_, 0.1f, 1000.0f);
+    if (meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f)
+    {
+        ImGui::TextDisabled("Default spawn scale: %.6f",
+            meshDialogTargetM_ / meshDialogItem_.worldSizeM);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    ImGui::TextWrapped(
+        "Normalization records a default spawn scale in the import manifest. "
+        "It does not modify the glTF or its vertex data.");
+    ImGui::Separator();
+
+    if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import",
+            ImVec2(120.0f, 0.0f)))
+    {
+        float spawnScale = 0.0f; // Explicitly unchecked removes normalization.
+        if (meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f)
+        {
+            spawnScale = meshDialogTargetM_ / meshDialogItem_.worldSizeM;
+        }
+        BeginImport(meshDialogItem_, {}, true, {}, {}, spawnScale);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
 {
     if (!joinPending_ || running_.load()) { return; }
@@ -1126,18 +1237,9 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
             if (!finalizeFailed)
             {
                 const bool outputIsFile = activeItem_.kind == Kind::Skybox;
-                // Spawn-scale normalizer: only meaningful for meshes with a measured size,
-                // and only when normalizing would actually change things (>5% off target).
-                float spawnScale = 0.0f;
-                if (normalizeSpawn_ && activeItem_.kind == Kind::Mesh &&
-                    activeItem_.worldSizeM > 0.0f && spawnTargetM_ > 0.0f)
-                {
-                    const float s = spawnTargetM_ / activeItem_.worldSizeM;
-                    if (s < 0.95f || s > 1.05f) { spawnScale = s; }
-                }
                 finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
                     fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
-                    activeMergeManifest_, activeRemovedSources_, spawnScale);
+                    activeMergeManifest_, activeRemovedSources_, activeMeshSpawnScale_);
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
@@ -1272,18 +1374,6 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                 "Leave OFF for glTF meshes and plain textures.\n"
                 "Only enable if a normal-mapped surface ends up lit from the wrong side.");
         }
-        ImGui::Checkbox("Normalize spawn size to", &normalizeSpawn_);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(70.0f);
-        ImGui::InputFloat("m##spawnTarget", &spawnTargetM_, 0.0f, 0.0f, "%.1f");
-        spawnTargetM_ = std::clamp(spawnTargetM_, 0.1f, 1000.0f);
-        if (ImGui::IsItemHovered() || (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)))
-        {
-            ImGui::SetTooltip(
-                "Meshes often arrive centimeter-authored (a rock at ~115 m). On import this\n"
-                "records a default spawn scale (longest side -> target size) in the import\n"
-                "manifest; spawning from the content browser applies it. The glTF is untouched.");
-        }
     }
 
     // --- Status: blue while running, then green on success / red on failure --
@@ -1349,7 +1439,7 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                 {
                     ImGui::SetTooltip(
                         "Baked world size is ~%.0f m — likely centimeter-authored.\n"
-                        "Expect to scale it down after spawning (e.g. 0.01-0.02).",
+                        "Use the mesh import dialog to choose a normalized spawn size.",
                         it.worldSizeM);
                 }
             }
@@ -1402,8 +1492,9 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                 ImGui::BeginDisabled(busy);
                 if (ImGui::SmallButton(it.alreadyInProject ? "Re-import" : "Import"))
                 {
-                    // Texture sets get a pick-files + preset dialog; meshes/skyboxes import directly.
+                    // Each asset type asks only for the decisions relevant to it.
                     if (it.kind == Kind::TextureSet) { OpenImportDialog(it); }
+                    else if (it.kind == Kind::Mesh) { OpenMeshImportDialog(it); }
                     else { BeginImport(it, {}, true); }
                 }
                 ImGui::EndDisabled();
@@ -1441,7 +1532,8 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         }
     }
 
-    DrawImportDialog(); // texture-set pick-files + preset modal (no-op unless open)
+    DrawImportDialog();     // texture-set pick-files + preset modal
+    DrawMeshImportDialog(); // per-mesh spawn-size normalization modal
 
     ImGui::End();
     return finished;
