@@ -20,11 +20,15 @@ VSOut VSMain(VSIn i)
 }
 
 [RootSignature(GBUFFER_RS)]
-PSOut PSMain(VSOut i)
+PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 {
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, baseColor.a, alphaCutoff);
 
+    // Two-sided foliage (CULL_NONE fronds): a backface reuses the front vertex normal, which points
+    // away from the camera → wrong diffuse (dark) + spurious specular. Flip it to face out of the
+    // visible side. No-op for single-sided meshes (backfaces are culled, isFrontFace always true).
     float3 NNorm = normalize(i.NWS);
+    if (!isFrontFace) { NNorm = -NNorm; }
 
     float3 albedo;
     float2 mr;

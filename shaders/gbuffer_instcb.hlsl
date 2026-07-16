@@ -79,7 +79,7 @@ VSOutInst VSMain(VSInInst i)
 }
 
 [RootSignature(GBUFFER_INSTCB_RS)]
-PSOut PSMain(VSOutInst i)
+PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
 {
     InstancePerObject d = inst[i.IID];
 
@@ -101,7 +101,9 @@ PSOut PSMain(VSOutInst i)
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
 
+    // Two-sided foliage: flip a backface normal to face out of the visible side (see gbuffer.hlsl).
     float3 NNorm = normalize(i.NWS);
+    if (!isFrontFace) { NNorm = -NNorm; }
 
     float3 albedo;
     float2 mr;

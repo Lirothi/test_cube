@@ -5,19 +5,19 @@
     "zNear": 0.01
   },
   "directionalLight": {
-    "ambient": 0.07,
+    "ambient": 0.10000000149011612,
     "color": [
-      1.0,
-      0.84,
-      0.68
+      0.9867109656333923,
+      0.7375746369361877,
+      0.48843833804130554
     ],
     "direction": [
-      -0.557,
-      -0.682,
-      -0.473
+      -1.4769999980926514,
+      -0.6819999814033508,
+      -0.4729999899864197
     ],
     "enabled": true,
-    "exposure": 1.2
+    "exposure": 1.2000000476837158
   },
   "objects": [
     {
@@ -107,106 +107,6 @@
     },
     {
       "enabled": true,
-      "id": 8,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
-      "name": "staticMesh #8",
-      "position": [
-        40.52806854248047,
-        0.7960619926452637,
-        82.17115783691406
-      ],
-      "rotationDeg": [
-        0.0,
-        -60.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 9,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
-      "name": "staticMesh #9",
-      "position": [
-        39.721099853515625,
-        2.096060276031494,
-        74.06896209716797
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 10,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
-      "name": "staticMesh #10",
-      "position": [
-        31.12073516845703,
-        2.096061944961548,
-        77.59577178955078
-      ],
-      "rotationDeg": [
-        0.0,
-        60.0,
-        0.0
-      ],
-      "scale": [
-        1.0000001192092896,
-        1.0,
-        1.0000001192092896
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 11,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
-      "name": "staticMesh #11",
-      "position": [
-        45.1362190246582,
-        0.7960630059242249,
-        79.73365783691406
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 12,
       "inputLayout": "PosNormTanUV",
       "material": "auto",
@@ -282,81 +182,6 @@
     },
     {
       "enabled": true,
-      "id": 19,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
-      "name": "staticMesh #9 Copy",
-      "position": [
-        48.321102142333984,
-        1.8322287797927856,
-        71.96895599365234
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 20,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
-      "name": "staticMesh #10 Copy",
-      "position": [
-        42.720645904541016,
-        2.3516156673431396,
-        72.19559478759766
-      ],
-      "rotationDeg": [
-        0.0,
-        -45.0,
-        0.0
-      ],
-      "scale": [
-        0.9999998807907104,
-        1.0,
-        0.9999998807907104
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 21,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
-      "name": "staticMesh #8 Copy",
-      "position": [
-        49.12807083129883,
-        0.13327233493328094,
-        80.07115173339844
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "shader": "shaders/gbuffer.hlsl",
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 22,
       "inputLayout": "PosNormTanUV",
       "material": "auto",
@@ -410,22 +235,2497 @@
       "id": 24,
       "inputLayout": "PosNormTanUV",
       "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
-      "name": "staticMesh #11 Copy",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 001 (Date Palm)",
       "position": [
-        42.43621826171875,
-        1.1406837701797485,
-        79.43365478515625
+        -54.71826934814453,
+        2.4955010414123535,
+        45.37023162841797
       ],
       "rotationDeg": [
         0.0,
-        -59.99999237060547,
+        96.76339721679688,
         0.0
       ],
       "scale": [
-        1.3000000715255737,
-        1.3000000715255737,
-        1.3000000715255737
+        0.8003000020980835,
+        0.8003000020980835,
+        0.8003000020980835
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 25,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 002 (Date Palm)",
+      "position": [
+        -43.89203643798828,
+        0.6092180013656616,
+        -46.18059539794922
+      ],
+      "rotationDeg": [
+        0.0,
+        290.1813049316406,
+        0.0
+      ],
+      "scale": [
+        1.0839999914169312,
+        1.0839999914169312,
+        1.0839999914169312
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 26,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 003 (Curly Palm)",
+      "position": [
+        35.77363586425781,
+        1.1678789854049683,
+        -51.38296127319336
+      ],
+      "rotationDeg": [
+        0.0,
+        296.7705078125,
+        0.0
+      ],
+      "scale": [
+        1.0860999822616577,
+        1.0860999822616577,
+        1.0860999822616577
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 27,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 004 (Coconut Palm)",
+      "position": [
+        -70.06649780273438,
+        0.8999090194702148,
+        48.48466873168945
+      ],
+      "rotationDeg": [
+        0.0,
+        318.8645935058594,
+        0.0
+      ],
+      "scale": [
+        1.1420999765396118,
+        1.1420999765396118,
+        1.1420999765396118
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 28,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 005 (Curly Palm)",
+      "position": [
+        -11.591859817504883,
+        1.8985329866409302,
+        -67.77153778076172
+      ],
+      "rotationDeg": [
+        0.0,
+        302.4408874511719,
+        0.0
+      ],
+      "scale": [
+        0.9973000288009644,
+        0.9973000288009644,
+        0.9973000288009644
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 29,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 006 (Date Palm)",
+      "position": [
+        57.57623291015625,
+        1.6378430128097534,
+        41.45992660522461
+      ],
+      "rotationDeg": [
+        0.0,
+        291.2088928222656,
+        0.0
+      ],
+      "scale": [
+        1.121500015258789,
+        1.121500015258789,
+        1.121500015258789
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 30,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 007 (Date Palm)",
+      "position": [
+        -60.02897644042969,
+        2.336306095123291,
+        -52.810611724853516
+      ],
+      "rotationDeg": [
+        0.0,
+        66.36100006103516,
+        0.0
+      ],
+      "scale": [
+        1.1136000156402588,
+        1.1136000156402588,
+        1.1136000156402588
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 31,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 008 (Coconut Palm)",
+      "position": [
+        -70.70952606201172,
+        2.3530349731445313,
+        -25.684612274169922
+      ],
+      "rotationDeg": [
+        0.0,
+        86.54530334472656,
+        0.0
+      ],
+      "scale": [
+        0.8396000266075134,
+        0.8396000266075134,
+        0.8396000266075134
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 32,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 009 (Curly Palm)",
+      "position": [
+        -65.31593322753906,
+        1.3408139944076538,
+        -17.63721466064453
+      ],
+      "rotationDeg": [
+        0.0,
+        28.917499542236328,
+        0.0
+      ],
+      "scale": [
+        0.8004000186920166,
+        0.8004000186920166,
+        0.8004000186920166
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 33,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 010 (Coconut Palm)",
+      "position": [
+        -59.99921798706055,
+        2.138071060180664,
+        -59.27367401123047
+      ],
+      "rotationDeg": [
+        0.0,
+        110.36849975585938,
+        0.0
+      ],
+      "scale": [
+        0.8130999803543091,
+        0.8130999803543091,
+        0.8130999803543091
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 34,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 011 (Coconut Palm)",
+      "position": [
+        44.93366622924805,
+        1.8250329494476318,
+        -48.35342788696289
+      ],
+      "rotationDeg": [
+        0.0,
+        165.4290008544922,
+        0.0
+      ],
+      "scale": [
+        1.079200029373169,
+        1.079200029373169,
+        1.079200029373169
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 35,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 012 (Coconut Palm)",
+      "position": [
+        82.88932037353516,
+        1.9804739952087402,
+        28.404024124145508
+      ],
+      "rotationDeg": [
+        0.0,
+        327.38970947265625,
+        0.0
+      ],
+      "scale": [
+        1.1291999816894531,
+        1.1291999816894531,
+        1.1291999816894531
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 36,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 013 (Curly Palm)",
+      "position": [
+        -83.6070785522461,
+        1.1252280473709106,
+        -33.86115264892578
+      ],
+      "rotationDeg": [
+        0.0,
+        84.05460357666016,
+        0.0
+      ],
+      "scale": [
+        0.828000009059906,
+        0.828000009059906,
+        0.828000009059906
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 37,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 014 (Curly Palm)",
+      "position": [
+        63.65485763549805,
+        1.9894150495529175,
+        -22.90022087097168
+      ],
+      "rotationDeg": [
+        0.0,
+        81.87039947509766,
+        0.0
+      ],
+      "scale": [
+        0.8396000266075134,
+        0.8396000266075134,
+        0.8396000266075134
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 38,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 015 (Coconut Palm)",
+      "position": [
+        -60.25514221191406,
+        1.4061390161514282,
+        25.977663040161133
+      ],
+      "rotationDeg": [
+        0.0,
+        340.8255920410156,
+        0.0
+      ],
+      "scale": [
+        0.9200000166893005,
+        0.9200000166893005,
+        0.9200000166893005
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 39,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 016 (Coconut Palm)",
+      "position": [
+        82.9773941040039,
+        1.9589979648590088,
+        -9.531781196594238
+      ],
+      "rotationDeg": [
+        0.0,
+        18.841100692749023,
+        0.0
+      ],
+      "scale": [
+        0.8282999992370605,
+        0.8282999992370605,
+        0.8282999992370605
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 40,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 017 (Date Palm)",
+      "position": [
+        -60.77843475341797,
+        0.601934015750885,
+        -22.098888397216797
+      ],
+      "rotationDeg": [
+        0.0,
+        77.87889862060547,
+        0.0
+      ],
+      "scale": [
+        1.1964999437332153,
+        1.1964999437332153,
+        1.1964999437332153
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 41,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 018 (Curly Palm)",
+      "position": [
+        58.730716705322266,
+        1.773414969444275,
+        -31.07624053955078
+      ],
+      "rotationDeg": [
+        0.0,
+        155.3262939453125,
+        0.0
+      ],
+      "scale": [
+        1.1411000490188599,
+        1.1411000490188599,
+        1.1411000490188599
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 42,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 019 (Date Palm)",
+      "position": [
+        52.431148529052734,
+        1.0279330015182495,
+        -67.276123046875
+      ],
+      "rotationDeg": [
+        0.0,
+        171.84689331054688,
+        0.0
+      ],
+      "scale": [
+        1.0378999710083008,
+        1.0378999710083008,
+        1.0378999710083008
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 43,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 020 (Date Palm)",
+      "position": [
+        -54.769752502441406,
+        1.6613869667053223,
+        -69.423095703125
+      ],
+      "rotationDeg": [
+        0.0,
+        299.0024108886719,
+        0.0
+      ],
+      "scale": [
+        0.9375,
+        0.9375,
+        0.9375
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 44,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 021 (Curly Palm)",
+      "position": [
+        77.15637969970703,
+        2.4736459255218506,
+        -4.404364109039307
+      ],
+      "rotationDeg": [
+        0.0,
+        163.8303985595703,
+        0.0
+      ],
+      "scale": [
+        1.159999966621399,
+        1.159999966621399,
+        1.159999966621399
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 45,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 022 (Curly Palm)",
+      "position": [
+        71.2785415649414,
+        2.98512601852417,
+        -19.814186096191406
+      ],
+      "rotationDeg": [
+        0.0,
+        150.93460083007813,
+        0.0
+      ],
+      "scale": [
+        0.9706000089645386,
+        0.9706000089645386,
+        0.9706000089645386
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 46,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 023 (Curly Palm)",
+      "position": [
+        82.83425903320313,
+        1.4692410230636597,
+        -22.098735809326172
+      ],
+      "rotationDeg": [
+        0.0,
+        155.00770568847656,
+        0.0
+      ],
+      "scale": [
+        1.1655000448226929,
+        1.1655000448226929,
+        1.1655000448226929
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 47,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 024 (Coconut Palm)",
+      "position": [
+        -87.26429748535156,
+        0.8340759873390198,
+        -12.058233261108398
+      ],
+      "rotationDeg": [
+        0.0,
+        6.07289981842041,
+        0.0
+      ],
+      "scale": [
+        1.132099986076355,
+        1.132099986076355,
+        1.132099986076355
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 48,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 025 (Date Palm)",
+      "position": [
+        -21.345279693603516,
+        0.6576110124588013,
+        -59.54508590698242
+      ],
+      "rotationDeg": [
+        0.0,
+        337.7809143066406,
+        0.0
+      ],
+      "scale": [
+        1.1592999696731567,
+        1.1592999696731567,
+        1.1592999696731567
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 49,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 026 (Coconut Palm)",
+      "position": [
+        38.64973449707031,
+        2.348594903945923,
+        -71.44499206542969
+      ],
+      "rotationDeg": [
+        0.0,
+        79.69580078125,
+        0.0
+      ],
+      "scale": [
+        0.9761999845504761,
+        0.9761999845504761,
+        0.9761999845504761
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 50,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 027 (Curly Palm)",
+      "position": [
+        68.30718994140625,
+        2.1842238903045654,
+        23.91180992126465
+      ],
+      "rotationDeg": [
+        0.0,
+        212.6990966796875,
+        0.0
+      ],
+      "scale": [
+        1.1672999858856201,
+        1.1672999858856201,
+        1.1672999858856201
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 51,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 028 (Date Palm)",
+      "position": [
+        16.568660736083984,
+        1.0222100019454956,
+        -84.48275756835938
+      ],
+      "rotationDeg": [
+        0.0,
+        115.51799774169922,
+        0.0
+      ],
+      "scale": [
+        1.0799000263214111,
+        1.0799000263214111,
+        1.0799000263214111
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 52,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 029 (Coconut Palm)",
+      "position": [
+        -10.599143981933594,
+        2.145045042037964,
+        -82.4172134399414
+      ],
+      "rotationDeg": [
+        0.0,
+        241.9407958984375,
+        0.0
+      ],
+      "scale": [
+        0.9718999862670898,
+        0.9718999862670898,
+        0.9718999862670898
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 53,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 030 (Date Palm)",
+      "position": [
+        -76.33304595947266,
+        3.0357460975646973,
+        1.637935996055603
+      ],
+      "rotationDeg": [
+        0.0,
+        169.89739990234375,
+        0.0
+      ],
+      "scale": [
+        1.0016000270843506,
+        1.0016000270843506,
+        1.0016000270843506
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 54,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 031 (Curly Palm)",
+      "position": [
+        -72.53844451904297,
+        2.388766050338745,
+        -11.357529640197754
+      ],
+      "rotationDeg": [
+        0.0,
+        168.2823944091797,
+        0.0
+      ],
+      "scale": [
+        0.8859999775886536,
+        0.8859999775886536,
+        0.8859999775886536
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 55,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 032 (Curly Palm)",
+      "position": [
+        -49.43515396118164,
+        1.9757709503173828,
+        -52.56904220581055
+      ],
+      "rotationDeg": [
+        0.0,
+        122.41010284423828,
+        0.0
+      ],
+      "scale": [
+        1.1577999591827393,
+        1.1577999591827393,
+        1.1577999591827393
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 56,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 033 (Curly Palm)",
+      "position": [
+        -76.8846664428711,
+        2.2720398902893066,
+        -19.097274780273438
+      ],
+      "rotationDeg": [
+        0.0,
+        137.2042999267578,
+        0.0
+      ],
+      "scale": [
+        0.9074000120162964,
+        0.9074000120162964,
+        0.9074000120162964
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 57,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 034 (Coconut Palm)",
+      "position": [
+        -86.61897277832031,
+        0.6607999801635742,
+        16.92987632751465
+      ],
+      "rotationDeg": [
+        0.0,
+        9.092000007629395,
+        0.0
+      ],
+      "scale": [
+        0.8831999897956848,
+        0.8831999897956848,
+        0.8831999897956848
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 58,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 035 (Curly Palm)",
+      "position": [
+        81.23538208007813,
+        2.0792009830474854,
+        8.349093437194824
+      ],
+      "rotationDeg": [
+        0.0,
+        119.34480285644531,
+        0.0
+      ],
+      "scale": [
+        0.9916999936103821,
+        0.9916999936103821,
+        0.9916999936103821
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 59,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 036 (Date Palm)",
+      "position": [
+        -80.91970825195313,
+        1.653905987739563,
+        23.747713088989258
+      ],
+      "rotationDeg": [
+        0.0,
+        235.5574951171875,
+        0.0
+      ],
+      "scale": [
+        0.8242999911308289,
+        0.8242999911308289,
+        0.8242999911308289
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 60,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 037 (Coconut Palm)",
+      "position": [
+        75.33432006835938,
+        2.6471869945526123,
+        16.809974670410156
+      ],
+      "rotationDeg": [
+        0.0,
+        245.7281036376953,
+        0.0
+      ],
+      "scale": [
+        1.0764000415802002,
+        1.0764000415802002,
+        1.0764000415802002
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 61,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 038 (Date Palm)",
+      "position": [
+        -79.21815490722656,
+        0.5554389953613281,
+        38.828826904296875
+      ],
+      "rotationDeg": [
+        0.0,
+        67.88040161132813,
+        0.0
+      ],
+      "scale": [
+        0.8939999938011169,
+        0.8939999938011169,
+        0.8939999938011169
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 62,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 039 (Curly Palm)",
+      "position": [
+        -65.42300415039063,
+        1.4065170288085938,
+        -6.971013069152832
+      ],
+      "rotationDeg": [
+        0.0,
+        8.790499687194824,
+        0.0
+      ],
+      "scale": [
+        1.1779999732971191,
+        1.1779999732971191,
+        1.1779999732971191
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 63,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 040 (Coconut Palm)",
+      "position": [
+        3.268078088760376,
+        0.48996201157569885,
+        -63.58354568481445
+      ],
+      "rotationDeg": [
+        0.0,
+        329.8106994628906,
+        0.0
+      ],
+      "scale": [
+        0.9825999736785889,
+        0.9825999736785889,
+        0.9825999736785889
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 64,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 041 (Date Palm)",
+      "position": [
+        39.162349700927734,
+        0.6667400002479553,
+        -79.4362564086914
+      ],
+      "rotationDeg": [
+        0.0,
+        89.06490325927734,
+        0.0
+      ],
+      "scale": [
+        0.8991000056266785,
+        0.8991000056266785,
+        0.8991000056266785
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 65,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 042 (Coconut Palm)",
+      "position": [
+        74.66405487060547,
+        2.1113269329071045,
+        -33.23627471923828
+      ],
+      "rotationDeg": [
+        0.0,
+        216.343994140625,
+        0.0
+      ],
+      "scale": [
+        1.1957000494003296,
+        1.1957000494003296,
+        1.1957000494003296
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 66,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 043 (Coconut Palm)",
+      "position": [
+        -33.23300552368164,
+        2.8207740783691406,
+        -71.89019012451172
+      ],
+      "rotationDeg": [
+        0.0,
+        262.69610595703125,
+        0.0
+      ],
+      "scale": [
+        1.1948000192642212,
+        1.1948000192642212,
+        1.1948000192642212
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 67,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 044 (Curly Palm)",
+      "position": [
+        -26.9870662689209,
+        0.8468449711799622,
+        -85.5588150024414
+      ],
+      "rotationDeg": [
+        0.0,
+        69.08920288085938,
+        0.0
+      ],
+      "scale": [
+        0.8787999749183655,
+        0.8787999749183655,
+        0.8787999749183655
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 68,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 045 (Date Palm)",
+      "position": [
+        -68.29408264160156,
+        2.6807820796966553,
+        -40.554542541503906
+      ],
+      "rotationDeg": [
+        0.0,
+        298.1492919921875,
+        0.0
+      ],
+      "scale": [
+        0.8443999886512756,
+        0.8443999886512756,
+        0.8443999886512756
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 69,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 046 (Curly Palm)",
+      "position": [
+        87.31936645507813,
+        1.1039689779281616,
+        8.770047187805176
+      ],
+      "rotationDeg": [
+        0.0,
+        304.7755126953125,
+        0.0
+      ],
+      "scale": [
+        1.1354999542236328,
+        1.1354999542236328,
+        1.1354999542236328
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 70,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 047 (Curly Palm)",
+      "position": [
+        -61.51579284667969,
+        0.7043780088424683,
+        -1.2123889923095703
+      ],
+      "rotationDeg": [
+        0.0,
+        343.73760986328125,
+        0.0
+      ],
+      "scale": [
+        0.902999997138977,
+        0.902999997138977,
+        0.902999997138977
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 71,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 048 (Curly Palm)",
+      "position": [
+        -67.23737335205078,
+        2.468820095062256,
+        14.49383544921875
+      ],
+      "rotationDeg": [
+        0.0,
+        37.922000885009766,
+        0.0
+      ],
+      "scale": [
+        0.8593000173568726,
+        0.8593000173568726,
+        0.8593000173568726
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 72,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 049 (Date Palm)",
+      "position": [
+        -77.96455383300781,
+        2.86086106300354,
+        12.346814155578613
+      ],
+      "rotationDeg": [
+        0.0,
+        217.45010375976563,
+        0.0
+      ],
+      "scale": [
+        0.984499990940094,
+        0.984499990940094,
+        0.984499990940094
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 73,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 050 (Coconut Palm)",
+      "position": [
+        30.319236755371094,
+        0.7578009963035583,
+        -82.2345199584961
+      ],
+      "rotationDeg": [
+        0.0,
+        13.66510009765625,
+        0.0
+      ],
+      "scale": [
+        0.9528999924659729,
+        0.9528999924659729,
+        0.9528999924659729
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 74,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 051 (Coconut Palm)",
+      "position": [
+        30.796995162963867,
+        2.3094260692596436,
+        -74.43656921386719
+      ],
+      "rotationDeg": [
+        0.0,
+        353.2185974121094,
+        0.0
+      ],
+      "scale": [
+        0.84170001745224,
+        0.84170001745224,
+        0.84170001745224
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 75,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 052 (Curly Palm)",
+      "position": [
+        -75.18434143066406,
+        2.077665090560913,
+        31.463581085205078
+      ],
+      "rotationDeg": [
+        0.0,
+        316.8584899902344,
+        0.0
+      ],
+      "scale": [
+        0.9886000156402588,
+        0.9886000156402588,
+        0.9886000156402588
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 76,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 053 (Coconut Palm)",
+      "position": [
+        3.4057469367980957,
+        1.2993719577789307,
+        -86.17330169677734
+      ],
+      "rotationDeg": [
+        0.0,
+        161.62420654296875,
+        0.0
+      ],
+      "scale": [
+        1.1068999767303467,
+        1.1068999767303467,
+        1.1068999767303467
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 77,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 054 (Curly Palm)",
+      "position": [
+        -55.666194915771484,
+        1.027608036994934,
+        32.259986877441406
+      ],
+      "rotationDeg": [
+        0.0,
+        99.43789672851563,
+        0.0
+      ],
+      "scale": [
+        1.1589000225067139,
+        1.1589000225067139,
+        1.1589000225067139
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 78,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 055 (Curly Palm)",
+      "position": [
+        64.3697509765625,
+        1.351660966873169,
+        45.776615142822266
+      ],
+      "rotationDeg": [
+        0.0,
+        85.83390045166016,
+        0.0
+      ],
+      "scale": [
+        1.0338000059127808,
+        1.0338000059127808,
+        1.0338000059127808
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 79,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 056 (Curly Palm)",
+      "position": [
+        -10.80316162109375,
+        0.5003100037574768,
+        -61.741432189941406
+      ],
+      "rotationDeg": [
+        0.0,
+        276.61419677734375,
+        0.0
+      ],
+      "scale": [
+        1.0616999864578247,
+        1.0616999864578247,
+        1.0616999864578247
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 80,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 057 (Date Palm)",
+      "position": [
+        3.004492998123169,
+        2.504549026489258,
+        -74.49845886230469
+      ],
+      "rotationDeg": [
+        0.0,
+        106.85289764404297,
+        0.0
+      ],
+      "scale": [
+        1.0989999771118164,
+        1.0989999771118164,
+        1.0989999771118164
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 81,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 058 (Date Palm)",
+      "position": [
+        54.92799377441406,
+        2.275538921356201,
+        -43.76556396484375
+      ],
+      "rotationDeg": [
+        0.0,
+        61.839599609375,
+        0.0
+      ],
+      "scale": [
+        1.0569000244140625,
+        1.0569000244140625,
+        1.0569000244140625
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 82,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 059 (Date Palm)",
+      "position": [
+        15.949127197265625,
+        2.3892650604248047,
+        -72.67970275878906
+      ],
+      "rotationDeg": [
+        0.0,
+        23.003400802612305,
+        0.0
+      ],
+      "scale": [
+        0.9075000286102295,
+        0.9075000286102295,
+        0.9075000286102295
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 83,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 060 (Curly Palm)",
+      "position": [
+        -88.96121215820313,
+        0.5342360138893127,
+        -4.825994968414307
+      ],
+      "rotationDeg": [
+        0.0,
+        42.135398864746094,
+        0.0
+      ],
+      "scale": [
+        1.104699969291687,
+        1.104699969291687,
+        1.104699969291687
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 84,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 061 (Curly Palm)",
+      "position": [
+        62.04215621948242,
+        2.450277090072632,
+        -42.61635971069336
+      ],
+      "rotationDeg": [
+        0.0,
+        255.49029541015625,
+        0.0
+      ],
+      "scale": [
+        0.8579000234603882,
+        0.8579000234603882,
+        0.8579000234603882
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 85,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 062 (Coconut Palm)",
+      "position": [
+        -80.53602600097656,
+        0.6757910251617432,
+        -49.97639846801758
+      ],
+      "rotationDeg": [
+        0.0,
+        327.364501953125,
+        0.0
+      ],
+      "scale": [
+        1.1591999530792236,
+        1.1591999530792236,
+        1.1591999530792236
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 86,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 063 (Date Palm)",
+      "position": [
+        61.80859375,
+        2.3623650074005127,
+        51.36119842529297
+      ],
+      "rotationDeg": [
+        0.0,
+        299.95849609375,
+        0.0
+      ],
+      "scale": [
+        0.8928999900817871,
+        0.8928999900817871,
+        0.8928999900817871
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 87,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 064 (Coconut Palm)",
+      "position": [
+        -13.481788635253906,
+        2.836477041244507,
+        -76.18023681640625
+      ],
+      "rotationDeg": [
+        0.0,
+        121.99150085449219,
+        0.0
+      ],
+      "scale": [
+        1.0505000352859497,
+        1.0505000352859497,
+        1.0505000352859497
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 88,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 065 (Coconut Palm)",
+      "position": [
+        81.54733276367188,
+        1.35663902759552,
+        39.306705474853516
+      ],
+      "rotationDeg": [
+        0.0,
+        276.9078063964844,
+        0.0
+      ],
+      "scale": [
+        1.0485999584197998,
+        1.0485999584197998,
+        1.0485999584197998
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 89,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 066 (Curly Palm)",
+      "position": [
+        86.8104248046875,
+        1.200255036354065,
+        -0.3035440146923065
+      ],
+      "rotationDeg": [
+        0.0,
+        37.96590042114258,
+        0.0
+      ],
+      "scale": [
+        0.9944999814033508,
+        0.9944999814033508,
+        0.9944999814033508
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 90,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 067 (Coconut Palm)",
+      "position": [
+        -39.72124481201172,
+        0.7525730133056641,
+        -50.620582580566406
+      ],
+      "rotationDeg": [
+        0.0,
+        224.3292999267578,
+        0.0
+      ],
+      "scale": [
+        1.0433000326156616,
+        1.0433000326156616,
+        1.0433000326156616
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 91,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 068 (Date Palm)",
+      "position": [
+        -69.03819274902344,
+        1.8946110010147095,
+        42.23902893066406
+      ],
+      "rotationDeg": [
+        0.0,
+        198.55909729003906,
+        0.0
+      ],
+      "scale": [
+        0.8364999890327454,
+        0.8364999890327454,
+        0.8364999890327454
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 92,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 069 (Date Palm)",
+      "position": [
+        -87.48841094970703,
+        0.8013650178909302,
+        7.019580841064453
+      ],
+      "rotationDeg": [
+        0.0,
+        33.95500183105469,
+        0.0
+      ],
+      "scale": [
+        0.9735000133514404,
+        0.9735000133514404,
+        0.9735000133514404
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 93,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 070 (Date Palm)",
+      "position": [
+        -53.05343246459961,
+        2.4698259830474854,
+        -58.449337005615234
+      ],
+      "rotationDeg": [
+        0.0,
+        128.1840057373047,
+        0.0
+      ],
+      "scale": [
+        1.174399971961975,
+        1.174399971961975,
+        1.174399971961975
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 94,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 071 (Curly Palm)",
+      "position": [
+        -78.49327087402344,
+        2.3379030227661133,
+        -12.317900657653809
+      ],
+      "rotationDeg": [
+        0.0,
+        204.75540161132813,
+        0.0
+      ],
+      "scale": [
+        1.1775000095367432,
+        1.1775000095367432,
+        1.1775000095367432
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 95,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 072 (Coconut Palm)",
+      "position": [
+        51.65045928955078,
+        1.2147719860076904,
+        -36.96582794189453
+      ],
+      "rotationDeg": [
+        0.0,
+        76.83419799804688,
+        0.0
+      ],
+      "scale": [
+        1.183500051498413,
+        1.183500051498413,
+        1.183500051498413
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 96,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 073 (Date Palm)",
+      "position": [
+        -51.05213928222656,
+        0.4861829876899719,
+        -78.14120483398438
+      ],
+      "rotationDeg": [
+        0.0,
+        280.0144958496094,
+        0.0
+      ],
+      "scale": [
+        1.086899995803833,
+        1.086899995803833,
+        1.086899995803833
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 97,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 074 (Date Palm)",
+      "position": [
+        -62.98124694824219,
+        2.297516107559204,
+        46.21961212158203
+      ],
+      "rotationDeg": [
+        0.0,
+        142.7165069580078,
+        0.0
+      ],
+      "scale": [
+        1.1685999631881714,
+        1.1685999631881714,
+        1.1685999631881714
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 98,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 075 (Coconut Palm)",
+      "position": [
+        -62.61453628540039,
+        1.3171050548553467,
+        9.771940231323242
+      ],
+      "rotationDeg": [
+        0.0,
+        219.5261993408203,
+        0.0
+      ],
+      "scale": [
+        0.8360000252723694,
+        0.8360000252723694,
+        0.8360000252723694
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 99,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 076 (Curly Palm)",
+      "position": [
+        -79.961669921875,
+        1.6080809831619263,
+        -41.40681838989258
+      ],
+      "rotationDeg": [
+        0.0,
+        268.7547912597656,
+        0.0
+      ],
+      "scale": [
+        1.1348999738693237,
+        1.1348999738693237,
+        1.1348999738693237
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 100,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 077 (Coconut Palm)",
+      "position": [
+        -66.88360595703125,
+        1.4223040342330933,
+        -59.494407653808594
+      ],
+      "rotationDeg": [
+        0.0,
+        100.63529968261719,
+        0.0
+      ],
+      "scale": [
+        0.8812000155448914,
+        0.8812000155448914,
+        0.8812000155448914
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 101,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 078 (Date Palm)",
+      "position": [
+        80.8130874633789,
+        2.3133280277252197,
+        -15.694154739379883
+      ],
+      "rotationDeg": [
+        0.0,
+        14.138099670410156,
+        0.0
+      ],
+      "scale": [
+        1.1832000017166138,
+        1.1832000017166138,
+        1.1832000017166138
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 102,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 079 (Coconut Palm)",
+      "position": [
+        -41.59343719482422,
+        2.616960048675537,
+        -66.14474487304688
+      ],
+      "rotationDeg": [
+        0.0,
+        0.019099999219179153,
+        0.0
+      ],
+      "scale": [
+        0.8345000147819519,
+        0.8345000147819519,
+        0.8345000147819519
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 103,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 080 (Coconut Palm)",
+      "position": [
+        65.025634765625,
+        1.1817359924316406,
+        5.519392013549805
+      ],
+      "rotationDeg": [
+        0.0,
+        258.5675048828125,
+        0.0
+      ],
+      "scale": [
+        1.0027999877929688,
+        1.0027999877929688,
+        1.0027999877929688
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 104,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 081 (Coconut Palm)",
+      "position": [
+        65.36787414550781,
+        0.8623859882354736,
+        -51.53262710571289
+      ],
+      "rotationDeg": [
+        0.0,
+        46.14849853515625,
+        0.0
+      ],
+      "scale": [
+        0.933899998664856,
+        0.933899998664856,
+        0.933899998664856
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 105,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 082 (Date Palm)",
+      "position": [
+        69.43521118164063,
+        2.065398931503296,
+        13.245333671569824
+      ],
+      "rotationDeg": [
+        0.0,
+        317.730712890625,
+        0.0
+      ],
+      "scale": [
+        0.838699996471405,
+        0.838699996471405,
+        0.838699996471405
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 106,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 083 (Date Palm)",
+      "position": [
+        34.13667297363281,
+        2.72462797164917,
+        -66.28228759765625
+      ],
+      "rotationDeg": [
+        0.0,
+        131.77200317382813,
+        0.0
+      ],
+      "scale": [
+        1.1033999919891357,
+        1.1033999919891357,
+        1.1033999919891357
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 107,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 084 (Date Palm)",
+      "position": [
+        -87.49832916259766,
+        0.5454800128936768,
+        -21.219514846801758
+      ],
+      "rotationDeg": [
+        0.0,
+        206.62600708007813,
+        0.0
+      ],
+      "scale": [
+        0.9354000091552734,
+        0.9354000091552734,
+        0.9354000091552734
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 108,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 085 (Date Palm)",
+      "position": [
+        -73.61630249023438,
+        0.9887139797210693,
+        -56.1650505065918
+      ],
+      "rotationDeg": [
+        0.0,
+        61.132198333740234,
+        0.0
+      ],
+      "scale": [
+        0.892300009727478,
+        0.892300009727478,
+        0.892300009727478
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 109,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 086 (Curly Palm)",
+      "position": [
+        73.94073486328125,
+        1.2732590436935425,
+        -39.19609832763672
+      ],
+      "rotationDeg": [
+        0.0,
+        69.84860229492188,
+        0.0
+      ],
+      "scale": [
+        0.8120999932289124,
+        0.8120999932289124,
+        0.8120999932289124
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 110,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 087 (Curly Palm)",
+      "position": [
+        89.11042785644531,
+        0.6341130137443542,
+        27.46196937561035
+      ],
+      "rotationDeg": [
+        0.0,
+        201.898193359375,
+        0.0
+      ],
+      "scale": [
+        0.8769000172615051,
+        0.8769000172615051,
+        0.8769000172615051
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 111,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 088 (Coconut Palm)",
+      "position": [
+        19.427539825439453,
+        1.9601800441741943,
+        -67.50794219970703
+      ],
+      "rotationDeg": [
+        0.0,
+        233.79690551757813,
+        0.0
+      ],
+      "scale": [
+        0.9904999732971191,
+        0.9904999732971191,
+        0.9904999732971191
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 112,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 089 (Date Palm)",
+      "position": [
+        78.0918960571289,
+        1.3021290302276611,
+        44.814029693603516
+      ],
+      "rotationDeg": [
+        0.0,
+        196.10980224609375,
+        0.0
+      ],
+      "scale": [
+        0.895799994468689,
+        0.895799994468689,
+        0.895799994468689
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 113,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 090 (Curly Palm)",
+      "position": [
+        -68.62897491455078,
+        2.1359119415283203,
+        -51.27120590209961
+      ],
+      "rotationDeg": [
+        0.0,
+        235.28939819335938,
+        0.0
+      ],
+      "scale": [
+        1.0293999910354614,
+        1.0293999910354614,
+        1.0293999910354614
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 114,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 091 (Date Palm)",
+      "position": [
+        77.91132354736328,
+        2.3126161098480225,
+        3.176877975463867
+      ],
+      "rotationDeg": [
+        0.0,
+        244.95880126953125,
+        0.0
+      ],
+      "scale": [
+        0.8801000118255615,
+        0.8801000118255615,
+        0.8801000118255615
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 115,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 092 (Date Palm)",
+      "position": [
+        69.53092956542969,
+        2.1694180965423584,
+        -8.776598930358887
+      ],
+      "rotationDeg": [
+        0.0,
+        189.6470947265625,
+        0.0
+      ],
+      "scale": [
+        1.0753999948501587,
+        1.0753999948501587,
+        1.0753999948501587
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 116,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 093 (Coconut Palm)",
+      "position": [
+        -68.20376586914063,
+        2.6334140300750732,
+        26.530216217041016
+      ],
+      "rotationDeg": [
+        0.0,
+        220.34010314941406,
+        0.0
+      ],
+      "scale": [
+        0.9671000242233276,
+        0.9671000242233276,
+        0.9671000242233276
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 117,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/date_palm/scene.gltf",
+      "name": "Palm 094 (Date Palm)",
+      "position": [
+        -63.74815368652344,
+        2.437096118927002,
+        -44.91290283203125
+      ],
+      "rotationDeg": [
+        0.0,
+        281.4609069824219,
+        0.0
+      ],
+      "scale": [
+        1.193600058555603,
+        1.193600058555603,
+        1.193600058555603
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 118,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 095 (Coconut Palm)",
+      "position": [
+        73.340576171875,
+        3.020318031311035,
+        -25.913450241088867
+      ],
+      "rotationDeg": [
+        0.0,
+        109.17659759521484,
+        0.0
+      ],
+      "scale": [
+        1.0516999959945679,
+        1.0516999959945679,
+        1.0516999959945679
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 119,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 096 (Coconut Palm)",
+      "position": [
+        70.48176574707031,
+        1.350000023841858,
+        34.262752532958984
+      ],
+      "rotationDeg": [
+        0.0,
+        355.4451904296875,
+        0.0
+      ],
+      "scale": [
+        0.8440999984741211,
+        0.8440999984741211,
+        0.8440999984741211
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 120,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 097 (Coconut Palm)",
+      "position": [
+        -33.766990661621094,
+        0.8164550065994263,
+        -55.14020538330078
+      ],
+      "rotationDeg": [
+        0.0,
+        20.346200942993164,
+        0.0
+      ],
+      "scale": [
+        0.9405999779701233,
+        0.9405999779701233,
+        0.9405999779701233
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 121,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 098 (Curly Palm)",
+      "position": [
+        28.455223083496094,
+        2.0628418922424316,
+        -63.03743362426758
+      ],
+      "rotationDeg": [
+        0.0,
+        160.49180603027344,
+        0.0
+      ],
+      "scale": [
+        0.8860999941825867,
+        0.8860999941825867,
+        0.8860999941825867
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 122,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/coconut_palm/scene.gltf",
+      "name": "Palm 099 (Coconut Palm)",
+      "position": [
+        -19.811325073242188,
+        2.9111599922180176,
+        -71.91670989990234
+      ],
+      "rotationDeg": [
+        0.0,
+        343.1957092285156,
+        0.0
+      ],
+      "scale": [
+        1.0135999917984009,
+        1.0135999917984009,
+        1.0135999917984009
+      ],
+      "shader": "shaders/gbuffer.hlsl",
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 123,
+      "inputLayout": "PosNormTanUV",
+      "material": "auto",
+      "model": "import_staging/curly_palm/scene.gltf",
+      "name": "Palm 100 (Curly Palm)",
+      "position": [
+        -62.63212966918945,
+        1.6964759826660156,
+        -32.51340103149414
+      ],
+      "rotationDeg": [
+        0.0,
+        48.57099914550781,
+        0.0
+      ],
+      "scale": [
+        0.8761000037193298,
+        0.8761000037193298,
+        0.8761000037193298
       ],
       "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
