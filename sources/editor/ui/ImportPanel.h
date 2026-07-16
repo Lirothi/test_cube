@@ -78,6 +78,7 @@ private:
     bool highQuality_ = false;
     bool flipGreen_ = false;
     bool moveIntoProject_ = true;
+    bool useGpu_ = true; // H5: BC6H/BC7 on the GPU (auto CPU fallback)
     int  skyboxFaceSize_ = 1024;
 
     // Background import job (one at a time).
@@ -90,7 +91,10 @@ private:
     Item activeItem_;
     std::vector<std::string> activeTargetOutputs_;
     std::vector<std::string> activeRemovedSources_;
-    bool activePartialImport_ = false;
+    // True for any non-full import (dialog subset or per-resource reimport): the manifest is
+    // MERGED instead of replaced, and the destination folder is NOT synced — files produced by
+    // earlier imports survive. Only a full import treats the folder as importer-owned.
+    bool activeMergeManifest_ = false;
     bool joinPending_ = false;
     std::string status_;
 

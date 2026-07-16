@@ -167,6 +167,7 @@ int WINAPI WinMain(
         opts.highQuality = std::strstr(lpCmdLine, "--high") != nullptr; // opt-in exhaustive BC7
         opts.flipGreen   = std::strstr(lpCmdLine, "--flip-green") != nullptr;
         opts.bc5Normal   = std::strstr(lpCmdLine, "--bc5-normal") != nullptr;
+        opts.useGpu      = std::strstr(lpCmdLine, "--cpu") == nullptr; // H5: GPU BC encode default-on
         return assets::RunImport(opts);
     }
 

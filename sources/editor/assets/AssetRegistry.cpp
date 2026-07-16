@@ -434,15 +434,32 @@ namespace
             }
 
             // A top-level imported skybox is textures/<name>.dds paired with
-            // import_staging/<name>.hdr.
-            const fs::path sourceHdr = fs::path("import_staging") /
-                (recordPath.stem().string() + ".hdr");
+            // import_staging/<name>.hdr — either loose at the staging root or
+            // folder-wrapped (Poly Haven HDRIs unzip into their own folder).
+            const std::string hdrName = recordPath.stem().string() + ".hdr";
+            const fs::path sourceHdr = fs::path("import_staging") / hdrName;
             std::error_code ec;
             if (fs::is_regular_file(sourceHdr, ec))
             {
                 sourceOut = sourceHdr;
                 projectOut = recordPath;
                 return true;
+            }
+            ec.clear();
+            for (const fs::directory_entry& stagingEntry :
+                fs::directory_iterator("import_staging", fs::directory_options::skip_permission_denied, ec))
+            {
+                if (ec) { break; }
+                std::error_code dirEc;
+                if (!stagingEntry.is_directory(dirEc)) { continue; }
+                const fs::path wrapped = stagingEntry.path() / hdrName;
+                std::error_code fileEc;
+                if (fs::is_regular_file(wrapped, fileEc))
+                {
+                    sourceOut = wrapped;
+                    projectOut = recordPath;
+                    return true;
+                }
             }
         }
 
@@ -705,39 +722,38 @@ namespace
         return ToLower(base);
     }
 
-    ResourceImportInspection InspectImportResource(const fs::path& source,
-        const fs::path& project,
-        const fs::path& resource)
+    // Everything about an import folder that is identical for all of its resource records:
+    // manifest contents + the source-candidate listing. Refresh() builds this ONCE per
+    // (source, project) pair and reuses it for every record in the folder — per-record
+    // manifest re-parsing + source-tree re-walking made Refresh O(records × files).
+    struct ImportFolderContext
     {
-        ResourceImportInspection result;
-        std::error_code ec;
-        if (!fs::exists(source, ec)) { return result; }
-        ec.clear();
-        if (!fs::exists(resource, ec))
-        {
-            result.status = EditorAssetImportStatus::Incomplete;
-            return result;
-        }
-
-        const bool sourceIsFile = fs::is_regular_file(source, ec);
-        const bool projectIsFile = fs::is_regular_file(project, ec);
-        fs::path outputRelative = projectIsFile ? resource.filename() :
-            resource.lexically_relative(project);
-        if (!IsSafeImportRelativePath(outputRelative))
-        {
-            result.status = EditorAssetImportStatus::Untracked;
-            return result;
-        }
-
+        bool sourceExists = false;
+        bool sourceIsFile = false;
+        bool projectIsFile = false;
+        bool hasManifest = false;
+        bool manifestBroken = false; // present but malformed -> every resource Incomplete
         std::unordered_map<std::string, ImportSourceFingerprint> recorded;
         std::set<std::string> recordedOutputs;
         std::vector<fs::path> sourceCandidates;
-        bool hasManifest = false;
+    };
+
+    ImportFolderContext BuildImportFolderContext(const fs::path& source, const fs::path& project)
+    {
+        ImportFolderContext ctx;
+        std::error_code ec;
+        ctx.sourceExists = fs::exists(source, ec);
+        if (!ctx.sourceExists) { return ctx; }
+        ec.clear();
+        ctx.sourceIsFile = fs::is_regular_file(source, ec);
+        ec.clear();
+        ctx.projectIsFile = fs::is_regular_file(project, ec);
+
         const fs::path manifestPath = ImportManifestPath(project);
         std::ifstream manifestFile(manifestPath);
         if (manifestFile)
         {
-            hasManifest = true;
+            ctx.hasManifest = true;
             nlohmann::json manifest = nlohmann::json::parse(
                 manifestFile, nullptr, false, true);
             if (manifest.is_discarded() || !manifest.is_object() ||
@@ -745,51 +761,51 @@ namespace
                 !manifest.contains("sources") || !manifest["sources"].is_array() ||
                 !manifest.contains("outputs") || !manifest["outputs"].is_array())
             {
-                result.status = EditorAssetImportStatus::Incomplete;
-                return result;
+                ctx.manifestBroken = true;
+                return ctx;
             }
             for (const nlohmann::json& entry : manifest["sources"])
             {
                 if (!entry.is_object() || !entry.contains("path") ||
                     !entry["path"].is_string())
                 {
-                    result.status = EditorAssetImportStatus::Incomplete;
-                    return result;
+                    ctx.manifestBroken = true;
+                    return ctx;
                 }
                 const fs::path relative(entry["path"].get<std::string>());
                 if (!IsSafeImportRelativePath(relative))
                 {
-                    result.status = EditorAssetImportStatus::Incomplete;
-                    return result;
+                    ctx.manifestBroken = true;
+                    return ctx;
                 }
                 const std::string key = NormalizeImportRelativePath(relative);
-                recorded[key] = {
+                ctx.recorded[key] = {
                     entry.value("size", 0ull),
                     entry.value("writeTime", 0ull),
                     entry.value("hash", 0ull)
                 };
-                sourceCandidates.push_back(relative);
+                ctx.sourceCandidates.push_back(relative);
             }
             for (const nlohmann::json& entry : manifest["outputs"])
             {
                 if (!entry.is_string())
                 {
-                    result.status = EditorAssetImportStatus::Incomplete;
-                    return result;
+                    ctx.manifestBroken = true;
+                    return ctx;
                 }
                 const fs::path relative(entry.get<std::string>());
                 if (!IsSafeImportRelativePath(relative))
                 {
-                    result.status = EditorAssetImportStatus::Incomplete;
-                    return result;
+                    ctx.manifestBroken = true;
+                    return ctx;
                 }
-                recordedOutputs.insert(NormalizeImportRelativePath(relative));
+                ctx.recordedOutputs.insert(NormalizeImportRelativePath(relative));
             }
         }
 
-        if (sourceIsFile)
+        if (ctx.sourceIsFile)
         {
-            sourceCandidates.push_back(source.filename());
+            ctx.sourceCandidates.push_back(source.filename());
         }
         else
         {
@@ -808,20 +824,56 @@ namespace
                 }
                 std::error_code relativeEc;
                 const fs::path relative = fs::relative(it->path(), source, relativeEc);
-                if (!relativeEc) { sourceCandidates.push_back(relative); }
+                if (!relativeEc) { ctx.sourceCandidates.push_back(relative); }
             }
         }
 
-        std::sort(sourceCandidates.begin(), sourceCandidates.end(),
+        std::sort(ctx.sourceCandidates.begin(), ctx.sourceCandidates.end(),
             [](const fs::path& a, const fs::path& b)
             {
                 return NormalizeImportRelativePath(a) < NormalizeImportRelativePath(b);
             });
-        sourceCandidates.erase(std::unique(sourceCandidates.begin(), sourceCandidates.end(),
+        ctx.sourceCandidates.erase(std::unique(ctx.sourceCandidates.begin(), ctx.sourceCandidates.end(),
             [](const fs::path& a, const fs::path& b)
             {
                 return NormalizeImportRelativePath(a) == NormalizeImportRelativePath(b);
-            }), sourceCandidates.end());
+            }), ctx.sourceCandidates.end());
+        return ctx;
+    }
+
+    ResourceImportInspection InspectImportResource(const ImportFolderContext& ctx,
+        const fs::path& source,
+        const fs::path& project,
+        const fs::path& resource)
+    {
+        ResourceImportInspection result;
+        if (!ctx.sourceExists) { return result; }
+        std::error_code ec;
+        if (!fs::exists(resource, ec))
+        {
+            result.status = EditorAssetImportStatus::Incomplete;
+            return result;
+        }
+        if (ctx.manifestBroken)
+        {
+            result.status = EditorAssetImportStatus::Incomplete;
+            return result;
+        }
+
+        const bool sourceIsFile = ctx.sourceIsFile;
+        const bool projectIsFile = ctx.projectIsFile;
+        fs::path outputRelative = projectIsFile ? resource.filename() :
+            resource.lexically_relative(project);
+        if (!IsSafeImportRelativePath(outputRelative))
+        {
+            result.status = EditorAssetImportStatus::Untracked;
+            return result;
+        }
+
+        const bool hasManifest = ctx.hasManifest;
+        const std::unordered_map<std::string, ImportSourceFingerprint>& recorded = ctx.recorded;
+        const std::set<std::string>& recordedOutputs = ctx.recordedOutputs;
+        const std::vector<fs::path>& sourceCandidates = ctx.sourceCandidates;
 
         std::vector<fs::path> dependencies;
         if (sourceIsFile)
@@ -1599,7 +1651,10 @@ void AssetRegistry::Refresh()
 
     // Resolve freshness per project resource. Generated siblings can depend on
     // different source maps, so editing/deleting one map must not dirty every
-    // DDS in its import folder.
+    // DDS in its import folder. The folder-wide work (manifest parse + source
+    // listing) is cached per import folder — a palm has ~17 records that would
+    // otherwise each re-parse the manifest and re-walk the staging tree.
+    std::unordered_map<std::string, ImportFolderContext> folderContexts;
     for (EditorAssetRecord& record : assets_)
     {
         fs::path source;
@@ -1621,8 +1676,15 @@ void AssetRegistry::Refresh()
 
         if (isProjectResource)
         {
+            const std::string contextKey = project.generic_string();
+            auto contextIt = folderContexts.find(contextKey);
+            if (contextIt == folderContexts.end())
+            {
+                contextIt = folderContexts.emplace(
+                    contextKey, BuildImportFolderContext(source, project)).first;
+            }
             ResourceImportInspection inspection = InspectImportResource(
-                source, project, fs::path(record.path));
+                contextIt->second, source, project, fs::path(record.path));
             record.importStatus = inspection.status;
             record.importSourceFiles = std::move(inspection.sourceFiles);
         }

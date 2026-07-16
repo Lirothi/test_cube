@@ -6,6 +6,8 @@
 
 #include <Windows.h>
 
+#pragma comment(lib, "d3d11.lib") // H5: importer-private D3D11 device for GPU BC6H/BC7 encode
+
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 
@@ -85,6 +87,50 @@ std::string Hex(HRESULT hr)
     char b[16];
     sprintf_s(b, "0x%08X", (unsigned)hr);
     return b;
+}
+
+//=============================================================================
+// H5 — GPU block compression. BC6H/BC7 encode on a private D3D11 compute device
+// (DirectXTex BCDirectCompute — the texconv -gpu path). This is offline file
+// conversion, so the device is wholly separate from the engine's D3D12 one; the
+// CPU path stays as the fallback (--cpu, headless without a GPU, older HW).
+// RunImport is single-threaded per run (the editor serializes jobs via its
+// running_ atomic, the CLI is one-shot), so a file-scope device is safe.
+//=============================================================================
+ID3D11Device* g_gpuDevice = nullptr;
+
+bool IsGpuCompressibleFormat(DXGI_FORMAT f)
+{
+    switch (f)
+    {
+    case DXGI_FORMAT_BC7_TYPELESS: case DXGI_FORMAT_BC7_UNORM: case DXGI_FORMAT_BC7_UNORM_SRGB:
+    case DXGI_FORMAT_BC6H_TYPELESS: case DXGI_FORMAT_BC6H_UF16: case DXGI_FORMAT_BC6H_SF16:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Single chokepoint for block compression: GPU when available and the target is
+// BC6H/BC7 (everything else — BC5 normals — is cheap on CPU), CPU otherwise.
+// A GPU failure mid-run (device removed etc.) degrades to CPU instead of
+// failing the import.
+HRESULT CompressBlocks(const Image* images, size_t nimages, const TexMetadata& meta,
+                       DXGI_FORMAT target, TEX_COMPRESS_FLAGS cflags, ScratchImage& out,
+                       Log& log, const std::string& label)
+{
+    if (g_gpuDevice && IsGpuCompressibleFormat(target))
+    {
+        // PARALLEL / BC7_QUICK are CPU-path speed knobs; the GPU encoder always
+        // runs its full mode search (quality ~= CPU default, way above QUICK).
+        const TEX_COMPRESS_FLAGS gpuFlags =
+            cflags & ~(TEX_COMPRESS_PARALLEL | TEX_COMPRESS_BC7_QUICK);
+        const HRESULT hr = Compress(g_gpuDevice, images, nimages, meta, target, gpuFlags,
+                                    TEX_ALPHA_WEIGHT_DEFAULT, out);
+        if (SUCCEEDED(hr)) { return hr; }
+        log.Line("  WARN gpu compress " + Hex(hr) + " — CPU fallback  " + label);
+    }
+    return Compress(images, nimages, meta, target, cflags, TEX_THRESHOLD_DEFAULT, out);
 }
 
 //=============================================================================
@@ -170,8 +216,8 @@ bool FinishTextureDds(ScratchImage work, bool srgb, DXGI_FORMAT target, const Im
     TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL;
     if (!opts.highQuality) { cflags |= TEX_COMPRESS_BC7_QUICK; }
     ScratchImage bc;
-    hr = Compress(mipped.GetImages(), mipped.GetImageCount(), mipped.GetMetadata(),
-                  target, cflags, TEX_THRESHOLD_DEFAULT, bc);
+    hr = CompressBlocks(mipped.GetImages(), mipped.GetImageCount(), mipped.GetMetadata(),
+                        target, cflags, bc, log, label);
     if (FAILED(hr)) { log.Line("  FAIL compress " + Hex(hr) + "  " + label); return false; }
 
     hr = SaveToDDSFile(bc.GetImages(), bc.GetImageCount(), bc.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
@@ -511,9 +557,11 @@ bool BuildFlipbook(const fs::path& dir, const Sequence& seq, const ImportOptions
     TEX_COMPRESS_FLAGS cflags = TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL;
     if (!opts.highQuality) { cflags |= TEX_COMPRESS_BC7_QUICK; }
     ScratchImage bc;
-    if (FAILED(Compress(*ai, DXGI_FORMAT_BC7_UNORM_SRGB, cflags, TEX_THRESHOLD_DEFAULT, bc)))
+    if (FAILED(CompressBlocks(atlas.GetImages(), atlas.GetImageCount(), atlas.GetMetadata(),
+                              DXGI_FORMAT_BC7_UNORM_SRGB, cflags, bc, log,
+                              "flipbook '" + seq.base + "'")))
     {
-        // OverrideFormat retagged ai in place, so recompress from the (now sRGB) atlas image.
+        // OverrideFormat retagged the atlas in place, so this compresses the (now sRGB) image.
         log.Line("  FAIL flipbook compress"); return false;
     }
 
@@ -642,8 +690,9 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
 
     fs::path out = in; out.replace_extension(L".dds");
     ScratchImage bc;
-    hr = Compress(cubeMips.GetImages(), cubeMips.GetImageCount(), cubeMips.GetMetadata(),
-                  DXGI_FORMAT_BC6H_UF16, TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL, TEX_THRESHOLD_DEFAULT, bc);
+    hr = CompressBlocks(cubeMips.GetImages(), cubeMips.GetImageCount(), cubeMips.GetMetadata(),
+                        DXGI_FORMAT_BC6H_UF16, TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL,
+                        bc, log, "skybox");
     if (SUCCEEDED(hr))
     {
         hr = SaveToDDSFile(bc.GetImages(), bc.GetImageCount(), bc.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
@@ -685,6 +734,29 @@ int RunImport(const ImportOptions& opts)
     // WIC (and the WIC-backed DirectXTex readers) require COM on this thread.
     const HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool coInited = SUCCEEDED(hrCo);
+
+    // H5: bring up the GPU encoder (D3D11 DirectCompute BC6H/BC7). Hardware only — WARP
+    // compute would lose to the OpenMP CPU path. Released on every RunImport exit.
+    struct GpuDeviceGuard
+    {
+        ~GpuDeviceGuard()
+        {
+            if (g_gpuDevice) { g_gpuDevice->Release(); g_gpuDevice = nullptr; }
+        }
+    } gpuDeviceGuard;
+    if (opts.useGpu)
+    {
+        const D3D_FEATURE_LEVEL wanted = D3D_FEATURE_LEVEL_11_0;
+        ID3D11Device* dev = nullptr;
+        const HRESULT hrDev = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+            &wanted, 1, D3D11_SDK_VERSION, &dev, nullptr, nullptr);
+        if (SUCCEEDED(hrDev)) { g_gpuDevice = dev; log.Line("gpu encode  : on (D3D11 BC6H/BC7 compute)"); }
+        else { log.Line("gpu encode  : unavailable " + Hex(hrDev) + " — CPU path"); }
+    }
+    else
+    {
+        log.Line("gpu encode  : off — CPU path");
+    }
 
     int failures = 0;
 

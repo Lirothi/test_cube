@@ -612,11 +612,38 @@ append a CREDITS.md entry, refresh AssetRegistry, completion toast. The imported
 spawnable via B4. Verify end-to-end with the coconut palm: Import → spawn → mipped BC textures
 confirmed (no shimmer at distance), CREDITS.md entry correct.
 
-**H4 (optional polish).** *(exec: GPT 5.6 terra)* Reimport: detect a source newer than its DDS siblings, offer
-one-click reimport; per-asset import status badges in the content browser.
+**H4 (optional polish). — DONE (Codex, commit 658f546; reviewed + amended by Fable 2026-07-16).**
+Shipped far beyond the spec: manifest-backed freshness (`.assetimport.json` per import with
+per-source size/writeTime/hash + outputs inventory), per-RESOURCE status
+(Untracked/Staged/UpToDate/SourceNewer/Incomplete) with dependency mapping (set maps, flipbook
+frames, same-stem loose), badges + one-click Import/Reimport in both the import panel and the
+content browser (list column, tile badge, context menu), partial per-resource reimport, deleted
+source ⇒ removes only its mapped output. Fable's post-review amendments: (a) dialog subset imports
+are MERGE imports — converting a subset never deletes previously-imported sibling outputs; only a
+full import syncs/owns the destination folder; (b) Refresh built a manifest-parse + source-walk per
+RECORD — now cached per import folder (`ImportFolderContext`), killing the O(records × files) cost;
+(c) folder-wrapped `.hdr` skyboxes (Poly Haven unzips into a folder) are now detected by the import
+panel and by the registry's reverse skybox mapping. *(original spec)* Reimport: detect a source
+newer than its DDS siblings, offer one-click reimport; per-asset import status badges in the
+content browser.
 
-**H5 — GPU texture encoder (do before Part I).** *(exec: Fable 5 — touches the D3D12 device + a
-compute path; escalate to Sol if the encoder's block math fights back)* The CPU DirectXTex path is
+**H5 — GPU texture encoder (do before Part I). — DONE (Fable 5, 2026-07-16), uncommitted.**
+Implemented via DirectXTex's own DirectCompute path instead of touching the engine device: vendored
+`BCDirectCompute.cpp` + `DirectXTexCompressGPU.cpp` (same pin 99a6a50) + `Shaders/{BC6HEncode,
+BC7Encode}.hlsl`, precompiled the 14 `.inc` blobs with fxc (cs_5_0 + cs_4_0, committed —
+no fxc step in the build; per-file `AdditionalIncludeDirectories=Shaders\Compiled` on
+BCDirectCompute.cpp). `RunImport` creates a private D3D11 FL11.0 hardware device (offline file
+conversion — zero interop with the engine's D3D12 device; WARP intentionally rejected, it loses to
+the OpenMP CPU path), released via RAII on every exit. Single chokepoint `CompressBlocks()` routes
+BC6H/BC7 to `Compress(ID3D11Device*,...)` and everything else (BC5) to CPU; GPU failure mid-run
+degrades to CPU per-texture instead of failing the import. CPU knobs (PARALLEL/BC7_QUICK) are
+stripped for the GPU call — the GPU encoder always runs its full mode search, so `--high` is now
+free. Fallbacks: `--cpu` CLI flag, "GPU texture encode" checkbox in the import panel (default on),
+auto CPU when device creation fails (headless/CI). Measured (32c CPU vs RTX GPU): campfire 3×2K BC7
+fast 7.25s→2.16s (~3.4×), `--high` ~60s→1.91s (~30×), palm 15 tex 6s→1.75s; fmt/mips outputs
+byte-format-identical (fmt=98/99, mips=12, DDS roundtrip-verified). Device-less CLI regression ok
+(`gpu encode : unavailable → CPU path` line in asset_import.log is the tell). *(original spec
+below)* The CPU DirectXTex path is
 the bottleneck: even with OpenMP block-parallelism a 2K BC7 costs seconds and `--high` is ~20s, so
 importing a palm/rock pack stalls for many seconds (H3 now shows a progress bar, but the wall-clock
 is the real problem). Move BC6H/BC7 compression onto the GPU so a 2K encode is sub-second.

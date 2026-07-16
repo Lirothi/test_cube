@@ -674,8 +674,11 @@ void ImportPanel::Rescan()
         }
         if (!entry.is_directory(ec)) { continue; }
 
-        // A directory: mesh asset if it holds a glTF/GLB, else a texture set if it holds images.
+        // A directory: mesh asset if it holds a glTF/GLB, else skybox(es) for folder-wrapped
+        // .hdr downloads (Poly Haven HDRIs unzip into their own folder), else a texture set
+        // if it holds images. An .hdr can coexist with a texture set — both items are listed.
         fs::path gltf;
+        std::vector<fs::path> hdrs;
         bool hasTex = false;
         for (auto it = fs::recursive_directory_iterator(p, ec); it != fs::recursive_directory_iterator(); it.increment(ec))
         {
@@ -683,13 +686,32 @@ void ImportPanel::Rescan()
             if (!it->is_regular_file(ec)) { continue; }
             const std::string ext = LowerExt(it->path());
             if (gltf.empty() && (ext == ".gltf" || ext == ".glb")) { gltf = it->path(); }
+            else if (ext == ".hdr") { hdrs.push_back(it->path()); }
             else if (IsConvertibleTexture(ext)) { hasTex = true; }
+        }
+
+        const std::string folderLicense = ReadLicense(p);
+
+        if (gltf.empty())
+        {
+            for (const fs::path& hdr : hdrs)
+            {
+                Item sky;
+                sky.path = hdr.string();
+                sky.name = hdr.stem().string();
+                sky.kind = Kind::Skybox;
+                sky.meta = "equirect HDRI -> BC6H cubemap";
+                sky.license = folderLicense;
+                sky.alreadyInProject = fs::exists(ProjectDest(sky), ec);
+                sky.importStatus = InspectAssetImportStatus(sky.path, ProjectDest(sky));
+                items_.push_back(std::move(sky));
+            }
         }
 
         Item it;
         it.path = p.string();
         it.name = p.filename().string();
-        it.license = ReadLicense(p);
+        it.license = folderLicense;
 
         if (!gltf.empty())
         {
@@ -706,7 +728,7 @@ void ImportPanel::Rescan()
         }
         else
         {
-            continue; // nothing importable
+            continue; // nothing importable beyond any skybox rows above
         }
         it.alreadyInProject = fs::exists(ProjectDest(it), ec);
         it.importStatus = InspectAssetImportStatus(it.path, ProjectDest(it));
@@ -731,7 +753,9 @@ void ImportPanel::BeginImport(const Item& item,
         activeTargetOutputs_.push_back(NormalizeRelativePath(output));
     }
     activeRemovedSources_ = removedSources;
-    activePartialImport_ = !activeTargetOutputs_.empty();
+    // Any subset (dialog file selection or per-resource reimport) merges into the existing
+    // manifest and must not delete sibling outputs; only a full import owns the whole folder.
+    activeMergeManifest_ = !includeRel.empty() || !activeTargetOutputs_.empty();
     running_.store(true);
     workerFailures_.store(0);
     progressDone_.store(0);
@@ -745,6 +769,7 @@ void ImportPanel::BeginImport(const Item& item,
     opt.maxTextureSize = maxTextureSize_;
     opt.highQuality = highQuality_;
     opt.flipGreen = flipGreen_;
+    opt.useGpu = useGpu_;
     opt.skyboxFaceSize = skyboxFaceSize_;
     opt.logPath = "asset_import.log";
     opt.registerPreset = registerPreset;
@@ -755,7 +780,7 @@ void ImportPanel::BeginImport(const Item& item,
     else { opt.stagingDir = item.path; }
 
     std::vector<std::string> manifestIncludeRel = includeRel;
-    if (activePartialImport_)
+    if (activeMergeManifest_)
     {
         const fs::path destination(ProjectDest(item));
         const fs::path manifestPath = ImportManifestPath(
@@ -862,8 +887,13 @@ void ImportPanel::DrawImportDialog()
     ImGui::BeginDisabled(selCount == 0);
     if (ImGui::Button("Import", ImVec2(120.0f, 0.0f)))
     {
+        // Everything selected = a FULL import (empty whitelist): the destination folder is
+        // synced to the run, stale outputs of deleted sources get cleaned. A subset = a
+        // merge import: only the selected maps are converted/copied, existing outputs of
+        // unselected maps are left untouched (unchecking never deletes).
         std::vector<std::string> includeRel;
         for (const auto& f : dialogFiles_) { if (f.selected) { includeRel.push_back(f.rel); } }
+        if (includeRel.size() == dialogFiles_.size()) { includeRel.clear(); }
         BeginImport(dialogItem_, includeRel, dialogCreatePreset_);
         ImGui::CloseCurrentPopup();
     }
@@ -945,7 +975,9 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                         continue;
                     }
                     const std::string normalizedRel = NormalizeRelativePath(rel);
-                    if (activePartialImport_ &&
+                    // Per-resource reimports copy only their mapped output; a dialog
+                    // subset import copies everything this run produced.
+                    if (!activeTargetOutputs_.empty() &&
                         std::find(activeTargetOutputs_.begin(), activeTargetOutputs_.end(),
                             normalizedRel) == activeTargetOutputs_.end())
                     {
@@ -973,11 +1005,12 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     fs::remove(d, rrec);
                 }
 
-                if (!finalizeFailed && !activePartialImport_)
+                if (!finalizeFailed && !activeMergeManifest_)
                 {
-                    // The destination folder is importer-owned. Synchronize it
-                    // to this run so deleted/unselected sources cannot leave
-                    // stale DDS or mesh files behind.
+                    // A FULL import owns the destination folder: synchronize it to
+                    // this run so deleted sources cannot leave stale DDS or mesh
+                    // files behind. Subset/per-resource imports never delete —
+                    // outputs of earlier imports survive.
                     RemoveStaleProjectOutputs(dst, projectOutputs);
                 }
                 else if (!finalizeFailed)
@@ -998,7 +1031,7 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 const bool outputIsFile = activeItem_.kind == Kind::Skybox;
                 finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
                     fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
-                    activePartialImport_, activeRemovedSources_);
+                    activeMergeManifest_, activeRemovedSources_);
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
@@ -1058,6 +1091,14 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         ImGui::Checkbox("High-quality BC7 (slower)", &highQuality_);
         ImGui::SameLine(0.0f, 24.0f);
         ImGui::Checkbox("Move into project after import", &moveIntoProject_);
+        ImGui::Checkbox("GPU texture encode", &useGpu_);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Encode BC6H/BC7 on the GPU (D3D11 compute) — seconds -> sub-second per 2K.\n"
+                "Falls back to the CPU encoder automatically if no device is available.");
+        }
+        ImGui::SameLine(0.0f, 24.0f);
         ImGui::Checkbox("Flip normal-map green", &flipGreen_);
         if (ImGui::IsItemHovered())
         {

@@ -1,0 +1,6 @@
+=== asset import (H1) ===
+staging dir : import_staging/campfire
+max size    : 2048  quality=fast
+gpu encode  : off — CPU path
+FATAL: staging dir does not exist or is not a directory
+=== done ===

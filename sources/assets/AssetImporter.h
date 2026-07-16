@@ -17,6 +17,7 @@ struct ImportOptions
     std::string skyboxHdr;          // optional: a single equirect .hdr -> skybox cubemap
     int         maxTextureSize = 2048; // downscale longest edge to this (staged 4K rock -> 2K)
     bool        highQuality = false; // BC7 max (exhaustive, ~20x slower) vs fast mode-6 (default)
+    bool        useGpu = true;      // H5: BC6H/BC7 on a D3D11 compute device (CPU fallback if absent)
     bool        flipGreen = false;  // invert normal-map green channel (OpenGL <-> DirectX Y)
     bool        bc5Normal = false;  // encode normal maps as BC5 (RG) instead of BC7 (RGB)
     int         skyboxFaceSize = 1024; // cube face edge for --skybox equirect -> cubemap
