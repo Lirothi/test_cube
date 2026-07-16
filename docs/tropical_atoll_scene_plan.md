@@ -575,7 +575,18 @@ vcxproj integration fights back. Implement:
 - CLI entry point (e.g. `test_cube.exe --import <staging-dir> [--skybox <file.hdr>]`) for
   headless/batch use and for the executor.
 
-**H2 — DDS-sibling resolution.** *(exec: GPT 5.6 terra — small resolver change; escalation rule
+**H2 — DDS-sibling resolution. — DONE (Opus 4.8), verified in-engine.** `Texture2D::CreateFromFile`
+(the single chokepoint for glTF-material AND preset texture loads via MaterialData::LoadAlbedo/MR/
+Normal) now prefers a sibling `<name>.dds` next to the requested source; already-`.dds` requests
+pass through untouched. Falls back to WIC with a one-time "unmipped texture" `OutputDebugString`
+warning (`LogTextureResolveOnce`, per-path dedup). SRV sRGB-ness stays usage-driven (CreateFromDDS_
+line ~349), so a BC7_UNORM_SRGB albedo sibling + `Usage::AlbedoSRGB` → sRGB SRV; BC7_UNORM MR/normal
++ linear usage → linear — correct color space regardless of the DDS's own flag. Loader already maps
+BC7_UNORM/_SRGB/BC5 (the H1 outputs). Verified DECISIVELY: imported the coconut palm to `.dds`
+siblings, renamed all 15 source `.png` away so ONLY `.dds` existed, booted the palm — rendered fully
+textured (bark/masked fronds/coconuts/normals/MR/shadows), proving the glTF's `.png` URIs resolved
+to siblings with the asset byte-identical. Uncommitted (`sources/materials/Texture2D.cpp`).
+*(original spec below)* *(exec: GPT 5.6 terra — small resolver change; escalation rule
 applies since it touches texture loading)* When resolving any texture path (glTF materials, material
 presets), prefer `<name>.dds` sitting next to the source file; fall back to the original
 PNG via WIC with a one-time "unmipped texture" log warning. This kills reference remapping

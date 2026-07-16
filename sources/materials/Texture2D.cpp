@@ -11,6 +11,8 @@
 #include <fstream>
 #include <cstring>
 #include <cwctype>
+#include <mutex>
+#include <unordered_set>
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -35,6 +37,41 @@ static bool EndsWithNoCase(const std::wstring& s, const std::wstring& suf)
         }
     }
     return true;
+}
+
+// H2 — DDS-sibling resolution. The path with its final extension swapped for ".dds" (empty if the
+// filename has no extension). Same directory, same basename — where the H1 importer drops its output.
+static std::wstring DdsSiblingPath(const std::wstring& path)
+{
+    const size_t slash = path.find_last_of(L"/\\");
+    const size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash)) {
+        return {};
+    }
+    return path.substr(0, dot) + L".dds";
+}
+
+static bool FileExistsW(const std::wstring& path)
+{
+    const DWORD attrs = GetFileAttributesW(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// One diagnostic line per source path: which sibling won, or (when none) a one-time "unmipped"
+// warning so shimmer from a not-yet-imported PNG is traceable.
+static void LogTextureResolveOnce(const std::wstring& src, const std::wstring& dds, bool useDds)
+{
+    static std::mutex mu;
+    static std::unordered_set<std::wstring> seen;
+    std::lock_guard<std::mutex> lk(mu);
+    if (!seen.insert(src).second) {
+        return;
+    }
+    if (useDds) {
+        OutputDebugStringW((L"[Texture2D] DDS sibling: " + src + L" -> " + dds + L"\n").c_str());
+    } else {
+        OutputDebugStringW((L"[Texture2D] unmipped texture (no DDS sibling, WIC fallback): " + src + L"\n").c_str());
+    }
 }
 
 // ========================= WIC loader (to RGBA8) =========================
@@ -367,10 +404,24 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     const CreateDesc& desc,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    // H2: prefer a sibling ".dds" next to the requested source (the H1 importer writes mipped BC DDS
+    // beside the original PNG/JPG). This keeps glTF material URIs and preset paths byte-identical —
+    // the DDS simply "appears" and is picked up here. Falls back to the source (WIC) with a one-time
+    // "unmipped" warning. Already-".dds" requests (e.g. hand-authored presets) skip this untouched.
+    CreateDesc d = desc;
+    if (!EndsWithNoCase(d.path, L".dds")) {
+        const std::wstring sibling = DdsSiblingPath(d.path);
+        const bool useDds = !sibling.empty() && FileExistsW(sibling);
+        LogTextureResolveOnce(d.path, sibling, useDds);
+        if (useDds) {
+            d.path = sibling;
+        }
+    }
+
     // DDS uses a separate path
-    if (EndsWithNoCase(desc.path, L".dds")) {
-        if (!CreateFromDDS_(renderer, uploadCmd, desc, keepAlive)) {
-            OutputDebugStringW((L"[Texture2D] DDS load failed: " + desc.path + L"\n").c_str());
+    if (EndsWithNoCase(d.path, L".dds")) {
+        if (!CreateFromDDS_(renderer, uploadCmd, d, keepAlive)) {
+            OutputDebugStringW((L"[Texture2D] DDS load failed: " + d.path + L"\n").c_str());
             return false;
         }
         return true;
@@ -379,13 +430,13 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     // 1) WIC → RGBA8
     std::vector<uint8_t> rgba;
     UINT w = 0, h = 0;
-    if (!LoadRGBA8_WIC_(desc.path, rgba, w, h)) {
-        OutputDebugStringW((L"[Texture2D] WIC load failed: " + desc.path + L"\n").c_str());
+    if (!LoadRGBA8_WIC_(d.path, rgba, w, h)) {
+        OutputDebugStringW((L"[Texture2D] WIC load failed: " + d.path + L"\n").c_str());
         return false;
     }
 
     // 2) If this is a NormalMap and normalIsRG=true, zero B to avoid noise
-    if (desc.usage == Usage::NormalMap && desc.normalIsRG) {
+    if (d.usage == Usage::NormalMap && d.normalIsRG) {
         for (size_t i = 0; i < rgba.size(); i += 4) {
             rgba[i + 2] = 0;   // B = 0
         }
@@ -393,7 +444,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
 
     // 3) Choose formats: TYPELESS resource, UNORM/SRGB SRV
     DXGI_FORMAT resourceFmt = DXGI_FORMAT_R8G8B8A8_TYPELESS;
-    DXGI_FORMAT srvFmt = (desc.usage == Usage::AlbedoSRGB) ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+    DXGI_FORMAT srvFmt = (d.usage == Usage::AlbedoSRGB) ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         : DXGI_FORMAT_R8G8B8A8_UNORM;
 
     // 4) WIC files carry no mips — build a CPU box-filter chain so minified sampling stops
@@ -402,7 +453,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     // H1's importer (BC DDS with offline mips) supersedes this for imported content.
     std::vector<std::vector<uint8_t>> mips;
     mips.emplace_back(std::move(rgba));
-    BuildMipChainRGBA8_(mips, w, h, desc.usage == Usage::AlbedoSRGB, desc.alphaCoverageCutoff);
+    BuildMipChainRGBA8_(mips, w, h, d.usage == Usage::AlbedoSRGB, d.alphaCoverageCutoff);
     UploadRGBA8Mips_(renderer, uploadCmd, mips, w, h, keepAlive, resourceFmt);
     CreateCpuSrv_(renderer, srvFmt, static_cast<UINT>(mips.size()));
 
