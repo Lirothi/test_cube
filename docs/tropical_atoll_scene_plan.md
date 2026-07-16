@@ -528,7 +528,21 @@ H1/H2 can run in parallel with B–F; must land before G2 (island dressing) so p
 mipped BC textures instead of raw WIC PNGs. The doc's part order is not strict execution order
 here.
 
-**H1 — conversion backend (no UI yet).** *(exec: Opus 4.8)* Vendor **DirectXTex** (source, MIT) into
+**H1 — conversion backend (no UI yet). — DONE (Opus 4.8), verified in-engine.** DirectXTex
+vendored (`third_party/DirectXTex`, pinned `99a6a50`, CPU units only, warnings-off in vcxproj);
+`sources/assets/AssetImporter.{h,cpp}` + `--import <dir> [--skybox <file.hdr>] [--high|--fast]
+[--flip-green] [--bc5-normal] [--max-size=N] [--sky-face=N]` CLI (main.cpp, headless, verdict in
+`asset_import.log`). Implements: PNG/JPG→mipped BC7 DDS (sRGB albedo / linear normal·MR, role by
+filename, 16-bit/BGRA canonicalize, max-size downscale, BC5 opt, green-flip opt) with tbb
+cross-texture parallelism; texture-set import (Poly Haven `_diff`/`_rough`/`_nor` → engine-layout
+MR synth R=metal(0)/G=rough + preset registered to `data/materials.json` via nlohmann, clean diff);
+frame-sequence→flipbook atlas (`_frame_NN`/single-base `_NN`, wide grid 8→4×2, POT cell, premult
+alpha, BC7, `<base>.flipbook.json` sidecar); equirect `.hdr`→6-face cube→BC6H_UF16 DX10 (parallel
+per-subresource compress, RGBA16F fallback). Verified: palm (15 loose), coast_sand set, smoke+flame
+flipbooks, 1024 skybox all render correctly in-engine; glTF palm not mis-detected. Notes: BC7 default
+is FAST mode-6 (~10s/1024²; `--high` exhaustive ~219s); DirectXTex `TEX_COMPRESS_PARALLEL` needs
+OpenMP (unused) so parallelism is ours; normal-Y convention left as `--flip-green` opt (sand `_nor_dx`
+rendered fine unflipped — convention not yet pinned). *(original spec below)* Vendor **DirectXTex** (source, MIT) into
 `third_party/` — prefer the library over shelling out to `texconv.exe` (in-process progress
 reporting, no binaries in the repo); keep the texconv-CLI route as a documented fallback if
 vcxproj integration fights back. Implement:

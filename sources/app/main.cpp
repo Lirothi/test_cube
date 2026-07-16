@@ -161,6 +161,9 @@ int WINAPI WinMain(
         if (const char* m = std::strstr(lpCmdLine, "--max-size=")) {
             opts.maxTextureSize = std::atoi(m + std::strlen("--max-size="));
         }
+        if (const char* m = std::strstr(lpCmdLine, "--sky-face=")) {
+            opts.skyboxFaceSize = std::atoi(m + std::strlen("--sky-face="));
+        }
         opts.highQuality = std::strstr(lpCmdLine, "--high") != nullptr; // opt-in exhaustive BC7
         opts.flipGreen   = std::strstr(lpCmdLine, "--flip-green") != nullptr;
         opts.bc5Normal   = std::strstr(lpCmdLine, "--bc5-normal") != nullptr;

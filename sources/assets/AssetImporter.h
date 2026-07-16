@@ -17,6 +17,7 @@ struct ImportOptions
     bool        highQuality = false; // BC7 max (exhaustive, ~20x slower) vs fast mode-6 (default)
     bool        flipGreen = false;  // invert normal-map green channel (OpenGL <-> DirectX Y)
     bool        bc5Normal = false;  // encode normal maps as BC5 (RG) instead of BC7 (RGB)
+    int         skyboxFaceSize = 1024; // cube face edge for --skybox equirect -> cubemap
     std::string logPath = "asset_import.log";
 };
 
