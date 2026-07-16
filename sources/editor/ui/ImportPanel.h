@@ -61,7 +61,9 @@ private:
         bool registerPreset,
         const std::vector<std::string>& targetOutputs = {},
         const std::vector<std::string>& removedSources = {},
-        float meshSpawnScale = -1.0f);
+        float meshSpawnScale = -1.0f,
+        const std::vector<std::string>& meshSplitNodes = {},
+        bool meshSplitChoiceProvided = false);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
@@ -104,6 +106,8 @@ private:
     // >= 0 is the explicit choice from the mesh import dialog. -1 preserves
     // an existing manifest value for non-interactive/bulk reimports.
     float activeMeshSpawnScale_ = -1.0f;
+    std::string activeMeshSplitGltf_;
+    std::vector<std::string> activeMeshSplitNodes_;
     bool joinPending_ = false;
     std::string status_;
     bool statusIsError_ = false; // colors the status line red on failure, green on success
@@ -120,6 +124,8 @@ private:
     Item meshDialogItem_;
     bool meshDialogNormalizeSpawn_ = false;
     float meshDialogTargetM_ = 6.0f;
+    bool meshDialogSplitTopLevelNodes_ = false;
+    std::vector<std::string> meshDialogTopLevelNodes_;
 };
 
 #endif // WITH_EDITOR

@@ -557,7 +557,7 @@ void AssetThumbnailCache::QueuePreflight(const EditorAssetRecord& record,
     ++entry.preflightToken;
     preflightQueue_.push_back({
         record.id.key,
-        record.path,
+        record.id.type == EditorAssetType::Mesh ? record.id.key : record.path,
         kind,
         record.fileWriteTime,
         assetRegistryRevision,

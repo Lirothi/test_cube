@@ -18,3 +18,6 @@ Model Information:
 * source:	https://sketchfab.com/3d-models/rock-boulder-game-ready-asset-0079cb0e717c4aeebe6bca21ec21b0d9
 * author:	Pixel Life (https://sketchfab.com/pixellife)
 
+## rocks
+This model was uploaded to and downloaded from Sketchfab.com under the sole responsibility of the User (as defined on sketchfab.com/terms). The downloading party is solely responsible for ensuring that any User Content uploaded to or downloaded from the Sketchfab Services complies with any applicable laws and third party rights, including but not limited to any intellectual property rights, privacy rights and publicity rights, as per Sketchfab terms sketchfab.com/terms.
+

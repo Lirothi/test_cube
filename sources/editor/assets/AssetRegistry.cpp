@@ -1347,6 +1347,60 @@ namespace
         }
         return count;
     }
+
+    void AddSplitMeshNodeAssets(std::vector<EditorAssetRecord>& assets)
+    {
+        const size_t physicalAssetCount = assets.size();
+        for (size_t i = 0; i < physicalAssetCount; ++i)
+        {
+            const EditorAssetRecord& base = assets[i];
+            if (base.id.type != EditorAssetType::Mesh ||
+                (base.extension != ".gltf" && base.extension != ".glb"))
+            {
+                continue;
+            }
+
+            fs::path sourceRoot;
+            fs::path projectRoot;
+            if (!ResolveImportPaths(base, sourceRoot, projectRoot)) { continue; }
+            fs::path outputRelative;
+            if (!RelativePathUnder(base.path, projectRoot, outputRelative)) { continue; }
+
+            std::ifstream file(ImportManifestPath(projectRoot));
+            if (!file) { continue; }
+            const nlohmann::json manifest = nlohmann::json::parse(
+                file, nullptr, false, true);
+            if (manifest.is_discarded() || !manifest.is_object()) { continue; }
+            const auto splitIt = manifest.find("splitTopLevelNodes");
+            if (splitIt == manifest.end() || !splitIt->is_object()) { continue; }
+            const auto gltfIt = splitIt->find("gltf");
+            const auto nodesIt = splitIt->find("nodes");
+            if (gltfIt == splitIt->end() || !gltfIt->is_string() ||
+                nodesIt == splitIt->end() || !nodesIt->is_array() ||
+                NormalizeImportRelativePath(gltfIt->get<std::string>()) !=
+                    NormalizeImportRelativePath(outputRelative))
+            {
+                continue;
+            }
+
+            std::set<std::string> unique;
+            for (const nlohmann::json& nodeEntry : *nodesIt)
+            {
+                if (!nodeEntry.is_string()) { continue; }
+                const std::string nodeName = nodeEntry.get<std::string>();
+                if (nodeName.empty() || !unique.insert(nodeName).second) { continue; }
+
+                EditorAssetRecord variant = base;
+                variant.id.key = base.id.key + "#node:" + nodeName;
+                variant.displayName = nodeName;
+                std::string virtualName = nodeName;
+                std::replace(virtualName.begin(), virtualName.end(), '\\', '_');
+                std::replace(virtualName.begin(), virtualName.end(), '/', '_');
+                variant.virtualPath = variant.virtualFolder + "/" + virtualName;
+                assets.push_back(std::move(variant));
+            }
+        }
+    }
 }
 
 EditorAssetImportStatus InspectAssetImportStatus(std::string_view sourcePath,
@@ -1565,6 +1619,10 @@ void AssetRegistry::Refresh()
         }
     }
 
+    // Imported prop packs can expose virtual #node variants alongside their
+    // physical glTF. They are separate spawnable assets backed by the same file.
+    AddSplitMeshNodeAssets(assets_);
+
     // Material presets: names under "presets" in data/materials.json. Parsed
     // directly here (no MaterialDataManager / GPU dependency).
     {
@@ -1770,8 +1828,9 @@ uint64_t AssetRegistry::ComputeContentSignature() const
                 fingerprints.push_back(FingerprintPath(path, 1));
                 continue;
             }
+            const bool importManifest = path.filename() == ".assetimport.json";
             if (typeEc || !it->is_regular_file(typeEc) ||
-                MatchExtension(path, root.extensions).empty())
+                (MatchExtension(path, root.extensions).empty() && !importManifest))
             {
                 continue;
             }

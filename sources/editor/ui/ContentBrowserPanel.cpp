@@ -1918,6 +1918,12 @@ namespace
             DisabledMenuItemWithTooltip("Delete File",
                 "Material presets are entries in data/materials.json — manage them in the material editor.");
         }
+        else if (record->id.type == EditorAssetType::Mesh &&
+            record->id.key != record->path)
+        {
+            DisabledMenuItemWithTooltip("Delete File",
+                "This is a virtual glTF node asset. Disable splitting on the source mesh to remove it.");
+        }
         else if (ImGui::MenuItem("Delete File"))
         {
             if (request.type == ContentBrowserRequestType::None)

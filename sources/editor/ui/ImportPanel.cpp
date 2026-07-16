@@ -230,6 +230,37 @@ namespace
         return scale > 0.0f ? scale : 0.0f;
     }
 
+    std::vector<std::string> ReadManifestSplitNodes(const fs::path& manifestPath,
+        std::string* gltfRelativeOut = nullptr)
+    {
+        std::vector<std::string> nodes;
+        std::ifstream file(manifestPath);
+        if (!file) { return nodes; }
+        const nlohmann::json manifest = nlohmann::json::parse(
+            file, nullptr, false, true);
+        if (manifest.is_discarded() || !manifest.is_object()) { return nodes; }
+        const auto splitIt = manifest.find("splitTopLevelNodes");
+        if (splitIt == manifest.end() || !splitIt->is_object()) { return nodes; }
+        const auto gltfIt = splitIt->find("gltf");
+        const auto nodesIt = splitIt->find("nodes");
+        if (gltfIt == splitIt->end() || !gltfIt->is_string() ||
+            nodesIt == splitIt->end() || !nodesIt->is_array())
+        {
+            return nodes;
+        }
+        if (gltfRelativeOut) { *gltfRelativeOut = gltfIt->get<std::string>(); }
+        std::set<std::string> unique;
+        for (const nlohmann::json& node : *nodesIt)
+        {
+            if (node.is_string() && !node.get<std::string>().empty() &&
+                unique.insert(node.get<std::string>()).second)
+            {
+                nodes.push_back(node.get<std::string>());
+            }
+        }
+        return nodes;
+    }
+
     bool IsSafeRelativePath(const fs::path& path)
     {
         if (path.empty() || path.is_absolute()) { return false; }
@@ -299,7 +330,9 @@ namespace
         const fs::path& manifestPath,
         bool partial,
         const std::vector<std::string>& removedSources,
-        float spawnScale)
+        float spawnScale,
+        const std::string& splitGltf,
+        const std::vector<std::string>& splitNodes)
     {
         nlohmann::json manifest = nlohmann::json::parse(
             sourceManifestJson, nullptr, false, true);
@@ -310,6 +343,13 @@ namespace
         if (!partial && spawnScale > 0.0f)
         {
             manifest["spawnScale"] = spawnScale;
+        }
+        if (!partial && !splitGltf.empty() && !splitNodes.empty())
+        {
+            manifest["splitTopLevelNodes"] = {
+                { "gltf", splitGltf },
+                { "nodes", splitNodes }
+            };
         }
 
         if (partial)
@@ -360,6 +400,10 @@ namespace
                     if (existing.contains("spawnScale"))
                     {
                         manifest["spawnScale"] = existing["spawnScale"];
+                    }
+                    if (existing.contains("splitTopLevelNodes"))
+                    {
+                        manifest["splitTopLevelNodes"] = existing["splitTopLevelNodes"];
                     }
                 }
             }
@@ -560,6 +604,85 @@ namespace
         metaOut = os.str();
         if (data->asset.copyright) { copyrightOut = data->asset.copyright; }
         cgltf_free(data);
+    }
+
+    bool GltfNodeSubtreeHasMesh(const cgltf_node* root)
+    {
+        if (!root) { return false; }
+        std::vector<const cgltf_node*> stack{ root };
+        while (!stack.empty())
+        {
+            const cgltf_node* node = stack.back();
+            stack.pop_back();
+            if (node->mesh) { return true; }
+            for (cgltf_size i = 0; i < node->children_count; ++i)
+            {
+                stack.push_back(node->children[i]);
+            }
+        }
+        return false;
+    }
+
+    std::vector<std::string> ListSplittableTopLevelNodes(const fs::path& gltf)
+    {
+        std::vector<std::string> result;
+        cgltf_options options{};
+        cgltf_data* data = nullptr;
+        if (cgltf_parse_file(&options, gltf.string().c_str(), &data) != cgltf_result_success)
+        {
+            return result;
+        }
+
+        std::vector<const cgltf_node*> roots;
+        const cgltf_scene* scene = data->scene ? data->scene :
+            (data->scenes_count > 0 ? &data->scenes[0] : nullptr);
+        if (scene)
+        {
+            for (cgltf_size i = 0; i < scene->nodes_count; ++i)
+            {
+                if (GltfNodeSubtreeHasMesh(scene->nodes[i])) { roots.push_back(scene->nodes[i]); }
+            }
+        }
+        else
+        {
+            for (cgltf_size i = 0; i < data->nodes_count; ++i)
+            {
+                const cgltf_node* node = &data->nodes[i];
+                if (!node->parent && GltfNodeSubtreeHasMesh(node)) { roots.push_back(node); }
+            }
+        }
+
+        // Blender/exporter scene wrappers are often a single meshless root.
+        // Peel those containers so the actual prop nodes become the split units.
+        while (roots.size() == 1 && !roots[0]->mesh && roots[0]->children_count > 0)
+        {
+            std::vector<const cgltf_node*> children;
+            for (cgltf_size i = 0; i < roots[0]->children_count; ++i)
+            {
+                if (GltfNodeSubtreeHasMesh(roots[0]->children[i]))
+                {
+                    children.push_back(roots[0]->children[i]);
+                }
+            }
+            if (children.empty()) { break; }
+            roots = std::move(children);
+        }
+
+        std::set<std::string> names;
+        std::set<std::string> duplicates;
+        for (const cgltf_node* node : roots)
+        {
+            if (!node->name || !*node->name) { continue; }
+            const std::string name(node->name);
+            if (!names.insert(name).second) { duplicates.insert(name); }
+        }
+        for (const cgltf_node* node : roots)
+        {
+            if (!node->name || !*node->name || duplicates.count(node->name) != 0) { continue; }
+            result.emplace_back(node->name);
+        }
+        cgltf_free(data);
+        return result;
     }
 
     // After moving a texture set out of staging, repoint its material preset — the backend wrote it
@@ -833,7 +956,9 @@ void ImportPanel::BeginImport(const Item& item,
     bool registerPreset,
     const std::vector<std::string>& targetOutputs,
     const std::vector<std::string>& removedSources,
-    float meshSpawnScale)
+    float meshSpawnScale,
+    const std::vector<std::string>& meshSplitNodes,
+    bool meshSplitChoiceProvided)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
@@ -847,10 +972,29 @@ void ImportPanel::BeginImport(const Item& item,
     // manifest and must not delete sibling outputs; only a full import owns the whole folder.
     activeMergeManifest_ = !includeRel.empty() || !activeTargetOutputs_.empty();
     activeMeshSpawnScale_ = 0.0f;
+    activeMeshSplitGltf_.clear();
+    activeMeshSplitNodes_.clear();
     if (item.kind == Kind::Mesh)
     {
+        const fs::path manifestPath = ImportManifestPath(ProjectDest(item), false);
         activeMeshSpawnScale_ = meshSpawnScale >= 0.0f ? meshSpawnScale :
-            ReadManifestSpawnScale(ImportManifestPath(ProjectDest(item), false));
+            ReadManifestSpawnScale(manifestPath);
+        if (meshSplitChoiceProvided)
+        {
+            activeMeshSplitNodes_ = meshSplitNodes;
+            std::error_code relativeEc;
+            const fs::path relative = fs::relative(
+                fs::path(item.gltfFile), fs::path(item.path), relativeEc);
+            if (!relativeEc && IsSafeRelativePath(relative))
+            {
+                activeMeshSplitGltf_ = relative.generic_string();
+            }
+        }
+        else
+        {
+            activeMeshSplitNodes_ = ReadManifestSplitNodes(
+                manifestPath, &activeMeshSplitGltf_);
+        }
     }
     running_.store(true);
     workerFailures_.store(0);
@@ -1026,9 +1170,13 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     meshDialogItem_ = item;
     meshDialogNormalizeSpawn_ = false;
     meshDialogTargetM_ = 6.0f;
+    meshDialogTopLevelNodes_ = ListSplittableTopLevelNodes(item.gltfFile);
+    meshDialogSplitTopLevelNodes_ = false;
 
     const fs::path manifestPath = ImportManifestPath(ProjectDest(item), false);
     const float existingScale = ReadManifestSpawnScale(manifestPath);
+    const std::vector<std::string> existingSplitNodes =
+        ReadManifestSplitNodes(manifestPath);
     std::error_code ec;
     if (fs::is_regular_file(manifestPath, ec))
     {
@@ -1037,6 +1185,10 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     if (existingScale > 0.0f && item.worldSizeM > 0.0f)
     {
         meshDialogTargetM_ = item.worldSizeM * existingScale;
+    }
+    if (!existingSplitNodes.empty() && meshDialogTopLevelNodes_.size() > 1)
+    {
+        meshDialogSplitTopLevelNodes_ = true;
     }
     showMeshImportDialog_ = true;
 }
@@ -1089,6 +1241,37 @@ void ImportPanel::DrawMeshImportDialog()
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
+    if (meshDialogTopLevelNodes_.size() > 1)
+    {
+        ImGui::Spacing();
+        ImGui::Checkbox("Split by top-level nodes", &meshDialogSplitTopLevelNodes_);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Create one spawnable content-browser asset per top-level prop.\n"
+                "The glTF stays as one file; each asset uses a #node selector.");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d props detected",
+            static_cast<int>(meshDialogTopLevelNodes_.size()));
+        if (meshDialogSplitTopLevelNodes_)
+        {
+            ImGui::Indent();
+            const size_t previewCount = std::min<size_t>(
+                meshDialogTopLevelNodes_.size(), 6);
+            for (size_t i = 0; i < previewCount; ++i)
+            {
+                ImGui::BulletText("%s", meshDialogTopLevelNodes_[i].c_str());
+            }
+            if (previewCount < meshDialogTopLevelNodes_.size())
+            {
+                ImGui::TextDisabled("... and %d more",
+                    static_cast<int>(meshDialogTopLevelNodes_.size() - previewCount));
+            }
+            ImGui::Unindent();
+        }
+    }
+
     ImGui::Spacing();
     ImGui::TextWrapped(
         "Normalization records a default spawn scale in the import manifest. "
@@ -1103,7 +1286,10 @@ void ImportPanel::DrawMeshImportDialog()
         {
             spawnScale = meshDialogTargetM_ / meshDialogItem_.worldSizeM;
         }
-        BeginImport(meshDialogItem_, {}, true, {}, {}, spawnScale);
+        const std::vector<std::string> splitNodes = meshDialogSplitTopLevelNodes_ ?
+            meshDialogTopLevelNodes_ : std::vector<std::string>{};
+        BeginImport(meshDialogItem_, {}, true, {}, {}, spawnScale,
+            splitNodes, true);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1239,7 +1425,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 const bool outputIsFile = activeItem_.kind == Kind::Skybox;
                 finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
                     fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
-                    activeMergeManifest_, activeRemovedSources_, activeMeshSpawnScale_);
+                    activeMergeManifest_, activeRemovedSources_, activeMeshSpawnScale_,
+                    activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
