@@ -35,18 +35,30 @@ bool UploadBatch::Begin(Renderer* renderer)
     return true;
 }
 
-void UploadBatch::SubmitAndWait(Renderer* renderer)
+bool UploadBatch::Submit(Renderer* renderer)
 {
     if (!open_ || !renderer)
     {
-        return;
+        return false;
     }
 
-    cmdList_->Close();
+    if (FAILED(cmdList_->Close()))
+    {
+        open_ = false;
+        return false;
+    }
     ID3D12CommandList* lists[] = { cmdList_.Get() };
     renderer->GetCommandQueue()->ExecuteCommandLists(1, lists);
-    renderer->WaitForPreviousFrame();
-
-    keepAlive_.clear();
     open_ = false;
+    return true;
+}
+
+void UploadBatch::SubmitAndWait(Renderer* renderer)
+{
+    if (!Submit(renderer))
+    {
+        return;
+    }
+    renderer->WaitForPreviousFrame();
+    keepAlive_.clear();
 }

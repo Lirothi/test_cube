@@ -33,6 +33,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     submeshes_ = { Submesh{ 0u, indexCount, 0u } };
 
     bounds_.Reset();
+    boundingSphereRadius_ = 0.0f;
 
     UploadManager up(device, uploadCmdList);
 
@@ -93,6 +94,18 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
         bounds.Expand(Math::float3(vert.position.x, vert.position.y, vert.position.z));
     }
     bounds_ = bounds;
+    if (bounds_.IsValid())
+    {
+        const Math::float3 center = bounds_.GetCenter();
+        float maxRadiusSq = 0.0f;
+        for (const VertexPNTUV& vert : verts)
+        {
+            const Math::float3 offset =
+                Math::float3(vert.position.x, vert.position.y, vert.position.z) - center;
+            maxRadiusSq = std::max(maxRadiusSq, offset.Dot(offset));
+        }
+        boundingSphereRadius_ = std::sqrt(maxRadiusSq);
+    }
 
 #if WITH_EDITOR
     raycastPositions_.reserve(verts.size());

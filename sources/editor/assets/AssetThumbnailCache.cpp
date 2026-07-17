@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -61,6 +62,9 @@ namespace editor_thumbnail_detail
         PreflightInput input;
         DiskCacheInfo cache;
         std::vector<std::string> staleCachePaths;
+        std::string resolvedPath;
+        std::shared_ptr<MeshCpuData> meshData;
+        std::string failureReason;
     };
 
     struct PreflightState
@@ -69,17 +73,18 @@ namespace editor_thumbnail_detail
         std::deque<PreflightResult> completed;
         std::atomic<std::size_t> jobsInFlight{ 0 };
     };
+
+    struct PreviewInitState
+    {
+        // 0 = not started, 1 = running, 2 = ready, -1 = failed.
+        std::atomic<int> status{ 0 };
+    };
 }
 
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 2;
-
-    // Bound the per-frame GPU work. Each processed frame idles the GPU once, then
-    // uploads/renders up to this many thumbnails, so opening a large folder fills
-    // in over a few frames instead of stalling on open.
-    constexpr std::size_t kMaxLoadsPerFrame = 3;
+    constexpr std::uint32_t kThumbnailSchemaVersion = 4;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.
@@ -172,6 +177,68 @@ namespace
         return error ? 0ull : static_cast<std::uint64_t>(time.time_since_epoch().count());
     }
 
+    std::string FilePart(const std::string& path)
+    {
+        const size_t fragment = path.find('#');
+        return fragment == std::string::npos ? path : path.substr(0, fragment);
+    }
+
+    bool EndsWithNoCase(const std::string& text, const char* suffix)
+    {
+        const size_t length = std::strlen(suffix);
+        if (text.size() < length) { return false; }
+        const size_t offset = text.size() - length;
+        for (size_t i = 0; i < length; ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(text[offset + i])) !=
+                std::tolower(static_cast<unsigned char>(suffix[i])))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ResolveMeshSource(const std::string& assetPath,
+        std::string& resolvedPath,
+        std::string& failureReason)
+    {
+        resolvedPath = assetPath;
+        if (!EndsWithNoCase(FilePart(assetPath), ".mesh.json"))
+        {
+            return true;
+        }
+
+        std::ifstream file(FilePart(assetPath));
+        if (!file)
+        {
+            failureReason = "Mesh asset JSON could not be opened.";
+            return false;
+        }
+        const nlohmann::json asset = nlohmann::json::parse(file, nullptr, false, true);
+        if (asset.is_discarded() || !asset.is_object())
+        {
+            failureReason = "Mesh asset JSON is invalid.";
+            return false;
+        }
+        const auto geometry = asset.find("geometry");
+        const auto model = asset.find("model");
+        if (geometry != asset.end() && geometry->is_string())
+        {
+            resolvedPath = geometry->get<std::string>();
+        }
+        else if (model != asset.end() && model->is_string())
+        {
+            resolvedPath = model->get<std::string>();
+        }
+        else
+        {
+            failureReason = "Mesh asset JSON has no geometry path.";
+            return false;
+        }
+        return !resolvedPath.empty();
+    }
+
     std::string Hex(std::uint64_t value)
     {
         constexpr char digits[] = "0123456789abcdef";
@@ -251,7 +318,8 @@ namespace
         }
     }
 
-    DiskCacheInfo BuildDiskCacheInfo(const PreflightInput& input)
+    DiskCacheInfo BuildDiskCacheInfo(const PreflightInput& input,
+        const std::string& resolvedPath)
     {
         DiskCacheInfo info;
         const std::uint32_t type = input.kind == PreflightKind::Mesh
@@ -270,6 +338,11 @@ namespace
         HashText(signature, input.key);
         HashText(signature, input.path);
         HashValue(signature, input.sourceWriteTime);
+        if (input.kind == PreflightKind::Mesh)
+        {
+            HashText(signature, resolvedPath);
+            HashValue(signature, FileWriteTime(FilePart(resolvedPath)));
+        }
         if (input.kind == PreflightKind::Material)
         {
             HashMaterialDependencies(signature, input.key);
@@ -548,9 +621,61 @@ namespace
     }
 }
 
+struct AssetThumbnailCache::GpuJob
+{
+    PendingLoad load;
+    std::unique_ptr<UploadBatch> commands;
+    Texture2D texture;
+    TextureCube cube;
+    std::shared_ptr<Mesh> mesh;
+    std::shared_ptr<MaterialData> material;
+    Microsoft::WRL::ComPtr<ID3D12Resource> rendered;
+    ThumbnailReadback readback;
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    std::uint64_t fenceValue = 1;
+    bool hasReadback = false;
+    bool ok = false;
+};
+
 AssetThumbnailCache::AssetThumbnailCache()
     : preflightState_(std::make_shared<PreflightState>())
+    , previewInitState_(std::make_shared<editor_thumbnail_detail::PreviewInitState>())
+    , preview_(std::make_shared<EditorPreviewRenderer>())
 {
+}
+
+AssetThumbnailCache::~AssetThumbnailCache() = default;
+
+void AssetThumbnailCache::StartPreviewInitialization(Renderer& renderer)
+{
+    if (!previewInitState_ || !preview_) { return; }
+    int expected = 0;
+    if (!previewInitState_->status.compare_exchange_strong(expected, 1,
+            std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D12Device> device = renderer.GetDevice();
+    if (!device)
+    {
+        previewInitState_->status.store(-1, std::memory_order_release);
+        return;
+    }
+
+    const std::shared_ptr<EditorPreviewRenderer> preview = preview_;
+    const std::shared_ptr<editor_thumbnail_detail::PreviewInitState> state =
+        previewInitState_;
+    auto initialize = [preview, state, device]()
+    {
+        const bool initialized = preview->EnsureInitialized(device.Get());
+        state->status.store(initialized ? 2 : -1, std::memory_order_release);
+    };
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+    TaskSystem::Get().SubmitDetach(std::move(initialize));
+#else
+    initialize();
+#endif
 }
 
 void AssetThumbnailCache::BeginFrame(Renderer& renderer)
@@ -620,8 +745,25 @@ void AssetThumbnailCache::LaunchPreflightJobs()
             CPU_SCOPE(ProfilerScopes::kAssetThumbnailPreflight);
             PreflightResult result;
             result.input = std::move(input);
-            result.cache = BuildDiskCacheInfo(result.input);
+            result.resolvedPath = result.input.path;
+            if (result.input.kind == PreflightKind::Mesh)
+            {
+                ResolveMeshSource(result.input.path, result.resolvedPath,
+                    result.failureReason);
+            }
+            result.cache = BuildDiskCacheInfo(result.input, result.resolvedPath);
             result.staleCachePaths = FindStaleDiskCacheFiles(result.cache);
+            if (result.input.kind == PreflightKind::Mesh &&
+                !result.cache.hit && result.failureReason.empty())
+            {
+                result.meshData = std::make_shared<MeshCpuData>();
+                MeshManager parser;
+                if (!parser.ParseFileCpu(result.resolvedPath, *result.meshData))
+                {
+                    result.meshData.reset();
+                    result.failureReason = "Referenced mesh geometry could not be parsed.";
+                }
+            }
 
             {
                 std::lock_guard<std::mutex> lock(state->mutex);
@@ -702,6 +844,13 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
             ReleaseEntry(renderer, entry);
         }
 
+        if (!result.cache.hit && !result.failureReason.empty())
+        {
+            entry.state = State::Failed;
+            entry.failureReason = result.failureReason;
+            continue;
+        }
+
         PendingLoad::Kind generationKind = PendingLoad::Kind::Mesh;
         switch (input.kind)
         {
@@ -718,9 +867,11 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
         load.generationKind = generationKind;
         load.sourceWriteTime = input.sourceWriteTime;
         load.cacheSignature = result.cache.signature;
-        load.path = input.path;
+        load.sourcePath = input.path;
+        load.path = result.resolvedPath.empty() ? input.path : result.resolvedPath;
         load.cachePath = result.cache.path;
         load.presetKey = input.key;
+        load.meshData = std::move(result.meshData);
         queue_.push_back(std::move(load));
     }
 }
@@ -769,6 +920,7 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
             load.kind = kind;
             load.generationKind = kind;
             load.sourceWriteTime = record.fileWriteTime;
+            load.sourcePath = record.path;
             load.path = record.path;
             load.presetKey = record.id.key;
             load.usage = UsageForRecord(record);
@@ -801,6 +953,7 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
                 load.kind = kind;
                 load.generationKind = kind;
                 load.sourceWriteTime = record.fileWriteTime;
+                load.sourcePath = record.path;
                 load.path = record.path;
                 load.presetKey = record.id.key;
                 load.usage = UsageForRecord(record);
@@ -856,268 +1009,71 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
     return view;
 }
 
-void AssetThumbnailCache::ProcessPending(Renderer& renderer)
+bool AssetThumbnailCache::CommitGpuJob(Renderer& renderer)
 {
-    CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
-    CommitPreflightResults(renderer);
-    LaunchPreflightJobs();
-    if (queue_.empty())
+    if (!gpuJob_) { return true; }
+    if (!gpuJob_->fence ||
+        gpuJob_->fence->GetCompletedValue() < gpuJob_->fenceValue)
     {
-        return;
+        return false;
     }
 
-    // Pull the next batch of still-wanted loads and mark them Generating so a
-    // second Request this frame does not re-enqueue them.
-    std::vector<PendingLoad> batch;
-    while (!queue_.empty() && batch.size() < kMaxLoadsPerFrame)
+    std::unique_ptr<GpuJob> job = std::move(gpuJob_);
+    const auto entryIt = entries_.find(job->load.key);
+    if (entryIt != entries_.end())
     {
-        PendingLoad load = std::move(queue_.front());
-        queue_.pop_front();
-
-        auto it = entries_.find(load.key);
-        if (it == entries_.end() || it->second.state != State::Queued ||
-            it->second.sourceWriteTime != load.sourceWriteTime ||
-            it->second.cacheSignature != load.cacheSignature)
+        Entry& entry = entryIt->second;
+        const bool current = entry.state == State::Generating &&
+            entry.sourceWriteTime == job->load.sourceWriteTime &&
+            entry.cacheSignature == job->load.cacheSignature;
+        if (current)
         {
-            continue; // Stale queue entry (evicted or already handled).
-        }
-        it->second.state = State::Generating;
-        batch.push_back(std::move(load));
-    }
-
-    if (batch.empty())
-    {
-        return;
-    }
-
-    renderer.WaitForPreviousFrame();
-
-    bool needsPreview = false;
-    bool needsMaterials = false;
-    for (const PendingLoad& load : batch)
-    {
-        if (load.kind == PendingLoad::Kind::Mesh ||
-            load.kind == PendingLoad::Kind::Material ||
-            load.kind == PendingLoad::Kind::Cube)
-        {
-            needsPreview = true;
-        }
-        if (load.kind == PendingLoad::Kind::Material)
-        {
-            needsMaterials = true;
-        }
-    }
-    bool previewReady = false;
-    if (needsPreview)
-    {
-        previewReady = preview_.EnsureInitialized(renderer);
-        if (previewReady && needsMaterials)
-        {
-            // Material keys include all referenced maps. Reload the preview-only
-            // cache before a miss so the rendered image matches those changes.
-            preview_.ReloadPresets();
-        }
-    }
-
-    struct Loaded
-    {
-        Texture2D texture;
-        TextureCube cube;
-        std::shared_ptr<Mesh> mesh;
-        std::shared_ptr<MaterialData> material;
-        bool ok = false;
-    };
-    std::vector<Loaded> loaded(batch.size());
-
-    // Phase A: uploads (textures + ensure mesh/material assets resident). One
-    // fenced batch, so the mesh/texture resources are in a stable state before the
-    // render phase draws them.
-    {
-        UploadBatch uploads;
-        if (!uploads.Begin(&renderer))
-        {
-            for (PendingLoad& load : batch)
+            if (job->load.kind == PendingLoad::Kind::Texture ||
+                job->load.kind == PendingLoad::Kind::DiskCache)
             {
-                auto it = entries_.find(load.key);
-                if (it != entries_.end() && it->second.state == State::Generating)
+                if (job->ok && job->texture.GetResource())
                 {
-                    it->second.state = State::Queued;
-                    queue_.push_back(std::move(load));
+                    const D3D12_RESOURCE_DESC desc =
+                        job->texture.GetResource()->GetDesc();
+                    entry.resource = job->texture.GetResource();
+                    entry.srvFormat = job->texture.GetSrvFormat();
+                    entry.width = job->texture.GetWidth();
+                    entry.height = job->texture.GetHeight();
+                    entry.mipLevels = std::max<UINT>(desc.MipLevels, 1u);
+                    entry.state = State::Ready;
+                    entry.failureReason.clear();
+                }
+                else if (job->load.kind == PendingLoad::Kind::DiskCache)
+                {
+                    // Re-run preflight so a corrupt PNG falls back to worker-side
+                    // mesh parsing instead of doing heavy CPU work here.
+                    RemoveDiskCacheFile(job->load.cachePath);
+                    entry.state = State::Preflighting;
+                    entry.failureReason.clear();
+                    entry.preflightPending = true;
+                    ++entry.preflightToken;
+                    preflightQueue_.push_back({
+                        job->load.key,
+                        job->load.sourcePath.empty()
+                            ? job->load.path
+                            : job->load.sourcePath,
+                        entry.generationKind,
+                        entry.sourceWriteTime,
+                        entry.registryRevision,
+                        entry.preflightToken,
+                        preflightEpoch_
+                    });
+                }
+                else
+                {
+                    entry.state = State::Failed;
+                    entry.failureReason = "Texture could not be loaded for preview.";
+                    entry.resource.Reset();
                 }
             }
-            return;
-        }
-
-        for (std::size_t i = 0; i < batch.size(); ++i)
-        {
-            PendingLoad& load = batch[i];
-            Loaded& out = loaded[i];
-            switch (load.kind)
+            else if (job->ok && job->rendered)
             {
-            case PendingLoad::Kind::Texture:
-            case PendingLoad::Kind::DiskCache:
-            {
-                Texture2D::CreateDesc desc;
-                desc.path = WidenAscii(load.kind == PendingLoad::Kind::DiskCache
-                    ? load.cachePath
-                    : load.path);
-                desc.usage = load.kind == PendingLoad::Kind::DiskCache
-                    ? Texture2D::Usage::AlbedoSRGB
-                    : load.usage;
-                out.ok = out.texture.CreateFromFile(&renderer,
-                    uploads.CommandList(), desc, uploads.KeepAlive());
-                break;
-            }
-            case PendingLoad::Kind::Mesh:
-                if (previewReady)
-                {
-                    out.mesh = preview_.Meshes().Load(load.path, &renderer,
-                        uploads.CommandList(), uploads.KeepAlive());
-                    out.ok = out.mesh != nullptr;
-                }
-                break;
-            case PendingLoad::Kind::Cube:
-                if (previewReady)
-                {
-                    out.ok = out.cube.CreateFromDDS(&renderer, uploads.CommandList(),
-                        WidenAscii(load.path), uploads.KeepAlive());
-                }
-                break;
-            case PendingLoad::Kind::Material:
-                if (previewReady)
-                {
-                    out.material = preview_.Materials().GetOrCreate(&renderer,
-                        uploads.CommandList(), uploads.KeepAlive(), load.presetKey);
-                    out.mesh = preview_.EnsureSphere(renderer, uploads);
-                    out.ok = out.material != nullptr && out.mesh != nullptr;
-                }
-                break;
-            }
-        }
-        uploads.SubmitAndWait(&renderer);
-    }
-
-    // Phase B: render source previews and, in the same bounded submission,
-    // copy their 256px color targets into readback buffers for the disk cache.
-    // One command list per thumbnail keeps the single-slot descriptor heaps
-    // correct at execute time.
-    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> rendered(batch.size());
-    std::vector<ThumbnailReadback> readbacks(batch.size());
-    for (std::size_t i = 0; i < batch.size(); ++i)
-    {
-        const PendingLoad& load = batch[i];
-        if (load.kind == PendingLoad::Kind::Texture ||
-            load.kind == PendingLoad::Kind::DiskCache || !loaded[i].ok)
-        {
-            continue;
-        }
-        if (load.kind != PendingLoad::Kind::Cube && !loaded[i].mesh)
-        {
-            loaded[i].ok = false;
-            continue;
-        }
-
-        UploadBatch render;
-        if (!render.Begin(&renderer))
-        {
-            loaded[i].ok = false;
-            continue;
-        }
-
-        if (load.kind == PendingLoad::Kind::Cube)
-        {
-            rendered[i] = preview_.RecordCubeThumbnail(renderer, render.CommandList(),
-                loaded[i].cube, kPreviewRenderSize);
-        }
-        else
-        {
-            Mesh* mesh = loaded[i].mesh.get();
-
-            ID3D12Resource* albedo = nullptr;
-            DXGI_FORMAT albedoFormat = DXGI_FORMAT_UNKNOWN;
-            bool hasAlbedo = false;
-            if (load.kind == PendingLoad::Kind::Material && loaded[i].material)
-            {
-                MaterialData* material = loaded[i].material.get();
-                if (material->hasAlbedo && material->albedo.GetResource())
-                {
-                    albedo = material->albedo.GetResource();
-                    albedoFormat = material->albedo.GetSrvFormat();
-                    hasAlbedo = true;
-                }
-            }
-
-            rendered[i] = preview_.RecordThumbnail(renderer, render.CommandList(),
-                *mesh, albedo, albedoFormat, hasAlbedo, kPreviewRenderSize);
-        }
-
-        bool hasReadback = false;
-        if (rendered[i] && !load.cachePath.empty())
-        {
-            hasReadback = RecordThumbnailReadback(renderer.GetDevice(), render.CommandList(),
-                rendered[i].Get(), readbacks[i]);
-        }
-        render.SubmitAndWait(&renderer);
-        if (!rendered[i])
-        {
-            loaded[i].ok = false;
-        }
-        else if (hasReadback)
-        {
-            // Disk cache failures are non-fatal: the fresh GPU thumbnail stays
-            // usable and a later source miss can try writing the PNG again.
-            (void)WriteThumbnailPng(readbacks[i], load.cachePath);
-        }
-    }
-
-    // Phase C: commit results into the cache entries.
-    for (std::size_t i = 0; i < batch.size(); ++i)
-    {
-        const PendingLoad& load = batch[i];
-        auto it = entries_.find(load.key);
-        if (it == entries_.end())
-        {
-            continue;
-        }
-        Entry& entry = it->second;
-
-        if (load.kind == PendingLoad::Kind::Texture ||
-            load.kind == PendingLoad::Kind::DiskCache)
-        {
-            if (loaded[i].ok && loaded[i].texture.GetResource())
-            {
-                const D3D12_RESOURCE_DESC desc = loaded[i].texture.GetResource()->GetDesc();
-                entry.resource = loaded[i].texture.GetResource();
-                entry.srvFormat = loaded[i].texture.GetSrvFormat();
-                entry.width = loaded[i].texture.GetWidth();
-                entry.height = loaded[i].texture.GetHeight();
-                entry.mipLevels = std::max<UINT>(desc.MipLevels, 1u);
-                entry.state = State::Ready;
-                entry.failureReason.clear();
-            }
-            else if (load.kind == PendingLoad::Kind::DiskCache)
-            {
-                // A corrupt or partial PNG must not leave a thumbnail stuck
-                // failed. Delete it and rerun the original source renderer.
-                RemoveDiskCacheFile(load.cachePath);
-                PendingLoad retry = load;
-                retry.kind = load.generationKind;
-                entry.state = State::Queued;
-                entry.failureReason.clear();
-                queue_.push_back(std::move(retry));
-            }
-            else
-            {
-                entry.state = State::Failed;
-                entry.failureReason = "Texture could not be loaded for preview.";
-                entry.resource.Reset();
-            }
-        }
-        else
-        {
-            if (loaded[i].ok && rendered[i])
-            {
-                entry.resource = rendered[i];
+                entry.resource = job->rendered;
                 entry.srvFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
                 entry.width = kPreviewRenderSize;
                 entry.height = kPreviewRenderSize;
@@ -1128,7 +1084,7 @@ void AssetThumbnailCache::ProcessPending(Renderer& renderer)
             else
             {
                 entry.state = State::Failed;
-                switch (load.kind)
+                switch (job->load.kind)
                 {
                 case PendingLoad::Kind::Mesh:
                     entry.failureReason = "Mesh preview could not be rendered.";
@@ -1148,7 +1104,195 @@ void AssetThumbnailCache::ProcessPending(Renderer& renderer)
         }
     }
 
+    if (job->ok && job->rendered && job->hasReadback &&
+        !job->load.cachePath.empty())
+    {
+        const ThumbnailReadback readback = job->readback;
+        const std::string cachePath = job->load.cachePath;
+        auto encode = [readback, cachePath]()
+        {
+            (void)WriteThumbnailPng(readback, cachePath);
+        };
+#if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
+        TaskSystem::Get().SubmitDetach(std::move(encode));
+#else
+        encode();
+#endif
+    }
+
     EvictIfNeeded(renderer);
+    return true;
+}
+
+void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
+{
+    if (gpuJob_) { return; }
+
+    PendingLoad load;
+    Entry* entry = nullptr;
+    while (!queue_.empty())
+    {
+        load = std::move(queue_.front());
+        queue_.pop_front();
+
+        const auto it = entries_.find(load.key);
+        if (it == entries_.end() || it->second.state != State::Queued ||
+            it->second.sourceWriteTime != load.sourceWriteTime ||
+            it->second.cacheSignature != load.cacheSignature)
+        {
+            continue;
+        }
+        entry = &it->second;
+        entry->state = State::Generating;
+        break;
+    }
+    if (!entry) { return; }
+
+    const bool needsPreview = load.kind == PendingLoad::Kind::Mesh ||
+        load.kind == PendingLoad::Kind::Material ||
+        load.kind == PendingLoad::Kind::Cube;
+    if (needsPreview)
+    {
+        StartPreviewInitialization(renderer);
+        const int initStatus = previewInitState_
+            ? previewInitState_->status.load(std::memory_order_acquire)
+            : -1;
+        if (initStatus != 2)
+        {
+            if (initStatus < 0)
+            {
+                entry->state = State::Failed;
+                entry->failureReason = "Thumbnail renderer could not be initialized.";
+            }
+            else
+            {
+                entry->state = State::Queued;
+                queue_.push_front(std::move(load));
+            }
+            return;
+        }
+    }
+    if (load.kind == PendingLoad::Kind::Material)
+    {
+        preview_->ReloadPresets();
+    }
+
+    std::unique_ptr<GpuJob> job = std::make_unique<GpuJob>();
+    job->load = std::move(load);
+    job->commands = std::make_unique<UploadBatch>();
+    if (!job->commands->Begin(&renderer))
+    {
+        entry->state = State::Queued;
+        queue_.push_front(std::move(job->load));
+        return;
+    }
+
+    switch (job->load.kind)
+    {
+    case PendingLoad::Kind::Texture:
+    case PendingLoad::Kind::DiskCache:
+    {
+        Texture2D::CreateDesc desc;
+        desc.path = WidenAscii(job->load.kind == PendingLoad::Kind::DiskCache
+            ? job->load.cachePath
+            : job->load.path);
+        desc.usage = job->load.kind == PendingLoad::Kind::DiskCache
+            ? Texture2D::Usage::AlbedoSRGB
+            : job->load.usage;
+        job->ok = job->texture.CreateFromFile(&renderer,
+            job->commands->CommandList(), desc, job->commands->KeepAlive());
+        break;
+    }
+    case PendingLoad::Kind::Mesh:
+        if (job->load.meshData)
+        {
+            job->mesh = preview_->Meshes().CreateFromCpuData(job->load.path,
+                &renderer, *job->load.meshData, job->commands->CommandList(),
+                job->commands->KeepAlive());
+            job->ok = job->mesh != nullptr;
+        }
+        break;
+    case PendingLoad::Kind::Cube:
+        job->ok = job->cube.CreateFromDDS(&renderer,
+            job->commands->CommandList(), WidenAscii(job->load.path),
+            job->commands->KeepAlive());
+        break;
+    case PendingLoad::Kind::Material:
+        job->material = preview_->Materials().GetOrCreate(&renderer,
+            job->commands->CommandList(), job->commands->KeepAlive(),
+            job->load.presetKey);
+        job->mesh = preview_->EnsureSphere(renderer, *job->commands);
+        job->ok = job->material != nullptr && job->mesh != nullptr;
+        break;
+    }
+
+    if (needsPreview && job->ok)
+    {
+        if (job->load.kind == PendingLoad::Kind::Cube)
+        {
+            job->rendered = preview_->RecordCubeThumbnail(renderer,
+                job->commands->CommandList(), job->cube, kPreviewRenderSize);
+        }
+        else
+        {
+            ID3D12Resource* albedo = nullptr;
+            DXGI_FORMAT albedoFormat = DXGI_FORMAT_UNKNOWN;
+            bool hasAlbedo = false;
+            if (job->load.kind == PendingLoad::Kind::Material && job->material &&
+                job->material->hasAlbedo && job->material->albedo.GetResource())
+            {
+                albedo = job->material->albedo.GetResource();
+                albedoFormat = job->material->albedo.GetSrvFormat();
+                hasAlbedo = true;
+            }
+            job->rendered = preview_->RecordThumbnail(renderer,
+                job->commands->CommandList(), *job->mesh, albedo,
+                albedoFormat, hasAlbedo, kPreviewRenderSize);
+        }
+
+        job->ok = job->rendered != nullptr;
+        if (job->rendered && !job->load.cachePath.empty())
+        {
+            job->hasReadback = RecordThumbnailReadback(renderer.GetDevice(),
+                job->commands->CommandList(), job->rendered.Get(), job->readback);
+        }
+    }
+
+    if (FAILED(renderer.GetDevice()->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+            IID_PPV_ARGS(&job->fence))) ||
+        !job->commands->Submit(&renderer))
+    {
+        entry->state = State::Failed;
+        entry->failureReason = "Thumbnail GPU submission failed.";
+        return;
+    }
+    if (FAILED(renderer.GetCommandQueue()->Signal(
+            job->fence.Get(), job->fenceValue)))
+    {
+        // Exceptional device/queue failure: keep upload intermediates alive until
+        // the already submitted command list is known to be finished.
+        renderer.WaitForPreviousFrame();
+        entry->state = State::Failed;
+        entry->failureReason = "Thumbnail GPU fence failed.";
+        return;
+    }
+
+    gpuJob_ = std::move(job);
+}
+
+void AssetThumbnailCache::ProcessPending(Renderer& renderer)
+{
+    CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
+    CommitPreflightResults(renderer);
+    LaunchPreflightJobs();
+
+    // Never wait here. A single in-flight job protects the preview renderer's
+    // shared descriptor/constant-buffer slots; completion is polled next frame.
+    if (!CommitGpuJob(renderer))
+    {
+        return;
+    }
+    StartGpuJob(renderer);
 }
 
 void AssetThumbnailCache::EvictIfNeeded(Renderer& renderer)
@@ -1195,6 +1339,12 @@ void AssetThumbnailCache::ReleaseEntry(Renderer& renderer, Entry& entry)
 
 void AssetThumbnailCache::ReleaseAll(Renderer& renderer)
 {
+    if (gpuJob_)
+    {
+        renderer.WaitForPreviousFrame();
+        gpuJob_.reset();
+    }
+
     bool anyResident = false;
     for (auto& pair : entries_)
     {

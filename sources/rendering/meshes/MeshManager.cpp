@@ -134,6 +134,72 @@ std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
     }
 }
 
+bool MeshManager::ParseFileCpu(const std::string& path, MeshCpuData& out,
+    const MeshLoadOptions& opt)
+{
+    out.vertices.clear();
+    out.indices.clear();
+    out.submeshes.clear();
+
+    std::string low = tolower_str(path);
+    const size_t fragment = low.find('#');
+    const std::string filePart = fragment == std::string::npos ? low : low.substr(0, fragment);
+    const auto endsWith = [&filePart](const char* suffix)
+    {
+        const size_t length = std::strlen(suffix);
+        return filePart.size() >= length &&
+            filePart.compare(filePart.size() - length, length, suffix) == 0;
+    };
+
+    bool parsed = false;
+    if (endsWith(".obj"))
+    {
+        parsed = ParseOBJFile(path, out.vertices, out.indices, opt);
+    }
+    else if (endsWith(".gltf") || endsWith(".glb"))
+    {
+        parsed = ParseGltfFile(path, out.vertices, out.indices, out.submeshes, opt);
+    }
+    else
+    {
+        parsed = ParseTextFile(path, out.vertices, out.indices, opt);
+    }
+
+    if (!parsed || out.vertices.empty() || out.indices.empty())
+    {
+        out = {};
+        return false;
+    }
+    if (opt.generateTangentSpace)
+    {
+        Mesh::GenerateNormalsTangents(out.vertices, out.indices.data(),
+            static_cast<UINT>(out.indices.size()));
+    }
+    return true;
+}
+
+std::shared_ptr<Mesh> MeshManager::CreateFromCpuData(const std::string& key,
+    Renderer* renderer,
+    const MeshCpuData& data,
+    ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
+{
+    const auto cached = cache_.find(key);
+    if (cached != cache_.end()) { return cached->second; }
+    if (!renderer || !uploadCmdList || data.vertices.empty() || data.indices.empty())
+    {
+        return nullptr;
+    }
+
+    std::vector<VertexPNTUV> vertices = data.vertices;
+    std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>();
+    mesh->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
+        vertices, data.indices.data(), static_cast<UINT>(data.indices.size()),
+        false, data.submeshes.empty() ? nullptr : &data.submeshes);
+    cache_[key] = mesh;
+    return mesh;
+}
+
 std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
     Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,

@@ -9,7 +9,6 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "materials/Texture2D.h"
 #include "rendering/meshes/MeshManager.h"
 #include "materials/MaterialDataManager.h"
 
@@ -24,10 +23,10 @@ class UploadBatch;
 // one root signature, a shared depth target, a reusable constant buffer) plus a
 // private MeshManager / MaterialDataManager so it never touches the edited scene.
 //
-// Lifetime / threading: everything runs inside the editor draw/tick window under a
-// GPU wait, driven by AssetThumbnailCache. Asset loads use a caller-provided
-// UploadBatch; each thumbnail render records into a caller-provided command list
-// that the caller submits (one draw per list keeps the single-slot descriptor
+// Lifetime / threading: thumbnail draws are recorded on the editor thread by
+// AssetThumbnailCache, which polls a dedicated fence instead of waiting. Asset
+// loads use a caller-provided UploadBatch; each thumbnail render records into a
+// caller-provided command list (one draw per list keeps the single-slot descriptor
 // heaps correct). Generated color targets are handed to the cache, which owns
 // their lifetime; this class owns only the shared pipeline objects.
 class EditorPreviewRenderer
@@ -36,7 +35,7 @@ public:
     // Create the pipeline objects once (shaders, root signature, PSO, heaps,
     // shared depth target, reusable constant buffer, 1x1 white fallback). Returns
     // false if any step fails; callers then mark the affected thumbnails Failed.
-    bool EnsureInitialized(Renderer& renderer);
+    bool EnsureInitialized(ID3D12Device* device);
     bool IsInitialized() const { return initialized_; }
 
     // Private asset caches used to build previews without touching the scene.
@@ -90,7 +89,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // shader-visible, 1 slot
     Microsoft::WRL::ComPtr<ID3D12Resource> depthTarget_;
     Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer_;
-    Texture2D whiteFallback_;
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle_{};
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle_{};

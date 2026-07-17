@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include <d3dcompiler.h>
@@ -61,14 +62,13 @@ namespace
     }
 }
 
-bool EditorPreviewRenderer::EnsureInitialized(Renderer& renderer)
+bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
 {
     if (initialized_)
     {
         return true;
     }
 
-    ID3D12Device* device = renderer.GetDevice();
     if (!device)
     {
         return false;
@@ -249,21 +249,14 @@ bool EditorPreviewRenderer::EnsureInitialized(Renderer& renderer)
         return false;
     }
 
-    // 1x1 white fallback so the pixel shader always has a valid SRV bound.
-    {
-        UploadBatch up;
-        if (up.Begin(&renderer))
-        {
-            const std::uint8_t white[4] = { 255, 255, 255, 255 };
-            whiteFallback_.CreateFromRGBA8(&renderer, up.CommandList(),
-                white, 1, 1, up.KeepAlive());
-            up.SubmitAndWait(&renderer);
-        }
-    }
-    if (!whiteFallback_.GetResource())
-    {
-        return false;
-    }
+    // Mesh previews without an albedo use a null SRV. The shader branches to a
+    // neutral tint, avoiding a synchronous fallback-texture upload.
+    D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv{};
+    nullSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    nullSrv.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(nullptr, &nullSrv, srvCpuHandle_);
 
     initialized_ = true;
     return true;
@@ -397,33 +390,41 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
 
     const bool useAlbedo = hasAlbedo && albedo != nullptr;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format = useAlbedo ? albedoSrvFormat : whiteFallback_.GetSrvFormat();
+    srv.Format = useAlbedo ? albedoSrvFormat : DXGI_FORMAT_R8G8B8A8_UNORM;
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(
-        useAlbedo ? albedo : whiteFallback_.GetResource(), &srv, srvCpuHandle_);
+    device->CreateShaderResourceView(useAlbedo ? albedo : nullptr, &srv, srvCpuHandle_);
 
-    // Camera framing from the mesh bounds: a fixed three-quarter view.
+    // Use the mesh's actual enclosing sphere so every preview follows the same
+    // edge-to-edge framing. This covers the geometry without treating empty AABB
+    // corners as mesh volume (especially important for the material preview sphere).
     const AABB& bounds = mesh.GetBoundingBox();
     const Math::float3 centerPt = bounds.IsValid()
         ? bounds.GetCenter()
         : Math::float3(0.0f, 0.0f, 0.0f);
-    float radius = bounds.IsValid() ? bounds.GetRadius() : 1.0f;
+    float radius = mesh.GetBoundingSphereRadius();
+    if (radius <= 0.0f && bounds.IsValid())
+    {
+        radius = bounds.GetRadius();
+    }
     radius = std::max(radius, 1.0e-3f);
 
     const dx::XMVECTOR center = dx::XMVectorSet(centerPt.x, centerPt.y, centerPt.z, 1.0f);
     const dx::XMVECTOR offset =
         dx::XMVector3Normalize(dx::XMVectorSet(0.8f, 0.7f, -1.0f, 0.0f));
     const float fovY = dx::XMConvertToRadians(35.0f);
-    const float distance = (radius / std::tan(fovY * 0.5f)) * 1.35f;
+    // A sphere of radius r viewed from r / sin(fov / 2) is tangent to both
+    // vertical viewport edges. The thumbnail target is square, so this also
+    // matches the horizontal edges.
+    const float distance = radius / std::sin(fovY * 0.5f);
     const dx::XMVECTOR eye =
         dx::XMVectorAdd(center, dx::XMVectorScale(offset, distance));
     const dx::XMVECTOR up = dx::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
     const dx::XMMATRIX view = dx::XMMatrixLookAtLH(eye, center, up);
-    const float nearZ = std::max(radius * 0.05f, distance - radius * 2.0f);
-    const float farZ = distance + radius * 3.0f;
+    const float nearZ = std::max(radius * 0.01f, distance - radius * 1.01f);
+    const float farZ = distance + radius * 1.01f;
     const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(fovY, 1.0f, nearZ, farZ);
     const dx::XMMATRIX model = dx::XMMatrixIdentity();
     const dx::XMMATRIX mvp = dx::XMMatrixMultiply(dx::XMMatrixMultiply(model, view), proj);

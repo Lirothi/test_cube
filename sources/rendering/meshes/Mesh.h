@@ -53,6 +53,10 @@ public:
         bool generateTangentSpace = true,
         const std::vector<Submesh>* submeshes = nullptr);
 
+    // CPU-only preprocessing used by asynchronous editor thumbnail preparation.
+    static void GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
+        const uint32_t* indices, UINT indexCount);
+
     // Rendering. lod 0 = full detail (the base buffers); higher indices select coarser LODs,
     // clamped to what's available (Step 6). With no extra LODs, any lod draws full detail.
     void Draw(ID3D12GraphicsCommandList* cmdList, UINT lod = 0) const;
@@ -88,6 +92,9 @@ public:
     DXGI_FORMAT GetIndexFormat() const { return indexFormat_; }
 
     const AABB& GetBoundingBox() const { return bounds_; }
+    // Radius of the mesh's vertex-enclosing sphere, centered on its AABB center.
+    // Unlike AABB::GetRadius(), this does not include empty box corners.
+    float GetBoundingSphereRadius() const { return boundingSphereRadius_; }
 
 #if WITH_EDITOR
     // Editor picking/placement narrow phase. Geometry stays in mesh-local space;
@@ -115,10 +122,6 @@ private:
     void BindIA(ID3D12GraphicsCommandList* cmdList,
         const D3D12_VERTEX_BUFFER_VIEW& vbv, const D3D12_INDEX_BUFFER_VIEW& ibv) const;
 
-    // Generate normals/tangents (simple: per triangle with vertex averaging)
-    static void GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
-        const uint32_t* indices, UINT indexCount);
-
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer_;
@@ -128,6 +131,7 @@ private:
     DXGI_FORMAT indexFormat_ = DXGI_FORMAT_R16_UINT;
     UINT  indexCount_ = 0;
     AABB bounds_;
+    float boundingSphereRadius_ = 0.0f;
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs

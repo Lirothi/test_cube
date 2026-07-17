@@ -390,6 +390,17 @@
     <ClCompile Include="third_party\DirectXTex\DirectXTexWIC.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <!-- Keep the DirectXTex opt-out from static analysis self-contained.  Without this,
+         it inherits the project-level /analyze:projectdirectory and cl emits D9025. -->
+    <ClCompile Update="third_party\DirectXTex\*.cpp">
+      <PREfastProjectDirectory />
+      <PREfastRulesetDirectories />
+      <PREfastRulesetFile />
+      <PREfastAdditionalOptions />
+      <PREfastAdditionalPlugins />
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/assets/AssetImporter.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />

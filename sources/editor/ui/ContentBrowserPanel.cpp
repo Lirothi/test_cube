@@ -604,14 +604,17 @@ namespace
         const ImVec2 itemMin = ImGui::GetItemRectMin();
         const ImVec2 itemMax = ImGui::GetItemRectMax();
         const char* label = ImportStatusBadge(record.importStatus);
-        const ImVec2 textSize = ImGui::CalcTextSize(label);
+        ImFont* font = ImGui::GetFont();
+        const float fontSize = ImGui::GetFontSize() * 0.66f;
+        const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
         const ImVec2 badgeMin(
             itemMax.x - textSize.x - 12.0f,
             itemMin.y + 5.0f);
         const ImVec2 badgeMax(itemMax.x - 5.0f, badgeMin.y + textSize.y + 5.0f);
         drawList->AddRectFilled(badgeMin, badgeMax,
             ImGui::GetColorU32(ImportStatusColor(record.importStatus)), 3.0f);
-        drawList->AddText(ImVec2(badgeMin.x + 3.5f, badgeMin.y + 2.5f),
+        drawList->AddText(font, fontSize,
+            ImVec2(badgeMin.x + 3.5f, badgeMin.y + 2.5f),
             IM_COL32(255, 255, 255, 255), label);
     }
 

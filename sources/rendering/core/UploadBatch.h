@@ -28,6 +28,10 @@ public:
     UploadBatch& operator=(const UploadBatch&) = delete;
 
     bool Begin(Renderer* renderer);
+    // Close and enqueue without waiting. The caller must keep this UploadBatch
+    // alive until its own queue fence completes so upload intermediates and the
+    // command allocator remain valid.
+    bool Submit(Renderer* renderer);
     void SubmitAndWait(Renderer* renderer);
 
     bool IsOpen() const { return open_; }

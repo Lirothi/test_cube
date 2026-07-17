@@ -14,6 +14,14 @@ struct MeshLoadOptions {
     int  iBase  = 0;                  // Index base used in "i a b c"
 };
 
+// CPU-side geometry prepared independently of D3D12. Thumbnail jobs parse and
+// preprocess this on worker threads, then only enqueue GPU uploads in the editor.
+struct MeshCpuData {
+    std::vector<VertexPNTUV> vertices;
+    std::vector<uint32_t> indices;
+    std::vector<Mesh::Submesh> submeshes;
+};
+
 // A3: plain (cgltf-free) description of the glTF material for a given selector, resolved with the
 // SAME group ordering as the geometry load (so "#N" addresses one consistent group). Texture
 // paths are resolved relative to the glTF file (URI-decoded); empty when the channel is absent.
@@ -35,6 +43,18 @@ struct GltfMaterialDesc {
 
 class MeshManager {
 public:
+    // Parse a supported mesh without creating GPU resources. glTF fragment
+    // selectors are honored and tangent generation is CPU-only.
+    bool ParseFileCpu(const std::string& path, MeshCpuData& out,
+        const MeshLoadOptions& opt = {});
+
+    // Upload already prepared geometry without reparsing or generating LODs.
+    std::shared_ptr<Mesh> CreateFromCpuData(const std::string& key,
+        Renderer* renderer,
+        const MeshCpuData& data,
+        ID3D12GraphicsCommandList* uploadCmdList,
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+
     // A3/B2: parse a glTF/GLB material (CPU-only, no GPU, no buffer load). groupOrdinal >= 0
     // picks that group within the selector's resolved, material-index-ordered group list
     // (submesh i of a multi-submesh load == ordinal i); -1 = the selector's own group choice.

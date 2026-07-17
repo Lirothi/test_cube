@@ -1612,6 +1612,12 @@ void AssetRegistry::Refresh()
             record.virtualFolder = NormalizeVirtualPath(std::move(virtualFolder));
             record.virtualPath = record.virtualFolder + "/" + p.filename().generic_string();
             record.displayName = p.filename().string();
+            if (record.id.type == EditorAssetType::Mesh && ext == ".mesh.json")
+            {
+                // The sidecar is the spawnable mesh asset. Keep its physical filename for
+                // identity and file operations, but present its semantic asset name in the UI.
+                record.displayName = p.stem().stem().string();
+            }
             if (record.id.type == EditorAssetType::MaterialPreset)
             {
                 // Materials are referenced BY NAME everywhere (level JSON "material",

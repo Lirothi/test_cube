@@ -27,6 +27,7 @@ namespace editor_thumbnail_detail
     };
 
     struct PreflightState;
+    struct PreviewInitState;
 }
 
 // Editor-owned cache of real asset thumbnails for the Content Browser (Step 12F).
@@ -38,13 +39,15 @@ namespace editor_thumbnail_detail
 // Every resident thumbnail is left shader-readable and handed to ImGui via a
 // per-frame texture id.
 //
-// Lifetime / threading: cache ownership and every GPU operation remain on the
-// editor thread. Preflight jobs use only copied paths and metadata, then publish
-// an immutable result for the editor thread to validate and commit.
+// Lifetime / threading: uploads, draws, and cache commits stay on the editor
+// thread. Worker jobs prepare CPU mesh data, encode cached PNGs, and initialize
+// the preview pipeline from a retained D3D12 device reference; they publish only
+// immutable results for the editor thread to consume.
 class AssetThumbnailCache
 {
 public:
     AssetThumbnailCache();
+    ~AssetThumbnailCache();
 
     enum class State
     {
@@ -103,9 +106,11 @@ private:
         Kind generationKind = Kind::Texture; // source kind when `kind` is DiskCache
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t cacheSignature = 0;
+        std::string sourcePath;             // original asset path before resolution
         std::string path;                   // texture / mesh source file
         std::string cachePath;              // rendered cache PNG, if any
         std::string presetKey;              // material preset name
+        std::shared_ptr<MeshCpuData> meshData; // worker-prepared geometry
         Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB; // texture only
     };
 
@@ -141,12 +146,17 @@ private:
         std::uint64_t epoch = 0;
     };
 
+    struct GpuJob;
+
     void QueuePreflight(const EditorAssetRecord& record,
         PendingLoad::Kind generationKind,
         std::uint64_t assetRegistryRevision,
         Entry& entry);
     void LaunchPreflightJobs();
     void CommitPreflightResults(Renderer& renderer);
+    void StartPreviewInitialization(Renderer& renderer);
+    bool CommitGpuJob(Renderer& renderer);
+    void StartGpuJob(Renderer& renderer);
     void EvictIfNeeded(Renderer& renderer);
     void ReleaseEntry(Renderer& renderer, Entry& entry);
 
@@ -154,7 +164,9 @@ private:
     std::deque<PendingLoad> queue_;
     std::deque<PreflightRequest> preflightQueue_;
     std::shared_ptr<editor_thumbnail_detail::PreflightState> preflightState_;
-    EditorPreviewRenderer preview_;
+    std::shared_ptr<editor_thumbnail_detail::PreviewInitState> previewInitState_;
+    std::unique_ptr<GpuJob> gpuJob_;
+    std::shared_ptr<EditorPreviewRenderer> preview_;
     std::uint64_t frameCounter_ = 0;
     std::uint64_t preflightEpoch_ = 1;
 };
