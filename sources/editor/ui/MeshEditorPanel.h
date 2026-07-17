@@ -7,6 +7,7 @@
 #include "third_party/json/json.hpp"
 
 class AssetRegistry;
+struct EditorContext;
 
 // Part J — dedicated Mesh Editor window. Opened by double-clicking a `models/<name>.mesh.json`
 // asset in the content browser. Edits the mesh asset's render defaults — per-slot materials,
@@ -20,12 +21,16 @@ public:
     void Open(const std::string& meshAssetPath);
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
-    void Draw(AssetRegistry& registry, bool* open);
+    // `ctx` gives access to the scene document so Save can live-apply to placed instances.
+    void Draw(EditorContext& ctx, AssetRegistry& registry, bool* open);
 
     const std::string& CurrentPath() const { return path_; }
 
 private:
-    void Save(AssetRegistry& registry);
+    void Save(EditorContext& ctx, AssetRegistry& registry);
+    // Live-apply: respawn every placed object that references this mesh asset (and doesn't override
+    // the changed key) so the edit shows immediately. Returns the number of instances updated.
+    int  ApplyToScene(EditorContext& ctx) const;
 
     std::string   path_;             // the .mesh.json path currently being edited
     nlohmann::json doc_;             // parsed document (the round-trip base — unknown keys preserved)

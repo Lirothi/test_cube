@@ -2545,11 +2545,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             "Mesh Editor",
             &showMeshEditor_,
             true,
-            [this](EditorContext& /*panelCtx*/)
+            [this](EditorContext& panelCtx)
             {
                 // J: edit a models/<name>.mesh.json's render defaults (materials/renderLayer/
                 // spawnScale/texOffsScale). Opened by double-clicking the mesh asset in the browser.
-                meshEditor_.Draw(assetRegistry_, &showMeshEditor_);
+                // Save live-applies to placed instances via panelCtx (scene/document/renderer).
+                meshEditor_.Draw(panelCtx, assetRegistry_, &showMeshEditor_);
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(

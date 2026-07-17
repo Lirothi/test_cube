@@ -871,9 +871,12 @@ One file describes how to RENDER a piece of geometry:
   empty array not persisted), `renderLayer` combo (default/Terrain/Transparent/Sky), `spawnScale`
   drag, `texOffsScale` DragFloat4. NO shader. Save writes `doc_.dump(2)` back to the file (round-trip;
   unknown keys preserved) + `registry.Refresh()`. Verified: factory consumes `material` (slot 0) +
-  `materials` (per-slot) exactly as written, `shader` defaults to gbuffer when absent. LIMITATION:
-  the per-submesh slot list is user-managed (not auto-sized to the geometry's submesh count) — a
-  future nicety needs mesh introspection.
+  `materials` (per-slot) exactly as written, `shader` defaults to gbuffer when absent.
+  **Auto-slot-count**: `MeshManager::CountSubmeshes` (CPU; ParseGltfSelector+ResolveGltfGroups) sizes
+  the picker list to the geometry's submesh count (verified palm=5, date/curly=4, obj=1); the general
+  slot-0 combo is removed. **Live-apply**: Save re-spawns every placed `staticMesh` referencing this
+  asset (CreateStaticMeshFromJson re-reads the file → new defaults land, per-object overrides still
+  win), batched into one GPU sync; status reports the updated count.
 
 **J2 (future, not scheduled)**: mesh-asset-level flags as they become real — castShadow,
 LOD config, collision ref; per-node mesh assets for split glTF packs.

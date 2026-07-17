@@ -4,11 +4,20 @@
 #include "editor/assets/AssetRegistry.h"
 #include "rendering/meshes/MeshManager.h"
 
+#include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
+#include "editor/EditorContext.h"
+#include "editor/scene/EditorSceneDocument.h"
+#include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
+#include "rendering/renderables/RenderableObjectBase.h"
+
 #include "imgui.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -84,7 +93,7 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     }
 }
 
-void MeshEditorPanel::Draw(AssetRegistry& registry, bool* open)
+void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open)
 {
     if (!ImGui::Begin("Mesh Editor", open))
     {
@@ -172,8 +181,10 @@ void MeshEditorPanel::Draw(AssetRegistry& registry, bool* open)
     ImGui::Separator();
     if (ImGui::Button("Save"))
     {
-        Save(registry);
+        Save(ctx, registry);
     }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(applies live to placed instances that don't override the field)");
     if (!status_.empty())
     {
         ImGui::SameLine();
@@ -183,7 +194,54 @@ void MeshEditorPanel::Draw(AssetRegistry& registry, bool* open)
     ImGui::End();
 }
 
-void MeshEditorPanel::Save(AssetRegistry& registry)
+// Paths compare equal regardless of slash direction (registry uses '/', level JSON may vary).
+static std::string NormalizeSlashes(std::string s)
+{
+    std::replace(s.begin(), s.end(), '\\', '/');
+    return s;
+}
+
+int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
+{
+    const std::string wantMesh = NormalizeSlashes(path_);
+
+    // Collect placed static-mesh objects that reference THIS mesh asset. (Transparent meshes would
+    // need CreateTransparentMeshFromJson; they're not the mesh-asset use case — mirror the material
+    // commands, which are staticMesh-only.)
+    std::vector<EditorObjectId> targets;
+    for (const EditorObject& obj : ctx.document.Objects())
+    {
+        if (obj.type != "staticMesh") { continue; }
+        const std::string m = NormalizeSlashes(obj.properties.value("mesh", std::string()));
+        if (!m.empty() && m == wantMesh) { targets.push_back(obj.id); }
+    }
+    if (targets.empty()) { return 0; }
+
+    // Respawn each (CreateStaticMeshFromJson re-runs ResolveMeshAsset, which re-reads the just-saved
+    // mesh.json — so the new defaults land, while any per-object override still wins). One GPU sync
+    // for the whole batch rather than per-object (a grove can be dozens of instances).
+    ctx.renderer.WaitForPreviousFrame();
+    UploadBatch uploads;
+    if (!uploads.Begin(&ctx.renderer)) { return 0; }
+
+    int applied = 0;
+    for (const EditorObjectId id : targets)
+    {
+        if (ctx.scene.FindEditorObject(id.value) == nullptr) { continue; } // no live runtime (disabled)
+        const EditorObject* obj = ctx.document.Find(id);
+        if (!obj) { continue; }
+        const nlohmann::json json = EditorSceneDocument::ObjectToJson(*obj);
+        std::unique_ptr<RenderableObjectBase> runtime = SceneObjectFactory::CreateStaticMeshFromJson(json);
+        if (!runtime) { continue; }
+        ctx.scene.RemoveEditorObject(id.value);
+        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime));
+        ++applied;
+    }
+    uploads.SubmitAndWait(&ctx.renderer);
+    return applied;
+}
+
+void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
 {
     // Fold the per-slot picks back into the document. Compact form when nothing overrides the
     // default: a single slot, or an all-"auto" glTF, collapses to the scalar `material` (for glTF
@@ -210,8 +268,12 @@ void MeshEditorPanel::Save(AssetRegistry& registry)
     }
     out << doc_.dump(2) << "\n";
     out.close();
-    status_ = "Saved.";
     registry.Refresh(); // re-index so any dependent views pick up the change
+
+    // Live-apply to placed instances (must happen AFTER the file is written — the respawn re-reads it).
+    const int applied = ApplyToScene(ctx);
+    status_ = applied > 0 ? ("Saved — updated " + std::to_string(applied) + " placed instance(s).")
+                          : "Saved.";
 }
 
 #endif // WITH_EDITOR
