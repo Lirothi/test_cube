@@ -156,6 +156,25 @@ namespace
         return manifest.value("spawnScale", 0.0f);
     }
 
+    // J1: a `models/<name>.mesh.json` record is spawned as a compact reference (the mesh asset
+    // owns geometry/layout/shader/material); raw .obj/.gltf records keep the legacy inline form.
+    bool IsMeshAsset(const std::string& key)
+    {
+        constexpr std::string_view kExt = ".mesh.json";
+        return key.size() >= kExt.size() &&
+            std::equal(kExt.rbegin(), kExt.rend(), key.rbegin());
+    }
+
+    // Spawn scale from the mesh asset file (its own `spawnScale`, else 0 = no baked scale).
+    float MeshAssetSpawnScale(const std::string& meshAssetPath)
+    {
+        std::ifstream file(meshAssetPath);
+        if (!file) { return 0.0f; }
+        const nlohmann::json asset = nlohmann::json::parse(file, nullptr, false, true);
+        if (asset.is_discarded() || !asset.is_object()) { return 0.0f; }
+        return asset.value("spawnScale", 0.0f);
+    }
+
     class StaticMeshObjectFactory final : public IEditorObjectFactory
     {
     public:
@@ -174,9 +193,24 @@ namespace
         {
             nlohmann::json o = nlohmann::json::object();
             o["type"] = std::string(Type());
-            const std::string model = sourceAsset ? sourceAsset->id.key : std::string{};
-            o["model"] = model;
             o["position"] = SpawnPositionJson(ctx.scene, worldPositionHint);
+            const std::string assetKey = sourceAsset ? sourceAsset->id.key : std::string{};
+
+            // J1: a mesh asset spawns as a compact reference — geometry/layout/shader/material all
+            // live in the file, so the level entry is just `mesh` + placement.
+            if (IsMeshAsset(assetKey))
+            {
+                o["mesh"] = assetKey;
+                const float meshScale = MeshAssetSpawnScale(assetKey);
+                o["scale"] = meshScale > 0.0f
+                    ? nlohmann::json::array({ meshScale, meshScale, meshScale })
+                    : nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
+                return o;
+            }
+
+            // Legacy path: raw .obj/.gltf record — write the inline render plumbing.
+            const std::string model = assetKey;
+            o["model"] = model;
             const float importScale = ImportedSpawnScale(model);
             o["scale"] = importScale > 0.0f
                 ? nlohmann::json::array({ importScale, importScale, importScale })

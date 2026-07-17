@@ -1,5 +1,7 @@
 #include "app/scene/SceneObjectFactory.h"
 
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "core/math/Math.h"
@@ -41,6 +43,39 @@ namespace
         if (s == "Debug") { return RenderLayer::Debug; }
         return RenderLayer::Default;
     }
+
+    // J1: if the object references a mesh asset (`"mesh"` = path to a models/<name>.mesh.json),
+    // fold that asset's render defaults UNDER the object's own keys — the object always wins, so
+    // per-placement overrides (material/materials/shader/renderLayer/texOffsScale/...) keep
+    // working exactly as before. The asset's `geometry` maps onto `model`. Returns `o` unchanged
+    // when there is no `mesh` key or the file can't be read (bare object, no crash). All paths are
+    // cwd-relative, matching every other engine path convention (model, textures, ...).
+    json ResolveMeshAsset(const json& o)
+    {
+        const auto meshIt = o.find("mesh");
+        if (meshIt == o.end() || !meshIt->is_string()) { return o; }
+
+        std::ifstream f(meshIt->get<std::string>());
+        if (!f) { return o; }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const json asset = json::parse(ss.str(), nullptr, /*allow_exceptions=*/false, /*ignore_comments=*/true);
+        if (asset.is_discarded() || !asset.is_object()) { return o; }
+
+        json eff = o;
+        // Fold every asset key the object doesn't already carry — material, materials, shader,
+        // inputLayout, renderLayer, texOffsScale, params, and any future field all become mesh
+        // defaults the object can override. `geometry` -> `model`; `spawnScale` is a spawn-time
+        // hint (consumed by the editor spawn factory), not a load field.
+        for (auto it = asset.begin(); it != asset.end(); ++it)
+        {
+            const std::string& key = it.key();
+            if (key == "spawnScale") { continue; }
+            const std::string effKey = (key == "geometry") ? std::string("model") : key;
+            if (!eff.contains(effKey)) { eff[effKey] = it.value(); }
+        }
+        return eff;
+    }
 }
 
 namespace SceneObjectFactory
@@ -75,8 +110,12 @@ namespace SceneObjectFactory
         }
     }
 
-    std::unique_ptr<RenderableObjectBase> CreateStaticMeshFromJson(const json& o)
+    std::unique_ptr<RenderableObjectBase> CreateStaticMeshFromJson(const json& oIn)
     {
+        // J1: expand a mesh-asset reference (`"mesh"`) into effective render fields; a plain
+        // object (legacy `"model"` + inline plumbing) passes through untouched.
+        const json o = ResolveMeshAsset(oIn);
+
         const std::string model = o.value("model", std::string{});
         const std::string material = o.value("material", std::string{});
         const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
@@ -103,8 +142,9 @@ namespace SceneObjectFactory
         return mesh;
     }
 
-    std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const json& o)
+    std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const json& oIn)
     {
+        const json o = ResolveMeshAsset(oIn); // J1: transparent meshes may reference a mesh asset too
         const std::string model = o.value("model", std::string{});
         const float3 pos = ToFloat3(o.value("position", json::array()));
         const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));

@@ -790,9 +790,23 @@ Level objects currently repeat renderer plumbing per instance — `inputLayout`,
 in a level file). That is boilerplate that belongs to the ASSET, not the placement. Same
 philosophy as I0: one mesh = one file, engine-native, first-class in the content browser.
 
-**J1 — mesh assets (`models/<name>.mesh.json`).** *(exec: Opus 4.8 — loader layering + round-trip
-rules are the risk, the schema itself is small; escalate to Fable if StaticMesh/JsonLevel
-resolution ordering bites)* One file describes how to RENDER a piece of geometry:
+**J1 — mesh assets (`models/<name>.mesh.json`). — DONE (Opus 4.8, 2026-07-16), uncommitted.**
+As landed: `SceneObjectFactory::ResolveMeshAsset` expands a `"mesh"` reference by folding EVERY
+asset key the object doesn't already carry (general fold, not a fixed list — `geometry`→`model`,
+`spawnScale` excluded as a spawn-time hint; object keys always win), called at the top of both
+`CreateStaticMeshFromJson` and `CreateTransparentMeshFromJson` so every load/spawn/respawn path
+(SceneObjectRegistry, SceneStress, SpawnMeshCommand, SetMaterial/SetMaterialSlot respawn) resolves
+uniformly. The editor spawn factory (`StaticMeshObjectFactory::BuildDefaultJson`) detects a
+`.mesh.json` record (`IsMeshAsset`) and emits the compact `{"mesh": path, position, scale}` form
+(scale from the asset's own `spawnScale`); raw `.obj/.gltf` records keep the legacy inline form.
+AssetRegistry indexes `.mesh.json` under the models root (Mesh type, id.key = path). The importer
+writes `models/<name>/<name>.mesh.json` on a whole-asset mesh import (`geometry` = the copied
+glTF, `spawnScale` from the size-normalizer). Back-compat is intact — legacy `model`+inline
+objects load byte-identically (ResolveMeshAsset returns them untouched) and round-trip verbatim.
+Verified: a compact `{"mesh":"models/atoll_island.mesh.json"}` level booted headless → 1 caster,
+RT + cull-validation PASS (material/renderLayer/texOffsScale all pulled from the asset);
+scene-stress on the legacy demo levels CLEAN. *(original spec below)*
+One file describes how to RENDER a piece of geometry:
 ```json
 {
   "geometry": "models/atoll_island.obj",      // or "models/rocks/scene.gltf#node:Rock_1"

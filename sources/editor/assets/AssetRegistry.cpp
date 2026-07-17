@@ -1149,7 +1149,7 @@ namespace
     const std::array<DirRoot, 6>& AssetRoots()
     {
         static const std::array<DirRoot, 6> roots = { {
-            { "models",         "/Game/Models",    EditorAssetType::Mesh,           { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb", ".dds", ".png" } },
+            { "models",         "/Game/Models",    EditorAssetType::Mesh,           { ".obj", ".mesh.txt", ".mesh.json", ".txt", ".gltf", ".glb", ".dds", ".png" } },
             { "textures",       "/Game/Textures",  EditorAssetType::Texture,        { ".dds", ".png" } },
             { "data/levels",    "/Game/Levels",    EditorAssetType::Level,          { ".json" } },
             // I0: one material = one file; the record id is the material NAME (filename stem) —

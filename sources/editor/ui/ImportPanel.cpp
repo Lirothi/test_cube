@@ -1437,6 +1437,26 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     activeMergeManifest_, activeRemovedSources_, activeMeshSpawnScale_,
                     activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
+
+            // J1: emit a mesh asset (models/<name>/<name>.mesh.json) so the mesh spawns as a
+            // compact `{"mesh": ...}` level entry (geometry/layout/shader/material live in the
+            // file). Whole-asset imports only — split imports register per-node records (J2).
+            if (!finalizeFailed && activeItem_.kind == Kind::Mesh &&
+                activeMeshSplitGltf_.empty() && !activeItem_.gltfFile.empty())
+            {
+                std::error_code relEc;
+                const fs::path rel =
+                    fs::relative(fs::path(activeItem_.gltfFile), fs::path(activeItem_.path), relEc);
+                if (!relEc)
+                {
+                    nlohmann::json meshAsset;
+                    meshAsset["geometry"] = (dst / rel).generic_string();
+                    if (activeMeshSpawnScale_ > 0.0f) { meshAsset["spawnScale"] = activeMeshSpawnScale_; }
+                    const fs::path meshAssetPath = dst / (activeItem_.name + ".mesh.json");
+                    std::ofstream out(meshAssetPath, std::ios::trunc);
+                    if (out) { out << meshAsset.dump(2) << "\n"; }
+                }
+            }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
         }
