@@ -1438,9 +1438,10 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
 
-            // J1: emit a mesh asset (models/<name>/<name>.mesh.json) so the mesh spawns as a
-            // compact `{"mesh": ...}` level entry (geometry/layout/shader/material live in the
-            // file). Whole-asset imports only — split imports register per-node records (J2).
+            // J1: emit a mesh asset (models/<name>/<name>.mesh.json) so the mesh spawns as a compact
+            // `{"mesh": ...}` level entry (geometry/layout/material live in the file; shader is a
+            // material concern, not a mesh one). Whole-asset glTF imports only — split imports
+            // register per-node records (J2). Editable afterwards in the Mesh Editor window.
             if (!finalizeFailed && activeItem_.kind == Kind::Mesh &&
                 activeMeshSplitGltf_.empty() && !activeItem_.gltfFile.empty())
             {
@@ -1451,6 +1452,7 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 {
                     nlohmann::json meshAsset;
                     meshAsset["geometry"] = (dst / rel).generic_string();
+                    meshAsset["material"] = "auto"; // glTF: resolve materials from the asset itself
                     if (activeMeshSpawnScale_ > 0.0f) { meshAsset["spawnScale"] = activeMeshSpawnScale_; }
                     const fs::path meshAssetPath = dst / (activeItem_.name + ".mesh.json");
                     std::ofstream out(meshAssetPath, std::ios::trunc);

@@ -1130,6 +1130,18 @@ namespace
         return !any;
     }
 
+    // J: raw geometry under models/ (.obj/.gltf/.glb/…) is the SOURCE for a `.mesh.json` asset, which
+    // is the first-class spawnable — hide the source from the browser so only the mesh asset shows.
+    // Staging glTF (import sources) is under import_staging/ and stays visible for the import flow.
+    bool IsHiddenSourceGeometry(const EditorAssetRecord& record)
+    {
+        if (record.id.type != EditorAssetType::Mesh) { return false; }
+        const std::string& e = record.extension;
+        const bool rawGeometry = (e == ".obj" || e == ".gltf" || e == ".glb" ||
+                                  e == ".mesh.txt" || e == ".txt" || e == ".bin");
+        return rawGeometry && record.path.rfind("models/", 0) == 0;
+    }
+
     void ClearTypeFilters(bool* activeTypeFilters)
     {
         for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
@@ -2901,7 +2913,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                     searchBuffer_, EditorAssetType::Unknown);
             for (const EditorAssetRecord* record : assetCandidates)
             {
-                if (record && MatchesActiveTypeFilters(*record, activeTypeFilters_))
+                if (record && MatchesActiveTypeFilters(*record, activeTypeFilters_) &&
+                    !IsHiddenSourceGeometry(*record))
                 {
                     visibleAssets_.push_back(record);
                 }

@@ -853,6 +853,22 @@ One file describes how to RENDER a piece of geometry:
   browser → compact level entry; palm .mesh.json with `"materials"` slots renders identically to
   the same palm spawned the legacy way.
 
+**J1 follow-ups (user request 2026-07-17, exec: Opus 4.8):**
+- **Shader removed from mesh asset — DONE, uncommitted.** Shader is a MATERIAL concern (I0), not a
+  mesh one. Stripped the redundant default `"shader"` key from the 7 migrated `.mesh.json` (all were
+  `shaders/gbuffer.hlsl`); the Mesh Editor never exposes it; ImportPanel never writes it.
+- **Hide raw geometry from content browser — DONE, uncommitted.** `ContentBrowserPanel::
+  IsHiddenSourceGeometry` drops Mesh records with a raw-geometry extension (`.obj/.gltf/.glb/.mesh.txt
+  /.txt/.bin`) that live under `models/` from the asset grid — the `.mesh.json` is the first-class
+  spawnable; the source geometry it wraps is hidden. import_staging/ glTF stays visible (import flow).
+- **Auto mesh.json on import — completed, uncommitted.** ImportPanel now writes `material:"auto"` +
+  `geometry` (+ `spawnScale`) for whole-asset glTF imports; comment de-stale'd (no shader).
+- **Mesh Editor window (dedicated) — NOT YET BUILT.** User-chosen design: double-click a `.mesh.json`
+  in the content browser → dedicated window; fields = per-slot material pickers, renderLayer,
+  spawnScale, texOffsScale tiling (NO shader); write back to the file round-trip-preserving. Mirror
+  ImportPanel's EditorController ownership; slot count from the geometry's submesh count; preset list
+  from AssetRegistry/MaterialDataManager. (Release_Editor builds clean with the 3 done items.)
+
 **J2 (future, not scheduled)**: mesh-asset-level flags as they become real — castShadow,
 LOD config, collision ref; per-node mesh assets for split glTF packs.
 

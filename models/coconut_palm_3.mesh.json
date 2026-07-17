@@ -1,6 +1,5 @@
 {
   "geometry": "models/coconut_palm/scene.gltf",
   "inputLayout": "PosNormTanUV",
-  "material": "auto",
-  "shader": "shaders/gbuffer.hlsl"
+  "material": "auto"
 }
