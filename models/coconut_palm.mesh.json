@@ -1,4 +1,6 @@
 {
   "geometry": "import_staging/coconut_palm/scene.gltf",
-  "material": "auto"
+  "material": "auto",
+  "spawnScale": 1.0,
+  "texOffsScale": null
 }

@@ -863,11 +863,17 @@ One file describes how to RENDER a piece of geometry:
   spawnable; the source geometry it wraps is hidden. import_staging/ glTF stays visible (import flow).
 - **Auto mesh.json on import — completed, uncommitted.** ImportPanel now writes `material:"auto"` +
   `geometry` (+ `spawnScale`) for whole-asset glTF imports; comment de-stale'd (no shader).
-- **Mesh Editor window (dedicated) — NOT YET BUILT.** User-chosen design: double-click a `.mesh.json`
-  in the content browser → dedicated window; fields = per-slot material pickers, renderLayer,
-  spawnScale, texOffsScale tiling (NO shader); write back to the file round-trip-preserving. Mirror
-  ImportPanel's EditorController ownership; slot count from the geometry's submesh count; preset list
-  from AssetRegistry/MaterialDataManager. (Release_Editor builds clean with the 3 done items.)
+- **Mesh Editor window (dedicated) — BUILT (Opus 4.8), Release_Editor clean; UX pending user eyeball.**
+  `sources/editor/ui/MeshEditorPanel.{h,cpp}` — double-click a `.mesh.json` Mesh record in the content
+  browser (`ContentBrowserAction::Type::EditMesh`, gated by `IsEditableMeshAsset`) opens a dedicated
+  "Mesh Editor" window (registered like the importer via EditorLambdaPanel + `showMeshEditor_`).
+  Fields: slot-0 `material` combo (auto+presets), a per-submesh `materials` list (add/remove rows,
+  empty array not persisted), `renderLayer` combo (default/Terrain/Transparent/Sky), `spawnScale`
+  drag, `texOffsScale` DragFloat4. NO shader. Save writes `doc_.dump(2)` back to the file (round-trip;
+  unknown keys preserved) + `registry.Refresh()`. Verified: factory consumes `material` (slot 0) +
+  `materials` (per-slot) exactly as written, `shader` defaults to gbuffer when absent. LIMITATION:
+  the per-submesh slot list is user-managed (not auto-sized to the geometry's submesh count) — a
+  future nicety needs mesh introspection.
 
 **J2 (future, not scheduled)**: mesh-asset-level flags as they become real — castShadow,
 LOD config, collision ref; per-node mesh assets for split glTF packs.

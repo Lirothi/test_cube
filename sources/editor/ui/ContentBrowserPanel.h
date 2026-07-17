@@ -34,7 +34,8 @@ struct ContentBrowserAction
         OpenLevel,
         OpenLevelPreservingCamera,
         OpenImportWindow,
-        ReimportAsset
+        ReimportAsset,
+        EditMesh
     };
 
     Type type = Type::None;

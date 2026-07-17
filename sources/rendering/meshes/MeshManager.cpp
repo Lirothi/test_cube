@@ -786,3 +786,42 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
     cgltf_free(data);
     return out;
 }
+
+size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
+{
+    const GltfSelector sel = ParseGltfSelector(pathWithFragment);
+
+    const auto endsWithNoCase = [](const std::string& s, const char* suf)
+    {
+        const size_t n = std::strlen(suf);
+        if (s.size() < n) { return false; }
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (std::tolower((unsigned char)s[s.size() - n + i]) != std::tolower((unsigned char)suf[i])) { return false; }
+        }
+        return true;
+    };
+    if (!endsWithNoCase(sel.file, ".gltf") && !endsWithNoCase(sel.file, ".glb"))
+    {
+        return 1; // .obj / .mesh.txt / .txt = a single material slot
+    }
+
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success)
+    {
+        return 1;
+    }
+    std::vector<GltfGroup> groups;
+    std::string err;
+    size_t count = 1;
+    if (ResolveGltfGroups(data, sel, groups, err) && !groups.empty())
+    {
+        // Mirror LoadGltf: whole-file/#node selectors load EVERY resolved group (one submesh each);
+        // a "#N" selector loads that single group.
+        const bool allGroups = sel.wholeFile || !sel.nodeName.empty();
+        count = allGroups ? groups.size() : 1u;
+    }
+    cgltf_free(data);
+    return count;
+}

@@ -42,6 +42,11 @@ public:
     static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment,
                                                  int groupOrdinal = -1);
 
+    // J: number of material slots (submeshes) a geometry resolves to (CPU-only, no GPU). glTF =
+    // the resolved group count (#N selector = 1); non-glTF (.obj/.mesh.txt) = 1. Used by the Mesh
+    // Editor to show exactly one material picker per submesh. Returns 1 on any parse failure.
+    static size_t CountSubmeshes(const std::string& pathWithFragment);
+
     // Auto-detect by extension (.obj | .mesh.txt | .txt)
     std::shared_ptr<Mesh> Load(const std::string& path,
                                Renderer* renderer,

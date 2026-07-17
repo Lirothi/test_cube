@@ -2484,6 +2484,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     showImportPanel_ = true;
                     importPanel_.BeginReimport(*asset, assetRegistry_);
                 }
+                else if (action.type == ContentBrowserAction::Type::EditMesh)
+                {
+                    showMeshEditor_ = true;
+                    meshEditor_.Open(asset->path);
+                }
                 else if (action.type == ContentBrowserAction::Type::SpawnObject)
                 {
                     const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
@@ -2533,6 +2538,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 // H3: importer window. It refreshes the AssetRegistry itself on completion; the
                 // 2s poll picks up the new DDS/models entries too.
                 importPanel_.Draw(assetRegistry_, &showImportPanel_);
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "meshEditor",
+            "Mesh Editor",
+            &showMeshEditor_,
+            true,
+            [this](EditorContext& /*panelCtx*/)
+            {
+                // J: edit a models/<name>.mesh.json's render defaults (materials/renderLayer/
+                // spawnScale/texOffsScale). Opened by double-clicking the mesh asset in the browser.
+                meshEditor_.Draw(assetRegistry_, &showMeshEditor_);
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -3327,6 +3344,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("inspector");
     drawPanel("commandHistory");
     drawPanel("importAssets");
+    drawPanel("meshEditor");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {

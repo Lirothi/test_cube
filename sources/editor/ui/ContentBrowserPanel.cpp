@@ -1142,6 +1142,12 @@ namespace
         return rawGeometry && record.path.rfind("models/", 0) == 0;
     }
 
+    // J: a `.mesh.json` mesh asset is editable in the dedicated Mesh Editor window (double-click).
+    bool IsEditableMeshAsset(const EditorAssetRecord& record)
+    {
+        return record.id.type == EditorAssetType::Mesh && record.extension == ".mesh.json";
+    }
+
     void ClearTypeFilters(bool* activeTypeFilters)
     {
         for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
@@ -2070,6 +2076,12 @@ namespace
                     action.type = ContentBrowserAction::Type::OpenLevel;
                     action.asset = record->id;
                 }
+                else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    IsEditableMeshAsset(*record))
+                {
+                    action.type = ContentBrowserAction::Type::EditMesh;
+                    action.asset = record->id;
+                }
             }
             DrawSourceRowThumbnail(thumb, icons);
             DrawAssetDragSource(*record, selectedAsset);
@@ -2196,6 +2208,14 @@ namespace
             {
                 selectedAsset = record->id;
                 action.type = ContentBrowserAction::Type::OpenLevel;
+                action.asset = record->id;
+            }
+            else if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                IsEditableMeshAsset(*record))
+            {
+                selectedAsset = record->id;
+                action.type = ContentBrowserAction::Type::EditMesh;
                 action.asset = record->id;
             }
 
@@ -2951,8 +2971,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     }
     if (const EditorAssetRecord* selectedRecord = FindById(registry, selectedAsset))
     {
-        const std::string selectedLabel = TruncateLabel(selectedRecord->displayName, 48);
-        ImGui::TextDisabled("Selected: %s", selectedLabel.c_str());
+        //const std::string selectedLabel = TruncateLabel(selectedRecord->displayName, 48);
+        //ImGui::TextDisabled("Selected: %s", selectedLabel.c_str());
     }
 
     if (visibleEntryCount == 0)

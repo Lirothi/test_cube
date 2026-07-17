@@ -234,6 +234,7 @@
     <ClCompile Include="sources/editor/assets/EditorPreviewRenderer.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/ui/ImportPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
@@ -404,6 +405,7 @@
     <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/ImportPanel.h" />
+    <ClInclude Include="sources/editor/ui/MeshEditorPanel.h" />
     <ClInclude Include="sources/editor/ui/CommandHistoryPanel.h" />
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />

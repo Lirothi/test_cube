@@ -16,6 +16,7 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/ImportPanel.h"
 #include "editor/ui/InspectorPanel.h"
+#include "editor/ui/MeshEditorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
 #include "editor/ui/ViewportGizmo.h"
 
@@ -93,11 +94,13 @@ private:
     bool showInspector_ = true;
     bool showCommandHistory_ = true;
     bool showImportPanel_ = false; // H3: import_staging -> engine assets window
+    bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
     int selectionOutlineRadius_ = 1;
     AssetRegistry assetRegistry_;
     AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;
     ImportPanel importPanel_;
+    MeshEditorPanel meshEditor_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     CommandHistoryPanel commandHistory_;
