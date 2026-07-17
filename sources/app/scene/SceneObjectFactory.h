@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <vector>
 
 // nlohmann/json — single header. The factory functions are JSON-driven so engine
 // code (and later the editor) can share mesh creation without depending on
@@ -36,6 +38,12 @@ namespace SceneObjectFactory
     // material, inputLayout, shader, position, scale, plus the shared properties
     // above.
     std::unique_ptr<RenderableObjectBase> CreateStaticMeshFromJson(const nlohmann::json& objectJson);
+
+    // Level-error detection: return every missing-asset problem for a mesh object (empty = healthy).
+    // Checks the geometry (mesh.json + geometry file), each named material preset
+    // (data/materials/<name>.json; "auto"/glTF-embedded skipped), and that preset's albedo/mr/normal
+    // texture files exist (honoring H2 .dds-sibling resolution). Pure/CPU, no GPU or editor deps.
+    std::vector<std::string> MeshAssetErrors(const nlohmann::json& objectJson);
 
     // Create a TransparentStaticMesh from a level/editor object JSON entry.
     std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const nlohmann::json& objectJson);

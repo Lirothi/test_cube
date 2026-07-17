@@ -1,0 +1,5 @@
+{
+  "geometry": "models/rocks/scene.gltf#node:Rock02",
+  "material": "auto",
+  "spawnScale": 0.035492148250341415
+}

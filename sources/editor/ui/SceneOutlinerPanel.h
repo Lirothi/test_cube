@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "editor/EditorSelection.h"
@@ -48,7 +49,10 @@ public:
 
     // Draws the panel as its own ImGui window. `open` backs the window's close
     // button (the editor owns it).
-    OutlinerAction Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open);
+    // `assetErrors` (objectId.value -> messages) routes objects with missing assets into a
+    // dedicated "Bad Assets" group instead of their normal group (J).
+    OutlinerAction Draw(EditorSceneDocument& document, EditorSelection& selection,
+        const std::unordered_map<std::uint64_t, std::vector<std::string>>& assetErrors, bool* open);
 
     PersistentState GetPersistentState() const;
     void SetPersistentState(const PersistentState& state);
@@ -68,6 +72,7 @@ private:
     char searchBuffer_[256] = {};
     bool showObjects_ = true;
     bool showEnvironment_ = true;
+    bool badAssetsGroupOpen_ = true;
     bool meshesGroupOpen_ = true;
     bool lightsGroupOpen_ = true;
     bool camerasGroupOpen_ = true;
@@ -83,6 +88,7 @@ private:
 
     // Per-frame scratch, reused across Draw calls (cleared each frame, capacity
     // retained) so the row buckets and display order don't reallocate every frame.
+    std::vector<OutlinerRowRef> scratchBadAssets_;
     std::vector<OutlinerRowRef> scratchMeshes_;
     std::vector<OutlinerRowRef> scratchLights_;
     std::vector<OutlinerRowRef> scratchCameras_;

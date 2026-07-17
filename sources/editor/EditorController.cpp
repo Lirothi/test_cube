@@ -19,6 +19,7 @@
 #include "app/camera/Camera.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
@@ -2275,6 +2276,30 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     }
 }
 
+void EditorController::RefreshAssetErrors()
+{
+    const bool wasClean = assetErrors_.empty();
+    assetErrors_.clear();
+    for (const EditorObject& obj : document_.Objects())
+    {
+        if (obj.type != "staticMesh" && obj.type != "transparentMesh") { continue; }
+        std::vector<std::string> errs = SceneObjectFactory::MeshAssetErrors(EditorSceneDocument::ObjectToJson(obj));
+        if (!errs.empty()) { assetErrors_.emplace(obj.id.value, std::move(errs)); }
+    }
+    // Pop the window open the moment a scan first surfaces problems (e.g. right after a level load).
+    if (wasClean && !assetErrors_.empty()) { showLevelErrors_ = true; }
+}
+
+void EditorController::RefreshAssetErrorsIfStale()
+{
+    const std::uint64_t v = document_.ContentVersion();
+    const std::string& lvl = document_.LevelPath();
+    const std::size_t n = document_.Objects().size();
+    if (v == assetErrorsVersion_ && lvl == assetErrorsLevel_ && n == assetErrorsCount_) { return; }
+    assetErrorsVersion_ = v; assetErrorsLevel_ = lvl; assetErrorsCount_ = n;
+    RefreshAssetErrors();
+}
+
 bool EditorController::RequestOpenLevelPath(LevelManager& levelManager,
     const std::string& path,
     bool preserveCameraTransform,
@@ -2554,13 +2579,60 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "levelErrors",
+            "Level Errors",
+            &showLevelErrors_,
+            true,
+            [this](EditorContext& /*panelCtx*/)
+            {
+                // J: list every placed object with a missing asset (geometry / material / texture).
+                // The objects still exist and are grouped under "Bad Assets" in the outliner; they
+                // just render nothing. Clicking a row selects the object.
+                if (!ImGui::Begin("Level Errors", &showLevelErrors_))
+                {
+                    ImGui::End();
+                    return;
+                }
+                if (assetErrors_.empty())
+                {
+                    ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "No asset errors in this level.");
+                    ImGui::End();
+                    return;
+                }
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%zu object(s) with missing assets:",
+                    assetErrors_.size());
+                ImGui::Separator();
+                for (const EditorObject& obj : document_.Objects())
+                {
+                    const auto it = assetErrors_.find(obj.id.value);
+                    if (it == assetErrors_.end()) { continue; }
+                    ImGui::PushID(static_cast<int>(obj.id.value));
+                    const std::string header = (obj.name.empty() ? obj.type : obj.name) +
+                        "  (" + std::to_string(it->second.size()) + ")";
+                    if (ImGui::Selectable(header.c_str()))
+                    {
+                        selection_.Clear();
+                        selection_.Add(obj.id, false);
+                    }
+                    ImGui::Indent();
+                    for (const std::string& msg : it->second)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "- %s", msg.c_str());
+                    }
+                    ImGui::Unindent();
+                    ImGui::PopID();
+                }
+                ImGui::End();
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "sceneOutliner",
             "Scene Outliner",
             &showOutliner_,
             true,
             [this](EditorContext& panelCtx)
             {
-                const OutlinerAction outlinerAction = outliner_.Draw(document_, selection_, &showOutliner_);
+                const OutlinerAction outlinerAction = outliner_.Draw(document_, selection_, assetErrors_, &showOutliner_);
                 if (outlinerAction.type == OutlinerAction::Type::DeleteObject)
                 {
                     if (!selection_.Contains(outlinerAction.target))
@@ -3313,6 +3385,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         drawPanelToggle("inspector");
         drawPanelToggle("commandHistory");
         drawPanelToggle("importAssets");
+        drawPanelToggle("levelErrors");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Selection");
@@ -3328,6 +3401,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
     ImGui::End();
     open_ = open;
+
+    // J: keep the missing-asset scan current (cheap file-exists checks, only re-run when the loaded
+    // level or an edit changed the document) so the outliner group + errors window are fresh.
+    RefreshAssetErrorsIfStale();
 
     const auto drawPanel = [this, &ctx](const char* panelId)
     {
@@ -3346,6 +3423,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("commandHistory");
     drawPanel("importAssets");
     drawPanel("meshEditor");
+    drawPanel("levelErrors");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {

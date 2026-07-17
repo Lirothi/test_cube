@@ -685,10 +685,58 @@ namespace
         return result;
     }
 
-    // After moving a texture set out of staging, repoint its material file(s) — the backend wrote
-    // them (data/materials/<set>.json, I0) with import_staging/ paths, which now dangle. Plain
-    // text replace per file keeps formatting; every material file is checked because a staging
-    // folder can yield sets whose names differ from the folder name.
+    // Mesh sidecar names are filesystem-safe while retaining readable glTF node names.
+    std::string MeshAssetFileComponent(const std::string& text)
+    {
+        std::string result;
+        result.reserve(text.size());
+        for (const unsigned char ch : text)
+        {
+            if (std::isalnum(ch) || ch == '_' || ch == '-')
+            {
+                result.push_back(static_cast<char>(ch));
+            }
+            else if (result.empty() || result.back() != '_')
+            {
+                result.push_back('_');
+            }
+        }
+        while (!result.empty() && result.back() == '_') { result.pop_back(); }
+        return result.empty() ? std::string("node") : result;
+    }
+
+    bool WriteImportedMeshAsset(const fs::path& path,
+        const std::string& geometry,
+        float spawnScale)
+    {
+        nlohmann::json asset = nlohmann::json::object();
+        std::ifstream existingFile(path);
+        if (existingFile)
+        {
+            nlohmann::json existing = nlohmann::json::parse(
+                existingFile, nullptr, false, true);
+            if (!existing.is_discarded() && existing.is_object())
+            {
+                asset = std::move(existing); // preserve Mesh Editor overrides
+            }
+        }
+
+        asset["geometry"] = geometry;
+        if (!asset.contains("material")) { asset["material"] = "auto"; }
+        if (spawnScale > 0.0f) { asset["spawnScale"] = spawnScale; }
+        else { asset.erase("spawnScale"); }
+
+        std::error_code ec;
+        fs::create_directories(path.parent_path(), ec);
+        if (ec) { return false; }
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) { return false; }
+        out << asset.dump(2) << '\n';
+        return static_cast<bool>(out);
+    }
+
+    // After moving a texture set out of staging, repoint its material file(s) because the backend
+    // wrote them with import_staging/ paths, which now dangle.
     void RepointPresetPaths(const std::string& stagingPrefix, const std::string& destPrefix)
     {
         std::error_code ec;
@@ -758,6 +806,38 @@ std::string ImportPanel::ProjectDest(const Item& item) const
     case Kind::Skybox:     return (fs::path(kTexturesRoot) / (item.name + ".dds")).string();
     }
     return (fs::path(kModelsRoot) / item.name).string();
+}
+
+bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
+    const std::vector<std::string>& splitNodes)
+{
+    if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
+
+    std::error_code relEc;
+    const fs::path rel = fs::relative(
+        fs::path(item.gltfFile), fs::path(item.path), relEc);
+    if (relEc || !IsSafeRelativePath(rel)) { return false; }
+
+    const fs::path dst = ProjectDest(item);
+    const std::string geometry = (dst / rel).generic_string();
+    const fs::path meshAssetRoot = dst.parent_path();
+    if (splitNodes.empty())
+    {
+        return WriteImportedMeshAsset(
+            meshAssetRoot / (item.name + ".mesh.json"), geometry, spawnScale);
+    }
+
+    for (const std::string& node : splitNodes)
+    {
+        const fs::path meshAssetPath = meshAssetRoot /
+            (item.name + "_node_" + MeshAssetFileComponent(node) + ".mesh.json");
+        if (!WriteImportedMeshAsset(meshAssetPath,
+                geometry + "#node:" + node, spawnScale))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& registry)
@@ -1202,7 +1282,7 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     showMeshImportDialog_ = true;
 }
 
-void ImportPanel::DrawMeshImportDialog()
+void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
 {
     if (showMeshImportDialog_)
     {
@@ -1287,25 +1367,52 @@ void ImportPanel::DrawMeshImportDialog()
         "It does not modify the glTF or its vertex data.");
     ImGui::Separator();
 
+    const float selectedSpawnScale =
+        meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f ?
+        meshDialogTargetM_ / meshDialogItem_.worldSizeM : 0.0f;
+    const std::vector<std::string> selectedSplitNodes =
+        meshDialogSplitTopLevelNodes_ ? meshDialogTopLevelNodes_ :
+        std::vector<std::string>{};
+
     if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import",
-            ImVec2(120.0f, 0.0f)))
+            ImVec2(0.0f, 0.0f)))
     {
-        float spawnScale = 0.0f; // Explicitly unchecked removes normalization.
-        if (meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f)
-        {
-            spawnScale = meshDialogTargetM_ / meshDialogItem_.worldSizeM;
-        }
-        const std::vector<std::string> splitNodes = meshDialogSplitTopLevelNodes_ ?
-            meshDialogTopLevelNodes_ : std::vector<std::string>{};
-        BeginImport(meshDialogItem_, {}, true, {}, {}, spawnScale,
-            splitNodes, true);
+        BeginImport(meshDialogItem_, {}, true, {}, {}, selectedSpawnScale,
+            selectedSplitNodes, true);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+    ImGui::BeginDisabled(!meshDialogItem_.alreadyInProject);
+    const bool recreateMeshJson = ImGui::Button(
+        "Recreate mesh JSON only", ImVec2(0.0f, 0.0f));
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip(
+            "Regenerate only the spawnable .mesh.json asset(s).\n"
+            "No glTF, binary, or texture files are re-imported.\n"
+            "Uses the current normalization and split options.");
+    }
+    if (recreateMeshJson)
+    {
+        const bool recreated = RecreateMeshAssets(meshDialogItem_,
+            selectedSpawnScale, selectedSplitNodes);
+        status_ = recreated ?
+            (selectedSplitNodes.empty() ?
+                "Recreated mesh JSON for " + meshDialogItem_.name :
+                "Recreated " + std::to_string(selectedSplitNodes.size()) +
+                " split mesh JSON files for " + meshDialogItem_.name) :
+            "Failed to recreate mesh JSON for " + meshDialogItem_.name;
+        statusIsError_ = !recreated;
+        if (recreated) { registry.Refresh(); }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(0.0f, 0.0f)))
     {
         ImGui::CloseCurrentPopup();
     }
+
     ImGui::EndPopup();
 }
 
@@ -1438,26 +1545,14 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
 
-            // J1: emit a mesh asset (models/<name>/<name>.mesh.json) so the mesh spawns as a compact
-            // `{"mesh": ...}` level entry (geometry/layout/material live in the file; shader is a
-            // material concern, not a mesh one). Whole-asset glTF imports only — split imports
-            // register per-node records (J2). Editable afterwards in the Mesh Editor window.
+            // Emit first-class mesh assets next to the imported pack directory. A whole-pack
+            // import owns models/<name>.mesh.json; a split import owns one sidecar per selected
+            // top-level node. Existing sidecars retain Mesh Editor overrides when re-imported.
             if (!finalizeFailed && activeItem_.kind == Kind::Mesh &&
-                activeMeshSplitGltf_.empty() && !activeItem_.gltfFile.empty())
+                !activeItem_.gltfFile.empty())
             {
-                std::error_code relEc;
-                const fs::path rel =
-                    fs::relative(fs::path(activeItem_.gltfFile), fs::path(activeItem_.path), relEc);
-                if (!relEc)
-                {
-                    nlohmann::json meshAsset;
-                    meshAsset["geometry"] = (dst / rel).generic_string();
-                    meshAsset["material"] = "auto"; // glTF: resolve materials from the asset itself
-                    if (activeMeshSpawnScale_ > 0.0f) { meshAsset["spawnScale"] = activeMeshSpawnScale_; }
-                    const fs::path meshAssetPath = dst / (activeItem_.name + ".mesh.json");
-                    std::ofstream out(meshAssetPath, std::ios::trunc);
-                    if (out) { out << meshAsset.dump(2) << "\n"; }
-                }
+                finalizeFailed = !RecreateMeshAssets(activeItem_,
+                    activeMeshSpawnScale_, activeMeshSplitNodes_);
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
@@ -1751,7 +1846,7 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     }
 
     DrawImportDialog();     // texture-set pick-files + preset modal
-    DrawMeshImportDialog(); // per-mesh spawn-size normalization modal
+    DrawMeshImportDialog(registry); // per-mesh spawn-size normalization modal
 
     ImGui::End();
     return finished;

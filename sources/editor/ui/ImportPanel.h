@@ -68,7 +68,9 @@ private:
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
     void OpenMeshImportDialog(const Item& item);
-    void DrawMeshImportDialog();
+    void DrawMeshImportDialog(AssetRegistry& registry);
+    bool RecreateMeshAssets(const Item& item, float spawnScale,
+        const std::vector<std::string>& splitNodes);
 
     // Engine-tree destination for an item, by kind: models/<name> (Mesh), textures/<name>
     // (TextureSet), textures/<name>.dds (Skybox). Meshes go to models/ (their sibling DDS ride

@@ -124,50 +124,6 @@
     },
     {
       "enabled": true,
-      "id": 20,
-      "mesh": "models/coconut_palm_0.mesh.json",
-      "name": "part.g0.trunk.single",
-      "position": [
-        -16.0,
-        0.0,
-        4.0
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 22,
-      "mesh": "models/coconut_palm_2.mesh.json",
-      "name": "part.g2.fronds.single",
-      "position": [
-        -24.0,
-        0.0,
-        4.0
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 30,
       "mesh": "models/date_palm.mesh.json",
       "name": "date_palm.whole",
@@ -462,28 +418,6 @@
         0.014999999664723873,
         0.014999999664723873,
         0.014999999664723873
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 64,
-      "mesh": "models/coconut_palm_3.mesh.json",
-      "name": "staticMesh #64",
-      "position": [
-        -0.34886378049850464,
-        1.1920928955078125e-07,
-        2.4381792545318604
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
       ],
       "type": "staticMesh"
     },

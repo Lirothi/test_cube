@@ -1,5 +1,6 @@
 #include "app/scene/SceneObjectFactory.h"
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -73,6 +74,79 @@ namespace SceneObjectFactory
             if (!eff.contains(effKey)) { eff[effKey] = it.value(); }
         }
         return eff;
+    }
+
+    std::vector<std::string> MeshAssetErrors(const json& oIn)
+    {
+        namespace fs = std::filesystem;
+        std::vector<std::string> errs;
+
+        const auto exists = [](const std::string& p)
+        {
+            std::error_code ec;
+            return !p.empty() && fs::exists(fs::path(p), ec);
+        };
+        // A referenced texture is present if the file exists OR (H2) its .dds sibling does.
+        const auto texExists = [&](const std::string& p)
+        {
+            if (exists(p)) { return true; }
+            const size_t dot = p.find_last_of('.');
+            const size_t slash = p.find_last_of("/\\");
+            if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+            {
+                return exists(p.substr(0, dot) + ".dds");
+            }
+            return false;
+        };
+
+        const json o = ResolveMeshAsset(oIn);
+
+        // 1) Geometry: mesh.json resolvable + the geometry file present (fragment stripped).
+        if (oIn.contains("mesh") && oIn["mesh"].is_string() && !o.contains("model"))
+        {
+            errs.push_back("mesh asset not found: " + oIn["mesh"].get<std::string>());
+        }
+        else
+        {
+            const std::string model = o.value("model", std::string());
+            if (!model.empty())
+            {
+                const std::string file = model.substr(0, model.find('#'));
+                if (!exists(file)) { errs.push_back("geometry not found: " + file); }
+            }
+        }
+
+        // 2)+3) Named material presets (I0 per-file) and their textures. "auto"/glTF-embedded skipped.
+        std::vector<std::string> mats;
+        if (o.contains("material") && o["material"].is_string()) { mats.push_back(o["material"].get<std::string>()); }
+        if (o.contains("materials") && o["materials"].is_array())
+        {
+            for (const auto& e : o["materials"]) { if (e.is_string()) { mats.push_back(e.get<std::string>()); } }
+        }
+        for (const std::string& m : mats)
+        {
+            if (m.empty() || m == "auto") { continue; }
+            const std::string matFile = "data/materials/" + m + ".json";
+            if (!exists(matFile)) { errs.push_back("material not found: " + m); continue; }
+
+            std::ifstream mf(matFile);
+            std::stringstream ss; ss << mf.rdbuf();
+            const json mj = json::parse(ss.str(), nullptr, /*exceptions=*/false, /*comments=*/true);
+            if (mj.is_discarded() || !mj.is_object()) { errs.push_back("material unreadable: " + m); continue; }
+
+            for (const char* key : { "albedo", "mr", "normal" })
+            {
+                if (mj.contains(key) && mj[key].is_string())
+                {
+                    const std::string tp = mj[key].get<std::string>();
+                    if (!tp.empty() && !texExists(tp))
+                    {
+                        errs.push_back("texture missing (" + m + "/" + key + "): " + tp);
+                    }
+                }
+            }
+        }
+        return errs;
     }
 
     void ApplyStaticMeshJsonProperties(StaticMesh& mesh, const json& o)

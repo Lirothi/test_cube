@@ -1,5 +1,0 @@
-{
-  "geometry": "models/rocks/scene.gltf",
-  "inputLayout": "PosNormTanUV",
-  "material": "auto"
-}

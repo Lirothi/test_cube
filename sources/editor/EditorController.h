@@ -2,7 +2,9 @@
 #if WITH_EDITOR
 
 #include <array>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "editor/assets/AssetRegistry.h"
@@ -95,7 +97,18 @@ private:
     bool showCommandHistory_ = true;
     bool showImportPanel_ = false; // H3: import_staging -> engine assets window
     bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
+    bool showLevelErrors_ = false; // J: level-errors window (missing geometry/material/textures)
     int selectionOutlineRadius_ = 1;
+
+    // J: per-object missing-asset problems (objectId.value -> messages). Rescanned when the loaded
+    // level or an edit changes the document (see RefreshAssetErrorsIfStale). Consumed by the Level
+    // Errors window and the outliner "Bad Assets" group.
+    std::unordered_map<std::uint64_t, std::vector<std::string>> assetErrors_;
+    std::uint64_t assetErrorsVersion_ = ~0ull;
+    std::string   assetErrorsLevel_;
+    std::size_t   assetErrorsCount_ = ~0ull;
+    void RefreshAssetErrors();
+    void RefreshAssetErrorsIfStale();
     AssetRegistry assetRegistry_;
     AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;

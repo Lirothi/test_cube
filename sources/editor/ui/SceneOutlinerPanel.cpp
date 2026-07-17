@@ -40,6 +40,7 @@ namespace
 
     enum class OutlinerGroup
     {
+        BadAssets,
         Meshes,
         Lights,
         Cameras,
@@ -388,7 +389,8 @@ void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
     trackSelection_ = state.trackSelection;
 }
 
-OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSelection& selection, bool* open)
+OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSelection& selection,
+    const std::unordered_map<std::uint64_t, std::vector<std::string>>& assetErrors, bool* open)
 {
     CPU_SCOPE(ProfilerScopes::kSceneOutlinerDraw);
     OutlinerAction action;
@@ -490,8 +492,11 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
 
     if (forcePrimaryVisible)
     {
-        switch (GroupForObject(*selectedObject))
+        const OutlinerGroup selGroup = (assetErrors.count(selectedObject->id.value) != 0)
+            ? OutlinerGroup::BadAssets : GroupForObject(*selectedObject);
+        switch (selGroup)
         {
+        case OutlinerGroup::BadAssets:   badAssetsGroupOpen_ = true; break;
         case OutlinerGroup::Meshes:      meshesGroupOpen_ = true; break;
         case OutlinerGroup::Lights:      lightsGroupOpen_ = true; break;
         case OutlinerGroup::Cameras:     camerasGroupOpen_ = true; break;
@@ -501,6 +506,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     }
 
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
+    std::vector<OutlinerRowRef>& badAssets = scratchBadAssets_;
     std::vector<OutlinerRowRef>& meshes = scratchMeshes_;
     std::vector<OutlinerRowRef>& lights = scratchLights_;
     std::vector<OutlinerRowRef>& cameras = scratchCameras_;
@@ -530,6 +536,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
 
     if (bucketsDirty)
     {
+        badAssets.clear();
         meshes.clear();
         lights.clear();
         cameras.clear();
@@ -538,8 +545,12 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         const auto addVisibleRow = [&](EditorObject& object, bool environment)
         {
             std::vector<OutlinerRowRef>* group = nullptr;
-            switch (GroupForObject(object))
+            // J: an object with a missing asset goes to Bad Assets regardless of its normal group.
+            const OutlinerGroup dest = (!environment && assetErrors.count(object.id.value) != 0)
+                ? OutlinerGroup::BadAssets : GroupForObject(object);
+            switch (dest)
             {
+            case OutlinerGroup::BadAssets:   group = &badAssets; break;
             case OutlinerGroup::Meshes:      group = &meshes; break;
             case OutlinerGroup::Lights:      group = &lights; break;
             case OutlinerGroup::Cameras:     group = &cameras; break;
@@ -628,6 +639,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
         if (bucketsDirty || (sortSpecs && sortSpecs->SpecsDirty))
         {
+            SortRows(badAssets, sortSpecs);
             SortRows(meshes, sortSpecs);
             SortRows(lights, sortSpecs);
             SortRows(cameras, sortSpecs);
@@ -656,6 +668,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 }
             }
         };
+        appendDisplayedRows(badAssets, badAssetsGroupOpen_);
         appendDisplayedRows(meshes, meshesGroupOpen_);
         appendDisplayedRows(lights, lightsGroupOpen_);
         appendDisplayedRows(cameras, camerasGroupOpen_);
@@ -952,6 +965,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             }
         };
 
+        drawGroup("##badAssetsGroup", "Bad Assets", badAssets, badAssetsGroupOpen_);
         drawGroup("##meshesGroup", "Meshes", meshes, meshesGroupOpen_);
         drawGroup("##lightsGroup", "Lights", lights, lightsGroupOpen_);
         drawGroup("##camerasGroup", "Cameras", cameras, camerasGroupOpen_);
