@@ -2178,7 +2178,7 @@
     {
       "enabled": true,
       "id": 155,
-      "material": "damaged_plaster",
+      "material": "bronze_copy11",
       "mesh": "models/box.mesh.json",
       "name": "staticMesh #2 Copy Copy",
       "position": [
@@ -2202,7 +2202,7 @@
     {
       "enabled": true,
       "id": 156,
-      "material": "damaged_plaster",
+      "material": "bronze_copy11",
       "mesh": "models/box.mesh.json",
       "name": "staticMesh #2 Copy Copy Copy",
       "position": [
@@ -2492,7 +2492,7 @@
       "enabled": true,
       "intensity": 15.0,
       "position": [
-        -19.369644165039062,
+        -19.369644165039063,
         1.554520845413208,
         5.129709243774414
       ],

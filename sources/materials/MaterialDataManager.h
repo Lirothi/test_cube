@@ -55,6 +55,10 @@ public:
     // schema-v2 objects, name = filename stem). Returns true if at least one loaded.
     bool LoadPresetsFromDirectory(const std::wstring& directory);
 
+    // Register one schema-v2 material file immediately. The editor uses this after creating,
+    // duplicating, or renaming a material so it can be assigned without restarting the level.
+    bool LoadPresetFromFile(const std::wstring& path);
+
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -110,7 +111,11 @@ public:
 
 private:
     struct SrvCache {
-        UINT frame = UINT_MAX;
+        // The descriptor allocator is reset every time a frame-resource slot is
+        // reused. Cache against the monotonically increasing frame number, not
+        // the 0..kFrameCount-1 swap-chain slot, so a recycled descriptor range
+        // is never rebound as this material's table.
+        uint64_t frameNumber = UINT64_MAX;
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
     } gbufferSrvCache_;
     std::mutex cacheMtx_;

@@ -77,7 +77,7 @@ public:
     ContentBrowserAction Draw(AssetRegistry& registry,
         EditorAssetId& selectedAsset,
         const EditorExtensionRegistry& extensions,
-        const EditorSceneDocument& document,
+        EditorSceneDocument& document,
         EditorObjectId selectedObject,
         Renderer& renderer,
         AssetThumbnailCache& thumbnails,
@@ -91,6 +91,14 @@ public:
     void SetPersistentState(const PersistentState& state);
 
 private:
+    enum class MaterialFileOperation
+    {
+        None,
+        Create,
+        Duplicate,
+        Rename
+    };
+
     void EnsureSelectedFolder(const AssetRegistry& registry);
     void SelectFolder(const AssetRegistry& registry, const std::string& folderPath, bool addHistory);
     void NavigateHistory(const AssetRegistry& registry, int delta);
@@ -99,12 +107,19 @@ private:
     char sourceSearchBuffer_[128] = {};
     char newFolderName_[64] = {};
     char newCollectionName_[64] = {};
+    char materialName_[64] = {};
     std::string selectedFolder_ = "/Game";
     std::string newFolderParent_;
     std::string deleteFolderTarget_;
     std::string folderOperationMessage_;
     EditorAssetId deleteAssetTarget_;      // asset pending the delete-confirmation modal
     std::string deleteAssetPath_;          // its disk path (materials: id.key is the NAME, not the path)
+    MaterialFileOperation materialFileOperation_ = MaterialFileOperation::None;
+    std::string materialFileSourcePath_;
+    std::string materialOriginalName_;
+    std::string materialOperationMessage_;
+    std::vector<std::string> materialRenameReferences_;
+    std::vector<std::string> materialRenameScanFailures_;
     // One-frame flag: expand the Sources tree along selectedFolder_ and scroll to it.
     // Raised by navigation that happens OUTSIDE the tree (asset-view double-click,
     // breadcrumbs, "Reveal in Sources", history) so both views stay in sync.

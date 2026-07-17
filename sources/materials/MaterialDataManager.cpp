@@ -139,6 +139,42 @@ bool MaterialDataManager::LoadPresetsFromDirectory(const std::wstring& directory
     return loaded > 0;
 }
 
+bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path)
+{
+    namespace fs = std::filesystem;
+    const fs::path materialPath(path);
+    std::error_code ec;
+    if (!fs::is_regular_file(materialPath, ec))
+    {
+        return false;
+    }
+
+    std::string extension = materialPath.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension != ".json")
+    {
+        return false;
+    }
+
+    std::ifstream file(materialPath);
+    if (!file)
+    {
+        return false;
+    }
+    std::stringstream contents;
+    contents << file.rdbuf();
+    const nlohmann::json json = nlohmann::json::parse(contents.str(), nullptr, false,
+        /*ignore_comments=*/true);
+    if (json.is_discarded() || !json.is_object())
+    {
+        return false;
+    }
+
+    RegisterPreset(materialPath.stem().string(), ParseMaterialPresetJson(json));
+    return true;
+}
+
 bool MaterialDataManager::HasPreset(const std::string& name) const
 {
     return presets_.find(name) != presets_.end();

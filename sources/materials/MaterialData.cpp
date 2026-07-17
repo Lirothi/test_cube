@@ -77,9 +77,9 @@ size_t MaterialData::AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t&
 void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
                                         UINT srvTableRegister, UINT samplerTableRegister)
 {
-    const UINT fi = r->GetCurrentFrameIndex();
+    const uint64_t frameNumber = r->GetTotalFrameNumber();
     std::lock_guard lck(cacheMtx_);
-    if (gbufferSrvCache_.frame == fi && gbufferSrvCache_.gpu.ptr != 0) {
+    if (gbufferSrvCache_.frameNumber == frameNumber && gbufferSrvCache_.gpu.ptr != 0) {
         ctx.srvTable[srvTableRegister] = gbufferSrvCache_.gpu;
     }
     else {
@@ -91,7 +91,7 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
         if (count > 0) {
             auto tbl = r->StageSrvUavTable(srvs, count);
             ctx.srvTable[srvTableRegister] = tbl.gpu;
-            gbufferSrvCache_.frame = fi;
+            gbufferSrvCache_.frameNumber = frameNumber;
             gbufferSrvCache_.gpu = tbl.gpu;
         }
     }

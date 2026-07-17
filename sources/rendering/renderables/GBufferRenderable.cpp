@@ -276,6 +276,12 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
                     matParamses_[i] = matDatas_[i]->presetParams;
                 }
             }
+            // A missing preset (including a material that was just created but not registered
+            // yet) must render as a flat fallback. Leaving the default texture flags enabled
+            // would sample the descriptor table from an unrelated preceding draw.
+            matParamses_[i].SetUseAlbedo(matDatas_[i] && matDatas_[i]->hasAlbedo);
+            matParamses_[i].SetUseMR(matDatas_[i] && matDatas_[i]->hasMR);
+            matParamses_[i].SetUseNormal(matDatas_[i] && matDatas_[i]->hasNormal);
         }
     }
 

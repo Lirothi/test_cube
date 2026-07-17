@@ -883,7 +883,7 @@ LOD config, collision ref; per-node mesh assets for split glTF packs.
 
 ## Part I (continued) — material editor steps I1–I4
 
-**I1 — material file operations in the browser.** *(exec: GPT 5.6 terra — small once I0 lands)*
+**I1 — material file operations in the browser.** *(DONE 2026-07-17)*
 Content-browser context menu on a material: Create New (from a default template), Duplicate,
 Delete (the I0 file records make Delete/Move just work — this step only adds Create/Duplicate).
 Rename = file rename, BUT levels/slots reference materials by name — on rename scan

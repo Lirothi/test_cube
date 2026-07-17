@@ -10,8 +10,10 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -27,6 +29,11 @@
 #include "rendering/core/UploadBatch.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+
+#pragma warning(push)
+#pragma warning(disable: 26819)
+#include "third_party/json/json.hpp"
+#pragma warning(pop)
 
 namespace
 {
@@ -51,6 +58,9 @@ namespace
         { "/Game/Shaders",  "shaders" },
     };
 
+    constexpr const char* kMaterialsVirtualRoot = "/Game/Materials";
+    constexpr const char* kMaterialsPhysicalRoot = "data/materials";
+
     enum class ContentBrowserRequestType
     {
         None,
@@ -59,7 +69,10 @@ namespace
         SelectFolder,
         Refresh,
         DeleteAsset, // asset = file to delete (confirmation modal follows)
-        MoveAsset    // asset = file, folderPath = target virtual folder
+        MoveAsset,   // asset = file, folderPath = target virtual folder
+        CreateMaterial,
+        DuplicateMaterial,
+        RenameMaterial
     };
 
     struct ContentBrowserUiRequest
@@ -1026,6 +1039,368 @@ namespace
         return true;
     }
 
+    bool EndsWithNoCase(const std::string& text, const char* suffix)
+    {
+        const std::size_t suffixLength = std::strlen(suffix);
+        if (text.size() < suffixLength)
+        {
+            return false;
+        }
+        const std::size_t start = text.size() - suffixLength;
+        for (std::size_t index = 0; index < suffixLength; ++index)
+        {
+            if (std::tolower(static_cast<unsigned char>(text[start + index])) !=
+                std::tolower(static_cast<unsigned char>(suffix[index])))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ValidateMaterialName(const char* name, std::string& reason)
+    {
+        if (!name || name[0] == '\0')
+        {
+            reason = "Material name is required.";
+            return false;
+        }
+
+        const std::string text(name);
+        if (text == "." || text == ".." || text == "auto")
+        {
+            reason = "This material name is reserved.";
+            return false;
+        }
+        if (text.front() == ' ' || text.back() == ' ')
+        {
+            reason = "Material name cannot start or end with a space.";
+            return false;
+        }
+        constexpr const char* invalidChars = "\\/:*?\"<>|";
+        if (text.find_first_of(invalidChars) != std::string::npos)
+        {
+            reason = "Material name cannot contain path separators or reserved characters.";
+            return false;
+        }
+        if (EndsWithNoCase(text, ".json"))
+        {
+            reason = "Enter the material asset name without the .json extension.";
+            return false;
+        }
+        return true;
+    }
+
+    nlohmann::json MakeDefaultMaterialTemplate()
+    {
+        // I0 schema-v2 defaults: neutral, fully PBR-capable, and immediately
+        // editable without referring to any texture that might not exist yet.
+        return {
+            { "normalIsRG", true },
+            { "useTBN", true },
+            { "alphaTest", false },
+            { "alphaCutoff", 0.5f },
+            { "twoSided", false },
+            { "tint", { 1.0f, 1.0f, 1.0f, 1.0f } },
+            { "metalRough", { 0.0f, 0.5f } },
+            { "texOffsScale", { 0.0f, 0.0f, 1.0f, 1.0f } },
+            { "normalStrength", 1.0f },
+            { "emissiveColor", { 0.0f, 0.0f, 0.0f } },
+            { "emissiveStrength", 0.0f }
+        };
+    }
+
+    bool JsonReferencesMaterial(const nlohmann::json& value, const std::string& materialName)
+    {
+        if (value.is_object())
+        {
+            const auto material = value.find("material");
+            if (material != value.end() && material->is_string() &&
+                material->get<std::string>() == materialName)
+            {
+                return true;
+            }
+            const auto materials = value.find("materials");
+            if (materials != value.end() && materials->is_array())
+            {
+                for (const nlohmann::json& slot : *materials)
+                {
+                    if (slot.is_string() && slot.get<std::string>() == materialName)
+                    {
+                        return true;
+                    }
+                }
+            }
+            for (const auto& item : value.items())
+            {
+                if (JsonReferencesMaterial(item.value(), materialName))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (value.is_array())
+        {
+            for (const nlohmann::json& item : value)
+            {
+                if (JsonReferencesMaterial(item, materialName))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    struct MaterialReferenceScan
+    {
+        std::vector<std::string> references;
+        std::vector<std::string> failures;
+    };
+
+    void ScanMaterialReferencesIn(const fs::path& root, const std::string& materialName,
+        MaterialReferenceScan& scan)
+    {
+        std::error_code error;
+        if (!fs::is_directory(root, error))
+        {
+            return;
+        }
+
+        fs::recursive_directory_iterator it(root,
+            fs::directory_options::skip_permission_denied, error);
+        const fs::recursive_directory_iterator end;
+        while (!error && it != end)
+        {
+            const fs::directory_entry entry = *it;
+            if (entry.is_regular_file(error) && EndsWithNoCase(entry.path().string(), ".json"))
+            {
+                std::ifstream file(entry.path());
+                const nlohmann::json document = file
+                    ? nlohmann::json::parse(file, nullptr, false, true)
+                    : nlohmann::json{};
+                if (document.is_discarded() || !file)
+                {
+                    scan.failures.push_back(entry.path().generic_string());
+                }
+                else if (JsonReferencesMaterial(document, materialName))
+                {
+                    scan.references.push_back(entry.path().generic_string());
+                }
+            }
+            error.clear();
+            it.increment(error);
+        }
+        if (error)
+        {
+            scan.failures.push_back(root.generic_string());
+        }
+    }
+
+    MaterialReferenceScan ScanMaterialReferences(const std::string& materialName)
+    {
+        MaterialReferenceScan scan;
+        // Levels contain direct object material/slot references. Mesh assets can
+        // carry the same defaults, so include them to avoid an indirect break.
+        ScanMaterialReferencesIn("data/levels", materialName, scan);
+        ScanMaterialReferencesIn("models", materialName, scan);
+        return scan;
+    }
+
+    bool ReplaceMaterialReferences(nlohmann::json& value, const std::string& oldName,
+        const std::string& newName)
+    {
+        bool changed = false;
+        if (value.is_object())
+        {
+            auto material = value.find("material");
+            if (material != value.end() && material->is_string() &&
+                material->get<std::string>() == oldName)
+            {
+                *material = newName;
+                changed = true;
+            }
+            auto materials = value.find("materials");
+            if (materials != value.end() && materials->is_array())
+            {
+                for (nlohmann::json& slot : *materials)
+                {
+                    if (slot.is_string() && slot.get<std::string>() == oldName)
+                    {
+                        slot = newName;
+                        changed = true;
+                    }
+                }
+            }
+            for (auto& item : value.items())
+            {
+                changed = ReplaceMaterialReferences(item.value(), oldName, newName) || changed;
+            }
+        }
+        else if (value.is_array())
+        {
+            for (nlohmann::json& item : value)
+            {
+                changed = ReplaceMaterialReferences(item, oldName, newName) || changed;
+            }
+        }
+        return changed;
+    }
+
+    struct MaterialReferenceRewrite
+    {
+        fs::path path;
+        fs::path tempPath;
+        fs::path backupPath;
+        bool committed = false;
+    };
+
+    void RemoveMaterialRenameTemps(const std::vector<MaterialReferenceRewrite>& rewrites)
+    {
+        for (const MaterialReferenceRewrite& rewrite : rewrites)
+        {
+            std::error_code error;
+            fs::remove(rewrite.tempPath, error);
+        }
+    }
+
+    void RollBackMaterialReferenceRewrites(std::vector<MaterialReferenceRewrite>& rewrites)
+    {
+        for (auto it = rewrites.rbegin(); it != rewrites.rend(); ++it)
+        {
+            if (!it->committed)
+            {
+                continue;
+            }
+            std::error_code error;
+            fs::remove(it->path, error);
+            error.clear();
+            fs::rename(it->backupPath, it->path, error);
+            it->committed = false;
+        }
+        RemoveMaterialRenameTemps(rewrites);
+    }
+
+    bool RenameMaterialAndReplaceReferences(const fs::path& materialSource,
+        const fs::path& materialDestination, const std::string& oldName,
+        const std::string& newName, const std::vector<std::string>& referencePaths,
+        std::string& reason)
+    {
+        std::error_code error;
+        if (!fs::is_regular_file(materialSource, error))
+        {
+            reason = "Source material file no longer exists.";
+            return false;
+        }
+        if (fs::exists(materialDestination, error))
+        {
+            reason = "A material with that name already exists.";
+            return false;
+        }
+
+        std::vector<MaterialReferenceRewrite> rewrites;
+        rewrites.reserve(referencePaths.size());
+        for (const std::string& referencePath : referencePaths)
+        {
+            std::ifstream file(referencePath);
+            const nlohmann::json document = file
+                ? nlohmann::json::parse(file, nullptr, false, true)
+                : nlohmann::json{};
+            if (document.is_discarded() || !file)
+            {
+                reason = "A previously found reference could no longer be read: " + referencePath;
+                return false;
+            }
+
+            nlohmann::json updated = document;
+            if (!ReplaceMaterialReferences(updated, oldName, newName))
+            {
+                continue; // The file changed after the scan and no longer needs an update.
+            }
+
+            MaterialReferenceRewrite rewrite;
+            rewrite.path = fs::path(referencePath);
+            rewrite.tempPath = rewrite.path;
+            rewrite.tempPath += ".material-rename.tmp";
+            rewrite.backupPath = rewrite.path;
+            rewrite.backupPath += ".material-rename.bak";
+            if (fs::exists(rewrite.tempPath, error) || fs::exists(rewrite.backupPath, error))
+            {
+                reason = "A material-rename recovery file already exists beside " + referencePath +
+                    ". Resolve or remove it before retrying.";
+                return false;
+            }
+
+            std::ofstream output(rewrite.tempPath, std::ios::trunc);
+            output << updated.dump(2) << '\n';
+            if (!output)
+            {
+                reason = "Could not write a temporary updated level/mesh file: " + referencePath;
+                RemoveMaterialRenameTemps(rewrites);
+                std::error_code removeError;
+                fs::remove(rewrite.tempPath, removeError);
+                return false;
+            }
+            rewrites.push_back(std::move(rewrite));
+        }
+
+        for (MaterialReferenceRewrite& rewrite : rewrites)
+        {
+            fs::rename(rewrite.path, rewrite.backupPath, error);
+            if (error)
+            {
+                reason = "Could not stage reference update for " + rewrite.path.generic_string() +
+                    ": " + error.message();
+                RollBackMaterialReferenceRewrites(rewrites);
+                return false;
+            }
+            fs::rename(rewrite.tempPath, rewrite.path, error);
+            if (error)
+            {
+                const std::string detail = error.message();
+                error.clear();
+                fs::rename(rewrite.backupPath, rewrite.path, error);
+                reason = "Could not commit reference update for " + rewrite.path.generic_string() +
+                    ": " + detail;
+                RollBackMaterialReferenceRewrites(rewrites);
+                return false;
+            }
+            rewrite.committed = true;
+        }
+
+        fs::rename(materialSource, materialDestination, error);
+        if (error)
+        {
+            reason = "Material could not be renamed: " + error.message();
+            RollBackMaterialReferenceRewrites(rewrites);
+            return false;
+        }
+
+        for (const MaterialReferenceRewrite& rewrite : rewrites)
+        {
+            std::error_code removeError;
+            fs::remove(rewrite.backupPath, removeError);
+        }
+        return true;
+    }
+
+    void ReplaceMaterialReferencesInOpenDocument(EditorSceneDocument& document,
+        const std::string& oldName, const std::string& newName)
+    {
+        bool changed = false;
+        for (EditorObject& object : document.Objects())
+        {
+            changed = ReplaceMaterialReferences(object.properties, oldName, newName) || changed;
+        }
+        if (changed)
+        {
+            // The runtime retains the equivalent MaterialData until its next
+            // object rebuild, but the open document must already carry the new
+            // reference so a later Save cannot resurrect the old material name.
+            document.SetDirty(true);
+        }
+    }
+
     bool IsPhysicalFolderEmpty(const std::string& virtualPath, std::string& reason)
     {
         fs::path physicalPath;
@@ -1459,6 +1834,17 @@ namespace
             DisabledMenuItemWithTooltip("New Folder", mapReason.c_str());
         }
 
+        if (folderPath == kMaterialsVirtualRoot)
+        {
+            if (ImGui::MenuItem("Create New Material..."))
+            {
+                if (request.type == ContentBrowserRequestType::None)
+                {
+                    request.type = ContentBrowserRequestType::CreateMaterial;
+                }
+            }
+        }
+
         ImGui::Separator();
         if (ImGui::MenuItem("Copy Current Folder Path"))
         {
@@ -1867,6 +2253,33 @@ namespace
             else
             {
                 DisabledMenuItemWithTooltip("Assign Material to Selected Object", materialReason.c_str());
+            }
+
+            ImGui::Separator();
+            if (ImGui::MenuItem("Create New Material..."))
+            {
+                if (request.type == ContentBrowserRequestType::None)
+                {
+                    request.type = ContentBrowserRequestType::CreateMaterial;
+                }
+            }
+            if (ImGui::MenuItem("Duplicate Material..."))
+            {
+                if (request.type == ContentBrowserRequestType::None)
+                {
+                    request.type = ContentBrowserRequestType::DuplicateMaterial;
+                    request.asset = record->id;
+                    request.assetPath = record->path;
+                }
+            }
+            if (ImGui::MenuItem("Rename Material..."))
+            {
+                if (request.type == ContentBrowserRequestType::None)
+                {
+                    request.type = ContentBrowserRequestType::RenameMaterial;
+                    request.asset = record->id;
+                    request.assetPath = record->path;
+                }
             }
             wroteSpecificAction = true;
         }
@@ -2427,7 +2840,7 @@ void ContentBrowserPanel::NotifyAutoRefresh(double timeSec)
 ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     EditorAssetId& selectedAsset,
     const EditorExtensionRegistry& extensions,
-    const EditorSceneDocument& document,
+    EditorSceneDocument& document,
     EditorObjectId selectedObject,
     Renderer& renderer,
     AssetThumbnailCache& thumbnails,
@@ -3066,6 +3479,36 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         folderOperationMessage_.clear();
         ImGui::OpenPopup("Delete File###ContentBrowserDeleteAsset");
     }
+    else if (uiRequest.type == ContentBrowserRequestType::CreateMaterial ||
+        uiRequest.type == ContentBrowserRequestType::DuplicateMaterial ||
+        uiRequest.type == ContentBrowserRequestType::RenameMaterial)
+    {
+        materialFileOperation_ = uiRequest.type == ContentBrowserRequestType::CreateMaterial
+            ? MaterialFileOperation::Create
+            : uiRequest.type == ContentBrowserRequestType::DuplicateMaterial
+                ? MaterialFileOperation::Duplicate
+                : MaterialFileOperation::Rename;
+        materialFileSourcePath_ = uiRequest.assetPath;
+        materialOriginalName_ = uiRequest.asset.key;
+        materialOperationMessage_.clear();
+        materialRenameReferences_.clear();
+        materialRenameScanFailures_.clear();
+
+        std::string defaultName = "new_material";
+        if (materialFileOperation_ == MaterialFileOperation::Duplicate)
+        {
+            defaultName = fs::path(materialFileSourcePath_).stem().string() + "_copy";
+        }
+        else if (materialFileOperation_ == MaterialFileOperation::Rename)
+        {
+            defaultName = materialOriginalName_;
+            const MaterialReferenceScan scan = ScanMaterialReferences(materialOriginalName_);
+            materialRenameReferences_ = scan.references;
+            materialRenameScanFailures_ = scan.failures;
+        }
+        std::snprintf(materialName_, sizeof(materialName_), "%s", defaultName.c_str());
+        ImGui::OpenPopup("Material File Operation###ContentBrowserMaterialFileOperation");
+    }
     else if (uiRequest.type == ContentBrowserRequestType::MoveAsset)
     {
         // Validate + execute. The drop tooltip already filtered the cheap refusals; this is the
@@ -3278,6 +3721,245 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         if (ImGui::Button("Cancel"))
         {
             folderOperationMessage_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Material File Operation###ContentBrowserMaterialFileOperation",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        const char* title = materialFileOperation_ == MaterialFileOperation::Create
+            ? "Create New Material"
+            : materialFileOperation_ == MaterialFileOperation::Duplicate
+                ? "Duplicate Material"
+                : "Rename Material";
+        const char* commitLabel = materialFileOperation_ == MaterialFileOperation::Create
+            ? "Create"
+            : materialFileOperation_ == MaterialFileOperation::Duplicate
+                ? "Duplicate"
+                : "Rename Anyway";
+        const auto completeMaterialFileOperation = [&](const std::string& name)
+        {
+            // AssetRegistry refresh makes the new file visible in the browser, but the runtime
+            // material manager has its own preset registry populated at level load. Register
+            // this one immediately so assigning a just-created duplicate does not leave its
+            // renderable without material data until the next application launch.
+            if (MaterialDataManager* materials = renderer.GetMaterialDataManager())
+            {
+                const fs::path path = fs::path(kMaterialsPhysicalRoot) / (name + ".json");
+                if (!materials->LoadPresetFromFile(path.wstring()))
+                {
+                    OutputDebugStringA("[editor] Material file was created but could not be registered at runtime.\n");
+                }
+            }
+            registry.Refresh();
+            EnsureSelectedFolder(registry);
+            selectedAsset = { EditorAssetType::MaterialPreset, name };
+            materialFileOperation_ = MaterialFileOperation::None;
+            materialFileSourcePath_.clear();
+            materialOriginalName_.clear();
+            materialOperationMessage_.clear();
+            materialRenameReferences_.clear();
+            materialRenameScanFailures_.clear();
+            ImGui::CloseCurrentPopup();
+        };
+        ImGui::TextUnformatted(title);
+        if (materialFileOperation_ == MaterialFileOperation::Duplicate)
+        {
+            ImGui::TextDisabled("Source: %s", materialFileSourcePath_.c_str());
+        }
+        else if (materialFileOperation_ == MaterialFileOperation::Rename)
+        {
+            ImGui::TextDisabled("Source: %s", materialFileSourcePath_.c_str());
+            if (!materialRenameReferences_.empty())
+            {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.20f, 1.0f),
+                    "Warning: %d level/mesh file(s) reference '%s'.",
+                    static_cast<int>(materialRenameReferences_.size()),
+                    materialOriginalName_.c_str());
+                ImGui::TextWrapped(
+                    "Rename Anyway leaves these references unchanged. Rename and Replace updates every scanned material/slot reference.");
+                const size_t listed = std::min<size_t>(materialRenameReferences_.size(), 8);
+                for (size_t index = 0; index < listed; ++index)
+                {
+                    ImGui::BulletText("%s", materialRenameReferences_[index].c_str());
+                }
+                if (listed < materialRenameReferences_.size())
+                {
+                    ImGui::TextDisabled("... and %d more.",
+                        static_cast<int>(materialRenameReferences_.size() - listed));
+                }
+            }
+            if (!materialRenameScanFailures_.empty())
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f),
+                    "Could not fully scan %d JSON file(s); inspect references manually.",
+                    static_cast<int>(materialRenameScanFailures_.size()));
+            }
+        }
+
+        ImGui::InputText("Material Name", materialName_, sizeof(materialName_));
+        ImGui::TextDisabled("Creates data/materials/<name>.json");
+        if (!materialOperationMessage_.empty())
+        {
+            ImGui::TextWrapped("%s", materialOperationMessage_.c_str());
+        }
+
+        if (ImGui::Button(commitLabel))
+        {
+            std::string reason;
+            if (!ValidateMaterialName(materialName_, reason))
+            {
+                materialOperationMessage_ = reason;
+            }
+            else
+            {
+                const std::string name(materialName_);
+                const fs::path root(kMaterialsPhysicalRoot);
+                const fs::path destination = root / (name + ".json");
+                std::error_code error;
+                bool success = false;
+                if (materialFileOperation_ == MaterialFileOperation::Create)
+                {
+                    if (!fs::is_directory(root, error) && !fs::create_directories(root, error))
+                    {
+                        reason = error ? error.message() : "Material directory could not be created.";
+                    }
+                    else if (fs::exists(destination, error))
+                    {
+                        reason = "A material with that name already exists.";
+                    }
+                    else
+                    {
+                        std::ofstream output(destination, std::ios::trunc);
+                        output << MakeDefaultMaterialTemplate().dump(2) << '\n';
+                        if (!output)
+                        {
+                            reason = "Material template could not be written.";
+                        }
+                        else
+                        {
+                            success = true;
+                        }
+                    }
+                }
+                else if (materialFileOperation_ == MaterialFileOperation::Duplicate)
+                {
+                    const fs::path source(materialFileSourcePath_);
+                    if (!fs::is_regular_file(source, error))
+                    {
+                        reason = "Source material file no longer exists.";
+                    }
+                    else if (fs::exists(destination, error))
+                    {
+                        reason = "A material with that name already exists.";
+                    }
+                    else if (!fs::copy_file(source, destination, fs::copy_options::none, error))
+                    {
+                        reason = error ? error.message() : "Material could not be duplicated.";
+                    }
+                    else
+                    {
+                        success = true;
+                    }
+                }
+                else if (materialFileOperation_ == MaterialFileOperation::Rename)
+                {
+                    const fs::path source(materialFileSourcePath_);
+                    if (name == materialOriginalName_)
+                    {
+                        reason = "The material name is unchanged.";
+                    }
+                    else if (!fs::is_regular_file(source, error))
+                    {
+                        reason = "Source material file no longer exists.";
+                    }
+                    else if (fs::exists(destination, error))
+                    {
+                        reason = "A material with that name already exists.";
+                    }
+                    else
+                    {
+                        fs::rename(source, destination, error);
+                        if (error)
+                        {
+                            reason = error.message();
+                        }
+                        else
+                        {
+                            success = true;
+                        }
+                    }
+                }
+
+                if (success)
+                {
+                    completeMaterialFileOperation(name);
+                }
+                else
+                {
+                    materialOperationMessage_ = reason.empty()
+                        ? "Material file operation failed."
+                        : reason;
+                }
+            }
+        }
+        if (materialFileOperation_ == MaterialFileOperation::Rename)
+        {
+            ImGui::SameLine();
+            const bool canReplaceReferences = materialRenameScanFailures_.empty();
+            ImGui::BeginDisabled(!canReplaceReferences);
+            const bool renameAndReplace = ImGui::Button("Rename and Replace");
+            ImGui::EndDisabled();
+            if (!canReplaceReferences && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip(
+                    "One or more level/mesh JSON files could not be scanned, so references cannot be replaced safely.");
+            }
+            if (renameAndReplace)
+            {
+                std::string reason;
+                if (!ValidateMaterialName(materialName_, reason))
+                {
+                    materialOperationMessage_ = reason;
+                }
+                else
+                {
+                    const std::string name(materialName_);
+                    if (name == materialOriginalName_)
+                    {
+                        materialOperationMessage_ = "The material name is unchanged.";
+                    }
+                    else if (RenameMaterialAndReplaceReferences(
+                        fs::path(materialFileSourcePath_),
+                        fs::path(kMaterialsPhysicalRoot) / (name + ".json"),
+                        materialOriginalName_, name, materialRenameReferences_, reason))
+                    {
+                        ReplaceMaterialReferencesInOpenDocument(document,
+                            materialOriginalName_, name);
+                        completeMaterialFileOperation(name);
+                    }
+                    else
+                    {
+                        materialOperationMessage_ = reason.empty()
+                            ? "Material rename and replacement failed."
+                            : reason;
+                    }
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            materialFileOperation_ = MaterialFileOperation::None;
+            materialFileSourcePath_.clear();
+            materialOriginalName_.clear();
+            materialOperationMessage_.clear();
+            materialRenameReferences_.clear();
+            materialRenameScanFailures_.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
