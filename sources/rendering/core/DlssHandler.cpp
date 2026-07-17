@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 
 #include "rendering/core/Renderer.h"
 #include "app/camera/Camera.h"
@@ -47,8 +48,23 @@ DlssHandler::DlssHandler(Renderer& renderer)
     options_.preExposure = 1.0f;
     options_.exposureScale = 1.0f;
     options_.colorBuffersHDR = sl::Boolean::eTrue;
-    options_.useAutoExposure = sl::Boolean::eFalse;
+    options_.useAutoExposure = sl::Boolean::eTrue;
     options_.alphaUpscalingEnabled = sl::Boolean::eFalse;
+
+    // Force the CNN model (preset F, the only CNN preset left on 310.x DLLs; A-E are removed).
+    // The transformer default (K) drops history trust over temporally unstable content —
+    // ocean refraction/specular — and smears it during camera motion. Verified via the NGX
+    // debug HUD (ShowDlssIndicator): eDefault resolves to K on our 310.4 DLL.
+    // NOTE: the water fix is the COMBO of preset F + AUTO-exposure. Manual exposure (a 1x1
+    // tagged texture, see kTagManualExposure in Evaluate) brings the smearing back: the
+    // network normalizes input by exposure before its history decisions, and our raw HDR at
+    // exposure=1 sits outside the range the CNN behaves well in.
+    options_.dlaaPreset = sl::DLSSPreset::ePresetF;
+    options_.qualityPreset = sl::DLSSPreset::ePresetF;
+    options_.balancedPreset = sl::DLSSPreset::ePresetF;
+    options_.performancePreset = sl::DLSSPreset::ePresetF;
+    options_.ultraPerformancePreset = sl::DLSSPreset::ePresetF;
+    options_.ultraQualityPreset = sl::DLSSPreset::ePresetF;
 
     constants_.depthInverted = sl::Boolean::eTrue;
     constants_.cameraMotionIncluded = sl::Boolean::eTrue;
@@ -306,6 +322,97 @@ void DlssHandler::UpdateCameraData(const Camera& camera)
     }
 }
 
+void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
+{
+    if (exposureUploaded_)
+    {
+        return;
+    }
+
+    ID3D12Device* device = renderer_.GetDevice();
+    if (device == nullptr)
+    {
+        return;
+    }
+
+    if (!exposureTex_)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = 1;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R32_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&exposureTex_))))
+        {
+            return;
+        }
+        exposureTex_->SetName(L"DlssExposure1x1");
+
+        D3D12_HEAP_PROPERTIES upHeap{};
+        upHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC bufDesc{};
+        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufDesc.Width = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+        bufDesc.Height = 1;
+        bufDesc.DepthOrArraySize = 1;
+        bufDesc.MipLevels = 1;
+        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufDesc.SampleDesc.Count = 1;
+        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(&upHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&exposureUpload_))))
+        {
+            exposureTex_.Reset();
+            return;
+        }
+
+        void* mapped = nullptr;
+        const D3D12_RANGE noRead{ 0, 0 };
+        if (SUCCEEDED(exposureUpload_->Map(0, &noRead, &mapped)))
+        {
+            // Tonemap is plain ACES with no exposure multiplier (exposure is baked into light
+            // intensities during shading), so the effective pre-tonemap exposure is 1.
+            const float kExposure = 1.0f;
+            std::memcpy(mapped, &kExposure, sizeof(kExposure));
+            exposureUpload_->Unmap(0, nullptr);
+        }
+    }
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = exposureTex_.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = exposureUpload_.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Offset = 0;
+    src.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R32_FLOAT;
+    src.PlacedFootprint.Footprint.Width = 1;
+    src.PlacedFootprint.Footprint.Height = 1;
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+    cl->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    // One-time transition recorded on the frame list; the texture then lives in
+    // NON_PIXEL_SHADER_RESOURCE forever (never registered with the state tracker).
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = exposureTex_.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    cl->ResourceBarrier(1, &barrier);
+
+    exposureUploaded_ = true;
+}
+
 bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
 {
     CPU_SCOPE(ProfilerScopes::kDlssEvaluate);
@@ -326,6 +433,16 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     renderer_.Transition(cl, deferred.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.dlssBias.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Manual exposure is DISABLED on purpose: tagging the 1x1 exposure texture turns NGX
+    // auto-exposure off, and the preset-F water fix empirically depends on auto-exposure
+    // (manual exposure=1 brings the motion smearing back). Kept for future experiments —
+    // a correct adapted value (not 1.0) might work; flip the flag to try.
+    constexpr bool kTagManualExposure = false;
+    if (kTagManualExposure)
+    {
+        EnsureExposureResources(cl);
+    }
 
     sl::Resource color(sl::ResourceType::eTex2d, deferred.scene.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     color.width = std::max(renderer_.renderWidth_, 1u);
@@ -357,18 +474,28 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     output.nativeFormat = static_cast<uint32_t>(renderer_.GetSceneColorFormat());
     output.mipLevels = 1;
 
-    std::array<sl::ResourceTag, 5> tags = {
+    // Without an exposure tag NGX forces auto-exposure ON regardless of useAutoExposure
+    // (confirmed via the NGX debug HUD); the 1x1 constant texture switches it to manual.
+    sl::Resource exposure(sl::ResourceType::eTex2d, exposureTex_.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    exposure.width = 1;
+    exposure.height = 1;
+    exposure.nativeFormat = static_cast<uint32_t>(DXGI_FORMAT_R32_FLOAT);
+    exposure.mipLevels = 1;
+
+    std::array<sl::ResourceTag, 6> tags = {
         sl::ResourceTag(&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&bias, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent),
         //sl::ResourceTag(&bias, sl::kBufferTypeReactiveMaskHint, sl::ResourceLifecycle::eValidUntilPresent),
-        sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent)
+        sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eValidUntilPresent)
     };
+    const uint32_t tagCount = (kTagManualExposure && exposureUploaded_) ? 6u : 5u;
 
     {
         CPU_SCOPE(ProfilerScopes::kDlssSetTagsOptions);
-        if (slSetTagForFrame(*frameToken_, viewport_, tags.data(), static_cast<uint32_t>(tags.size()),
+        if (slSetTagForFrame(*frameToken_, viewport_, tags.data(), tagCount,
             reinterpret_cast<sl::CommandBuffer*>(cl)) != sl::Result::eOk)
         {
             return false;

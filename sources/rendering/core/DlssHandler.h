@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <algorithm>
 #include <cstdint>
+#include <wrl/client.h>
 
 #include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
@@ -41,6 +42,7 @@ private:
     void HandleAllocationFailure();
     void ResetJitterSequence();
     Math::float2 GenerateJitterSample();
+    void EnsureExposureResources(ID3D12GraphicsCommandList* cl);
 
 private:
     Renderer& renderer_;
@@ -58,4 +60,10 @@ private:
     Math::float2 jitterPixels_ = Math::float2(0.0f, 0.0f);
     uint32_t haltonIndex_ = 0;
     static constexpr uint32_t kHaltonSequenceLength_ = 1024;
+
+    // 1x1 R32F exposure texture tagged as kBufferTypeExposure. Without it NGX forces
+    // auto-exposure ON regardless of useAutoExposure (confirmed via the NGX debug HUD).
+    Microsoft::WRL::ComPtr<ID3D12Resource> exposureTex_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> exposureUpload_;
+    bool exposureUploaded_ = false;
 };
