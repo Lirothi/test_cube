@@ -1,0 +1,6 @@
+{
+  "geometry": "import_staging/rock_boulder_2_game_ready_asset/scene.gltf",
+  "inputLayout": "PosNormTanUV",
+  "material": "auto",
+  "shader": "shaders/gbuffer.hlsl"
+}

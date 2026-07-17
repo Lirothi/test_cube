@@ -1,0 +1,7 @@
+{
+  "geometry": "models/atoll_island.obj",
+  "inputLayout": "PosNormTanUV",
+  "material": "sandstone_cracks",
+  "renderLayer": "Terrain",
+  "shader": "shaders/gbuffer.hlsl"
+}

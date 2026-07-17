@@ -79,11 +79,15 @@ bool TryFloat3(const json& j, float3& out)
     return true;
 }
 
-SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationContext& ctx, const json& o)
+SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationContext& ctx, const json& oIn)
 {
     (void)ctx;
 
     SceneObjectRegistry::ObjectList objects;
+
+    // J1: expand a mesh-asset reference so this creator (incl. the RotatingObject branch, which
+    // reads model/material/layout/shader directly) sees the effective render fields.
+    const json o = SceneObjectFactory::ResolveMeshAsset(oIn);
 
     // RotatingObject is demo-specific: build it only for a nonzero speed, then
     // apply shared staticMesh properties so animation starts from the authored

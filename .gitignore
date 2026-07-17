@@ -376,7 +376,12 @@ import_staging/
 
 # Imported / binary assets — kept out of git (regenerate via the in-editor importer).
 # Already-committed files under these stay tracked until explicitly `git rm --cached`'d.
-/models/
+# EXCEPTION: the tiny text mesh-asset descriptors (models/*.mesh.json, J1) ARE tracked —
+# levels reference them, so they must clone. The ignore-contents-then-re-include pattern is
+# required because re-including a file under an ignored *directory* doesn't work.
+/models/**
+!/models/**/
+!/models/**/*.mesh.json
 /textures/
 
 # Exclusions

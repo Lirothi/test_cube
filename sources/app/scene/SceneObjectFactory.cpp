@@ -43,13 +43,10 @@ namespace
         if (s == "Debug") { return RenderLayer::Debug; }
         return RenderLayer::Default;
     }
+}
 
-    // J1: if the object references a mesh asset (`"mesh"` = path to a models/<name>.mesh.json),
-    // fold that asset's render defaults UNDER the object's own keys — the object always wins, so
-    // per-placement overrides (material/materials/shader/renderLayer/texOffsScale/...) keep
-    // working exactly as before. The asset's `geometry` maps onto `model`. Returns `o` unchanged
-    // when there is no `mesh` key or the file can't be read (bare object, no crash). All paths are
-    // cwd-relative, matching every other engine path convention (model, textures, ...).
+namespace SceneObjectFactory
+{
     json ResolveMeshAsset(const json& o)
     {
         const auto meshIt = o.find("mesh");
@@ -66,7 +63,8 @@ namespace
         // Fold every asset key the object doesn't already carry — material, materials, shader,
         // inputLayout, renderLayer, texOffsScale, params, and any future field all become mesh
         // defaults the object can override. `geometry` -> `model`; `spawnScale` is a spawn-time
-        // hint (consumed by the editor spawn factory), not a load field.
+        // hint (consumed by the editor spawn factory), not a load field. All paths are cwd-relative,
+        // matching every other engine path convention.
         for (auto it = asset.begin(); it != asset.end(); ++it)
         {
             const std::string& key = it.key();
@@ -76,10 +74,7 @@ namespace
         }
         return eff;
     }
-}
 
-namespace SceneObjectFactory
-{
     void ApplyStaticMeshJsonProperties(StaticMesh& mesh, const json& o)
     {
         if (o.contains("rotationDeg"))

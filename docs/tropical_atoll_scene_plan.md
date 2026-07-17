@@ -805,7 +805,18 @@ glTF, `spawnScale` from the size-normalizer). Back-compat is intact — legacy `
 objects load byte-identically (ResolveMeshAsset returns them untouched) and round-trip verbatim.
 Verified: a compact `{"mesh":"models/atoll_island.mesh.json"}` level booted headless → 1 caster,
 RT + cull-validation PASS (material/renderLayer/texOffsScale all pulled from the asset);
-scene-stress on the legacy demo levels CLEAN. *(original spec below)*
+scene-stress on the legacy demo levels CLEAN.
+**BULK MIGRATION done (user: "собери меши... замени на левелах", scope = every mesh/every level):**
+a Python pass generated 17 `models/*.mesh.json` (one per distinct geometry+selector) and rewrote
+**437 objects** across all 10 levels to the compact `{"mesh": ..., placement}` form. Hoisting rule
+= a render key moves into the asset only if present-and-identical on EVERY object using that
+geometry; keys that vary stay per-object (e.g. `box`/`sphere` are material-test grids used as both
+static+transparent → nothing hoisted, just `model`→`mesh`; the metal/rough grid keeps per-sphere
+`metalRough`). `.gitignore` gained an ignore-contents-then-reinclude exception so the tiny
+`.mesh.json` descriptors ARE tracked (binaries stay ignored). Verified: scene-stress across the
+converted demo/demo1/new1 (incl. a `rotateSpeedDeg` corgi — RotatingObject) CLEAN; full atoll.json
+(107 meshes) booted → 107 RT instances, 442 casters, palm multi-slot auto-instancing (34×5) intact,
+cull PASS. *(original spec below)*
 One file describes how to RENDER a piece of geometry:
 ```json
 {

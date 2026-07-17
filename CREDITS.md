@@ -21,3 +21,15 @@ Model Information:
 ## rocks
 This model was uploaded to and downloaded from Sketchfab.com under the sole responsibility of the User (as defined on sketchfab.com/terms). The downloading party is solely responsible for ensuring that any User Content uploaded to or downloaded from the Sketchfab Services complies with any applicable laws and third party rights, including but not limited to any intellectual property rights, privacy rights and publicity rights, as per Sketchfab terms sketchfab.com/terms.
 
+## curly_palm
+Model Information:
+* title:	Curly Palm
+* source:	https://sketchfab.com/3d-models/curly-palm-00f2b57dd0e844edbeb116034fa471ec
+* author:	evolveduk (https://sketchfab.com/evolveduk)
+
+## rock_boulder_2_game_ready_asset
+Model Information:
+* title:	Rock Boulder 2 (game ready asset)
+* source:	https://sketchfab.com/3d-models/rock-boulder-2-game-ready-asset-70fd18ec2a4a4d378d9d8c1ba878dcbc
+* author:	Pixel Life (https://sketchfab.com/pixellife)
+

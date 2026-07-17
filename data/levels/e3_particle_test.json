@@ -45,7 +45,7 @@
       "enabled": true,
       "id": 2,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "ground",
       "position": [
         0.0,

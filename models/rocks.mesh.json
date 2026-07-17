@@ -1,0 +1,6 @@
+{
+  "geometry": "import_staging/rocks/scene.gltf",
+  "inputLayout": "PosNormTanUV",
+  "material": "auto",
+  "shader": "shaders/gbuffer.hlsl"
+}

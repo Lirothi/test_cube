@@ -45,7 +45,7 @@
       "enabled": true,
       "id": 2,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "ground",
       "position": [
         0.0,
@@ -74,7 +74,6 @@
     {
       "enabled": true,
       "id": 10,
-      "material": "auto",
       "materials": [
         "auto",
         "auto",
@@ -82,7 +81,7 @@
         "auto",
         "auto"
       ],
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.whole.ONE_OBJECT",
       "position": [
         0.0,
@@ -104,8 +103,7 @@
     {
       "enabled": true,
       "id": 11,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.whole.clone",
       "position": [
         -8.0,
@@ -127,8 +125,7 @@
     {
       "enabled": true,
       "id": 20,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf#0",
+      "mesh": "models/coconut_palm_0.mesh.json",
       "name": "part.g0.trunk.single",
       "position": [
         -16.0,
@@ -150,8 +147,7 @@
     {
       "enabled": true,
       "id": 22,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf#2",
+      "mesh": "models/coconut_palm_2.mesh.json",
       "name": "part.g2.fronds.single",
       "position": [
         -24.0,
@@ -173,8 +169,7 @@
     {
       "enabled": true,
       "id": 30,
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "date_palm.whole",
       "position": [
         14.0,
@@ -196,7 +191,6 @@
     {
       "enabled": true,
       "id": 31,
-      "material": "auto",
       "materials": [
         "sandstone_cracks",
         "auto",
@@ -204,7 +198,7 @@
         "auto",
         "auto"
       ],
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.mixed.slots",
       "position": [
         8.0,
@@ -226,8 +220,7 @@
     {
       "enabled": true,
       "id": 50,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.0",
       "position": [
         -2.0,
@@ -249,8 +242,7 @@
     {
       "enabled": true,
       "id": 51,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.1",
       "position": [
         -7.0,
@@ -272,8 +264,7 @@
     {
       "enabled": true,
       "id": 52,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.2",
       "position": [
         -12.0,
@@ -295,8 +286,7 @@
     {
       "enabled": true,
       "id": 53,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.3",
       "position": [
         -17.0,
@@ -318,8 +308,7 @@
     {
       "enabled": true,
       "id": 54,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.4",
       "position": [
         3.0,
@@ -341,8 +330,7 @@
     {
       "enabled": true,
       "id": 55,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.5",
       "position": [
         8.0,
@@ -364,8 +352,7 @@
     {
       "enabled": true,
       "id": 56,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.6",
       "position": [
         -22.0,
@@ -387,8 +374,7 @@
     {
       "enabled": true,
       "id": 57,
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.7",
       "position": [
         13.0,
@@ -411,11 +397,11 @@
       "enabled": true,
       "id": 60,
       "material": "bronze",
+      "mesh": "models/box.mesh.json",
       "metalRough": [
         1.0,
         0.05
       ],
-      "model": "models/box.obj",
       "name": "rt.mirror",
       "position": [
         0.0,
@@ -438,8 +424,7 @@
     {
       "enabled": true,
       "id": 40,
-      "material": "auto",
-      "model": "import_staging/rocks/scene.gltf#node:Rock01_Rock01Shader_0",
+      "mesh": "models/rocks_node_Rock01_Rock01Shader_0.mesh.json",
       "name": "rock.node1",
       "position": [
         20.0,
@@ -461,8 +446,7 @@
     {
       "enabled": true,
       "id": 41,
-      "material": "auto",
-      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
       "name": "boulder",
       "position": [
         22.0,
@@ -484,9 +468,7 @@
     {
       "enabled": true,
       "id": 64,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "models/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm_3.mesh.json",
       "name": "staticMesh #64",
       "position": [
         -0.34886378049850464,
@@ -503,15 +485,12 @@
         1.0,
         1.0
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 68,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "models/date_palm/scene.gltf",
+      "mesh": "models/date_palm_2.mesh.json",
       "name": "staticMesh #68",
       "position": [
         7.474907875061035,
@@ -528,7 +507,6 @@
         0.8175769448280334,
         0.8175769448280334
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     }
   ],

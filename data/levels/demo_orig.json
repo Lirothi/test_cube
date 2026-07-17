@@ -23,7 +23,7 @@
       "enabled": true,
       "id": 1,
       "material": "damaged_plaster",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #1",
       "normalStrength": 1.0,
       "position": [
@@ -48,7 +48,7 @@
       "enabled": true,
       "id": 2,
       "material": "damaged_plaster",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #2",
       "position": [
         0.0,
@@ -71,8 +71,7 @@
     {
       "enabled": true,
       "id": 3,
-      "material": "bronze",
-      "model": "models/teapot.obj",
+      "mesh": "models/teapot.mesh.json",
       "name": "staticMesh #3",
       "position": [
         -1.0,
@@ -96,7 +95,7 @@
       "enabled": true,
       "id": 4,
       "material": "bronze",
-      "model": "models/sphere.obj",
+      "mesh": "models/sphere.mesh.json",
       "name": "staticMesh #4",
       "position": [
         -3.0,
@@ -119,8 +118,7 @@
     {
       "enabled": true,
       "id": 5,
-      "material": "brick",
-      "model": "models/corgi.obj",
+      "mesh": "models/corgi.mesh.json",
       "name": "staticMesh #5",
       "position": [
         3.0,
@@ -149,7 +147,7 @@
       "enabled": true,
       "id": 6,
       "ior": 1.1,
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "transparentMesh #6",
       "normalMap": "textures/damaged_plaster_normal.dds",
       "position": [
@@ -187,7 +185,7 @@
       "enabled": true,
       "id": 7,
       "ior": 1.1,
-      "model": "models/sphere.obj",
+      "mesh": "models/sphere.mesh.json",
       "name": "transparentMesh #7",
       "normalMap": "textures/damaged_plaster_normal.dds",
       "position": [
@@ -220,7 +218,7 @@
       "enabled": true,
       "id": 8,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #8",
       "position": [
         0.0,
@@ -250,7 +248,7 @@
       "enabled": true,
       "id": 9,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #9",
       "position": [
         0.0,
@@ -280,7 +278,7 @@
       "enabled": true,
       "id": 10,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #10",
       "position": [
         39.0,
@@ -310,7 +308,7 @@
       "enabled": true,
       "id": 11,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #11",
       "position": [
         39.0,
@@ -340,7 +338,7 @@
       "enabled": true,
       "id": 12,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #12",
       "position": [
         -39.0,
@@ -370,7 +368,7 @@
       "enabled": true,
       "id": 13,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #13",
       "position": [
         -39.0,
@@ -400,7 +398,7 @@
       "enabled": true,
       "id": 14,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #14",
       "position": [
         0.0,
@@ -430,7 +428,7 @@
       "enabled": true,
       "id": 15,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #15",
       "position": [
         -39.0,
@@ -460,7 +458,7 @@
       "enabled": true,
       "id": 16,
       "material": "sandstone_cracks",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #16",
       "position": [
         39.0,
@@ -490,7 +488,7 @@
       "enabled": true,
       "id": 17,
       "material": "bronze",
-      "model": "models/box.obj",
+      "mesh": "models/box.mesh.json",
       "name": "staticMesh #17",
       "normalStrength": 0.01,
       "position": [
@@ -521,11 +519,11 @@
       "enabled": true,
       "id": 18,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #18",
       "position": [
         0.0,
@@ -549,11 +547,11 @@
       "enabled": true,
       "id": 19,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.11111111
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #19",
       "position": [
         1.2000000476837158,
@@ -577,11 +575,11 @@
       "enabled": true,
       "id": 20,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.22222222
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #20",
       "position": [
         2.4000000953674316,
@@ -605,11 +603,11 @@
       "enabled": true,
       "id": 21,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.33333334
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #21",
       "position": [
         3.5999999046325684,
@@ -633,11 +631,11 @@
       "enabled": true,
       "id": 22,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.44444445
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #22",
       "position": [
         4.800000190734863,
@@ -661,11 +659,11 @@
       "enabled": true,
       "id": 23,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.55555558
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #23",
       "position": [
         6.0,
@@ -689,11 +687,11 @@
       "enabled": true,
       "id": 24,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.66666669
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #24",
       "position": [
         7.199999809265137,
@@ -717,11 +715,11 @@
       "enabled": true,
       "id": 25,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.77777779
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #25",
       "position": [
         8.399999618530273,
@@ -745,11 +743,11 @@
       "enabled": true,
       "id": 26,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         0.8888889
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #26",
       "position": [
         9.600000381469727,
@@ -773,11 +771,11 @@
       "enabled": true,
       "id": 27,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
         1.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #27",
       "position": [
         10.800000190734863,
@@ -801,11 +799,11 @@
       "enabled": true,
       "id": 28,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #28",
       "position": [
         0.0,
@@ -829,11 +827,11 @@
       "enabled": true,
       "id": 29,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.11111111
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #29",
       "position": [
         1.2000000476837158,
@@ -857,11 +855,11 @@
       "enabled": true,
       "id": 30,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.22222222
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #30",
       "position": [
         2.4000000953674316,
@@ -885,11 +883,11 @@
       "enabled": true,
       "id": 31,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.33333334
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #31",
       "position": [
         3.5999999046325684,
@@ -913,11 +911,11 @@
       "enabled": true,
       "id": 32,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.44444445
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #32",
       "position": [
         4.800000190734863,
@@ -941,11 +939,11 @@
       "enabled": true,
       "id": 33,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.55555558
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #33",
       "position": [
         6.0,
@@ -969,11 +967,11 @@
       "enabled": true,
       "id": 34,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.66666669
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #34",
       "position": [
         7.199999809265137,
@@ -997,11 +995,11 @@
       "enabled": true,
       "id": 35,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.77777779
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #35",
       "position": [
         8.399999618530273,
@@ -1025,11 +1023,11 @@
       "enabled": true,
       "id": 36,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         0.8888889
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #36",
       "position": [
         9.600000381469727,
@@ -1053,11 +1051,11 @@
       "enabled": true,
       "id": 37,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.25,
         1.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #37",
       "position": [
         10.800000190734863,
@@ -1081,11 +1079,11 @@
       "enabled": true,
       "id": 38,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #38",
       "position": [
         0.0,
@@ -1109,11 +1107,11 @@
       "enabled": true,
       "id": 39,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.11111111
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #39",
       "position": [
         1.2000000476837158,
@@ -1137,11 +1135,11 @@
       "enabled": true,
       "id": 40,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.22222222
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #40",
       "position": [
         2.4000000953674316,
@@ -1165,11 +1163,11 @@
       "enabled": true,
       "id": 41,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.33333334
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #41",
       "position": [
         3.5999999046325684,
@@ -1193,11 +1191,11 @@
       "enabled": true,
       "id": 42,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.44444445
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #42",
       "position": [
         4.800000190734863,
@@ -1221,11 +1219,11 @@
       "enabled": true,
       "id": 43,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.55555558
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #43",
       "position": [
         6.0,
@@ -1249,11 +1247,11 @@
       "enabled": true,
       "id": 44,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.66666669
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #44",
       "position": [
         7.199999809265137,
@@ -1277,11 +1275,11 @@
       "enabled": true,
       "id": 45,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.77777779
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #45",
       "position": [
         8.399999618530273,
@@ -1305,11 +1303,11 @@
       "enabled": true,
       "id": 46,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         0.8888889
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #46",
       "position": [
         9.600000381469727,
@@ -1333,11 +1331,11 @@
       "enabled": true,
       "id": 47,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.5,
         1.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #47",
       "position": [
         10.800000190734863,
@@ -1361,11 +1359,11 @@
       "enabled": true,
       "id": 48,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #48",
       "position": [
         0.0,
@@ -1389,11 +1387,11 @@
       "enabled": true,
       "id": 49,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.11111111
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #49",
       "position": [
         1.2000000476837158,
@@ -1417,11 +1415,11 @@
       "enabled": true,
       "id": 50,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.22222222
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #50",
       "position": [
         2.4000000953674316,
@@ -1445,11 +1443,11 @@
       "enabled": true,
       "id": 51,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.33333334
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #51",
       "position": [
         3.5999999046325684,
@@ -1473,11 +1471,11 @@
       "enabled": true,
       "id": 52,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.44444445
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #52",
       "position": [
         4.800000190734863,
@@ -1501,11 +1499,11 @@
       "enabled": true,
       "id": 53,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.55555558
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #53",
       "position": [
         6.0,
@@ -1529,11 +1527,11 @@
       "enabled": true,
       "id": 54,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.66666669
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #54",
       "position": [
         7.199999809265137,
@@ -1557,11 +1555,11 @@
       "enabled": true,
       "id": 55,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.77777779
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #55",
       "position": [
         8.399999618530273,
@@ -1585,11 +1583,11 @@
       "enabled": true,
       "id": 56,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         0.8888889
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #56",
       "position": [
         9.600000381469727,
@@ -1613,11 +1611,11 @@
       "enabled": true,
       "id": 57,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.75,
         1.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #57",
       "position": [
         10.800000190734863,
@@ -1641,11 +1639,11 @@
       "enabled": true,
       "id": 58,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #58",
       "position": [
         0.0,
@@ -1669,11 +1667,11 @@
       "enabled": true,
       "id": 59,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.11111111
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #59",
       "position": [
         1.2000000476837158,
@@ -1697,11 +1695,11 @@
       "enabled": true,
       "id": 60,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.22222222
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #60",
       "position": [
         2.4000000953674316,
@@ -1725,11 +1723,11 @@
       "enabled": true,
       "id": 61,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.33333334
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #61",
       "position": [
         3.5999999046325684,
@@ -1753,11 +1751,11 @@
       "enabled": true,
       "id": 62,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.44444445
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #62",
       "position": [
         4.800000190734863,
@@ -1781,11 +1779,11 @@
       "enabled": true,
       "id": 63,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.55555558
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #63",
       "position": [
         6.0,
@@ -1809,11 +1807,11 @@
       "enabled": true,
       "id": 64,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.66666669
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #64",
       "position": [
         7.199999809265137,
@@ -1837,11 +1835,11 @@
       "enabled": true,
       "id": 65,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.77777779
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #65",
       "position": [
         8.399999618530273,
@@ -1865,11 +1863,11 @@
       "enabled": true,
       "id": 66,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.8888889
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #66",
       "position": [
         9.600000381469727,
@@ -1893,11 +1891,11 @@
       "enabled": true,
       "id": 67,
       "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
       "metalRough": [
         1.0,
         1.0
       ],
-      "model": "models/sphere.obj",
       "name": "staticMesh #67",
       "position": [
         10.800000190734863,

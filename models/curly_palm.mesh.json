@@ -1,0 +1,6 @@
+{
+  "geometry": "import_staging/curly_palm/scene.gltf",
+  "inputLayout": "PosNormTanUV",
+  "material": "auto",
+  "shader": "shaders/gbuffer.hlsl"
+}

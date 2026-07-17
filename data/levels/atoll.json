@@ -44,16 +44,13 @@
     {
       "enabled": true,
       "id": 2,
-      "inputLayout": "PosNormTanUV",
-      "material": "sandstone_cracks",
-      "model": "models/atoll_island.obj",
+      "mesh": "models/atoll_island.mesh.json",
       "name": "AtollIsland",
       "position": [
         0.0,
         0.10000000149011612,
         0.0
       ],
-      "renderLayer": "Terrain",
       "rotationDeg": [
         0.0,
         -0.0,
@@ -64,7 +61,6 @@
         1.0,
         1.0
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "texOffsScale": [
         0.0,
         0.0,
@@ -76,16 +72,13 @@
     {
       "enabled": true,
       "id": 3,
-      "inputLayout": "PosNormTanUV",
-      "material": "sandstone_cracks",
-      "model": "models/atoll_lagoon_floor.obj",
+      "mesh": "models/atoll_lagoon_floor.mesh.json",
       "name": "AtollLagoonFloor",
       "position": [
         0.0,
         0.10000000149011612,
         0.0
       ],
-      "renderLayer": "Terrain",
       "rotationDeg": [
         0.0,
         0.0,
@@ -96,7 +89,6 @@
         1.0,
         1.0
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "texOffsScale": [
         0.0,
         0.0,
@@ -109,8 +101,7 @@
       "enabled": true,
       "id": 12,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
       "name": "staticMesh #12",
       "position": [
         46.95258331298828,
@@ -133,9 +124,7 @@
     {
       "enabled": true,
       "id": 13,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/rock_boulder_2_game_ready_asset/scene.gltf",
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
       "name": "staticMesh #13",
       "position": [
         44.98234176635742,
@@ -152,15 +141,12 @@
         0.009999999776482582,
         0.009999999776482582
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 14,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/rocks/scene.gltf",
+      "mesh": "models/rocks.mesh.json",
       "name": "staticMesh #14",
       "position": [
         44.84239196777344,
@@ -177,15 +163,12 @@
         0.10000000149011612,
         0.10000000149011612
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 22,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/rock_boulder_2_game_ready_asset/scene.gltf",
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
       "name": "staticMesh #13 Copy",
       "position": [
         47.60773849487305,
@@ -202,15 +185,13 @@
         0.009999999776482582,
         0.009999998845160007
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 23,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
+      "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
       "name": "staticMesh #12 Copy",
       "position": [
         49.24107360839844,
@@ -234,8 +215,7 @@
       "enabled": true,
       "id": 24,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 001 (Date Palm)",
       "position": [
         -54.71826934814453,
@@ -259,8 +239,7 @@
       "enabled": true,
       "id": 25,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 002 (Date Palm)",
       "position": [
         -43.89203643798828,
@@ -283,9 +262,7 @@
     {
       "enabled": true,
       "id": 26,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 003 (Curly Palm)",
       "position": [
         35.77363586425781,
@@ -302,15 +279,13 @@
         1.0860999822616577,
         1.0860999822616577
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 27,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 004 (Coconut Palm)",
       "position": [
         -70.06649780273438,
@@ -333,9 +308,7 @@
     {
       "enabled": true,
       "id": 28,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 005 (Curly Palm)",
       "position": [
         -11.591859817504883,
@@ -352,15 +325,13 @@
         0.9973000288009644,
         0.9973000288009644
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 29,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 006 (Date Palm)",
       "position": [
         57.57623291015625,
@@ -384,8 +355,7 @@
       "enabled": true,
       "id": 30,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 007 (Date Palm)",
       "position": [
         -60.02897644042969,
@@ -409,12 +379,11 @@
       "enabled": true,
       "id": 31,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 008 (Coconut Palm)",
       "position": [
         -70.70952606201172,
-        2.3530349731445313,
+        2.3530349731445312,
         -25.684612274169922
       ],
       "rotationDeg": [
@@ -433,9 +402,7 @@
     {
       "enabled": true,
       "id": 32,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 009 (Curly Palm)",
       "position": [
         -65.31593322753906,
@@ -452,15 +419,13 @@
         0.8004000186920166,
         0.8004000186920166
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 33,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 010 (Coconut Palm)",
       "position": [
         -59.99921798706055,
@@ -484,8 +449,7 @@
       "enabled": true,
       "id": 34,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 011 (Coconut Palm)",
       "position": [
         44.93366622924805,
@@ -509,8 +473,7 @@
       "enabled": true,
       "id": 35,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 012 (Coconut Palm)",
       "position": [
         82.88932037353516,
@@ -533,9 +496,7 @@
     {
       "enabled": true,
       "id": 36,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 013 (Curly Palm)",
       "position": [
         -83.6070785522461,
@@ -552,15 +513,12 @@
         0.828000009059906,
         0.828000009059906
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 37,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 014 (Curly Palm)",
       "position": [
         63.65485763549805,
@@ -577,15 +535,13 @@
         0.8396000266075134,
         0.8396000266075134
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 38,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 015 (Coconut Palm)",
       "position": [
         -60.25514221191406,
@@ -609,8 +565,7 @@
       "enabled": true,
       "id": 39,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 016 (Coconut Palm)",
       "position": [
         82.9773941040039,
@@ -634,8 +589,7 @@
       "enabled": true,
       "id": 40,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 017 (Date Palm)",
       "position": [
         -60.77843475341797,
@@ -658,9 +612,7 @@
     {
       "enabled": true,
       "id": 41,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 018 (Curly Palm)",
       "position": [
         58.730716705322266,
@@ -677,15 +629,13 @@
         1.1411000490188599,
         1.1411000490188599
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 42,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 019 (Date Palm)",
       "position": [
         52.431148529052734,
@@ -709,8 +659,7 @@
       "enabled": true,
       "id": 43,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 020 (Date Palm)",
       "position": [
         -54.769752502441406,
@@ -733,9 +682,7 @@
     {
       "enabled": true,
       "id": 44,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 021 (Curly Palm)",
       "position": [
         77.15637969970703,
@@ -752,15 +699,12 @@
         1.159999966621399,
         1.159999966621399
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 45,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 022 (Curly Palm)",
       "position": [
         71.2785415649414,
@@ -769,7 +713,7 @@
       ],
       "rotationDeg": [
         0.0,
-        150.93460083007813,
+        150.93460083007812,
         0.0
       ],
       "scale": [
@@ -777,18 +721,15 @@
         0.9706000089645386,
         0.9706000089645386
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 46,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 023 (Curly Palm)",
       "position": [
-        82.83425903320313,
+        82.83425903320312,
         1.4692410230636597,
         -22.098735809326172
       ],
@@ -802,15 +743,13 @@
         1.1655000448226929,
         1.1655000448226929
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 47,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 024 (Coconut Palm)",
       "position": [
         -87.26429748535156,
@@ -834,8 +773,7 @@
       "enabled": true,
       "id": 48,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 025 (Date Palm)",
       "position": [
         -21.345279693603516,
@@ -859,8 +797,7 @@
       "enabled": true,
       "id": 49,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 026 (Coconut Palm)",
       "position": [
         38.64973449707031,
@@ -883,9 +820,7 @@
     {
       "enabled": true,
       "id": 50,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 027 (Curly Palm)",
       "position": [
         68.30718994140625,
@@ -902,15 +837,13 @@
         1.1672999858856201,
         1.1672999858856201
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 51,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 028 (Date Palm)",
       "position": [
         16.568660736083984,
@@ -934,8 +867,7 @@
       "enabled": true,
       "id": 52,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 029 (Coconut Palm)",
       "position": [
         -10.599143981933594,
@@ -959,8 +891,7 @@
       "enabled": true,
       "id": 53,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 030 (Date Palm)",
       "position": [
         -76.33304595947266,
@@ -983,9 +914,7 @@
     {
       "enabled": true,
       "id": 54,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 031 (Curly Palm)",
       "position": [
         -72.53844451904297,
@@ -1002,15 +931,12 @@
         0.8859999775886536,
         0.8859999775886536
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 55,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 032 (Curly Palm)",
       "position": [
         -49.43515396118164,
@@ -1027,15 +953,12 @@
         1.1577999591827393,
         1.1577999591827393
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 56,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 033 (Curly Palm)",
       "position": [
         -76.8846664428711,
@@ -1052,15 +975,13 @@
         0.9074000120162964,
         0.9074000120162964
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 57,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 034 (Coconut Palm)",
       "position": [
         -86.61897277832031,
@@ -1083,12 +1004,10 @@
     {
       "enabled": true,
       "id": 58,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 035 (Curly Palm)",
       "position": [
-        81.23538208007813,
+        81.23538208007812,
         2.0792009830474854,
         8.349093437194824
       ],
@@ -1102,18 +1021,16 @@
         0.9916999936103821,
         0.9916999936103821
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 59,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 036 (Date Palm)",
       "position": [
-        -80.91970825195313,
+        -80.91970825195312,
         1.653905987739563,
         23.747713088989258
       ],
@@ -1134,8 +1051,7 @@
       "enabled": true,
       "id": 60,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 037 (Coconut Palm)",
       "position": [
         75.33432006835938,
@@ -1159,8 +1075,7 @@
       "enabled": true,
       "id": 61,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 038 (Date Palm)",
       "position": [
         -79.21815490722656,
@@ -1169,7 +1084,7 @@
       ],
       "rotationDeg": [
         0.0,
-        67.88040161132813,
+        67.88040161132812,
         0.0
       ],
       "scale": [
@@ -1183,12 +1098,10 @@
     {
       "enabled": true,
       "id": 62,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 039 (Curly Palm)",
       "position": [
-        -65.42300415039063,
+        -65.42300415039062,
         1.4065170288085938,
         -6.971013069152832
       ],
@@ -1202,15 +1115,13 @@
         1.1779999732971191,
         1.1779999732971191
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 63,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 040 (Coconut Palm)",
       "position": [
         3.268078088760376,
@@ -1234,8 +1145,7 @@
       "enabled": true,
       "id": 64,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 041 (Date Palm)",
       "position": [
         39.162349700927734,
@@ -1259,8 +1169,7 @@
       "enabled": true,
       "id": 65,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 042 (Coconut Palm)",
       "position": [
         74.66405487060547,
@@ -1284,8 +1193,7 @@
       "enabled": true,
       "id": 66,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 043 (Coconut Palm)",
       "position": [
         -33.23300552368164,
@@ -1308,9 +1216,7 @@
     {
       "enabled": true,
       "id": 67,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 044 (Curly Palm)",
       "position": [
         -26.9870662689209,
@@ -1327,15 +1233,13 @@
         0.8787999749183655,
         0.8787999749183655
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 68,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 045 (Date Palm)",
       "position": [
         -68.29408264160156,
@@ -1358,12 +1262,10 @@
     {
       "enabled": true,
       "id": 69,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 046 (Curly Palm)",
       "position": [
-        87.31936645507813,
+        87.31936645507812,
         1.1039689779281616,
         8.770047187805176
       ],
@@ -1377,15 +1279,12 @@
         1.1354999542236328,
         1.1354999542236328
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 70,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 047 (Curly Palm)",
       "position": [
         -61.51579284667969,
@@ -1402,15 +1301,12 @@
         0.902999997138977,
         0.902999997138977
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 71,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 048 (Curly Palm)",
       "position": [
         -67.23737335205078,
@@ -1427,15 +1323,13 @@
         0.8593000173568726,
         0.8593000173568726
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 72,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 049 (Date Palm)",
       "position": [
         -77.96455383300781,
@@ -1444,7 +1338,7 @@
       ],
       "rotationDeg": [
         0.0,
-        217.45010375976563,
+        217.45010375976562,
         0.0
       ],
       "scale": [
@@ -1459,8 +1353,7 @@
       "enabled": true,
       "id": 73,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 050 (Coconut Palm)",
       "position": [
         30.319236755371094,
@@ -1484,8 +1377,7 @@
       "enabled": true,
       "id": 74,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 051 (Coconut Palm)",
       "position": [
         30.796995162963867,
@@ -1508,9 +1400,7 @@
     {
       "enabled": true,
       "id": 75,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 052 (Curly Palm)",
       "position": [
         -75.18434143066406,
@@ -1527,15 +1417,13 @@
         0.9886000156402588,
         0.9886000156402588
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 76,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 053 (Coconut Palm)",
       "position": [
         3.4057469367980957,
@@ -1558,9 +1446,7 @@
     {
       "enabled": true,
       "id": 77,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 054 (Curly Palm)",
       "position": [
         -55.666194915771484,
@@ -1569,7 +1455,7 @@
       ],
       "rotationDeg": [
         0.0,
-        99.43789672851563,
+        99.43789672851562,
         0.0
       ],
       "scale": [
@@ -1577,15 +1463,12 @@
         1.1589000225067139,
         1.1589000225067139
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 78,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 055 (Curly Palm)",
       "position": [
         64.3697509765625,
@@ -1602,15 +1485,12 @@
         1.0338000059127808,
         1.0338000059127808
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 79,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 056 (Curly Palm)",
       "position": [
         -10.80316162109375,
@@ -1627,15 +1507,13 @@
         1.0616999864578247,
         1.0616999864578247
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 80,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 057 (Date Palm)",
       "position": [
         3.004492998123169,
@@ -1659,8 +1537,7 @@
       "enabled": true,
       "id": 81,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 058 (Date Palm)",
       "position": [
         54.92799377441406,
@@ -1684,8 +1561,7 @@
       "enabled": true,
       "id": 82,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 059 (Date Palm)",
       "position": [
         15.949127197265625,
@@ -1708,12 +1584,10 @@
     {
       "enabled": true,
       "id": 83,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 060 (Curly Palm)",
       "position": [
-        -88.96121215820313,
+        -88.96121215820312,
         0.5342360138893127,
         -4.825994968414307
       ],
@@ -1727,15 +1601,12 @@
         1.104699969291687,
         1.104699969291687
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 84,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 061 (Curly Palm)",
       "position": [
         62.04215621948242,
@@ -1752,15 +1623,13 @@
         0.8579000234603882,
         0.8579000234603882
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 85,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 062 (Coconut Palm)",
       "position": [
         -80.53602600097656,
@@ -1784,8 +1653,7 @@
       "enabled": true,
       "id": 86,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 063 (Date Palm)",
       "position": [
         61.80859375,
@@ -1809,8 +1677,7 @@
       "enabled": true,
       "id": 87,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 064 (Coconut Palm)",
       "position": [
         -13.481788635253906,
@@ -1834,8 +1701,7 @@
       "enabled": true,
       "id": 88,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 065 (Coconut Palm)",
       "position": [
         81.54733276367188,
@@ -1858,9 +1724,7 @@
     {
       "enabled": true,
       "id": 89,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 066 (Curly Palm)",
       "position": [
         86.8104248046875,
@@ -1877,15 +1741,13 @@
         0.9944999814033508,
         0.9944999814033508
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 90,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 067 (Coconut Palm)",
       "position": [
         -39.72124481201172,
@@ -1909,8 +1771,7 @@
       "enabled": true,
       "id": 91,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 068 (Date Palm)",
       "position": [
         -69.03819274902344,
@@ -1934,8 +1795,7 @@
       "enabled": true,
       "id": 92,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 069 (Date Palm)",
       "position": [
         -87.48841094970703,
@@ -1959,8 +1819,7 @@
       "enabled": true,
       "id": 93,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 070 (Date Palm)",
       "position": [
         -53.05343246459961,
@@ -1983,9 +1842,7 @@
     {
       "enabled": true,
       "id": 94,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 071 (Curly Palm)",
       "position": [
         -78.49327087402344,
@@ -1994,7 +1851,7 @@
       ],
       "rotationDeg": [
         0.0,
-        204.75540161132813,
+        204.75540161132812,
         0.0
       ],
       "scale": [
@@ -2002,15 +1859,13 @@
         1.1775000095367432,
         1.1775000095367432
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 95,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 072 (Coconut Palm)",
       "position": [
         51.65045928955078,
@@ -2034,8 +1889,7 @@
       "enabled": true,
       "id": 96,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 073 (Date Palm)",
       "position": [
         -51.05213928222656,
@@ -2059,8 +1913,7 @@
       "enabled": true,
       "id": 97,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 074 (Date Palm)",
       "position": [
         -62.98124694824219,
@@ -2084,8 +1937,7 @@
       "enabled": true,
       "id": 98,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 075 (Coconut Palm)",
       "position": [
         -62.61453628540039,
@@ -2108,9 +1960,7 @@
     {
       "enabled": true,
       "id": 99,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 076 (Curly Palm)",
       "position": [
         -79.961669921875,
@@ -2127,15 +1977,13 @@
         1.1348999738693237,
         1.1348999738693237
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 100,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 077 (Coconut Palm)",
       "position": [
         -66.88360595703125,
@@ -2159,8 +2007,7 @@
       "enabled": true,
       "id": 101,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 078 (Date Palm)",
       "position": [
         80.8130874633789,
@@ -2184,8 +2031,7 @@
       "enabled": true,
       "id": 102,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 079 (Coconut Palm)",
       "position": [
         -41.59343719482422,
@@ -2209,8 +2055,7 @@
       "enabled": true,
       "id": 103,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 080 (Coconut Palm)",
       "position": [
         65.025634765625,
@@ -2234,8 +2079,7 @@
       "enabled": true,
       "id": 104,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 081 (Coconut Palm)",
       "position": [
         65.36787414550781,
@@ -2259,11 +2103,10 @@
       "enabled": true,
       "id": 105,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 082 (Date Palm)",
       "position": [
-        69.43521118164063,
+        69.43521118164062,
         2.065398931503296,
         13.245333671569824
       ],
@@ -2284,8 +2127,7 @@
       "enabled": true,
       "id": 106,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 083 (Date Palm)",
       "position": [
         34.13667297363281,
@@ -2294,7 +2136,7 @@
       ],
       "rotationDeg": [
         0.0,
-        131.77200317382813,
+        131.77200317382812,
         0.0
       ],
       "scale": [
@@ -2309,8 +2151,7 @@
       "enabled": true,
       "id": 107,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 084 (Date Palm)",
       "position": [
         -87.49832916259766,
@@ -2319,7 +2160,7 @@
       ],
       "rotationDeg": [
         0.0,
-        206.62600708007813,
+        206.62600708007812,
         0.0
       ],
       "scale": [
@@ -2334,8 +2175,7 @@
       "enabled": true,
       "id": 108,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 085 (Date Palm)",
       "position": [
         -73.61630249023438,
@@ -2358,9 +2198,7 @@
     {
       "enabled": true,
       "id": 109,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 086 (Curly Palm)",
       "position": [
         73.94073486328125,
@@ -2377,15 +2215,12 @@
         0.8120999932289124,
         0.8120999932289124
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 110,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 087 (Curly Palm)",
       "position": [
         89.11042785644531,
@@ -2402,15 +2237,13 @@
         0.8769000172615051,
         0.8769000172615051
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 111,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 088 (Coconut Palm)",
       "position": [
         19.427539825439453,
@@ -2419,7 +2252,7 @@
       ],
       "rotationDeg": [
         0.0,
-        233.79690551757813,
+        233.79690551757812,
         0.0
       ],
       "scale": [
@@ -2434,8 +2267,7 @@
       "enabled": true,
       "id": 112,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 089 (Date Palm)",
       "position": [
         78.0918960571289,
@@ -2458,9 +2290,7 @@
     {
       "enabled": true,
       "id": 113,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 090 (Curly Palm)",
       "position": [
         -68.62897491455078,
@@ -2477,15 +2307,13 @@
         1.0293999910354614,
         1.0293999910354614
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 114,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 091 (Date Palm)",
       "position": [
         77.91132354736328,
@@ -2509,8 +2337,7 @@
       "enabled": true,
       "id": 115,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 092 (Date Palm)",
       "position": [
         69.53092956542969,
@@ -2534,11 +2361,10 @@
       "enabled": true,
       "id": 116,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 093 (Coconut Palm)",
       "position": [
-        -68.20376586914063,
+        -68.20376586914062,
         2.6334140300750732,
         26.530216217041016
       ],
@@ -2559,8 +2385,7 @@
       "enabled": true,
       "id": 117,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/date_palm/scene.gltf",
+      "mesh": "models/date_palm.mesh.json",
       "name": "Palm 094 (Date Palm)",
       "position": [
         -63.74815368652344,
@@ -2584,8 +2409,7 @@
       "enabled": true,
       "id": 118,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 095 (Coconut Palm)",
       "position": [
         73.340576171875,
@@ -2609,8 +2433,7 @@
       "enabled": true,
       "id": 119,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 096 (Coconut Palm)",
       "position": [
         70.48176574707031,
@@ -2634,8 +2457,7 @@
       "enabled": true,
       "id": 120,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 097 (Coconut Palm)",
       "position": [
         -33.766990661621094,
@@ -2658,9 +2480,7 @@
     {
       "enabled": true,
       "id": 121,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 098 (Curly Palm)",
       "position": [
         28.455223083496094,
@@ -2677,15 +2497,13 @@
         0.8860999941825867,
         0.8860999941825867
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     },
     {
       "enabled": true,
       "id": 122,
       "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/coconut_palm/scene.gltf",
+      "mesh": "models/coconut_palm.mesh.json",
       "name": "Palm 099 (Coconut Palm)",
       "position": [
         -19.811325073242188,
@@ -2708,9 +2526,7 @@
     {
       "enabled": true,
       "id": 123,
-      "inputLayout": "PosNormTanUV",
-      "material": "auto",
-      "model": "import_staging/curly_palm/scene.gltf",
+      "mesh": "models/curly_palm.mesh.json",
       "name": "Palm 100 (Curly Palm)",
       "position": [
         -62.63212966918945,
@@ -2727,7 +2543,6 @@
         0.8761000037193298,
         0.8761000037193298
       ],
-      "shader": "shaders/gbuffer.hlsl",
       "type": "staticMesh"
     }
   ],
