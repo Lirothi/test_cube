@@ -64,6 +64,7 @@ namespace editor_thumbnail_detail
         std::vector<std::string> staleCachePaths;
         std::string resolvedPath;
         std::shared_ptr<MeshCpuData> meshData;
+        std::vector<std::string> meshMaterialSlots;
         std::string failureReason;
     };
 
@@ -84,7 +85,7 @@ namespace editor_thumbnail_detail
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 4;
+    constexpr std::uint32_t kThumbnailSchemaVersion = 5;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.
@@ -201,9 +202,11 @@ namespace
 
     bool ResolveMeshSource(const std::string& assetPath,
         std::string& resolvedPath,
+        std::vector<std::string>& materialSlots,
         std::string& failureReason)
     {
         resolvedPath = assetPath;
+        materialSlots.clear();
         if (!EndsWithNoCase(FilePart(assetPath), ".mesh.json"))
         {
             return true;
@@ -235,6 +238,27 @@ namespace
         {
             failureReason = "Mesh asset JSON has no geometry path.";
             return false;
+        }
+
+        // Match SceneObjectFactory's material precedence: per-submesh `materials`
+        // wins; a legacy scalar `material` is a slot-zero fallback.
+        const auto materials = asset.find("materials");
+        if (materials != asset.end() && materials->is_array())
+        {
+            for (const nlohmann::json& value : *materials)
+            {
+                materialSlots.push_back(value.is_string()
+                    ? value.get<std::string>()
+                    : std::string{});
+            }
+        }
+        else
+        {
+            const auto material = asset.find("material");
+            if (material != asset.end() && material->is_string())
+            {
+                materialSlots.push_back(material->get<std::string>());
+            }
         }
         return !resolvedPath.empty();
     }
@@ -315,11 +339,45 @@ namespace
                 : std::string{};
             HashText(hash, path);
             HashValue(hash, FileWriteTime(path));
+
+            // Texture2D prefers an imported DDS sibling over the source path.
+            // Track both so a texture re-import also invalidates the preview.
+            if (!path.empty() && !EndsWithNoCase(path, ".dds"))
+            {
+                fs::path ddsPath(path);
+                ddsPath.replace_extension(".dds");
+                const std::string dds = ddsPath.generic_string();
+                HashText(hash, dds);
+                HashValue(hash, FileWriteTime(dds));
+            }
+        }
+    }
+
+    void HashGltfMaterialDependencies(std::uint64_t& hash,
+        const std::string& gltfSelector, int groupOrdinal)
+    {
+        const GltfMaterialDesc material =
+            MeshManager::DescribeGltfMaterial(gltfSelector, groupOrdinal);
+        HashValue(hash, material.valid);
+        for (const std::string* path : { &material.albedoPath, &material.mrPath,
+                                         &material.normalPath, &material.emissivePath })
+        {
+            HashText(hash, *path);
+            HashValue(hash, FileWriteTime(*path));
+            if (!path->empty() && !EndsWithNoCase(*path, ".dds"))
+            {
+                fs::path ddsPath(*path);
+                ddsPath.replace_extension(".dds");
+                const std::string dds = ddsPath.generic_string();
+                HashText(hash, dds);
+                HashValue(hash, FileWriteTime(dds));
+            }
         }
     }
 
     DiskCacheInfo BuildDiskCacheInfo(const PreflightInput& input,
-        const std::string& resolvedPath)
+        const std::string& resolvedPath,
+        const std::vector<std::string>& meshMaterialSlots)
     {
         DiskCacheInfo info;
         const std::uint32_t type = input.kind == PreflightKind::Mesh
@@ -342,6 +400,30 @@ namespace
         {
             HashText(signature, resolvedPath);
             HashValue(signature, FileWriteTime(FilePart(resolvedPath)));
+            const std::string geometryPath = FilePart(resolvedPath);
+            const bool gltfGeometry = EndsWithNoCase(geometryPath, ".gltf") ||
+                EndsWithNoCase(geometryPath, ".glb");
+            const std::size_t gltfSlots = gltfGeometry
+                ? std::max<std::size_t>(1, MeshManager::CountSubmeshes(resolvedPath))
+                : 0;
+            const std::size_t materialSlotCount = std::max(
+                meshMaterialSlots.size(), gltfSlots);
+            for (std::size_t slot = 0; slot < materialSlotCount; ++slot)
+            {
+                const std::string& material = slot < meshMaterialSlots.size()
+                    ? meshMaterialSlots[slot]
+                    : std::string("auto");
+                HashText(signature, material);
+                if (material == "auto" || (material.empty() && gltfGeometry))
+                {
+                    HashGltfMaterialDependencies(signature, resolvedPath,
+                        static_cast<int>(slot));
+                }
+                else if (!material.empty())
+                {
+                    HashMaterialDependencies(signature, material);
+                }
+            }
         }
         if (input.kind == PreflightKind::Material)
         {
@@ -629,6 +711,7 @@ struct AssetThumbnailCache::GpuJob
     TextureCube cube;
     std::shared_ptr<Mesh> mesh;
     std::shared_ptr<MaterialData> material;
+    std::vector<std::shared_ptr<MaterialData>> meshMaterials;
     Microsoft::WRL::ComPtr<ID3D12Resource> rendered;
     ThumbnailReadback readback;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;
@@ -749,9 +832,11 @@ void AssetThumbnailCache::LaunchPreflightJobs()
             if (result.input.kind == PreflightKind::Mesh)
             {
                 ResolveMeshSource(result.input.path, result.resolvedPath,
+                    result.meshMaterialSlots,
                     result.failureReason);
             }
-            result.cache = BuildDiskCacheInfo(result.input, result.resolvedPath);
+            result.cache = BuildDiskCacheInfo(result.input, result.resolvedPath,
+                result.meshMaterialSlots);
             result.staleCachePaths = FindStaleDiskCacheFiles(result.cache);
             if (result.input.kind == PreflightKind::Mesh &&
                 !result.cache.hit && result.failureReason.empty())
@@ -872,6 +957,7 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
         load.cachePath = result.cache.path;
         load.presetKey = input.key;
         load.meshData = std::move(result.meshData);
+        load.meshMaterialSlots = std::move(result.meshMaterialSlots);
         queue_.push_back(std::move(load));
     }
 }
@@ -1172,7 +1258,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
             return;
         }
     }
-    if (load.kind == PendingLoad::Kind::Material)
+    if (load.kind == PendingLoad::Kind::Material || load.kind == PendingLoad::Kind::Mesh)
     {
         preview_->ReloadPresets();
     }
@@ -1209,6 +1295,38 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
             job->mesh = preview_->Meshes().CreateFromCpuData(job->load.path,
                 &renderer, *job->load.meshData, job->commands->CommandList(),
                 job->commands->KeepAlive());
+            std::size_t materialSlotCount = 1;
+            if (job->mesh)
+            {
+                for (const Mesh::Submesh& submesh : job->mesh->GetSubmeshes())
+                {
+                    materialSlotCount = std::max<std::size_t>(materialSlotCount,
+                        static_cast<std::size_t>(submesh.materialSlot) + 1);
+                }
+            }
+            job->meshMaterials.reserve(materialSlotCount);
+            for (std::size_t slot = 0; slot < materialSlotCount; ++slot)
+            {
+                // This intentionally mirrors GBufferRenderable: unspecified
+                // glTF slots use their imported material, while a scalar
+                // `material` only overrides slot zero.
+                const std::string materialName = slot < job->load.meshMaterialSlots.size()
+                    ? job->load.meshMaterialSlots[slot]
+                    : "auto";
+                if (materialName.empty() || materialName == "auto")
+                {
+                    job->meshMaterials.push_back(
+                        preview_->Materials().GetOrCreateFromGltf(&renderer,
+                            job->commands->CommandList(), job->commands->KeepAlive(),
+                            job->load.path, static_cast<int>(slot)));
+                }
+                else
+                {
+                    job->meshMaterials.push_back(preview_->Materials().GetOrCreate(
+                        &renderer, job->commands->CommandList(),
+                        job->commands->KeepAlive(), materialName));
+                }
+            }
             job->ok = job->mesh != nullptr;
         }
         break;
@@ -1235,19 +1353,18 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         }
         else
         {
-            ID3D12Resource* albedo = nullptr;
-            DXGI_FORMAT albedoFormat = DXGI_FORMAT_UNKNOWN;
-            bool hasAlbedo = false;
-            if (job->load.kind == PendingLoad::Kind::Material && job->material &&
-                job->material->hasAlbedo && job->material->albedo.GetResource())
+            std::vector<std::shared_ptr<MaterialData>> materials;
+            if (job->load.kind == PendingLoad::Kind::Mesh)
             {
-                albedo = job->material->albedo.GetResource();
-                albedoFormat = job->material->albedo.GetSrvFormat();
-                hasAlbedo = true;
+                materials = job->meshMaterials;
+            }
+            else if (job->load.kind == PendingLoad::Kind::Material && job->material)
+            {
+                materials.push_back(job->material);
             }
             job->rendered = preview_->RecordThumbnail(renderer,
-                job->commands->CommandList(), *job->mesh, albedo,
-                albedoFormat, hasAlbedo, kPreviewRenderSize);
+                job->commands->CommandList(), *job->mesh, materials,
+                kPreviewRenderSize);
         }
 
         job->ok = job->rendered != nullptr;

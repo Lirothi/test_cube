@@ -47,7 +47,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 albedo = gBaseColor.rgb;
     if (gBaseColor.a > 0.5)
     {
-        albedo = gAlbedo.Sample(gSampler, input.uv).rgb;
+        albedo *= gAlbedo.Sample(gSampler, input.uv).rgb;
     }
 
     float3 N = normalize(input.normalW);

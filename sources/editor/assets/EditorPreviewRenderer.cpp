@@ -25,6 +25,14 @@ namespace
     constexpr DXGI_FORMAT kColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
     constexpr std::uint32_t kThumbnailSize = 256;
+    // Mesh assets may have several material slots. Keep a distinct descriptor
+    // and 256-byte CBV for every draw recorded into one thumbnail command list.
+    // Slot 255 is reserved as a neutral fallback if a pathological asset has
+    // more submeshes than the preview heap was sized for.
+    constexpr std::uint32_t kPreviewMaterialSlots = 255;
+    constexpr std::uint32_t kPreviewFallbackSlot = kPreviewMaterialSlots;
+    constexpr std::uint32_t kPreviewDrawSlots = kPreviewMaterialSlots + 1;
+    constexpr std::uint32_t kPreviewConstantStride = 256;
 
     // Matches the PreviewCB cbuffer in shaders/editor_preview.hlsl (16-byte packed).
     struct PreviewConstants
@@ -194,7 +202,8 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
         return false;
     }
 
-    // Descriptor heaps: 1 RTV, 1 DSV, 1 shader-visible SRV (one draw per list).
+    // Descriptor heaps: 1 RTV, 1 DSV, and a shader-visible SRV for every
+    // mesh-material draw that can appear in a thumbnail command list.
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     heapDesc.NumDescriptors = 1;
@@ -209,6 +218,7 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     }
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    heapDesc.NumDescriptors = kPreviewDrawSlots;
     if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&srvHeap_))))
     {
         return false;
@@ -217,19 +227,21 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     dsvHandle_ = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
     srvCpuHandle_ = srvHeap_->GetCPUDescriptorHandleForHeapStart();
     srvGpuHandle_ = srvHeap_->GetGPUDescriptorHandleForHeapStart();
+    srvDescriptorSize_ = device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     if (!CreateSharedDepth(device, kThumbnailSize))
     {
         return false;
     }
 
-    // Reusable 256-byte constant buffer (one draw per submit, so a single buffer
-    // is safe to overwrite between fenced renders).
+    // One 256-byte CBV per material draw. A thumbnail job is fenced before this
+    // shared upload buffer is reused by a later job.
     D3D12_HEAP_PROPERTIES uploadHeap{};
     uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
     D3D12_RESOURCE_DESC cbDesc{};
     cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    cbDesc.Width = 256;
+    cbDesc.Width = static_cast<UINT64>(kPreviewConstantStride) * kPreviewDrawSlots;
     cbDesc.Height = 1;
     cbDesc.DepthOrArraySize = 1;
     cbDesc.MipLevels = 1;
@@ -256,7 +268,12 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     nullSrv.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(nullptr, &nullSrv, srvCpuHandle_);
+    for (std::uint32_t slot = 0; slot < kPreviewDrawSlots; ++slot)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvCpuHandle_;
+        handle.ptr += static_cast<SIZE_T>(slot) * srvDescriptorSize_;
+        device->CreateShaderResourceView(nullptr, &nullSrv, handle);
+    }
 
     initialized_ = true;
     return true;
@@ -361,9 +378,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     Renderer& renderer,
     ID3D12GraphicsCommandList* cl,
     const Mesh& mesh,
-    ID3D12Resource* albedo,
-    DXGI_FORMAT albedoSrvFormat,
-    bool hasAlbedo,
+    const std::vector<std::shared_ptr<MaterialData>>& materials,
     std::uint32_t size)
 {
     ID3D12Device* device = renderer.GetDevice();
@@ -387,14 +402,6 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     rtv.Format = kColorFormat;
     rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
     device->CreateRenderTargetView(color.Get(), &rtv, rtvHandle_);
-
-    const bool useAlbedo = hasAlbedo && albedo != nullptr;
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format = useAlbedo ? albedoSrvFormat : DXGI_FORMAT_R8G8B8A8_UNORM;
-    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(useAlbedo ? albedo : nullptr, &srv, srvCpuHandle_);
 
     // Use the mesh's actual enclosing sphere so every preview follows the same
     // edge-to-edge framing. This covers the geometry without treating empty AABB
@@ -429,17 +436,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     const dx::XMMATRIX model = dx::XMMatrixIdentity();
     const dx::XMMATRIX mvp = dx::XMMatrixMultiply(dx::XMMatrixMultiply(model, view), proj);
 
-    PreviewConstants cb{};
-    dx::XMStoreFloat4x4(&cb.mvp, mvp);
-    dx::XMStoreFloat4x4(&cb.model, model);
     const dx::XMVECTOR lightDir =
         dx::XMVector3Normalize(dx::XMVectorSet(0.4f, 0.8f, -0.5f, 0.0f));
-    dx::XMStoreFloat4(&cb.lightDir, lightDir);
-    cb.baseColor = useAlbedo
-        ? dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 1.0f }
-        : dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 0.0f };
-    cb.ambient = dx::XMFLOAT4{ 0.28f, 0.30f, 0.34f, 1.0f };
-    std::memcpy(constantBufferMapped_, &cb, sizeof(cb));
 
     auto barrier = [cl](ID3D12Resource* res,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -471,9 +469,6 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     cl->SetPipelineState(pipeline_.Get());
     ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
     cl->SetDescriptorHeaps(1, heaps);
-    cl->SetGraphicsRootConstantBufferView(0, constantBuffer_->GetGPUVirtualAddress());
-    cl->SetGraphicsRootDescriptorTable(1, srvGpuHandle_);
-
     // Bind the mesh IA directly (Mesh::Draw uses a global bind cache tied to the
     // main render's command list, which must not be touched here).
     D3D12_VERTEX_BUFFER_VIEW vbv{};
@@ -488,7 +483,86 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->IASetVertexBuffers(0, 1, &vbv);
     cl->IASetIndexBuffer(&ibv);
-    cl->DrawIndexedInstanced(mesh.GetIndexCount(), 1, 0, 0, 0);
+
+    const std::vector<Mesh::Submesh>& submeshes = mesh.GetSubmeshes();
+    const std::uint32_t drawCount = std::max<std::uint32_t>(
+        1u, static_cast<std::uint32_t>(submeshes.size()));
+    for (std::uint32_t draw = 0; draw < drawCount; ++draw)
+    {
+        const bool hasSubmesh = draw < submeshes.size();
+        const Mesh::Submesh& submesh = hasSubmesh
+            ? submeshes[draw]
+            : Mesh::Submesh{};
+        const UINT indexCount = hasSubmesh ? submesh.indexCount : mesh.GetIndexCount();
+        if (indexCount == 0)
+        {
+            continue;
+        }
+
+        // The reserved fallback slot keeps all geometry visible even for a
+        // mesh with more material ranges than the fixed preview descriptor heap.
+        const std::uint32_t slot = draw < kPreviewMaterialSlots
+            ? draw
+            : kPreviewFallbackSlot;
+        const MaterialData* material = nullptr;
+        if (draw < kPreviewMaterialSlots && hasSubmesh &&
+            submesh.materialSlot < materials.size())
+        {
+            material = materials[submesh.materialSlot].get();
+        }
+        else if (draw < kPreviewMaterialSlots && !hasSubmesh && !materials.empty())
+        {
+            material = materials.front().get();
+        }
+
+        ID3D12Resource* albedo = nullptr;
+        DXGI_FORMAT albedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+        if (material && material->hasAlbedo && material->albedo.GetResource())
+        {
+            albedo = material->albedo.GetResource();
+            albedoFormat = material->albedo.GetSrvFormat();
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = albedoFormat;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvCpuHandle_;
+        srvHandle.ptr += static_cast<SIZE_T>(slot) * srvDescriptorSize_;
+        device->CreateShaderResourceView(albedo, &srv, srvHandle);
+
+        PreviewConstants cb{};
+        dx::XMStoreFloat4x4(&cb.mvp, mvp);
+        dx::XMStoreFloat4x4(&cb.model, model);
+        dx::XMStoreFloat4(&cb.lightDir, lightDir);
+        if (material)
+        {
+            const MaterialParams& params = material->fromGltf
+                ? material->gltfDefaultParams
+                : material->hasPresetParams
+                    ? material->presetParams
+                    : MaterialParams{};
+            cb.baseColor = dx::XMFLOAT4{ params.baseColor.x, params.baseColor.y,
+                params.baseColor.z, albedo ? 1.0f : 0.0f };
+        }
+        else
+        {
+            cb.baseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 0.0f };
+        }
+        cb.ambient = dx::XMFLOAT4{ 0.28f, 0.30f, 0.34f, 1.0f };
+        std::memcpy(constantBufferMapped_ +
+            static_cast<std::size_t>(slot) * kPreviewConstantStride, &cb, sizeof(cb));
+
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvGpuHandle_;
+        gpuHandle.ptr += static_cast<UINT64>(slot) * srvDescriptorSize_;
+        cl->SetGraphicsRootConstantBufferView(0,
+            constantBuffer_->GetGPUVirtualAddress() +
+            static_cast<UINT64>(slot) * kPreviewConstantStride);
+        cl->SetGraphicsRootDescriptorTable(1, gpuHandle);
+        cl->DrawIndexedInstanced(indexCount, 1,
+            hasSubmesh ? submesh.indexOffset : 0, 0, 0);
+    }
 
     // Leave the thumbnail in a shader-read state, exactly like a loaded texture,
     // and return the depth target to COMMON for the next render.

@@ -111,6 +111,7 @@ private:
         std::string cachePath;              // rendered cache PNG, if any
         std::string presetKey;              // material preset name
         std::shared_ptr<MeshCpuData> meshData; // worker-prepared geometry
+        std::vector<std::string> meshMaterialSlots; // `.mesh.json` material names by submesh slot
         Texture2D::Usage usage = Texture2D::Usage::AlbedoSRGB; // texture only
     };
 

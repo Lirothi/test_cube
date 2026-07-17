@@ -26,8 +26,7 @@ class UploadBatch;
 // Lifetime / threading: thumbnail draws are recorded on the editor thread by
 // AssetThumbnailCache, which polls a dedicated fence instead of waiting. Asset
 // loads use a caller-provided UploadBatch; each thumbnail render records into a
-// caller-provided command list (one draw per list keeps the single-slot descriptor
-// heaps correct). Generated color targets are handed to the cache, which owns
+// caller-provided command list. Generated color targets are handed to the cache, which owns
 // their lifetime; this class owns only the shared pipeline objects.
 class EditorPreviewRenderer
 {
@@ -55,13 +54,12 @@ public:
 
     // Record one thumbnail draw of `mesh` into `cl` and return the freshly created
     // color target (sRGB, left in PIXEL_SHADER_RESOURCE, ready for ImGui). The
-    // caller submits `cl`. `albedo` may be null for a neutral (mesh) preview.
+    // caller submits `cl`. A material entry is selected by each submesh's
+    // material slot; missing entries draw with the neutral mesh material.
     Microsoft::WRL::ComPtr<ID3D12Resource> RecordThumbnail(Renderer& renderer,
         ID3D12GraphicsCommandList* cl,
         const Mesh& mesh,
-        ID3D12Resource* albedo,
-        DXGI_FORMAT albedoSrvFormat,
-        bool hasAlbedo,
+        const std::vector<std::shared_ptr<MaterialData>>& materials,
         std::uint32_t size);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
@@ -86,7 +84,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // shader-visible, 1 slot
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // shader-visible, one per preview draw
     Microsoft::WRL::ComPtr<ID3D12Resource> depthTarget_;
     Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer_;
 
@@ -95,6 +93,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle_{};
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle_{};
     std::uint8_t* constantBufferMapped_ = nullptr;
+    std::uint32_t srvDescriptorSize_ = 0;
     std::uint32_t depthSize_ = 0;
     bool initialized_ = false;
     bool presetsLoaded_ = false;
