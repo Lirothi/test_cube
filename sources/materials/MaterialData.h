@@ -62,6 +62,17 @@ public:
     // alpha* + doubleSided by Part C (masked/two-sided foliage), emissive* by Part D.
     bool          fromGltf = false;
     MaterialParams gltfDefaultParams;      // baseColor tint, metalRough, texFlags from the glTF material
+
+    // I0: material FILES (data/materials/<name>.json) can carry parameter defaults. Seeded into a
+    // slot's MaterialParams at Init only when the level JSON didn't override that slot (explicit
+    // per-object params win — see GBufferRenderable::Init).
+    bool           hasPresetParams = false;
+    MaterialParams presetParams;
+
+    // I0: optional gbuffer shader override from the material file ("shader" key). Applied to the
+    // slot's graphics PSO (and, via the _csm suffix convention, its shadow PSO). Empty = object's
+    // shader. Auto-instancing is skipped for objects using an overriding material.
+    std::wstring shaderOverride;
     bool          alphaMask = false;       // alphaMode == MASK (Part C)
     float         alphaCutoff = 0.5f;      // (Part C)
     bool          doubleSided = false;     // (Part C)

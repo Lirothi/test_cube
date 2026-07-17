@@ -67,6 +67,9 @@ namespace
         ContentBrowserRequestType type = ContentBrowserRequestType::None;
         std::string folderPath;
         EditorAssetId asset;
+        // File-backed asset ops (DeleteAsset): the record's disk path. Needed because a
+        // material's id.key is its NAME, not its path (I0 per-file materials).
+        std::string assetPath;
         // SelectFolder only: expand/scroll the Sources tree to the new selection. True for
         // navigation outside the tree (tiles, breadcrumbs, reveal); the tree's own clicks
         // pass false so the view doesn't jump under the cursor.
@@ -1279,7 +1282,7 @@ namespace
                     TryMapVirtualFolderToPhysical(folderPath, targetPhysical, mapReason);
                 if (id.type == EditorAssetType::MaterialPreset)
                 {
-                    refuse = "Material presets are entries in data/materials.json — nothing to move.";
+                    refuse = "Materials are referenced by name and live flat in data/materials/ — nothing to move.";
                 }
                 else if (!targetMaps)
                 {
@@ -1913,12 +1916,7 @@ namespace
             RequestIfUnset(request, ContentBrowserRequestType::Refresh, {});
         }
         ImGui::Separator();
-        if (record->id.type == EditorAssetType::MaterialPreset)
-        {
-            DisabledMenuItemWithTooltip("Delete File",
-                "Material presets are entries in data/materials.json — manage them in the material editor.");
-        }
-        else if (record->id.type == EditorAssetType::Mesh &&
+        if (record->id.type == EditorAssetType::Mesh &&
             record->id.key != record->path)
         {
             DisabledMenuItemWithTooltip("Delete File",
@@ -1930,7 +1928,13 @@ namespace
             {
                 request.type = ContentBrowserRequestType::DeleteAsset;
                 request.asset = record->id;
+                request.assetPath = record->path; // materials: id.key is the NAME, path is the file (I0)
             }
+        }
+        if (record->id.type == EditorAssetType::MaterialPreset && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Deletes %s.\nObjects referencing '%s' by name will lose the material.",
+                record->path.c_str(), record->displayName.c_str());
         }
         ImGui::EndPopup();
     }
@@ -3022,6 +3026,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     else if (uiRequest.type == ContentBrowserRequestType::DeleteAsset)
     {
         deleteAssetTarget_ = uiRequest.asset;
+        deleteAssetPath_ = uiRequest.assetPath.empty() ? uiRequest.asset.key : uiRequest.assetPath;
         folderOperationMessage_.clear();
         ImGui::OpenPopup("Delete File###ContentBrowserDeleteAsset");
     }
@@ -3202,7 +3207,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::TextWrapped("Delete this file from disk? This cannot be undone.");
-        ImGui::Text("File: %s", deleteAssetTarget_.key.c_str());
+        ImGui::Text("File: %s", deleteAssetPath_.c_str());
         if (!folderOperationMessage_.empty())
         {
             ImGui::TextWrapped("%s", folderOperationMessage_.c_str());
@@ -3211,7 +3216,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         if (ImGui::Button("Delete"))
         {
             std::error_code ec;
-            const fs::path target(deleteAssetTarget_.key);
+            const fs::path target(deleteAssetPath_);
             if (!fs::is_regular_file(target, ec))
             {
                 folderOperationMessage_ = "File no longer exists.";

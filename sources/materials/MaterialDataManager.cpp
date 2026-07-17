@@ -15,6 +15,71 @@
 
 using Microsoft::WRL::ComPtr;
 
+namespace
+{
+    // Schema v2 (I0): one flat JSON object per material. Texture keys + feature flags + optional
+    // parameter DEFAULTS. Shared by the per-file loader and the legacy monolith entries (whose
+    // objects use the same keys, minus the params that never existed there).
+    MaterialPreset ParseMaterialPresetJson(const nlohmann::json& p)
+    {
+        const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+        MaterialPreset preset;
+        preset.albedoPath   = widen(p.value("albedo", std::string{}));
+        preset.mrPath       = widen(p.value("mr", std::string{}));
+        preset.normalPath   = widen(p.value("normal", std::string{}));
+        preset.emissivePath = widen(p.value("emissive", std::string{}));
+        preset.shaderPath   = widen(p.value("shader", std::string{}));
+        preset.normalIsRG   = p.value("normalIsRG", true);
+        preset.useTBN       = p.value("useTBN", true);
+
+        preset.alphaTest   = p.value("alphaTest", false);
+        preset.alphaCutoff = p.value("alphaCutoff", 0.5f);
+        preset.twoSided    = p.value("twoSided", false);
+
+        // Optional param defaults — only mark hasParams when the file actually carries one, so
+        // migrated/param-less materials leave per-object params untouched (demo levels identical).
+        const auto readFloats = [&](const char* key, float* dst, size_t n) -> bool
+        {
+            const auto it = p.find(key);
+            if (it == p.end() || !it->is_array() || it->size() < n) { return false; }
+            for (size_t i = 0; i < n; ++i) { dst[i] = (*it)[i].get<float>(); }
+            return true;
+        };
+        float v4[4];
+        if (readFloats("tint", v4, 4))
+        {
+            preset.params.baseColor = float4(v4[0], v4[1], v4[2], v4[3]);
+            preset.hasParams = true;
+        }
+        if (readFloats("metalRough", v4, 2))
+        {
+            preset.params.metalRough = float2(v4[0], v4[1]);
+            preset.hasParams = true;
+        }
+        if (readFloats("texOffsScale", v4, 4))
+        {
+            preset.params.texOffsScale = float4(v4[0], v4[1], v4[2], v4[3]);
+            preset.hasParams = true;
+        }
+        if (readFloats("emissiveColor", v4, 3))
+        {
+            preset.params.emissiveColor = float3(v4[0], v4[1], v4[2]);
+            preset.hasParams = true;
+        }
+        if (p.contains("emissiveStrength"))
+        {
+            preset.params.emissiveStrength = p.value("emissiveStrength", 0.0f);
+            preset.hasParams = true;
+        }
+        if (p.contains("normalStrength"))
+        {
+            preset.params.SetNormalStrength(p.value("normalStrength", 1.0f));
+            preset.hasParams = true;
+        }
+        return preset;
+    }
+}
+
 void MaterialDataManager::RegisterPreset(const std::string& name, const MaterialPreset& preset)
 {
     presets_[name] = preset;
@@ -33,21 +98,45 @@ bool MaterialDataManager::LoadPresetsFromJsonFile(const std::wstring& path)
         return false;
     }
 
-    const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
-
     for (const auto& [name, p] : j["presets"].items()) {
         if (!p.is_object()) {
             continue;
         }
-        MaterialPreset preset;
-        preset.albedoPath = widen(p.value("albedo", std::string{}));
-        preset.mrPath     = widen(p.value("mr", std::string{}));
-        preset.normalPath = widen(p.value("normal", std::string{}));
-        preset.normalIsRG = p.value("normalIsRG", true);
-        preset.useTBN     = p.value("useTBN", true);
-        RegisterPreset(name, preset);
+        RegisterPreset(name, ParseMaterialPresetJson(p));
     }
     return true;
+}
+
+bool MaterialDataManager::LoadPresetsFromDirectory(const std::wstring& directory)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(directory, ec)) {
+        return false;
+    }
+
+    size_t loaded = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(directory, ec)) {
+        if (ec) { break; }
+        std::error_code fileEc;
+        if (!entry.is_regular_file(fileEc)) { continue; }
+        const fs::path& p = entry.path();
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".json") { continue; }
+
+        std::ifstream f(p);
+        if (!f) { continue; }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
+        if (j.is_discarded() || !j.is_object()) { continue; }
+
+        RegisterPreset(p.stem().string(), ParseMaterialPresetJson(j));
+        ++loaded;
+    }
+    return loaded > 0;
 }
 
 bool MaterialDataManager::HasPreset(const std::string& name) const
@@ -84,6 +173,19 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     auto md = std::make_shared<MaterialData>();
     md->normalIsRG = p.normalIsRG;
     md->useTBN     = p.useTBN;
+
+    // I0 schema v2: alpha-test/two-sided ride the same MaterialData fields the glTF path uses,
+    // so the per-slot PSO plumbing (ALPHA_TEST define, cull mode) works unchanged. Param defaults
+    // are stashed for GBufferRenderable::Init to seed into non-overridden slots.
+    md->alphaMask   = p.alphaTest;
+    md->alphaCutoff = p.alphaCutoff;
+    md->doubleSided = p.twoSided;
+    md->shaderOverride = p.shaderPath;
+    if (p.hasParams)
+    {
+        md->hasPresetParams = true;
+        md->presetParams = p.params;
+    }
 
     if (!p.albedoPath.empty()) { (void)md->LoadAlbedo(renderer, uploadCmdList, p.albedoPath, uploadKeepAlive); }
     if (!p.mrPath.empty())     { (void)md->LoadMR    (renderer, uploadCmdList, p.mrPath,     uploadKeepAlive); }

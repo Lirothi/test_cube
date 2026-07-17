@@ -43,10 +43,10 @@ public:
     MeshManager& Meshes() { return meshes_; }
     MaterialDataManager& Materials() { return materials_; }
 
-    // Load material presets from data/materials.json once. Safe to call repeatedly.
+    // Load material assets (data/materials/*.json + legacy monolith) once. Safe to call repeatedly.
     void EnsurePresets();
 
-    // Drop the preview-only material cache after materials.json or one of its
+    // Drop the preview-only material cache after a material file or one of its
     // referenced maps changed. The next EnsurePresets/GetOrCreate reloads them.
     void ReloadPresets();
 

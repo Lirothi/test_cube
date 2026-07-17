@@ -685,30 +685,39 @@ namespace
         return result;
     }
 
-    // After moving a texture set out of staging, repoint its material preset — the backend wrote it
-    // (data/materials.json) with import_staging/ paths, which now dangle. Plain text replace keeps
-    // the file's exact formatting/key order (cleaner round-trip than a JSON re-dump).
+    // After moving a texture set out of staging, repoint its material file(s) — the backend wrote
+    // them (data/materials/<set>.json, I0) with import_staging/ paths, which now dangle. Plain
+    // text replace per file keeps formatting; every material file is checked because a staging
+    // folder can yield sets whose names differ from the folder name.
     void RepointPresetPaths(const std::string& stagingPrefix, const std::string& destPrefix)
     {
-        const fs::path mat = "data/materials.json";
-        std::string content;
+        std::error_code ec;
+        for (const fs::directory_entry& entry :
+            fs::directory_iterator("data/materials", fs::directory_options::skip_permission_denied, ec))
         {
-            std::ifstream in(mat);
-            if (!in) { return; }
-            std::ostringstream ss;
-            ss << in.rdbuf();
-            content = ss.str();
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!entry.is_regular_file(fileEc) || LowerExt(entry.path()) != ".json") { continue; }
+
+            std::string content;
+            {
+                std::ifstream in(entry.path());
+                if (!in) { continue; }
+                std::ostringstream ss;
+                ss << in.rdbuf();
+                content = ss.str();
+            }
+            bool changed = false;
+            for (size_t pos = 0; (pos = content.find(stagingPrefix, pos)) != std::string::npos; )
+            {
+                content.replace(pos, stagingPrefix.size(), destPrefix);
+                pos += destPrefix.size();
+                changed = true;
+            }
+            if (!changed) { continue; }
+            std::ofstream out(entry.path(), std::ios::trunc);
+            if (out) { out << content; }
         }
-        bool changed = false;
-        for (size_t pos = 0; (pos = content.find(stagingPrefix, pos)) != std::string::npos; )
-        {
-            content.replace(pos, stagingPrefix.size(), destPrefix);
-            pos += destPrefix.size();
-            changed = true;
-        }
-        if (!changed) { return; }
-        std::ofstream out(mat, std::ios::trunc);
-        if (out) { out << content; }
     }
 
     void WriteCreditsEntry(const std::string& name, const std::string& license)
@@ -1135,8 +1144,8 @@ void ImportPanel::DrawImportDialog()
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip(
-            "On: albedo + rough(+metal) + normal -> one material preset in data/materials.json.\n"
-            "Off: just convert the selected images to DDS (no preset).");
+            "On: albedo + rough(+metal) + normal -> one material file in data/materials/.\n"
+            "Off: just convert the selected images to DDS (no material).");
     }
 
     ImGui::Separator();

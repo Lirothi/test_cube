@@ -293,9 +293,12 @@ void App::InitScene()
         assert(false && "No bindings.json found!");
     }
 
-    const bool presetsLoaded = renderer.GetMaterialDataManager()->LoadPresetsFromJsonFile(L"data/materials.json");
-    assert(presetsLoaded && "No data/materials.json found!");
-    (void)presetsLoaded;
+    // I0: materials are per-file assets in data/materials/ (one json per material, name = stem).
+    // The legacy monolith loads first so per-file materials win on a name clash during migration.
+    MaterialDataManager* materials = renderer.GetMaterialDataManager();
+    (void)materials->LoadPresetsFromJsonFile(L"data/materials.json"); // legacy, absent post-migration
+    (void)materials->LoadPresetsFromDirectory(L"data/materials");
+    assert(materials->PresetCount() > 0 && "No material presets found (data/materials/)!");
 
     UploadBatch uploadBatch;
     const bool batchBegun = uploadBatch.Begin(&renderer);

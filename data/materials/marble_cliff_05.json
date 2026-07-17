@@ -1,0 +1,7 @@
+{
+  "albedo": "textures/marble_cliff_05_2k/textures/marble_cliff_05_albedo.dds",
+  "mr": "textures/marble_cliff_05_2k/textures/marble_cliff_05_mr.dds",
+  "normal": "textures/marble_cliff_05_2k/textures/marble_cliff_05_normal.dds",
+  "normalIsRG": false,
+  "useTBN": true
+}

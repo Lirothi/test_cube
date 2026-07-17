@@ -26,8 +26,10 @@ Decisions locked with the user:
   .hdr→BC6H cubemap, license→CREDITS.md). Neither the user nor the executor hand-runs
   converters once it lands; the same backend is exposed as a CLI for headless/batch use.
 - **Simple in-editor material editor** (user request): parameter/texture-picker editing of
-  material presets with live scene preview and save to `data/materials.json` (Part I).
-  Explicitly NOT a node graph and NOT custom shader authoring.
+  materials with live scene preview. Explicitly NOT a node graph and NOT custom shader
+  AUTHORING (a material may still SELECT a feature shader — I0 `"shader"` key). Since the
+  2026-07-16 Part-I rewrite, materials are per-file assets `data/materials/<name>.json` (I0,
+  done); the old monolithic data/materials.json is gone.
 
 ## Current engine state (verified 2026-07-13)
 
@@ -59,6 +61,13 @@ Gaps this plan closes:
 6. No light flicker animation (Part F).
 7. No asset conversion pipeline (raw PNG/HDR → mipped BC DDS) and no import UX (Part H).
 8. Material presets are hand-edited JSON only — no in-editor authoring/tweaking (Part I).
+
+**State refresh (2026-07-16):** gaps 1–5 and 7 are CLOSED (Parts A–E and H fully landed; see
+per-step DONE markers). Gap 8 is in progress — I0 (per-file materials + schema v2 + material
+shader override) is done; the editor window itself (I2) is pending. Materials now live in
+`data/materials/<name>.json`; Part J (mesh asset format, `models/<name>.mesh.json`) is scheduled
+next so level objects stop repeating inputLayout/shader/material per placement. Part F and
+E4-tuning statuses: F not started; G0 done, G1 mostly done (skybox imported via the H pipeline).
 
 Out of scope (explicitly): audio (no backend exists), global atmospheric fog (ocean height fog
 only), bloom, DLSS-RR, RT handling of masked geometry (fronds will reflect as opaque in RT
@@ -122,6 +131,9 @@ reflections — acceptable; optionally exclude fronds from BLAS).
 ---
 
 ## Part A — glTF import
+
+**STATUS: ALL DONE + committed** (A1 cgltf vendored, A2 loader + `#N`/`#node:` selectors,
+A3 material import with factor-multiply fix, A4 editor spawn; A5 dropped — owned by Part H).
 
 Rationale: nearly all free realistic assets ship as glTF/GLB. One-time engine work kills the
 per-asset Blender routine.
@@ -191,8 +203,7 @@ One placed object = one multi-material asset. Identity/UX work, not perf (draw c
 identical — see Decisions). This is the **widest-touch part of the plan**: stage the commits so
 each one builds, runs the demo level unchanged, and keeps auto-instancing intact.
 
-**B1 — submesh plumbing (behavioral no-op).** *(exec: Opus 4.8 — mechanical, but the per-range
-LOD rebuild must be exactly right)* `Mesh` gains a submesh table
+**B1 — submesh plumbing (behavioral no-op).** *(exec: Opus 4.8; DONE 2026-07-14)* `Mesh` gains a submesh table
 `{indexOffset, indexCount, materialSlot}`; OBJ/`.txt` loaders emit exactly one submesh, so
 nothing changes visually. **LOD gotcha**: `GenerateLods` simplifies the whole index buffer
 today — it must simplify each submesh range independently and rebuild the table per LOD level,
@@ -261,7 +272,7 @@ too.)* As landed:
   deliberately keeps slots sharing the OBJECT's bounds; switching to tight per-submesh AABBs
   (finer page culling) would trade the dedupe away — measure before doing it.
 
-**B4 — editor UX + spawn.** *(exec: Opus 4.8)* `SpawnMeshCommand` spawns ONE object per glTF asset with slots
+**B4 — editor UX + spawn.** *(exec: Opus 4.8; DONE 2026-07-14 — slot list + SetMaterialSlotCommand + re-fetch-runtime-after-respawn fix)* `SpawnMeshCommand` spawns ONE object per glTF asset with slots
 auto-filled from A3 materials; `InspectorPanel` shows a material-slot list (per-slot preset
 picker, per-slot undo via a `SetMaterialSlotCommand`); outliner shows one node per asset.
 Verify with the coconut palm: spawn → one object with 5 slots; move/duplicate/undo/save/reload
@@ -353,6 +364,8 @@ area), cull validation PASS, demo unchanged, scene-stress=15 CLEAN.
 
 ## Part D — emissive meshes
 
+**STATUS: DONE (Opus 4.8, 2026-07-15) — verified with a glowing ember box vs no-emissive reference.**
+
 *(exec: Opus 4.8)* Extend `gbuffer.hlsl` (and the masked variant) with per-material-slot `emissiveColor` (rgb) ×
 `emissiveStrength`, optional `emissiveTexture` (from A3). Write into the existing emissive
 target (`RT2`); `compose_cs.hlsl` already adds it. JSON knobs on material entries (slot-level,
@@ -368,7 +381,7 @@ emitter = one CB update + 2 dispatches + 1 draw, regardless of particle count �
 the engine's GPU-driven direction and its known CPU-submission bottleneck. Budgets stay modest
 for the campfire (≤ ~2K particles per emitter), but the design scales.
 
-**E1 — GPU sim core.** *(exec: Fable — buffer lifetime + dispatch plumbing, hazard-prone)* `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
+**E1 — GPU sim core.** *(exec: Fable; DONE 2026-07-15, committed)* `sources/vfx/ParticleEmitter.{h,cpp}` (+ `ParticleTypes.h`),
 `shaders/particle_spawn_cs.hlsl`, `shaders/particle_update_cs.hlsl`:
 - `EmitterDesc` (JSON-serializable, unchanged by the GPU choice): `maxParticles`, `spawnRate`,
   `lifetime` [min,max], `initialSpeed` [min,max] + cone (direction, angle), `gravity`
@@ -405,10 +418,9 @@ already runs in sorted-queue order there):
   fps); depth-test ON, depth-write OFF; additive or premultiplied-alpha blend state per emitter.
 - No per-frame CPU upload of particle data at all; only the emitter CB.
 - Particles are absent from G-buffer/shadow/RT — intended (no reflected/shadow-casting fire).
-- **E2b (optional polish)** *(exec: Opus 4.8)*: soft-particle depth fade using the scene depth SRV already
+- **E2b (optional polish)** *(exec: Opus 4.8; DONE 2026-07-15 — via the engine's existing depthCopy)*: soft-particle depth fade using the scene depth SRV already
   available to the transparent pass.
-- **E2c — sorting for `alpha` emitters (smoke)** *(exec: Opus 4.8 — textbook algorithm,
-  self-contained)*: single-workgroup bitonic sort of alive slots
+- **E2c — sorting for `alpha` emitters (smoke)** *(exec: Opus 4.8; DONE 2026-07-15 — prev-frame camera pos, 1-frame lag imperceptible)*: single-workgroup bitonic sort of alive slots
   by view depth into a small index buffer, VS indexes through it (fine up to ~1–2K particles —
   enforce `maxParticles` ≤ sort capacity when `sortParticles` is set). Additive emitters (fire,
   sparks) skip it. Interim state before D2c lands: keep smoke opacity low — premultiplied alpha
@@ -480,7 +492,7 @@ true` for the campfire — pointlight shadows exist and are cheap for one light.
 Prefer assembling **in the editor** (this is the dogfooding goal), saving via the document
 pipeline; hand-edit JSON only for things the editor can't author yet.
 
-**G0 — procedural island mesh.** *(exec: GPT 5.6 terra — standalone script, eyeball-verifiable)* No good free atoll meshes exist; generate one:
+**G0 — procedural island mesh.** *(exec: GPT 5.6 terra; DONE — commit "Way to atoll level G0", models/atoll_island.obj + atoll_lagoon_floor.obj)* No good free atoll meshes exist; generate one:
 `tools/gen_island.py` (pure Python, writes OBJ directly — no Blender dependency): a ring-shaped
 heightfield (radial gaussian ring + low-frequency noise), gentle beach slope crossing y=0 (ocean
 shore-depth params need real underwater geometry to fade against), a flattened area for the
@@ -489,7 +501,7 @@ generate a simple lagoon-floor disc (sand, slightly below sea level) so the lago
 turquoise-over-sand rather than deep-ocean.
 **Sea level convention: ocean plane sits at y=0; author everything against that.**
 
-**G1 — environment.** *(exec: GPT 5.6 terra — runs H1 CLI + tunes ocean preset with the user)*
+**G1 — environment.** *(exec: GPT 5.6 terra; MOSTLY DONE — skybox rustig_koppie converted+imported via the H pipeline (GPU BC6H); verify ocean preset tuning before calling it closed)*
 Skybox conversion runs through the importer backend (H1 ".hdr → skybox"
 path, via UI or CLI):
 1. equirect `.hdr` → 6 cube faces (CPU projection, float precision preserved);
@@ -592,7 +604,7 @@ presets), prefer `<name>.dds` sitting next to the source file; fall back to the 
 PNG via WIC with a one-time "unmipped texture" log warning. This kills reference remapping
 entirely: the imported glTF stays byte-identical, DDS files just appear beside its textures.
 
-**H3 — importer UI.** *(exec: Opus 4.8 — ImGui + background jobs)* Content browser "Import…" button → window that scans `import_staging/`
+**H3 — importer UI. — DONE (Opus 4.8 2026-07-16 + heavy same-week rework: table UI, move-not-copy routed by type, texture-pick dialog, progress bar, CB Import button; the unit/scale normalizer landed as the spawn-scale manifest verdict and split-by-top-level-nodes landed via Codex as virtual node records).** *(original spec below)* Content browser "Import…" button → window that scans `import_staging/`
 and lists detected assets (glTF/GLB with texture sets, texture-only folders, `.hdr` files)
 with what was found: primitive/material counts, alphaMode/doubleSided flags, texture
 resolutions, and license/author pulled from `source.txt` **or the glTF `asset.extras`**
@@ -709,38 +721,161 @@ engine-layout MR (R=metal, G=rough), so imported glTF assets are second-class vs
   define (uses the default gbuffer variant), metal/rough read correctly, and the scene looks
   identical to before. Bonus: one fewer shader permutation for every imported asset.
 
-## Part I — simple material editor
+## Part I — material editor (v2, rewritten 2026-07-16 after H4–H6 landed)
 
-Parameter-level editing of material presets — deliberately small: texture pickers + sliders +
-checkboxes. NOT a node graph, NOT shader authoring, no material-instance hierarchy. **Ordering**:
-needs B4 (slot list in the inspector); the C/D fields (alphaTest/twoSided, emissive) appear in
-the UI as those parts land; pairs naturally with H (pickers browse imported DDS). Needed during
-G2–G3 for tuning sand/rock/fronds/embers in place.
+Parameter-level editing of materials — still deliberately small: texture pickers + sliders +
+checkboxes. NOT a node graph, NOT shader authoring, no material-instance hierarchy. **Rewritten**
+because the original spec predated the importer pipeline and the content-browser file management,
+and audit against the code found three stale assumptions: (a) `MaterialPreset` is only 3 texture
+paths + `normalIsRG`/`useTBN` — most fields the editor must expose (tint, metal/rough scalars,
+emissive, alphaCutoff/twoSided, tiling) do NOT exist in the preset schema, they are per-OBJECT
+`MaterialParams`; (b) the monolithic `data/materials.json` now fights the content browser — file
+delete/move/status-badges are per-FILE and had to be disabled for presets; (c) infrastructure the
+spec assumed missing now exists (offscreen mesh thumbnails in `AssetThumbnailCache`, the
+`ConsumeMaterialHotReloadFlag` → `RefreshMaterialHandles` → `OnMaterialHotReload` vehicle, CB
+drag-drop payloads + `AssignMaterial` action, GPU object-ID picking). `mrLayout` is DEAD as an
+editable field (H6: a `.dds` MR is always engine-layout). **Ordering**: B4/C/D/H all done — Part I
+is unblocked end to end; needed during G2–G3 for tuning sand/rock/fronds/embers in place.
 
-**I1 — presets become writable assets.** *(exec: Opus 4.8 — round-trip-preserving JSON writes)* AssetRegistry already harvests presets from
-`data/materials.json`; add the write path: create / duplicate / rename / delete preset,
-saved back to `data/materials.json`. Read-modify-write per preset (merge), preserving unknown
-keys and key order — hand-authored entries must survive round-trips with clean diffs.
+**I0 — materials become per-file assets with a full schema (the foundation). — DONE (Fable 5,
+2026-07-16), uncommitted.** Implemented as specced, notes: schema v2 lives in `MaterialPreset`
+(+`emissivePath` parsed but RESERVED — no consumer, the gbuffer SRV table is 3); param defaults
+ride NEW `MaterialData::hasPresetParams/presetParams`, seeded in `GBufferRenderable::Init` only
+when the slot's params memcmp-equal the factory defaults (explicit level-JSON overrides win);
+alphaTest/alphaCutoff/twoSided map onto the existing glTF MaterialData fields so the per-slot PSO
+plumbing (ALPHA_TEST define, cull) is reused unchanged. Migrated 5 presets to
+`data/materials/<name>.json` (texture keys + flags ONLY — no params → hasParams=false → demo
+byte-identical), `git rm data/materials.json`; App + EditorPreviewRenderer load legacy-then-dir
+(per-file wins on clashes); AssetThumbnailCache material-dependency hash prefers the per-file
+path (legacy fallback); AssetRegistry gained a `data/materials` DirRoot (id.key = filename STEM =
+material name, record.path = file) replacing the monolith parse block, texture-based import-status
+carry ported per-file; importer `WritePresets` writes/merges per-file, `RepointPresetPaths`
+sweeps `data/materials/*.json`; CB Delete enabled for materials (request carries `assetPath`
+since a material's id.key is its NAME), move stays refused (name-referenced, flat folder).
+Verified: build clean, scene-stress boot CLEAN (demo materials resolve from files), CLI set
+import writes `data/materials/coast_sand_01.json`.
+**AMENDED (user request): schema v2 also carries an optional `"shader"` key** — a material can
+override the gbuffer shader for feature materials (vegetation sway etc.). Wiring: applied to the
+slot's graphics PSO in `ConfigureGraphicsPipeline` (slot 0 / single-slot, so the base material and
+— via the `_csm`-suffix convention in `BuildShadowDesc` — the SHADOW PSO follow automatically) and
+in `BuildSlotMaterials` for slots 1+ (each slot resets shaderFile to its own override or the
+object default; deliberately NOT in `ApplySlotPipelineOverrides`, which the instanced descs reuse
+with their own shader). Contract for custom shaders: keep the standard PerObject b0 layout (the
+CB-size guard falls a mismatching slot back to slot 0) and ship the `<name>_csm.hlsl` counterpart.
+Auto-instancing is DISABLED for objects whose materials override the shader (no instanced
+counterpart — a batch would silently draw them without the feature); a future sway shader that
+needs instancing must add its own instcb variant. GpuInstancedModels ignores overrides (its own
+shader family). *(original spec below)* One material = one file:
+`data/materials/<name>.json`, where the filename stem IS the material name (levels and slots keep
+referencing materials by name — identity unchanged). Schema v2 per file: textures
+(`albedo`/`mr`/`normal`/`emissive`) + parameter DEFAULTS (`tint` rgba, `metalRough` xy,
+`emissiveColor`+`emissiveStrength`, `alphaTest`+`alphaCutoff`+`twoSided`, `texOffsScale`,
+`normalStrength`, `normalIsRG`, `useTBN`). Semantics: material params seed the per-object
+`MaterialParams` at Init; per-object overrides in level JSON keep working and WIN (demo levels
+must not change appearance — verify by diffing a demo screenshot before/after). Work: (1)
+`MaterialPreset`/`MaterialDataManager` extended to schema v2 + a folder loader
+(`LoadPresetsFromDirectory("data/materials")`); (2) migrate the 5 existing presets to files and
+DELETE the monolith (keep `LoadPresetsFromJsonFile` code one release for safety, nothing ships
+using it); (3) the importer's texture-set preset registration writes a per-file material instead
+of merging into the monolith (`WritePresets` → per-file, `RepointPresetPaths` follows); (4)
+AssetRegistry: MaterialPreset records keep `id.key` = material NAME (all existing consumers —
+slot combos, SetMaterialCommand — keep working) but `record.path` = the real file → H4 badges and
+the content-browser Delete/Move/context-menu work for materials automatically (remove the
+"presets live in materials.json" guards added with the file-management pass).
 
-**I2 — editor window.** *(exec: Opus 4.8; escalate to Fable if the live-apply GPU sync fights
-back)* Opened by double-clicking a material in the content browser or from an
-"edit" button next to the slot's preset picker (B4 inspector). Fields: texture pickers for
-albedo / mr / normal / emissive (thumbnails from AssetRegistry, DDS preferred per H2), tint,
-metal/rough scalars, `normalStrength`, `normalIsRG`, `mrLayout`, `texOffsScale` tiling,
-`alphaTest`/`alphaCutoff`/`twoSided` (C1), `emissiveColor`/`emissiveStrength` (D). Edits apply
-**live to every scene object referencing the preset** — re-resolve + the same full GPU sync
-pattern SpawnMeshCommand uses (respect frame-in-flight: no swapping textures under an active
-frame). Undo/redo via a `SetMaterialPropertyCommand` on the editor command stack.
+## Part J — mesh asset format (added 2026-07-16; executes NOW — after I0, before I1)
 
-**I3 — "Save as preset" on a slot.** *(exec: Opus 4.8)* glTF import (A3) produces runtime-only auto-materials;
-one click promotes a slot's effective material (auto-material or preset+overrides) into a named
-preset in `data/materials.json` and rebinds the slot to it. This is the bridge from imported
-assets to authorable content — verify with the palm fronds: tweak `alphaCutoff`, save as
-`palm_fronds`, reload level, slot still references it.
+Level objects currently repeat renderer plumbing per instance — `inputLayout`, `shader`,
+`material`, often `texOffsScale`/`renderLayer` — for every mesh placed (see any staticMesh entry
+in a level file). That is boilerplate that belongs to the ASSET, not the placement. Same
+philosophy as I0: one mesh = one file, engine-native, first-class in the content browser.
 
-**I4 (optional polish).** *(exec: GPT 5.6 terra)* Sphere-preview thumbnails for materials in the content browser
-(offscreen render target); drag-and-drop a material from the browser onto a mesh/slot in the
-viewport.
+**J1 — mesh assets (`models/<name>.mesh.json`).** *(exec: Opus 4.8 — loader layering + round-trip
+rules are the risk, the schema itself is small; escalate to Fable if StaticMesh/JsonLevel
+resolution ordering bites)* One file describes how to RENDER a piece of geometry:
+```json
+{
+  "geometry": "models/atoll_island.obj",      // or "models/rocks/scene.gltf#node:Rock_1"
+  "inputLayout": "PosNormTanUV",              // optional, default PosNormTanUV
+  "shader": "shaders/gbuffer.hlsl",           // optional, default gbuffer (materials can still override per I0)
+  "material": "sandstone_cracks",             // optional; slot 0 (default: "auto" for glTF, first preset otherwise)
+  "materials": ["bark", "auto"],              // optional per-slot list (B2)
+  "renderLayer": "Terrain",                   // optional default
+  "spawnScale": 0.015                         // optional; wins over .assetimport.json spawnScale
+}
+```
+- **Level objects shrink** to placement + reference: `{"type":"staticMesh", "mesh":
+  "models/atoll_island.mesh.json", position/rotation/scale, name, id}`. Per-object overrides
+  (material/materials/shader/texOffsScale/renderLayer/params) REMAIN LEGAL and WIN over the mesh
+  asset's defaults — same layering rule as I0 material params.
+- **Back-compat is a hard rule**: existing objects using `model` + inline plumbing keep loading
+  byte-identically, and the editor's round-trip serialization must NOT rewrite them into the new
+  form (verbatim `properties` preservation already guarantees this). Only NEW spawns emit the
+  compact form.
+- **Resolution point**: `SceneObjectFactory::CreateStaticMeshFromJson` (+ StaticMesh) — when the
+  object has `"mesh"`, read the asset file, then apply the object's own overrides on top. Engine
+  code, no editor dependency (ships in non-editor builds).
+- **Importer (H3)**: a mesh import also writes `models/<name>/<name>.mesh.json` (geometry=the
+  glTF, everything else defaulted — glTF assets are nearly empty files; spawnScale moves in from
+  the manifest verdict). Split-by-nodes can later emit one tiny mesh asset per node instead of
+  virtual registry records (optional harmonization, not required for J1).
+- **Registry/browser**: `.mesh.json` under models/ = the spawnable Mesh record (id.key = path,
+  like other file assets); the spawn factory writes `"mesh"` for these records and keeps the
+  legacy `"model"` form for raw .obj/.gltf records. Existing drag-drop/spawn/delete/move work via
+  the file-management pass. (Optionally hide raw geometry files that are owned by a mesh asset —
+  polish, not J1.)
+- **Verify**: demo levels load unchanged (round-trip diff clean); spawn a mesh asset from the
+  browser → compact level entry; palm .mesh.json with `"materials"` slots renders identically to
+  the same palm spawned the legacy way.
+
+**J2 (future, not scheduled)**: mesh-asset-level flags as they become real — castShadow,
+LOD config, collision ref; per-node mesh assets for split glTF packs.
+
+## Part I (continued) — material editor steps I1–I4
+
+**I1 — material file operations in the browser.** *(exec: GPT 5.6 terra — small once I0 lands)*
+Content-browser context menu on a material: Create New (from a default template), Duplicate,
+Delete (the I0 file records make Delete/Move just work — this step only adds Create/Duplicate).
+Rename = file rename, BUT levels/slots reference materials by name — on rename scan
+`data/levels/*.json` for references and either warn ("N references in: …") or offer auto-update;
+never silently break a level.
+
+**I2 — material editor window (the core).** *(exec: Opus 4.8; escalate to Fable ONLY for the
+in-place texture reload if the GPU sync fights back)* Opened by double-clicking a material in the
+content browser or an "edit" button next to the slot's preset picker (B4 inspector). Fields =
+schema v2: texture pickers for albedo/mr/normal/emissive (thumbnails via AssetThumbnailCache, DDS
+preferred per H2), tint, metal/rough scalars, normalStrength, texOffsScale tiling,
+alphaTest/alphaCutoff/twoSided, emissiveColor/emissiveStrength, normalIsRG/useTBN. NO mrLayout
+(dead per H6). **Live-apply, two tiers** (this replaces the old spec's "respawn everything"):
+- *Scalar params + texture swaps*: mutate the CACHED `MaterialData` in place — WaitForPreviousFrame,
+  reload changed textures into the same MaterialData via UploadBatch, update params, then raise the
+  existing material-hot-reload flag → `RefreshMaterialHandles` → `OnMaterialHotReload` rebuilds
+  descriptor handles engine-wide. CAVEAT verified in code: `OnMaterialHotReload` ONLY rebuilds
+  handles — the in-place texture reload is the delicate half (frames in flight; this is the Fable
+  escalation point). Param edits must also re-seed `MaterialParams` of scene objects referencing
+  the material WITHOUT a level override (per-slot: `slotPresets_` already records which slot uses
+  which preset).
+- *PSO-affecting toggles* (alphaTest on/off, twoSided, normalIsRG): these change shader
+  defines/cull mode → fall back to the proven respawn pattern (SetMaterialCommand-style: idle →
+  remove → recreate from JSON → re-add) for every referencing object.
+Undo/redo via `SetMaterialPropertyCommand` on the editor command stack; the file is saved on an
+explicit Save button (dirty marker in the title), not on every slider tick.
+
+**I3 — "Save as material" on a slot.** *(exec: Opus 4.8)* glTF import (A3) produces runtime-only
+auto-materials; one click promotes a slot's effective material (auto-material or
+preset+overrides) into a named `data/materials/<name>.json` and rebinds the slot to it (existing
+SetMaterialSlotCommand). Post-H6 this is trivial data-wise — imported textures are already final
+engine-layout DDS, so the new file just references them. Verify with the palm fronds: tweak
+`alphaCutoff`, save as `palm_fronds`, reload level, slot still references it.
+
+**I4 — material thumbnails + viewport drag-drop.** *(exec: Opus 4.8 — extends the existing
+offscreen thumbnail path, not a new renderer)* (1) Sphere-preview thumbnails: add a Material kind
+to `AssetThumbnailCache` reusing the existing offscreen mesh-thumbnail pipeline (lit sphere +
+the material's textures/params). (2) Drag a material from the browser onto a mesh in the
+viewport: the asset drag payload + `AssignMaterial` action already exist; add the viewport drop
+target and resolve the hovered object (+ slot, via submesh id where applicable) through the GPU
+object-ID picking readback from level-editor Step 20. Both sub-steps are independent — land in
+either order.
 
 ## Risks / gotchas summary
 
@@ -834,10 +969,17 @@ CC0 — бери не думая. CC-BY — можно, но нужно указ
 `source.txt`, исполнитель заполнит CREDITS.md. Ничего с пометкой Editorial/NoAI/
 NonCommercial-без-нужды лучше не брать, чтобы не разбираться.
 
-## Порядок работ (рекомендация)
-Части A–C (glTF, сабмеши, листва) — до того, как пальмы встанут в сцену; часть E (частицы)
-можно делать параллельно со сбором ассетов; бэкенд импортера (H1–H2) тоже параллелится, а его
-UI (H3) нужен к моменту массовой расстановки ассетов (G2); редактор материалов (I) — к тюнингу
-песка/камня/листвы/углей в G2–G3. Минимальный первый визуальный
-результат: A + H1 (для неба) + G0 + G1 (остров, океан, небо, солнце) — уже смотрибельно и
-мотивирует; дальше пальмы (B+C), пещера, костёр (D+E+F).
+## Порядок работ (актуализировано 2026-07-16)
+СДЕЛАНО: A (glTF), B (сабмеши), C (листва), D (эмиссив), E1–E3 (частицы: сим, биллборды,
+softparticles, сортировка, пресеты+редактор), H целиком (H1–H6: бэкенд, DDS-резолв, UI
+импортёра, манифесты/бейджи/реимпорт, GPU-энкодер, запекание MR/факторов), G0 (остров),
+G1 почти (скайбокс импортирован), I0 (пер-файловые материалы + shader override).
+
+ОСТАЛОСЬ, в порядке исполнения:
+1. **J1 — mesh-ассеты** (`models/<name>.mesh.json`) — следующий шаг; убирает бойлерплейт
+   inputLayout/shader/material из объектов уровня перед массовой расстановкой.
+2. **I1** (файл-операции материалов в браузере) и **I2** (окно редактора материалов) — к
+   тюнингу песка/камня/листвы/углей в G2–G3. I3/I4 по ходу.
+3. **E4** (тюнинг пресетов fire/smoke/sparks на реальных флипбуках) + **F** (фликер поинт-лайта)
+   — к моменту костра (G3).
+4. **G2 → G3 → G4** — расстановка острова, костёр, полировка + `--scene-stress=30` гейт.

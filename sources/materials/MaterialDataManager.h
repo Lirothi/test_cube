@@ -10,13 +10,34 @@
 class Renderer;
 struct ID3D12GraphicsCommandList;
 
-// Preset configuration (texture paths + feature flags)
+// Material asset configuration (schema v2, I0). One material = one file
+// `data/materials/<name>.json` (filename stem = material name); the legacy monolithic
+// data/materials.json {"presets":{...}} is still readable during migration.
 struct MaterialPreset {
+    // Textures (engine-ready paths; H2 resolves DDS siblings).
     std::wstring albedoPath;
-    std::wstring mrPath;
+    std::wstring mrPath;      // R=metal, G=rough (H6: always engine layout on disk)
     std::wstring normalPath;
+    std::wstring emissivePath; // RESERVED: parsed + persisted, not consumed yet (gbuffer SRV table is 3)
     bool normalIsRG = true;
     bool useTBN     = true;
+
+    // Optional gbuffer shader override ("shader" key) for feature materials (vegetation sway
+    // etc.). Empty = the object's own shader (level JSON, default shaders/gbuffer.hlsl).
+    // Contract: the shader must keep the standard PerObject b0 layout, and its CSM counterpart
+    // must exist as <name>_csm.hlsl (the shadow pass derives it by suffix). Auto-instancing is
+    // disabled for objects whose materials override the shader (no instanced counterpart).
+    std::wstring shaderPath;
+
+    // Optional parameter DEFAULTS. hasParams is true when the file carried any param key; a slot
+    // seeds from these only when the level JSON didn't override it (per-object params win).
+    bool           hasParams = false;
+    MaterialParams params;
+
+    // Alpha test / cull features (drive the slot's PSO exactly like the glTF fields do).
+    bool  alphaTest = false;
+    float alphaCutoff = 0.5f;
+    bool  twoSided = false;
 };
 
 // Manages presets and the cache of loaded MaterialData
@@ -27,11 +48,17 @@ public:
 
     // Register all presets from a JSON file ({"presets": {name: {albedo, mr,
     // normal, normalIsRG, useTBN}}}). Returns false if the file is missing or
-    // malformed.
+    // malformed. LEGACY (pre-I0 monolith) — kept for migration safety.
     bool LoadPresetsFromJsonFile(const std::wstring& path);
+
+    // I0: register every material file in a directory (data/materials/*.json, flat
+    // schema-v2 objects, name = filename stem). Returns true if at least one loaded.
+    bool LoadPresetsFromDirectory(const std::wstring& directory);
 
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;
+
+    size_t PresetCount() const { return presets_.size(); }
 
     // Get or create MaterialData by preset name (lazy texture loading)
     std::shared_ptr<MaterialData> GetOrCreate(Renderer* renderer,

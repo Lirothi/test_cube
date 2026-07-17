@@ -591,38 +591,38 @@ bool ImportTextureSet(const fs::path& dir, const fs::path& diff, const fs::path&
     return success;
 }
 
-// Register texture-set presets in data/materials.json. The file is already in nlohmann-canonical
-// form (sorted keys, 2-space) so parse -> insert -> dump(2) yields a clean minimal diff.
+// I0: register texture-set materials as per-file assets — one data/materials/<name>.json per
+// set (schema v2, flat object). Existing files are merged per key so a partial set reimport
+// (only some maps selected) preserves the untouched texture entries and any authored params.
 void WritePresets(const std::vector<PresetEntry>& entries, Log& log)
 {
     if (entries.empty()) { return; }
-    const char* path = "data/materials.json";
-    nlohmann::json j = nlohmann::json::object();
-    {
-        std::ifstream f(path);
-        if (f)
-        {
-            std::stringstream ss; ss << f.rdbuf();
-            nlohmann::json parsed = nlohmann::json::parse(ss.str(), nullptr, false, true);
-            if (!parsed.is_discarded() && parsed.is_object()) { j = std::move(parsed); }
-        }
-    }
-    if (!j.contains("presets") || !j["presets"].is_object()) { j["presets"] = nlohmann::json::object(); }
+    std::error_code ec;
+    fs::create_directories("data/materials", ec);
 
     for (const auto& e : entries)
     {
-        nlohmann::json& p = j["presets"][e.name];
-        if (!p.is_object()) { p = nlohmann::json::object(); }
+        const fs::path path = fs::path("data/materials") / (e.name + ".json");
+        nlohmann::json p = nlohmann::json::object();
+        {
+            std::ifstream f(path);
+            if (f)
+            {
+                std::stringstream ss; ss << f.rdbuf();
+                nlohmann::json parsed = nlohmann::json::parse(ss.str(), nullptr, false, true);
+                if (!parsed.is_discarded() && parsed.is_object()) { p = std::move(parsed); }
+            }
+        }
         if (!e.albedo.empty()) { p["albedo"] = e.albedo; }
         if (!e.mr.empty()) { p["mr"] = e.mr; }
         if (!e.normal.empty()) { p["normal"] = e.normal; }
         p["normalIsRG"] = false;
         p["useTBN"] = true;
-        log.Line("registered preset '" + e.name + "'");
-    }
 
-    std::ofstream out(path, std::ios::trunc);
-    out << j.dump(2) << "\n";
+        std::ofstream out(path, std::ios::trunc);
+        out << p.dump(2) << "\n";
+        log.Line("registered material '" + e.name + "' -> " + path.generic_string());
+    }
 }
 
 //=============================================================================
@@ -1086,7 +1086,7 @@ int RunImport(const ImportOptions& opts)
         opts.progressDone->store(opts.progressTotal->load(), std::memory_order_relaxed);
     }
 
-    // Register the texture-set presets in one read-modify-write of data/materials.json.
+    // Register the texture-set materials as per-file assets (data/materials/<set>.json, I0).
     WritePresets(presets, log);
 
     log.Line("converted: " + std::to_string(converted) + " loose + " + std::to_string(presets.size()) +

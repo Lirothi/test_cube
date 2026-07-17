@@ -341,7 +341,9 @@ void EditorPreviewRenderer::EnsurePresets()
         return;
     }
     presetsLoaded_ = true;
+    // Mirror the app bootstrap (I0): legacy monolith first, per-file materials win on clashes.
     materials_.LoadPresetsFromJsonFile(L"data/materials.json");
+    materials_.LoadPresetsFromDirectory(L"data/materials");
 }
 
 void EditorPreviewRenderer::ReloadPresets()

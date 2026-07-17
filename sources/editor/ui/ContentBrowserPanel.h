@@ -102,7 +102,8 @@ private:
     std::string newFolderParent_;
     std::string deleteFolderTarget_;
     std::string folderOperationMessage_;
-    EditorAssetId deleteAssetTarget_;      // file pending the delete-confirmation modal
+    EditorAssetId deleteAssetTarget_;      // asset pending the delete-confirmation modal
+    std::string deleteAssetPath_;          // its disk path (materials: id.key is the NAME, not the path)
     // One-frame flag: expand the Sources tree along selectedFolder_ and scroll to it.
     // Raised by navigation that happens OUTSIDE the tree (asset-view double-click,
     // breadcrumbs, "Reveal in Sources", history) so both views stay in sync.

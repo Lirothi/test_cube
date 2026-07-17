@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 #include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
@@ -198,6 +199,11 @@ void GBufferRenderable::BuildSlotMaterials(Renderer* renderer)
     {
         Material::GraphicsDesc gd = BuildGraphicsDesc(renderer); // slot-0 configured desc
         ApplySlotPipelineOverrides(gd, i);
+        // I0: per-slot material shader override. The slot-0 desc may already carry slot 0's
+        // override — reset to this slot's choice (its own override, else the object's shader).
+        gd.shaderFile = (matDatas_[i] && !matDatas_[i]->shaderOverride.empty())
+            ? matDatas_[i]->shaderOverride
+            : GetGraphicsShaderPath();
         auto m = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
         // The uniform binder writes b0 through slot-0 field handles — every slot permutation
         // must share the PerObject layout (defines never change the cbuffer struct). Guard it:
@@ -259,6 +265,17 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         else
         {
             matDatas_[i] = mgr->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, name);
+            // I0: material files can carry param DEFAULTS. Seed them only when the slot still has
+            // factory-default params — an explicit per-object override from the level JSON
+            // (applied before Init) must win. Param-less materials leave slots untouched.
+            if (matDatas_[i] && matDatas_[i]->hasPresetParams)
+            {
+                static const MaterialParams kDefaultParams{};
+                if (std::memcmp(&matParamses_[i], &kDefaultParams, sizeof(MaterialParams)) == 0)
+                {
+                    matParamses_[i] = matDatas_[i]->presetParams;
+                }
+            }
         }
     }
 
@@ -323,6 +340,12 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
     // fails to compile we disable instancing for this object (no half-instanced state).
     if (!renderer) { return; }
     if (GetGraphicsShaderPath() != L"shaders/gbuffer.hlsl") { return; }
+    // I0: material shader overrides have no instanced counterpart — a batch would silently draw
+    // them with the plain instanced shader (no sway etc.). Disable instancing for such objects.
+    for (const auto& md : matDatas_)
+    {
+        if (md && !md->shaderOverride.empty()) { return; }
+    }
 
     Material::GraphicsDesc gd = BuildGraphicsDesc(renderer);
     gd.shaderFile = L"shaders/gbuffer_instcb.hlsl";
@@ -420,6 +443,14 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
     // cull mode come from slot 0's MaterialData (per-slot PSOs replace C1's union-of-flags;
     // slots 1+ get their own materials in BuildSlotMaterials).
     ApplySlotPipelineOverrides(desc, 0);
+    // I0: a material file can override the gbuffer shader ("shader" key — vegetation sway etc.).
+    // Applied here, NOT in ApplySlotPipelineOverrides — the instanced descs reuse that helper
+    // with their own shader. The shadow PSO follows automatically: BuildShadowDesc derives
+    // <shader>_csm.hlsl from this desc's shaderFile.
+    if (!matDatas_.empty() && matDatas_[0] && !matDatas_[0]->shaderOverride.empty())
+    {
+        desc.shaderFile = matDatas_[0]->shaderOverride;
+    }
 
     desc.depth.StencilEnable = TRUE;
     desc.depth.StencilReadMask = 0x80;

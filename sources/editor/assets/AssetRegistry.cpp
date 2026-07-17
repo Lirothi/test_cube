@@ -1146,16 +1146,19 @@ namespace
         std::vector<std::string> extensions;
     };
 
-    const std::array<DirRoot, 5>& AssetRoots()
+    const std::array<DirRoot, 6>& AssetRoots()
     {
-        static const std::array<DirRoot, 5> roots = { {
-            { "models",         "/Game/Models",   EditorAssetType::Mesh,    { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb", ".dds", ".png" } },
-            { "textures",       "/Game/Textures", EditorAssetType::Texture, { ".dds", ".png" } },
-            { "data/levels",    "/Game/Levels",   EditorAssetType::Level,   { ".json" } },
-            { "shaders",        "/Game/Shaders",  EditorAssetType::Shader,  { ".hlsl" } },
+        static const std::array<DirRoot, 6> roots = { {
+            { "models",         "/Game/Models",    EditorAssetType::Mesh,           { ".obj", ".mesh.txt", ".txt", ".gltf", ".glb", ".dds", ".png" } },
+            { "textures",       "/Game/Textures",  EditorAssetType::Texture,        { ".dds", ".png" } },
+            { "data/levels",    "/Game/Levels",    EditorAssetType::Level,          { ".json" } },
+            // I0: one material = one file; the record id is the material NAME (filename stem) —
+            // see the scan loop — because levels and slots reference materials by name.
+            { "data/materials", "/Game/Materials", EditorAssetType::MaterialPreset, { ".json" } },
+            { "shaders",        "/Game/Shaders",   EditorAssetType::Shader,         { ".hlsl" } },
             // Raw drop zone: spawn glTF/GLB straight from staging until the H importer converts
             // them into models/ (they're gitignored; harmless if the folder is absent).
-            { "import_staging", "/Game/Staging",  EditorAssetType::Mesh,    { ".gltf", ".glb" } },
+            { "import_staging", "/Game/Staging",   EditorAssetType::Mesh,           { ".gltf", ".glb" } },
         } };
         return roots;
     }
@@ -1609,6 +1612,15 @@ void AssetRegistry::Refresh()
             record.virtualFolder = NormalizeVirtualPath(std::move(virtualFolder));
             record.virtualPath = record.virtualFolder + "/" + p.filename().generic_string();
             record.displayName = p.filename().string();
+            if (record.id.type == EditorAssetType::MaterialPreset)
+            {
+                // Materials are referenced BY NAME everywhere (level JSON "material",
+                // slot lists, SetMaterialCommand) — the id stays the name (= filename
+                // stem); record.path still points at the file for browser file ops.
+                record.id.key = p.stem().string();
+                record.displayName = record.id.key;
+                record.virtualPath = record.virtualFolder + "/" + record.displayName;
+            }
             record.extension = ext;
             record.fileWriteTime = WriteTimeOf(p);
             if (record.id.type == EditorAssetType::Texture)
@@ -1623,87 +1635,58 @@ void AssetRegistry::Refresh()
     // physical glTF. They are separate spawnable assets backed by the same file.
     AddSplitMeshNodeAssets(assets_);
 
-    // Material presets: names under "presets" in data/materials.json. Parsed
-    // directly here (no MaterialDataManager / GPU dependency).
+    // I0: materials come from the data/materials root scan above. Keep the folder visible even
+    // when empty, and carry each material's import status from its referenced textures — an
+    // imported set's material points at textures/<staging-folder>/..., so the badge and one-click
+    // reimport work from /Game/Materials too.
     {
         EnsureFolder(folders_, "/Game/Materials");
 
-        const char* materialsPath = "data/materials.json";
-        std::error_code ec;
-        if (fs::exists(materialsPath, ec))
+        for (EditorAssetRecord& record : assets_)
         {
-            std::ifstream file(materialsPath);
-            nlohmann::json doc;
-            bool parsed = false;
-            if (file)
+            if (record.id.type != EditorAssetType::MaterialPreset)
             {
-                try
-                {
-                    file >> doc;
-                    parsed = true;
-                }
-                catch (const std::exception&)
-                {
-                    parsed = false;
-                }
+                continue;
+            }
+            std::ifstream file(record.path);
+            if (!file)
+            {
+                continue;
+            }
+            nlohmann::json doc = nlohmann::json::parse(file, nullptr, false, true);
+            if (doc.is_discarded() || !doc.is_object())
+            {
+                continue;
             }
 
-            if (parsed)
+            for (const char* textureKey : { "albedo", "mr", "normal" })
             {
-                const auto presetsIt = doc.find("presets");
-                if (presetsIt != doc.end() && presetsIt->is_object())
+                const auto textureIt = doc.find(textureKey);
+                if (textureIt == doc.end() || !textureIt->is_string())
                 {
-                    const uint64_t writeTime = WriteTimeOf(materialsPath);
-                    for (auto it = presetsIt->begin(); it != presetsIt->end(); ++it)
-                    {
-                        EditorAssetRecord record;
-                        record.id.type = EditorAssetType::MaterialPreset;
-                        record.id.key = it.key();
-                        record.path = materialsPath;
-                        record.virtualFolder = "/Game/Materials";
-                        record.virtualPath = record.virtualFolder + "/" + it.key();
-                        record.displayName = it.key();
-                        record.fileWriteTime = writeTime;
-
-                        // Imported texture-set presets point at
-                        // textures/<staging-folder>/... . Carry the same import
-                        // status as their generated texture records so the
-                        // badge and one-click reimport also work from Materials.
-                        if (it.value().is_object())
-                        {
-                            for (const char* textureKey : { "albedo", "mr", "normal" })
-                            {
-                                const auto textureIt = it.value().find(textureKey);
-                                if (textureIt == it.value().end() || !textureIt->is_string())
-                                {
-                                    continue;
-                                }
-                                fs::path relativeTexture;
-                                if (!RelativePathUnder(fs::path(textureIt->get<std::string>()),
-                                        "textures", relativeTexture))
-                                {
-                                    continue;
-                                }
-                                const auto first = relativeTexture.begin();
-                                if (first == relativeTexture.end() ||
-                                    std::next(first) == relativeTexture.end())
-                                {
-                                    continue;
-                                }
-                                const fs::path source = fs::path("import_staging") / *first;
-                                const fs::path project = fs::path("textures") / *first;
-                                record.importStatus = InspectAssetImportStatus(
-                                    source.generic_string(), project.generic_string());
-                                if (record.importStatus != EditorAssetImportStatus::Untracked)
-                                {
-                                    record.importSourcePath = source.generic_string();
-                                }
-                                break;
-                            }
-                        }
-                        assets_.push_back(std::move(record));
-                    }
+                    continue;
                 }
+                fs::path relativeTexture;
+                if (!RelativePathUnder(fs::path(textureIt->get<std::string>()),
+                        "textures", relativeTexture))
+                {
+                    continue;
+                }
+                const auto first = relativeTexture.begin();
+                if (first == relativeTexture.end() ||
+                    std::next(first) == relativeTexture.end())
+                {
+                    continue;
+                }
+                const fs::path source = fs::path("import_staging") / *first;
+                const fs::path project = fs::path("textures") / *first;
+                record.importStatus = InspectAssetImportStatus(
+                    source.generic_string(), project.generic_string());
+                if (record.importStatus != EditorAssetImportStatus::Untracked)
+                {
+                    record.importSourcePath = source.generic_string();
+                }
+                break;
             }
         }
     }
@@ -1861,11 +1844,14 @@ uint64_t AssetRegistry::ComputeContentSignature() const
         }
     }
 
+    // I0: per-file materials live under the data/materials root, which the root loop above
+    // already fingerprints; the legacy monolith is only tracked while it still exists.
     const fs::path materialsPath("data/materials.json");
     std::error_code materialsEc;
-    fingerprints.push_back(FingerprintPath(materialsPath,
-        fs::is_regular_file(materialsPath, materialsEc) ? 4 : 5,
-        materialsEc ? 0 : FileSizeOf(materialsPath)));
+    if (fs::is_regular_file(materialsPath, materialsEc))
+    {
+        fingerprints.push_back(FingerprintPath(materialsPath, 4, FileSizeOf(materialsPath)));
+    }
 
     std::sort(fingerprints.begin(), fingerprints.end());
     uint64_t hash = 14695981039346656037ull;

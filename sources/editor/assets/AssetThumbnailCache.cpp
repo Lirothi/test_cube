@@ -186,40 +186,64 @@ namespace
 
     void HashMaterialDependencies(std::uint64_t& hash, const std::string& presetKey)
     {
-        constexpr const char* kMaterialsJson = "data/materials.json";
-        HashText(hash, kMaterialsJson);
-        HashValue(hash, FileWriteTime(kMaterialsJson));
-
-        std::ifstream file(kMaterialsJson);
-        if (!file)
+        // I0: materials are per-file assets (data/materials/<name>.json, flat object). The
+        // monolithic data/materials.json remains a legacy fallback during migration.
+        nlohmann::json preset;
+        const std::string perFilePath = "data/materials/" + presetKey + ".json";
+        if (std::ifstream perFile{ perFilePath })
         {
-            HashText(hash, "missing-materials-json");
-            return;
+            HashText(hash, perFilePath);
+            HashValue(hash, FileWriteTime(perFilePath));
+
+            std::stringstream contents;
+            contents << perFile.rdbuf();
+            const nlohmann::json document =
+                nlohmann::json::parse(contents.str(), nullptr, false, /*ignore_comments=*/true);
+            if (document.is_discarded() || !document.is_object())
+            {
+                HashText(hash, "invalid-material-file");
+                return;
+            }
+            preset = document;
         }
-
-        std::stringstream contents;
-        contents << file.rdbuf();
-        const nlohmann::json document =
-            nlohmann::json::parse(contents.str(), nullptr, false, /*ignore_comments=*/true);
-        if (document.is_discarded() || !document.contains("presets") ||
-            !document["presets"].is_object())
+        else
         {
-            HashText(hash, "invalid-materials-json");
-            return;
-        }
+            constexpr const char* kMaterialsJson = "data/materials.json";
+            HashText(hash, kMaterialsJson);
+            HashValue(hash, FileWriteTime(kMaterialsJson));
 
-        const auto preset = document["presets"].find(presetKey);
-        if (preset == document["presets"].end() || !preset->is_object())
-        {
-            HashText(hash, "missing-material-preset");
-            return;
+            std::ifstream file(kMaterialsJson);
+            if (!file)
+            {
+                HashText(hash, "missing-materials-json");
+                return;
+            }
+
+            std::stringstream contents;
+            contents << file.rdbuf();
+            const nlohmann::json document =
+                nlohmann::json::parse(contents.str(), nullptr, false, /*ignore_comments=*/true);
+            if (document.is_discarded() || !document.contains("presets") ||
+                !document["presets"].is_object())
+            {
+                HashText(hash, "invalid-materials-json");
+                return;
+            }
+
+            const auto entry = document["presets"].find(presetKey);
+            if (entry == document["presets"].end() || !entry->is_object())
+            {
+                HashText(hash, "missing-material-preset");
+                return;
+            }
+            preset = *entry;
         }
 
         for (const char* name : { "albedo", "mr", "normal" })
         {
             HashText(hash, name);
-            const auto dependency = preset->find(name);
-            const std::string path = dependency != preset->end() && dependency->is_string()
+            const auto dependency = preset.find(name);
+            const std::string path = dependency != preset.end() && dependency->is_string()
                 ? dependency->get<std::string>()
                 : std::string{};
             HashText(hash, path);
