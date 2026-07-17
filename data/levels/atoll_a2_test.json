@@ -379,28 +379,6 @@
     },
     {
       "enabled": true,
-      "id": 40,
-      "mesh": "models/rocks_node_Rock01_Rock01Shader_0.mesh.json",
-      "name": "rock.node1",
-      "position": [
-        20.0,
-        0.0,
-        6.0
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        0.019999999552965164,
-        0.019999999552965164,
-        0.019999999552965164
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 41,
       "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
       "name": "boulder",
@@ -418,28 +396,6 @@
         0.014999999664723873,
         0.014999999664723873,
         0.014999999664723873
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "id": 68,
-      "mesh": "models/date_palm_2.mesh.json",
-      "name": "staticMesh #68",
-      "position": [
-        7.474907875061035,
-        0.0,
-        1.4934501647949219
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        0.8175769448280334,
-        0.8175769448280334,
-        0.8175769448280334
       ],
       "type": "staticMesh"
     }

@@ -21,6 +21,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
+#include "editor/commands/SetMeshAssetCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
@@ -173,6 +174,87 @@ namespace
             }
         }
         commandStack.Execute(ctx, std::move(composite));
+    }
+
+    bool IsMeshAsset(const EditorAssetRecord& record)
+    {
+        return record.id.type == EditorAssetType::Mesh && record.extension == ".mesh.json";
+    }
+
+    void DrawMeshAssetSelector(EditorContext& ctx,
+        EditorCommandStack& commandStack,
+        const AssetRegistry& registry,
+        const EditorObject& object)
+    {
+        if (object.type != "staticMesh")
+        {
+            return;
+        }
+
+        const std::string current = object.properties.value("mesh", std::string());
+        const EditorAssetRecord* currentRecord = nullptr;
+        for (const EditorAssetRecord& record : registry.Assets())
+        {
+            if (IsMeshAsset(record) && record.id.key == current)
+            {
+                currentRecord = &record;
+                break;
+            }
+        }
+
+        std::string currentLabel;
+        if (currentRecord)
+        {
+            currentLabel = currentRecord->displayName;
+        }
+        else if (!current.empty())
+        {
+            currentLabel = std::filesystem::path(current).filename().string() + " (missing)";
+        }
+        else
+        {
+            const std::string legacyModel = object.properties.value("model", std::string());
+            currentLabel = legacyModel.empty()
+                ? std::string("(none)")
+                : std::filesystem::path(legacyModel).filename().string() + " (legacy)";
+        }
+
+        if (!ImGui::BeginCombo("Mesh Asset", currentLabel.c_str()))
+        {
+            return;
+        }
+
+        int assetCount = 0;
+        for (const EditorAssetRecord& record : registry.Assets())
+        {
+            if (!IsMeshAsset(record))
+            {
+                continue;
+            }
+
+            ++assetCount;
+            const bool selected = record.id.key == current;
+            ImGui::PushID(record.id.key.c_str());
+            if (ImGui::Selectable(record.displayName.c_str(), selected) && !selected)
+            {
+                commandStack.Execute(ctx,
+                    std::make_unique<SetMeshAssetCommand>(object.id, record.id.key));
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", record.id.key.c_str());
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        }
+        if (assetCount == 0)
+        {
+            ImGui::TextDisabled("No .mesh.json assets found.");
+        }
+        ImGui::EndCombo();
     }
 
     void DrawInspectorDropTarget(EditorContext& ctx,
@@ -706,6 +788,8 @@ void InspectorPanel::Draw(EditorContext& ctx,
             commandStack.Execute(ctx, std::make_unique<SetEnabledCommand>(obj->id, enabled));
         }
     }
+
+    DrawMeshAssetSelector(ctx, commandStack, registry, *obj);
 
     if (obj->properties.contains("model") && obj->properties["model"].is_string())
     {
