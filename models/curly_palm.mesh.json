@@ -1,5 +1,5 @@
 {
-  "geometry": "import_staging/curly_palm/scene.gltf",
+  "geometry": "models/curly_palm/scene.gltf",
   "inputLayout": "PosNormTanUV",
   "material": "auto"
 }

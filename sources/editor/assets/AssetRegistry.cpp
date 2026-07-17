@@ -1146,9 +1146,9 @@ namespace
         std::vector<std::string> extensions;
     };
 
-    const std::array<DirRoot, 6>& AssetRoots()
+    const std::array<DirRoot, 5>& AssetRoots()
     {
-        static const std::array<DirRoot, 6> roots = { {
+        static const std::array<DirRoot, 5> roots = { {
             { "models",         "/Game/Models",    EditorAssetType::Mesh,           { ".obj", ".mesh.txt", ".mesh.json", ".txt", ".gltf", ".glb", ".dds", ".png" } },
             { "textures",       "/Game/Textures",  EditorAssetType::Texture,        { ".dds", ".png" } },
             { "data/levels",    "/Game/Levels",    EditorAssetType::Level,          { ".json" } },
@@ -1156,9 +1156,9 @@ namespace
             // see the scan loop — because levels and slots reference materials by name.
             { "data/materials", "/Game/Materials", EditorAssetType::MaterialPreset, { ".json" } },
             { "shaders",        "/Game/Shaders",   EditorAssetType::Shader,         { ".hlsl" } },
-            // Raw drop zone: spawn glTF/GLB straight from staging until the H importer converts
-            // them into models/ (they're gitignored; harmless if the folder is absent).
-            { "import_staging", "/Game/Staging",   EditorAssetType::Mesh,           { ".gltf", ".glb" } },
+            // import_staging is NOT mounted: it's a raw drop zone for the importer (ImportPanel scans
+            // it directly via kStagingRoot), not a browsable asset root. Imported assets live in
+            // models/; mesh.json reference the models/ copies (J cleanup 2026-07-17).
         } };
         return roots;
     }
