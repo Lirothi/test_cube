@@ -129,6 +129,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     invProj = material->ComputeCB0FieldHandle("invProj");
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
+    enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
 }
@@ -585,6 +586,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.invProj, data.invProj, dest);
     matComposeCS_->UpdateCBField(handles.skyboxIntensity, data.skyboxIntensity, dest);
     matComposeCS_->UpdateCBField(handles.camPos, data.camPos, dest);
+    matComposeCS_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
     matComposeCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matComposeCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
 }

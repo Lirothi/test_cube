@@ -31,7 +31,7 @@ cbuffer PerFrame : register(b0)
     float4x4 invProj; // clip  -> view
     float skyboxIntensity; // 1.0
     float3 camPosWS;
-    float  _padding0;
+    uint enableSkySpecular;
     float2 screenSize;
     float2 invScreenSize;
 }
@@ -95,7 +95,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // mirror-sharp horizon next to the roughness-blurred SSR/RT reflection. The `gloss`
         // term below fades the reflection out as rough->1, so the very blurry upper mips are
         // only lightly weighted.
-        float3 skyCol = SkyboxTex.SampleLevel(gSmp, Rw, rough * kSkyRoughMaxMip).rgb * skyboxIntensity;
+        float3 skyCol = 0.0f.xxx;
+        if (enableSkySpecular != 0u)
+        {
+            skyCol = SkyboxTex.SampleLevel(gSmp, Rw, rough * kSkyRoughMaxMip).rgb * skyboxIntensity;
+        }
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α))
         float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);

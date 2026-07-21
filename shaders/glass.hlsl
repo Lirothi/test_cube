@@ -58,7 +58,7 @@ cbuffer GlassView : register(b1)
     float4 cascadeSplitsVS;       // cascade splits in view space
     float4 cascadeScaleBias[4];   // xy = scale, zw = bias per cascade
     float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
-    float4 lightCounts;           // x = point lights, y = spot lights
+    float4 lightCounts;           // x = point lights, y = spot lights, z = traced reflections, w = sky reflection enabled
     float4x4 lightViewProj[4];
     float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
     float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
@@ -437,13 +437,18 @@ PSOut PSMain(VSOut i)
     }
 
     float3 reflectionDir = reflect(-V, N);
-    float3 skyRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+    float3 skyRefl = 0.0f.xxx;
+    if (lightCounts.w > 0.5f)
+    {
+        skyRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+    }
     float3 envRefl = skyRefl;
     // S15b off-screen RT reflection: the GlassReflGbuffer + GlassReflections passes traced this
     // glass surface's reflection (on-screen AND off-screen recompute, via rt_reflections_cs) into
     // GlassReflection, premultiplied (rgb = radiance, a = coverage). Composite the skybox where the
-    // ray missed (a < 1). Gated by rtEnabled (lightCounts.z = reflection source == RT); when off,
-    // GlassReflection is not produced this frame and is never read here.
+    // ray missed (a < 1). Gated by lightCounts.z (reflection source is SSR/RT); when off,
+    // GlassReflection is not produced this frame and is never read here. lightCounts.w
+    // independently suppresses the cubemap in the true None mode.
     if (lightCounts.z > 0.5f)
     {
         float2 reflUV = i.posH.xy * screenSizeInv.zw; // SV_POSITION pixel -> normalized screen UV

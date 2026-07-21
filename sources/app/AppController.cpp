@@ -96,13 +96,15 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
         if (input.WasActionPressed("CycleReflectionSource"))
         {
-            // F5: cycle Off -> SSR -> RT -> Off (skip RT on non-RT hardware).
+            // F5: cycle None -> SkyOnly -> SSR -> RT -> None (skip RT on
+            // non-RT hardware).
             const bool rt = renderer.IsRaytracingSupported();
             switch (settings_.reflectionSource)
             {
-            case ReflectionSource::Off: settings_.reflectionSource = ReflectionSource::SSR; break;
-            case ReflectionSource::SSR: settings_.reflectionSource = rt ? ReflectionSource::RT : ReflectionSource::Off; break;
-            default:                    settings_.reflectionSource = ReflectionSource::Off; break;
+            case ReflectionSource::None:    settings_.reflectionSource = ReflectionSource::SkyOnly; break;
+            case ReflectionSource::SkyOnly: settings_.reflectionSource = ReflectionSource::SSR; break;
+            case ReflectionSource::SSR:     settings_.reflectionSource = rt ? ReflectionSource::RT : ReflectionSource::None; break;
+            default:                        settings_.reflectionSource = ReflectionSource::None; break;
             }
         }
         if (input.WasActionPressed("ToggleRTDebugView"))

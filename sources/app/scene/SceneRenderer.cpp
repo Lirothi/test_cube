@@ -244,9 +244,12 @@ namespace
 
         const float pointCount = frame.lightManager ? static_cast<float>(frame.lightManager->PointLights().size()) : 0.0f;
         const float spotCount = frame.lightManager ? static_cast<float>(frame.lightManager->GetSpotLightCount()) : 0.0f;
-        // z = glass-reflections-active flag: glass.hlsl samples GlassReflection when set (RT or
-        // SSR mode), else uses skybox.
-        vc.lightCounts = float4(pointCount, spotCount, glassReflActive ? 1.0f : 0.0f, 0.0f);
+        // z = traced glass reflections active (SSR/RT); w = skybox surface
+        // reflection enabled (SkyOnly/SSR/RT, but not None).
+        const bool skySpecularActive = frame.settings.reflectionSource != ReflectionSource::None;
+        vc.lightCounts = float4(pointCount, spotCount,
+            glassReflActive ? 1.0f : 0.0f,
+            skySpecularActive ? 1.0f : 0.0f);
 
         // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
         const bool vsmOn = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
@@ -327,7 +330,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Reflection source (S8) + RT debug viz (S6), gated on hardware support. RT
     // reflections fall back to SSR on non-RT hardware (rtReflect stays false, so
     // the screen-space reflection source runs). The AS is built only when RT reflections or the debug
-    // viz need it; otherwise the frame is byte-identical to the SSR/Off path.
+    // viz need it; otherwise the frame is byte-identical to the SSR/None/SkyOnly path.
     const bool rtSupported = renderer->IsRaytracingSupported();
     // S13: once an AS allocation has failed (low VRAM / device lost), disable RT for
     // the rest of this scene and fall back to SSR — cleanly, never a crash. Sticky
@@ -341,13 +344,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     const bool rtDebugView = rtSupported && !rtFailed && frame.settings.rtDebugView;
     const bool rtReflect = rtSupported && !rtFailed && frame.settings.reflectionSource == ReflectionSource::RT;
-    const bool reflectionsOff = frame.settings.reflectionSource == ReflectionSource::Off;
+    const bool clearReflections = frame.settings.reflectionSource == ReflectionSource::None ||
+                                  frame.settings.reflectionSource == ReflectionSource::SkyOnly;
     const bool rtBuildAS = rtReflect || rtDebugView;
     rtReflectActive_ = rtReflect; // S15: RT reflections active this frame
-    // S15b: glass gets off-screen reflections whenever opaque reflections do (source != Off) —
-    // RT mode uses rt_reflections_cs, SSR mode (and RT's AS-failure fallback) uses ssr_cs. The
-    // forward glass samples glassReflection when this is set (b1 flag), else skybox.
-    glassReflActive_ = !reflectionsOff;
+    // S15b: glass gets traced reflections in SSR/RT modes. SkyOnly and None skip
+    // the glass reflection prepass; the forward shader uses the cubemap only in
+    // SkyOnly and suppresses it in None via lightCounts.w.
+    glassReflActive_ = !clearReflections;
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -660,8 +664,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Reflection source (S8): whichever variant runs writes the same premultiplied
     // reflection buffer, so the blur + compose chain is identical. RT (S7) runs
     // instead of the screen-space source (mt-dep on Main_BuildAS; its TLAS SRV
-    // bypasses the state tracker); Off just clears reflection so compose shows
-    // skybox specular only.
+    // bypasses the state tracker); None/SkyOnly clear the reflection buffer and
+    // compose decides whether the skybox fallback is enabled.
     const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -685,7 +689,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 Pass_RTReflections(renderer, ctx, *frame_->camera);
             });
     }
-    else if (reflectionsOff)
+    else if (clearReflections)
     {
         pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky },
             { { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
@@ -747,8 +751,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Off-screen glass reflections (S15b): render a glass front-face G-buffer (normal+depth)
     // then compute reflections over it into glassReflection (sampled by the forward glass pass).
     // Active in RT mode (rt_reflections_cs, incl. off-screen recompute) AND SSR mode (ssr_cs).
-    // Runs after Compose so the lit opaque `light` buffer is the on-screen color source. Off =>
-    // these passes are absent and glass falls back to skybox by construction (b1 flag is 0).
+    // Runs after Compose so the lit opaque `light` buffer is the on-screen color source.
+    // None/SkyOnly skip these passes; glass.hlsl independently suppresses or samples
+    // its skybox fallback through the second b1 flag.
     size_t pGlassReflect = (size_t)-1;
     if (glassReflActive_)
     {
@@ -2548,9 +2553,10 @@ void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ct
 
 void SceneRenderer::Pass_ClearReflections(Renderer* renderer, RenderGraphPassContext ctx)
 {
-    // Reflection source = Off: zero the reflection target so the unchanged blur +
-    // compose produce skybox-specular-only reflections. The target is per-frame, so it
-    // must be cleared every frame, not once.
+    // Reflection source = None/SkyOnly: zero the traced/screen reflection target.
+    // Compose separately gates the skybox fallback, so SkyOnly retains it while
+    // None produces no opaque environment reflection. The target is per-frame, so
+    // it must be cleared every frame, not once.
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
@@ -2651,6 +2657,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.invProj = camera.GetInvProjMatrix();
         constants.skyboxIntensity = skybox->GetExposure();
         constants.camPos = camera.GetPosition();
+        constants.enableSkySpecular =
+            frame_->settings.reflectionSource != ReflectionSource::None ? 1u : 0u;
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 

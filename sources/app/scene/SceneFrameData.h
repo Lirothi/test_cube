@@ -24,14 +24,16 @@ enum class SsrTechnique : uint32_t
     Count
 };
 
-// Where screen reflections come from (S8). Off = skybox specular only; SSR =
-// screen-space; RT = hardware ray-traced (Tier-1). RT is only honored when
+// Where surface reflections come from (S8). None disables both traced/screen
+// reflections and the skybox fallback; SkyOnly keeps only the skybox fallback;
+// SSR is screen-space; RT is hardware ray-traced (Tier-1). RT is only honored when
 // Renderer::IsRaytracingSupported() — otherwise the renderer falls back to SSR.
 enum class ReflectionSource : uint32_t
 {
-    Off = 0,
-    SSR = 1,
-    RT = 2,
+    None = 0,
+    SkyOnly = 1,
+    SSR = 2,
+    RT = 3,
     Count
 };
 
@@ -44,8 +46,9 @@ struct SceneRenderSettings
     bool debugTexMode = false;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
-    // Tier-1 ray-traced pass instead of SSR; Off clears the reflection buffer
-    // (skybox specular only). RT auto-falls back to SSR on non-RT hardware.
+    // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer
+    // but keeps skybox specular; None disables both. RT auto-falls back to SSR on
+    // non-RT hardware.
     ReflectionSource reflectionSource = ReflectionSource::RT;
     // S6: RT hit/visibility debug viz (dev tool). Traces a reflection ray per
     // pixel and writes a hit-distance/miss image into the reflection target (view via

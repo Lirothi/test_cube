@@ -108,7 +108,7 @@ private:
         const Camera& camera, const SceneView& mainView);
     void Pass_GlassReflections(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // RT mode
     void Pass_GlassReflectionsSSR(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // SSR mode
-    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 "Off": zero the reflection target
+    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 None/SkyOnly: zero traced reflection
     void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
@@ -141,7 +141,7 @@ private:
     bool rtFailureLogged_ = false; // S13: one-time "AS alloc failed -> SSR fallback" log
     bool asVramLogged_ = false;    // S13: one-time AS VRAM accounting log
     bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
-    bool glassReflActive_ = false; // S15b: glass reflections active (RT or SSR; source != Off)
+    bool glassReflActive_ = false; // S15b: traced glass reflections active (RT or SSR)
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
 
     // VSM (Rung 2) skip-when-still: last camera view matrix + whether the VSM has been rendered

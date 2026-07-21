@@ -107,6 +107,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle invProj;
     Material::CBFieldHandle skyboxIntensity;
     Material::CBFieldHandle camPos;
+    Material::CBFieldHandle enableSkySpecular;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
 
@@ -217,6 +218,7 @@ struct ComposePassConstants
     mat4 invProj{};
     float skyboxIntensity = 1.0f;
     float3 camPos{};
+    uint32_t enableSkySpecular = 1u;
     float2 screenSize{};
     float2 invScreenSize{};
 };

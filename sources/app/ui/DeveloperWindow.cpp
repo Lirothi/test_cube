@@ -255,9 +255,9 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                 }
                 ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
                 // S15b: glass off-screen reflections render into a glass G-buffer + glassReflection at
-                // this same reflection resolution and follow the reflection source below (RT/SSR/Off).
+                // this same reflection resolution and follow the reflection source below.
                 // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
-                ImGui::TextDisabled("Glass reflections share this target (active in SSR/RT; off in Off).");
+                ImGui::TextDisabled("Glass: traced in SSR/RT, cubemap in Sky only, disabled in None.");
 
                 // S16: glossy reflections — blur radius scales with surface roughness (0 = sharp mirror).
                 ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale, 0.0f, 24.0f, "%.1f");
@@ -278,17 +278,18 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
 
                 ImGui::Separator();
 
-                // Reflection source (S8): Off / SSR / RT. RT is greyed out on
+                // Reflection source (S8): None / Sky only / SSR / RT. RT is greyed out on
                 // non-RT hardware (and the renderer falls back to SSR anyway).
                 const bool rtSupported = renderer.IsRaytracingSupported();
-                const char* srcLabels[] = { "Off", "SSR", "RT" };
+                const char* srcLabels[] = { "None", "Sky only", "SSR", "RT" };
+                constexpr int srcCount = static_cast<int>(ReflectionSource::Count);
                 int curSrc = static_cast<int>(settings.reflectionSource);
-                if (curSrc < 0 || curSrc >= 3) { curSrc = 1; }
+                if (curSrc < 0 || curSrc >= srcCount) { curSrc = static_cast<int>(ReflectionSource::SSR); }
                 if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
                 {
-                    for (int i = 0; i < 3; ++i)
+                    for (int i = 0; i < srcCount; ++i)
                     {
-                        const bool isRT = (i == 2);
+                        const bool isRT = (i == static_cast<int>(ReflectionSource::RT));
                         ImGui::BeginDisabled(isRT && !rtSupported);
                         if (ImGui::Selectable(srcLabels[i], curSrc == i))
                         {
