@@ -106,6 +106,10 @@ public:
     // propagating across ring regions). >0 means shadow content changed -> VSM must re-render even
     // if the camera is still (drives SceneRenderer's skip-when-still gate).
     std::uint32_t MoverCount() const { return lastMoverCount_; }
+    // A GPU-idle editor rebuild can replace masked-material SRVs without moving any caster.
+    // Preserve that content-change signal through the next UpdateForFrame so VSM does not keep
+    // cached pages rendered with the old alpha mask.
+    void ForceContentRefreshNextFrame() { forceContentRefresh_ = true; }
     std::uint32_t ViewFrustumCount() const { return viewFrustumCount_; }
     std::uint32_t MeshGroupCount() const { return numMeshGroups_; }
 
@@ -283,6 +287,7 @@ private:
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow
     std::uint32_t lastMoverCount_ = 0;   // casters re-uploaded last UpdateForFrame (VSM skip gate)
+    bool          forceContentRefresh_ = false; // editor rebuild changed material/geometry content
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 

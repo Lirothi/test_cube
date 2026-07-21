@@ -521,6 +521,9 @@ void Scene::RefreshShadowGpuForEditor(Renderer& renderer)
     shadowGpu_.Rebuild(&renderer, objects_);
     shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
     uploads.SubmitAndWait(&renderer);
+    // Material/geometry content may have changed without a transform change. Keep the next VSM
+    // frame from reusing cached pages rendered with the previous masked texture descriptors.
+    shadowGpu_.ForceContentRefreshNextFrame();
 }
 
 RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id)

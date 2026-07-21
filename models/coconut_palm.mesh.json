@@ -3,9 +3,9 @@
   "materials": [
     "coconut_palm_0",
     "coconut_palm_1",
-    "auto",
-    "auto",
-    "auto"
+    "coconut_palm_2",
+    "coconut_palm_3",
+    "coconut_palm_4"
   ],
   "spawnScale": 1.0,
   "texOffsScale": [

@@ -289,6 +289,13 @@ int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
         ++applied;
     }
     uploads.SubmitAndWait(&ctx.renderer);
+    if (applied > 0)
+    {
+        // Like Material Editor, this direct live-apply bypasses EditorCommandStack's automatic
+        // caster refresh. Rebuild mesh groups and material-owned masked SRV handles explicitly.
+        ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
+        ctx.scene.InvalidateRaytracing();
+    }
     return applied;
 }
 

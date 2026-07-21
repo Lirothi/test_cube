@@ -345,10 +345,17 @@ int MaterialEditorPanel::ApplyToScene(EditorContext& ctx) const
     }
     uploads.SubmitAndWait(&ctx.renderer);
 
-    // The rebuilt material has NEW albedo/MR SRVs; the RT bindless caches the old ones per-mesh,
-    // so drop the RT caches (GPU is idle after SubmitAndWait) — next RT frame re-registers with the
-    // current SRVs. Without this, RT reflections read freed descriptors -> DEVICE_HUNG on re-apply.
-    ctx.scene.InvalidateRaytracing();
+    if (applied > 0)
+    {
+        // This direct live-apply bypasses EditorCommandStack. Rebuild the shadow caster data now:
+        // masked palm groups cache MaterialData-owned albedo SRVs, and destroying the old runtime
+        // objects invalidated those handles even though the caster count stayed unchanged.
+        ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
+
+        // The rebuilt material has NEW albedo/MR SRVs; the RT bindless caches the old ones per-mesh,
+        // so drop the RT caches too. Next RT frame re-registers with the current SRVs.
+        ctx.scene.InvalidateRaytracing();
+    }
     return applied;
 }
 

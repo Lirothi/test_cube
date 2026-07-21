@@ -740,6 +740,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
         Rebuild(renderer, objects);
+        forceContentRefresh_ = false; // this frame's mover signal already covers the rebuild
         lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
         return count_;
     }
@@ -799,7 +800,17 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         OutputDebugStringA(buf);
     }
 
-    lastMoverCount_ = uploaded;
+    if (forceContentRefresh_)
+    {
+        // Editor live-apply can keep identical transforms while replacing masked texture SRVs.
+        // Treat content as changed once so VSM runs and refreshes every resident cached page.
+        lastMoverCount_ = std::max<std::uint32_t>(count_, 1u);
+        forceContentRefresh_ = false;
+    }
+    else
+    {
+        lastMoverCount_ = uploaded;
+    }
     return uploaded;
 }
 
@@ -1503,6 +1514,7 @@ void ShadowGpuData::Reset()
     maskedAlbedoSrvs_.fill({});    // C2: MaterialData-owned SRV handles dangle across a level unload
     maskedAlbedoCount_ = 0;
     hasMaskedGroups_ = false;
+    forceContentRefresh_ = false;
     megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
     valState_ = 0;
     logFramesRemaining_ = 5;

@@ -1,0 +1,15 @@
+{
+  "albedo": "models/coconut_palm/textures/Tree_2Mat_baseColor.png",
+  "alphaCutoff": 0.25811079144477844,
+  "alphaTest": true,
+  "metalRough": [
+    1.0,
+    1.0
+  ],
+  "mr": "models/coconut_palm/textures/Tree_2Mat_metallicRoughness.png",
+  "multiplyMR": true,
+  "normal": "models/coconut_palm/textures/Tree_2Mat_normal.png",
+  "normalIsRG": false,
+  "twoSided": true,
+  "useTBN": true
+}

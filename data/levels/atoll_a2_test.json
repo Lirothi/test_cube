@@ -75,11 +75,11 @@
       "enabled": true,
       "id": 10,
       "materials": [
-        "auto",
-        "auto",
-        "auto",
-        "auto",
-        "auto"
+        "coconut_palm_0",
+        "coconut_palm_1",
+        "coconut_palm_2",
+        "coconut_palm_3",
+        "coconut_palm_4"
       ],
       "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.whole.ONE_OBJECT",
