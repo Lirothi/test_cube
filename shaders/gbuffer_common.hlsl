@@ -111,8 +111,12 @@ struct PSOut
     float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + unused A2
     float4 RT2 : SV_Target2; // Emissive.rgb
     float2 RT3 : SV_Target3; // Motion vector (UV delta)
+#ifdef EDITOR_OBJECT_ID
     uint RT4 : SV_Target4; // Editor object id (0 = none)
     float4 RT5 : SV_Target5; // GBAux: AO, indirect specular scale, shading model / 15, reserved
+#else
+    float4 RT4 : SV_Target4; // GBAux: AO, indirect specular scale, shading model / 15, reserved
+#endif
 };
 
 inline VSOut BaseVS(float3 pos,
@@ -154,8 +158,12 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss,
     o.RT1 = float4(NrmTo01(NWS), 1.0);
     o.RT2 = emiss;
     o.RT3 = motion;
+#ifdef EDITOR_OBJECT_ID
     o.RT4 = objectIdValue;
     o.RT5 = float4(1.0, 1.0, EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+#else
+    o.RT4 = float4(1.0, 1.0, EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+#endif
     return o;
 }
 

@@ -111,7 +111,6 @@ public:
     // Format accessors — definitions live in RenderConstants.h (render:: namespace).
     DXGI_FORMAT GetLightTargetFormat() const { return render::kLightTargetFormat; }
     DXGI_FORMAT GetSceneColorFormat() const { return render::kSceneColorFormat; }
-    DXGI_FORMAT GetDlssBiasFormat() const { return render::kDlssBiasFormat; }
     DXGI_FORMAT GetBackbufferFormat() const { return render::kBackbufferFormat; }
     DXGI_FORMAT GetBackbufferResourceFormat() const { return render::kBackbufferResourceFormat; }
     DXGI_FORMAT GetGBuffer0Format() const { return render::kGBuffer0Format; }
@@ -122,7 +121,9 @@ public:
     DXGI_FORMAT GetDsvFormat() const { return render::kDeferredDepthFormat; }
     DXGI_FORMAT GetDepthSrvFormat() const { return render::kDeferredDepthSrvFormat; }
     DXGI_FORMAT GetGBufferVelocityFormat() const { return render::kGBufferVelocityFormat; }
+#if WITH_EDITOR
     DXGI_FORMAT GetObjectIdFormat() const { return render::kObjectIdFormat; }
+#endif
     DXGI_FORMAT GetReflectionFormat() const { return render::kReflectionFormat; }
     DXGI_FORMAT GetReflectionScratchFormat() const { return render::kReflectionScratchFormat; }
 
@@ -151,11 +152,13 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyTexSrv()    { EnsureVsmDummySrvs(); return vsmDummyTexSrv_; }
 
+#if WITH_EDITOR
     bool RequestObjectIdPick(float displayX, float displayY);
     bool HasPendingObjectIdPick() const { return objectIdPickRequested_; }
     void RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl);
     void ResolveObjectIdPickReadback();
     bool ConsumeObjectIdPick(uint32_t& outObjectId);
+#endif
 
     // Utility functions
     void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
@@ -351,7 +354,9 @@ private:
     void RefreshCurrentFrameCaches();
     std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
+#if WITH_EDITOR
     void ResetObjectIdPickState();
+#endif
     void RecreateDeferredTargets();
     void UpdateRenderResolutionFromScale();
 
@@ -373,6 +378,7 @@ private:
     UINT  renderWidth_ = width_;
     UINT  renderHeight_ = height_;
 
+#if WITH_EDITOR
     Microsoft::WRL::ComPtr<ID3D12Resource> objectIdReadback_;
     UINT objectIdPickX_ = 0;
     UINT objectIdPickY_ = 0;
@@ -380,6 +386,7 @@ private:
     bool objectIdPickRequested_ = false;
     bool objectIdPickInFlight_ = false;
     bool objectIdPickResultValid_ = false;
+#endif
 
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT reflectionTextureWidth_ = 1;

@@ -85,8 +85,8 @@ Implementation decisions for this renderer:
    premultiplied subsurface/transmission color. Simultaneous foliage emissive is an accepted v1
    limitation and must be documented in the editor.
 5. **Use one consolidated material auxiliary GBuffer.** `R8G8B8A8_UNORM`: R = material AO,
-   G = indirect-specular scale, B = four-bit shading-model ID, A = reserved. Append it as a new MRT;
-   do not renumber the existing velocity/object-ID targets.
+   G = indirect-specular scale, B = four-bit shading-model ID, A = reserved. In editor builds it is
+   RT5 after the object-ID target; in runtime builds the editor-only target is absent and GBAux is RT4.
 6. **Do not silently grow `render::InstancePerObject`.** It is currently 208 bytes and mirrored by
    GBuffer and shadow paths. Material-static foliage parameters should travel through a dedicated
    per-slot surface-parameter CB, or through the existing multi-slot CB where that already occupies
@@ -121,9 +121,11 @@ Official references:
   - RT1: world normal + constant alpha 1;
   - RT2: emissive;
   - RT3: motion;
-  - RT4: editor object ID.
+  - editor: RT4 object ID, RT5 GBAux;
+  - runtime: RT4 GBAux.
 - Deferred formats are declared in `sources/rendering/core/RenderConstants.h`; targets/descriptors are
-  owned by `RenderTargetManager`; `Renderer::BindGBuffer` currently binds five MRTs.
+  owned by `RenderTargetManager`. Object-ID allocation, readback, render-graph states, and MRT slots are
+  compiled only with `WITH_EDITOR`; runtime binds five GBuffer MRTs while editor binds six.
 - Directional, point, and spot light compute shaders all use `EvalBRDF` from `shaders/utils.hlsl`.
   Directional ambient is a flat `albedo * (1-metal) * ambientIntensity` term.
 - Compose blends premultiplied SSR/RT coverage over the sky fallback:
@@ -323,8 +325,9 @@ Release_Editor builds passed; every capture exited 0.
   - Add a Material Editor combo. Selecting foliage enables `twoSided`; attempting to disable it either
     re-enables it or presents a clear validation error.
   - `MaterialData::ConfigureDefinesForGBuffer` writes `SHADING_MODEL_ID` into the slot PSO desc.
-  - Append neutral `GBAux` as RT5 (`R8G8B8A8_UNORM`) without renumbering RT0..RT4.
-  - `FinalizeGBuffer` writes the encoded compile-time ID to `RT5.b`; default macro value is 0.
+  - Append neutral `GBAux` (`R8G8B8A8_UNORM`). It is RT5 with editor object picking and compacted to
+    RT4 when `WITH_EDITOR` is disabled.
+  - `FinalizeGBuffer` writes the encoded compile-time ID to `GBAux.b`; default macro value is 0.
   - Preserve GB1 RGB10 normal precision; GB1 alpha is not used for material identity.
   - Add a debug visualization for decoded IDs.
   - Lighting and compose may decode the ID in this step, but must not branch on it yet.
@@ -336,7 +339,8 @@ Release_Editor builds passed; every capture exited 0.
 **Result:** Added the exact `DefaultLit=0` / `TwoSidedFoliage=1` C++ contract within a four-bit
 0..15 HLSL encoding, strict JSON string helpers, and PSO identity via `SHADING_MODEL_ID`. The ID lives
 in `GBAux.b` as `id/15`; GB1 remains RGB10 and no normal precision is lost. `GBAux` is a consolidated
-`R8G8B8A8_UNORM` RT5 initialized to neutral AO/specular values `(1,1,0,0)`.
+`R8G8B8A8_UNORM` target initialized to neutral AO/specular values `(1,1,0,0)`. Editor builds keep it at
+RT5 after object ID; runtime builds omit ObjectID entirely and bind GBAux at RT4.
 The Material Editor exposes both models and makes `twoSided` mandatory for foliage; new and generated
 materials serialize `defaultLit`, while omitted legacy fields remain ID 0. Texture Inspector now has a
 dedicated `Shading Model ID` view. A temporary isolated atoll fixture rendered foliage as ID 1 beside
@@ -363,7 +367,7 @@ compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore t
   - Do **not** grow the shared 208-byte `render::InstancePerObject` as a shortcut. If transport design
     forces a growth, update all C++ and HLSL mirrors, shadow structured-buffer strides, upload sizes,
     and static asserts in this same step and explain why the dedicated CB was impossible.
-  - Reuse the neutral `GBAux` RT5 landed in F2; populate R/G from the new material parameters while
+  - Reuse the neutral `GBAux` target landed in F2; populate R/G from the new material parameters while
     preserving B shading-model identity and reserved A.
   - Keep AO=1 and indirectSpecularScale=1 for all old materials.
   - DefaultLit writes emissive to GB2. Foliage writes
@@ -634,8 +638,8 @@ compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore t
 - **MRT/PSO mismatch:** adding GBAux changes the GBuffer PSO render-target count and
   `OMSetRenderTargets`. Update every GBuffer PSO variant and binding atomically in F3. A format/count
   mismatch can fail PSO creation before a shader error is visible.
-- **Two-bit alpha quantization:** write exact `id/3.0` and decode with round. Do not compare sampled
-  alpha to arbitrary thresholds in multiple shaders.
+- **Four-bit shading-model quantization:** write exact `id/15.0` to `GBAux.b` and decode with round.
+  Keep the C++/HLSL ID range at 0..15 and do not compare sampled values to ad-hoc thresholds.
 - **GB2 interpretation:** compose must branch before adding emissive. Otherwise foliage payload becomes
   self-illumination.
 - **Shared instance stride:** `render::InstancePerObject` is consumed outside the main GBuffer path.

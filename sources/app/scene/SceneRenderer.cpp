@@ -805,6 +805,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_Transparent(renderer, ctx, *frame_->camera, *frame_->mainView);
         });
 
+#if WITH_EDITOR
     size_t pObjectIdReadback = pTransp;
     if (renderer->HasPendingObjectIdPick())
     {
@@ -818,6 +819,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 ctx.EndCL(t);
             });
     }
+#else
+    const size_t pObjectIdReadback = pTransp;
+#endif
 
     auto pDebugDraw = rg.AddPass(RenderPass::Main_DebugDraw, { pObjectIdReadback },
         { { D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -872,7 +876,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         [this, renderer, &overlayPrepTask](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx, overlayPrepTask); });
     epilogueRG.Execute(renderer);
     renderer->EndFrame();
+#if WITH_EDITOR
     renderer->ResolveObjectIdPickReadback();
+#endif
 
     frame_ = nullptr;
 }
@@ -929,7 +935,9 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     {
                         const auto& D = renderer->GetDeferredForFrame();
                         renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
                         renderer->Transition(t.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
                         renderer->BindSceneColorWithVelocity(t.cl, Renderer::ClearMode::None, true);
                     }
                     else
@@ -1702,7 +1710,9 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
           { D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+#if WITH_EDITOR
           { D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+#endif
           { D.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext sub) {
@@ -2886,16 +2896,15 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             renderer->Transition(driver.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             renderer->Transition(driver.cl, D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             renderer->Transition(driver.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            renderer->Transition(driver.cl, D.dlssBias.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
             renderer->Transition(driver.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
             // S15b: the glass refl (computed pre-transparent into UAV) is sampled by the forward
             // glass PS at t7. No-op when already PIXEL (RT off / non-RT HW: glass.hlsl won't read it).
             if (D.glassReflection.Get())
             {
                 renderer->Transition(driver.cl, D.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
-            const float clearBias[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
-            driver.cl->ClearRenderTargetView(D.dlssBiasRTV, clearBias, 0, nullptr);
             renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
@@ -3165,7 +3174,6 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
 
         rc.srvTable[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
         //rc.srvTable[0] = renderer->StageSrvUavTable({ D.gbSRV[3] }).gpu; // t0
-        //rc.srvTable[0] = renderer->StageSrvUavTable({ D.dlssBiasSRV }).gpu; // t0
         const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 

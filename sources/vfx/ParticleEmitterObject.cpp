@@ -72,7 +72,7 @@ void ParticleEmitterObject::Init(Renderer* renderer,
     CreateDescriptors(renderer->GetDevice());
 
     // E2: billboard pipeline. Vertexless ("None" resolves to an empty input layout); draws into
-    // the transparent pass targets — RT0 (scene color) blends, the velocity/bias/objectId
+    // the transparent pass targets — RT0 (scene color) blends, while velocity/objectId
     // targets are write-masked off (a soft quad must not stomp motion vectors or picking ids
     // under the fire). Reversed-Z depth test, no depth write, no culling (billboards).
     {
@@ -80,11 +80,16 @@ void ParticleEmitterObject::Init(Renderer* renderer,
         gd.shaderFile = L"shaders/particles.hlsl";
         gd.inputLayoutKey = "None";
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        gd.numRT = 4;
+#if WITH_EDITOR
+        gd.numRT = 3;
+#else
+        gd.numRT = 2;
+#endif
         gd.rtvFormats[0] = renderer->GetSceneColorFormat();
         gd.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
-        gd.rtvFormats[2] = renderer->GetDlssBiasFormat();
-        gd.rtvFormats[3] = renderer->GetObjectIdFormat();
+#if WITH_EDITOR
+        gd.rtvFormats[2] = renderer->GetObjectIdFormat();
+#endif
         gd.dsvFormat = renderer->GetDsvFormat();
         // The ocean is submitted before particles and writes depth, so the regular depth test
         // resolves their overlap per pixel: foreground particles survive while particles genuinely
@@ -101,7 +106,7 @@ void ParticleEmitterObject::Init(Renderer* renderer,
         gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
         gd.blend.RenderTarget[0].DestBlendAlpha = desc_.additive ? D3D12_BLEND_ONE : D3D12_BLEND_INV_SRC_ALPHA;
         gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-        for (int rt = 1; rt < 4; ++rt)
+        for (UINT rt = 1; rt < gd.numRT; ++rt)
         {
             gd.blend.RenderTarget[rt].BlendEnable = FALSE;
             gd.blend.RenderTarget[rt].RenderTargetWriteMask = 0; // untouched under the quad

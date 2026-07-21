@@ -423,7 +423,7 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     }
 
     auto& deferred = renderer_.rtManager_.Deferred(renderer_.currentFrameIndex_);
-    if (!deferred.scene || !deferred.depth || !deferred.gbVelocity || !deferred.dlssBias || !deferred.dlssOutput)
+    if (!deferred.scene || !deferred.depth || !deferred.gbVelocity || !deferred.dlssOutput)
     {
         return false;
     }
@@ -431,7 +431,6 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     renderer_.Transition(cl, deferred.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer_.Transition(cl, deferred.dlssBias.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // Manual exposure is DISABLED on purpose: tagging the 1x1 exposure texture turns NGX
@@ -462,12 +461,6 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     depth.nativeFormat = static_cast<uint32_t>(renderer_.GetDeferredDepthFormat());
     depth.mipLevels = 1;
 
-    sl::Resource bias(sl::ResourceType::eTex2d, deferred.dlssBias.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-    bias.width = std::max(renderer_.renderWidth_, 1u);
-    bias.height = std::max(renderer_.renderHeight_, 1u);
-    bias.nativeFormat = static_cast<uint32_t>(renderer_.GetDlssBiasFormat());
-    bias.mipLevels = 1;
-
     sl::Resource output(sl::ResourceType::eTex2d, deferred.dlssOutput.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
     output.width = std::max(renderer_.width_, 1u);
     output.height = std::max(renderer_.height_, 1u);
@@ -482,16 +475,14 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     exposure.nativeFormat = static_cast<uint32_t>(DXGI_FORMAT_R32_FLOAT);
     exposure.mipLevels = 1;
 
-    std::array<sl::ResourceTag, 6> tags = {
+    std::array<sl::ResourceTag, 5> tags = {
         sl::ResourceTag(&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
-        sl::ResourceTag(&bias, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent),
-        //sl::ResourceTag(&bias, sl::kBufferTypeReactiveMaskHint, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent),
         sl::ResourceTag(&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eValidUntilPresent)
     };
-    const uint32_t tagCount = (kTagManualExposure && exposureUploaded_) ? 6u : 5u;
+    const uint32_t tagCount = (kTagManualExposure && exposureUploaded_) ? 5u : 4u;
 
     {
         CPU_SCOPE(ProfilerScopes::kDlssSetTagsOptions);

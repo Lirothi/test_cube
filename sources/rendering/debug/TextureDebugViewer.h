@@ -34,7 +34,6 @@ public:
         GBuffer2,
         GBufferAux,
         Velocity,
-        DlssBias,
         Depth,
         DepthCopy,
         ShadowAtlas,

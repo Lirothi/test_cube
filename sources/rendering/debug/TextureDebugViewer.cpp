@@ -172,7 +172,6 @@ namespace
         case TextureDebugViewer::Target::GBuffer2: return "GBuffer 2";
         case TextureDebugViewer::Target::GBufferAux: return "GBuffer Aux";
         case TextureDebugViewer::Target::Velocity: return "Velocity";
-        case TextureDebugViewer::Target::DlssBias: return "DLSS Bias";
         case TextureDebugViewer::Target::Depth: return "Depth";
         case TextureDebugViewer::Target::DepthCopy: return "Depth Copy";
         case TextureDebugViewer::Target::ShadowAtlas: return "Shadow Atlas";
@@ -213,7 +212,6 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "Emissive.", D.gb2.Get(), renderer.GetGBuffer2Format()),
             MakeTarget(TextureDebugViewer::Target::GBufferAux, "GBuffer", "Auxiliary material payload: AO R, indirect specular scale G, shading model B, reserved A.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::Velocity, "GBuffer", "Motion vectors.", D.gbVelocity.Get(), renderer.GetGBufferVelocityFormat()),
-            MakeTarget(TextureDebugViewer::Target::DlssBias, "DLSS", "DLSS bias/mask target.", D.dlssBias.Get(), renderer.GetDlssBiasFormat()),
             MakeTarget(TextureDebugViewer::Target::Depth, "Depth", "Main deferred depth SRV.", D.depth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::DepthCopy, "Depth", "Depth copy before transparent pass.", D.depthCopy.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::ShadowAtlas, "Shadows", "Directional cascade shadow atlas.", D.shadow.Get(), DXGI_FORMAT_R16_UNORM),

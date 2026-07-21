@@ -17,20 +17,26 @@ class RenderTargetManager
 {
 public:
     struct DeferredTargets {
-        static constexpr size_t kResourceCount = 24; // gb0,gb1,gb2,gbVelocity,gbAux,objectID,depth,depthCopy,light,scene,sceneOpaque,dlssBias,tonemap,fxaa,reflection,reflectionScratch,oceanReflection,shadow,spotShadow,pointShadow,dlssOutput,glassReflNormal,glassReflDepth,glassReflection
+        static constexpr size_t kResourceCount =
+#if WITH_EDITOR
+            23; // Runtime targets plus the editor-only objectID target.
+#else
+            22;
+#endif
         // Resources
         Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
         Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // encoded normal RGB; A2 remains unused
         Microsoft::WRL::ComPtr<ID3D12Resource> gb2;   // emissive
         Microsoft::WRL::ComPtr<ID3D12Resource> gbVelocity; // motion vectors
         Microsoft::WRL::ComPtr<ID3D12Resource> gbAux; // AO, indirect specular scale, shading model
+#if WITH_EDITOR
         Microsoft::WRL::ComPtr<ID3D12Resource> objectID; // editor object id (0 = none)
+#endif
         Microsoft::WRL::ComPtr<ID3D12Resource> depth;
         Microsoft::WRL::ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
         Microsoft::WRL::ComPtr<ID3D12Resource> light;
         Microsoft::WRL::ComPtr<ID3D12Resource> scene;
         Microsoft::WRL::ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
-        Microsoft::WRL::ComPtr<ID3D12Resource> dlssBias;
         Microsoft::WRL::ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
         Microsoft::WRL::ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
         Microsoft::WRL::ComPtr<ID3D12Resource> reflection;        // premultiplied; compose samples this after blur
@@ -49,7 +55,9 @@ public:
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbAuxRTV{};
+#if WITH_EDITOR
         D3D12_CPU_DESCRIPTOR_HANDLE objectIDRTV{};
+#endif
         D3D12_CPU_DESCRIPTOR_HANDLE dsv{};
         D3D12_CPU_DESCRIPTOR_HANDLE gbSRV[4]{}; // GB0,GB1,GB2,GBVelocity
         D3D12_CPU_DESCRIPTOR_HANDLE gbAuxSRV{};
@@ -59,7 +67,6 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
-        D3D12_CPU_DESCRIPTOR_HANDLE dlssBiasRTV{}, dlssBiasSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE tonemapSRV{}, tonemapUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionSRV{}, reflectionUAV{};
@@ -88,12 +95,13 @@ public:
         DXGI_FORMAT gb2;
         DXGI_FORMAT gbAux;
         DXGI_FORMAT velocity;
+#if WITH_EDITOR
         DXGI_FORMAT objectID;
+#endif
         DXGI_FORMAT depth;
         DXGI_FORMAT depthSrv;
         DXGI_FORMAT light;
         DXGI_FORMAT sceneColor;
-        DXGI_FORMAT dlssBias;
         DXGI_FORMAT reflection;
         DXGI_FORMAT reflectionScratch;
         DXGI_FORMAT oceanReflection;
@@ -122,8 +130,14 @@ public:
     bool IsLocalShadowFull() const { return localShadowFull_; }
 
 private:
-    enum class DeferredRtvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, ObjectID, Light, Scene, DlssBias, GlassReflNormal, Count };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, DlssBias, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
+    enum class DeferredRtvSlot : UINT {
+        GB0, GB1, GB2, GBVelocity, GBAux,
+#if WITH_EDITOR
+        ObjectID,
+#endif
+        Light, Scene, GlassReflNormal, Count
+    };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

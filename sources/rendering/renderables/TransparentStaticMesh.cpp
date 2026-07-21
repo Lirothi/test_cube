@@ -255,11 +255,16 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 4;
+#if WITH_EDITOR
+    desc.numRT = 3;
+#else
+    desc.numRT = 2;
+#endif
     desc.rtvFormats[0] = renderer->GetSceneColorFormat();
     desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
-    desc.rtvFormats[2] = renderer->GetDlssBiasFormat();
-    desc.rtvFormats[3] = renderer->GetObjectIdFormat();
+#if WITH_EDITOR
+    desc.rtvFormats[2] = renderer->GetObjectIdFormat();
+#endif
     desc.dsvFormat = renderer->GetDsvFormat();
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
@@ -274,10 +279,10 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     desc.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+#if WITH_EDITOR
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
     desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    desc.blend.RenderTarget[3].BlendEnable = FALSE;
-    desc.blend.RenderTarget[3].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+#endif
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
 
     auto& defs = desc.defines;
@@ -286,6 +291,9 @@ void TransparentStaticMesh::ConfigureGraphicsPipeline(Renderer* renderer, Materi
     {
         defs.emplace_back("NORMALMAP_IS_RG", "1");
     }
+#if WITH_EDITOR
+    defs.emplace_back("EDITOR_OBJECT_ID", "1");
+#endif
     // S15b: glass samples the precomputed GlassReflection texture (t7) — no RayQuery in this
     // shader, so the PSO is identical on RT and non-RT HW (one variant, 8-SRV table).
 }

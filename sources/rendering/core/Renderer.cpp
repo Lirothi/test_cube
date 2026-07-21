@@ -322,6 +322,7 @@ void Renderer::EndFrame() {
     ExecuteTimelineAndPresent();
 }
 
+#if WITH_EDITOR
 bool Renderer::RequestObjectIdPick(float displayX, float displayY)
 {
     if (!GetDevice() || !rtManager_.IsCreated() || objectIdPickRequested_ || objectIdPickInFlight_)
@@ -463,6 +464,7 @@ void Renderer::ResetObjectIdPickState()
     objectIdPickInFlight_ = false;
     objectIdPickResultValid_ = false;
 }
+#endif
 
 void Renderer::InitImGui()
 {
@@ -1056,12 +1058,13 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.gb2 = render::kGBuffer2Format;
     formats.gbAux = render::kGBufferAuxFormat;
     formats.velocity = render::kGBufferVelocityFormat;
+#if WITH_EDITOR
     formats.objectID = render::kObjectIdFormat;
+#endif
     formats.depth = render::kDeferredDepthFormat;
     formats.depthSrv = render::kDeferredDepthSrvFormat;
     formats.light = render::kLightTargetFormat;
     formats.sceneColor = render::kSceneColorFormat;
-    formats.dlssBias = render::kDlssBiasFormat;
     formats.reflection = render::kReflectionFormat;
     formats.reflectionScratch = render::kReflectionScratchFormat;
     formats.oceanReflection = render::kReflectionFormat;
@@ -1082,7 +1085,9 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
 
 void Renderer::DestroyDeferredTargets() {
     rtManager_.Destroy(stateTracker_);
+#if WITH_EDITOR
     ResetObjectIdPickState();
+#endif
 
     reflectionTextureWidth_ = 1;
     reflectionTextureHeight_ = 1;
@@ -1345,10 +1350,17 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
+#if WITH_EDITOR
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[6] = {
         D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3], D.objectIDRTV, D.gbAuxRTV
     };
     cl->OMSetRenderTargets(6, rtvs, FALSE, &D.dsv);
+#else
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[5] = {
+        D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3], D.gbAuxRTV
+    };
+    cl->OMSetRenderTargets(5, rtvs, FALSE, &D.dsv);
+#endif
     cl->OMSetStencilRef(0);
 
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
@@ -1357,11 +1369,17 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
 
     if (mode != ClearMode::None) {
         const float c[4]{ 0,0,0,0 };
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 4; ++i) {
             cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
         }
+#if WITH_EDITOR
+        cl->ClearRenderTargetView(rtvs[4], c, 0, nullptr);
+        constexpr int kAuxRtvIndex = 5;
+#else
+        constexpr int kAuxRtvIndex = 4;
+#endif
         const float auxNeutral[4]{ 1,1,0,0 };
-        cl->ClearRenderTargetView(rtvs[5], auxNeutral, 0, nullptr);
+        cl->ClearRenderTargetView(rtvs[kAuxRtvIndex], auxNeutral, 0, nullptr);
         if (mode == ClearMode::ColorDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 0.0f, 0, 0, nullptr);
@@ -1420,8 +1438,13 @@ void Renderer::BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearM
 
 void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth) {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4] = { D.sceneRTV, D.gbRTV[3], D.dlssBiasRTV, D.objectIDRTV };
-    cl->OMSetRenderTargets(4, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+#if WITH_EDITOR
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = { D.sceneRTV, D.gbRTV[3], D.objectIDRTV };
+    cl->OMSetRenderTargets(3, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+#else
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = { D.sceneRTV, D.gbRTV[3] };
+    cl->OMSetRenderTargets(2, rtvs, FALSE, withDepth ? &D.dsv : nullptr);
+#endif
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
     D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
     cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
@@ -1429,8 +1452,9 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
         const float c[4]{ 0,0,0,0 };
         cl->ClearRenderTargetView(rtvs[0], c, 0, nullptr);
         cl->ClearRenderTargetView(rtvs[1], c, 0, nullptr);
+#if WITH_EDITOR
         cl->ClearRenderTargetView(rtvs[2], c, 0, nullptr);
-        cl->ClearRenderTargetView(rtvs[3], c, 0, nullptr);
+#endif
         if (mode == ClearMode::ColorDepth && withDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);

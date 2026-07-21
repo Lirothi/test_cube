@@ -286,8 +286,9 @@ struct PSOut
 {
     float4 color : SV_Target0;
     float2 velocity : SV_Target1;
-    float bias : SV_Target2;
-    uint objectId : SV_Target3;
+#ifdef EDITOR_OBJECT_ID
+    uint objectId : SV_Target2;
+#endif
 };
 
 [RootSignature(GLASS_RS)]
@@ -512,7 +513,8 @@ PSOut PSMain(VSOut i)
     PSOut o;
     o.color = float4(color, 1.0f);
     o.velocity = motion;
-    o.bias = 0.0f;
+#ifdef EDITOR_OBJECT_ID
     o.objectId = objectId;
+#endif
     return o;
 }

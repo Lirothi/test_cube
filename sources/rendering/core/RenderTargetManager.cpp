@@ -62,7 +62,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        desc.NumDescriptors = render::kFrameCount * kDeferredRtvPerFrame;  // GB0,GB1,GB2,Velocity,ObjectID,Light,Scene,DLSS bias
+        desc.NumDescriptors = render::kFrameCount * kDeferredRtvPerFrame;
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredRtvHeap_)));
     }
     {
@@ -163,10 +163,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredRtvSlot::GB2:        D.gbRTV[2] = outRTV; break;
             case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
             case DeferredRtvSlot::GBAux:      D.gbAuxRTV = outRTV; break;
+#if WITH_EDITOR
             case DeferredRtvSlot::ObjectID:   D.objectIDRTV = outRTV; break;
+#endif
             case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
             case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
-            case DeferredRtvSlot::DlssBias:   D.dlssBiasRTV = outRTV; break;
             default: break;
             }
             switch (srvSlot) {
@@ -179,7 +180,6 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredSrvSlot::Stencil:    D.stencilSRV = outSRV; break;
             case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
             case DeferredSrvSlot::Scene:      D.sceneSRV = outSRV; break;
-            case DeferredSrvSlot::DlssBias:   D.dlssBiasSRV = outSRV; break;
             default: break;
             }
             if (uavSlot != DeferredSrvSlot::Count)
@@ -195,6 +195,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         };
 
+#if WITH_EDITOR
     auto CreateObjectIdTarget = [&](UINT f)
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.objectID, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
@@ -219,6 +220,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             tracker.SetResourceState(D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         };
+#endif
 
     auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
@@ -391,7 +393,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
         CreateRT(formats.gbAux, DeferredRtvSlot::GBAux, DeferredSrvSlot::GBAux, DeferredSrvSlot::Count,
             f, D.gbAux, D.gbAuxRTV, D.gbAuxSRV, float4(1, 1, 0, 0));
+#if WITH_EDITOR
         CreateObjectIdTarget(f);
+#endif
 
         CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV,
             0.0f, DXGI_FORMAT_UNKNOWN, DeferredSrvSlot::Stencil, &D.stencilSRV, render::kDeferredStencilSrvFormat);
@@ -408,7 +412,6 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
         CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateRT(formats.dlssBias, DeferredRtvSlot::DlssBias, DeferredSrvSlot::DlssBias, DeferredSrvSlot::Count, f, D.dlssBias, D.dlssBiasRTV, D.dlssBiasSRV, float4(0, 0, 0, 0));
         CreateSrvTexture(formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
@@ -443,7 +446,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gb2.Get(), L"GB2");
         nameRes(D.gbVelocity.Get(), L"GBVelocity");
         nameRes(D.gbAux.Get(), L"GBAux");
+#if WITH_EDITOR
         nameRes(D.objectID.Get(), L"ObjectID");
+#endif
         nameRes(D.depth.Get(), L"Depth");
         nameRes(D.depthCopy.Get(), L"DepthCopy");
         nameRes(D.shadow.Get(), L"CascadeShadow");
@@ -452,7 +457,6 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.light.Get(), L"Light");
         nameRes(D.scene.Get(), L"Scene");
         nameRes(D.sceneOpaque.Get(), L"SceneOpaque");
-        nameRes(D.dlssBias.Get(), L"DlssBias");
         nameRes(D.dlssOutput.Get(), L"DlssOutput");
         nameRes(D.reflection.Get(), L"Reflection");
         nameRes(D.reflectionScratch.Get(), L"ReflectionScratch");
@@ -682,12 +686,13 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.gb2);
         collect(D.gbVelocity);
         collect(D.gbAux);
+#if WITH_EDITOR
         collect(D.objectID);
+#endif
         collect(D.depth);
         collect(D.depthCopy);
         collect(D.light);
         collect(D.scene);
-        collect(D.dlssBias);
         collect(D.sceneOpaque);
         collect(D.tonemap);
         collect(D.fxaa);

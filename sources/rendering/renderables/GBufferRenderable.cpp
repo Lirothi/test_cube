@@ -439,15 +439,23 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
+#if WITH_EDITOR
     desc.numRT = 6;
+#else
+    desc.numRT = 5;
+#endif
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetGBuffer0Format();
         desc.rtvFormats[1] = renderer->GetGBuffer1Format();
         desc.rtvFormats[2] = renderer->GetGBuffer2Format();
         desc.rtvFormats[3] = renderer->GetGBufferVelocityFormat();
+#if WITH_EDITOR
         desc.rtvFormats[4] = renderer->GetObjectIdFormat();
         desc.rtvFormats[5] = renderer->GetGBufferAuxFormat();
+#else
+        desc.rtvFormats[4] = renderer->GetGBufferAuxFormat();
+#endif
         desc.dsvFormat = renderer->GetDeferredDepthFormat();
     }
 
@@ -455,6 +463,9 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
     // cull mode come from slot 0's MaterialData (per-slot PSOs replace C1's union-of-flags;
     // slots 1+ get their own materials in BuildSlotMaterials).
     ApplySlotPipelineOverrides(desc, 0);
+#if WITH_EDITOR
+    desc.defines.emplace_back("EDITOR_OBJECT_ID", "1");
+#endif
     // I0: a material file can override the gbuffer shader ("shader" key — vegetation sway etc.).
     // Applied here, NOT in ApplySlotPipelineOverrides — the instanced descs reuse that helper
     // with their own shader. The shadow PSO follows automatically: BuildShadowDesc derives
