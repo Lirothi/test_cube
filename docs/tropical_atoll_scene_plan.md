@@ -940,7 +940,25 @@ alphaTest/alphaCutoff/twoSided, emissiveColor/emissiveStrength, normalIsRG/useTB
 Undo/redo via `SetMaterialPropertyCommand` on the editor command stack; the file is saved on an
 explicit Save button (dirty marker in the title), not on every slider tick.
 
-**I3 — "Save as material" on a slot.** *(exec: Opus 4.8)* glTF import (A3) produces runtime-only
+**I3 — "Save as material" on a slot + auto-materials at import. — DONE (Opus 4.8, 2026-07-16),
+uncommitted.** User refinement: **the importer now also drops the glTF "auto" material and writes
+real named material files.** Shared helper `sources/editor/assets/MaterialFileGen.{h,cpp}`
+(`materialgen::WriteFromGltf(geometry, ordinal, name, overwrite)`) writes a schema-v2
+`data/materials/<name>.json` from `MeshManager::DescribeGltfMaterial` (same ordinal→material map the
+runtime uses, so materials[i] lines up with submesh i); textures come out as the imported
+`models/<name>/…` paths (H2 resolves the DDS), and since H6 baked the glTF factors into those DDS a
+param is only written when its texture is absent; alphaTest/twoSided/normalIsRG carried through.
+Used in two places: (1) the importer (`ImportPanel`, whole-asset + split imports) generates one
+material file per submesh slot and sets the mesh asset's `materials` (or scalar `material`) to the
+names instead of `"auto"` — so a freshly imported palm arrives with 5 editable named materials;
+(2) an inspector "Save as material" button on each still-`"auto"` glTF slot promotes it and rebinds
+via SetMaterialSlotCommand. Both preserve an existing file (a re-import / re-save keeps
+material-editor edits; the DDS behind it is overwritten in place). Enabler:
+`MaterialDataManager::GetOrCreate` now **lazy-loads** `data/materials/<name>.json` on a registry
+miss, so materials created after startup (importer / I1 / I3) work immediately without a restart.
+Verified: build clean; atoll (auto palms) boots unchanged (existing "auto" mesh assets keep the
+runtime path — the change is forward-looking, only NEW imports get named materials); user to confirm
+a fresh palm import shows named material files + renders. *(original spec below)* glTF import (A3) produces runtime-only
 auto-materials; one click promotes a slot's effective material (auto-material or
 preset+overrides) into a named `data/materials/<name>.json` and rebinds the slot to it (existing
 SetMaterialSlotCommand). Post-H6 this is trivial data-wise — imported textures are already final

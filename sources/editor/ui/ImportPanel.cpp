@@ -9,6 +9,8 @@
 
 #include "assets/AssetImporter.h"
 #include "editor/assets/AssetRegistry.h"
+#include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
+#include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
 
@@ -705,9 +707,33 @@ namespace
         return result.empty() ? std::string("node") : result;
     }
 
+    // I3: promote a glTF's runtime "auto" materials to real named material files, one per submesh
+    // slot, so imported meshes are fully authorable (editable in the material editor, reusable).
+    // Uses the SAME ordinal->material mapping the runtime uses (MeshManager::DescribeGltfMaterial),
+    // so materials[i] lines up with submesh i. Textures come out as the imported models/<name>/
+    // DDS paths (H2 resolves them); glTF factors are already baked into those DDS by H6, so a param
+    // is only written when the corresponding texture is ABSENT. Existing files are preserved (a
+    // re-import keeps material-editor edits; the DDS behind them is overwritten in place). Returns
+    // the per-slot names ("auto" for null-material slots); empty on parse failure.
+    std::vector<std::string> GenerateMaterialFilesForGltf(const std::string& geometry,
+        const std::string& baseName)
+    {
+        std::vector<std::string> names;
+        const size_t slotCount = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+        for (size_t i = 0; i < slotCount; ++i)
+        {
+            // Preserve existing files (overwrite=false) so a re-import keeps material-editor edits.
+            const std::string result = materialgen::WriteFromGltf(
+                geometry, static_cast<int>(i), baseName + "_" + std::to_string(i), /*overwrite=*/false);
+            names.push_back(result.empty() ? std::string("auto") : result);
+        }
+        return names;
+    }
+
     bool WriteImportedMeshAsset(const fs::path& path,
         const std::string& geometry,
-        float spawnScale)
+        float spawnScale,
+        const std::string& materialBaseName)
     {
         nlohmann::json asset = nlohmann::json::object();
         std::ifstream existingFile(path);
@@ -722,7 +748,18 @@ namespace
         }
 
         asset["geometry"] = geometry;
-        if (!asset.contains("material")) { asset["material"] = "auto"; }
+        // First import (no material binding yet): promote the glTF's auto-materials to named
+        // files. A re-import keeps whatever material/materials the asset already carries.
+        if (!asset.contains("material") && !asset.contains("materials"))
+        {
+            const std::vector<std::string> names =
+                GenerateMaterialFilesForGltf(geometry, materialBaseName);
+            bool anyNamed = false;
+            for (const std::string& n : names) { if (n != "auto") { anyNamed = true; break; } }
+            if (!anyNamed || names.empty()) { asset["material"] = "auto"; }
+            else if (names.size() == 1) { asset["material"] = names[0]; }
+            else { asset["materials"] = names; }
+        }
         if (spawnScale > 0.0f) { asset["spawnScale"] = spawnScale; }
         else { asset.erase("spawnScale"); }
 
@@ -824,15 +861,16 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     if (splitNodes.empty())
     {
         return WriteImportedMeshAsset(
-            meshAssetRoot / (item.name + ".mesh.json"), geometry, spawnScale);
+            meshAssetRoot / (item.name + ".mesh.json"), geometry, spawnScale, item.name);
     }
 
     for (const std::string& node : splitNodes)
     {
+        const std::string component = MeshAssetFileComponent(node);
         const fs::path meshAssetPath = meshAssetRoot /
-            (item.name + "_node_" + MeshAssetFileComponent(node) + ".mesh.json");
+            (item.name + "_node_" + component + ".mesh.json");
         if (!WriteImportedMeshAsset(meshAssetPath,
-                geometry + "#node:" + node, spawnScale))
+                geometry + "#node:" + node, spawnScale, item.name + "_" + component))
         {
             return false;
         }

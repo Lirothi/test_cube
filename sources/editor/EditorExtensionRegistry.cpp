@@ -289,24 +289,23 @@ namespace
             // Per-slot material list for multi-material (glTF) objects; a single "Material" combo
             // otherwise (back-compat). "auto" = pull the slot's material from the glTF (B2).
             const bool multiSlot = slotCount > 1;
-            const auto& materialsProp = obj.properties.contains("materials") &&
-                                        obj.properties["materials"].is_array()
-                ? obj.properties["materials"] : nlohmann::json::array();
-            auto slotCurrent = [&](size_t i) -> std::string {
-                if (i < materialsProp.size() && materialsProp[i].is_string())
-                {
-                    return materialsProp[i].get<std::string>();
-                }
-                return i == 0 ? obj.properties.value("material", std::string("auto"))
-                              : std::string("auto");
-            };
 
             if (multiSlot)
             {
+                // Resolve each slot's EFFECTIVE material from the runtime NOW, before the combo
+                // loop. Two reasons: (1) slotPresets_ already merges the object's own "materials"
+                // override over the mesh-asset defaults, so a material promoted via the Mesh
+                // Editor's "Save as material" (which lives on the mesh asset, never on the object
+                // JSON) shows up here — the object's own properties alone would still read "auto".
+                // (2) A per-slot combo command respawns the object mid-loop, dangling gbMat; caching
+                // the names first keeps the loop from dereferencing a freed pointer.
+                std::vector<std::string> resolvedSlots(slotCount);
+                for (size_t i = 0; i < slotCount; ++i) { resolvedSlots[i] = gbMat->SlotPreset(i); }
+
                 ImGui::TextDisabled("Material slots (%zu)", slotCount);
                 for (size_t i = 0; i < slotCount; ++i)
                 {
-                    const std::string cur = slotCurrent(i);
+                    const std::string cur = resolvedSlots[i];
                     ImGui::PushID(static_cast<int>(i));
                     char label[32];
                     std::snprintf(label, sizeof(label), "Slot %zu", i);
@@ -329,12 +328,20 @@ namespace
                         }
                         ImGui::EndCombo();
                     }
+                    // "Save as material" (promote a still-"auto" glTF slot to a named file) lives
+                    // in the Mesh Editor, not here — it's a per-mesh-asset op whose Save fans out
+                    // to every placed instance, not a per-instance override.
                     ImGui::PopID();
                 }
             }
             else
             {
-                const std::string current = obj.properties.value("material", std::string());
+                // Effective material for the single slot: the runtime's resolved name (mesh-asset
+                // default folded in) when available, else the object's own override. Same reason as
+                // the multi-slot branch — a mesh-asset-level material won't appear in obj JSON.
+                const std::string current = gbMat && slotCount == 1
+                    ? gbMat->SlotPreset(0)
+                    : obj.properties.value("material", std::string());
                 if (ImGui::BeginCombo("Material", current.empty() ? "(none)" : current.c_str()))
                 {
                     for (const EditorAssetRecord& rec : registry.Assets())

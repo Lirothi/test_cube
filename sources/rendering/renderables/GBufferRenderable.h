@@ -42,6 +42,16 @@ public:
         if (!presets.empty()) { slotPresets_ = std::move(presets); }
     }
 
+    // Resolved per-slot material name (the level/mesh-asset "materials" that produced this slot,
+    // with the object's own override already folded in by ResolveMeshAsset); "auto" for a glTF
+    // slot with no explicit preset. The editor Inspector shows this so a slot's *effective*
+    // material — e.g. one promoted via the Mesh Editor's "Save as material", which lives on the
+    // mesh asset and never touches the object's own JSON — displays correctly.
+    std::string SlotPreset(size_t slot) const
+    {
+        return slot < slotPresets_.size() ? slotPresets_[slot] : std::string("auto");
+    }
+
     // B2: multi-slot objects draw per-submesh (own CB slice + SRV table + ranged draw each).
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
@@ -120,6 +130,12 @@ public:
         return matDatas_.size() > 1 && m && m->GetSubmeshCount() > 1;
     }
 
+    // A3: subclasses whose model is a glTF/GLB with "material":"auto" return the selector
+    // ("path.gltf#N") here so Init builds a runtime auto-material from the glTF instead of a
+    // named preset. Empty (default) => use matPreset_. Public so the editor (I3 "Save as
+    // material") can read which glTF a still-"auto" slot resolves from.
+    virtual std::string GetGltfMaterialSourcePath() const { return {}; }
+
 protected:
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
@@ -136,11 +152,6 @@ protected:
     }
 
     const std::string& MatPreset() const { return slotPresets_[0]; }
-
-    // A3: subclasses whose model is a glTF/GLB with "material":"auto" return the selector
-    // ("path.gltf#N") here so Init builds a runtime auto-material from the glTF instead of a
-    // named preset. Empty (default) => use matPreset_.
-    virtual std::string GetGltfMaterialSourcePath() const { return {}; }
 
 private:
     void BuildInstancedMaterials(Renderer* renderer);

@@ -1,6 +1,12 @@
 {
   "geometry": "models/coconut_palm/scene.gltf",
-  "material": "auto",
+  "materials": [
+    "coconut_palm_0",
+    "coconut_palm_1",
+    "auto",
+    "auto",
+    "auto"
+  ],
   "spawnScale": 1.0,
   "texOffsScale": [
     0.0,

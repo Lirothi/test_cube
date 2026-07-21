@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/assets/MaterialFileGen.h"
 #include "rendering/meshes/MeshManager.h"
 
 #include "app/scene/Scene.h"
@@ -15,6 +16,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -52,6 +54,31 @@ bool MaterialCombo(const char* label, std::string& value, const std::vector<std:
         ImGui::EndCombo();
     }
     return changed;
+}
+
+// True when the mesh-asset geometry is a glTF/GLB (only those carry auto-materials to promote).
+// The geometry may carry a "#node:X"/"#N" selector suffix — strip it before checking the ext.
+bool IsGltfGeometry(const std::string& geometry)
+{
+    std::string p = geometry.substr(0, geometry.find('#'));
+    std::transform(p.begin(), p.end(), p.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return p.size() >= 5 && (p.compare(p.size() - 5, 5, ".gltf") == 0 ||
+                             p.compare(p.size() - 4, 4, ".glb") == 0);
+}
+
+// Base name for a material file promoted from a glTF (parent folder when the file stem is the
+// generic "scene"/"model"/"mesh", else the stem) — mirrors the importer's naming (I3).
+std::string MaterialBaseName(const std::string& geometry)
+{
+    const std::string p = geometry.substr(0, geometry.find('#'));
+    const fs::path fp(p);
+    const std::string stem = fp.stem().string();
+    std::string lo = stem;
+    std::transform(lo.begin(), lo.end(), lo.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string folder = fp.parent_path().filename().string();
+    return ((lo == "scene" || lo == "model" || lo == "mesh") && !folder.empty()) ? folder : stem;
 }
 
 } // namespace
@@ -122,6 +149,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
 
     const std::vector<std::string> presets = CollectPresets(registry);
+    const std::string geometry = doc_.value("geometry", std::string());
+    const bool geometryIsGltf = IsGltfGeometry(geometry);
 
     // One material picker per submesh — the slot count is auto-detected from the geometry (Open()).
     ImGui::SeparatorText(slots_.size() == 1 ? "Material" : "Material slots (per submesh)");
@@ -130,6 +159,28 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::PushID(static_cast<int>(i));
         const std::string label = (slots_.size() == 1) ? std::string("Material") : ("slot " + std::to_string(i));
         MaterialCombo(label.c_str(), slots_[i], presets, /*allowAuto=*/true); // edits slots_[i] in place
+
+        // I3: promote a still-"auto" glTF slot into a named material file, then bind the slot to it
+        // (in memory). The panel's Save persists materials[] AND fans out to every placed instance.
+        if (geometryIsGltf && slots_[i] == "auto")
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Save as material"))
+            {
+                const std::string name = MaterialBaseName(geometry) + "_" + std::to_string(i);
+                const std::string written = materialgen::WriteFromGltf(
+                    geometry, static_cast<int>(i), name, /*overwrite=*/false);
+                if (!written.empty() && written != "auto")
+                {
+                    slots_[i] = written;
+                    status_ = "Created data/materials/" + written + ".json — Save to apply.";
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Bake this glTF auto-material into an editable data/materials file.");
+            }
+        }
         ImGui::PopID();
     }
 

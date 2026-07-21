@@ -1,0 +1,7 @@
+{
+  "albedo": "models/coconut_palm/textures/Tree_1Mat_baseColor.png",
+  "mr": "models/coconut_palm/textures/Tree_1Mat_metallicRoughness.png",
+  "normal": "models/coconut_palm/textures/Tree_1Mat_normal.png",
+  "normalIsRG": false,
+  "useTBN": true
+}

@@ -199,10 +199,17 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
         return it->second;
     }
 
-    // Does a preset exist?
+    // Does a preset exist? If not, lazy-load its file — materials created AFTER startup (importer,
+    // I1/I3 editor) aren't in presets_ yet; data/materials/<name>.json is the source of truth.
     auto pit = presets_.find(name);
     if (pit == presets_.end()) {
-        return {};
+        const std::wstring path = L"data/materials/" + std::wstring(name.begin(), name.end()) + L".json";
+        if (LoadPresetFromFile(path)) {
+            pit = presets_.find(name);
+        }
+        if (pit == presets_.end()) {
+            return {};
+        }
     }
 
     const MaterialPreset& p = pit->second;

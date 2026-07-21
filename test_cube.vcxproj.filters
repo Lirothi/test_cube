@@ -189,6 +189,9 @@
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp">
       <Filter>sources\editor\assets</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/assets/MaterialFileGen.cpp">
+      <Filter>sources\editor\assets</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/assets/AssetThumbnailCache.cpp">
       <Filter>sources\editor\assets</Filter>
     </ClCompile>
@@ -696,6 +699,9 @@
       <Filter>sources\editor</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/assets/AssetRegistry.h">
+      <Filter>sources\editor\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/assets/MaterialFileGen.h">
       <Filter>sources\editor\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/assets/AssetThumbnailCache.h">
