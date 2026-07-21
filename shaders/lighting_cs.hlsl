@@ -169,6 +169,20 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
     return shadow;
 }
 
+// Directional sun visibility for a receiver at P with surface normal N and cosine ndl. Wraps
+// the VSM-vs-CSM selection so the front and transmission samples share one code path. For the
+// foliage transmission lobe the caller passes the flipped normal (-N) so the receiver is offset
+// toward the sun-facing side (see CSMain).
+float SampleSunShadow(float3 P, float3 N, float ndl)
+{
+    if (useVsm != 0u)
+    {
+        return VsmClipmapShadow(P, N, camPosWS, clipmapBaseExtent, clipmapNormalBias, vsmDepthBias,
+                                clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+    }
+    return SampleShadowCSM(P, ndl, N);
+}
+
 #define LIGHTING_RS \
     "CBV(b0)," \
     "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
@@ -214,6 +228,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // them out and kills highlight contrast.
     const float3 ambient = albedo * (1.0 - metal) * ambientIntensity;
 
+    // GBAux.b carries the four-bit shading-model ID (F2). Foliage additionally reads its
+    // premultiplied subsurface/transmission payload from GB2 (F3).
+    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+
     BRDFInput bi;
     bi.albedo = albedo;
     bi.rough = rough;
@@ -222,26 +240,47 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     bi.V = V;
     bi.L = L;
 
-    BRDFResult br = EvalBRDF(bi, sunAngularSize);
     float3 color = ambient * lightRgb;
-    if (br.NdotL > 0.0)
+
+    if (shadingModel == kShadingModelTwoSidedFoliage)
     {
-        // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
-        float shadow;
-        if (useVsm != 0u)
+        float3 subsurface = GB2.SampleLevel(gSmpPoint, uv, 0).rgb;
+        FoliageResult fr = EvalFoliageBRDF(bi, subsurface, sunAngularSize);
+
+        // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math
+        // and same shadow as DefaultLit.
+        if (fr.NdotL > 0.0)
         {
-            shadow = VsmClipmapShadow(P, N, camPosWS, clipmapBaseExtent, clipmapNormalBias, vsmDepthBias,
-                                      clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+            float shadow = SampleSunShadow(P, N, fr.NdotL);
+            const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
+            color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow;
         }
-        else
+
+        // Back hemisphere: light transmitted through the thin leaf toward the viewer. Sample
+        // the shadow with the normal flipped (-N) so the receiver is offset toward the
+        // sun-facing side and its slope bias uses the back cosine — otherwise the leaf's own
+        // front face self-shadows the transmission to black. This is the scoped transmission
+        // shadow bias the plan (F4) calls for, not shadow disablement: a genuine occluder
+        // between the sun and the leaf still darkens the sun-facing side and kills transmission.
+        if (any(fr.transBRDF > 0.0))
         {
-            shadow = SampleShadowCSM(P, br.NdotL, N);
+            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)));
+            color += fr.transBRDF * lightRgb * shadowT;
         }
-        // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
-        // highlight reads against the environment reflection. metal=0 -> no change.
-        const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);
-        float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow;
-        color += direct;
+    }
+    else
+    {
+        BRDFResult br = EvalBRDF(bi, sunAngularSize);
+        if (br.NdotL > 0.0)
+        {
+            // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
+            float shadow = SampleSunShadow(P, N, br.NdotL);
+            // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
+            // highlight reads against the environment reflection. metal=0 -> no change.
+            const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);
+            float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow;
+            color += direct;
+        }
     }
 
     LightTarget[dispatchThreadId.xy] = float4(color * exposure, 1.0);

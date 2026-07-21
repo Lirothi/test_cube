@@ -280,4 +280,52 @@ inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
 	return o;
 }
 
+// ===== Two-sided thin-foliage direct lighting =====
+// Adds a back-hemisphere transmission lobe on top of the standard front-side GGX/Lambert
+// response so a thin leaf lit from behind glows with a tinted subsurface color — matching the
+// intent of Unreal's legacy "Two Sided Foliage" model (a thin-sheet wrap/transmission
+// approximation, not volumetric subsurface scattering).
+//
+// N is the VISIBLE-side normal (already SV_IsFrontFace-corrected when the GBuffer is written),
+// so front lighting uses dot(N,L) exactly like DefaultLit and the transmission lobe uses the
+// opposite hemisphere via dot(-N,L). Front (diffuse+specular) and back (transmission) reach
+// full strength in disjoint directions; between them the wrap softens the hand-off so they do
+// not double-count at full strength.
+
+// Transmission-onset wrap width. A documented tuning constant (NOT a measured Unreal value):
+// it lets light bleed through near the terminator instead of switching on hard exactly at the
+// back-facing angle. 0 = hard onset at dot(-N,L)>=0; larger = softer/wider bleed.
+static const float kFoliageTransmitWrap = 0.5f;
+
+struct FoliageResult
+{
+	float3 diffBRDF;  // front Lambert BRDF; caller multiplies by NdotL * radiance
+	float3 specBRDF;  // front GGX BRDF;     caller multiplies by NdotL * radiance
+	float3 transBRDF; // back transmission weight (cosine + wrap + payload baked in); caller multiplies by radiance only
+	float  NdotL;     // front cosine, weights diffBRDF + specBRDF
+};
+
+// subsurfacePayload = GB2.rgb = subsurfaceColor * transmissionStrength (premultiplied at the
+// GBuffer write in F3). lightAngularSize widens the analytic sun GGX lobe (see EvalBRDF).
+inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload, float lightAngularSize = 0.0f)
+{
+	FoliageResult o;
+
+	// Front side is byte-for-byte the DefaultLit response (Lambert + GGX). This keeps a
+	// front-lit leaf indistinguishable from DefaultLit and lets local lights / RT hits reuse it.
+	BRDFResult br = EvalBRDF(bi, lightAngularSize);
+	o.diffBRDF = br.diffBRDF;
+	o.specBRDF = br.specBRDF;
+	o.NdotL = br.NdotL;
+
+	// Back side: wrapped -N·L. 0 when fully front-lit, 1 when the light is straight behind the
+	// leaf. View-independent thin-sheet approximation; kInvPi keeps it in the same radiometric
+	// units as the Lambert diffuse term.
+	float backNdotL = dot(-bi.N, bi.L);
+	float transmit = saturate((backNdotL + kFoliageTransmitWrap) / (1.0f + kFoliageTransmitWrap));
+	o.transBRDF = subsurfacePayload * transmit * kInvPi;
+
+	return o;
+}
+
 #endif // UTILS_HLSL
