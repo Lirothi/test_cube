@@ -1,10 +1,11 @@
-#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : Texture2DArray Spot Shadow Atlas
 // t6     : StructuredBuffer<SpotLightData>
 // t7     : StructuredBuffer<uint> VSM page table (Rung 2 / Step 21)
 // t8     : Texture2D VSM physical page pool depth
+// t9     : GBAux (AO, indirect specular scale, shading model)
 // u0     : Light accumulation RWTexture2D
 // s0     : LinearClamp
 // s1     : PointClamp
@@ -34,6 +35,7 @@ Texture2DArray SpotShadowAtlas : register(t5);
 StructuredBuffer<SpotLightData> SpotLights : register(t6);
 StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
 Texture2D VsmPool : register(t8);
+Texture2D GBAux : register(t9);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);

@@ -109,7 +109,7 @@ struct PSOut
 {
     float4 RT0 : SV_Target0; // Albedo.rgb + A=pack(rough,metal)
     float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + unused A2
-    float4 RT2 : SV_Target2; // Emissive.rgb
+    float4 RT2 : SV_Target2; // DefaultLit: emissive; foliage: subsurface/transmission payload
     float2 RT3 : SV_Target3; // Motion vector (UV delta)
 #ifdef EDITOR_OBJECT_ID
     uint RT4 : SV_Target4; // Editor object id (0 = none)
@@ -146,7 +146,10 @@ inline VSOut BaseVS(float3 pos,
 }
 
 // Final MRT output using prepared values
-inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss, float2 motion, uint objectIdValue)
+inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
+                             float3 emissiveValue, float3 subsurfaceColorValue,
+                             float transmissionStrengthValue, float ambientOcclusionValue,
+                             float indirectSpecularScaleValue, float2 motion, uint objectIdValue)
 {
     PSOut o;
     float metal = mr.x;
@@ -156,13 +159,19 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss,
     o.RT0 = float4(albedo, PackRM(rough, metal));
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
     o.RT1 = float4(NrmTo01(NWS), 1.0);
-    o.RT2 = emiss;
+#if SHADING_MODEL_ID == 1
+    o.RT2 = float4(subsurfaceColorValue * transmissionStrengthValue, 0.0);
+#else
+    o.RT2 = float4(emissiveValue, 0.0);
+#endif
     o.RT3 = motion;
 #ifdef EDITOR_OBJECT_ID
     o.RT4 = objectIdValue;
-    o.RT5 = float4(1.0, 1.0, EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+    o.RT5 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
+                   EncodeShadingModel(SHADING_MODEL_ID), 0.0);
 #else
-    o.RT4 = float4(1.0, 1.0, EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+    o.RT4 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
+                   EncodeShadingModel(SHADING_MODEL_ID), 0.0);
 #endif
     return o;
 }

@@ -66,6 +66,14 @@ namespace
             return true;
         };
         float v4[4];
+        if (readFloats("subsurfaceColor", v4, 3))
+        {
+            preset.surfaceParams.subsurfaceColor = float3(v4[0], v4[1], v4[2]);
+        }
+        preset.surfaceParams.transmissionStrength = p.value("transmissionStrength", 0.0f);
+        preset.surfaceParams.indirectSpecularScale = p.value("indirectSpecularScale", 1.0f);
+        preset.surfaceParams.ambientOcclusion = p.value("ambientOcclusion", 1.0f);
+
         if (readFloats("tint", v4, 4))
         {
             preset.params.baseColor = float4(v4[0], v4[1], v4[2], v4[3]);
@@ -247,6 +255,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     md->normalIsRG = p.normalIsRG;
     md->useTBN     = p.useTBN;
     md->shadingModel = p.shadingModel;
+    md->surfaceParams = p.surfaceParams;
 
     // I0 schema v2: alpha-test/two-sided ride the same MaterialData fields the glTF path uses,
     // so the per-slot PSO plumbing (ALPHA_TEST define, cull mode) works unchanged. Param defaults

@@ -6,10 +6,20 @@ Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
 SamplerState gSmp : register(s0);
 
+cbuffer SurfaceParams : register(b2)
+{
+    float3 subsurfaceColor;
+    float transmissionStrength;
+    float ambientOcclusion;
+    float indirectSpecularScale;
+    float2 _surfacePad;
+};
+
 #define GBUFFER_RS \
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
     "CBV(b0)," \
     "CBV(b1)," \
+    "CBV(b2)," \
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
@@ -52,5 +62,6 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(emissive, 0), motion, i.objectId);
+    return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
+                           ambientOcclusion, indirectSpecularScale, motion, i.objectId);
 }

@@ -1,11 +1,12 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
-// t1: GB2 (Emissive)
+// t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
 // t3: GB1 (Normal01 + Rough encoded in A)
 // t4: Depth (R32F SRV created from the DSV)
 // t5: Skybox cubemap
 // t6: Filtered reflection (premultiplied)
+// t7: GBAux (AO, indirect specular scale, shading model)
 // u0: Scene color (HDR)
 
 #pragma pack_matrix(row_major)
@@ -19,6 +20,7 @@ Texture2D GB1 : register(t3);
 Texture2D DepthT : register(t4);
 TextureCube SkyboxTex : register(t5);
 Texture2D ReflectionTexture : register(t6);
+Texture2D GBAux : register(t7);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -66,8 +68,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invScreenSize;
 
     float3 lit = LightTarget.SampleLevel(gSmp, uv, 0).rgb;
-    float3 emi = GB2.SampleLevel(gSmp, uv, 0).rgb;
-    float3 color = lit + emi;
+    float3 payload = GB2.SampleLevel(gSmp, uv, 0).rgb;
+    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    float3 color = lit;
+    if (shadingModel == kShadingModelDefaultLit)
+    {
+        color += payload;
+    }
 
     float z = ReadDepth(uv);
     if (z > kEps)

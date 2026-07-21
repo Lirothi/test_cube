@@ -20,7 +20,16 @@ SamplerState gSmp : register(s0);
 // Step 6 per-instance LOD: the cloud is drawn one range per LOD tier. gInstanceBase is the
 // tier's start offset into gRemap; gRemap maps draw-instance -> real instance index (the
 // instance buffer stays in grid order so prevWorld is stable). gRemap[64] = up to 256 insts.
-cbuffer InstDraw : register(b2) { uint gInstanceBase; uint3 _instDrawPad; };
+cbuffer InstDraw : register(b2)
+{
+    uint gInstanceBase;
+    uint3 _instDrawPad;
+    float3 subsurfaceColor;
+    float transmissionStrength;
+    float ambientOcclusion;
+    float indirectSpecularScale;
+    float2 _surfacePad;
+};
 cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
 
 [RootSignature(GBUFFER_INST_RS)]
@@ -63,5 +72,6 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(emissive, 0), motion, i.objectId);
+    return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
+                           ambientOcclusion, indirectSpecularScale, motion, i.objectId);
 }

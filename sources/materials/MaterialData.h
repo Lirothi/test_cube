@@ -29,6 +29,16 @@ static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) < 16);
 const char* ShadingModelToString(ShadingModel model);
 bool TryParseShadingModel(std::string_view text, ShadingModel& outModel);
 
+// Material-static surface payload written to GBAux/GB2. These values do not belong in the
+// per-object/instance transform payload: every object using a material shares them.
+struct MaterialSurfaceParams
+{
+    float3 subsurfaceColor = { 1.0f, 1.0f, 1.0f };
+    float transmissionStrength = 0.0f;
+    float ambientOcclusion = 1.0f;
+    float indirectSpecularScale = 1.0f;
+};
+
 // ---------------------
 // Per-object parameters (in b0)
 // ---------------------
@@ -73,6 +83,7 @@ public:
     bool normalIsRG = true; // RG/BC5 vs RGB(A)
     bool useTBN     = true; // TBN path (otherwise derivatives)
     ShadingModel shadingModel = ShadingModel::DefaultLit;
+    MaterialSurfaceParams surfaceParams;
     bool mrLayoutGltf = false; // true => RAW glTF preview: MR is glTF-packed + factors multiply; emits
                                // MR_LAYOUT_GLTF. Imported assets stay false — the importer bakes both
                                // the channel order AND the factors into the DDS (H6).
@@ -123,6 +134,10 @@ public:
     void StageGBufferBindings(Renderer* r, RenderContext& ctx,
                               UINT srvTableRegister = 0, UINT samplerTableRegister = 0);
 
+    // Stage the material-static SurfaceParams root CBV. Cached once per material per frame.
+    void StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
+    static void StageNeutralGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
+
     // For the instanced path (t0 = instances), append t1..t3 starting at the provided offset.
     // Returns the number of descriptors appended.
     size_t AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset = 0) const;
@@ -137,5 +152,9 @@ private:
         uint64_t frameNumber = UINT64_MAX;
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
     } gbufferSrvCache_;
+    struct SurfaceCbCache {
+        uint64_t frameNumber = UINT64_MAX;
+        D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
+    } surfaceCbCache_;
     std::mutex cacheMtx_;
 };

@@ -115,6 +115,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         const size_t slotCount = leadInst_->InstanceSlotCount();
         slotCbScratch_.assign(slotCount, 0);
         const MaterialParams defaults{};
+        const MaterialSurfaceParams surfaceDefaults{};
         for (size_t slot = 0; slot < slotCount; ++slot)
         {
             auto cb = renderer->GetFrameResource()->AllocDynamic(
@@ -131,6 +132,14 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             const auto e = p.EmissiveLinear();
             sp->emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
             sp->_pad1 = 0.0f;
+            const MaterialData* slotData = leadInst_->InstanceSlotData(slot);
+            const MaterialSurfaceParams& surface = slotData ? slotData->surfaceParams : surfaceDefaults;
+            sp->surface.subsurfaceColor = DirectX::XMFLOAT3(
+                surface.subsurfaceColor.x, surface.subsurfaceColor.y, surface.subsurfaceColor.z);
+            sp->surface.transmissionStrength = surface.transmissionStrength;
+            sp->surface.ambientOcclusion = surface.ambientOcclusion;
+            sp->surface.indirectSpecularScale = surface.indirectSpecularScale;
+            sp->surface._pad = DirectX::XMFLOAT2(0.0f, 0.0f);
             slotCbScratch_[slot] = cb.gpu;
         }
     }
@@ -159,11 +168,19 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             ctx.cbv[0] = alloc.gpu; // b0: per-instance array
             ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
 
-            if (gbuffer && matData_)
+            if (gbuffer)
             {
-                // Shared material textures (t0..t2) + sampler (s0); instances live in b0, so no
-                // t0 conflict with the GpuInstancedModels structured-buffer path.
-                matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+                if (matData_)
+                {
+                    // Shared material textures (t0..t2) + sampler (s0); instances live in b0, so no
+                    // t0 conflict with the GpuInstancedModels structured-buffer path.
+                    matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+                    matData_->StageGBufferSurfaceParams(renderer, ctx, 2);
+                }
+                else
+                {
+                    MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
+                }
             }
 
             material->Bind(cl, ctx, wireframe);
@@ -172,7 +189,8 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         }
 
         // One ranged instanced draw per submesh; the instance array (b0) is shared across the
-        // loop, only b2 + the SRV/sampler tables change (redundant rebinds elided by the bind
+        // loop, only the combined material/surface b2 + the SRV/sampler tables change
+        // (redundant rebinds elided by the bind
         // cache). Null slot materials draw flat: texFlags gate all sampling in the PS. The
         // shadow path (gbuffer=false) draws the same ranges with no per-slot bindings (B3).
         const size_t slotCount = leadInst_->InstanceSlotCount();

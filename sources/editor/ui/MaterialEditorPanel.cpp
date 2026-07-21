@@ -292,6 +292,29 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         const bool foliage = shadingModelValid && shadingModel == ShadingModel::TwoSidedFoliage;
         if (foliage) { doc_["twoSided"] = true; }
 
+        static const float kSubsurfaceDef[3] = { 1.0f, 1.0f, 1.0f };
+        float subsurface[3];
+        ReadFloats(doc_, "subsurfaceColor", subsurface, 3, kSubsurfaceDef);
+        if (ImGui::ColorEdit3("Subsurface Color", subsurface))
+        {
+            WriteFloats(doc_, "subsurfaceColor", subsurface, 3);
+        }
+        float transmission = doc_.value("transmissionStrength", 0.0f);
+        if (ImGui::DragFloat("Transmission Strength", &transmission, 0.01f, 0.0f, 1.0f))
+        {
+            doc_["transmissionStrength"] = transmission;
+        }
+        float indirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
+        if (ImGui::DragFloat("Indirect Specular Scale", &indirectSpecularScale, 0.01f, 0.0f, 1.0f))
+        {
+            doc_["indirectSpecularScale"] = indirectSpecularScale;
+        }
+        float ambientOcclusion = doc_.value("ambientOcclusion", 1.0f);
+        if (ImGui::DragFloat("Ambient Occlusion", &ambientOcclusion, 0.01f, 0.0f, 1.0f))
+        {
+            doc_["ambientOcclusion"] = ambientOcclusion;
+        }
+
         bool alphaTest = doc_.value("alphaTest", false);
         if (ImGui::Checkbox("Alpha test (masked)", &alphaTest)) { doc_["alphaTest"] = alphaTest; }
         if (alphaTest)

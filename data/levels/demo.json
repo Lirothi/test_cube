@@ -2226,7 +2226,7 @@
         1.0
       ],
       "type": "staticMesh",
-      "useMR": false
+      "useMR": true
     },
     {
       "enabled": true,

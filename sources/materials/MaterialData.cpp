@@ -1,6 +1,7 @@
 #include "materials/MaterialData.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/renderables/InstanceTypes.h"
 #include <algorithm>
 #include <array>
 #include <string>
@@ -128,4 +129,33 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
     D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
     aniso.MipLODBias = r->GetDlssMipBias();
     ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, aniso);
+}
+
+void MaterialData::StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister)
+{
+    if (!r || cbvRegister >= RenderContext::kMaxBindings) { return; }
+
+    const uint64_t frameNumber = r->GetTotalFrameNumber();
+    std::lock_guard lck(cacheMtx_);
+    if (surfaceCbCache_.frameNumber != frameNumber || surfaceCbCache_.gpu == 0)
+    {
+        auto cb = r->GetFrameResource()->AllocDynamic(
+            sizeof(render::MaterialSurfaceParamsGpu), render::kConstantBufferAlignment);
+        auto* dst = static_cast<render::MaterialSurfaceParamsGpu*>(cb.cpu);
+        dst->subsurfaceColor = DirectX::XMFLOAT3(
+            surfaceParams.subsurfaceColor.x, surfaceParams.subsurfaceColor.y, surfaceParams.subsurfaceColor.z);
+        dst->transmissionStrength = surfaceParams.transmissionStrength;
+        dst->ambientOcclusion = surfaceParams.ambientOcclusion;
+        dst->indirectSpecularScale = surfaceParams.indirectSpecularScale;
+        dst->_pad = DirectX::XMFLOAT2(0.0f, 0.0f);
+        surfaceCbCache_.frameNumber = frameNumber;
+        surfaceCbCache_.gpu = cb.gpu;
+    }
+    ctx.cbv[cbvRegister] = surfaceCbCache_.gpu;
+}
+
+void MaterialData::StageNeutralGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister)
+{
+    static MaterialData neutral;
+    neutral.StageGBufferSurfaceParams(r, ctx, cbvRegister);
 }

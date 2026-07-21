@@ -21,6 +21,23 @@ public:
     MaterialParams& MaterialParamsRef() { return matParamses_[0]; }
     const MaterialParams& MaterialParamsRef() const { return matParamses_[0]; }
 
+    // Fields explicitly supplied by the effective object JSON. Material-file defaults are merged
+    // per field during Init, so overriding roughness does not accidentally discard emissive, tint,
+    // UV transform, or other unrelated defaults from the selected material.
+    enum class MaterialParamField : uint32_t
+    {
+        TexOffsScale = 1u << 0,
+        NormalStrength = 1u << 1,
+        UseMR = 1u << 2,
+        EmissiveColor = 1u << 3,
+        EmissiveStrength = 1u << 4,
+        MetalRough = 1u << 5
+    };
+    void MarkMaterialParamOverride(MaterialParamField field)
+    {
+        materialParamOverrideMask_ |= static_cast<uint32_t>(field);
+    }
+
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
 
     // B2: material slots (submesh i draws with slot subs[i].materialSlot). Single-slot objects
@@ -159,6 +176,7 @@ private:
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    void MergeMaterialDefaults(size_t slot, const MaterialParams& defaults);
     // C1b/F2: patch a graphics desc with slot i's pipeline identity: sampling defines,
     // SHADING_MODEL_ID, ALPHA_TEST, and cull mode (two-sided).
     void ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const;
@@ -171,6 +189,7 @@ private:
     std::vector<MaterialParams> matParamses_;
     std::vector<std::string> slotPresets_;
     uint32_t currentDrawSlot_ = 0;
+    uint32_t materialParamOverrideMask_ = 0;
 
     // Instanced (cbuffer-array) variants of the gbuffer + shadow materials, built once at
     // Init when this object's graphics shader has an instanced counterpart. Shared/cached

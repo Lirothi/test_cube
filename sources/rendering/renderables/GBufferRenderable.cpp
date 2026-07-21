@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 
 #include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
@@ -222,6 +221,56 @@ void GBufferRenderable::BuildSlotMaterials(Renderer* renderer)
     }
 }
 
+void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams& defaults)
+{
+    if (slot >= matParamses_.size())
+    {
+        return;
+    }
+
+    // Effective object JSON only exposes slot-0 overrides. Other slots inherit their material
+    // defaults wholesale. Keep the explicit values before replacing the destination, then restore
+    // only fields whose JSON keys were actually present. An explicit value may equal the engine
+    // default, so comparing values cannot represent override intent.
+    if (slot != 0 || materialParamOverrideMask_ == 0)
+    {
+        matParamses_[slot] = defaults;
+        return;
+    }
+
+    const MaterialParams explicitValues = matParamses_[slot];
+    matParamses_[slot] = defaults;
+    const auto overridden = [this](MaterialParamField field)
+    {
+        return (materialParamOverrideMask_ & static_cast<uint32_t>(field)) != 0;
+    };
+
+    if (overridden(MaterialParamField::TexOffsScale))
+    {
+        matParamses_[slot].texOffsScale = explicitValues.texOffsScale;
+    }
+    if (overridden(MaterialParamField::NormalStrength))
+    {
+        matParamses_[slot].texFlags.w = explicitValues.texFlags.w;
+    }
+    if (overridden(MaterialParamField::UseMR))
+    {
+        matParamses_[slot].texFlags.y = explicitValues.texFlags.y;
+    }
+    if (overridden(MaterialParamField::EmissiveColor))
+    {
+        matParamses_[slot].emissiveColor = explicitValues.emissiveColor;
+    }
+    if (overridden(MaterialParamField::EmissiveStrength))
+    {
+        matParamses_[slot].emissiveStrength = explicitValues.emissiveStrength;
+    }
+    if (overridden(MaterialParamField::MetalRough))
+    {
+        matParamses_[slot].metalRough = explicitValues.metalRough;
+    }
+}
+
 void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
@@ -252,10 +301,7 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
             matDatas_[i] = mgr->GetOrCreateFromGltf(renderer, uploadCmdList, uploadKeepAlive, gltfSrc, ordinal);
             if (matDatas_[i] && matDatas_[i]->fromGltf)
             {
-                // Seed slot params from the glTF material. NOTE: runs after the factory's
-                // ApplyStaticMeshJsonProperties, so explicit JSON param overrides on a
-                // glTF-"auto" object are clobbered (known A3 limitation; B4 layers overrides).
-                matParamses_[i] = matDatas_[i]->gltfDefaultParams;
+                MergeMaterialDefaults(i, matDatas_[i]->gltfDefaultParams);
             }
             else if (!matDatas_[i])
             {
@@ -269,16 +315,11 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         else
         {
             matDatas_[i] = mgr->GetOrCreate(renderer, uploadCmdList, uploadKeepAlive, name);
-            // I0: material files can carry param DEFAULTS. Seed them only when the slot still has
-            // factory-default params — an explicit per-object override from the level JSON
-            // (applied before Init) must win. Param-less materials leave slots untouched.
+            // Material files carry defaults; effective object JSON overrides merge per field.
+            // Param-less materials leave the pre-Init values untouched.
             if (matDatas_[i] && matDatas_[i]->hasPresetParams)
             {
-                static const MaterialParams kDefaultParams{};
-                if (std::memcmp(&matParamses_[i], &kDefaultParams, sizeof(MaterialParams)) == 0)
-                {
-                    matParamses_[i] = matDatas_[i]->presetParams;
-                }
+                MergeMaterialDefaults(i, matDatas_[i]->presetParams);
             }
             // A missing preset (including a material that was just created but not registered
             // yet) must render as a flat fallback. Leaving the default texture flags enabled
@@ -430,6 +471,11 @@ void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommand
     if (MaterialData* md = GetMaterialDataForSlot(currentDrawSlot_))
     {
         md->StageGBufferBindings(renderer, ctx, 0, 0);
+        md->StageGBufferSurfaceParams(renderer, ctx, 2);
+    }
+    else
+    {
+        MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
     }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

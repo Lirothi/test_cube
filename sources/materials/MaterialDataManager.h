@@ -22,6 +22,7 @@ struct MaterialPreset {
     bool normalIsRG = true;
     bool useTBN     = true;
     ShadingModel shadingModel = ShadingModel::DefaultLit;
+    MaterialSurfaceParams surfaceParams;
 
     // Optional gbuffer shader override ("shader" key) for feature materials (vegetation sway
     // etc.). Empty = the object's own shader (level JSON, default shaders/gbuffer.hlsl).

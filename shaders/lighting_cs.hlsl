@@ -1,6 +1,7 @@
 // t0..t3 : GBuffer textures (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth (R32F)
 // t5     : Shadow atlas
+// t8     : GBAux (AO, indirect specular scale, shading model)
 // u0     : Light accumulation target (RWTexture2D)
 // s0     : PointClamp
 // s1     : ComparisonLinearClamp
@@ -18,6 +19,7 @@ Texture2D DepthT : register(t4);
 Texture2D ShadowAtlas : register(t5);
 StructuredBuffer<uint> VsmPageTable : register(t6); // Rung 2 / Step 24f: directional clipmap page table
 Texture2D VsmPool : register(t7);                    // VSM physical page pool depth
+Texture2D GBAux : register(t8);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -169,7 +171,7 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 

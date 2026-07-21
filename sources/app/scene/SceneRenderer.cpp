@@ -557,7 +557,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         ID3D12Resource* vpt = frame_->vsm->PageTable();
         pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf, pVsmPageRender }, { pShadow },
             { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
-              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -571,6 +571,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
               { D.gb1.Get(), kSrvAll },
               { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll },
+              { D.gbAux.Get(), kSrvAll },
               { D.depth.Get(), kSrvAll },
               { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
@@ -593,7 +594,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         const std::initializer_list<ResourceStateDecl> spotDecls = {
             { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
             { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
-            { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+            { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
             { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } };
@@ -611,7 +612,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         pSpotLights = rg.AddPassMT(RenderPass::Main_SpotLights, { pLight }, { pSpotShadow },
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
-              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
             spotFn);
     }
@@ -631,7 +632,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
-              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.pointShadow.Get(), kSrvAll },
               { frame_->vsm->PagePool(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { frame_->vsm->PageTable(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
@@ -642,7 +643,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         pPointLights = rg.AddPass(RenderPass::Main_PointLights, { pSpotLights, pPointShadow },
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
-              { D.gbVelocity.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
+              { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.pointShadow.Get(), kSrvAll } },
             pointFn);
     }
@@ -721,6 +722,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         { { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.gbAux.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1811,7 +1813,8 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const auto& deferred = renderer->GetDeferredForFrame();
         if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
             deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
-            deferred.depthSRV.ptr == 0 || deferred.shadowSRV.ptr == 0)
+            deferred.gbAuxSRV.ptr == 0 || deferred.depthSRV.ptr == 0 ||
+            deferred.shadowSRV.ptr == 0)
         {
             return;
         }
@@ -1878,7 +1881,8 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV,
               vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
-              vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t7 (inert in Legacy)
+              vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t7 (inert in Legacy)
+              D.gbAuxSRV },                                                           // t8
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -1916,7 +1920,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         const auto& deferred = renderer->GetDeferredForFrame();
         if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
             deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
-            deferred.depthSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0)
+            deferred.gbAuxSRV.ptr == 0 || deferred.depthSRV.ptr == 0 ||
+            deferred.spotShadowSRV.ptr == 0)
         {
             return;
         }
@@ -1982,7 +1987,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
             [&](uint8_t* dest) { resources_.WriteSpotLightConstants(constants, dest); },
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle,
               vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
-              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t8 (inert in Legacy)
+              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t8 (inert in Legacy)
+              D.gbAuxSRV },                                                             // t9
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -2014,7 +2020,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         const auto& deferred = renderer->GetDeferredForFrame();
         if (deferred.gbSRV[0].ptr == 0 || deferred.gbSRV[1].ptr == 0 ||
             deferred.gbSRV[2].ptr == 0 || deferred.gbSRV[3].ptr == 0 ||
-            deferred.depthSRV.ptr == 0)
+            deferred.gbAuxSRV.ptr == 0 || deferred.depthSRV.ptr == 0)
         {
             return;
         }
@@ -2080,10 +2086,12 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, pointMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WritePointLightConstants(constants, dest); },
-            // t0-t5 as before; t6 = point shadow depth cube (B3); t7/t8 = VSM page table + pool.
+            // t0-t5 as before; t6 = point shadow depth cube; t7/t8 = VSM page table + pool;
+            // t9 = GBAux appended for material-model lighting.
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV,
               vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
-              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv() },   // t8 (inert in Legacy)
+              vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t8 (inert in Legacy)
+              D.gbAuxSRV },                                                             // t9
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -2657,7 +2665,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         auto composeMaterial = resources_.GetComposeMaterial();
         const UINT cbSize = resources_.GetComposeCBSizeBytes();
         Skybox* skybox = frame_->skybox;
-        if (!composeMaterial || cbSize == 0 || !skybox)
+        if (!composeMaterial || cbSize == 0 || !skybox || D.gbAuxSRV.ptr == 0)
         {
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             break;
@@ -2676,7 +2684,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, composeMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteComposeConstants(constants, dest); },
-            { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV, skybox->GetTex()->GetSRVCPU(), D.reflectionSRV },
+            { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV,
+              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

@@ -10,6 +10,7 @@
   "multiplyMR": true,
   "normal": "models/coconut_palm/textures/Tree_2Mat_normal.png",
   "normalIsRG": false,
+  "shadingModel": "defaultLit",
   "twoSided": true,
   "useTBN": true
 }

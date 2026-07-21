@@ -350,7 +350,7 @@ compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore t
 
 ---
 
-### F3 — Surface payload CB and `GBAux` MRT (neutral plumbing)
+### F3 — Surface payload CB and `GBAux` MRT (neutral plumbing) — DONE (2026-07-21)
 
 - **Depends:** F2.
 - **Goal:** Carry foliage data and indirect controls without changing the default rendered result.
@@ -380,6 +380,21 @@ compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore t
   foliage GB2 shows its payload and is not self-emissive.
 - **Verify:** Debug + `Release_Editor`; resize/render-scale changes; DLSS on/off; material live-edit then
   camera movement; GPU validation; instanced single-slot and multi-slot rendering.
+
+**Result:** Added material/editor support for `subsurfaceColor`, `transmissionStrength`, scalar
+`ambientOcclusion`, and `indirectSpecularScale`, all with backward-compatible neutral defaults. Ordinary
+and single-slot GBuffer paths bind a dedicated 32-byte material-static `b2`; multi-slot auto-instancing
+extends its existing per-slot `b2` from 80 to 112 bytes; GPU-instancing extends its existing draw `b2`.
+The shared `InstancePerObject` block remains exactly 208 bytes. GBuffer writes AO/specular scale to
+`GBAux.rg`, preserves the four-bit model ID in B, writes DefaultLit emissive to GB2, and writes foliage
+`subsurfaceColor * transmissionStrength` there instead. Compose decodes the model ID and does not add
+foliage GB2 as emissive. `GBAux` is appended at t8/t9/t9/t7 for directional, spot, point, and compose,
+respectively, without renumbering their established descriptors. Debug, `Release`, and `Release_Editor`
+builds passed; Debug `--scene-stress=1` reported CLEAN; the atoll fixture rendered ordinary, multi-slot,
+and auto-instanced palms. A temporary red foliage payload verified the ID=1 permutation without red
+self-emission, then the palm material and screenshots were removed. The five-operation GBV stress also
+reached its CLEAN verdict, but still logged renderer-wide ObjectCompute/VSM/depth and GBuffer sampler
+validation diagnostics; this step does not claim a warning-free global GBV baseline.
 
 ---
 

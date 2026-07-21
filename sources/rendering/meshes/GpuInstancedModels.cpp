@@ -12,6 +12,8 @@
 #include "rendering/core/RenderConstants.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/renderables/InstanceTypes.h"
+#include "materials/MaterialData.h"
 #include "core/math/Math.h"
 #include "app/camera/Camera.h"
 #include <cstring>
@@ -23,6 +25,15 @@ namespace
 {
     constexpr float kInstanceSpacing = 1.3f;
     constexpr UINT kInstanceGridSize = 10;
+
+    struct alignas(16) GpuInstDrawParams
+    {
+        uint32_t instanceBase = 0;
+        uint32_t _pad[3]{};
+        render::MaterialSurfaceParamsGpu surface{};
+    };
+    static_assert(sizeof(GpuInstDrawParams) == 48,
+        "GpuInstDrawParams must match the HLSL InstDraw cbuffer layout");
 }
 
 GpuInstancedModels::GpuInstancedModels(
@@ -180,8 +191,19 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     for (UINT tier = 0; tier < kLodTiers; ++tier)
     {
         if (tierCount_[tier] == 0u) { continue; }
-        auto baseCB = renderer->GetFrameResource()->AllocDynamic(kAlign, kAlign);
-        *static_cast<uint32_t*>(baseCB.cpu) = tierBase_[tier];
+        auto baseCB = renderer->GetFrameResource()->AllocDynamic(sizeof(GpuInstDrawParams), kAlign);
+        auto* drawParams = static_cast<GpuInstDrawParams*>(baseCB.cpu);
+        *drawParams = {};
+        drawParams->instanceBase = tierBase_[tier];
+        const MaterialSurfaceParams surface = GetMaterialData()
+            ? GetMaterialData()->surfaceParams
+            : MaterialSurfaceParams{};
+        drawParams->surface.subsurfaceColor = XMFLOAT3(
+            surface.subsurfaceColor.x, surface.subsurfaceColor.y, surface.subsurfaceColor.z);
+        drawParams->surface.transmissionStrength = surface.transmissionStrength;
+        drawParams->surface.ambientOcclusion = surface.ambientOcclusion;
+        drawParams->surface.indirectSpecularScale = surface.indirectSpecularScale;
+        drawParams->surface._pad = XMFLOAT2(0.0f, 0.0f);
         ctx.cbv[2] = baseCB.gpu;
         mat->Bind(cl, ctx, wireframe);
         mesh_->DrawInstanced(cl, tierCount_[tier], tier);

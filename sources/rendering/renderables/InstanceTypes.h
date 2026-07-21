@@ -4,6 +4,20 @@
 
 namespace render
 {
+// CPU mirror of the material-static SurfaceParams cbuffer used by all GBuffer variants.
+// Kept separate from InstancePerObject so adding foliage controls does not grow the 208-byte
+// per-instance payload shared with shadow paths.
+struct alignas(16) MaterialSurfaceParamsGpu
+{
+    DirectX::XMFLOAT3 subsurfaceColor;       // 0
+    float             transmissionStrength; // 12
+    float             ambientOcclusion;     // 16
+    float             indirectSpecularScale;// 20
+    DirectX::XMFLOAT2 _pad;                  // 24
+};                                           // 32
+static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
+    "MaterialSurfaceParamsGpu must match the HLSL SurfaceParams layout (32 bytes)");
+
 // CPU mirror of HLSL `InstancePerObject` in shaders/gbuffer_common.hlsl. Field order and
 // padding must match the cbuffer layout exactly (constant-buffer packing rules put
 // metalRough at offset 144, texOffsScale at 160, and objectId at 192. Filled per
@@ -38,9 +52,10 @@ struct alignas(16) InstanceSlotParams
     DirectX::XMFLOAT4 texFlags;     // 48
     DirectX::XMFLOAT3 emissive;     // 64 (D: premultiplied color*strength)
     float             _pad1;        // 76
-};                                  // 80
-static_assert(sizeof(InstanceSlotParams) == 80,
-    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (80 bytes)");
+    MaterialSurfaceParamsGpu surface; // 80
+};                                  // 112
+static_assert(sizeof(InstanceSlotParams) == 112,
+    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (112 bytes)");
 
 // Per-caster world bounds for GPU shadow culling (Rung 0, Step 2). center.xyz = world-space
 // AABB center (w = bounding radius, for a cheap sphere pre-test); halfExtents.xyz = world-space

@@ -19,7 +19,7 @@ SamplerState gSmp : register(s0);
 #endif
 
 #if INSTCB_SLOT_PARAMS
-// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 64 bytes, cbuffer packing.
+// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 112 bytes, cbuffer packing.
 cbuffer SlotParams : register(b2)
 {
     float4 slotBaseColor;
@@ -30,6 +30,11 @@ cbuffer SlotParams : register(b2)
     float4 slotTexFlags;
     float3 slotEmissive; // D: premultiplied color*strength
     float _slotPad1;
+    float3 slotSubsurfaceColor;
+    float slotTransmissionStrength;
+    float slotAmbientOcclusion;
+    float slotIndirectSpecularScale;
+    float2 _slotSurfacePad;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -40,10 +45,20 @@ cbuffer SlotParams : register(b2)
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #else
+cbuffer SurfaceParams : register(b2)
+{
+    float3 surfaceSubsurfaceColor;
+    float surfaceTransmissionStrength;
+    float surfaceAmbientOcclusion;
+    float surfaceIndirectSpecularScale;
+    float2 _surfacePad;
+};
+
 #define GBUFFER_INSTCB_RS \
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
     "CBV(b0)," \
     "CBV(b1)," \
+    "CBV(b2)," \
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #endif
@@ -91,6 +106,10 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mAlphaCutoff  = slotAlphaCutoff;
     const float  mMrMultiply   = slotMrMultiply;
     const float3 mEmissive     = slotEmissive;
+    const float3 mSubsurfaceColor = slotSubsurfaceColor;
+    const float  mTransmissionStrength = slotTransmissionStrength;
+    const float  mAmbientOcclusion = slotAmbientOcclusion;
+    const float  mIndirectSpecularScale = slotIndirectSpecularScale;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
@@ -99,6 +118,10 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mAlphaCutoff  = d.alphaCutoff;
     const float  mMrMultiply   = d.mrMultiply;
     const float3 mEmissive     = d.emissive;
+    const float3 mSubsurfaceColor = surfaceSubsurfaceColor;
+    const float  mTransmissionStrength = surfaceTransmissionStrength;
+    const float  mAmbientOcclusion = surfaceAmbientOcclusion;
+    const float  mIndirectSpecularScale = surfaceIndirectSpecularScale;
 #endif
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
@@ -127,5 +150,6 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, float4(mEmissive, 0), motion, i.objectId);
+    return FinalizeGBuffer(albedo, mr, N, mEmissive, mSubsurfaceColor, mTransmissionStrength,
+                           mAmbientOcclusion, mIndirectSpecularScale, motion, i.objectId);
 }

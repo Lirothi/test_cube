@@ -157,19 +157,41 @@ namespace SceneObjectFactory
         }
 
         auto& mp = mesh.MaterialParamsRef();
-        if (o.contains("texOffsScale")) { mp.texOffsScale = ToFloat4(o["texOffsScale"], mp.texOffsScale); }
-        if (o.contains("normalStrength")) { mp.texFlags.w = o["normalStrength"].get<float>(); }
-        if (o.contains("useMR")) { mp.SetUseMR(o["useMR"].get<bool>()); }
-        // D: self-illumination on slot 0 (glowing embers etc). Survives Init for non-glTF meshes
-        // (glTF "auto" slots seed from the material — a known A3/B2 layering limit).
-        if (o.contains("emissiveColor")) { mp.emissiveColor = ToFloat3(o["emissiveColor"], mp.emissiveColor); }
-        if (o.contains("emissiveStrength")) { mp.emissiveStrength = o["emissiveStrength"].get<float>(); }
+        using ParamField = GBufferRenderable::MaterialParamField;
+        if (o.contains("texOffsScale"))
+        {
+            mp.texOffsScale = ToFloat4(o["texOffsScale"], mp.texOffsScale);
+            mesh.MarkMaterialParamOverride(ParamField::TexOffsScale);
+        }
+        if (o.contains("normalStrength"))
+        {
+            mp.texFlags.w = o["normalStrength"].get<float>();
+            mesh.MarkMaterialParamOverride(ParamField::NormalStrength);
+        }
+        if (o.contains("useMR"))
+        {
+            mp.SetUseMR(o["useMR"].get<bool>());
+            mesh.MarkMaterialParamOverride(ParamField::UseMR);
+        }
+        // Self-illumination on slot 0 (glowing embers etc). The override mask keeps explicitly
+        // authored object values while unrelated fields continue to inherit from the material.
+        if (o.contains("emissiveColor"))
+        {
+            mp.emissiveColor = ToFloat3(o["emissiveColor"], mp.emissiveColor);
+            mesh.MarkMaterialParamOverride(ParamField::EmissiveColor);
+        }
+        if (o.contains("emissiveStrength"))
+        {
+            mp.emissiveStrength = o["emissiveStrength"].get<float>();
+            mesh.MarkMaterialParamOverride(ParamField::EmissiveStrength);
+        }
         if (o.contains("metalRough"))
         {
             const json& mr = o["metalRough"];
             if (mr.is_array() && mr.size() >= 2)
             {
                 mp.metalRough = float2(mr[0].get<float>(), mr[1].get<float>());
+                mesh.MarkMaterialParamOverride(ParamField::MetalRough);
             }
         }
 
