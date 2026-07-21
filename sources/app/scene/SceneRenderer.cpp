@@ -1703,6 +1703,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
           { D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
+          { D.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);

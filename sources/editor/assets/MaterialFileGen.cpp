@@ -31,6 +31,7 @@ namespace materialgen
         if (!d.albedoPath.empty()) { m["albedo"] = d.albedoPath; }
         if (!d.mrPath.empty()) { m["mr"] = d.mrPath; }
         if (!d.normalPath.empty()) { m["normal"] = d.normalPath; }
+        m["shadingModel"] = "defaultLit";
         m["normalIsRG"] = false;
         m["useTBN"] = true;
         if (d.alphaMask) { m["alphaTest"] = true; m["alphaCutoff"] = d.alphaCutoff; }

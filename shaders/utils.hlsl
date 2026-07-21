@@ -11,6 +11,23 @@ static const float kMinRoughness = 0.03f;
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
 static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for dielectrics
 
+// GBAux.b carries a four-bit shading-model contract in an R8 UNORM channel. Values 0..15 are
+// encoded exactly at n/15; the remaining channel precision is intentionally unused for now.
+// Keep these IDs in sync with the C++ ShadingModel enum in MaterialData.h.
+static const uint kShadingModelDefaultLit = 0u;
+static const uint kShadingModelTwoSidedFoliage = 1u;
+static const uint kShadingModelMask = 15u;
+
+inline float EncodeShadingModel(uint id)
+{
+	return float(id & kShadingModelMask) / float(kShadingModelMask);
+}
+
+inline uint DecodeShadingModel(float encoded)
+{
+	return (uint)round(saturate(encoded) * float(kShadingModelMask));
+}
+
 // ============ normalize helpers ============
 inline float3 NormalizeSafe(float3 v, float3 fallback)
 {

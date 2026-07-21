@@ -247,6 +247,51 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
 
     ImGui::SeparatorText("Surface flags");
     {
+        ShadingModel shadingModel = ShadingModel::DefaultLit;
+        bool shadingModelValid = true;
+        if (const auto it = doc_.find("shadingModel"); it != doc_.end())
+        {
+            shadingModelValid = it->is_string() &&
+                TryParseShadingModel(it->get_ref<const std::string&>(), shadingModel);
+        }
+
+        const char* shadingModelPreview = "Default Lit";
+        if (!shadingModelValid) { shadingModelPreview = "Invalid (Default Lit fallback)"; }
+        else if (shadingModel == ShadingModel::TwoSidedFoliage) { shadingModelPreview = "Two-Sided Foliage"; }
+
+        if (ImGui::BeginCombo("Shading Model", shadingModelPreview))
+        {
+            struct ShadingModelOption
+            {
+                ShadingModel value;
+                const char* label;
+            };
+            constexpr ShadingModelOption kOptions[] = {
+                { ShadingModel::DefaultLit, "Default Lit" },
+                { ShadingModel::TwoSidedFoliage, "Two-Sided Foliage" }
+            };
+            for (const ShadingModelOption& option : kOptions)
+            {
+                const bool selected = shadingModelValid && shadingModel == option.value;
+                if (ImGui::Selectable(option.label, selected))
+                {
+                    shadingModel = option.value;
+                    shadingModelValid = true;
+                    doc_["shadingModel"] = ShadingModelToString(option.value);
+                }
+                if (selected) { ImGui::SetItemDefaultFocus(); }
+            }
+            ImGui::EndCombo();
+        }
+        if (!shadingModelValid)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
+                "Unknown shadingModel. Runtime uses Default Lit until a valid value is selected.");
+        }
+
+        const bool foliage = shadingModelValid && shadingModel == ShadingModel::TwoSidedFoliage;
+        if (foliage) { doc_["twoSided"] = true; }
+
         bool alphaTest = doc_.value("alphaTest", false);
         if (ImGui::Checkbox("Alpha test (masked)", &alphaTest)) { doc_["alphaTest"] = alphaTest; }
         if (alphaTest)
@@ -254,15 +299,21 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             float cutoff = doc_.value("alphaCutoff", 0.5f);
             if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f)) { doc_["alphaCutoff"] = cutoff; }
         }
-        bool twoSided = doc_.value("twoSided", false);
+        bool twoSided = foliage || doc_.value("twoSided", false);
+        ImGui::BeginDisabled(foliage);
         if (ImGui::Checkbox("Two-sided", &twoSided)) { doc_["twoSided"] = twoSided; }
+        ImGui::EndDisabled();
+        if (foliage && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("Two-Sided Foliage always renders both faces.");
+        }
         bool normalIsRG = doc_.value("normalIsRG", true);
         if (ImGui::Checkbox("Normal map is RG (BC5)", &normalIsRG)) { doc_["normalIsRG"] = normalIsRG; }
         bool useTBN = doc_.value("useTBN", true);
         if (ImGui::Checkbox("Use TBN", &useTBN)) { doc_["useTBN"] = useTBN; }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Alpha test / two-sided / normal-RG change the slot's PSO — Save\n"
+            ImGui::SetTooltip("Shading model / alpha test / two-sided / normal-RG change the slot's PSO — Save\n"
                               "respawns referencing objects so it takes effect.");
         }
     }

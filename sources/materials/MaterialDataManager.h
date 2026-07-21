@@ -21,6 +21,7 @@ struct MaterialPreset {
     std::wstring emissivePath; // RESERVED: parsed + persisted, not consumed yet (gbuffer SRV table is 3)
     bool normalIsRG = true;
     bool useTBN     = true;
+    ShadingModel shadingModel = ShadingModel::DefaultLit;
 
     // Optional gbuffer shader override ("shader" key) for feature materials (vegetation sway
     // etc.). Empty = the object's own shader (level JSON, default shaders/gbuffer.hlsl).

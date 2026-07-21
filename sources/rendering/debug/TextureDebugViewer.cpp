@@ -168,7 +168,9 @@ namespace
         case TextureDebugViewer::Target::GlassReflection: return "Glass Reflection";
         case TextureDebugViewer::Target::GBuffer0: return "GBuffer 0";
         case TextureDebugViewer::Target::GBuffer1: return "GBuffer 1";
+        case TextureDebugViewer::Target::ShadingModel: return "Shading Model ID";
         case TextureDebugViewer::Target::GBuffer2: return "GBuffer 2";
+        case TextureDebugViewer::Target::GBufferAux: return "GBuffer Aux";
         case TextureDebugViewer::Target::Velocity: return "Velocity";
         case TextureDebugViewer::Target::DlssBias: return "DLSS Bias";
         case TextureDebugViewer::Target::Depth: return "Depth";
@@ -206,8 +208,10 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GlassReflDepth, "Reflection", "Glass G-buffer: front-face depth (S15b reflection ray origin).", D.glassReflDepth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::GlassReflection, "Reflection", "Off-screen glass reflection (RT or SSR) sampled by the forward glass pass.", D.glassReflection.Get(), renderer.GetReflectionFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
-            MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal and roughness.", D.gb1.Get(), renderer.GetGBuffer1Format()),
+            MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused.", D.gb1.Get(), renderer.GetGBuffer1Format()),
+            MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "Emissive.", D.gb2.Get(), renderer.GetGBuffer2Format()),
+            MakeTarget(TextureDebugViewer::Target::GBufferAux, "GBuffer", "Auxiliary material payload: AO R, indirect specular scale G, shading model B, reserved A.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::Velocity, "GBuffer", "Motion vectors.", D.gbVelocity.Get(), renderer.GetGBufferVelocityFormat()),
             MakeTarget(TextureDebugViewer::Target::DlssBias, "DLSS", "DLSS bias/mask target.", D.dlssBias.Get(), renderer.GetDlssBiasFormat()),
             MakeTarget(TextureDebugViewer::Target::Depth, "Depth", "Main deferred depth SRV.", D.depth.Get(), renderer.GetDepthSrvFormat()),
@@ -310,7 +314,10 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
         ImGui::EndCombo();
     }
 
-    if (ImGui::BeginCombo("Channels", ChannelModeLabel(channelMode_)))
+    const bool forceShadingModelChannel = target_ == Target::ShadingModel;
+    const ChannelMode effectiveChannelMode = forceShadingModelChannel ? ChannelMode::Blue : channelMode_;
+    ImGui::BeginDisabled(forceShadingModelChannel);
+    if (ImGui::BeginCombo("Channels", ChannelModeLabel(effectiveChannelMode)))
     {
         for (int i = 0; i < static_cast<int>(ChannelMode::Count); ++i)
         {
@@ -327,6 +334,7 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
 
     ImGui::Checkbox("Image border", &showBorder_);
     ImGui::Separator();
@@ -382,7 +390,7 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
     {
         const uint32_t width = static_cast<uint32_t>(std::max<UINT64>(resourceDesc.Width, 1));
         const uint32_t height = std::max<uint32_t>(resourceDesc.Height, 1);
-        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = MakeSrvDesc(*selected, channelMode_);
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = MakeSrvDesc(*selected, effectiveChannelMode);
         const ImTextureID textureId = renderer.CreateImGuiTextureId(resource, srvDesc);
 
         ImVec2 available = ImGui::GetContentRegionAvail();

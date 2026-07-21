@@ -173,7 +173,7 @@ void GBufferRenderable::ApplySlotPipelineOverrides(Material::GraphicsDesc& desc,
         return;
     }
     const MaterialData& md = *matDatas_[slot];
-    md.ConfigureDefinesForGBuffer(desc); // NORMALMAP_IS_RG / USE_TBN / MR_LAYOUT_GLTF
+    md.ConfigureDefinesForGBuffer(desc); // sampling layout + SHADING_MODEL_ID
 
     auto& defs = desc.defines;
     defs.erase(std::remove_if(defs.begin(), defs.end(),
@@ -439,7 +439,7 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    desc.numRT = 5;
+    desc.numRT = 6;
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetGBuffer0Format();
@@ -447,6 +447,7 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
         desc.rtvFormats[2] = renderer->GetGBuffer2Format();
         desc.rtvFormats[3] = renderer->GetGBufferVelocityFormat();
         desc.rtvFormats[4] = renderer->GetObjectIdFormat();
+        desc.rtvFormats[5] = renderer->GetGBufferAuxFormat();
         desc.dsvFormat = renderer->GetDeferredDepthFormat();
     }
 

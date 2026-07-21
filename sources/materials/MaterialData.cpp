@@ -3,8 +3,34 @@
 #include "rendering/descriptors/SamplerManager.h"
 #include <algorithm>
 #include <array>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
+
+const char* ShadingModelToString(ShadingModel model)
+{
+    switch (model)
+    {
+    case ShadingModel::DefaultLit: return "defaultLit";
+    case ShadingModel::TwoSidedFoliage: return "twoSidedFoliage";
+    default: return "defaultLit";
+    }
+}
+
+bool TryParseShadingModel(std::string_view text, ShadingModel& outModel)
+{
+    if (text == "defaultLit")
+    {
+        outModel = ShadingModel::DefaultLit;
+        return true;
+    }
+    if (text == "twoSidedFoliage")
+    {
+        outModel = ShadingModel::TwoSidedFoliage;
+        return true;
+    }
+    return false;
+}
 
 bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                               std::vector<ComPtr<ID3D12Resource>>* keepAlive)
@@ -50,10 +76,12 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
     eraseKey("NORMALMAP_IS_RG");
     eraseKey("USE_TBN");
     eraseKey("MR_LAYOUT_GLTF");
+    eraseKey("SHADING_MODEL_ID");
 
     defs.emplace_back("NORMALMAP_IS_RG", normalIsRG   ? "1" : "0");
     defs.emplace_back("USE_TBN",         useTBN       ? "1" : "0");
     defs.emplace_back("MR_LAYOUT_GLTF",  mrLayoutGltf ? "1" : "0");
+    defs.emplace_back("SHADING_MODEL_ID", std::to_string(static_cast<uint32_t>(shadingModel)));
 }
 
 size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset) const

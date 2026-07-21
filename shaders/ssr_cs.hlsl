@@ -1,6 +1,6 @@
 #define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget            (HDR color sampled at the marched hit)
-// t1: GB1 (reflector normal.rgb, rough in A)
+// t1: GB1 (reflector normal.rgb, shading model ID in A; SSR currently consumes RGB only)
 // t2: Depth  (R32F) marched against in screen space (the OPAQUE scene depth)
 // t3: OriginDepth (R32F) reconstructs the reflector surface position. For opaque this is the
 //     same texture as t2; for glass it is the glass front-face depth (origin) while t2 stays

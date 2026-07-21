@@ -162,6 +162,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredRtvSlot::GB1:        D.gbRTV[1] = outRTV; break;
             case DeferredRtvSlot::GB2:        D.gbRTV[2] = outRTV; break;
             case DeferredRtvSlot::GBVelocity: D.gbRTV[3] = outRTV; break;
+            case DeferredRtvSlot::GBAux:      D.gbAuxRTV = outRTV; break;
             case DeferredRtvSlot::ObjectID:   D.objectIDRTV = outRTV; break;
             case DeferredRtvSlot::Light:      D.lightRTV = outRTV; break;
             case DeferredRtvSlot::Scene:      D.sceneRTV = outRTV; break;
@@ -173,6 +174,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             case DeferredSrvSlot::GB1:        D.gbSRV[1] = outSRV; break;
             case DeferredSrvSlot::GB2:        D.gbSRV[2] = outSRV; break;
             case DeferredSrvSlot::GBVelocity: D.gbSRV[3] = outSRV; break;
+            case DeferredSrvSlot::GBAux:      D.gbAuxSRV = outSRV; break;
             case DeferredSrvSlot::Depth:      D.depthSRV = outSRV; break;
             case DeferredSrvSlot::Stencil:    D.stencilSRV = outSRV; break;
             case DeferredSrvSlot::Light:      D.lightSRV = outSRV; break;
@@ -387,6 +389,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateRT(formats.gb1, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
         CreateRT(formats.gb2, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
         CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
+        CreateRT(formats.gbAux, DeferredRtvSlot::GBAux, DeferredSrvSlot::GBAux, DeferredSrvSlot::Count,
+            f, D.gbAux, D.gbAuxRTV, D.gbAuxSRV, float4(1, 1, 0, 0));
         CreateObjectIdTarget(f);
 
         CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV,
@@ -438,6 +442,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gb1.Get(), L"GB1");
         nameRes(D.gb2.Get(), L"GB2");
         nameRes(D.gbVelocity.Get(), L"GBVelocity");
+        nameRes(D.gbAux.Get(), L"GBAux");
         nameRes(D.objectID.Get(), L"ObjectID");
         nameRes(D.depth.Get(), L"Depth");
         nameRes(D.depthCopy.Get(), L"DepthCopy");
@@ -676,6 +681,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.gb1);
         collect(D.gb2);
         collect(D.gbVelocity);
+        collect(D.gbAux);
         collect(D.objectID);
         collect(D.depth);
         collect(D.depthCopy);

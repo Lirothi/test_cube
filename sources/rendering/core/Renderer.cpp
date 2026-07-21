@@ -1054,6 +1054,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.gb0 = render::kGBuffer0Format;
     formats.gb1 = render::kGBuffer1Format;
     formats.gb2 = render::kGBuffer2Format;
+    formats.gbAux = render::kGBufferAuxFormat;
     formats.velocity = render::kGBufferVelocityFormat;
     formats.objectID = render::kObjectIdFormat;
     formats.depth = render::kDeferredDepthFormat;
@@ -1344,8 +1345,10 @@ void Renderer::SetDlssMode(sl::DLSSMode mode)
 
 void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[5] = { D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3], D.objectIDRTV };
-    cl->OMSetRenderTargets(5, rtvs, FALSE, &D.dsv);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[6] = {
+        D.gbRTV[0], D.gbRTV[1], D.gbRTV[2], D.gbRTV[3], D.objectIDRTV, D.gbAuxRTV
+    };
+    cl->OMSetRenderTargets(6, rtvs, FALSE, &D.dsv);
     cl->OMSetStencilRef(0);
 
     D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
@@ -1357,6 +1360,8 @@ void Renderer::BindGBuffer(ID3D12GraphicsCommandList* cl, ClearMode mode) {
         for (int i = 0; i < 5; ++i) {
             cl->ClearRenderTargetView(rtvs[i], c, 0, nullptr);
         }
+        const float auxNeutral[4]{ 1,1,0,0 };
+        cl->ClearRenderTargetView(rtvs[5], auxNeutral, 0, nullptr);
         if (mode == ClearMode::ColorDepth)
         {
             cl->ClearDepthStencilView(D.dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 0.0f, 0, 0, nullptr);

@@ -1096,6 +1096,7 @@ namespace
         // I0 schema-v2 defaults: neutral, fully PBR-capable, and immediately
         // editable without referring to any texture that might not exist yet.
         return {
+            { "shadingModel", "defaultLit" },
             { "normalIsRG", true },
             { "useTBN", true },
             { "alphaTest", false },

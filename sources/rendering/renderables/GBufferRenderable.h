@@ -159,8 +159,8 @@ private:
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
-    // C1b: patch a graphics desc with slot i's pipeline identity: sampling defines
-    // (NORMALMAP_IS_RG/USE_TBN/MR_LAYOUT_GLTF), ALPHA_TEST, and cull mode (two-sided).
+    // C1b/F2: patch a graphics desc with slot i's pipeline identity: sampling defines,
+    // SHADING_MODEL_ID, ALPHA_TEST, and cull mode (two-sided).
     void ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const;
     // C1b: build slotGraphicsMaterials_ (per-slot PSOs; [0] aliases graphicsMaterial_).
     void BuildSlotMaterials(Renderer* renderer);

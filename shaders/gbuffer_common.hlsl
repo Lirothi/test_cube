@@ -4,6 +4,10 @@
 #ifndef GBUFFER_COMMON_HLSL
 #define GBUFFER_COMMON_HLSL
 
+#ifndef SHADING_MODEL_ID
+#define SHADING_MODEL_ID 0
+#endif
+
 // Per-instance payload (Step 4 auto-instancing). Same field layout as PerObject so the
 // shading math is shared; arrayed and indexed by SV_InstanceID. The explicit pad makes
 // the C++/HLSL offsets match (metalRough at 144, texOffsScale at 160 — cbuffer rules).
@@ -104,10 +108,11 @@ struct VSOut
 struct PSOut
 {
     float4 RT0 : SV_Target0; // Albedo.rgb + A=pack(rough,metal)
-    float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + A=1
+    float4 RT1 : SV_Target1; // Normal.xyz (RGB10) + unused A2
     float4 RT2 : SV_Target2; // Emissive.rgb
     float2 RT3 : SV_Target3; // Motion vector (UV delta)
     uint RT4 : SV_Target4; // Editor object id (0 = none)
+    float4 RT5 : SV_Target5; // GBAux: AO, indirect specular scale, shading model / 15, reserved
 };
 
 inline VSOut BaseVS(float3 pos,
@@ -150,6 +155,7 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS, float4 emiss,
     o.RT2 = emiss;
     o.RT3 = motion;
     o.RT4 = objectIdValue;
+    o.RT5 = float4(1.0, 1.0, EncodeShadingModel(SHADING_MODEL_ID), 0.0);
     return o;
 }
 

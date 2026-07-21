@@ -32,6 +32,26 @@ namespace
         preset.normalIsRG   = p.value("normalIsRG", true);
         preset.useTBN       = p.value("useTBN", true);
 
+        if (const auto it = p.find("shadingModel"); it != p.end())
+        {
+            ShadingModel parsed = ShadingModel::DefaultLit;
+            const bool valid = it->is_string() &&
+                TryParseShadingModel(it->get_ref<const std::string&>(), parsed);
+            if (valid)
+            {
+                preset.shadingModel = parsed;
+            }
+            else
+            {
+                const std::string value = it->is_string()
+                    ? it->get_ref<const std::string&>()
+                    : std::string("<non-string>");
+                const std::string warning = "[MaterialDataManager] Unknown shadingModel '" + value +
+                    "'; using defaultLit.\n";
+                OutputDebugStringA(warning.c_str());
+            }
+        }
+
         preset.alphaTest   = p.value("alphaTest", false);
         preset.alphaCutoff = p.value("alphaCutoff", 0.5f);
         preset.twoSided    = p.value("twoSided", false);
@@ -226,13 +246,14 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     auto md = std::make_shared<MaterialData>();
     md->normalIsRG = p.normalIsRG;
     md->useTBN     = p.useTBN;
+    md->shadingModel = p.shadingModel;
 
     // I0 schema v2: alpha-test/two-sided ride the same MaterialData fields the glTF path uses,
     // so the per-slot PSO plumbing (ALPHA_TEST define, cull mode) works unchanged. Param defaults
     // are stashed for GBufferRenderable::Init to seed into non-overridden slots.
     md->alphaMask   = p.alphaTest;
     md->alphaCutoff = p.alphaCutoff;
-    md->doubleSided = p.twoSided;
+    md->doubleSided = p.twoSided || p.shadingModel == ShadingModel::TwoSidedFoliage;
     md->shaderOverride = p.shaderPath;
     if (p.hasParams)
     {

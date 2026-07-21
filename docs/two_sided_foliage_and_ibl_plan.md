@@ -79,13 +79,14 @@ Implementation decisions for this renderer:
    `SkyOnly`.
 2. **Shading model is material-static.** JSON and the Material Editor select `DefaultLit` or
    `TwoSidedFoliage`; it is part of the slot PSO identity.
-3. **Use the free two-bit `GB1.a` for shading-model ID.** `GB1` is `R10G10B10A2_UNORM` and its alpha is
-   currently always written as 1. Four IDs are enough for this rung.
+3. **Use a four-bit shading-model ID in `GBAux.b`.** Keep `GB1` as `R10G10B10A2_UNORM` so normal
+   precision is unchanged. Encode IDs 0..15 as `id / 15` in the eight-bit blue channel.
 4. **Use model-specific `GB2.rgb`.** DefaultLit stores emissive; TwoSidedFoliage stores its
    premultiplied subsurface/transmission color. Simultaneous foliage emissive is an accepted v1
    limitation and must be documented in the editor.
-5. **Add a small material auxiliary GBuffer.** `R8G8_UNORM`: R = material AO, G = indirect-specular
-   scale. Append it as a new MRT; do not renumber the existing velocity/object-ID targets.
+5. **Use one consolidated material auxiliary GBuffer.** `R8G8B8A8_UNORM`: R = material AO,
+   G = indirect-specular scale, B = four-bit shading-model ID, A = reserved. Append it as a new MRT;
+   do not renumber the existing velocity/object-ID targets.
 6. **Do not silently grow `render::InstancePerObject`.** It is currently 208 bytes and mirrored by
    GBuffer and shadow paths. Material-static foliage parameters should travel through a dedicated
    per-slot surface-parameter CB, or through the existing multi-slot CB where that already occupies
@@ -194,24 +195,23 @@ must not produce a foliage material whose rasterizer culls the back face.
 ```text
 0 = DefaultLit
 1 = TwoSidedFoliage
-2 = reserved
-3 = reserved
+2..15 = reserved
 ```
 
 HLSL contract:
 
 ```hlsl
-float EncodeShadingModel(uint id) { return float(id & 3u) / 3.0f; }
-uint  DecodeShadingModel(float a) { return (uint)round(saturate(a) * 3.0f); }
+float EncodeShadingModel(uint id) { return float(id & 15u) / 15.0f; }
+uint  DecodeShadingModel(float b) { return (uint)round(saturate(b) * 15.0f); }
 ```
 
 ### Deferred payload
 
 ```text
 GB0  R8G8B8A8_UNORM   albedo.rgb, packed roughness/metal in a (unchanged)
-GB1  R10G10B10A2      normal.rgb, shadingModelId in a
+GB1  R10G10B10A2      normal.rgb, unused a
 GB2  R11G11B10_FLOAT  DefaultLit: emissive; Foliage: subsurfaceColor*transmissionStrength
-GBAux R8G8_UNORM      materialAO, indirectSpecularScale
+GBAux R8G8B8A8_UNORM  materialAO, indirectSpecularScale, shadingModelId/15, reserved
 ```
 
 Do not steal bits from packed roughness/metal in GB0. Do not change normal precision in GB1.
@@ -310,26 +310,39 @@ Release_Editor builds passed; every capture exited 0.
 
 ---
 
-### F2 — Shading-model identity plumbing (dormant)
+### F2 — Shading-model identity plumbing (dormant) — DONE (2026-07-21)
 
 - **Depends:** F0.
-- **Goal:** Carry a material shading model through JSON, PSO identity, and GB1 without changing light.
+- **Goal:** Carry a material shading model through JSON, PSO identity, and GBAux without changing light.
 - **Touch:** `MaterialData.h/.cpp`, `MaterialDataManager.h/.cpp`, `MaterialEditorPanel.*`,
-  `GBufferRenderable.cpp`, `shaders/gbuffer_common.hlsl`, all GBuffer variants, shared HLSL decode
-  helpers, texture-debug UI.
+  `GBufferRenderable.cpp`, `shaders/gbuffer_common.hlsl`, all GBuffer variants, render-target lifecycle,
+  shared HLSL decode helpers, texture-debug UI.
 - **Implement:**
   - Add the C++ `ShadingModel` enum and strict string parse/serialize helpers.
   - Unknown/missing strings fall back to DefaultLit with a warning for unknown values.
   - Add a Material Editor combo. Selecting foliage enables `twoSided`; attempting to disable it either
     re-enables it or presents a clear validation error.
   - `MaterialData::ConfigureDefinesForGBuffer` writes `SHADING_MODEL_ID` into the slot PSO desc.
-  - `FinalizeGBuffer` writes the encoded compile-time ID to `RT1.a`; default macro value is 0.
+  - Append neutral `GBAux` as RT5 (`R8G8B8A8_UNORM`) without renumbering RT0..RT4.
+  - `FinalizeGBuffer` writes the encoded compile-time ID to `RT5.b`; default macro value is 0.
+  - Preserve GB1 RGB10 normal precision; GB1 alpha is not used for material identity.
   - Add a debug visualization for decoded IDs.
   - Lighting and compose may decode the ID in this step, but must not branch on it yet.
 - **Interface contract:** C++ enum values and HLSL IDs are exactly the table in Section 6.
 - **Done-when:** old materials are ID 0, a test foliage material is ID 1, and the lit result is unchanged.
 - **Verify:** Debug + `Release_Editor`; Material Editor save/reload/live-apply; per-object and instanced
   GBuffer paths; debug-ID screenshot.
+
+**Result:** Added the exact `DefaultLit=0` / `TwoSidedFoliage=1` C++ contract within a four-bit
+0..15 HLSL encoding, strict JSON string helpers, and PSO identity via `SHADING_MODEL_ID`. The ID lives
+in `GBAux.b` as `id/15`; GB1 remains RGB10 and no normal precision is lost. `GBAux` is a consolidated
+`R8G8B8A8_UNORM` RT5 initialized to neutral AO/specular values `(1,1,0,0)`.
+The Material Editor exposes both models and makes `twoSided` mandatory for foliage; new and generated
+materials serialize `defaultLit`, while omitted legacy fields remain ID 0. Texture Inspector now has a
+dedicated `Shading Model ID` view. A temporary isolated atoll fixture rendered foliage as ID 1 beside
+legacy ID 0 surfaces in `C:\tmp\foliage_F2_4bit_shading_model_id.png`; the fixture was then removed without
+changing the palm materials or level. Debug and `Release_Editor` builds passed, final runtime shader
+compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore the new ID.
 
 ---
 
@@ -350,9 +363,9 @@ Release_Editor builds passed; every capture exited 0.
   - Do **not** grow the shared 208-byte `render::InstancePerObject` as a shortcut. If transport design
     forces a growth, update all C++ and HLSL mirrors, shadow structured-buffer strides, upload sizes,
     and static asserts in this same step and explain why the dedicated CB was impossible.
-  - Append `GBAux` as RT5 (`R8G8_UNORM`) after existing RT4 object ID. Add resource, RTV/SRV,
-    allocation, clear, resize/destroy, state tracking, format getter, and debug viewer entry.
-  - Write AO=1 and indirectSpecularScale=1 for all old materials.
+  - Reuse the neutral `GBAux` RT5 landed in F2; populate R/G from the new material parameters while
+    preserving B shading-model identity and reserved A.
+  - Keep AO=1 and indirectSpecularScale=1 for all old materials.
   - DefaultLit writes emissive to GB2. Foliage writes
     `subsurfaceColor * transmissionStrength` to GB2.
   - Compose must stop adding GB2 as emissive when shading model is foliage, but no new foliage light is

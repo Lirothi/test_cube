@@ -117,6 +117,7 @@ public:
     DXGI_FORMAT GetGBuffer0Format() const { return render::kGBuffer0Format; }
     DXGI_FORMAT GetGBuffer1Format() const { return render::kGBuffer1Format; }
     DXGI_FORMAT GetGBuffer2Format() const { return render::kGBuffer2Format; }
+    DXGI_FORMAT GetGBufferAuxFormat() const { return render::kGBufferAuxFormat; }
     DXGI_FORMAT GetDeferredDepthFormat() const { return render::kDeferredDepthFormat; }
     DXGI_FORMAT GetDsvFormat() const { return render::kDeferredDepthFormat; }
     DXGI_FORMAT GetDepthSrvFormat() const { return render::kDeferredDepthSrvFormat; }

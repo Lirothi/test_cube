@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <wrl/client.h>
 #include <d3d12.h>
@@ -13,6 +14,20 @@
 #include "core/math/Math.h"
 
 class Renderer;
+
+// Stored as a four-bit ID in GBAux.b (encoded as id/15 in an R8 UNORM channel). Keep these numeric
+// values in sync with kShadingModel* in shaders/utils.hlsl.
+enum class ShadingModel : uint8_t
+{
+    DefaultLit = 0,
+    TwoSidedFoliage = 1
+};
+static_assert(static_cast<uint8_t>(ShadingModel::DefaultLit) == 0);
+static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) == 1);
+static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) < 16);
+
+const char* ShadingModelToString(ShadingModel model);
+bool TryParseShadingModel(std::string_view text, ShadingModel& outModel);
 
 // ---------------------
 // Per-object parameters (in b0)
@@ -57,6 +72,7 @@ public:
     // Feature flags (can be passed as defines when building shader permutations)
     bool normalIsRG = true; // RG/BC5 vs RGB(A)
     bool useTBN     = true; // TBN path (otherwise derivatives)
+    ShadingModel shadingModel = ShadingModel::DefaultLit;
     bool mrLayoutGltf = false; // true => RAW glTF preview: MR is glTF-packed + factors multiply; emits
                                // MR_LAYOUT_GLTF. Imported assets stay false — the importer bakes both
                                // the channel order AND the factors into the DDS (H6).
@@ -99,7 +115,7 @@ public:
     bool LoadNormal(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
-    // Configure defines for the GBuffer variant (NORMALMAP_IS_RG / USE_TBN)
+    // Configure sampling and shading-model defines for the GBuffer variant.
     void ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const;
 
     // Assemble the SRV table and sampler for the standard GBuffer pass:
