@@ -25,6 +25,7 @@ struct RtInstanceDesc
     D3D12_CPU_DESCRIPTOR_HANDLE mrSrv{};
     Math::float4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
     Math::float2 metalRough{ 0.0f, 1.0f }; // x=metallic, y=roughness (flat fallback when no MR texture)
+    bool mrMultiply = false;               // true = MR texture * metalRough; false = texture override
 };
 class Camera;
 class Material;

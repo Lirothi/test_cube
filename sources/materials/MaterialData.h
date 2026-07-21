@@ -25,6 +25,8 @@ struct MaterialParams
     // C1 alpha test cutoff: fragment discarded when baseColor.a*albedo.a < cutoff. -1 disables
     // the test for this slot (the shader skips clip); set to the glTF alphaCutoff on MASK slots.
     float  alphaCutoff = -1.0f;
+    // 0 = an enabled MR texture overrides metalRough; 1 = texture * metalRough.
+    float  mrMultiply  = 0.0f;
     float4 texOffsScale = { 0.0f, 0.0f, 1.0f, 1.0f };
     // x=useAlbedo, y=useMR, z=useNormal, w=normalStrength (XY before reconstructing Z)
     float4 texFlags    = {1.f, 1.f, 1.f, 1.f};
@@ -44,6 +46,7 @@ struct MaterialParams
     void SetUseMR(bool b)    { texFlags.y = b ? 1.f : 0.f; }
     void SetUseNormal(bool b){ texFlags.z = b ? 1.f : 0.f; }
     void SetNormalStrength(float s){ texFlags.w = s; }
+    void SetMultiplyMR(bool b){ mrMultiply = b ? 1.f : 0.f; }
 };
 
 // ---------------------

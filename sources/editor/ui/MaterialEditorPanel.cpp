@@ -203,6 +203,8 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
     ImGui::SeparatorText("Textures");
     TexturePicker("Albedo", doc_, "albedo", textures);
     TexturePicker("Metal/Rough", doc_, "mr", textures);
+    bool useMR = doc_.value("useMR", true);
+    if (ImGui::Checkbox("Use MR Texture", &useMR)) { doc_["useMR"] = useMR; }
     TexturePicker("Normal", doc_, "normal", textures);
     TexturePicker("Emissive", doc_, "emissive", textures);
 
@@ -215,6 +217,16 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         static const float kMrDef[2] = { 0.0f, 0.35f };
         float mr[2]; ReadFloats(doc_, "metalRough", mr, 2, kMrDef);
         if (ImGui::DragFloat2("Metal / Rough", mr, 0.01f, 0.0f, 1.0f)) { WriteFloats(doc_, "metalRough", mr, 2); }
+
+        bool multiplyMR = doc_.value("multiplyMR", false);
+        ImGui::BeginDisabled(!useMR);
+        if (ImGui::Checkbox("Multiply MR texture by values", &multiplyMR)) { doc_["multiplyMR"] = multiplyMR; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Checked: final MR = texture * Metal/Rough values.\n"
+                              "Unchecked: the texture overrides the values.");
+        }
+        ImGui::EndDisabled();
 
         float ns = doc_.value("normalStrength", 1.0f);
         if (ImGui::DragFloat("Normal Strength", &ns, 0.01f, 0.0f, 4.0f)) { doc_["normalStrength"] = ns; }

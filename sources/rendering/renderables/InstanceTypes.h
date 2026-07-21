@@ -15,7 +15,7 @@ struct alignas(16) InstancePerObject
     DirectX::XMFLOAT4   baseColor;    // 128
     DirectX::XMFLOAT2   metalRough;   // 144
     float               alphaCutoff;  // 152 (C1 alpha test; -1 disables)
-    float               _pad0;        // 156
+    float               mrMultiply;   // 156 (0=override, 1=texture*metalRough)
     DirectX::XMFLOAT4   texOffsScale; // 160
     DirectX::XMFLOAT4   texFlags;     // 176
     uint32_t            objectId;     // 192
@@ -33,7 +33,7 @@ struct alignas(16) InstanceSlotParams
     DirectX::XMFLOAT4 baseColor;    // 0
     DirectX::XMFLOAT2 metalRough;   // 16
     float             alphaCutoff;  // 24 (C1 alpha test; -1 disables)
-    float             _pad0;        // 28
+    float             mrMultiply;   // 28 (0=override, 1=texture*metalRough)
     DirectX::XMFLOAT4 texOffsScale; // 32
     DirectX::XMFLOAT4 texFlags;     // 48
     DirectX::XMFLOAT3 emissive;     // 64 (D: premultiplied color*strength)

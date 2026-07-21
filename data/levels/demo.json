@@ -981,7 +981,7 @@
       ],
       "rotationDeg": [
         0.0,
-        0.0,
+        -0.0,
         0.0
       ],
       "scale": [
@@ -2204,6 +2204,10 @@
       "id": 156,
       "material": "bronze_copy11",
       "mesh": "models/box.mesh.json",
+      "metalRough": [
+        0.0,
+        0.6000000238418579
+      ],
       "name": "staticMesh #2 Copy Copy Copy",
       "position": [
         -16.41788101196289,
@@ -2221,7 +2225,8 @@
         1.0,
         1.0
       ],
-      "type": "staticMesh"
+      "type": "staticMesh",
+      "useMR": false
     },
     {
       "enabled": true,

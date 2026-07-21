@@ -17,7 +17,7 @@ struct InstancePerObject
     float4 baseColor;
     float2 metalRough;
     float alphaCutoff; // C1 alpha test (-1 disables)
-    float _instPad0;
+    float mrMultiply; // 0=MR texture overrides values, 1=texture*metalRough
     float4 texOffsScale;
     float4 texFlags;
     uint objectId;
@@ -33,7 +33,7 @@ cbuffer PerObject : register(b0)
     float4 baseColor; // fallback Albedo (linear); .a = alpha factor (glTF)
     float2 metalRough; // x=metallic (fallback), y=roughness (fallback)
     float alphaCutoff; // C1 alpha test (-1 disables)
-    float _alphaPad;
+    float mrMultiply; // 0=MR texture overrides values, 1=texture*metalRough
     float4 texOffsScale;
     float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
     uint objectId;

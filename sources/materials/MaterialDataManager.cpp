@@ -56,6 +56,16 @@ namespace
             preset.params.metalRough = float2(v4[0], v4[1]);
             preset.hasParams = true;
         }
+        if (p.contains("useMR"))
+        {
+            preset.params.SetUseMR(p.value("useMR", true));
+            preset.hasParams = true;
+        }
+        if (p.contains("multiplyMR"))
+        {
+            preset.params.SetMultiplyMR(p.value("multiplyMR", false));
+            preset.hasParams = true;
+        }
         if (readFloats("texOffsScale", v4, 4))
         {
             preset.params.texOffsScale = float4(v4[0], v4[1], v4[2], v4[3]);
@@ -303,6 +313,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     p.metalRough = float2(d.metallic, d.roughness);
     p.SetUseAlbedo(md->hasAlbedo);
     p.SetUseMR(md->hasMR);
+    p.SetMultiplyMR(md->mrLayoutGltf); // raw glTF factors multiply; imported DDS already bakes them
     p.SetUseNormal(md->hasNormal);
     p.SetNormalStrength(d.normalScale);
     // D: glTF emissiveFactor drives self-illumination (strength 1; KHR_emissive_strength not

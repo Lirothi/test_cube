@@ -125,7 +125,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             sp->baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
             sp->metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
             sp->alphaCutoff = p.alphaCutoff;
-            sp->_pad0 = 0.0f;
+            sp->mrMultiply = p.mrMultiply;
             sp->texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
             sp->texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
             const auto e = p.EmissiveLinear();

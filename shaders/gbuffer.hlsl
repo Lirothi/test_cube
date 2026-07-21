@@ -36,16 +36,14 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, albedo, mr, N);
 
 #if MR_LAYOUT_GLTF
-    // Raw (unimported) glTF preview: baseColorFactor / metallic / roughness factors MULTIPLY the
-    // texture channels (falling back to the factor alone where the channel's texture is absent).
-    // IMPORTED assets never hit this branch: the importer bakes the factors into the DDS and the
-    // repacked MR resolves to the engine layout below.
+    // Raw (unimported) glTF preview: baseColorFactor multiplies the texture. MR multiplication is
+    // selected by mrMultiply below; raw glTF defaults it on, while imported DDS bakes the factors.
     albedo = texFlags.x > 0.5 ? albedo * baseColor.rgb : baseColor.rgb;
-    mr     = texFlags.y > 0.5 ? mr * metalRough.xy     : metalRough.xy;
 #else
     albedo = lerp(baseColor.rgb, albedo, texFlags.x);
-    mr = lerp(metalRough.xy, mr, texFlags.y);
 #endif
+    float2 texturedMR = lerp(mr, mr * metalRough.xy, mrMultiply);
+    mr = lerp(metalRough.xy, texturedMR, texFlags.y);
     if (texFlags.z < 0.5)
     {
         N = NNorm;

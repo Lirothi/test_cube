@@ -38,7 +38,8 @@ struct InstancePerObject
     float4x4 prevWorld;
     float4   baseColor;
     float2   metalRough;
-    float2   _instPad0;
+    float    alphaCutoff;
+    float    mrMultiply;
     float4   texOffsScale;
     float4   texFlags;
     uint     objectId;

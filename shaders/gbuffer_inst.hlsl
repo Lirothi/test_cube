@@ -49,11 +49,11 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 
 #if MR_LAYOUT_GLTF
     albedo = texFlags.x > 0.5 ? albedo * baseColor.rgb : baseColor.rgb;
-    mr     = texFlags.y > 0.5 ? mr * metalRough.xy     : metalRough.xy;
 #else
     albedo = lerp(baseColor.rgb, albedo, texFlags.x);
-    mr = lerp(metalRough.xy, mr, texFlags.y);
 #endif
+    float2 texturedMR = lerp(mr, mr * metalRough.xy, mrMultiply);
+    mr = lerp(metalRough.xy, texturedMR, texFlags.y);
     if (texFlags.z < 0.5)
     {
         N = NNorm;

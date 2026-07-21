@@ -34,6 +34,7 @@ public:
             cbHandles_.baseColor = material->ComputeCBFieldHandle(0, "baseColor");
             cbHandles_.metalRough = material->ComputeCBFieldHandle(0, "metalRough");
             cbHandles_.alphaCutoff = material->ComputeCBFieldHandle(0, "alphaCutoff");
+            cbHandles_.mrMultiply = material->ComputeCBFieldHandle(0, "mrMultiply");
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
             cbHandles_.emissive = material->ComputeCBFieldHandle(0, "emissive");
@@ -62,6 +63,7 @@ public:
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
         UpdateUniform(owner, cbHandles_.metalRough, material, p.metalRough, cbData);
         UpdateUniform(owner, cbHandles_.alphaCutoff, material, p.alphaCutoff, cbData);
+        UpdateUniform(owner, cbHandles_.mrMultiply, material, p.mrMultiply, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
         UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
@@ -85,6 +87,7 @@ private:
         Material::CBFieldHandle baseColor;
         Material::CBFieldHandle metalRough;
         Material::CBFieldHandle alphaCutoff;
+        Material::CBFieldHandle mrMultiply;
         Material::CBFieldHandle texOffsScale;
         Material::CBFieldHandle texFlags;
         Material::CBFieldHandle emissive;
@@ -120,7 +123,8 @@ bool IInstanceable::SameInstanceSlots(const IInstanceable& other) const
         const MaterialParams* b = other.InstanceSlotParams(i);
         if (!a || !b) { if (a != b) { return false; } continue; }
         if (!eq4(a->baseColor, b->baseColor) || !eq2(a->metalRough, b->metalRough) ||
-            !eq4(a->texOffsScale, b->texOffsScale) || !eq4(a->texFlags, b->texFlags))
+            a->mrMultiply != b->mrMultiply || !eq4(a->texOffsScale, b->texOffsScale) ||
+            !eq4(a->texFlags, b->texFlags))
         {
             return false;
         }
@@ -280,7 +284,8 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
             // yet) must render as a flat fallback. Leaving the default texture flags enabled
             // would sample the descriptor table from an unrelated preceding draw.
             matParamses_[i].SetUseAlbedo(matDatas_[i] && matDatas_[i]->hasAlbedo);
-            matParamses_[i].SetUseMR(matDatas_[i] && matDatas_[i]->hasMR);
+            const bool wantsMR = matParamses_[i].texFlags.y > 0.5f;
+            matParamses_[i].SetUseMR(matDatas_[i] && matDatas_[i]->hasMR && wantsMR);
             matParamses_[i].SetUseNormal(matDatas_[i] && matDatas_[i]->hasNormal);
         }
     }
@@ -407,7 +412,7 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
     out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
     out.alphaCutoff = p.alphaCutoff; // C1 (single-slot instanced; multi-slot uses b2)
-    out._pad0 = 0.0f;
+    out.mrMultiply = p.mrMultiply;
     out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
     out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
     out.objectId = ToObjectId32(GetEditorObjectId());

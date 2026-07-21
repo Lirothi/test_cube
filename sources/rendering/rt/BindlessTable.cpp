@@ -13,7 +13,8 @@ namespace {
 // Two instances with the same mesh AND material share one record; different
 // materials on a shared mesh get distinct records.
 uint64_t FloatBits(float f) { uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b; }
-uint64_t MakeGeomKey(Mesh* mesh, SIZE_T albedoSrvPtr, SIZE_T mrSrvPtr, const float* baseColor4, float roughness, float metalness)
+uint64_t MakeGeomKey(Mesh* mesh, SIZE_T albedoSrvPtr, SIZE_T mrSrvPtr, const float* baseColor4,
+                     float roughness, float metalness, bool mrMultiply)
 {
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
@@ -22,6 +23,7 @@ uint64_t MakeGeomKey(Mesh* mesh, SIZE_T albedoSrvPtr, SIZE_T mrSrvPtr, const flo
     mix(static_cast<uint64_t>(mrSrvPtr));
     mix(FloatBits(roughness));
     mix(FloatBits(metalness));
+    mix(mrMultiply ? 1ull : 0ull);
     if (baseColor4) { for (int i = 0; i < 4; ++i) { mix(FloatBits(baseColor4[i])); } }
     return h;
 }
@@ -70,9 +72,10 @@ void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_
 
 uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                           D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
-                                          const float* baseColor4, float roughness, float metalness)
+                                          const float* baseColor4, float roughness, float metalness,
+                                          bool mrMultiply)
 {
-    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness };
+    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply };
     return GetOrRegisterMesh(mesh, &one, 1);
 }
 
@@ -84,10 +87,12 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
     // Key = mesh + every slot's material (two objects sharing a mesh but overriding a slot get
     // distinct record runs).
     uint64_t key = MakeGeomKey(mesh, slots[0].albedoSrv.ptr, slots[0].mrSrv.ptr,
-                               slots[0].baseColor4, slots[0].roughness, slots[0].metalness);
+                               slots[0].baseColor4, slots[0].roughness, slots[0].metalness,
+                               slots[0].mrMultiply);
     for (size_t s = 1; s < slotCount; ++s) {
         key ^= MakeGeomKey(mesh, slots[s].albedoSrv.ptr, slots[s].mrSrv.ptr,
-                           slots[s].baseColor4, slots[s].roughness, slots[s].metalness) + s;
+                           slots[s].baseColor4, slots[s].roughness, slots[s].metalness,
+                           slots[s].mrMultiply) + s;
     }
     auto it = geomCache_.find(key);
     if (it != geomCache_.end()) {
@@ -132,6 +137,7 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
         rec.albedoTexIndex = 0xFFFFFFFFu;
         rec.roughness = sm.roughness;
         rec.metalness = sm.metalness;
+        rec.mrMultiply = sm.mrMultiply ? 1u : 0u;
         if (sm.baseColor4) {
             rec.baseColor[0] = sm.baseColor4[0]; rec.baseColor[1] = sm.baseColor4[1];
             rec.baseColor[2] = sm.baseColor4[2]; rec.baseColor[3] = sm.baseColor4[3];

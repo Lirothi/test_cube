@@ -2,7 +2,7 @@
 #define RT_GEOMETRY_HLSLI
 
 // Shared bindless geometry definitions for the RT passes. Mirrors
-// rt::GeometryInfoGPU (3x 16B rows) and the resident VertexPNTUV layout.
+// rt::GeometryInfoGPU (4x 16B rows) and the resident VertexPNTUV layout.
 struct GeometryInfo
 {
     uint   vbIndex;
@@ -14,6 +14,8 @@ struct GeometryInfo
     uint   mrTexIndex;     // 0xFFFFFFFF = none (use flat roughness/metalness)
     uint   firstTri;       // B3: first triangle of this record's submesh range in the IB
     float4 baseColor;
+    uint   mrMultiply;     // 0 = texture overrides values, 1 = texture * values
+    uint3  _pad;
 };
 
 // B3: records are per (instance, submesh) — the BLAS carries one geometry per submesh, so the

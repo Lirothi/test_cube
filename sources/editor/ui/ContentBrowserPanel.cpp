@@ -1103,6 +1103,8 @@ namespace
             { "twoSided", false },
             { "tint", { 1.0f, 1.0f, 1.0f, 1.0f } },
             { "metalRough", { 0.0f, 0.5f } },
+            { "useMR", true },
+            { "multiplyMR", false },
             { "texOffsScale", { 0.0f, 0.0f, 1.0f, 1.0f } },
             { "normalStrength", 1.0f },
             { "emissiveColor", { 0.0f, 0.0f, 0.0f } },

@@ -25,7 +25,7 @@ cbuffer SlotParams : register(b2)
     float4 slotBaseColor;
     float2 slotMetalRough;
     float slotAlphaCutoff; // C1 alpha test (-1 disables)
-    float _slotPad0;
+    float slotMrMultiply; // 0=MR texture overrides values, 1=texture*metalRough
     float4 slotTexOffsScale;
     float4 slotTexFlags;
     float3 slotEmissive; // D: premultiplied color*strength
@@ -89,6 +89,7 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float4 mTexOffsScale = slotTexOffsScale;
     const float4 mTexFlags     = slotTexFlags;
     const float  mAlphaCutoff  = slotAlphaCutoff;
+    const float  mMrMultiply   = slotMrMultiply;
     const float3 mEmissive     = slotEmissive;
 #else
     const float4 mBaseColor    = d.baseColor;
@@ -96,6 +97,7 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float4 mTexOffsScale = d.texOffsScale;
     const float4 mTexFlags     = d.texFlags;
     const float  mAlphaCutoff  = d.alphaCutoff;
+    const float  mMrMultiply   = d.mrMultiply;
     const float3 mEmissive     = d.emissive;
 #endif
 
@@ -112,11 +114,11 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
 
 #if MR_LAYOUT_GLTF
     albedo = mTexFlags.x > 0.5 ? albedo * mBaseColor.rgb : mBaseColor.rgb;
-    mr     = mTexFlags.y > 0.5 ? mr * mMetalRough.xy     : mMetalRough.xy;
 #else
     albedo = lerp(mBaseColor.rgb, albedo, mTexFlags.x);
-    mr = lerp(mMetalRough.xy, mr, mTexFlags.y);
 #endif
+    float2 texturedMR = lerp(mr, mr * mMetalRough.xy, mMrMultiply);
+    mr = lerp(mMetalRough.xy, texturedMR, mTexFlags.y);
     if (mTexFlags.z < 0.5)
     {
         N = NNorm;

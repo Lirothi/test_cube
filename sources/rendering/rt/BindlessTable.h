@@ -30,6 +30,9 @@ struct GeometryInfoGPU
     uint32_t firstTri = 0u; // B3: this record's first triangle in the IB (submesh indexOffset/3)
     // Row 2 (16B)
     float    baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f }; // material tint / fallback
+    // Row 3 (16B)
+    uint32_t mrMultiply = 0u; // 0 = texture overrides values, 1 = texture * values
+    uint32_t _pad[3]{};
 };
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that
@@ -69,6 +72,7 @@ public:
         const float* baseColor4 = nullptr;
         float roughness = 1.0f;
         float metalness = 0.0f;
+        bool mrMultiply = false;
     };
 
     // Register a mesh (idempotent): one geometry-info record PER SUBMESH (contiguous — the BLAS
@@ -79,7 +83,8 @@ public:
     uint32_t GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots, size_t slotCount);
     uint32_t GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
-                               const float* baseColor4, float roughness, float metalness);
+                               const float* baseColor4, float roughness, float metalness,
+                               bool mrMultiply);
 
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const

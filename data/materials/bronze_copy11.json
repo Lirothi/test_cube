@@ -1,5 +1,6 @@
 {
   "albedo": "textures/bronze_albedo.dds",
+  "alphaTest": false,
   "emissiveColor": [
     1.0,
     0.4784053564071655,
@@ -7,12 +8,14 @@
   ],
   "emissiveStrength": 0.0,
   "metalRough": [
-    0.0,
+    1.0,
     1.0
   ],
   "mr": "textures/bronze_mr.dds",
+  "multiplyMR": true,
   "normal": "textures/bronze_normal.dds",
   "normalIsRG": false,
   "normalStrength": 1.0,
+  "useMR": true,
   "useTBN": true
 }

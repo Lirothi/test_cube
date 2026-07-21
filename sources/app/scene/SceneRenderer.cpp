@@ -1013,6 +1013,7 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                         slotMats[s].baseColor4 = &p->baseColor.x;
                         slotMats[s].roughness = p->metalRough.y;
                         slotMats[s].metalness = p->metalRough.x;
+                        slotMats[s].mrMultiply = p->mrMultiply > 0.5f;
                     }
                 }
             }
@@ -1033,7 +1034,8 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 {
                     entry.instanceId = bindless_.Ready()
                         ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
-                                                      /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x)
+                                                      /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x,
+                                                      desc.mrMultiply)
                         : instanceId;
                 }
                 rtInstances_.push_back(entry);

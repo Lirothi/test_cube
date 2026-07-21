@@ -108,6 +108,7 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
     {
         Texture2D mrTex = ResourceDescriptorHeap[g.mrTexIndex];
         float2 mr = mrTex.SampleLevel(gSmp, uvHit, 0).rg;
+        if (g.mrMultiply != 0u) { mr *= float2(metal, rough); }
         metal = saturate(mr.x);
         rough = saturate(mr.y);
     }
