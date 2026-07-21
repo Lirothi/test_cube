@@ -890,8 +890,37 @@ Rename = file rename, BUT levels/slots reference materials by name — on rename
 `data/levels/*.json` for references and either warn ("N references in: …") or offer auto-update;
 never silently break a level.
 
-**I2 — material editor window (the core).** *(exec: Opus 4.8; escalate to Fable ONLY for the
-in-place texture reload if the GPU sync fights back)* Opened by double-clicking a material in the
+**I2 — material editor window (the core). — DONE (Opus 4.8, 2026-07-16), uncommitted.**
+As landed: `sources/editor/ui/MaterialEditorPanel.{h,cpp}` — opened by double-clicking a material
+in the content browser or its "Edit Material..." context item (new `ContentBrowserAction::Type::
+EditMaterial`; material `id.key` is the NAME, `record.path` the file). Edits the schema-v2 doc in
+place (round-trip, unknown keys preserved): albedo/mr/normal/emissive texture pickers (combo over
+registry Texture records), tint, metalRough, normalStrength, texOffsScale, alphaTest/alphaCutoff/
+twoSided, emissiveColor/strength, normalIsRG/useTBN, and the I0 feature-shader override — NO
+mrLayout (dead per H6). **The spec's two live-apply tiers collapsed into ONE safe mechanism**:
+"Save & Apply" writes the file → `MaterialDataManager::LoadPresetFromFile` (re-register) →
+`EvictCached(name)` (new) → respawns every placed static mesh whose EFFECTIVE material (resolved
+through `SceneObjectFactory::ResolveMeshAsset` — covers inline overrides AND materials inherited
+from a `.mesh.json`) is this one, batched under one WaitForPreviousFrame/UploadBatch (mirrors
+MeshEditorPanel). Respawn rebuilds textures, params AND the per-slot PSO, so scalar edits and the
+PSO-affecting toggles both take effect with zero descriptor surgery — the Fable-escalation "in-place
+texture reload" was avoided entirely. "Revert" reloads from disk. NO command-stack undo yet
+(material edits aren't document mutations; Revert-from-disk is the escape hatch) — deferred.
+**Crash fix (DEVICE_HUNG on 2nd Save&Apply):** the respawn's material rebuild frees the old
+albedo/MR GPU textures and loads new ones, but the RT bindless geom-info table caches material SRVs
+per-mesh (`SceneRenderer` `bindless_.GetOrRegisterMesh`) and is NOT invalidated on a material change
+— so with RT reflections on, the geom-info table dangles → GPU reads freed descriptors → hang
+(surfaced in AssetThumbnailCache::ReleaseEntry, the next D3D call after the debug-layer device-
+removal break). Fix: new `SceneRenderer::InvalidateRaytracing()` (RT-only subset of Reset() —
+asManager + bindless + reflectionHistory + rtInstances, keeps materials) exposed via
+`Scene::InvalidateRaytracing()`, called by ApplyToScene after the respawn's SubmitAndWait (GPU idle);
+the per-frame register loop re-registers meshes with the new SRVs next frame. Cheap no-op when RT
+off. (The per-frame gbuffer/shadow SRV staging self-heals, so RT bindless was the only persistent
+stale cache.) Verified: build + scene-stress CLEAN; user to confirm repeated Save&Apply with F5/RT on.
+**NOTE: I1
+(create/duplicate/rename/delete material files in the CB) was already landed by another executor —
+`MaterialDataManager::LoadPresetFromFile` + CB CreateMaterial/DuplicateMaterial/RenameMaterial
+requests exist.** *(original spec below)* Opened by double-clicking a material in the
 content browser or an "edit" button next to the slot's preset picker (B4 inspector). Fields =
 schema v2: texture pickers for albedo/mr/normal/emissive (thumbnails via AssetThumbnailCache, DDS
 preferred per H2), tint, metal/rough scalars, normalStrength, texOffsScale tiling,

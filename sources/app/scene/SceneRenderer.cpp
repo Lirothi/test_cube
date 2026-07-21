@@ -302,6 +302,19 @@ void SceneRenderer::Reset()
     frame_ = nullptr;
 }
 
+void SceneRenderer::InvalidateRaytracing()
+{
+    // RT-only subset of Reset() — keep materials/handles, rebuild the acceleration structures +
+    // bindless geom-info next RT frame. The per-frame register loop (GetOrRegisterMesh) re-runs
+    // and re-reads current material SRVs after this clear.
+    asManager_.Reset();
+    bindless_.Reset();
+    reflectionHistory_.Reset();
+    asManagerInited_ = false;
+    asScratchRetireFrame_ = 0;
+    rtInstances_.clear();
+}
+
 void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 {
     if (!renderer)

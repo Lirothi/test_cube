@@ -59,6 +59,10 @@ public:
     // duplicating, or renaming a material so it can be assigned without restarting the level.
     bool LoadPresetFromFile(const std::wstring& path);
 
+    // I2: drop the cached MaterialData for a name so the next GetOrCreate rebuilds it (after its
+    // definition or textures changed on disk). Live objects keep their shared_ptr until respawned.
+    void EvictCached(const std::string& name);
+
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;
 

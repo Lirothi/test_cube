@@ -18,6 +18,7 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/ImportPanel.h"
 #include "editor/ui/InspectorPanel.h"
+#include "editor/ui/MaterialEditorPanel.h"
 #include "editor/ui/MeshEditorPanel.h"
 #include "editor/ui/SceneOutlinerPanel.h"
 #include "editor/ui/ViewportGizmo.h"
@@ -97,6 +98,7 @@ private:
     bool showCommandHistory_ = true;
     bool showImportPanel_ = false; // H3: import_staging -> engine assets window
     bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
+    bool showMaterialEditor_ = false; // I2: Material Editor window (edits a data/materials/<name>.json)
     bool showLevelErrors_ = false; // J: level-errors window (missing geometry/material/textures)
     int selectionOutlineRadius_ = 1;
 
@@ -114,6 +116,7 @@ private:
     ContentBrowserPanel contentBrowser_;
     ImportPanel importPanel_;
     MeshEditorPanel meshEditor_;
+    MaterialEditorPanel materialEditor_;
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     CommandHistoryPanel commandHistory_;

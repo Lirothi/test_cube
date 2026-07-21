@@ -2239,6 +2239,12 @@ namespace
         }
         else if (record->id.type == EditorAssetType::MaterialPreset)
         {
+            if (ImGui::MenuItem("Edit Material..."))
+            {
+                action.type = ContentBrowserAction::Type::EditMaterial;
+                action.asset = record->id;
+            }
+            ImGui::Separator();
             std::string materialReason;
             const bool canAssignMaterial =
                 CanAssignMaterialAsset(*record, document, selectedObject, materialReason);
@@ -2498,6 +2504,12 @@ namespace
                     action.type = ContentBrowserAction::Type::EditMesh;
                     action.asset = record->id;
                 }
+                else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    record->id.type == EditorAssetType::MaterialPreset)
+                {
+                    action.type = ContentBrowserAction::Type::EditMaterial;
+                    action.asset = record->id;
+                }
             }
             DrawSourceRowThumbnail(thumb, icons);
             DrawAssetDragSource(*record, selectedAsset);
@@ -2632,6 +2644,14 @@ namespace
             {
                 selectedAsset = record->id;
                 action.type = ContentBrowserAction::Type::EditMesh;
+                action.asset = record->id;
+            }
+            else if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                record->id.type == EditorAssetType::MaterialPreset)
+            {
+                selectedAsset = record->id;
+                action.type = ContentBrowserAction::Type::EditMaterial;
                 action.asset = record->id;
             }
 

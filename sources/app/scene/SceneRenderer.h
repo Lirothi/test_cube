@@ -48,6 +48,13 @@ public:
         Skybox* skybox);
     void Reset();
 
+    // I2: drop the cached RT acceleration structures + bindless geometry-info so the next RT frame
+    // re-registers every mesh with its CURRENT material SRVs. Needed after a material's textures are
+    // rebuilt (the bindless caches albedo/MR SRVs per-mesh; a rebuild frees the old ones, leaving
+    // the geom-info table dangling -> DEVICE_HUNG). MUST be called with the GPU idle. No-op-cheap
+    // when RT is off (state is empty). Geometry is unchanged, but re-registering is simplest+safe.
+    void InvalidateRaytracing();
+
     // RT reflections for glass (S15): whether RT reflections are active this frame
     // (rtSupported && source==RT && AS not failed), and the current TLAS SRV — read
     // by the transparent pass / glass renderable. {0} when no TLAS is built.

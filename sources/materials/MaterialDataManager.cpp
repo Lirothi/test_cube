@@ -317,6 +317,11 @@ void MaterialDataManager::ClearCache()
     cache_.clear();
 }
 
+void MaterialDataManager::EvictCached(const std::string& name)
+{
+    cache_.erase(name);
+}
+
 void MaterialDataManager::ClearAll()
 {
     cache_.clear();

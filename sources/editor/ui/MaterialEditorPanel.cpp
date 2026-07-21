@@ -1,0 +1,368 @@
+#include "editor/ui/MaterialEditorPanel.h"
+#if WITH_EDITOR
+
+#include "editor/assets/AssetRegistry.h"
+#include "editor/ui/EditorDragDrop.h"
+
+#include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
+#include "editor/EditorContext.h"
+#include "editor/scene/EditorSceneDocument.h"
+#include "materials/MaterialDataManager.h"
+#include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
+#include "rendering/renderables/RenderableObjectBase.h"
+
+#include "imgui.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cfloat>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <sstream>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+std::vector<std::string> CollectTextures(const AssetRegistry& registry)
+{
+    std::vector<std::string> out;
+    for (const EditorAssetRecord& rec : registry.Assets())
+    {
+        if (rec.id.type == EditorAssetType::Texture) { out.push_back(rec.path); }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::string ToLowerCopy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+// Texture picker over ("(none)" + every registry texture) with a live search box at the top of the
+// dropdown (case-insensitive substring — the texture list is long). Edits doc_[key] in place: sets
+// the chosen path, or erases the key for "(none)". H2 resolves the .dds sibling at load, so either a
+// .dds or .png path works.
+void TexturePicker(const char* label, nlohmann::json& doc, const char* key,
+    const std::vector<std::string>& textures)
+{
+    // Which picker's dropdown is currently open (one at a time) + its filter text. Function-static
+    // so the open/close transition is visible across both BeginCombo branches.
+    static const void* openPicker = nullptr;
+    static char filter[128] = {};
+
+    const std::string cur = doc.contains(key) && doc[key].is_string()
+        ? doc[key].get<std::string>() : std::string();
+    if (ImGui::BeginCombo(label, cur.empty() ? "(none)" : cur.c_str()))
+    {
+        if (openPicker != key)  // just opened -> reset + focus the search box
+        {
+            openPicker = key;
+            filter[0] = '\0';
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##texfilter", "search...", filter, sizeof(filter));
+        ImGui::Separator();
+
+        const std::string needle = ToLowerCopy(filter);
+        if (ImGui::BeginChild("##texlist", ImVec2(0.0f, 220.0f), false))
+        {
+            if (needle.empty() && ImGui::Selectable("(none)", cur.empty())) { doc.erase(key); }
+            for (const std::string& t : textures)
+            {
+                if (!needle.empty() && ToLowerCopy(t).find(needle) == std::string::npos) { continue; }
+                if (ImGui::Selectable(t.c_str(), cur == t)) { doc[key] = t; }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::EndCombo();
+    }
+    else if (openPicker == key)
+    {
+        openPicker = nullptr; // this picker's dropdown closed -> re-focus/reset on next open
+    }
+
+    // Drop target: drag a texture from the content browser onto the field to assign it. The CB's
+    // asset payload carries the texture's key (= its path for texture records), which is exactly
+    // what the material file stores. Non-texture payloads are refused with a hint.
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                EditorDragDrop::kAssetPayloadType, ImGuiDragDropFlags_AcceptBeforeDelivery))
+        {
+            EditorAssetId id;
+            if (EditorDragDrop::DecodeAssetPayload(payload, id))
+            {
+                if (id.type != EditorAssetType::Texture)
+                {
+                    ImGui::SetTooltip("Only textures can be dropped here.");
+                }
+                else if (payload->IsDelivery())
+                {
+                    doc[key] = id.key;
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+}
+
+// Read an N-float array from doc[key] into `v`, filling from `def` where absent/short.
+void ReadFloats(const nlohmann::json& doc, const char* key, float* v, int n, const float* def)
+{
+    for (int i = 0; i < n; ++i) { v[i] = def[i]; }
+    const auto it = doc.find(key);
+    if (it != doc.end() && it->is_array())
+    {
+        for (int i = 0; i < n && i < static_cast<int>(it->size()); ++i)
+        {
+            if ((*it)[i].is_number()) { v[i] = (*it)[i].get<float>(); }
+        }
+    }
+}
+
+void WriteFloats(nlohmann::json& doc, const char* key, const float* v, int n)
+{
+    nlohmann::json arr = nlohmann::json::array();
+    for (int i = 0; i < n; ++i) { arr.push_back(v[i]); }
+    doc[key] = std::move(arr);
+}
+
+void CollectMaterialNames(const nlohmann::json& eff, std::vector<std::string>& out)
+{
+    if (eff.contains("material") && eff["material"].is_string())
+    {
+        out.push_back(eff["material"].get<std::string>());
+    }
+    if (eff.contains("materials") && eff["materials"].is_array())
+    {
+        for (const auto& e : eff["materials"])
+        {
+            if (e.is_string()) { out.push_back(e.get<std::string>()); }
+        }
+    }
+}
+
+} // namespace
+
+void MaterialEditorPanel::Open(const std::string& materialName, const std::string& filePath)
+{
+    name_ = materialName;
+    path_ = filePath;
+    doc_ = nlohmann::json::object();
+    loaded_ = false;
+    status_.clear();
+
+    std::ifstream f(path_);
+    if (f)
+    {
+        std::stringstream ss; ss << f.rdbuf();
+        nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
+        if (!j.is_discarded() && j.is_object()) { doc_ = std::move(j); loaded_ = true; }
+    }
+    if (!loaded_) { status_ = "Failed to load " + path_; }
+}
+
+void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open)
+{
+    if (!ImGui::Begin("Material Editor", open))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (name_.empty())
+    {
+        ImGui::TextDisabled("Double-click a material in the content browser to edit it.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("%s", name_.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", path_.c_str());
+    ImGui::Separator();
+
+    if (!loaded_)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", status_.c_str());
+        ImGui::End();
+        return;
+    }
+
+    const std::vector<std::string> textures = CollectTextures(registry);
+
+    ImGui::SeparatorText("Textures");
+    TexturePicker("Albedo", doc_, "albedo", textures);
+    TexturePicker("Metal/Rough", doc_, "mr", textures);
+    TexturePicker("Normal", doc_, "normal", textures);
+    TexturePicker("Emissive", doc_, "emissive", textures);
+
+    ImGui::SeparatorText("Parameters");
+    {
+        static const float kTintDef[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        float tint[4]; ReadFloats(doc_, "tint", tint, 4, kTintDef);
+        if (ImGui::ColorEdit4("Tint", tint)) { WriteFloats(doc_, "tint", tint, 4); }
+
+        static const float kMrDef[2] = { 0.0f, 0.35f };
+        float mr[2]; ReadFloats(doc_, "metalRough", mr, 2, kMrDef);
+        if (ImGui::DragFloat2("Metal / Rough", mr, 0.01f, 0.0f, 1.0f)) { WriteFloats(doc_, "metalRough", mr, 2); }
+
+        float ns = doc_.value("normalStrength", 1.0f);
+        if (ImGui::DragFloat("Normal Strength", &ns, 0.01f, 0.0f, 4.0f)) { doc_["normalStrength"] = ns; }
+
+        static const float kTosDef[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        float tos[4]; ReadFloats(doc_, "texOffsScale", tos, 4, kTosDef);
+        if (ImGui::DragFloat4("Tex Offset / Scale", tos, 0.01f)) { WriteFloats(doc_, "texOffsScale", tos, 4); }
+    }
+
+    ImGui::SeparatorText("Emissive");
+    {
+        static const float kEmDef[3] = { 0.0f, 0.0f, 0.0f };
+        float em[3]; ReadFloats(doc_, "emissiveColor", em, 3, kEmDef);
+        if (ImGui::ColorEdit3("Emissive Color", em)) { WriteFloats(doc_, "emissiveColor", em, 3); }
+        float es = doc_.value("emissiveStrength", 0.0f);
+        if (ImGui::DragFloat("Emissive Strength", &es, 0.05f, 0.0f, 100.0f)) { doc_["emissiveStrength"] = es; }
+    }
+
+    ImGui::SeparatorText("Surface flags");
+    {
+        bool alphaTest = doc_.value("alphaTest", false);
+        if (ImGui::Checkbox("Alpha test (masked)", &alphaTest)) { doc_["alphaTest"] = alphaTest; }
+        if (alphaTest)
+        {
+            float cutoff = doc_.value("alphaCutoff", 0.5f);
+            if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f)) { doc_["alphaCutoff"] = cutoff; }
+        }
+        bool twoSided = doc_.value("twoSided", false);
+        if (ImGui::Checkbox("Two-sided", &twoSided)) { doc_["twoSided"] = twoSided; }
+        bool normalIsRG = doc_.value("normalIsRG", true);
+        if (ImGui::Checkbox("Normal map is RG (BC5)", &normalIsRG)) { doc_["normalIsRG"] = normalIsRG; }
+        bool useTBN = doc_.value("useTBN", true);
+        if (ImGui::Checkbox("Use TBN", &useTBN)) { doc_["useTBN"] = useTBN; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Alpha test / two-sided / normal-RG change the slot's PSO — Save\n"
+                              "respawns referencing objects so it takes effect.");
+        }
+    }
+
+    ImGui::SeparatorText("Feature shader (optional)");
+    {
+        char buf[260] = {};
+        const std::string cur = doc_.value("shader", std::string());
+        std::snprintf(buf, sizeof(buf), "%s", cur.c_str());
+        if (ImGui::InputTextWithHint("##shader", "shaders/gbuffer.hlsl (default)", buf, sizeof(buf)))
+        {
+            if (buf[0] == '\0') { doc_.erase("shader"); }
+            else { doc_["shader"] = std::string(buf); }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Override the gbuffer shader for feature materials (e.g. vegetation\n"
+                              "sway). Must keep the PerObject b0 layout and ship a <name>_csm.hlsl\n"
+                              "shadow counterpart. Leave empty for the default.");
+        }
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Save & Apply"))
+    {
+        Save(ctx, registry);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert"))
+    {
+        Open(name_, path_); // reload from disk
+    }
+    if (!status_.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", status_.c_str());
+    }
+
+    ImGui::End();
+}
+
+int MaterialEditorPanel::ApplyToScene(EditorContext& ctx) const
+{
+    // Collect placed static meshes whose EFFECTIVE material (after mesh-asset + slot resolution) is
+    // this one. Resolving via ResolveMeshAsset means both inline `material`/`materials` overrides
+    // AND materials inherited from a `.mesh.json` are covered.
+    std::vector<EditorObjectId> targets;
+    for (const EditorObject& obj : ctx.document.Objects())
+    {
+        if (obj.type != "staticMesh") { continue; }
+        const nlohmann::json eff =
+            SceneObjectFactory::ResolveMeshAsset(EditorSceneDocument::ObjectToJson(obj));
+        std::vector<std::string> names;
+        CollectMaterialNames(eff, names);
+        if (std::find(names.begin(), names.end(), name_) != names.end())
+        {
+            targets.push_back(obj.id);
+        }
+    }
+    if (targets.empty()) { return 0; }
+
+    // One GPU sync for the whole batch. The cache was already evicted, so each respawn's
+    // GetOrCreate rebuilds this material fresh (new textures / params / PSO flags).
+    ctx.renderer.WaitForPreviousFrame();
+    UploadBatch uploads;
+    if (!uploads.Begin(&ctx.renderer)) { return 0; }
+
+    int applied = 0;
+    for (const EditorObjectId id : targets)
+    {
+        if (ctx.scene.FindEditorObject(id.value) == nullptr) { continue; } // disabled -> no runtime
+        const EditorObject* obj = ctx.document.Find(id);
+        if (!obj) { continue; }
+        const nlohmann::json json = EditorSceneDocument::ObjectToJson(*obj);
+        std::unique_ptr<RenderableObjectBase> runtime = SceneObjectFactory::CreateStaticMeshFromJson(json);
+        if (!runtime) { continue; }
+        ctx.scene.RemoveEditorObject(id.value);
+        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime));
+        ++applied;
+    }
+    uploads.SubmitAndWait(&ctx.renderer);
+
+    // The rebuilt material has NEW albedo/MR SRVs; the RT bindless caches the old ones per-mesh,
+    // so drop the RT caches (GPU is idle after SubmitAndWait) — next RT frame re-registers with the
+    // current SRVs. Without this, RT reflections read freed descriptors -> DEVICE_HUNG on re-apply.
+    ctx.scene.InvalidateRaytracing();
+    return applied;
+}
+
+void MaterialEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
+{
+    std::ofstream out(path_, std::ios::trunc);
+    if (!out)
+    {
+        status_ = "Save FAILED (not writable): " + path_;
+        return;
+    }
+    out << doc_.dump(2) << "\n";
+    out.close();
+
+    // Re-register the definition + drop the stale built MaterialData, THEN respawn users so their
+    // GetOrCreate rebuilds from the new file. Order matters: register -> evict -> respawn.
+    MaterialDataManager* mgr = ctx.renderer.GetMaterialDataManager();
+    if (mgr)
+    {
+        mgr->LoadPresetFromFile(std::wstring(path_.begin(), path_.end()));
+        mgr->EvictCached(name_);
+    }
+    registry.Refresh(); // re-index for CB thumbnails/badges
+
+    const int applied = ApplyToScene(ctx);
+    status_ = "Saved — updated " + std::to_string(applied) + " object(s).";
+}
+
+#endif // WITH_EDITOR

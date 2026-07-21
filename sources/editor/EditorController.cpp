@@ -2514,6 +2514,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     showMeshEditor_ = true;
                     meshEditor_.Open(asset->path);
                 }
+                else if (action.type == ContentBrowserAction::Type::EditMaterial)
+                {
+                    // I2: material id.key is the NAME (file stem); asset->path is the file.
+                    showMaterialEditor_ = true;
+                    materialEditor_.Open(asset->id.key, asset->path);
+                }
                 else if (action.type == ContentBrowserAction::Type::SpawnObject)
                 {
                     const IEditorObjectFactory* factory = extensions_.FindObjectFactory(action.objectFactoryType);
@@ -2576,6 +2582,18 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 // spawnScale/texOffsScale). Opened by double-clicking the mesh asset in the browser.
                 // Save live-applies to placed instances via panelCtx (scene/document/renderer).
                 meshEditor_.Draw(panelCtx, assetRegistry_, &showMeshEditor_);
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "materialEditor",
+            "Material Editor",
+            &showMaterialEditor_,
+            true,
+            [this](EditorContext& panelCtx)
+            {
+                // I2: edit a data/materials/<name>.json (textures/params/flags/shader). Save
+                // re-registers the preset, evicts its cache, and respawns referencing objects.
+                materialEditor_.Draw(panelCtx, assetRegistry_, &showMaterialEditor_);
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -3423,6 +3441,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     drawPanel("commandHistory");
     drawPanel("importAssets");
     drawPanel("meshEditor");
+    drawPanel("materialEditor");
     drawPanel("levelErrors");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)

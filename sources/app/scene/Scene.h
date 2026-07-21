@@ -40,6 +40,10 @@ public:
     // RT reflections for glass (S15): forwarded from the scene renderer so the
     // transparent pass can bind the TLAS + gate ray tracing.
     bool IsRtReflectActive() const { return sceneRenderer_.IsRtReflectActive(); }
+    // I2: after a material's GPU textures are rebuilt, drop the RT acceleration/bindless caches so
+    // they re-register with the new SRVs (else the geom-info table dangles -> DEVICE_HUNG). Call
+    // with the GPU idle. Cheap no-op when RT is off.
+    void InvalidateRaytracing() { sceneRenderer_.InvalidateRaytracing(); }
     D3D12_CPU_DESCRIPTOR_HANDLE GetRtTlasSrv(UINT frameIndex) const { return sceneRenderer_.GetTlasSrvCpu(frameIndex); }
 
     const mat4& GetCascadeView(size_t index) const;
