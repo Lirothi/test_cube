@@ -4,6 +4,9 @@
     <Filter Include="sources">
       <UniqueIdentifier>{2f945f3e-b723-4214-859a-7577c42810bf}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\assets">
+      <UniqueIdentifier>{6966204d-e4ba-4b50-95f6-f5b005b4dbee}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app">
       <UniqueIdentifier>{5aff9bc4-3b70-4d19-9d0a-bbee8fd08061}</UniqueIdentifier>
     </Filter>
@@ -102,6 +105,9 @@
     </Filter>
     <Filter Include="third_party">
       <UniqueIdentifier>{7a300746-b1e1-41ad-bbd4-6f265c38c41a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\DirectXTex">
+      <UniqueIdentifier>{8d8fc9c2-d9ef-4c86-be1d-2eff95b59bdb}</UniqueIdentifier>
     </Filter>
     <Filter Include="third_party\cgltf">
       <UniqueIdentifier>{ca3db394-f78d-43e5-b116-f5e38602972a}</UniqueIdentifier>
@@ -600,6 +606,75 @@
     <ClCompile Include="third_party\meshoptimizer\src\vfetchoptimizer.cpp">
       <Filter>third_party\meshoptimizer\src</Filter>
     </ClCompile>
+    <ClCompile Include="sources/assets/AssetImporter.cpp">
+      <Filter>sources\assets</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetMeshAssetCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/MaterialEditorPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC4BC5.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BC6HBC7.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\BCDirectCompute.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexCompress.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexCompressGPU.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexConvert.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexDDS.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexFlipRotate.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexHDR.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexImage.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexMipmaps.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexMisc.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexNormalMaps.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexPMAlpha.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexResize.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexTGA.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexUtil.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\DirectXTex\DirectXTexWIC.cpp">
+      <Filter>third_party\DirectXTex</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/app/AppController.h">
@@ -1058,6 +1133,21 @@
     <ClInclude Include="third_party\imgui\imstb_truetype.h">
       <Filter>third_party\imgui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/assets/AssetImporter.h">
+      <Filter>sources\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetMeshAssetCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/MaterialEditorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/MeshEditorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/Screenshot.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl">
@@ -1300,8 +1390,25 @@
     <None Include="third_party\imgui\LICENSE.txt">
       <Filter>third_party\imgui</Filter>
     </None>
+    <None Include="shaders\particle_common.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\particle_sort_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\particle_spawn_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\particle_update_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\particles.hlsl">
+      <Filter>shaders</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <Natvis Include="third_party\robin_hood.natvis" />
+    <Natvis Include="third_party\robin_hood.natvis">
+      <Filter>third_party</Filter>
+    </Natvis>
   </ItemGroup>
 </Project>
