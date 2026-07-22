@@ -43,6 +43,13 @@ public:
 
 private:
     void Save(EditorContext& ctx, AssetRegistry& registry);
+
+    // Per-slot wind foliage weight, stored in the document as "windFoliage": [w0, w1, ...].
+    // Reading a slot with no entry yet reports the same default the runtime uses (the slot's
+    // alpha-mask flag is not visible here, so 0 = woody, and the runtime fallback still applies
+    // while the array is absent). Writing grows the array to the slot count.
+    float WindFoliageForSlot(size_t slot) const;
+    void SetWindFoliageForSlot(size_t slot, float value);
     // Live-apply: respawn every placed object that references this mesh asset (and doesn't override
     // the changed key) so the edit shows immediately. Returns the number of instances updated.
     int  ApplyToScene(EditorContext& ctx) const;

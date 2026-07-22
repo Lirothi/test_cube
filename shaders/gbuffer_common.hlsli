@@ -28,7 +28,9 @@ struct InstancePerObject
     uint objectId;
     float3 emissive; // D: premultiplied color*strength
     float windStrength; // W3: per-object foliage sway strength (0 = rigid)
-    float3 _pad0; // pad to 224 bytes (must match render::InstancePerObject + the shadow mirror)
+    float windInvHeight; // 1 / mesh height (normalises the bend profile)
+    float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
+    float windTrunkStiff; // per-object; divides the main bend
 };
 
 #ifndef GBUFFER_SKIP_PEROBJECT
@@ -46,6 +48,9 @@ cbuffer PerObject : register(b0)
     uint objectId;
     float3 emissive; // D: premultiplied color*strength, added to RT2
     float windStrength; // W3: per-object foliage sway strength (0 = rigid); read by the VS in W4
+    float windInvHeight; // 1 / mesh height (normalises the bend profile)
+    float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
+    float windTrunkStiff; // per-object; divides the main bend
 };
 #else
 // Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).
@@ -81,10 +86,12 @@ cbuffer PerView : register(b1)
 // position and windPrevTime for the motion-vector prev position. The shadow VS in
 // shadow_indirect_csm.hlsl declares its own PerView copy and mirrors this helper — the two MUST
 // stay identical or the shadow detaches from the tree.
-inline float3 ApplyWindWS(float3 objPos, float4x4 w, float windStrengthValue,
+inline float3 ApplyWindWS(float3 objPos, float3 posWS, float4x4 w, float windStrengthValue,
+                          float invHeightValue, float foliageValue, float trunkStiffValue,
                           float gustMulValue, float t)
 {
-    return WindOffset(objPos, float3(w._41, w._42, w._43), windStrengthValue,
+    return WindOffset(objPos, posWS, float3(w._41, w._42, w._43), windStrengthValue,
+                      invHeightValue, foliageValue, trunkStiffValue,
                       windDirXZ, windSwayAmp, windSwayFreq, gustMulValue, t);
 }
 
@@ -153,7 +160,10 @@ inline VSOut BaseVS(float3 pos,
                     float4 tangent,
                     float2 uv,
                     uint objectIdValue,
-                    float windStrengthValue)
+                    float windStrengthValue,
+                    float windInvHeightValue,
+                    float windFoliageValue,
+                    float windTrunkStiffValue)
 {
     VSOut o;
     float4 posH = float4(pos, 1.0f);
@@ -162,11 +172,14 @@ inline VSOut BaseVS(float3 pos,
     // submesh/slot (and, in W5, the shadow) bends in lockstep. The SAME offset is applied to the
     // prev world position with windPrevTime, so DLSS/TAA motion vectors track the sway (else the
     // moving leaves smear). windStrengthValue 0 => zero offset => byte-identical to no-wind.
+    // The offset is a function of the UN-swayed world position, so read it before adding.
     float4 worldPos = mul(posH, world);
-    worldPos.xyz += ApplyWindWS(pos, world, windStrengthValue, windGustMul, windTime);
+    worldPos.xyz += ApplyWindWS(pos, worldPos.xyz, world, windStrengthValue, windInvHeightValue,
+                                windFoliageValue, windTrunkStiffValue, windGustMul, windTime);
 
     float4 prevWorldPos = mul(posH, prevWorld);
-    prevWorldPos.xyz += ApplyWindWS(pos, prevWorld, windStrengthValue,
+    prevWorldPos.xyz += ApplyWindWS(pos, prevWorldPos.xyz, prevWorld, windStrengthValue,
+                                    windInvHeightValue, windFoliageValue, windTrunkStiffValue,
                                     windPrevGustMul, windPrevTime);
 
     o.H = mul(worldPos, viewProj);

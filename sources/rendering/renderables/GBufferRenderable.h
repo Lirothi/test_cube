@@ -16,6 +16,7 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     GBufferRenderable* AsGBufferRenderable() override { return this; }
+    const GBufferRenderable* AsGBufferRenderable() const override { return this; }
 
     // Slot-0 ("legacy single material") accessors — the factory/editor write these.
     MaterialParams& MaterialParamsRef() { return matParamses_[0]; }
@@ -43,6 +44,27 @@ public:
     // so all submeshes of a tree sway in lockstep (it is NOT a per-slot override).
     void SetWindStrength(float w) { windStrength_ = w; }
     float GetWindStrength() const { return windStrength_; }
+
+    // Per-ASSET wind tuning (mesh.json, overridable per object in the level JSON).
+    // windTrunkStiffness divides the main bend: >1 stiffer trunk, <1 whippier.
+    // windFoliage is one weight PER MATERIAL SLOT (0 = woody, 1 = leaves). Left empty, each slot
+    // falls back to its alpha-mask flag - right for cutout leaves, but it misses OPAQUE foliage
+    // slots (the staged palm's frond bases are opaque), which is why the explicit list exists.
+    void SetWindTrunkStiffness(float s) { windTrunkStiffness_ = s; }
+    float GetWindTrunkStiffness() const { return windTrunkStiffness_; }
+    void SetWindFoliageWeights(std::vector<float> w) { windFoliageWeights_ = std::move(w); }
+    // Resolved foliage weight of a material slot (slot 0 when the index is out of range).
+    // ShadowGpuData uses this to give each per-slot caster id its own weight.
+    float FoliageForSlot(size_t slot) const
+    {
+        if (matParamses_.empty()) { return 0.0f; }
+        return matParamses_[slot < matParamses_.size() ? slot : 0].windFoliage;
+    }
+
+    // 1 / mesh height in OBJECT space, from the mesh's local bounds (height = bounds.max.y, since
+    // the bend pivots about the object origin). Normalises the bend profile so each asset bends
+    // over its OWN height. 0 when there is no usable mesh => no bend, the safe default.
+    float WindInvHeight() const;
 
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
 
@@ -197,6 +219,8 @@ private:
     uint32_t currentDrawSlot_ = 0;
     uint32_t materialParamOverrideMask_ = 0;
     float windStrength_ = 0.0f; // W3: per-object sway strength, applied to every slot at Init
+    float windTrunkStiffness_ = 1.0f;       // per-object; divides the main bend
+    std::vector<float> windFoliageWeights_; // per-slot; empty => derive from alphaMask
 
     // Instanced (cbuffer-array) variants of the gbuffer + shadow materials, built once at
     // Init when this object's graphics shader has an instanced counterpart. Shared/cached

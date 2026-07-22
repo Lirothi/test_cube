@@ -26,9 +26,13 @@ static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
 //
 // W3 grew this 208 -> 224 to add `windStrength` (the struct was full — the old free `_pad0` had
 // become `mrMultiply`). The stride is SHARED with every shadow reader, so this layout MUST stay in
-// lockstep with the HLSL `InstancePerObject` in gbuffer_common.hlsli AND the mirror in
-// shadow_indirect_csm.hlsl (which aliases the gbuffer-only `emissive`+pad tail). Miss one and shadow
-// draws silently corrupt (the B3 stride lesson).
+// lockstep with FOUR mirrors: the HLSL `InstancePerObject` in gbuffer_common.hlsli, the `PerObject`
+// cbuffer next to it, the copy in shadow_indirect_csm.hlsl, and the one in shadow_gi_scatter_cs.hlsl
+// (the GPU scatter — it was missed once and left the GI ids' tail uninitialised, which scrambled
+// every GPU-instanced shadow). Miss one and shadow draws silently corrupt (the B3 stride lesson).
+//
+// Tier 0 wind added windInvHeight/windInvRadius INSIDE the existing 12-byte pad, so the 224-byte
+// stride is unchanged and none of the ring/mega-buffer sizing moves.
 struct alignas(16) InstancePerObject
 {
     DirectX::XMFLOAT4X4 world;        // 0
@@ -42,7 +46,9 @@ struct alignas(16) InstancePerObject
     uint32_t            objectId;     // 192
     DirectX::XMFLOAT3   emissive;     // 196 (D: premultiplied color*strength)
     float               windStrength; // 208 (W3: per-object foliage sway strength; 0 = rigid)
-    DirectX::XMFLOAT3   _pad0;         // 212 (pad to the 16-byte boundary)
+    float               windInvHeight; // 212 (1 / mesh height; normalises the bend profile)
+    float               windFoliage;   // 216 (PER-SLOT 0..1: 0 = trunk, 1 = leaves)
+    float               windTrunkStiff;// 220 (per-object; divides the main bend)
 };                                    // 224
 static_assert(sizeof(InstancePerObject) == 224,
     "InstancePerObject must match the HLSL cbuffer layout (224 bytes)");
@@ -60,7 +66,9 @@ struct alignas(16) InstanceSlotParams
     DirectX::XMFLOAT4 texOffsScale; // 32
     DirectX::XMFLOAT4 texFlags;     // 48
     DirectX::XMFLOAT3 emissive;     // 64 (D: premultiplied color*strength)
-    float             _pad1;        // 76
+    float             windFoliage;  // 76 (per-slot foliage weight; the multi-slot instanced VS
+                                    //     reads wind foliage from here, everything else from
+                                    //     InstancePerObject)
     MaterialSurfaceParamsGpu surface; // 80
 };                                  // 112
 static_assert(sizeof(InstanceSlotParams) == 112,

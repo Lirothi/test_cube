@@ -56,8 +56,15 @@ struct WindState
         prevGustMul = gustMul;
         time = clockSeconds;
 
+        // windDirXZ is the direction the wind BLOWS TOWARD, i.e. the direction the waves visibly
+        // travel — which is the NEGATION of the ocean's (cos,sin) heading. Measured, not assumed:
+        // the ocean spectrum peaks for wave vectors k along +(cos,sin), but the time evolution uses
+        // Tessendorf's exp(+i*omega*t), so those waves propagate toward -k. Verified on screen at two
+        // headings (dir 90 -> waves travel -Z; dir 0 -> waves travel -X). Without this negation the
+        // foliage leans INTO the visible wind, 180 degrees off the water.
+        // `directionDeg` itself is left untouched — it is shared verbatim with the ocean.
         const float rad = directionDeg * Math::DEG2RAD;
-        windDirXZ = Math::float2(std::cos(rad), std::sin(rad)); // matches the ocean's degrees->vector
+        windDirXZ = Math::float2(-std::cos(rad), -std::sin(rad));
 
         swayAmplitude = foliageSwayMeters * strength;
         const float gustAmp = gustAmplitude > 0.0f ? gustAmplitude : 0.0f;
@@ -65,16 +72,19 @@ struct WindState
         gustMul = 1.0f + gustAmp * GustNoise(time * gustFreq, gustSeed);
     }
 
-    // W5: worst-case horizontal displacement (metres) WindOffset can produce for a caster at
-    // windStrength 1. The shader's sway peaks at |sin(p) + 0.5*sin(...)| <= 1.5 and the
-    // perpendicular flutter adds up to 0.15 of the same amplitude, all scaled by the gust
-    // envelope's ceiling (1 + gustAmplitude, once W6 turns gusts on). Used to pad shadow caster
-    // bounds so the VSM per-page / Rung-0 cull never clips a swaying frond tip.
+    // W5: worst-case displacement (metres) WindOffset can produce for a caster at windStrength 1.
+    // Used to pad shadow caster bounds so the VSM per-page / Rung-0 cull never clips a swaying frond
+    // tip. MUST track the shader: the Tier 0 main bend peaks at kWindBendPeak (= kWindBendSteady +
+    // 1.5 * kWindBendOsc = 1.525 in wind.hlsli) times the height profile, whose maximum is 1 at the
+    // top; the leaf flutter adds kWindFlutterAmp * 1.5 on top (vertical bob plus half that
+    // laterally). Everything scales with the gust envelope's ceiling (1 + gustAmplitude).
     float MaxSwayExtentMeters() const
     {
-        constexpr float kMaxSwayFactor = 1.65f; // 1.5 (layered sines) + 0.15 (flutter)
+        constexpr float kBendPeak    = 1.525f; // == kWindBendPeak in shaders/wind.hlsli
+        constexpr float kStreamPeak  = 0.9f;   // == kWindFoliageStream (leaves stream further)
+        constexpr float kFlutterPeak = 0.225f; // == kWindFlutterAmp * 1.5
         const float gustCeil = 1.0f + (gustAmplitude > 0.0f ? gustAmplitude : 0.0f);
-        return swayAmplitude * gustCeil * kMaxSwayFactor;
+        return swayAmplitude * gustCeil * (kBendPeak * (1.0f + kStreamPeak) + kFlutterPeak);
     }
 };
 

@@ -226,6 +226,26 @@ namespace SceneObjectFactory
             mesh.SetWindStrength(o["windStrength"].get<float>());
         }
 
+        // Per-ASSET wind tuning. These normally live in models/<name>.mesh.json and reach us here
+        // because ResolveMeshAsset folds every asset key the object does not already carry, so a
+        // level object can still override either one.
+        if (o.contains("windTrunkStiffness") && o["windTrunkStiffness"].is_number())
+        {
+            mesh.SetWindTrunkStiffness(o["windTrunkStiffness"].get<float>());
+        }
+        if (o.contains("windFoliage") && o["windFoliage"].is_array())
+        {
+            // One weight per material slot (0 = woody, 1 = leaves). Slots past the end fall back to
+            // the alpha-mask heuristic in ResolveMaterialSlots.
+            std::vector<float> weights;
+            weights.reserve(o["windFoliage"].size());
+            for (const auto& v : o["windFoliage"])
+            {
+                weights.push_back(v.is_number() ? v.get<float>() : 0.0f);
+            }
+            mesh.SetWindFoliageWeights(std::move(weights));
+        }
+
         if (o.contains("renderLayer"))
         {
             mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));

@@ -18,6 +18,10 @@ cbuffer ScatterParams : register(b0)
     uint   gCount;         // instance count
     float  gWindStrength;  // W5: the object's foliage sway strength (0 = rigid), same value gbuffer_inst.hlsl passes
     float  gSwayPad;       // W5: metres to grow the world AABB on X/Z for the sway (0 when rigid)
+    float  gWindInvHeight; // 1 / mesh height
+    float  gWindFoliage;   // GI objects are one mesh -> one foliage weight for the whole cloud
+    float  gWindTrunkStiff;
+    float  _pad1;
     float4 gAabbCenter;  // mesh-local AABB center (w unused)
     float4 gAabbExtent;  // mesh-local AABB half-extents (w unused)
     row_major float4x4 gObjectWorld; // object model matrix, folded onto each instance's local world
@@ -50,8 +54,10 @@ struct InstancePerObject
     float4   texFlags;
     uint     objectId;
     uint3    _instPad1;
-    float    windStrength; // 208
-    float3   _instPad2;    // pad to 224
+    float    windStrength;  // 208
+    float    windInvHeight;  // 212
+    float    windFoliage;    // 216
+    float    windTrunkStiff; // 220
 };
 // Matches render::CasterBounds (32 bytes): world center + radius, world half-extents.
 struct CasterBounds
@@ -80,6 +86,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // W5: the indirect shadow VS sways by this. It is NOT written anywhere else for GI ids, so
     // leaving it out feeds the sway uninitialised buffer memory (= scrambled GI shadows).
     gInst[dst].windStrength = gWindStrength;
+    gInst[dst].windInvHeight = gWindInvHeight;
+    gInst[dst].windFoliage = gWindFoliage;
+    gInst[dst].windTrunkStiff = gWindTrunkStiff;
 
     // Conservative world AABB from the mesh-local AABB under `world` (row-vector convention:
     // p' = mul(float4(p,1), world); extents map through abs of the upper-left 3x3).
@@ -90,6 +99,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // W5: grow by the max sway on the horizontal axes (mirrors ShadowGpuData::FillBounds for the
     // static casters) so the per-page / per-view cull can't clip a swaying tip. 0 when rigid.
     eW.x += gSwayPad;
+    eW.y += gSwayPad; // Tier 0: the arc bend dips the crown and the leaf flutter bobs vertically
     eW.z += gSwayPad;
     gBounds[dst].center = float4(cW, length(eW));
     gBounds[dst].halfExtents = float4(eW, 0.0f);

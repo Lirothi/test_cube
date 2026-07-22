@@ -29,7 +29,7 @@ cbuffer SlotParams : register(b2)
     float4 slotTexOffsScale;
     float4 slotTexFlags;
     float3 slotEmissive; // D: premultiplied color*strength
-    float _slotPad1;
+    float slotWindFoliage; // per-slot foliage weight (0 = trunk, 1 = leaves)
     float3 slotSubsurfaceColor;
     float slotTransmissionStrength;
     float slotAmbientOcclusion;
@@ -81,7 +81,16 @@ struct VSOutInst
 VSOutInst VSMain(VSInInst i)
 {
     InstancePerObject d = inst[i.IID];
-    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId, d.windStrength);
+    // Foliage is a PER-SLOT weight. The multi-slot variant binds the slot CB (b2) and takes it from
+    // there; the single-slot variant has no b2, and for a one-slot object the per-instance value IS
+    // that slot's weight.
+#if INSTCB_SLOT_PARAMS
+    const float foliageW = slotWindFoliage;
+#else
+    const float foliageW = d.windFoliage;
+#endif
+    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId,
+                     d.windStrength, d.windInvHeight, foliageW, d.windTrunkStiff);
 
     VSOutInst o;
     o.H = b.H;

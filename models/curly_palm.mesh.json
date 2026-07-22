@@ -11,5 +11,12 @@
     1
   ],
   "texOffsScale": null,
-  "windStrength": 1.0
+  "windFoliage": [
+    0.0,
+    1.0,
+    0.0,
+    1.0
+  ],
+  "windStrength": 1.0,
+  "windTrunkStiffness": 0.8
 }

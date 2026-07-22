@@ -27,7 +27,8 @@ cbuffer SurfaceParams : register(b2)
 [RootSignature(GBUFFER_RS)]
 VSOut VSMain(VSIn i)
 {
-    return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV, objectId, windStrength);
+    return BaseVS(i.P, world, prevWorld, viewProj, i.N, i.T, i.UV, objectId,
+                  windStrength, windInvHeight, windFoliage, windTrunkStiff);
 }
 
 [RootSignature(GBUFFER_RS)]

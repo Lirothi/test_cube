@@ -60,6 +60,12 @@
         1.0,
         1.0
       ],
+      "texOffsScale": [
+        0.0,
+        0.0,
+        20.0,
+        20.0
+      ],
       "type": "staticMesh"
     },
     {
@@ -268,7 +274,7 @@
       "name": "staticMesh #27 Copy Copy",
       "position": [
         37.568424224853516,
-        2.4676647186279297,
+        2.062107563018799,
         62.69271469116211
       ],
       "rotationDeg": [
@@ -318,13 +324,13 @@
   "spotLights": [],
   "wind": {
     "directionDeg": 90.0,
-    "foliageSwayMeters": 0.5,
+    "foliageSwayMeters": 1.5,
     "gust": {
-      "amplitude": 0.5,
+      "amplitude": 0.0,
       "frequencyHz": 0.15,
       "seed": 3
     },
     "strength": 1.0,
-    "swayFrequency": 0.8999999761581421
+    "swayFrequency": 1.2000000476837158
   }
 }

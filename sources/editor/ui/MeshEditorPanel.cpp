@@ -549,6 +549,23 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "Tangents are regenerated from the resulting normals and UVs.");
         }
 
+        // Per-slot wind foliage weight. Geometry alone cannot tell a frond hanging down against the
+        // trunk from the trunk itself, so this is authored rather than inferred; unauthored slots
+        // fall back to the slot's alpha-mask flag, which misses OPAQUE foliage (frond bases).
+        {
+            float foliage = WindFoliageForSlot(i);
+            if (ImGui::SliderFloat("Wind foliage", &foliage, 0.0f, 1.0f, "%.2f"))
+            {
+                SetWindFoliageForSlot(i, foliage);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("How much this submesh behaves as leaves in the wind.\n"
+                                  "0 = woody (trunk/branch): only the main bend.\n"
+                                  "1 = foliage: streams downwind and flutters on top of the bend.");
+            }
+        }
+
         ImGui::PopID();
     }
 
@@ -580,6 +597,35 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         if (ImGui::DragFloat("Spawn Scale", &scale, 0.001f, 0.0001f, 10000.0f, "%.4f"))
         {
             doc_["spawnScale"] = scale;
+        }
+    }
+
+    // Wind (asset-wide). Per-slot foliage weights live next to each material slot above.
+    ImGui::Spacing();
+    ImGui::SeparatorText("Wind");
+    {
+        float strength = doc_.value("windStrength", 0.0f);
+        if (ImGui::SliderFloat("Wind Strength", &strength, 0.0f, 1.0f, "%.2f"))
+        {
+            if (strength <= 0.0f) { doc_.erase("windStrength"); } // absent == rigid
+            else { doc_["windStrength"] = strength; }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Master sway amount for this asset. 0 = rigid (the field is dropped\n"
+                              "from the file, so the asset is byte-identical to a pre-wind one).");
+        }
+
+        float stiffness = doc_.value("windTrunkStiffness", 1.0f);
+        if (ImGui::SliderFloat("Trunk Stiffness", &stiffness, 0.1f, 4.0f, "%.2f"))
+        {
+            if (std::abs(stiffness - 1.0f) < 1.0e-4f) { doc_.erase("windTrunkStiffness"); }
+            else { doc_["windTrunkStiffness"] = stiffness; }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Divides the main bend: >1 stiffer woody trunk, <1 whippier stem.\n"
+                              "Only affects the trunk-driven bend, not the foliage streaming.");
         }
     }
 
@@ -666,6 +712,30 @@ int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
         ctx.scene.InvalidateRaytracing();
     }
     return applied;
+}
+
+float MeshEditorPanel::WindFoliageForSlot(size_t slot) const
+{
+    const auto it = doc_.find("windFoliage");
+    if (it == doc_.end() || !it->is_array() || slot >= it->size()) { return 0.0f; }
+    const auto& v = (*it)[slot];
+    return v.is_number() ? v.get<float>() : 0.0f;
+}
+
+void MeshEditorPanel::SetWindFoliageForSlot(size_t slot, float value)
+{
+    // Keep the array exactly slot-count long so entry i always addresses submesh i; a short array
+    // would silently shift every weight past the gap onto the wrong submesh.
+    std::vector<float> weights(slots_.size(), 0.0f);
+    for (size_t i = 0; i < weights.size(); ++i) { weights[i] = WindFoliageForSlot(i); }
+    if (slot < weights.size()) { weights[slot] = value; }
+
+    bool allZero = true;
+    for (float w : weights) { if (w > 0.0f) { allZero = false; break; } }
+    // All-zero means "no foliage authored" — drop the key so the runtime's alpha-mask default
+    // applies again instead of pinning every slot to woody.
+    if (allZero) { doc_.erase("windFoliage"); }
+    else { doc_["windFoliage"] = weights; }
 }
 
 void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)

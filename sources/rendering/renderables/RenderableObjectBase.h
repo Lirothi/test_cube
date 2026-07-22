@@ -159,6 +159,7 @@ public:
     virtual RenderableObject* AsRenderableObject() { return nullptr; }
     virtual const RenderableObject* AsRenderableObject() const { return nullptr; }
     virtual GBufferRenderable* AsGBufferRenderable() { return nullptr; }
+    virtual const GBufferRenderable* AsGBufferRenderable() const { return nullptr; }
     virtual TransparentStaticMesh* AsTransparentStaticMesh() { return nullptr; }
     virtual OceanRenderable* AsOceanRenderable() { return nullptr; }
     virtual ParticleEmitterObject* AsParticleEmitter() { return nullptr; } // E3: editor inspector

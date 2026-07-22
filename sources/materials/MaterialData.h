@@ -68,6 +68,9 @@ struct MaterialParams
     // every slot in GBufferRenderable::ResolveMaterialSlots (submesh sync). Read by the gbuffer VS
     // (W4) via the b0 PerObject CB / InstancePerObject; the ocean-force analogue for foliage.
     float  windStrength     = 0.f;
+    // Per-SLOT foliage weight (0 = woody trunk, 1 = leaves). Authored per asset via mesh.json
+    // "windFoliage": [..] (one entry per material slot); defaults to the slot's alpha-mask flag.
+    float  windFoliage      = 0.f;
 
     float3 EmissiveLinear() const
     {

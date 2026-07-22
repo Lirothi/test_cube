@@ -131,7 +131,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             sp->texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
             const auto e = p.EmissiveLinear();
             sp->emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
-            sp->_pad1 = 0.0f;
+            sp->windFoliage = p.windFoliage; // per-slot: the multi-slot instanced VS reads it here
             const MaterialData* slotData = leadInst_->InstanceSlotData(slot);
             const MaterialSurfaceParams& surface = slotData ? slotData->surfaceParams : surfaceDefaults;
             sp->surface.subsurfaceColor = DirectX::XMFLOAT3(

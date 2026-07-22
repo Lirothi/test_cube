@@ -18,7 +18,11 @@ VSOutD VSMain(VSInInst i)
     // unlike the non-instanced b0 which UpdateShadowCB has to populate explicitly.
     const float4x4 w = inst[i.IID].world;
     float4 wp = mul(float4(i.P, 1.0f), w);
-    wp.xyz += ApplyWindWS(i.P, w, inst[i.IID].windStrength, windGustMul, windTime);
+    // NOTE: this CPU-fallback path has no b2, so foliage falls back to the object's slot-0 weight.
+    // The MAIN bend (the large motion) is per-object and stays in exact lockstep with the gbuffer;
+    // only the small leaf detail can differ here, and indirect shadows are the default path anyway.
+    wp.xyz += ApplyWindWS(i.P, wp.xyz, w, inst[i.IID].windStrength, inst[i.IID].windInvHeight,
+                          inst[i.IID].windFoliage, inst[i.IID].windTrunkStiff, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;
 }
