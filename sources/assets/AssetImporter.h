@@ -20,6 +20,8 @@ struct ImportOptions
     bool        useGpu = true;      // H5: BC6H/BC7 on a D3D11 compute device (CPU fallback if absent)
     bool        flipGreen = false;  // invert normal-map green channel (OpenGL <-> DirectX Y)
     bool        bc5Normal = false;  // encode normal maps as BC5 (RG) instead of BC7 (RGB)
+    bool        centerNormals = false; // re-center a normal map whose flat baseline strays from (128,128)
+                                       // (a "purple cast"/DC lean that skews lighting); threshold-gated
     int         skyboxFaceSize = 1024; // cube face edge for --skybox equirect -> cubemap
     std::string logPath = "asset_import.log";
 

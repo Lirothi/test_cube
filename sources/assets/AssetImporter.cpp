@@ -347,6 +347,55 @@ bool FinishTextureDds(ScratchImage work, bool srgb, DXGI_FORMAT target, const Im
     return ok;
 }
 
+// Re-center a tangent-space normal map that carries a baked-in DC "lean" — a purple cast where the
+// flat baseline strays from (128,128) instead of pointing straight up. A uniform lean skews lighting
+// (badly under grazing lights: it shoves the lit disc off-center), so shift tangent XY back to
+// neutral and re-normalize each texel, keeping the surface detail. Threshold-gated: already-neutral
+// maps (like a good Poly Haven set) are left untouched. Operates on the pre-mip R8G8B8A8 image.
+static void CenterNormalMap(ScratchImage& work, Log& log, const std::string& label)
+{
+    const Image* img = work.GetImage(0, 0, 0);
+    if (!img || img->format != DXGI_FORMAT_R8G8B8A8_UNORM) { return; }
+    const size_t px = img->width * img->height;
+    if (px == 0) { return; }
+    double sumR = 0.0, sumG = 0.0;
+    for (size_t y = 0; y < img->height; ++y)
+    {
+        const uint8_t* row = img->pixels + y * img->rowPitch;
+        for (size_t x = 0; x < img->width; ++x) { sumR += row[x * 4]; sumG += row[x * 4 + 1]; }
+    }
+    const float avgR = static_cast<float>(sumR / static_cast<double>(px));
+    const float avgG = static_cast<float>(sumG / static_cast<double>(px));
+    const float mx = avgR / 127.5f - 1.0f; // mean lean in tangent X
+    const float my = avgG / 127.5f - 1.0f; // mean lean in tangent Y
+    const float lean = std::sqrt(mx * mx + my * my);
+    if (lean <= 0.03f) { return; } // ~1.7 deg: within noise, leave neutral maps alone
+
+    ScratchImage t;
+    if (FAILED(TransformImage(work.GetImages(), work.GetImageCount(), work.GetMetadata(),
+        [mx, my](XMVECTOR* out, const XMVECTOR* in, size_t width, size_t)
+        {
+            for (size_t j = 0; j < width; ++j)
+            {
+                float nx = XMVectorGetX(in[j]) * 2.0f - 1.0f - mx;
+                float ny = XMVectorGetY(in[j]) * 2.0f - 1.0f - my;
+                float r2 = nx * nx + ny * ny;
+                constexpr float cap = 0.98f; // keep a little Z headroom (never fully flat)
+                if (r2 > cap) { const float s = std::sqrt(cap / r2); nx *= s; ny *= s; r2 = cap; }
+                const float nz = std::sqrt(fmaxf(1e-4f, 1.0f - r2));
+                out[j] = XMVectorSet(nx * 0.5f + 0.5f, ny * 0.5f + 0.5f, nz * 0.5f + 0.5f, XMVectorGetW(in[j]));
+            }
+        }, t)))
+    {
+        return;
+    }
+    work = std::move(t);
+    const int leanDeg = static_cast<int>(std::atan(lean) * 57.2958f + 0.5f);
+    log.Line("  [normal centered] lean " + std::to_string(leanDeg) + " deg (avg R=" +
+             std::to_string(static_cast<int>(avgR + 0.5f)) + " G=" +
+             std::to_string(static_cast<int>(avgG + 0.5f)) + " -> 128)  " + label);
+}
+
 //=============================================================================
 // Core conversion: PNG/JPG/TGA -> mipped BC7 (or BC5) DDS sibling.
 //=============================================================================
@@ -375,6 +424,8 @@ bool ConvertTexture(const fs::path& in, const ImportOptions& opts, Log& log, con
             work = std::move(t);
         }
     }
+
+    if (role == TexRole::Normal && opts.centerNormals) { CenterNormalMap(work, log, rel); }
 
     // H6: bake packed MR (glTF/ORM/ARM: G=rough, B=metal) into FINAL engine data:
     // R = metal*metallicFactor, G = rough*roughnessFactor, B = 0. The DDS needs no
@@ -568,6 +619,7 @@ bool ImportTextureSet(const fs::path& dir, const fs::path& diff, const fs::path&
                     n = std::move(t);
                 }
             }
+            if (opts.centerNormals) { CenterNormalMap(n, log, name + " [normal]"); }
             const fs::path nOut = dir / (name + "_normal.dds");
             if (FinishTextureDds(std::move(n), false, DXGI_FORMAT_BC7_UNORM, opts, nOut, log, name + " [normal]"))
             {

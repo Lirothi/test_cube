@@ -87,6 +87,7 @@ private:
     int  maxTextureSize_ = 2048;
     bool highQuality_ = false;
     bool flipGreen_ = false;
+    bool centerNormals_ = true; // re-center normal maps with a DC "purple cast" lean (threshold-gated)
     bool moveIntoProject_ = true;
     bool useGpu_ = true; // H5: BC6H/BC7 on the GPU (auto CPU fallback)
     int  skyboxFaceSize_ = 1024;

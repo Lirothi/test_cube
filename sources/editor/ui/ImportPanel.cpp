@@ -1137,6 +1137,7 @@ void ImportPanel::BeginImport(const Item& item,
     opt.maxTextureSize = maxTextureSize_;
     opt.highQuality = highQuality_;
     opt.flipGreen = flipGreen_;
+    opt.centerNormals = centerNormals_;
     opt.useGpu = useGpu_;
     opt.skyboxFaceSize = skyboxFaceSize_;
     opt.logPath = "asset_import.log";
@@ -1724,6 +1725,15 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
             ImGui::SetTooltip(
                 "Leave OFF for glTF meshes and plain textures.\n"
                 "Only enable if a normal-mapped surface ends up lit from the wrong side.");
+        }
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::Checkbox("Center normal maps", &centerNormals_);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Re-center a normal map whose flat baseline strays from (128,128) -- a 'purple cast'\n"
+                "DC lean that skews lighting (shoves a point light's lit disc off-center). Only acts\n"
+                "when the average tilt exceeds ~1.7 deg, so clean/neutral maps are left untouched.");
         }
     }
 
