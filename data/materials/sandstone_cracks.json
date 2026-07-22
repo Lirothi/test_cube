@@ -1,7 +1,7 @@
 {
-  "albedo": "textures/sandstone_cracks_albedo.dds",
-  "mr": "textures/sandstone_cracks_mr.dds",
-  "normal": "textures/sandstone_cracks_normal.dds",
+  "albedo": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_albedo.dds",
+  "mr": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_mr.dds",
+  "normal": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_normal.dds",
   "normalIsRG": false,
   "useTBN": true
 }

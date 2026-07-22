@@ -400,6 +400,24 @@
       "type": "staticMesh"
     }
   ],
+  "pointLights": [
+    {
+      "color": [
+        1.0,
+        0.9200000166893005,
+        0.7799999713897705
+      ],
+      "enabled": false,
+      "intensity": 8.0,
+      "position": [
+        -0.9993913769721985,
+        0.5,
+        -7.335799694061279
+      ],
+      "radius": 12.0,
+      "shadowsEnabled": false
+    }
+  ],
   "skybox": {
     "texture": "textures/skybox.dds"
   }
