@@ -50,6 +50,7 @@ namespace
         dx::XMFLOAT4 surfaceParams; // rgb = subsurface color, w = transmission strength
         dx::XMFLOAT4 surfaceFlags; // x = shading model ID, y = albedo power, z = normal weight
         dx::XMFLOAT4 ambient;
+        dx::XMFLOAT4 debugParams; // x = normal length, yzw = diagnostic line color
     };
     static_assert(sizeof(PreviewConstants) <= 256, "PreviewConstants must fit one 256B CBV.");
 
@@ -100,7 +101,11 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     ComPtr<ID3DBlob> cubeVs = CompilePreviewShader("CubeVSMain", "vs_5_0");
     ComPtr<ID3DBlob> cubePs = CompilePreviewShader("CubePSMain", "ps_5_0");
     ComPtr<ID3DBlob> cubeArrayPs = CompilePreviewShader("CubeArrayPSMain", "ps_5_0");
-    if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs)
+    ComPtr<ID3DBlob> debugPs = CompilePreviewShader("DebugPS", "ps_5_0");
+    ComPtr<ID3DBlob> vertexNormalVs = CompilePreviewShader("VertexNormalVS", "vs_5_0");
+    ComPtr<ID3DBlob> vertexNormalGs = CompilePreviewShader("VertexNormalGS", "gs_5_0");
+    if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs ||
+        !debugPs || !vertexNormalVs || !vertexNormalGs)
     {
         return false;
     }
@@ -188,6 +193,33 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     if (FAILED(device->CreateGraphicsPipelineState(&pso,
             IID_PPV_ARGS(&doubleSidedPipeline_))))
+    {
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC wireframePso = pso;
+    wireframePso.PS = { debugPs->GetBufferPointer(), debugPs->GetBufferSize() };
+    wireframePso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    wireframePso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    if (FAILED(device->CreateGraphicsPipelineState(&wireframePso,
+            IID_PPV_ARGS(&wireframePipeline_))))
+    {
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC vertexNormalsPso = pso;
+    vertexNormalsPso.VS = {
+        vertexNormalVs->GetBufferPointer(), vertexNormalVs->GetBufferSize() };
+    vertexNormalsPso.GS = {
+        vertexNormalGs->GetBufferPointer(), vertexNormalGs->GetBufferSize() };
+    vertexNormalsPso.PS = { debugPs->GetBufferPointer(), debugPs->GetBufferSize() };
+    vertexNormalsPso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    vertexNormalsPso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    vertexNormalsPso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    vertexNormalsPso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    vertexNormalsPso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+    if (FAILED(device->CreateGraphicsPipelineState(&vertexNormalsPso,
+            IID_PPV_ARGS(&vertexNormalsPipeline_))))
     {
         return false;
     }
@@ -419,6 +451,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         size,
         camera,
         PreviewLight{},
+        EditorPreviewMode::Lit,
         renderSlot,
         existingColorTarget);
 }
@@ -432,6 +465,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     std::uint32_t height,
     const OrbitCamera& camera,
     const PreviewLight& light,
+    EditorPreviewMode mode,
     std::uint32_t renderSlot,
     ID3D12Resource* existingColorTarget)
 {
@@ -602,9 +636,16 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         {
             material = materials.front().get();
         }
-        cl->SetPipelineState(material && material->doubleSided
-            ? doubleSidedPipeline_.Get()
-            : pipeline_.Get());
+        if (mode == EditorPreviewMode::Wireframe)
+        {
+            cl->SetPipelineState(wireframePipeline_.Get());
+        }
+        else
+        {
+            cl->SetPipelineState(material && material->doubleSided
+                ? doubleSidedPipeline_.Get()
+                : pipeline_.Get());
+        }
 
         ID3D12Resource* textures[kPreviewTexturesPerDraw]{};
         DXGI_FORMAT formats[kPreviewTexturesPerDraw] = {
@@ -713,6 +754,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             std::max(0.0f, light.color.y),
             std::max(0.0f, light.color.z),
             std::max(0.0f, light.ambient) };
+        cb.debugParams = dx::XMFLOAT4{
+            radius * 0.05f, 0.15f, 0.85f, 1.0f };
         std::memcpy(frame.constantBufferMapped +
             static_cast<std::size_t>(slot) * kPreviewConstantStride, &cb, sizeof(cb));
 
@@ -724,6 +767,22 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         cl->SetGraphicsRootDescriptorTable(1, gpuHandle);
         cl->DrawIndexedInstanced(indexCount, 1,
             hasSubmesh ? submesh.indexOffset : 0, 0, 0);
+    }
+
+    if (mode == EditorPreviewMode::VertexNormals)
+    {
+        const UINT vertexCount = vbv.StrideInBytes > 0
+            ? vbv.SizeInBytes / vbv.StrideInBytes
+            : 0;
+        if (vertexCount > 0)
+        {
+            cl->SetPipelineState(vertexNormalsPipeline_.Get());
+            cl->SetGraphicsRootConstantBufferView(0,
+                frame.constantBuffer->GetGPUVirtualAddress());
+            cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+            cl->IASetIndexBuffer(nullptr);
+            cl->DrawInstanced(vertexCount, 1, 0, 0);
+        }
     }
 
     // Leave the thumbnail in a shader-read state, exactly like a loaded texture,

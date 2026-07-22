@@ -70,11 +70,22 @@ bool IsGltfGeometry(const std::string& geometry)
                              p.compare(p.size() - 4, 4, ".glb") == 0);
 }
 
+const char* PreviewModeLabel(EditorPreviewMode mode)
+{
+    switch (mode)
+    {
+    case EditorPreviewMode::Wireframe: return "Wireframe";
+    case EditorPreviewMode::VertexNormals: return "Vertex Normals";
+    default: return "Lit";
+    }
+}
+
 void DrawMeshPreview(EditorContext& ctx,
     AssetRegistry& registry,
     MeshEditorPreviewScene& previewScene,
     MeshEditorPreviewCamera& camera,
     const MeshEditorPreviewLight& light,
+    EditorPreviewMode& mode,
     const std::string& path,
     const std::string& geometry,
     const std::vector<std::string>& materialSlots,
@@ -138,7 +149,8 @@ void DrawMeshPreview(EditorContext& ctx,
         renderWidth,
         renderHeight,
         camera,
-        light);
+        light,
+        mode);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -178,8 +190,32 @@ void DrawMeshPreview(EditorContext& ctx,
         ImGui::SetTooltip("Reset the preview camera to fit the whole mesh.");
     }
     ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f);
+    if (ImGui::BeginCombo("##meshPreviewMode", PreviewModeLabel(mode)))
+    {
+        constexpr EditorPreviewMode kModes[] = {
+            EditorPreviewMode::Lit,
+            EditorPreviewMode::Wireframe,
+            EditorPreviewMode::VertexNormals
+        };
+        for (const EditorPreviewMode candidate : kModes)
+        {
+            const bool selected = candidate == mode;
+            if (ImGui::Selectable(PreviewModeLabel(candidate), selected))
+            {
+                mode = candidate;
+            }
+            if (selected) { ImGui::SetItemDefaultFocus(); }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Choose lit material rendering, topology wireframe, or vertex-normal lines.");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("1 directional light");
     ImGui::TextDisabled("LMB orbit | RMB/MMB pan | Wheel zoom | Double-click frame");
-    ImGui::TextDisabled("Preview scene | 1 directional light");
 }
 
 // Base name for a material file promoted from a glTF (parent folder when the file stem is the
@@ -331,6 +367,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         previewScene_,
         previewCamera_,
         previewLight_,
+        previewMode_,
         path_,
         doc_.value("geometry", std::string()),
         slots_,

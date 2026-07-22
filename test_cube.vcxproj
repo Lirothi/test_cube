@@ -418,6 +418,7 @@
     <ClInclude Include="sources/editor/assets/AssetRegistry.h" />
     <ClInclude Include="sources/editor/assets/AssetThumbnailCache.h" />
     <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h" />
+    <ClInclude Include="sources/editor/assets/EditorPreviewMode.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/ImportPanel.h" />
     <ClInclude Include="sources/editor/ui/MeshEditorPreviewScene.h" />

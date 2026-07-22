@@ -1,4 +1,10 @@
 {
   "geometry": "models/date_palm/scene.gltf",
-  "material": "auto"
+  "materials": [
+    "date_palm_0",
+    "date_palm_1",
+    "date_palm_2",
+    "date_palm_3"
+  ],
+  "texOffsScale": null
 }

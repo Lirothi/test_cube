@@ -82,11 +82,12 @@ Implementation decisions for this renderer:
 3. **Use a four-bit shading-model ID in `GBAux.b`.** Keep `GB1` as `R10G10B10A2_UNORM` so normal
    precision is unchanged. Encode IDs 0..15 as `id / 15` in the eight-bit blue channel.
 4. **Use model-specific `GB2.rgb`.** DefaultLit stores emissive; TwoSidedFoliage stores its
-   premultiplied subsurface/transmission color. Simultaneous foliage emissive is an accepted v1
-   limitation and must be documented in the editor.
+   premultiplied subsurface/transmission color after nonlinear albedo attenuation. Simultaneous
+   foliage emissive is an accepted v1 limitation and must be documented in the editor.
 5. **Use one consolidated material auxiliary GBuffer.** `R8G8B8A8_UNORM`: R = material AO,
-   G = indirect-specular scale, B = four-bit shading-model ID, A = reserved. In editor builds it is
-   RT5 after the object-ID target; in runtime builds the editor-only target is absent and GBAux is RT4.
+   G = indirect-specular scale, B = four-bit shading-model ID, A = foliage transmission normal
+   weight. In editor builds it is RT5 after the object-ID target; in runtime builds the editor-only
+   target is absent and GBAux is RT4.
 6. **Do not silently grow `render::InstancePerObject`.** It is currently 208 bytes and mirrored by
    GBuffer and shadow paths. Material-static foliage parameters should travel through a dedicated
    per-slot surface-parameter CB, or through the existing multi-slot CB where that already occupies
@@ -147,7 +148,7 @@ Official references:
 - Build from PowerShell with MSBuild. At minimum build Debug x64 after every step; build Release and
   `Release_Editor` at milestone boundaries.
 - C++/HLSL/project files use CRLF. Markdown uses LF. Verify touched files have no mixed endings.
-- Preserve unrelated worktree changes. Do not rewrite palm material files before F12.
+- Preserve unrelated worktree changes. Change authored palm material files only with human approval.
 - Treat `MaterialData` replacement/live apply as a descriptor-lifetime hazard. After material-editor
   tests, move the camera and exercise VSM so stale CPU SRV handles are caught.
 - Keep defaults neutral:
@@ -174,6 +175,8 @@ Official references:
   "twoSided": true,
   "subsurfaceColor": [0.22, 0.50, 0.10],
   "transmissionStrength": 0.65,
+  "transmissionAlbedoPower": 0.60,
+  "transmissionNormalWeight": 0.35,
   "indirectSpecularScale": 0.35,
   "ambientOcclusion": 1.0
 }
@@ -182,11 +185,13 @@ Official references:
 Backward-compatible defaults:
 
 ```text
-shadingModel           = DefaultLit
-subsurfaceColor        = (1,1,1)
-transmissionStrength   = 0
-indirectSpecularScale  = 1
-ambientOcclusion       = 1
+shadingModel             = DefaultLit
+subsurfaceColor          = (1,1,1)
+transmissionStrength     = 0
+transmissionAlbedoPower  = 0.6
+transmissionNormalWeight = 0.35
+indirectSpecularScale    = 1
+ambientOcclusion         = 1
 ```
 
 `TwoSidedFoliage` implies `twoSided=true`. The editor may keep the explicit JSON key for clarity, but
@@ -212,8 +217,8 @@ uint  DecodeShadingModel(float b) { return (uint)round(saturate(b) * 15.0f); }
 ```text
 GB0  R8G8B8A8_UNORM   albedo.rgb, packed roughness/metal in a (unchanged)
 GB1  R10G10B10A2      normal.rgb, unused a
-GB2  R11G11B10_FLOAT  DefaultLit: emissive; Foliage: subsurfaceColor*transmissionStrength
-GBAux R8G8B8A8_UNORM  materialAO, indirectSpecularScale, shadingModelId/15, reserved
+GB2  R11G11B10_FLOAT  DefaultLit: emissive; Foliage: subsurfaceColor*transmissionStrength*pow(linearAlbedo, transmissionAlbedoPower)
+GBAux R8G8B8A8_UNORM  materialAO, indirectSpecularScale, shadingModelId/15, transmissionNormalWeight
 ```
 
 Do not steal bits from packed roughness/metal in GB0. Do not change normal precision in GB1.
@@ -230,7 +235,7 @@ F0 baseline ─┬─> F1 real None/SkyOnly ────────────
 F7 offline GGX assets ─> F8 runtime split-sum IBL ─> F9 specular occlusion
 F7 ────────────────────────────────────────────────> F10 normal-variance roughness mips
 
-F5 + F6 + F8 + F9 ─> F11 RT/instancing/shadow parity ─> F12 palm migration and sign-off
+F5 + F6 + F8 + F9 ─> F11 RT/instancing/shadow parity
 ```
 
 `F1`, `F2`, and the design/prototype portion of `F7` may start independently. Serialize changes that
@@ -242,7 +247,7 @@ Milestones:
 - **M1 — useful foliage:** F2-F6. Two-sided transmission plus foliage indirect-specular control; the
   atoll should already be artistically usable.
 - **M2 — correct environment foundation:** F7-F10. GGX IBL, occlusion, and stable roughness mips.
-- **M3 — production parity:** F11-F12. All renderer paths agree and the palm content is migrated.
+- **M3 — production parity:** F11. All renderer paths agree; palm assignment and tuning are complete.
 
 ---
 
@@ -398,7 +403,7 @@ validation diagnostics; this step does not claim a warning-free global GBV basel
 
 ---
 
-### F4 — Directional-light TwoSidedFoliage (first visual flip)
+### F4 — Directional-light TwoSidedFoliage (first visual flip) — DONE (2026-07-22)
 
 - **Depends:** F3.
 - **Goal:** Add thin-sheet front diffuse, back transmission, and unchanged direct GGX sun specular.
@@ -423,7 +428,7 @@ validation diagnostics; this step does not claim a warning-free global GBV basel
   highlight remains visible; DefaultLit is unchanged.
 - **Verify:** fixed-camera front/back-sun captures, Legacy CSM and VSM A/B, shadow-debug validation.
 
-**Result:** Shader-only, exactly the declared touch-list. `shaders/utils.hlsli` gained a shared
+**Initial result:** Shader-only, exactly the declared touch-list. `shaders/utils.hlsli` gained a shared
 `EvalFoliageBRDF` helper (and `FoliageResult`) returning separate front `diffBRDF`, front `specBRDF`,
 and back `transBRDF` terms so F5 point/spot and F11 RT hit shading can reuse identical math. The front
 side is byte-for-byte the DefaultLit Lambert+GGX response (`EvalBRDF`); the back side is restricted to
@@ -446,12 +451,13 @@ leak is F6/F8's target, not F4's). DefaultLit atoll baseline unchanged. Debug an
 both `--shot` captures exited 0, `git diff --check` clean, touched shaders remain CRLF. A later atoll
 review removed the original view-independent wrap after it proved too broad. The temporary fixtures
 (`data/materials/__f4_leaf.json`,
-`data/levels/__f4_frontlit.json`, `data/levels/__f4_backlit.json`) are `__f4_`-prefixed test scaffolding
-and were kept untracked, not palm-material rewrites (those wait for F12).
+`data/levels/__f4_frontlit.json`, `data/levels/__f4_backlit.json`) were `__f4_`-prefixed validation
+scaffolding at that stage. Final palm assignment and tuning were completed later and are recorded in
+the final transmission follow-up below.
 
 ---
 
-### F5 — Point/spot and environment-diffuse foliage parity
+### F5 — Point/spot and environment-diffuse foliage parity — DONE (2026-07-22)
 
 - **Depends:** F4.
 - **Goal:** Remove shading-model differences between light types and avoid black undersides in ambient.
@@ -492,6 +498,22 @@ all Release and Debug `--shot` runs exited 0 (runtime shader compile + no debug-
 `git diff --check` clean; touched shaders remain CRLF. Follow-up fixed-camera Debug and Release_Editor
 captures with the directional view gate also exited 0; the front-lit view no longer receives the flat
 green subsurface lift.
+
+**Final transmission follow-up (2026-07-22):** Replaced the uniform foliage payload with a nonlinear,
+per-pixel albedo proxy:
+`subsurfaceColor * transmissionStrength * pow(linearAlbedo, transmissionAlbedoPower)`. Dark stems,
+veins, and pigment regions now transmit less without requiring a separate thickness texture. The shared
+foliage helper treats both botanical sides identically through `abs(N.L)`, blends projected-area
+weighting with broad thin-sheet wrap via `transmissionNormalWeight`, retains the view/light-opposition
+gate, and applies Schlick Fresnel at both the light-entry and view-exit interfaces. Transmission is also
+multiplied by `(1-metal)` and remains scaled by `kInvPi`. `GBAux.a`, previously reserved, carries the
+normal weight; the existing 32-byte material surface CB stores both new parameters without growing any
+instance stride. JSON loading, Material Editor controls, ordinary draws, single- and multi-slot
+instancing, GPU instancing, sun/point/spot lighting, and editor previews use the same contract. Initial
+values are `transmissionAlbedoPower=0.6` and `transmissionNormalWeight=0.35`. Debug and Release_Editor
+builds passed, and `atoll_a2_test` compiled the runtime shader permutations and rendered successfully.
+The human reviewed and approved the result, then completed the final palm material assignment and visual
+tuning; no separate content-migration/sign-off step remains.
 
 ---
 
@@ -659,40 +681,6 @@ and every `--shot` run exited 0.
 
 ---
 
-### F12 — Palm migration, tuning, and final sign-off
-
-- **Depends:** F11 and the desired M2 features (F7-F10).
-- **Goal:** Opt the actual palm leaves into the model and establish production defaults.
-- **Touch:** only confirmed leaf material files under `data/materials/`; optional importer-generated DDS
-  updates after user approval; this document's results section.
-- **Implement:**
-  - Identify leaf slots by alpha-test/two-sided usage and mesh assignment. Do not mark trunk/coconut
-    materials as foliage by filename guess alone.
-  - Start the leaf material near:
-
-    ```json
-    "shadingModel": "twoSidedFoliage",
-    "twoSided": true,
-    "subsurfaceColor": [0.22, 0.50, 0.10],
-    "transmissionStrength": 0.60,
-    "indirectSpecularScale": 0.35,
-    "ambientOcclusion": 1.0
-    ```
-
-  - Tune with authored roughness intact first. Do not hide renderer defects by forcing roughness to 1,
-    globally lowering sky exposure, or zeroing all specular.
-  - Capture the final matrix: None/SkyOnly/SSR/RT; front/back sun; camera above/below/grazing; near/far
-    palm; instancing on/off; VSM/Legacy; DLSS/TAA movement.
-  - Record measured GPU cost for added GBuffer bandwidth and IBL samples.
-- **Interface contract:** material JSON round-trips through the editor and older DefaultLit material
-  files remain valid without migration.
-- **Done-when:** the user confirms the foliage look; direct specular reads, environment does not flow
-  across cards, transmission reads naturally, and no unrelated material regression remains.
-- **Verify:** Debug, Release, `Release_Editor`; fixed-camera PNG set; short moving run; GPU validation;
-  `git diff --check`; line-ending audit.
-
----
-
 ## 9. Global acceptance criteria
 
 - `ReflectionSource::None` is genuinely free of surface reflections while the sky background remains.
@@ -735,12 +723,11 @@ and every `--shot` run exited 0.
 - **Fallback compatibility:** missing `_spec`/`_diffuse`/BRDF LUT resources must log and use a safe old
   path, not bind null descriptors.
 - **Rollback:** F1 is independently revertible; F2 is dormant; reverting F6 restores old indirect
-  intensity; F7 only adds derivative assets; F8 can fall back to the old cube; content migration is
-  isolated in F12.
+  intensity; F7 only adds derivative assets; F8 can fall back to the old cube.
 
 ## Suggested execution order
 
 F0 -> F1 -> F2 -> F3 -> F4 -> F5 -> F6 gives the shortest route to a user-visible, controllable foliage
-fix. Then F7 -> F8 -> F9 -> F10 establishes the correct environment foundation. Finish with F11 parity
-and F12 content migration/sign-off. Do not start by globally increasing palm roughness; that hides the
-IBL leak and makes later validation ambiguous.
+fix. Then F7 -> F8 -> F9 -> F10 establishes the correct environment foundation. Finish with F11 parity.
+Do not start by globally increasing palm roughness; that hides the IBL leak and makes later validation
+ambiguous.

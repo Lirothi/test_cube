@@ -71,6 +71,7 @@ struct MeshEditorPreviewScene::Impl
     std::array<std::unique_ptr<UploadBatch>, render::kFrameCount> frameCommands;
     std::array<MeshEditorPreviewCamera, render::kFrameCount> renderedCameras{};
     std::array<MeshEditorPreviewLight, render::kFrameCount> renderedLights{};
+    std::array<EditorPreviewMode, render::kFrameCount> renderedModes{};
     std::array<bool, render::kFrameCount> cameraValid{};
     std::string sourceSignature;
     std::string error;
@@ -162,7 +163,8 @@ struct MeshEditorPreviewScene::Impl
         std::uint32_t renderWidth,
         std::uint32_t renderHeight,
         const MeshEditorPreviewCamera& camera,
-        const MeshEditorPreviewLight& light)
+        const MeshEditorPreviewLight& light,
+        EditorPreviewMode mode)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -209,6 +211,7 @@ struct MeshEditorPreviewScene::Impl
                 renderHeight,
                 orbit,
                 previewLight,
+                mode,
                 frameIndex,
                 targets[frameIndex].Get());
         if (!target || !commands->Submit(&renderer))
@@ -221,6 +224,7 @@ struct MeshEditorPreviewScene::Impl
         frameCommands[frameIndex] = std::move(commands);
         renderedCameras[frameIndex] = camera;
         renderedLights[frameIndex] = light;
+        renderedModes[frameIndex] = mode;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -274,7 +278,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     std::uint32_t renderWidth,
     std::uint32_t renderHeight,
     const MeshEditorPreviewCamera& camera,
-    const MeshEditorPreviewLight& light)
+    const MeshEditorPreviewLight& light,
+    EditorPreviewMode mode)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -316,14 +321,16 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
          impl_->targets[frameIndex]->GetDesc().Height != renderHeight);
     if (!impl_->targets[frameIndex] || !impl_->cameraValid[frameIndex] ||
         targetSizeChanged || !SameCamera(impl_->renderedCameras[frameIndex], camera) ||
-        !SameLight(impl_->renderedLights[frameIndex], light))
+        !SameLight(impl_->renderedLights[frameIndex], light) ||
+        impl_->renderedModes[frameIndex] != mode)
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
                 renderWidth,
                 renderHeight,
                 camera,
-                light))
+                light,
+                mode))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();

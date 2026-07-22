@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
+#include "editor/assets/EditorPreviewMode.h"
 #include "rendering/meshes/MeshManager.h"
 #include "materials/MaterialDataManager.h"
 #include "rendering/core/RenderConstants.h"
@@ -92,6 +93,7 @@ public:
         std::uint32_t height,
         const OrbitCamera& camera,
         const PreviewLight& light,
+        EditorPreviewMode mode,
         std::uint32_t renderSlot,
         ID3D12Resource* existingColorTarget = nullptr);
 
@@ -132,6 +134,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> doubleSidedPipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> vertexNormalsPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;
     // Each swapchain frame gets independent descriptors, constants, and depth.

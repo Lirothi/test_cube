@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/math/Math.h"
+#include "editor/assets/EditorPreviewMode.h"
 #include "imgui.h"
 
 class Renderer;
@@ -64,7 +65,8 @@ public:
         std::uint32_t renderWidth,
         std::uint32_t renderHeight,
         const MeshEditorPreviewCamera& camera,
-        const MeshEditorPreviewLight& light);
+        const MeshEditorPreviewLight& light,
+        EditorPreviewMode mode);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.

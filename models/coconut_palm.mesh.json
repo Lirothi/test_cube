@@ -8,7 +8,9 @@
     "coconut_palm_4"
   ],
   "recomputeNormalSlots": [
-    2
+    2,
+    3,
+    4
   ],
   "spawnScale": 1.0,
   "texOffsScale": [

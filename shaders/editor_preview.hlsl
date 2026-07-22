@@ -20,6 +20,7 @@ cbuffer PreviewCB : register(b0)
     float4 gSurfaceParams;      // rgb = subsurface color, w = transmission strength
     float4 gSurfaceFlags;       // x = shading model ID, y = albedo power, z = normal weight
     float4 gAmbient;            // rgb = light color, w = ambient intensity
+    float4 gDebugParams;        // x = normal length, yzw = diagnostic line color
 };
 
 Texture2D gAlbedo : register(t0);
@@ -55,6 +56,42 @@ VSOutput VSMain(VSInput input)
     output.tangentW = float4(normalize(input.tangent.xyz), input.tangent.w);
     output.uv = input.uv;
     return output;
+}
+
+struct VertexNormalVSOutput
+{
+    float3 worldPos : POSITION;
+    float3 normalW : NORMAL;
+};
+
+VertexNormalVSOutput VertexNormalVS(VSInput input)
+{
+    VertexNormalVSOutput output;
+    output.worldPos = input.position;
+    output.normalW = normalize(input.normal);
+    return output;
+}
+
+struct VertexNormalGSOutput
+{
+    float4 position : SV_POSITION;
+};
+
+[maxvertexcount(2)]
+void VertexNormalGS(point VertexNormalVSOutput input[1],
+    inout LineStream<VertexNormalGSOutput> stream)
+{
+    VertexNormalGSOutput output;
+    output.position = mul(float4(input[0].worldPos, 1.0), gMVP);
+    stream.Append(output);
+    output.position = mul(float4(
+        input[0].worldPos + input[0].normalW * gDebugParams.x, 1.0), gMVP);
+    stream.Append(output);
+}
+
+float4 DebugPS(float4 position : SV_POSITION) : SV_TARGET
+{
+    return float4(gDebugParams.yzw, 1.0);
 }
 
 float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET

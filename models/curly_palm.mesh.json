@@ -1,5 +1,14 @@
 {
   "geometry": "models/curly_palm/scene.gltf",
   "inputLayout": "PosNormTanUV",
-  "material": "auto"
+  "materials": [
+    "curly_palm_0",
+    "curly_palm_1",
+    "curly_palm_2",
+    "curly_palm_3"
+  ],
+  "recomputeNormalSlots": [
+    1
+  ],
+  "texOffsScale": null
 }

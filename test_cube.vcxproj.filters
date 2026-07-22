@@ -713,6 +713,9 @@
     <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h">
       <Filter>sources\editor\assets</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/assets/EditorPreviewMode.h">
+      <Filter>sources\editor\assets</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
