@@ -1,5 +1,6 @@
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "wind.hlsli" // W4: shared WindOffset (same math as the shadow VS in W5)
 
 #ifndef GBUFFER_COMMON_HLSLI
 #define GBUFFER_COMMON_HLSLI
@@ -139,14 +140,29 @@ inline VSOut BaseVS(float3 pos,
                     float3 norm,
                     float4 tangent,
                     float2 uv,
-                    uint objectIdValue)
+                    uint objectIdValue,
+                    float windStrengthValue)
 {
     VSOut o;
     float4 posH = float4(pos, 1.0f);
+
+    // W4: global wind sway via the shared WindOffset. Phase comes from the world origin, so every
+    // submesh/slot (and, in W5, the shadow) bends in lockstep. The SAME offset is applied to the
+    // prev world position with windPrevTime, so DLSS/TAA motion vectors track the sway (else the
+    // moving leaves smear). windStrengthValue 0 => zero offset => byte-identical to no-wind.
+    // gustMul is constant (1.0) until W6, so the prev frame reuses windGustMul here.
     float4 worldPos = mul(posH, world);
+    worldPos.xyz += WindOffset(pos, float3(world._41, world._42, world._43), windStrengthValue,
+                               windDirXZ, windSwayAmp, windSwayFreq, windGustMul, windTime);
+
+    float4 prevWorldPos = mul(posH, prevWorld);
+    prevWorldPos.xyz += WindOffset(pos, float3(prevWorld._41, prevWorld._42, prevWorld._43),
+                                   windStrengthValue, windDirXZ, windSwayAmp, windSwayFreq,
+                                   windGustMul, windPrevTime);
+
     o.H = mul(worldPos, viewProj);
     o.clipH = mul(worldPos, viewProjNoJitter);
-    o.prevH = mul(mul(posH, prevWorld), prevViewProjNoJitter);
+    o.prevH = mul(prevWorldPos, prevViewProjNoJitter);
 
     float3x3 w3 = (float3x3) world;
     float3 N = NormalizeSafe(TransformDirectionWS(norm, w3), float3(0, 0, 1));

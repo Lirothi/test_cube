@@ -81,7 +81,7 @@ struct VSOutInst
 VSOutInst VSMain(VSInInst i)
 {
     InstancePerObject d = inst[i.IID];
-    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId);
+    VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId, d.windStrength);
 
     VSOutInst o;
     o.H = b.H;

@@ -40,7 +40,8 @@ VSOut VSMain(VSInInst i)
     const uint ri = gRemap[slot >> 2u][slot & 3u];
     float4x4 w = mul(gInstances[ri].world, world);
     float4x4 pw = mul(gInstances[ri].prevWorld, prevWorld);
-    return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV, objectId);
+    // windStrength comes from the batch-shared b0 (0 for the instanced cloud => no sway).
+    return BaseVS(i.P, w, pw, viewProj, i.N, i.T, i.UV, objectId, windStrength);
 }
 
 [RootSignature(GBUFFER_INST_RS)]

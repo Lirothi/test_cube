@@ -20,14 +20,14 @@
   },
   "wind": {
     "directionDeg": 90.0,
-    "strength": 0.3,
+    "strength": 1.0,
     "swayFrequency": 0.9,
     "gust": {
       "amplitude": 0.5,
       "frequencyHz": 0.15,
       "seed": 3
     },
-    "foliageSwayMeters": 0.25
+    "foliageSwayMeters": 0.5
   },
   "objects": [
     {
@@ -35,12 +35,12 @@
       "id": 7,
       "name": "FreeCameraStart",
       "position": [
-        -21.330015182495117,
-        10.810644149780273,
+        -28.0,
+        9.0,
         0.7756994962692261
       ],
       "rotationDeg": [
-        35.52336883544922,
+        12.0,
         91.10021209716797,
         0.0
       ],
