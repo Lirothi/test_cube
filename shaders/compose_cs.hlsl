@@ -11,7 +11,7 @@
 
 #pragma pack_matrix(row_major)
 
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);

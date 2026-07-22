@@ -1,6 +1,6 @@
 // Part E1: per-slot integrate + kill. Runs BEFORE spawn each frame (freshly spawned particles
 // render at age 0). Dead slots return their index to the dead-list stack.
-#include "particle_common.hlsl"
+#include "particle_common.hlsli"
 
 [numthreads(64, 1, 1)]
 [RootSignature(PARTICLE_CS_RS)]

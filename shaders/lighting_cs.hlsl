@@ -8,7 +8,7 @@
 
 #pragma pack_matrix(row_major)
 
-#include "utils.hlsl"
+#include "utils.hlsli"
 #include "vsm_sample.hlsli"
 
 Texture2D GB0 : register(t0);

@@ -13,7 +13,7 @@ inline bool g_freeze = false;
 // Cheap (4-byte copy per frame into a readback ring); the E1 verification instrument.
 inline bool g_debugAliveLog = true;
 
-// GPU particle state — mirrors `Particle` in shaders/particle_common.hlsl (structured buffer,
+// GPU particle state — mirrors `Particle` in shaders/particle_common.hlsli (structured buffer,
 // 48 bytes). age < 0 marks a dead slot (the render VS emits degenerate quads for those — E2).
 struct alignas(16) GpuParticle
 {
@@ -23,7 +23,7 @@ struct alignas(16) GpuParticle
 };
 static_assert(sizeof(GpuParticle) == 48, "GpuParticle must match the HLSL struct (48 bytes)");
 
-// Per-emitter constants — mirrors `EmitterParams` (b1) in shaders/particle_common.hlsl.
+// Per-emitter constants — mirrors `EmitterParams` (b1) in shaders/particle_common.hlsli.
 // Uploaded per frame via AllocDynamic (editor tweaks are a CB refill, no buffer rebuilds).
 struct alignas(16) GpuEmitterParams
 {

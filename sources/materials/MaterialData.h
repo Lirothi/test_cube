@@ -16,7 +16,7 @@
 class Renderer;
 
 // Stored as a four-bit ID in GBAux.b (encoded as id/15 in an R8 UNORM channel). Keep these numeric
-// values in sync with kShadingModel* in shaders/utils.hlsl.
+// values in sync with kShadingModel* in shaders/utils.hlsli.
 enum class ShadingModel : uint8_t
 {
     DefaultLit = 0,

@@ -4,7 +4,7 @@ Texture2D HDRColor : register(t0);
 RWTexture2D<float4> LdrTarget : register(u0);
 SamplerState gSmp : register(s0);
 
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 // ---- named constants ----
 static const float kGammaOut = 2.2;

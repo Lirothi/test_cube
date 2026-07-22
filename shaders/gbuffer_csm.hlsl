@@ -1,7 +1,7 @@
 #define GBUFFER_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1)"
 // Use the shared b0 (per-object) + b1 (per-view: viewProj) from gbuffer_common
 #pragma pack_matrix(row_major)
-#include "gbuffer_common.hlsl"
+#include "gbuffer_common.hlsli"
 
 struct VSOutD { float4 H : SV_POSITION; };
 

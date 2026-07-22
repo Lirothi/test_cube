@@ -55,7 +55,7 @@ Gaps this plan closes:
 1. No glTF/GLB import (Part A).
 2. One material per mesh everywhere — replaced by true multi-material submeshes (Part B).
 3. No alpha-test (masked) or two-sided rendering — required for palm fronds (Part C).
-4. Emissive G-buffer target exists (`RT2` in `shaders/gbuffer_common.hlsl`, composed in
+4. Emissive G-buffer target exists (`RT2` in `shaders/gbuffer_common.hlsli`, composed in
    `shaders/compose_cs.hlsl`) but stock `shaders/gbuffer.hlsl` writes 0 (Part D).
 5. No particle/billboard system at all (Part E).
 6. No light flicker animation (Part F).
@@ -168,7 +168,7 @@ drags)* In `MeshManager::Load`, dispatch `.gltf`/`.glb` → `ParseGltfFile`:
 - `baseColorTexture`/`baseColorFactor` → albedo/tint.
 - `metallicRoughnessTexture`: **glTF packs G=roughness, B=metallic; engine expects R=metal,
   G=rough.** Add a `mrLayout` flag (engine|gltf) to `MaterialParams` + a swizzle in
-  `gbuffer_common.hlsl` sampling — do NOT re-encode pixels at load.
+  `gbuffer_common.hlsli` sampling — do NOT re-encode pixels at load.
 - **Factors MULTIPLY texture channels — never skip them** (glTF spec: metallic =
   tex.B × `metallicFactor`, roughness = tex.G × `roughnessFactor`, albedo =
   tex × `baseColorFactor`; absent factor = 1.0). Real-world proof already in
@@ -281,7 +281,7 @@ round-trips; `--scene-stress` clean.
 ## Part C — masked + two-sided foliage
 
 **C1 — masked G-buffer variant.** *(exec: Opus 4.8; DONE 2026-07-14)* As landed: `ALPHA_TEST`
-define permutation + `AlphaTestClip` helper in `gbuffer_common.hlsl` (early clip of
+define permutation + `AlphaTestClip` helper in `gbuffer_common.hlsli` (early clip of
 `baseColor.a * albedo.a - cutoff`), per-slot `alphaCutoff` threaded through every CB via
 existing padding (b0 `PerObject`, `InstancePerObject`, `SlotParams` b2) with **sentinel −1 =
 slot never clips**. Because the object had ONE PSO, C1 shipped with a **union-of-flags interim**:

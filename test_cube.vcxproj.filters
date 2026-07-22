@@ -1195,7 +1195,7 @@
     <None Include="shaders\gbuffer.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\gbuffer_common.hlsl">
+    <None Include="shaders\gbuffer_common.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\gbuffer_csm.hlsl">
@@ -1279,7 +1279,7 @@
     <None Include="shaders\ui_rect.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\utils.hlsl">
+    <None Include="shaders\utils.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\rt_geometry.hlsli">
@@ -1402,7 +1402,7 @@
     <None Include="third_party\imgui\LICENSE.txt">
       <Filter>third_party\imgui</Filter>
     </None>
-    <None Include="shaders\particle_common.hlsl">
+    <None Include="shaders\particle_common.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\particle_sort_cs.hlsl">

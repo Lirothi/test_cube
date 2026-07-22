@@ -6,7 +6,7 @@
 // A plain DRAW_INDEXED command signature (no per-draw root args) drives this; nothing draws
 // from it until the Step 6 behavioral flip.
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 // C2: SHADOW_MASKED=1 builds the alpha-tested variant — used for the WHOLE caster set whenever
 // it contains any masked (alphaMode=MASK) group, so the per-page/per-view single-ExecuteIndirect

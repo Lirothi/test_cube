@@ -22,7 +22,7 @@
     "StaticSampler(s1, filter=FILTER_MIN_MAG_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)"
 
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 #include "rt_geometry.hlsli" // GeometryInfo + bindless VB/IB loaders
 #include "rt_lights.hlsli"   // SpotLightData/PointLightData + Eval helpers
 

@@ -18,7 +18,7 @@ struct alignas(16) MaterialSurfaceParamsGpu
 static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
     "MaterialSurfaceParamsGpu must match the HLSL SurfaceParams layout (32 bytes)");
 
-// CPU mirror of HLSL `InstancePerObject` in shaders/gbuffer_common.hlsl. Field order and
+// CPU mirror of HLSL `InstancePerObject` in shaders/gbuffer_common.hlsli. Field order and
 // padding must match the cbuffer layout exactly (constant-buffer packing rules put
 // metalRough at offset 144, texOffsScale at 160, and objectId at 192. Filled per
 // visible instance and uploaded as a root-CBV array (b0) indexed by SV_InstanceID.
@@ -77,7 +77,7 @@ struct alignas(16) ShadowViewFrustum
 };
 static_assert(sizeof(ShadowViewFrustum) == 96, "ShadowViewFrustum must be 96 bytes");
 
-// Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsl. Runs larger than this
+// Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsli. Runs larger than this
 // are split across multiple instanced draws.
 inline constexpr uint32_t kMaxInstancesPerDraw = 256;
 

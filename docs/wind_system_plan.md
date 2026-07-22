@@ -43,7 +43,7 @@ smear). Authored via a **`wind` level entity** (like `ocean`/`skybox`), editable
 - **Ocean clock:** `OceanRenderable::elapsedTime_` drives `simulation_->Update(..., elapsedTime_)`
   (`sources/ocean/OceanRenderable.cpp:529`). Reuse this exact accumulator for the wind time so
   waves/sway/gusts are phase-coherent.
-- **gbuffer VS:** all variants share `BaseVS` in `shaders/gbuffer_common.hlsl` (builds `worldPos`,
+- **gbuffer VS:** all variants share `BaseVS` in `shaders/gbuffer_common.hlsli` (builds `worldPos`,
   `clipH`, and `prevH` for motion vectors). The shared PerView CB (`b1`) has only viewProj /
   viewProjNoJitter / prevViewProjNoJitter — **no time**. Per-object params flow through the b0
   PerObject CB / instance array (baseColor, metalRough, alphaCutoff, texOffsScale, texFlags,

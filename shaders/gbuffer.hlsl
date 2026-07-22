@@ -1,5 +1,5 @@
 #pragma pack_matrix(row_major)
-#include "gbuffer_common.hlsl"
+#include "gbuffer_common.hlsli"
 
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough

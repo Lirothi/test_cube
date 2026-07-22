@@ -40,7 +40,6 @@ namespace
     struct PreviewConstants
     {
         dx::XMFLOAT4X4 mvp;
-        dx::XMFLOAT4X4 model;
         dx::XMFLOAT4 lightDir;
         dx::XMFLOAT4 eyePosition;
         dx::XMFLOAT4 baseColor;
@@ -48,6 +47,8 @@ namespace
         dx::XMFLOAT4 texOffsScale;
         dx::XMFLOAT4 texFlags; // xyz = use albedo/MR/normal, w = normal strength
         dx::XMFLOAT4 materialFlags; // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
+        dx::XMFLOAT4 surfaceParams; // rgb = subsurface color, w = transmission strength
+        dx::XMFLOAT4 surfaceFlags; // x = shading model ID, yzw reserved
         dx::XMFLOAT4 ambient;
     };
     static_assert(sizeof(PreviewConstants) <= 256, "PreviewConstants must fit one 256B CBV.");
@@ -511,9 +512,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     const dx::XMMATRIX framedView = dx::XMMatrixLookAtLH(framedEye, center, cameraUp);
     const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(
         fovY, aspect, framedNearZ, framedFarZ);
-    const dx::XMMATRIX model = dx::XMMatrixIdentity();
-    const dx::XMMATRIX mvp = dx::XMMatrixMultiply(
-        dx::XMMatrixMultiply(model, framedView), proj);
+    const dx::XMMATRIX mvp = dx::XMMatrixMultiply(framedView, proj);
 
     dx::XMVECTOR lightDirection = dx::XMVectorSet(
         light.direction.x, light.direction.y, light.direction.z, 0.0f);
@@ -652,7 +651,6 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
 
         PreviewConstants cb{};
         dx::XMStoreFloat4x4(&cb.mvp, mvp);
-        dx::XMStoreFloat4x4(&cb.model, model);
         dx::XMStoreFloat4(&cb.lightDir, lightDirection);
         cb.lightDir.w = std::max(0.0f, light.exposure);
         dx::XMStoreFloat4(&cb.eyePosition, framedEye);
@@ -685,6 +683,13 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 material->normalIsRG ? 1.0f : 0.0f,
                 material->doubleSided ? 1.0f : 0.0f,
                 textures[0] ? 1.0f : 0.0f };
+            cb.surfaceParams = dx::XMFLOAT4{
+                material->surfaceParams.subsurfaceColor.x,
+                material->surfaceParams.subsurfaceColor.y,
+                material->surfaceParams.subsurfaceColor.z,
+                material->surfaceParams.transmissionStrength };
+            cb.surfaceFlags = dx::XMFLOAT4{
+                static_cast<float>(material->shadingModel), 0.0f, 0.0f, 0.0f };
         }
         else
         {
@@ -693,6 +698,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             cb.texOffsScale = dx::XMFLOAT4{ 0.0f, 0.0f, 1.0f, 1.0f };
             cb.texFlags = dx::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 1.0f };
             cb.materialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
+            cb.surfaceParams = dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 0.0f };
+            cb.surfaceFlags = dx::XMFLOAT4{
+                static_cast<float>(ShadingModel::DefaultLit), 0.0f, 0.0f, 0.0f };
         }
         cb.ambient = dx::XMFLOAT4{
             std::max(0.0f, light.color.x),

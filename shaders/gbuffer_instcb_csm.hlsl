@@ -3,7 +3,7 @@
 // (light) comes from the shared per-view CB (b1). Mirrors gbuffer_csm.hlsl.
 #pragma pack_matrix(row_major)
 #define GBUFFER_SKIP_PEROBJECT
-#include "gbuffer_common.hlsl"
+#include "gbuffer_common.hlsli"
 
 #define GBUFFER_INSTCB_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1)"
 

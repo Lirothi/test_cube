@@ -1,6 +1,6 @@
 #define POINTLIGHT_ZFAIL_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
-#include "gbuffer_common.hlsl"
+#include "gbuffer_common.hlsli"
 
 [RootSignature(POINTLIGHT_ZFAIL_RS)]
 VSOut VSMain(VSIn v)

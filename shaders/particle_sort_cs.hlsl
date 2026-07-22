@@ -4,7 +4,7 @@
 // lag in sort order is imperceptible). Additive emitters (fire/sparks) never dispatch this.
 //
 // Fixed group size => sorted emitters are capped at SORT_N particles (enforced CPU-side).
-#include "particle_common.hlsl"
+#include "particle_common.hlsli"
 
 #define SORT_N 1024
 

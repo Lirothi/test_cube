@@ -97,7 +97,7 @@ implemented; you start at Step 14.**
 - **19:** No built-in ImGui file dialog. Use Win32 `GetOpenFileName`/`GetSaveFileName`
   or a tiny in-engine browser — do not add a new third-party dependency.
 - **20 (highest risk):** The PerObject CBV layout must match the HLSL `PerObject` struct
-  (`shaders/gbuffer_common.hlsl`, ~lines 24–34) **byte-for-byte** (HLSL 16-byte
+  (`shaders/gbuffer_common.hlsli`, ~lines 24–34) **byte-for-byte** (HLSL 16-byte
   packing). The `objectID` target must be at **render** resolution; clear to a
   sentinel. Scale the pick cursor by `renderW/displayW`; jitter is irrelevant for
   discrete ids but use the same matrices the G-buffer used. The instanced path

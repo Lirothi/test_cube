@@ -1,7 +1,7 @@
 // Part E (GPU particles): shared declarations for the spawn/update compute shaders and the
 // E2 billboard VS/PS. Mirrors vfx::GpuParticle / vfx::GpuEmitterParams (ParticleTypes.h).
-#ifndef PARTICLE_COMMON_HLSL
-#define PARTICLE_COMMON_HLSL
+#ifndef PARTICLE_COMMON_HLSLI
+#define PARTICLE_COMMON_HLSLI
 
 // Slot-array + dead-list scheme: particles[] never compacts; age < 0 marks a dead slot (the
 // render VS emits degenerate quads for them, so no indirect draw / alive-list is needed).
@@ -57,4 +57,4 @@ inline float3 RandCone(inout uint h, float3 axis, float halfAngle)
     return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + axis * cosT);
 }
 
-#endif // PARTICLE_COMMON_HLSL
+#endif // PARTICLE_COMMON_HLSLI

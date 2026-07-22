@@ -5,7 +5,7 @@
 // u0: reflection output (premultiplied RGBA)
 // s0: LinearClamp
 #pragma pack_matrix(row_major)
-#include "utils.hlsl" // UnpackRM
+#include "utils.hlsli" // UnpackRM
 Texture2D ReflectionIn : register(t0);
 Texture2D GB0          : register(t1);
 RWTexture2D<float4> ReflectionOut : register(u0);

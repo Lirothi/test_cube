@@ -1,7 +1,7 @@
 // Part E1: spawn N particles by popping slots off the dead-list stack. N comes from the CPU's
 // fractional spawnRate*dt accumulator (root constants b0). All randomness is a GPU hash of
 // (slot, frameSeed, thread) — no CPU-side RNG state.
-#include "particle_common.hlsl"
+#include "particle_common.hlsli"
 
 cbuffer SpawnBatch : register(b0)
 {

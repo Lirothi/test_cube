@@ -1,6 +1,6 @@
 #define GLASS_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0)"
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 cbuffer PerObject : register(b0)
 {

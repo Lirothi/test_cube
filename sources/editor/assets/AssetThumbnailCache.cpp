@@ -86,7 +86,7 @@ namespace editor_thumbnail_detail
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 7;
+    constexpr std::uint32_t kThumbnailSchemaVersion = 8;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.

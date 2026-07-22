@@ -115,7 +115,7 @@ Official references:
   correct place to add `SHADING_MODEL_ID`.
 - Slot PSOs already differ for alpha-test and two-sided culling in
   `GBufferRenderable::ApplySlotPipelineOverrides`; auto-instancing groups use slot-specific PSOs.
-- `shaders/gbuffer_common.hlsl::FinalizeGBuffer` is shared by per-object, instanced, and instanced-CB
+- `shaders/gbuffer_common.hlsli::FinalizeGBuffer` is shared by per-object, instanced, and instanced-CB
   GBuffer shaders. It writes:
   - RT0: albedo + packed roughness/metal;
   - RT1: world normal + constant alpha 1;
@@ -126,7 +126,7 @@ Official references:
 - Deferred formats are declared in `sources/rendering/core/RenderConstants.h`; targets/descriptors are
   owned by `RenderTargetManager`. Object-ID allocation, readback, render-graph states, and MRT slots are
   compiled only with `WITH_EDITOR`; runtime binds five GBuffer MRTs while editor binds six.
-- Directional, point, and spot light compute shaders all use `EvalBRDF` from `shaders/utils.hlsl`.
+- Directional, point, and spot light compute shaders all use `EvalBRDF` from `shaders/utils.hlsli`.
   Directional ambient is a flat `albedo * (1-metal) * ambientIntensity` term.
 - Compose blends premultiplied SSR/RT coverage over the sky fallback:
   `reflection.rgb + sky * (1-reflection.a)`.
@@ -317,7 +317,7 @@ Release_Editor builds passed; every capture exited 0.
 - **Depends:** F0.
 - **Goal:** Carry a material shading model through JSON, PSO identity, and GBAux without changing light.
 - **Touch:** `MaterialData.h/.cpp`, `MaterialDataManager.h/.cpp`, `MaterialEditorPanel.*`,
-  `GBufferRenderable.cpp`, `shaders/gbuffer_common.hlsl`, all GBuffer variants, render-target lifecycle,
+  `GBufferRenderable.cpp`, `shaders/gbuffer_common.hlsli`, all GBuffer variants, render-target lifecycle,
   shared HLSL decode helpers, texture-debug UI.
 - **Implement:**
   - Add the C++ `ShadingModel` enum and strict string parse/serialize helpers.
@@ -354,7 +354,7 @@ compilation and `--scene-stress=5` exited 0, and lighting/compose still ignore t
 
 - **Depends:** F2.
 - **Goal:** Carry foliage data and indirect controls without changing the default rendered result.
-- **Touch:** material preset/data/editor files; `shaders/gbuffer_common.hlsl`, `gbuffer.hlsl`,
+- **Touch:** material preset/data/editor files; `shaders/gbuffer_common.hlsli`, `gbuffer.hlsl`,
   `gbuffer_inst.hlsl`, `gbuffer_instcb.hlsl`; `InstanceTypes.h` only if unavoidable;
   `RenderConstants.h`, `RenderTargetManager.*`, `Renderer.*`, `GBufferRenderable.cpp`, render-graph
   declarations, `TextureDebugViewer.*`, directional/local/compose descriptor tables.
@@ -402,7 +402,7 @@ validation diagnostics; this step does not claim a warning-free global GBV basel
 
 - **Depends:** F3.
 - **Goal:** Add thin-sheet front diffuse, back transmission, and unchanged direct GGX sun specular.
-- **Touch:** `shaders/utils.hlsl` (or new `shaders/foliage_lighting.hlsli`),
+- **Touch:** `shaders/utils.hlsli` (or new `shaders/foliage_lighting.hlsli`),
   `shaders/lighting_cs.hlsl`.
 - **Implement:**
   - Keep `EvalBRDF` unchanged for DefaultLit.
@@ -423,7 +423,7 @@ validation diagnostics; this step does not claim a warning-free global GBV basel
   highlight remains visible; DefaultLit is unchanged.
 - **Verify:** fixed-camera front/back-sun captures, Legacy CSM and VSM A/B, shadow-debug validation.
 
-**Result:** Shader-only, exactly the declared touch-list. `shaders/utils.hlsl` gained a shared
+**Result:** Shader-only, exactly the declared touch-list. `shaders/utils.hlsli` gained a shared
 `EvalFoliageBRDF` helper (and `FoliageResult`) returning separate front `diffBRDF`, front `specBRDF`,
 and back `transBRDF` terms so F5 point/spot and F11 RT hit shading can reuse identical math. The front
 side is byte-for-byte the DefaultLit Lambert+GGX response (`EvalBRDF`); the back side is restricted to

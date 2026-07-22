@@ -9,7 +9,7 @@
 // s0: LinearClamp, s1: PointClamp
 
 #pragma pack_matrix(row_major)
-#include "utils.hlsl" // UnpackRM if needed
+#include "utils.hlsli" // UnpackRM if needed
 
 Texture2D   LightTarget : register(t0);
 Texture2D   GB1         : register(t1);

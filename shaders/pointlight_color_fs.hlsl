@@ -1,6 +1,6 @@
 #define POINTLIGHT_COLOR_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 static const float PI = 3.14159265359;
 

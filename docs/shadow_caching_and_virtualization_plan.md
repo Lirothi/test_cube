@@ -172,7 +172,7 @@ go.
 
 **What already exists (reuse it):** `render::InstancePerObject` (208 B SV_InstanceID struct,
 `InstanceTypes.h:11`) — the instance-data format; `SV_InstanceID` indexing in the shadow VS
-(`gbuffer_common.hlsl`); `RecordComputeDispatch` (`ComputeDispatch.h:22`) + `Renderer::UAV
+(`gbuffer_common.hlsli`); `RecordComputeDispatch` (`ComputeDispatch.h:22`) + `Renderer::UAV
 Barrier` — the compute produce/consume pattern; `Frustum::planes_[6]` + `Intersects(AABB)`
 (`Frustum.h:94`) — the cull test to port to HLSL; `RenderableObject::GetWorldBounds()` (cached
 world AABB); `rt::BindlessTable` (`BindlessTable.h:44`) — the SM6.6 heap pattern IF Steps 8/9

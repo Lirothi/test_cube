@@ -13,7 +13,7 @@
 
 #pragma pack_matrix(row_major)
 
-#include "utils.hlsl"
+#include "utils.hlsli"
 #include "vsm_sample.hlsli"
 
 struct PointLightData

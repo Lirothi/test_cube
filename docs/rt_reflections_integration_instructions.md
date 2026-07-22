@@ -237,7 +237,7 @@ Each step below provides: **Depends**, **Goal**, **Touch** (files), **Implement*
 - **Touch:** new `shaders/rt_debug_cs.hlsl`, a debug pass in `SceneRenderer.cpp`, reuse
   `sources/rendering/debug/TextureDebugViewer`.
 - **Implement:** A `cs_6_5` shader: reconstruct world pos from depth (reuse `ReconstructPosWS`
-  in `shaders/utils.hlsl`), shoot a ray along the **reflection vector** (`reflect(-V, N)` using
+  in `shaders/utils.hlsli`), shoot a ray along the **reflection vector** (`reflect(-V, N)` using
   `gb1` normal as in `compose_cs.hlsl`), `RayQuery<RAY_FLAG_FORCE_OPAQUE>` against the TLAS,
   write hit distance / hit-normal / miss to a debug UAV. Bind TLAS SRV + GBuffer SRVs via the
   staged descriptor table (follow `RecordComputeDispatch` usage in `Pass_SSR`).

@@ -1,8 +1,8 @@
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 
-#ifndef GBUFFER_COMMON_HLSL
-#define GBUFFER_COMMON_HLSL
+#ifndef GBUFFER_COMMON_HLSLI
+#define GBUFFER_COMMON_HLSLI
 
 #ifndef SHADING_MODEL_ID
 #define SHADING_MODEL_ID 0

@@ -1,7 +1,7 @@
 #pragma pack_matrix(row_major)
 
-#ifndef UTILS_HLSL
-#define UTILS_HLSL
+#ifndef UTILS_HLSLI
+#define UTILS_HLSLI
 
 // ================== constants ==================
 static const float kEpsilon = 1e-6f;
@@ -326,4 +326,4 @@ inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload, flo
 	return o;
 }
 
-#endif // UTILS_HLSL
+#endif // UTILS_HLSLI

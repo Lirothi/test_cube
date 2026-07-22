@@ -5,17 +5,20 @@
 // alpha-test foliage, while keeping the preview scene isolated and lit by one
 // directional key light. Compiled at runtime as vs_5_0 / ps_5_0.
 
+#include "utils.hlsli"
+
 cbuffer PreviewCB : register(b0)
 {
     row_major float4x4 gMVP;    // model * view * proj (row-vector convention)
-    row_major float4x4 gModel;  // world transform (identity here)
     float4 gLightDir;           // xyz = light ray direction, w = exposure
-    float4 gEyePosition;         // xyz = preview camera position
-    float4 gBaseColor;           // real material baseColor factor
-    float4 gMetalRoughAlpha;     // xy = metal/rough, z = alpha cutoff, w = MR multiply
-    float4 gTexOffsScale;        // xy = UV offset, zw = UV scale
-    float4 gTexFlags;            // xyz = use albedo/MR/normal, w = normal strength
-    float4 gMaterialFlags;       // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
+    float4 gEyePosition;        // xyz = preview camera position
+    float4 gBaseColor;          // real material baseColor factor
+    float4 gMetalRoughAlpha;    // xy = metal/rough, z = alpha cutoff, w = MR multiply
+    float4 gTexOffsScale;       // xy = UV offset, zw = UV scale
+    float4 gTexFlags;           // xyz = use albedo/MR/normal, w = normal strength
+    float4 gMaterialFlags;      // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
+    float4 gSurfaceParams;      // rgb = subsurface color, w = transmission strength
+    float4 gSurfaceFlags;       // x = shading model ID, yzw reserved
     float4 gAmbient;            // rgb = light color, w = ambient intensity
 };
 
@@ -45,33 +48,13 @@ VSOutput VSMain(VSInput input)
 {
     VSOutput output;
     output.position = mul(float4(input.position, 1.0), gMVP);
-    output.worldPos = mul(float4(input.position, 1.0), gModel).xyz;
-    output.normalW = normalize(mul(input.normal, (float3x3)gModel));
-    output.tangentW = float4(normalize(mul(input.tangent.xyz,
-        (float3x3)gModel)), input.tangent.w);
+    // Preview meshes are drawn with an identity model transform. Keeping world-space data
+    // directly in the vertex payload leaves room in the 256-byte CB for shading-model params.
+    output.worldPos = input.position;
+    output.normalW = normalize(input.normal);
+    output.tangentW = float4(normalize(input.tangent.xyz), input.tangent.w);
     output.uv = input.uv;
     return output;
-}
-
-float DistributionGGX(float3 N, float3 H, float roughness)
-{
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float ndh = saturate(dot(N, H));
-    float d = ndh * ndh * (a2 - 1.0) + 1.0;
-    return a2 / max(3.14159265 * d * d, 1.0e-5);
-}
-
-float GeometrySchlickGGX(float ndv, float roughness)
-{
-    float r = roughness + 1.0;
-    float k = (r * r) * 0.125;
-    return ndv / max(ndv * (1.0 - k) + k, 1.0e-5);
-}
-
-float3 FresnelSchlick(float cosTheta, float3 f0)
-{
-    return f0 + (1.0 - f0) * pow(1.0 - saturate(cosTheta), 5.0);
 }
 
 float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
@@ -137,19 +120,30 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 
     float3 L = normalize(-gLightDir.xyz);
     float3 V = normalize(gEyePosition.xyz - input.worldPos);
-    float3 H = normalize(L + V);
-    float ndl = saturate(dot(N, L));
-    float ndv = saturate(dot(N, V));
-    float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
-    float3 F = FresnelSchlick(saturate(dot(H, V)), f0);
-    float D = DistributionGGX(N, H, roughness);
-    float G = GeometrySchlickGGX(ndv, roughness) *
-        GeometrySchlickGGX(ndl, roughness);
-    float3 specular = (D * G * F) / max(4.0 * ndv * ndl, 1.0e-4);
-    float3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / 3.14159265;
+    BRDFInput bi;
+    bi.albedo = albedo;
+    bi.rough = roughness;
+    bi.metal = metallic;
+    bi.N = N;
+    bi.V = V;
+    bi.L = L;
 
-    float3 lit = (albedo * gAmbient.w * (1.0 - metallic) +
-        (diffuse + specular) * ndl) * gAmbient.rgb * gLightDir.w;
+    const float3 radiance = gAmbient.rgb * gLightDir.w;
+    float3 lit = albedo * (1.0 - metallic) * gAmbient.w * radiance;
+    const uint shadingModel = (uint)round(gSurfaceFlags.x);
+    if (shadingModel == kShadingModelTwoSidedFoliage)
+    {
+        const float3 subsurfacePayload =
+            gSurfaceParams.rgb * gSurfaceParams.w;
+        FoliageResult foliage = EvalFoliageBRDF(bi, subsurfacePayload);
+        lit += ((foliage.diffBRDF + foliage.specBRDF) * foliage.NdotL +
+            foliage.transBRDF) * radiance;
+    }
+    else
+    {
+        BRDFResult brdf = EvalBRDF(bi);
+        lit += (brdf.diffBRDF + brdf.specBRDF) * brdf.NdotL * radiance;
+    }
     return float4(lit, 1.0);
 }
 

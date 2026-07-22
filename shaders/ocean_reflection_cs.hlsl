@@ -2,7 +2,7 @@
 
 #pragma pack_matrix(row_major)
 
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 Texture2D SceneColorTexture : register(t0);
 Texture2D SceneDepthTexture : register(t1);

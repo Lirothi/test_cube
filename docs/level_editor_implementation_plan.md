@@ -1537,7 +1537,7 @@ Pixel-accurate selection of any object under the cursor.
 ### Modify Files
 
 - `sources/rendering/core/RenderTargetManager.*` (objectID target)
-- `shaders/gbuffer_common.hlsl`, `shaders/gbuffer*.hlsl` (write the id)
+- `shaders/gbuffer_common.hlsli`, `shaders/gbuffer*.hlsl` (write the id)
 - `sources/rendering/renderables/RenderableObject.cpp` (set the id per draw)
 - the scene renderer (bind the target, issue the readback)
 - `sources/rendering/core/Renderer.*` (readback buffer)

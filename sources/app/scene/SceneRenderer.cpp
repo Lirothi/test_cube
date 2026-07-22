@@ -113,7 +113,7 @@ namespace
     // Filled once per pass and bound for every object in that pass, replacing the
     // old per-object duplication of view/light/cascade data.
 
-    // Matches gbuffer_common.hlsl `cbuffer PerView : register(b1)`. The depth-only
+    // Matches gbuffer_common.hlsli `cbuffer PerView : register(b1)`. The depth-only
     // shadow shaders consume only viewProj (the other two are left identity/unused).
     struct PerViewCB
     {

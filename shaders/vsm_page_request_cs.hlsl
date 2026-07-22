@@ -7,7 +7,7 @@
 // Produces the page-request bitfield (1 bit per virtual page across all views × levels); NOTHING
 // consumes it yet (Step 20 allocates physical pages from it).
 #pragma pack_matrix(row_major)
-#include "utils.hlsl"
+#include "utils.hlsli"
 
 #define VSM_PAGE_REQUEST_RS \
     "CBV(b0), " \

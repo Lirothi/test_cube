@@ -4,7 +4,7 @@
 // FinalizeGBuffer) so instanced objects render pixel-identical to the per-object path.
 #pragma pack_matrix(row_major)
 #define GBUFFER_SKIP_PEROBJECT
-#include "gbuffer_common.hlsl"
+#include "gbuffer_common.hlsli"
 
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
