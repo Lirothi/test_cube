@@ -34,7 +34,8 @@ cbuffer SlotParams : register(b2)
     float slotTransmissionStrength;
     float slotAmbientOcclusion;
     float slotIndirectSpecularScale;
-    float2 _slotSurfacePad;
+    float slotTransmissionAlbedoPower;
+    float slotTransmissionNormalWeight;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -51,7 +52,8 @@ cbuffer SurfaceParams : register(b2)
     float surfaceTransmissionStrength;
     float surfaceAmbientOcclusion;
     float surfaceIndirectSpecularScale;
-    float2 _surfacePad;
+    float surfaceTransmissionAlbedoPower;
+    float surfaceTransmissionNormalWeight;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -110,6 +112,8 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mTransmissionStrength = slotTransmissionStrength;
     const float  mAmbientOcclusion = slotAmbientOcclusion;
     const float  mIndirectSpecularScale = slotIndirectSpecularScale;
+    const float  mTransmissionAlbedoPower = slotTransmissionAlbedoPower;
+    const float  mTransmissionNormalWeight = slotTransmissionNormalWeight;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
@@ -122,6 +126,8 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mTransmissionStrength = surfaceTransmissionStrength;
     const float  mAmbientOcclusion = surfaceAmbientOcclusion;
     const float  mIndirectSpecularScale = surfaceIndirectSpecularScale;
+    const float  mTransmissionAlbedoPower = surfaceTransmissionAlbedoPower;
+    const float  mTransmissionNormalWeight = surfaceTransmissionNormalWeight;
 #endif
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
@@ -151,5 +157,6 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     float2 motion = currUv - prevUv;
 
     return FinalizeGBuffer(albedo, mr, N, mEmissive, mSubsurfaceColor, mTransmissionStrength,
-                           mAmbientOcclusion, mIndirectSpecularScale, motion, i.objectId);
+                           mAmbientOcclusion, mIndirectSpecularScale, mTransmissionAlbedoPower,
+                           mTransmissionNormalWeight, motion, i.objectId);
 }

@@ -28,7 +28,8 @@ cbuffer InstDraw : register(b2)
     float transmissionStrength;
     float ambientOcclusion;
     float indirectSpecularScale;
-    float2 _surfacePad;
+    float transmissionAlbedoPower;
+    float transmissionNormalWeight;
 };
 cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
 
@@ -73,5 +74,6 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float2 motion = currUv - prevUv;
 
     return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
-                           ambientOcclusion, indirectSpecularScale, motion, i.objectId);
+                           ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
+                           transmissionNormalWeight, motion, i.objectId);
 }

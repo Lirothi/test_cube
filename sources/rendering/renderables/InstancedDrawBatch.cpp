@@ -139,7 +139,8 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             sp->surface.transmissionStrength = surface.transmissionStrength;
             sp->surface.ambientOcclusion = surface.ambientOcclusion;
             sp->surface.indirectSpecularScale = surface.indirectSpecularScale;
-            sp->surface._pad = DirectX::XMFLOAT2(0.0f, 0.0f);
+            sp->surface.transmissionAlbedoPower = surface.transmissionAlbedoPower;
+            sp->surface.transmissionNormalWeight = surface.transmissionNormalWeight;
             slotCbScratch_[slot] = cb.gpu;
         }
     }

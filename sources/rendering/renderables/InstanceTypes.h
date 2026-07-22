@@ -13,7 +13,8 @@ struct alignas(16) MaterialSurfaceParamsGpu
     float             transmissionStrength; // 12
     float             ambientOcclusion;     // 16
     float             indirectSpecularScale;// 20
-    DirectX::XMFLOAT2 _pad;                  // 24
+    float             transmissionAlbedoPower; // 24
+    float             transmissionNormalWeight;// 28
 };                                           // 32
 static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
     "MaterialSurfaceParamsGpu must match the HLSL SurfaceParams layout (32 bytes)");

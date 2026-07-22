@@ -281,29 +281,32 @@ inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
 }
 
 // ===== Two-sided thin-foliage direct lighting =====
-// Adds a back-hemisphere transmission lobe on top of the standard front-side GGX/Lambert
-// response so a thin leaf lit from behind glows with a tinted subsurface color — matching the
+// Adds a view-opposed transmission lobe on top of the standard front-side GGX/Lambert
+// response so a thin leaf viewed against a light glows with a tinted subsurface color — matching the
 // intent of Unreal's legacy "Two Sided Foliage" model (a thin-sheet wrap/transmission
 // approximation, not volumetric subsurface scattering).
 //
 // N is the VISIBLE-side normal (already SV_IsFrontFace-corrected when the GBuffer is written),
-// so front lighting uses dot(N,L) exactly like DefaultLit. Transmission is restricted to light
-// behind that visible side via dot(-N,L), then gated by the view/light opposition. The second
-// gate is what makes a leaf glow when it is viewed against the source instead of tinting foliage
-// from every camera direction.
+// so front lighting uses dot(N,L) exactly like DefaultLit. Transmission treats both botanical
+// sides identically through abs(N.L); view/light opposition makes a leaf glow when it is viewed
+// against the source instead of tinting foliage from every camera direction.
 static const float kFoliageTransmissionViewPower = 2.0f;
+static const float kFoliageTransmissionNormalWeight = 0.35f;
 
 struct FoliageResult
 {
 	float3 diffBRDF;  // front Lambert BRDF; caller multiplies by NdotL * radiance
 	float3 specBRDF;  // front GGX BRDF;     caller multiplies by NdotL * radiance
-	float3 transBRDF; // back transmission weight (cosine + wrap + payload baked in); caller multiplies by radiance only
+	float3 transBRDF; // two-sided transmission weight (Fresnel + wrap + payload); caller multiplies by radiance only
 	float  NdotL;     // front cosine, weights diffBRDF + specBRDF
 };
 
-// subsurfacePayload = GB2.rgb = subsurfaceColor * transmissionStrength (premultiplied at the
-// GBuffer write in F3). lightAngularSize widens the analytic sun GGX lobe (see EvalBRDF).
-inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload, float lightAngularSize = 0.0f)
+// subsurfacePayload = GB2.rgb = subsurfaceColor * transmissionStrength * albedoTransmission.
+// lightAngularSize widens the analytic sun GGX lobe (see EvalBRDF). normalWeight blends broad
+// thin-sheet wrap with projected-area weighting without assigning a privileged side to the leaf.
+inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload,
+	float lightAngularSize = 0.0f,
+	float normalWeight = kFoliageTransmissionNormalWeight)
 {
 	FoliageResult o;
 
@@ -314,14 +317,24 @@ inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload, flo
 	o.specBRDF = br.specBRDF;
 	o.NdotL = br.NdotL;
 
-	// Back side only: no terminator wrap, so front/grazing light cannot leak into transmission.
+	// The sheet is two-sided: abs(N.L) measures projected area without privileging either
+	// botanical side. A material weight keeps some broad wrap while retaining angle variation.
+	float sheetNdotL = saturate(abs(dot(bi.N, bi.L)));
+	float incidence = lerp(1.0f, sheetNdotL, saturate(normalWeight));
+
+	// Account for reflection at both interfaces. For a dielectric leaf this retains about 92%
+	// at normal incidence and smoothly suppresses impossible grazing-angle transmission.
+	float sheetNdotV = saturate(abs(dot(bi.N, bi.V)));
+	float3 FIn = F_Schlick(sheetNdotL, kF0Dielectric);
+	float3 FOut = F_Schlick(sheetNdotV, kF0Dielectric);
+	float3 interfaceTransmission = (1.0f - FIn) * (1.0f - FOut) * (1.0f - bi.metal);
+
 	// The view gate peaks when the camera and light are on opposite sides of the leaf. Squaring
 	// it gives a broad but directional forward-scattering lobe without an all-around glow.
-    float backNdotL = 1;//    saturate(dot(-bi.N, bi.L));
 	float viewLightOpposition = saturate(dot(bi.V, -bi.L));
 	float viewScatter = pow(viewLightOpposition, kFoliageTransmissionViewPower);
-	float transmit = backNdotL * viewScatter;
-	o.transBRDF = subsurfacePayload * transmit * kInvPi;
+	float transmit = incidence * viewScatter;
+	o.transBRDF = subsurfacePayload * interfaceTransmission * transmit * kInvPi;
 
 	return o;
 }

@@ -113,9 +113,9 @@ struct PSOut
     float2 RT3 : SV_Target3; // Motion vector (UV delta)
 #ifdef EDITOR_OBJECT_ID
     uint RT4 : SV_Target4; // Editor object id (0 = none)
-    float4 RT5 : SV_Target5; // GBAux: AO, indirect specular scale, shading model / 15, reserved
+    float4 RT5 : SV_Target5; // GBAux: AO, indirect specular scale, shading model / 15, transmission normal weight
 #else
-    float4 RT4 : SV_Target4; // GBAux: AO, indirect specular scale, shading model / 15, reserved
+    float4 RT4 : SV_Target4; // GBAux: AO, indirect specular scale, shading model / 15, transmission normal weight
 #endif
 };
 
@@ -149,7 +149,8 @@ inline VSOut BaseVS(float3 pos,
 inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
                              float3 emissiveValue, float3 subsurfaceColorValue,
                              float transmissionStrengthValue, float ambientOcclusionValue,
-                             float indirectSpecularScaleValue, float2 motion, uint objectIdValue)
+                             float indirectSpecularScaleValue, float transmissionAlbedoPowerValue,
+                             float transmissionNormalWeightValue, float2 motion, uint objectIdValue)
 {
     PSOut o;
     float metal = mr.x;
@@ -160,7 +161,11 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
     o.RT1 = float4(NrmTo01(NWS), 1.0);
 #if SHADING_MODEL_ID == 1
-    o.RT2 = float4(subsurfaceColorValue * transmissionStrengthValue, 0.0);
+    // Use linear albedo as a spatial absorption/thickness proxy. This is a Beer-Lambert-like
+    // relation (T = T0^distance): dark veins/stems transmit less while color variation survives.
+    const float albedoPower = max(transmissionAlbedoPowerValue, 0.0);
+    const float3 albedoTransmission = pow(max(saturate(albedo), 1.0e-3), albedoPower);
+    o.RT2 = float4(subsurfaceColorValue * transmissionStrengthValue * albedoTransmission, 0.0);
 #else
     o.RT2 = float4(emissiveValue, 0.0);
 #endif
@@ -168,10 +173,10 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
 #ifdef EDITOR_OBJECT_ID
     o.RT4 = objectIdValue;
     o.RT5 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+                   EncodeShadingModel(SHADING_MODEL_ID), saturate(transmissionNormalWeightValue));
 #else
     o.RT4 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), 0.0);
+                   EncodeShadingModel(SHADING_MODEL_ID), saturate(transmissionNormalWeightValue));
 #endif
     return o;
 }

@@ -224,8 +224,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     // GBAux.b carries the four-bit shading-model ID (F2). Foliage additionally reads its
     // premultiplied subsurface/transmission payload from GB2 (F3).
-    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    const float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
+    uint shadingModel = DecodeShadingModel(gbAux.b);
     const bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
+    const float transmissionNormalWeight = saturate(gbAux.a);
     float3 subsurface = 0.0f.xxx;
     if (isFoliage)
     {
@@ -249,7 +251,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     if (isFoliage)
     {
-        FoliageResult fr = EvalFoliageBRDF(bi, subsurface, sunAngularSize);
+        FoliageResult fr = EvalFoliageBRDF(
+            bi, subsurface, sunAngularSize, transmissionNormalWeight);
 
         // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math
         // and same shadow as DefaultLit.
@@ -260,9 +263,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow;
         }
 
-        // Back hemisphere: light transmitted through the thin leaf toward the viewer. Sample
+        // View-opposed lobe: light transmitted through the thin leaf toward the viewer. Sample
         // the shadow with the normal flipped (-N) so the receiver is offset toward the
-        // sun-facing side and its slope bias uses the back cosine — otherwise the leaf's own
+        // light-facing side and its slope bias uses the opposite cosine — otherwise the leaf's own
         // front face self-shadows the transmission to black. This is the scoped transmission
         // shadow bias the plan (F4) calls for, not shadow disablement: a genuine occluder
         // between the sun and the leaf still darkens the sun-facing side and kills transmission.

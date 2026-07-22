@@ -2,7 +2,7 @@
   "albedo": "models/coconut_palm/textures/Tree_2Mat_baseColor.png",
   "alphaCutoff": 0.25811079144477844,
   "alphaTest": true,
-  "indirectSpecularScale": 0.20000000298023224,
+  "indirectSpecularScale": 0.5,
   "metalRough": [
     1.0,
     1.0
@@ -13,11 +13,13 @@
   "normalIsRG": false,
   "shadingModel": "twoSidedFoliage",
   "subsurfaceColor": [
-    0.20172403752803802,
-    0.5382059812545776,
-    0.1144358366727829
+    0.5529674291610718,
+    0.6312292218208313,
+    0.5326651930809021
   ],
-  "transmissionStrength": 0.10000000149011612,
+  "transmissionAlbedoPower": 0.800000011920929,
+  "transmissionNormalWeight": 1.0,
+  "transmissionStrength": 1.0,
   "twoSided": true,
   "useTBN": true
 }

@@ -74,6 +74,10 @@ namespace
         preset.surfaceParams.indirectSpecularScale =
             std::clamp(p.value("indirectSpecularScale", 1.0f), 0.0f, 1.0f);
         preset.surfaceParams.ambientOcclusion = p.value("ambientOcclusion", 1.0f);
+        preset.surfaceParams.transmissionAlbedoPower =
+            std::clamp(p.value("transmissionAlbedoPower", 0.6f), 0.0f, 4.0f);
+        preset.surfaceParams.transmissionNormalWeight =
+            std::clamp(p.value("transmissionNormalWeight", 0.35f), 0.0f, 1.0f);
 
         if (readFloats("tint", v4, 4))
         {

@@ -48,7 +48,7 @@ namespace
         dx::XMFLOAT4 texFlags; // xyz = use albedo/MR/normal, w = normal strength
         dx::XMFLOAT4 materialFlags; // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
         dx::XMFLOAT4 surfaceParams; // rgb = subsurface color, w = transmission strength
-        dx::XMFLOAT4 surfaceFlags; // x = shading model ID, yzw reserved
+        dx::XMFLOAT4 surfaceFlags; // x = shading model ID, y = albedo power, z = normal weight
         dx::XMFLOAT4 ambient;
     };
     static_assert(sizeof(PreviewConstants) <= 256, "PreviewConstants must fit one 256B CBV.");
@@ -689,7 +689,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 material->surfaceParams.subsurfaceColor.z,
                 material->surfaceParams.transmissionStrength };
             cb.surfaceFlags = dx::XMFLOAT4{
-                static_cast<float>(material->shadingModel), 0.0f, 0.0f, 0.0f };
+                static_cast<float>(material->shadingModel),
+                material->surfaceParams.transmissionAlbedoPower,
+                material->surfaceParams.transmissionNormalWeight,
+                0.0f };
         }
         else
         {
@@ -700,7 +703,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             cb.materialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
             cb.surfaceParams = dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 0.0f };
             cb.surfaceFlags = dx::XMFLOAT4{
-                static_cast<float>(ShadingModel::DefaultLit), 0.0f, 0.0f, 0.0f };
+                static_cast<float>(ShadingModel::DefaultLit),
+                MaterialSurfaceParams{}.transmissionAlbedoPower,
+                MaterialSurfaceParams{}.transmissionNormalWeight,
+                0.0f };
         }
         cb.ambient = dx::XMFLOAT4{
             std::max(0.0f, light.color.x),

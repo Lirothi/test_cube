@@ -34,6 +34,8 @@ namespace materialgen
         m["shadingModel"] = "defaultLit";
         m["subsurfaceColor"] = { 1.0f, 1.0f, 1.0f };
         m["transmissionStrength"] = 0.0f;
+        m["transmissionAlbedoPower"] = 0.6f;
+        m["transmissionNormalWeight"] = 0.35f;
         m["indirectSpecularScale"] = 1.0f;
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;

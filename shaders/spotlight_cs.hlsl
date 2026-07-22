@@ -167,8 +167,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 V = normalize(camPosWS - P);
 
     // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).
-    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    const float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
+    uint shadingModel = DecodeShadingModel(gbAux.b);
     bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
+    const float transmissionNormalWeight = saturate(gbAux.a);
     float3 subsurface = 0.0f.xxx;
     if (isFoliage)
     {
@@ -216,13 +218,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         {
             // F5: shared F4 foliage helper -> spot lights match the directional/point model.
             // Cone + distance attenuation and shadow apply to the front lobe and transmission.
-            FoliageResult fr = EvalFoliageBRDF(bi, subsurface);
+            FoliageResult fr = EvalFoliageBRDF(
+                bi, subsurface, 0.0f, transmissionNormalWeight);
             if (fr.NdotL > 0.0f)
             {
                 float shadow = ComputeSpotShadow(light, P, N, fr.NdotL);
                 accum += (fr.diffBRDF + fr.specBRDF) * fr.NdotL * radiance * shadow;
             }
-            // Transmission: flipped-normal shadow sample so the leaf's own front face does not
+            // Transmission: flipped-normal shadow sample so the leaf's light-facing face does not
             // self-shadow the light passing through it (mirrors lighting_cs F4).
             if (any(fr.transBRDF > 0.0f))
             {

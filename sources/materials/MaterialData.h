@@ -37,6 +37,11 @@ struct MaterialSurfaceParams
     float transmissionStrength = 0.0f;
     float ambientOcclusion = 1.0f;
     float indirectSpecularScale = 1.0f;
+    // Treat linear albedo as a unit-distance transmission proxy: T = albedo^power.
+    // Zero preserves the old uniform payload; larger values increase color/thickness contrast.
+    float transmissionAlbedoPower = 0.6f;
+    // Blend between broad thin-sheet wrap (0) and abs(N.L) projected-area weighting (1).
+    float transmissionNormalWeight = 0.35f;
 };
 
 // ---------------------

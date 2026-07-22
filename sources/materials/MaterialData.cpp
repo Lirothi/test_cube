@@ -147,7 +147,8 @@ void MaterialData::StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UI
         dst->transmissionStrength = surfaceParams.transmissionStrength;
         dst->ambientOcclusion = surfaceParams.ambientOcclusion;
         dst->indirectSpecularScale = surfaceParams.indirectSpecularScale;
-        dst->_pad = DirectX::XMFLOAT2(0.0f, 0.0f);
+        dst->transmissionAlbedoPower = surfaceParams.transmissionAlbedoPower;
+        dst->transmissionNormalWeight = surfaceParams.transmissionNormalWeight;
         surfaceCbCache_.frameNumber = frameNumber;
         surfaceCbCache_.gpu = cb.gpu;
     }

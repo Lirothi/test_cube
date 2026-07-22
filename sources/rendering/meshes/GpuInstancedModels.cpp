@@ -203,7 +203,8 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
         drawParams->surface.transmissionStrength = surface.transmissionStrength;
         drawParams->surface.ambientOcclusion = surface.ambientOcclusion;
         drawParams->surface.indirectSpecularScale = surface.indirectSpecularScale;
-        drawParams->surface._pad = XMFLOAT2(0.0f, 0.0f);
+        drawParams->surface.transmissionAlbedoPower = surface.transmissionAlbedoPower;
+        drawParams->surface.transmissionNormalWeight = surface.transmissionNormalWeight;
         ctx.cbv[2] = baseCB.gpu;
         mat->Bind(cl, ctx, wireframe);
         mesh_->DrawInstanced(cl, tierCount_[tier], tier);

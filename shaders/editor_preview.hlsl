@@ -18,7 +18,7 @@ cbuffer PreviewCB : register(b0)
     float4 gTexFlags;           // xyz = use albedo/MR/normal, w = normal strength
     float4 gMaterialFlags;      // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
     float4 gSurfaceParams;      // rgb = subsurface color, w = transmission strength
-    float4 gSurfaceFlags;       // x = shading model ID, yzw reserved
+    float4 gSurfaceFlags;       // x = shading model ID, y = albedo power, z = normal weight
     float4 gAmbient;            // rgb = light color, w = ambient intensity
 };
 
@@ -133,9 +133,13 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     const uint shadingModel = (uint)round(gSurfaceFlags.x);
     if (shadingModel == kShadingModelTwoSidedFoliage)
     {
+        const float albedoPower = max(gSurfaceFlags.y, 0.0f);
+        const float3 albedoTransmission =
+            pow(max(saturate(albedo), 1.0e-3), albedoPower);
         const float3 subsurfacePayload =
-            gSurfaceParams.rgb * gSurfaceParams.w;
-        FoliageResult foliage = EvalFoliageBRDF(bi, subsurfacePayload);
+            gSurfaceParams.rgb * gSurfaceParams.w * albedoTransmission;
+        FoliageResult foliage = EvalFoliageBRDF(
+            bi, subsurfacePayload, 0.0f, saturate(gSurfaceFlags.z));
         lit += ((foliage.diffBRDF + foliage.specBRDF) * foliage.NdotL +
             foliage.transBRDF) * radiance;
     }

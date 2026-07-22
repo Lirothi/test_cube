@@ -318,6 +318,38 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         {
             doc_["transmissionStrength"] = transmission;
         }
+        const float serializedAlbedoPower = doc_.value("transmissionAlbedoPower", 0.6f);
+        float albedoPower = std::clamp(serializedAlbedoPower, 0.0f, 4.0f);
+        if (albedoPower != serializedAlbedoPower)
+        {
+            doc_["transmissionAlbedoPower"] = albedoPower;
+        }
+        if (ImGui::DragFloat("Transmission Albedo Power", &albedoPower, 0.01f, 0.0f, 4.0f,
+                             "%.3f", ImGuiSliderFlags_AlwaysClamp))
+        {
+            doc_["transmissionAlbedoPower"] = std::clamp(albedoPower, 0.0f, 4.0f);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Nonlinear absorption derived from linear albedo (T = albedo^power).\n"
+                              "0 gives uniform transmission; larger values darken stems and veins.");
+        }
+        const float serializedNormalWeight = doc_.value("transmissionNormalWeight", 0.35f);
+        float normalWeight = std::clamp(serializedNormalWeight, 0.0f, 1.0f);
+        if (normalWeight != serializedNormalWeight)
+        {
+            doc_["transmissionNormalWeight"] = normalWeight;
+        }
+        if (ImGui::DragFloat("Transmission Normal Weight", &normalWeight, 0.01f, 0.0f, 1.0f,
+                             "%.3f", ImGuiSliderFlags_AlwaysClamp))
+        {
+            doc_["transmissionNormalWeight"] = std::clamp(normalWeight, 0.0f, 1.0f);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("0 keeps broad two-sided wrap; 1 uses abs(N.L) projected-area weighting.\n"
+                              "Fresnel still suppresses grazing-angle transmission.");
+        }
         const float serializedIndirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
         float indirectSpecularScale = std::clamp(serializedIndirectSpecularScale, 0.0f, 1.0f);
         if (indirectSpecularScale != serializedIndirectSpecularScale)
