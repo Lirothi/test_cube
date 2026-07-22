@@ -46,6 +46,24 @@ struct WindState
         swayAmplitude = foliageSwayMeters * strength;
         gustMul = 1.0f; // W6 replaces this with the gust envelope
     }
+
+    // W5: worst-case horizontal displacement (metres) WindOffset can produce for a caster at
+    // windStrength 1. The shader's sway peaks at |sin(p) + 0.5*sin(...)| <= 1.5 and the
+    // perpendicular flutter adds up to 0.15 of the same amplitude, all scaled by the gust
+    // envelope's ceiling (1 + gustAmplitude, once W6 turns gusts on). Used to pad shadow caster
+    // bounds so the VSM per-page / Rung-0 cull never clips a swaying frond tip.
+    float MaxSwayExtentMeters() const
+    {
+        constexpr float kMaxSwayFactor = 1.65f; // 1.5 (layered sines) + 0.15 (flutter)
+        const float gustCeil = 1.0f + (gustAmplitude > 0.0f ? gustAmplitude : 0.0f);
+        return swayAmplitude * gustCeil * kMaxSwayFactor;
+    }
 };
+
+// W5: ShadowGpuData::FillBounds pads swaying casters' world AABBs but has no Scene/frame pointer.
+// Scene::Tick publishes the current wind's max sway extent here each frame (0 = no wind => the
+// bounds are byte-identical to the pre-wind path). Bounds are only refilled on a rebuild or when a
+// caster moves, so a live edit of the wind params (W6) takes effect on the next such refill.
+inline float g_maxSwayExtentMeters = 0.0f;
 
 } // namespace vfx

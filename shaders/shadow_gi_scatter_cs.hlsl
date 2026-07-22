@@ -14,9 +14,10 @@
 
 cbuffer ScatterParams : register(b0)
 {
-    uint   gGiBase;      // first global caster id of this object's instances
-    uint   gCount;       // instance count
-    uint2  _pad0;
+    uint   gGiBase;        // first global caster id of this object's instances
+    uint   gCount;         // instance count
+    float  gWindStrength;  // W5: the object's foliage sway strength (0 = rigid), same value gbuffer_inst.hlsl passes
+    float  gSwayPad;       // W5: metres to grow the world AABB on X/Z for the sway (0 when rigid)
     float4 gAabbCenter;  // mesh-local AABB center (w unused)
     float4 gAabbExtent;  // mesh-local AABB half-extents (w unused)
     row_major float4x4 gObjectWorld; // object model matrix, folded onto each instance's local world
@@ -31,7 +32,12 @@ struct InstanceData
     float3 _pad;
 };
 
-// Matches render::InstancePerObject (208 bytes). Shadows are depth-only, so only .world is written.
+// Matches render::InstancePerObject (224 bytes — W3 grew it 208 -> 224 for windStrength; this is the
+// 4th mirror of that layout, alongside InstanceTypes.h, gbuffer_common.hlsli and
+// shadow_indirect_csm.hlsl, and it MUST move with them). Shadows are depth-only, so the scatter
+// writes only .world and (since W5) .windStrength — the shadow VS reads both, and the GI region of
+// the unified DEFAULT-heap buffer is never otherwise initialised, so anything the VS reads here that
+// the scatter does not write is garbage.
 struct InstancePerObject
 {
     float4x4 world;
@@ -44,6 +50,8 @@ struct InstancePerObject
     float4   texFlags;
     uint     objectId;
     uint3    _instPad1;
+    float    windStrength; // 208
+    float3   _instPad2;    // pad to 224
 };
 // Matches render::CasterBounds (32 bytes): world center + radius, world half-extents.
 struct CasterBounds
@@ -69,13 +77,20 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float4x4 world = mul(gSrc[i].world, gObjectWorld); // full model->world (== gbuffer_inst_csm)
     const uint dst = gGiBase + i;
     gInst[dst].world = world;
+    // W5: the indirect shadow VS sways by this. It is NOT written anywhere else for GI ids, so
+    // leaving it out feeds the sway uninitialised buffer memory (= scrambled GI shadows).
+    gInst[dst].windStrength = gWindStrength;
 
     // Conservative world AABB from the mesh-local AABB under `world` (row-vector convention:
     // p' = mul(float4(p,1), world); extents map through abs of the upper-left 3x3).
     const float3 c = gAabbCenter.xyz;
     const float3 e = gAabbExtent.xyz;
     const float3 cW = mul(float4(c, 1.0f), world).xyz;
-    const float3 eW = mul(e, abs((float3x3)world));
+    float3 eW = mul(e, abs((float3x3)world));
+    // W5: grow by the max sway on the horizontal axes (mirrors ShadowGpuData::FillBounds for the
+    // static casters) so the per-page / per-view cull can't clip a swaying tip. 0 when rigid.
+    eW.x += gSwayPad;
+    eW.z += gSwayPad;
     gBounds[dst].center = float4(cW, length(eW));
     gBounds[dst].halfExtents = float4(eW, 0.0f);
 }

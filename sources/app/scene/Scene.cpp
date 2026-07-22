@@ -749,6 +749,8 @@ void Scene::Tick(float deltaTime) {
         OceanRenderable* ocean = FindOceanRenderable();
         const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
         windState_.Tick(clock);
+        // W5: publish the sway extent for ShadowGpuData::FillBounds (caster-bounds padding).
+        vfx::g_maxSwayExtentMeters = windState_.MaxSwayExtentMeters();
 
         // W1/W2 verify (self-limiting): the wind clock tracks the ocean, windDirXZ is unit, and (W2)
         // the ocean's wind dir/force reflect the authored wind entity when it is active.

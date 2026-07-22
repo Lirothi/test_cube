@@ -7,6 +7,7 @@
 // from it until the Step 6 behavioral flip.
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "wind.hlsli" // W5: the SAME sway function the gbuffer BaseVS uses (shadow must not diverge)
 
 // C2: SHADOW_MASKED=1 builds the alpha-tested variant — used for the WHOLE caster set whenever
 // it contains any masked (alphaMode=MASK) group, so the per-page/per-view single-ExecuteIndirect
@@ -33,7 +34,7 @@
 
 // Matches render::InstancePerObject (224 bytes) / the InstanceArray element in gbuffer_common.
 // W3 grew it 208 -> 224 to add windStrength; the tail (emissive + pad) is unused by the shadow
-// pass, so it is aliased as padding. W5 will read `windStrength` here to sway the shadow.
+// pass, so it is aliased as padding. W5 reads `windStrength` here to sway the shadow.
 struct InstancePerObject
 {
     float4x4 world;
@@ -53,12 +54,33 @@ struct InstancePerObject
 StructuredBuffer<InstancePerObject> Instances : register(t0);
 
 // Shared per-view CB (light viewProj for the shadow passes); same layout as gbuffer_common's.
+// W5: the wind tail at offset 192 must stay byte-identical to the gbuffer `cbuffer PerView` — the
+// CSM/spot/point paths get it from SceneRenderer::BuildShadowViewCB, and the VSM per-page path from
+// the 256-byte PageProj slot the setup CS writes (vsm_page_setup_cs.hlsl stores it at po+192).
+// viewProjNoJitter/prevViewProjNoJitter stay unread here (undefined in the VSM slot).
 cbuffer PerView : register(b1)
 {
     float4x4 viewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
+    float  windTime;      // 192
+    float  windPrevTime;  // 196 (unused: depth-only, no motion vectors)
+    float2 windDirXZ;     // 200
+    float  windSwayAmp;   // 208
+    float  windSwayFreq;  // 212
+    float  windGustMul;   // 216
+    float  _windPad;      // 220
 };
+
+// Mirrors gbuffer_common.hlsli::ApplyWindWS exactly (that header is not included here — this shader
+// declares its own leaner PerObject/PerView). Any drift between the two detaches the shadow.
+inline float4 WindTransformH(float3 objPos, float4x4 world, float windStrengthValue)
+{
+    float4 wp = mul(float4(objPos, 1.0f), world);
+    wp.xyz += WindOffset(objPos, float3(world._41, world._42, world._43), windStrengthValue,
+                         windDirXZ, windSwayAmp, windSwayFreq, windGustMul, windTime);
+    return mul(wp, viewProj);
+}
 
 #if SHADOW_MASKED
 
@@ -85,8 +107,8 @@ struct VSOutMasked
 VSOutMasked VSMain(VSInMasked i)
 {
     VSOutMasked o;
-    const float4x4 world = Instances[i.casterId].world;
-    o.H = TransformPositionH(i.P, world, viewProj);
+    const InstancePerObject ip = Instances[i.casterId];
+    o.H = WindTransformH(i.P, ip.world, ip.windStrength);
     o.UV = i.UV;
     const uint2 gm = GroupMask[CasterGroup[i.casterId]];
     o.texSlot = gm.x;
@@ -115,8 +137,8 @@ struct VSOutD { float4 H : SV_POSITION; };
 VSOutD VSMain(VSInIndirect i)
 {
     VSOutD o;
-    const float4x4 world = Instances[i.casterId].world;
-    o.H = TransformPositionH(i.P, world, viewProj);
+    const InstancePerObject ip = Instances[i.casterId];
+    o.H = WindTransformH(i.P, ip.world, ip.windStrength);
     return o;
 }
 

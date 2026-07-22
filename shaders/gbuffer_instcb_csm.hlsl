@@ -13,7 +13,13 @@ struct VSOutD { float4 H : SV_POSITION; };
 VSOutD VSMain(VSInInst i)
 {
     VSOutD o;
-    o.H = TransformPositionH(i.P, inst[i.IID].world, viewProj);
+    // W5: mirror the gbuffer BaseVS sway. Safe to read windStrength here: the shadow instance array
+    // is filled by the same IInstanceable::FillInstanceData as the gbuffer one (InstancedDrawBatch),
+    // unlike the non-instanced b0 which UpdateShadowCB has to populate explicitly.
+    const float4x4 w = inst[i.IID].world;
+    float4 wp = mul(float4(i.P, 1.0f), w);
+    wp.xyz += ApplyWindWS(i.P, w, inst[i.IID].windStrength, windTime);
+    o.H = mul(wp, viewProj);
     return o;
 }
 

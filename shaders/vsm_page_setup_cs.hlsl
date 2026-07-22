@@ -28,6 +28,11 @@ cbuffer SetupCB : register(b0)
     uint gNumCasters;   // active caster count (ShadowGpuData::ActiveCasterCount) + per-page slice stride
     uint gForceAll;     // page cache: 1 = mark every resident page dirty (static caster moved / rebuild)
     uint _pad0, _pad1, _pad2;
+    // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
+    // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
+    // float4s that make up that cbuffer tail.
+    float4 gWind0;      // x=time, y=prevTime, z=windDirXZ.x, w=windDirXZ.y
+    float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=pad
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
 };
@@ -107,6 +112,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     PageProj.Store4(po + 16u, asuint(pm[1]));
     PageProj.Store4(po + 32u, asuint(pm[2]));
     PageProj.Store4(po + 48u, asuint(pm[3]));
+    // W5: the wind tail of the shadow PerView CB. Bytes 64..192 (viewProjNoJitter /
+    // prevViewProjNoJitter) stay unwritten — the depth-only shadow VS never reads them.
+    PageProj.Store4(po + 192u, asuint(gWind0));
+    PageProj.Store4(po + 208u, asuint(gWind1));
 
     // The page's 6 frustum planes from pm (columns; clip = mul(world, pm)). Positive-vertex test is
     // scale-invariant, so unnormalized planes are fine. Near/far match the view (S preserves z).

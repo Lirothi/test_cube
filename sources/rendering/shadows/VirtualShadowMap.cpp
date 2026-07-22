@@ -8,6 +8,7 @@
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
+#include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
 {
@@ -703,7 +704,8 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
 }
 
 void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    ShadowGpuData* shadowGpu, const vsm::ViewProjEntry* views, std::uint32_t viewCount)
+    ShadowGpuData* shadowGpu, const vsm::ViewProjEntry* views, std::uint32_t viewCount,
+    const vfx::WindState* wind)
 {
     if (!renderer || !cl || !IsAllocated() || !shadowGpu || !views) { return; }
     EnsureShaderResources(renderer);
@@ -739,7 +741,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const bool caching = vsm::g_pageCaching && pageClearMat_ && pageClearMat_->GetPipelineState() && perPageDirtySrv_.ptr != 0;
     // Force a full render when caching is off, on the warmup frame (physOwnerPrev_ still garbage), or
     // when a static caster moved / a rebuild happened (not covered by the per-page dynamic test).
-    const std::uint32_t forceAll = (!caching || cacheWarmup_ || shadowGpu->MoverCount() > 0) ? 1u : 0u;
+    // W5: a wind caster sways in the VERTEX shader, so it is neither a "mover" nor a dynamic caster —
+    // the per-page dirty test would call its page clean and cache a stale, frozen shadow pose.
+    const bool windAnimating = wind && wind->swayAmplitude > 0.0f && shadowGpu->HasWindCasters();
+    const std::uint32_t forceAll =
+        (!caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 || windAnimating) ? 1u : 0u;
 
     // Consolidated caster VB/IB (built once at level load, ShadowGpuData::EnsureMegaBuffer): when
     // ready, the draw loop below binds geometry ONCE + issues one ExecuteIndirect(maxCount=groups)
@@ -763,6 +769,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, _p0, _p1, _p2;
+        // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
+        // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
+        // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
+        // `cbuffer PerView` in gbuffer_common.hlsli / shadow_indirect_csm.hlsl.
+        DirectX::XMFLOAT4 wind0{ 0.0f, 0.0f, 1.0f, 0.0f }; // time, prevTime, dirX, dirZ
+        DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 0.0f }; // swayAmp, swayFreq, gustMul, pad
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
@@ -780,6 +792,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
+            if (wind) // W5: null / swayAmp 0 leaves WindOffset returning exactly 0 (rigid casters)
+            {
+                cb.wind0 = DirectX::XMFLOAT4(wind->time, wind->prevTime,
+                                             wind->windDirXZ.x, wind->windDirXZ.y);
+                cb.wind1 = DirectX::XMFLOAT4(wind->swayAmplitude, wind->swayFrequency,
+                                             wind->gustMul, 0.0f);
+            }
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
             // Mega offsets (0 unless the consolidated path is active) so the setup rebases each

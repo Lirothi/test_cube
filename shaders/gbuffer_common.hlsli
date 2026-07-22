@@ -76,6 +76,17 @@ cbuffer PerView : register(b1)
     float  _windPad;
 };
 
+// W4/W5: single call site of the PerView wind fields for every shader that includes this header
+// (the gbuffer BaseVS and the CPU-fallback shadow VS variants). `t` is windTime for the current
+// position and windPrevTime for the motion-vector prev position. The shadow VS in
+// shadow_indirect_csm.hlsl declares its own PerView copy and mirrors this helper — the two MUST
+// stay identical or the shadow detaches from the tree.
+inline float3 ApplyWindWS(float3 objPos, float4x4 w, float windStrengthValue, float t)
+{
+    return WindOffset(objPos, float3(w._41, w._42, w._43), windStrengthValue,
+                      windDirXZ, windSwayAmp, windSwayFreq, windGustMul, t);
+}
+
 // Parameterized UV transform (per-instance texOffsScale). The non-instanced wrapper below
 // delegates to this with the PerObject global so both paths produce identical math.
 float2 tfUVp(float2 rawUV, float4 texOffsScale)
@@ -152,13 +163,10 @@ inline VSOut BaseVS(float3 pos,
     // moving leaves smear). windStrengthValue 0 => zero offset => byte-identical to no-wind.
     // gustMul is constant (1.0) until W6, so the prev frame reuses windGustMul here.
     float4 worldPos = mul(posH, world);
-    worldPos.xyz += WindOffset(pos, float3(world._41, world._42, world._43), windStrengthValue,
-                               windDirXZ, windSwayAmp, windSwayFreq, windGustMul, windTime);
+    worldPos.xyz += ApplyWindWS(pos, world, windStrengthValue, windTime);
 
     float4 prevWorldPos = mul(posH, prevWorld);
-    prevWorldPos.xyz += WindOffset(pos, float3(prevWorld._41, prevWorld._42, prevWorld._43),
-                                   windStrengthValue, windDirXZ, windSwayAmp, windSwayFreq,
-                                   windGustMul, windPrevTime);
+    prevWorldPos.xyz += ApplyWindWS(pos, prevWorld, windStrengthValue, windPrevTime);
 
     o.H = mul(worldPos, viewProj);
     o.clipH = mul(worldPos, viewProjNoJitter);

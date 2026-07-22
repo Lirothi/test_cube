@@ -14,6 +14,7 @@ class Renderer;
 class Material;
 class Camera;
 class ShadowGpuData;
+namespace vfx { struct WindState; } // W5: global wind, folded into the per-page shadow view CB
 
 // Rung 2 (VSM-lite) addressing constants. A virtual shadow map is a conceptually huge
 // (kVirtualRes²) shadow surface split into kPageSize² pages; only the pages on-screen pixels
@@ -211,8 +212,11 @@ public:
     // viewport. `views` are the VSM local shadow views (spots then point faces) in slot order.
     // Same-frame, race-free (no readback). Correctness-first: re-renders every resident page each
     // frame (Step 23 will gate to changed pages only).
+    // W5: `wind` (may be null) is copied into every page's PerView slot so the shadow VS sways
+    // foliage casters exactly like the gbuffer does.
     void RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
-                          const vsm::ViewProjEntry* views, std::uint32_t viewCount);
+                          const vsm::ViewProjEntry* views, std::uint32_t viewCount,
+                          const vfx::WindState* wind);
 
     // Step 19/20 (temporary): a few frames in, read back the request bitfield + allocation
     // counters and log the requested-page mip histogram + resident/newly-allocated/failed counts,

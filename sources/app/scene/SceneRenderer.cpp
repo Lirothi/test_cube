@@ -121,8 +121,8 @@ namespace
         mat4 viewProj;
         mat4 viewProjNoJitter;
         mat4 prevViewProjNoJitter;
-        // W3: global wind, consumed by the gbuffer VS (W4). Zero for the shadow pass until W5
-        // (the shadow shaders read only viewProj and ignore the tail). Layout matches the HLSL
+        // W3: global wind, consumed by the gbuffer VS (W4) and — since W5 — by the shadow VS too
+        // (shadow_indirect_csm.hlsl declares the same tail at offset 192). Layout matches the HLSL
         // `cbuffer PerView` in gbuffer_common.hlsli: time, prevTime, float2 windDirXZ, then
         // swayAmp, swayFreq, gustMul, pad.
         float windTime = 0.0f;
@@ -188,6 +188,20 @@ namespace
         return alloc.gpu;
     }
 
+    // W3/W5: the ONE place the wind tail of PerView is filled. The gbuffer and the shadow views
+    // must carry identical wind values, or the shadow bends out of step with the tree it belongs to.
+    void ApplyWind(PerViewCB& vc, const vfx::WindState* wind)
+    {
+        if (!wind) { return; } // no wind state -> defaults (swayAmp 0 => WindOffset returns 0)
+        vc.windTime = wind->time;
+        vc.windPrevTime = wind->prevTime;
+        vc.windDirX = wind->windDirXZ.x;
+        vc.windDirZ = wind->windDirXZ.y;
+        vc.windSwayAmp = wind->swayAmplitude;
+        vc.windSwayFreq = wind->swayFrequency;
+        vc.windGustMul = wind->gustMul;
+    }
+
     D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera,
                                                  const vfx::WindState* wind)
     {
@@ -195,23 +209,16 @@ namespace
         vc.viewProj = camera.GetViewProjMatrix();
         vc.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
         vc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
-        if (wind) // W3: fold the global wind into the gbuffer per-view CB (W4 reads it in the VS)
-        {
-            vc.windTime = wind->time;
-            vc.windPrevTime = wind->prevTime;
-            vc.windDirX = wind->windDirXZ.x;
-            vc.windDirZ = wind->windDirXZ.y;
-            vc.windSwayAmp = wind->swayAmplitude;
-            vc.windSwayFreq = wind->swayFrequency;
-            vc.windGustMul = wind->gustMul;
-        }
+        ApplyWind(vc, wind); // W3: W4's VS reads it for the sway + the prev-position motion vectors
         return UploadFrameCB(renderer, vc);
     }
 
-    D3D12_GPU_VIRTUAL_ADDRESS BuildShadowViewCB(Renderer* renderer, const mat4& lightView, const mat4& lightProj)
+    D3D12_GPU_VIRTUAL_ADDRESS BuildShadowViewCB(Renderer* renderer, const mat4& lightView, const mat4& lightProj,
+                                                const vfx::WindState* wind)
     {
         PerViewCB vc{};
         vc.viewProj = lightView * lightProj; // viewProjNoJitter/prevViewProjNoJitter unused by shadow shaders
+        ApplyWind(vc, wind); // W5: the shadow VS sways casters with the SAME params as the gbuffer
         return UploadFrameCB(renderer, vc);
     }
 
@@ -532,7 +539,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     {
         const bool viewStill = vsmHasRendered_ &&
             std::memcmp(&frame_->mainView->view, &vsmLastView_, sizeof(mat4)) == 0;
-        const bool contentStill = !frame_->shadowGpu || frame_->shadowGpu->MoverCount() == 0;
+        // W5: a wind-swayed caster animates in the VERTEX shader, so its transform never changes and
+        // MoverCount() stays 0 — without this the pool freezes after a few still frames and the palm
+        // shadow stops swaying while the tree keeps going (the shadow visibly detaches).
+        const bool windAnimating = frame_->wind && frame_->wind->swayAmplitude > 0.0f &&
+                                   frame_->shadowGpu && frame_->shadowGpu->HasWindCasters();
+        const bool contentStill = (!frame_->shadowGpu || frame_->shadowGpu->MoverCount() == 0) &&
+                                  !windAnimating;
         if (viewStill && contentStill)
         {
             // Keep rendering for a few frames after everything goes still so the resident set + the
@@ -1237,7 +1250,7 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRender);
-        frame_->vsm->RecordPageRender(renderer, t.cl, frame_->shadowGpu, views.data(), slot);
+        frame_->vsm->RecordPageRender(renderer, t.cl, frame_->shadowGpu, views.data(), slot, frame_->wind);
     }
     ctx.EndCL(t);
 }
@@ -1320,7 +1333,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
 
         t.cl->ClearDepthStencilView(shoreDepthDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view->view, view->proj);
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view->view, view->proj, frame_->wind);
 
         for (auto* obj : opaqueSimple)
         {
@@ -1372,7 +1385,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     // in Pass_ShadowCull; here each cascade issues ExecuteIndirect instead of the CPU loop.
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect](std::size_t cascadeIndex)
+    const vfx::WindState* wind = frame_->wind; // W5: shadow casters sway with the gbuffer's params
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind](std::size_t cascadeIndex)
     {
         if (cascadeIndex >= cascadeViews.size())
         {
@@ -1389,7 +1403,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
 
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, passName);
@@ -1452,7 +1466,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             continue;
         }
 
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
 
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, ctx.pass);
@@ -1512,7 +1526,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
-    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect](std::size_t lightIndex)
+    const vfx::WindState* wind = frame_->wind; // W5
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind](std::size_t lightIndex)
     {
         if (lightIndex >= spotViews.size())
         {
@@ -1527,7 +1542,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1577,7 +1592,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1630,7 +1645,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
-    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect](std::size_t faceIndex)
+    const vfx::WindState* wind = frame_->wind; // W5
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind](std::size_t faceIndex)
     {
         if (faceIndex >= pointViews.size())
         {
@@ -1646,7 +1662,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 static_cast<UINT>(faceIndex % 6), /*clear=*/true);
 
             const SceneView& view = pointViews[faceIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1697,7 +1713,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 static_cast<UINT>(faceIndex % 6), /*clear=*/true);
 
             const SceneView& view = pointViews[faceIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];

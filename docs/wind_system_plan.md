@@ -205,7 +205,12 @@ page edges (bounds padding). `--scene-stress=30`.
 
 - **Gust envelope:** in `WindState` update, `gustMul = 1 + gustAmp * gustNoise(time*gustFreq,
   seed)` where `gustNoise` is layered value-noise / summed low-freq sines (NOT per-frame white
-  noise — that strobes). Feed `gustMul` into the wind CB (already plumbed W3). Optionally feed a
+  noise — that strobes). Feed `gustMul` into the wind CB (already plumbed W3 — and, since W5, into
+  the shadow PerView CB and the VSM per-page `pageProj` slot too, so gusts reach shadows for free).
+  **Motion-vector note (W5):** `BaseVS` currently reuses the CURRENT `windGustMul` for the prev
+  position because gustMul is pinned to 1.0. The moment it varies per frame, add a `prevGustMul` to
+  the CB and feed it to the prev-position `WindOffset`, or DLSS/TAA smears the leaves again (re-run
+  W4's A/B with `swayFrequency` ~10 to make the motion supra-pixel). Optionally feed a
   smoothed gust into the ocean `windForce01` so whitecaps swell during gusts (keep subtle — the
   FFT lags). All trees share `gustMul` (coherent gusts), each still varies by its world-origin
   phase.

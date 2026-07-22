@@ -14,6 +14,7 @@
 #include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
+#include "vfx/WindState.h" // W5: g_maxSwayExtentMeters for the caster-bounds sway padding
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
 
@@ -259,7 +260,8 @@ void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::Instan
     }
 }
 
-void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out)
+void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out,
+                               float windStrength)
 {
     std::memset(&out, 0, sizeof(out));
     if (!obj) { return; }
@@ -270,8 +272,23 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     if (!b.IsValid()) { return; } // degenerate/absent → zeroed (cull treats as a point)
 
     const Math::float3 c = b.GetCenter();
-    const Math::float3 e = b.GetHalfExtents();
-    out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, b.GetRadius());
+    Math::float3 e = b.GetHalfExtents();
+    float radius = b.GetRadius();
+
+    // W5: the shadow VS displaces a swaying caster's vertices horizontally by up to
+    // windStrength * MaxSwayExtentMeters, which the static world AABB knows nothing about. Grow the
+    // box (and the sphere pre-test radius) by that much on X/Z, or the per-page / per-view cull drops
+    // the caster right as its fronds lean into a neighbouring page → shadow popping at page edges.
+    // windStrength 0 (everything but flagged foliage) leaves the bounds byte-identical.
+    const float pad = windStrength > 0.0f ? windStrength * vfx::g_maxSwayExtentMeters : 0.0f;
+    if (pad > 0.0f)
+    {
+        e.x += pad;
+        e.z += pad;
+        radius += pad;
+    }
+
+    out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, radius);
     out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
 }
 
@@ -375,6 +392,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     std::vector<DirectX::XMUINT2> groupMaskCpu; // per group: {albedo slot (~0 = opaque), asuint(cutoff)}
     maskedAlbedoSrvs_.fill({});
     maskedAlbedoCount_ = 0;
+    hasWindCasters_ = false; // W5: recomputed below over the static set + the folded GI objects
     bool maskedOverflow = false;
     std::uint32_t nextGroup = 0;
     size_t idx = 0;
@@ -414,7 +432,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         render::InstancePerObject inst{};
         render::CasterBounds bnd{};
         FillInstance(obj, inst);
-        FillBounds(obj, bnd);
+        FillBounds(obj, bnd, inst.windStrength); // W5: pad swaying casters' bounds
+        // W5: a wind caster animates in the VERTEX shader — its transform never changes, so the
+        // mover-based "nothing changed" tests would freeze its shadow. Remember that we have one.
+        if (inst.windStrength > 0.0f) { hasWindCasters_ = true; }
         const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
         for (size_t s = 0; s < slots; ++s)
         {
@@ -464,6 +485,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             const Math::float3 e = mb.GetHalfExtents();
             gc.aabbCenter = DirectX::XMFLOAT4(c.x, c.y, c.z, 0.0f);
             gc.aabbExtent = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
+        }
+        if (const GBufferRenderable* giGb = obj->AsGBufferRenderable())
+        {
+            if (giGb->CurrentDrawParams().windStrength > 0.0f) { hasWindCasters_ = true; } // W5
         }
         giCasters_.push_back(gc);
         giGroupMesh.push_back(mesh);
@@ -765,7 +790,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         if (ro && ro->MovedThisFrame())
         {
             FillInstance(obj, cpuInstances_[idx]);
-            FillBounds(obj, cpuBounds_[idx]);
+            FillBounds(obj, cpuBounds_[idx], cpuInstances_[idx].windStrength); // W5: sway padding
             for (size_t s = 1; s < slots; ++s) // duplicate across the object's submesh slots
             {
                 cpuInstances_[idx + s] = cpuInstances_[idx];
@@ -1191,7 +1216,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
 
             struct ScatterCB
             {
-                std::uint32_t       giBase, count, pad0, pad1;
+                std::uint32_t       giBase, count;
+                float               windStrength, swayPad; // W5 (mirrors gWindStrength/gSwayPad)
                 DirectX::XMFLOAT4   aabbCenter;
                 DirectX::XMFLOAT4   aabbExtent;
                 DirectX::XMFLOAT4X4 objectWorld;
@@ -1208,6 +1234,10 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 const RenderableObject* ro = gc.obj->AsRenderableObject();
                 DirectX::XMFLOAT4X4 objWorld = ro ? ro->GetModelMatrix().m : DirectX::XMFLOAT4X4{};
                 if (!ro) { DirectX::XMStoreFloat4x4(&objWorld, DirectX::XMMatrixIdentity()); }
+                // W5: the same per-object windStrength gbuffer_inst.hlsl feeds its BaseVS, so a
+                // flagged GPU-instanced object sways identically in the gbuffer and in shadow.
+                const GBufferRenderable* giGb = gc.obj->AsGBufferRenderable();
+                const float giWind = giGb ? giGb->CurrentDrawParams().windStrength : 0.0f;
 
                 renderer->Transition(cl, giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 RecordComputeDispatch(renderer, cl, giScatterMat_.get(), scatterCbSize,
@@ -1216,6 +1246,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                         ScatterCB c{};
                         c.giBase = gc.giBase;
                         c.count = gc.count;
+                        c.windStrength = giWind;
+                        c.swayPad = giWind > 0.0f ? giWind * vfx::g_maxSwayExtentMeters : 0.0f;
                         c.aabbCenter = gc.aabbCenter;
                         c.aabbExtent = gc.aabbExtent;
                         c.objectWorld = objWorld;

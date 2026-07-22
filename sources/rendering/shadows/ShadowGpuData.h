@@ -106,6 +106,11 @@ public:
     // propagating across ring regions). >0 means shadow content changed -> VSM must re-render even
     // if the camera is still (drives SceneRenderer's skip-when-still gate).
     std::uint32_t MoverCount() const { return lastMoverCount_; }
+    // W5: true when any caster carries windStrength > 0. Such a caster animates purely in the VERTEX
+    // shader — its transform never changes, so MoverCount() stays 0 and every "nothing moved, reuse
+    // last frame" gate (the VSM still-frame skip, the VSM per-page cache) would freeze its shadow
+    // while the gbuffer tree keeps swaying. Those gates must consult this too.
+    bool HasWindCasters() const { return hasWindCasters_; }
     // A GPU-idle editor rebuild can replace masked-material SRVs without moving any caster.
     // Preserve that content-change signal through the next UpdateForFrame so VSM does not keep
     // cached pages rendered with the old alpha mask.
@@ -234,7 +239,11 @@ private:
     // which excludes GPU-instanced casters.
     static bool IsGiFoldable(const RenderableObjectBase* obj);
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
-    static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
+    // W5: `windStrength` is the caster's per-object foliage sway strength (from the instance entry
+    // filled just above). Non-zero pads the world AABB by the current wind's max sway extent so the
+    // Rung-0 / VSM per-page cull can't clip a swaying frond tip.
+    static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out,
+                           float windStrength = 0.0f);
 
     void EnsureShaderResources(Renderer* renderer);         // lazily create cull compute + indirect-draw PSOs
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
@@ -283,6 +292,7 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups> maskedAlbedoSrvs_{};
     std::uint32_t maskedAlbedoCount_ = 0;
     bool hasMaskedGroups_ = false;
+    bool hasWindCasters_ = false; // W5: any caster with windStrength > 0 (see HasWindCasters)
 
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow

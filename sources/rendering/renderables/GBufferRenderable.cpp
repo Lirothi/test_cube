@@ -45,6 +45,7 @@ public:
         {
             // viewProj (light) now comes from the shared per-view CB (b1).
             shadowHandles_.world = shadowMaterial->ComputeCBFieldHandle(0, "world");
+            shadowHandles_.windStrength = shadowMaterial->ComputeCBFieldHandle(0, "windStrength");
         }
     }
 
@@ -78,6 +79,13 @@ public:
 
         // viewProj (light) is written once per cascade into the shared per-view CB (b1).
         UpdateUniform(owner, shadowHandles_.world, material, owner.GetModelMatrix(), cbData);
+        // W5: the CPU-fallback shadow VS reads windStrength from this b0. RenderShadow does NOT
+        // clear the dynamic CB allocation, so leaving it unwritten feeds the sway garbage from
+        // recycled frame-ring memory (observed as a stray, wildly displaced shadow). Write it.
+        const GBufferRenderable* gb = owner.AsGBufferRenderable();
+        const MaterialParams shadowDefaults{};
+        const auto& sp = gb ? gb->CurrentDrawParams() : shadowDefaults;
+        UpdateUniform(owner, shadowHandles_.windStrength, material, sp.windStrength, cbData);
     }
 
 private:
@@ -99,6 +107,7 @@ private:
     struct ShadowCBHandles
     {
         Material::CBFieldHandle world;
+        Material::CBFieldHandle windStrength; // W5
     } shadowHandles_{};
 };
 } // namespace
