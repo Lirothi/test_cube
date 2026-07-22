@@ -12,13 +12,20 @@ using namespace Microsoft::WRL;
 
 // NEW "full" format for textures/lighting
 // order matches the layout preset "PosNormTanUV":
-// POSITION (float3), NORMAL (float3), TANGENT (float4), TEXCOORD (float2)
+// POSITION (float3), NORMAL (float3), TANGENT (float4), TEXCOORD (float2), COLOR (RGBA8)
 struct VertexPNTUV {
-    DirectX::XMFLOAT3 position;
-    DirectX::XMFLOAT3 normal;    // can be left as zeros—we will generate them
-    DirectX::XMFLOAT4 tangent;   // xyz = tangent, w = handedness (+1/-1)
-    DirectX::XMFLOAT2 uv;
+    DirectX::XMFLOAT3 position;  // 0
+    DirectX::XMFLOAT3 normal;    // 12  can be left as zeros—we will generate them
+    DirectX::XMFLOAT4 tangent;   // 24  xyz = tangent, w = handedness (+1/-1)
+    DirectX::XMFLOAT2 uv;        // 40
+    // W7.1: baked per-vertex wind data (COLOR_0, sampled as R8G8B8A8_UNORM in the VS). R = geodesic
+    // sway weight, G = per-limb id (phase), B = along-limb edge weight, A = spare. Default 0 => a
+    // mesh with no bake is rigid and renders byte-identically. Appended at the END (offset 48) so the
+    // hardcoded UV offset 40 (InputLayoutManager / EditorPreviewRenderer / PosUV_InstCasterId) and
+    // every D3D12_APPEND_ALIGNED_ELEMENT stay valid.
+    uint32_t color = 0;          // 48
 };
+static_assert(sizeof(VertexPNTUV) == 52, "VertexPNTUV must be 52 bytes (PNTUV + COLOR_0 wind bake)");
 
 class Mesh {
 public:

@@ -51,12 +51,14 @@ void InputLayoutManager::InitBuiltins() {
         .Add("COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0)
         .Build(*this, "PosColor");
 
-    // pos, normal, tangent, uv
+    // pos, normal, tangent, uv, wind-bake color (W7.1: COLOR_0 at offset 48; the VS ignores it
+    // until W7.3, so meshes with no bake render byte-identically).
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Add("NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0)
         .Add("TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0)
         .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48)
         .Build(*this, "PosNormTanUV");
 
     // pos(float2), color, uv, shadow params
@@ -77,6 +79,7 @@ void InputLayoutManager::InitBuiltins() {
     // slot 1 is the visible-list stream (uint caster id), stepped once per instance.
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48) // W7.1: wind bake; depth-only VS needs the same weights
         .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
              D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
         .Build(*this, "PosOnly_InstCasterId");
@@ -87,6 +90,7 @@ void InputLayoutManager::InitBuiltins() {
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48) // W7.1: wind bake (masked shadow VS)
         .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
              D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
         .Build(*this, "PosUV_InstCasterId");

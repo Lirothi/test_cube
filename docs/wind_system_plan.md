@@ -34,7 +34,13 @@ smear). Authored via a **`wind` level entity** (like `ocean`/`skybox`), editable
    shadow VS BOTH include it and call it identically. If the two diverge by even a constant, the
    shadow detaches from the tree. Treat wind.hlsli as the single source of the math.
 
-## Current engine state (verified 2026-07-22)
+## Engine state as it was BEFORE W1 (snapshot, 2026-07-22)
+
+> Kept as the record of what the plan was written against. **It is stale now** — W1-W6 plus the
+> post-W6 rewrite changed most of it (the instance struct is 224 bytes with FOUR mirrors, the PerView
+> CB carries wind, the shadow VS sways). Read "Post-W6 — what actually shipped" and the Risks section
+> for the current picture before touching anything.
+
 
 - **Ocean wind:** `OceanSimulation::SetSceneVariables(renderer, localWindDirectionDegrees,
   swellDirectionDegrees, windForce01)` (`sources/ocean/OceanSimulation.cpp:234`). Level JSON
@@ -223,12 +229,143 @@ page edges (bounds padding). `--scene-stress=30`.
 **Verify (short run):** visible gusts — palms periodically bend harder together, then relax; the
 ocean direction matches the trees; editor edits apply live and survive save/reload.
 
-## W7 (optional polish)
+## Post-W6 — what actually shipped (2026-07-22, committed as `improving wind on trees WIP`)
 
-*(exec: Opus 4.8 / GPT terra)* Per-tree stiffness variation (a `windStiffness` per object);
-secondary high-frequency low-amplitude frond flutter (a second height band or UV-driven term on
-the frond slot only); wind-driven particle drift (smoke/embers bend downwind using the same
-`windDirXZ`); a `vfx::g_windFreeze` debug toggle.
+W1-W6 landed as written. Then a review of the result forced a rewrite of the sway math itself, plus
+two real bug fixes. Recorded here because the steps below build directly on it:
+
+- **Sway rewritten (the "Tier 0" pass).** The original `saturate(y * 1/3)^2` height weight flattened
+  partway up the trunk and its derivative discontinuity was a visible KINK; above it the whole crown
+  translated rigidly and traced a Lissajous figure (two incommensurate frequencies on perpendicular
+  axes). Replaced with the GPU Gems 3 ch.16 profile `((1+u)^4 - (1+u)^2)/12` normalised by the
+  ACTUAL mesh height, a length-preserving arc (`normalize(rel)*len`, built in WORLD space about the
+  object origin — doing it in object space silently divides the lean by the object scale), and a
+  steady downwind lean `bend = (1 + 0.35*osc) * gustMul` so the wind direction reads at all.
+- **Wind direction was 180 deg off the water.** The ocean spectrum peaks for wave vectors k along
+  `+(cos,sin)` but evolves with Tessendorf's `exp(+i*omega*t)`, so those waves travel toward `-k`:
+  the ocean's `directionDeg` visually means "where the wind comes FROM". `WindState::Tick` now
+  negates `windDirXZ`. The ocean is untouched.
+- **Per-slot foliage + per-asset tuning.** `windFoliage` is a weight PER MATERIAL SLOT and
+  `windTrunkStiffness` a per-object divisor of the main bend, both authored in `models/*.mesh.json`
+  and editable in the Mesh Editor. They ride the existing 224-byte `InstancePerObject` (the
+  per-slot weight is free because ShadowGpuData already allocates one caster id per (object, slot)).
+
+**The open problem this leaves.** Foliage is still located by geometry heuristics — a leaf weight
+built from distance to a single assumed crown point at `(0, 0.70*H, 0)`. That works for a
+single-trunk palm and breaks on anything else. Measured on `coconut_palm`, a ONE-clump TWO-trunk
+asset (trunk bases 0.24 m apart, but the trunks lean apart so the crowns end up ~2.4 m apart):
+**36 % of frond vertices saturate at weight 1**, i.e. a third of the canopy has no base-to-tip
+gradient and streams at full strength. No `objPos`-only formulation can fix this — one object space,
+two crowns, any single reference point is wrong for at least one of them. W7 retires the heuristics.
+
+## W7 — Per-vertex wind bake (retires the geometry heuristics)
+
+*(exec: Fable for W7.1 — vertex format + input layouts touch the shadow mega-buffer and RT BLAS;
+Opus 4.8 for W7.2/W7.3)*
+
+The fix is baked per-vertex data instead of guessed geometry. **Validated on all three palm assets
+before writing this** (prototype in the session scratchpad): geodesic distance along the mesh
+surface from the plant's ground contact, normalised, gives a monotone trunk-base -> trunk-top ->
+frond-base -> frond-tip gradient with **0 % saturation on every asset**, including the two-trunk
+coconut, with no tuning constants at all.
+
+| asset | trunk | collar | fronds | saturated |
+|---|---|---|---|---|
+| date_palm | 0.00-0.61 | 0.57-0.78 | 0.65-1.00 | 0 % |
+| coconut_palm | 0.00-0.61 | 0.54-0.68 | 0.63-1.00 | 0 % |
+| curly_palm | 0.00-0.32 | 0.25-0.87 | 0.33-1.00 | 1 % |
+
+### W7.1 — Vertex channel  — **DONE (2026-07-23), uncommitted**
+
+Landed: `VertexPNTUV` grew 48 -> 52 (`uint32_t color = 0` at offset 48, `static_assert(52)`); `COLOR_0`
+R8G8B8A8_UNORM added to the `PosNormTanUV`, `PosOnly_InstCasterId`, and `PosUV_InstCasterId` presets
+(explicit offset 48). Everything else auto-propagated via `sizeof(VertexPNTUV)` / `GetVertexStride()`
+(mega buffer `MegaStride`, RT BLAS `stride`, VB views). No VS reads the channel yet, so unbaked meshes
+are byte-identical. EditorPreviewRenderer needed no change (its explicit UV offset 40 stays valid).
+Verified: Debug+Release clean, atoll `--shot` byte-identical (palms/shadows/RT intact), `--scene-stress=30`
+verdict CLEAN.
+
+Append `COLOR_0` as `R8G8B8A8_UNORM` to `VertexPNTUV` (48 -> 52 bytes). **Append at the END, offset
+48**: the hardcoded UV offset 40 in `InputLayoutManager.cpp` / `EditorPreviewRenderer.cpp` and the
+`PosUV_InstCasterId` preset then stay valid, and every other element already uses
+`D3D12_APPEND_ALIGNED_ELEMENT`. Add the element to `PosNormTanUV` (gbuffer) and to BOTH shadow
+presets (`PosOnly_InstCasterId`, `PosUV_InstCasterId`) — the depth-only shadow VS needs the same
+weights or the shadow drifts off the tree. `sizeof(VertexPNTUV)` propagates the new stride to the
+mega buffer and the RT BLAS automatically.
+
+Channel budget: **R** = geodesic weight (W7.2), **G** = per-limb id for phase, **B** = along-limb
+edge weight (the Crysis "edge stiffness" for leaf-edge flutter), **A** = spare.
+
+**Why a vertex attribute and not a parallel `StructuredBuffer` indexed by `SV_VertexID`:** the
+gbuffer draws from the per-mesh VB while the indirect shadow path draws from the MEGA buffer with
+`BaseVertexLocation` rebasing — two different vertex index spaces for the same data, so the buffer
+would have to be mega-consolidated and kept in sync. That is the same dual-source-of-truth shape
+that produced the four-mirror `InstancePerObject` bugs. A vertex attribute rides the same VB, so
+gbuffer and shadow agree for free, rebasing included.
+
+**Verify:** build clean; `sizeof` assertions; a level with no baked assets renders byte-identically;
+`--scene-stress=30`.
+
+### W7.2 — Importer bake
+
+At import (cached — do not recompute per load):
+1. Weld vertices by position (UV seams would otherwise cut the graph).
+2. Build the edge graph from triangles.
+3. Seed from the ground-contact vertices (lowest Y band); multi-source Dijkstra -> geodesic distance
+   along the surface. **Multi-trunk falls out for free** — each trunk seeds from its own contact.
+4. Bridge disconnected islands (foliage is usually separate cards) to the nearest reachable vertex,
+   cheapest gap first, then keep relaxing. This is what makes a frond hanging DOWN the trunk measure
+   "up the trunk, then out along the frond" instead of reading as trunk.
+5. Normalise by the global max -> channel R.
+6. Per-limb id: walk back k metres along the parent chain to a "limb anchor" and hash its position
+   -> channel G. Works on welded meshes too, where connected components would give one island.
+7. Within a limb, distance from its principal axis -> channel B.
+
+**Known failure modes — handle explicitly, do not pretend they do not exist:** a plant not touching
+the ground (seed heuristic misses -> fall back to the lowest-Y band, expose a manual pivot in the
+Mesh Editor); far-away junk geometry attaching via a long bridge and inheriting a high weight (cap
+the bridge length, leave unreachable geometry at 0 = rigid); assets whose stiff end is at the top
+(hanging vine — needs an invert flag). The prototype's brute-force nearest-neighbour bridging is
+instant at ~5k verts but needs a spatial grid for 100k-vert trees.
+
+**Verify:** dump the baked weights per material slot and assert the monotone ordering above; 0 %
+saturation on all three palms.
+
+### W7.3 — Switch the shader over and DELETE the heuristics
+
+`wind.hlsli` reads the baked weight instead of computing one. **Remove** `kWindCrownHeightFrac`,
+`kWindFrondSpanFrac` and the whole radial/crown-distance mask — the point is to retire the
+heuristics, not to stack another layer on them. The per-slot `windFoliage` stays as the artistic
+multiplier on top of the baked weight (existing hand-tuned values keep working). Bake always, so
+there is no "unbaked" branch to maintain.
+
+**Verify:** coconut palm canopy shows a proper base-to-tip gradient (the reported bug); date palm
+unchanged or better; shadow still tracks (overhead-sun canopy-vs-shadow centroid test); motion
+vectors clean at high `swayFrequency`; `--scene-stress=30`.
+
+## W8 — Polish (was W7; revised 2026-07-23 now that most of the original list has shipped)
+
+*(exec: Opus 4.8 / GPT terra)*
+
+Reassessed against what actually landed:
+
+- ~~Per-tree stiffness variation~~ — **delivered** as per-asset `windTrunkStiffness` plus a per-object
+  level override. What is genuinely still missing is variation WITHOUT hand-authoring: a grove of
+  identical palms currently differs only in phase, so amplitude and stiffness are uniform. Derive a
+  small jitter from the same world-origin hash the phase already uses.
+- ~~Secondary frond flutter~~ — **superseded by W7.2 channel B**; do not implement separately.
+- **Wind-driven particle drift** — still wanted, still untouched. Smoke/embers bend downwind using
+  the same `windDirXZ` (which is now the visible-travel direction, so it matches the water).
+- **`vfx::g_windFreeze` debug toggle — promote this, it is not cosmetic.** Verification of this
+  system has repeatedly been the hard part, and the one real trap was using `swayFrequency: 0` for
+  deterministic screenshots: a static lean and a FROZEN shadow are pixel-identical, so that test was
+  structurally blind to the VSM freeze bug that shipped. A freeze toggle plus "advance time by
+  exactly dt" gives deterministic, diffable frames WITHOUT changing the wind parameters, and would
+  have caught it. Build it before the next visual change, not after.
+- **Gust -> ocean coupling** — W6 deliberately deferred pushing the gust envelope into the ocean
+  `windForce01` (it rebuilds the ocean GPU resources; needs a GPU-idle + change gate). Still open.
+- **Distance fade** — the per-vertex sway is full-rate ALU at any distance and can alias on distant
+  foliage. Fade the amplitude out with distance / on coarse LODs.
 
 ---
 
@@ -240,12 +377,21 @@ the frond slot only); wind-driven particle drift (smoke/embers bend downwind usi
   lockstep or detaches the shadow. This is the #1 thing to get right.
 - **Motion vectors:** the gbuffer VS MUST offset the prev-position with `prevTime` (and last
   frame's gust) or DLSS/TAA smears the moving leaves. This is the W4 pass/fail.
-- **`InstancePerObject` stride is shared with every shadow reader** — as of 2026-07-22 it is full at
-  208 bytes (no `_pad0` left; it became `mrMultiply`). Adding `windStrength` therefore **requires
-  growing it to 224** (16-byte aligned) and updating ALL mirrors in lockstep: the C++ struct +
-  `static_assert`, the HLSL `InstancePerObject` in `gbuffer_common.hlsli`, and the
-  `shadow_indirect_csm.hlsl:35` copy. Miss one and shadow draws silently corrupt (the B3 stride
-  lesson). Do the grow once in W3.
+- **`InstancePerObject` has FOUR mirrors, not three.** C++ `InstanceTypes.h` (+ `static_assert`), the
+  HLSL `InstancePerObject` AND the `PerObject` cbuffer in `gbuffer_common.hlsli`,
+  `shadow_indirect_csm.hlsl`, and **`shadow_gi_scatter_cs.hlsl`**. The scatter one was missed during
+  the 208 -> 224 grow and left the GI ids' tail uninitialised; once the shadow VS started reading
+  `windStrength` from there, every GPU-instanced shadow scrambled. It is currently full again at 224
+  (windStrength / windInvHeight / windFoliage / windTrunkStiff).
+- **Uninitialised instance data is nondeterministic — a plain A/B will not reproduce it.** Removing
+  the GI scatter's write again showed almost no diff because that heap memory happened to read as
+  zero. What reproduces it is INJECTING the garbage (write `1.0e18f`) on a level that has a `wind`
+  section. Note `WindOffset` early-outs on `windStrength <= 0` and scales by `swayAmp`, so on a level
+  with no `wind` block garbage is harmless unless it is NaN/Inf — hence "works on my machine".
+- **`RenderableObject::RenderShadow` does NOT clear its dynamic b0 allocation**, and
+  `GBufferRenderable::UpdateShadowCB` only writes what it is told to. Any field the CPU-fallback
+  shadow VS reads must be written there explicitly or it gets recycled frame-ring garbage (seen as a
+  stray, wildly displaced shadow).
 - **Caster bounds** must be padded by the sway amplitude for tree casters, or the VSM per-page /
   Rung-0 cull clips swaying tips → shadow flicker at page/cascade edges.
 - **One clock:** wind time must equal the ocean's `elapsedTime_`, or waves and sway visibly drift
@@ -256,6 +402,22 @@ the frond slot only); wind-driven particle drift (smoke/embers bend downwind usi
   range when calling `SetSceneVariables`.
 - **Height weight assumes base-at-0** object space (true for the staged palms per A2). An asset
   authored off-origin would sway about the wrong pivot — expose the height scale / pivot if needed.
+- **A vertex-shader-animated caster is neither a "mover" nor a dynamic caster.** Its transform never
+  changes, so every "nothing changed, reuse last frame" gate freezes its shadow while the gbuffer
+  tree keeps swaying: the VSM still-frame skip in `SceneRenderer` and the VSM per-page dirty test
+  both have to consult `ShadowGpuData::HasWindCasters()`.
+- **`swayFrequency: 0` makes screenshots deterministic and is therefore a TRAP.** A static lean and a
+  frozen shadow are pixel-identical, so that test cannot see a caching/skip bug — exactly how the
+  VSM freeze shipped. Always pair it with a TIME-VARYING test (two shots N seconds apart). W8's
+  freeze toggle is the proper fix.
+- **Test the GI path separately.** GPU-instanced casters never touch `FillInstanceData`; they go
+  through `shadow_gi_scatter_cs.hlsl`. Any new per-instance field must be verified on a level with
+  `instancedModels` (demo.json), not just on palms.
+- **A shader that fails to compile is nearly silent** — the engine falls back to D3DCompile SM5 and
+  carries on. The DBWIN tell is `[Material] DXC VS failed, fallback to D3DCompile SM5` +
+  `CreateGraphics failed`; grep for it on every run. To find the culprit fast, compile standalone:
+  `dxc.exe -T vs_6_6 -E VSMain -I shaders shaders/<file>.hlsl` (repeat with `-D INSTCB_SLOT_PARAMS=1`
+  for that file's second variant — `cbuffer SlotParams` only exists in the multi-slot build).
 - **Verify with `--shot`, don't assume** — and for motion, actually check for DLSS smear. (The last
   render-order fix was declared done without confirming the submit order actually changed; don't
   repeat that. See memory [[transparent-pass-bundle-ordering]].)
@@ -263,5 +425,13 @@ the frond slot only); wind-driven particle drift (smoke/embers bend downwind usi
 ## Suggested order
 
 W1 → W2 (wind source + ocean sync, no foliage yet — already a visible, testable result) → W3 → W4
-(trees sway in view) → W5 (shadows match) → W6 (gusts + editor). W7 as time allows. Each step is
-independently buildable and `--shot`-verifiable.
+(trees sway in view) → W5 (shadows match) → W6 (gusts + editor). **All six shipped**, followed by the
+unnumbered post-W6 rewrite recorded above.
+
+Next: **W7.1 → W7.2 → W7.3** (vertex channel → importer bake → switch the shader over and delete the
+heuristics). Do W7.3's deletion in the same pass as the switch — leaving the old crown/radial mask in
+place "just in case" is how the heuristics accumulate.
+
+Then **W8** as time allows, except the `g_windFreeze` toggle, which is worth pulling forward ahead of
+W7 because every W7 verification step wants it. Each step is independently buildable and
+`--shot`-verifiable.
