@@ -57,6 +57,7 @@ private:
     MeshEditorPreviewCamera previewCamera_;
     MeshEditorPreviewLight previewLight_;
     EditorPreviewMode previewMode_ = EditorPreviewMode::Lit;
+    std::uint32_t previewLod_ = 0;
     float previewPaneRatio_ = 0.55f;
 };
 

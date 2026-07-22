@@ -34,6 +34,13 @@ public:
         uint32_t materialSlot = 0; // index into the owner object's material-slot array
     };
 
+    struct LodDrawInfo {
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW indexBufferView{};
+        UINT indexCount = 0;
+        const std::vector<Submesh>* submeshes = nullptr;
+    };
+
     // Flexible upload of an arbitrary vertex format (specify the stride explicitly)
     void CreateGPUFlexible(ID3D12Device* device,
         ID3D12GraphicsCommandList* uploadCmdList,
@@ -70,6 +77,10 @@ public:
 
     UINT GetIndexCount() const { return indexCount_; }
     UINT GetLodCount() const { return 1u + static_cast<UINT>(extraLods_.size()); }
+
+    // Resolve one explicit LOD without applying the runtime global LOD enable/force overrides.
+    // Editor diagnostics use this to inspect every generated index buffer independently.
+    LodDrawInfo GetLodDrawInfo(UINT lod) const;
 
     // Step 6: append a coarser LOD as a reduced 32-bit index buffer over the SAME vertex
     // buffer (meshopt_simplify output references the base verts). Call after the base
@@ -113,10 +124,7 @@ private:
         std::vector<Submesh> submeshes; // ranges into this LOD's index buffer
     };
 
-    // Resolve a lod index to its buffer views + index count (lod 0 -> base members;
-    // out-of-range clamps to the coarsest available).
-    void SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
-        const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const;
+    UINT ResolveRuntimeLod(UINT lod) const;
 
     // Step 3: bind VB/IB/topology, skipping calls already matching the CL bind cache.
     void BindIA(ID3D12GraphicsCommandList* cmdList,

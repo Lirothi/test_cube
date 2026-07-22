@@ -86,6 +86,7 @@ void DrawMeshPreview(EditorContext& ctx,
     MeshEditorPreviewCamera& camera,
     const MeshEditorPreviewLight& light,
     EditorPreviewMode& mode,
+    std::uint32_t& lod,
     const std::string& path,
     const std::string& geometry,
     const std::vector<std::string>& materialSlots,
@@ -150,7 +151,8 @@ void DrawMeshPreview(EditorContext& ctx,
         renderHeight,
         camera,
         light,
-        mode);
+        mode,
+        lod);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -181,7 +183,7 @@ void DrawMeshPreview(EditorContext& ctx,
     }
 
     drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
-    if (ImGui::SmallButton("Frame"))
+    if (ImGui::Button("Frame"))
     {
         camera = {};
     }
@@ -190,7 +192,7 @@ void DrawMeshPreview(EditorContext& ctx,
         ImGui::SetTooltip("Reset the preview camera to fit the whole mesh.");
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(150.0f);
+    ImGui::SetNextItemWidth(130.0f);
     if (ImGui::BeginCombo("##meshPreviewMode", PreviewModeLabel(mode)))
     {
         constexpr EditorPreviewMode kModes[] = {
@@ -214,7 +216,33 @@ void DrawMeshPreview(EditorContext& ctx,
         ImGui::SetTooltip("Choose lit material rendering, topology wireframe, or vertex-normal lines.");
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("1 directional light");
+    const std::uint32_t lodCount = std::max(1u, preview.lodCount);
+    lod = std::min(lod, lodCount - 1u);
+    const std::string lodLabel = "LOD " + std::to_string(lod) + "/" +
+        std::to_string(lodCount - 1u);
+    ImGui::SetNextItemWidth(115.0f);
+    ImGui::BeginDisabled(lodCount <= 1u);
+    if (ImGui::BeginCombo("##meshPreviewLod", lodLabel.c_str()))
+    {
+        for (std::uint32_t candidate = 0; candidate < lodCount; ++candidate)
+        {
+            const bool selected = candidate == lod;
+            const std::string candidateLabel = "LOD " + std::to_string(candidate);
+            if (ImGui::Selectable(candidateLabel.c_str(), selected))
+            {
+                lod = candidate;
+            }
+            if (selected) { ImGui::SetItemDefaultFocus(); }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip(lodCount > 1u
+            ? "Render the mesh with the selected explicit LOD."
+            : "This mesh has no generated LODs.");
+    }
     ImGui::TextDisabled("LMB orbit | RMB/MMB pan | Wheel zoom | Double-click frame");
 }
 
@@ -244,6 +272,7 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     slots_.clear();
     recomputeNormalSlots_.clear();
     previewCamera_ = {};
+    previewLod_ = 0;
 
     std::ifstream f(path_);
     if (f)
@@ -368,6 +397,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         previewCamera_,
         previewLight_,
         previewMode_,
+        previewLod_,
         path_,
         doc_.value("geometry", std::string()),
         slots_,

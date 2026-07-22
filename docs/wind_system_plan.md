@@ -34,7 +34,7 @@ smear). Authored via a **`wind` level entity** (like `ocean`/`skybox`), editable
    shadow VS BOTH include it and call it identically. If the two diverge by even a constant, the
    shadow detaches from the tree. Treat wind.hlsli as the single source of the math.
 
-## Current engine state (verified 2026-07-15)
+## Current engine state (verified 2026-07-22)
 
 - **Ocean wind:** `OceanSimulation::SetSceneVariables(renderer, localWindDirectionDegrees,
   swellDirectionDegrees, windForce01)` (`sources/ocean/OceanSimulation.cpp:234`). Level JSON
@@ -54,9 +54,22 @@ smear). Authored via a **`wind` level entity** (like `ocean`/`skybox`), editable
   `SHADOW_MASKED` variant (fronds, `PosUV_InstCasterId` layout). The CPU-fallback per-object shadow
   is `shaders/gbuffer_csm.hlsl` (rarely used; the indirect path is default).
 - **Shadow instance data:** `render::InstancePerObject` (`sources/rendering/renderables/
-  InstanceTypes.h`) is 208 bytes with a free `float _pad0` at offset 156. Filled by
-  `ShadowGpuData::FillInstance`. **Reuse `_pad0` for `windStrength`; do NOT grow the struct** — the
-  StructuredBuffer stride must stay 208 (B3 lesson; growing it silently breaks every shadow read).
+  InstanceTypes.h:26`) is 208 bytes and — as of 2026-07-22 — **fully packed, no free scalar left**.
+  The `float _pad0` the earlier plan targeted (offset 156) is now `float mrMultiply` (the MR-texture
+  blend flag), and `texFlags.w` (its comment still reads "reserved") is actually the normal-map
+  strength (`gbuffer_common.hlsli:206,212`). Filled by `ShadowGpuData::FillInstance`. The
+  StructuredBuffer stride is shared with every reader — the C++ struct, the HLSL `InstancePerObject`
+  in `gbuffer_common.hlsli`, and the mirror in `shadow_indirect_csm.hlsl:35` (which aliases the
+  gbuffer's `emissive` tail as unused `uint3 _instPad1`). B3 lesson: it silently breaks shadow reads
+  unless ALL three move in lockstep. So `windStrength` **cannot slot into a free pad** — it forces a
+  deliberate grow (208 → 224, 16-byte aligned) across those three mirrors + the `static_assert`
+  (see W3/W5).
+- **Per-material surface params (new since the SSS / "mats for palms" work):** a separate
+  `SurfaceParams` cbuffer (`render::MaterialSurfaceParamsGpu`, 32 bytes, register **b2**,
+  `InstanceTypes.h:10`) was added precisely so foliage/SSS controls do NOT grow the 208-byte
+  per-instance payload. It is **gbuffer-only** (the shadow passes don't bind it), so it can hold
+  gbuffer-side foliage knobs but **cannot carry `windStrength` for the shadow sway** — that still
+  has to ride in `InstancePerObject`.
 - **Caster bounds:** the Rung-0 / VSM per-page cull tests a static world AABB per caster
   (`ShadowGpuData::FillBounds`). Swaying vertices exceed it.
 - **Verification tool:** `test_cube.exe --level=<lvl> --shot=<out.png> --shot-delay=<sec>` reads
@@ -122,10 +135,16 @@ wave crests rotate to match; remove the `wind` section → ocean unchanged from 
   swayFreq, gustMul, _pad;`. Fill from `WindState` in the per-view CB build.
 - Add a per-object `windStrength` (0 = rigid) to `MaterialParams` + the b0 PerObject CB +
   `render::InstancePerObject` (gbuffer instanced) + `InstanceSlotParams` (multi-slot instanced) —
-  the same set of touch-points Part D used for emissive. JSON: `"windStrength"` on a `staticMesh`
-  object, applied to **every slot** (uniform across the tree — critical for submesh sync). glTF-
-  auto palms: set it after the glTF slot seeding (like the alphaCutoff pass in
-  `ResolveMaterialSlots`).
+  the same set of touch-points Part D used for emissive.
+- **Stride note (changed 2026-07-22):** `render::InstancePerObject` is now full at 208 bytes (the
+  `_pad0` the plan assumed became `mrMultiply`), so this is the step that **grows it to 224** in
+  lockstep — the C++ struct + `static_assert(224)`, the HLSL `InstancePerObject` in
+  `gbuffer_common.hlsli`, AND the shadow mirror in `shadow_indirect_csm.hlsl:35`. Do it here (one
+  struct feeds both the gbuffer and shadow paths); W5 then only reads the field. `InstanceSlotParams`
+  still has a genuine free `float _pad1` at offset 76 — use it there (no grow needed on that struct).
+- JSON: `"windStrength"` on a `staticMesh` object, applied to **every slot** (uniform across the
+  tree — critical for submesh sync). glTF-auto palms: set it after the glTF slot seeding (like the
+  alphaCutoff pass in `ResolveMaterialSlots`).
 
 **Verify:** build clean; a temporary shader debug (tint by windStrength) shows only flagged trees
 lit, all their submeshes uniformly.
@@ -160,9 +179,10 @@ vectors correct) — this is the pass/fail for prev-sway.
 
 *(exec: Fable — shadow instance data + cull bounds + exact match)*
 
-- Add `float windStrength` to `render::InstancePerObject` by **reusing `_pad0` at offset 156**
-  (stays 208 bytes; update the HLSL `InstancePerObject` mirror + `shadow_indirect_csm.hlsl`'s
-  struct). `ShadowGpuData::FillInstance` sets it from the object (mirror how it reads other
+- `float windStrength` is already on `render::InstancePerObject` from W3 (the struct grew 208 → 224
+  there — see the W3 stride note; there is no `_pad0` to reuse anymore, and the shadow mirror in
+  `shadow_indirect_csm.hlsl:35` grew with it). Here, just make the shadow path read it:
+  `ShadowGpuData::FillInstance` sets `windStrength` from the object (mirror how it reads other
   per-object fields).
 - Add `time` + wind params to the shadow view CB (`b1`) used by the indirect shadow passes (both
   the per-view CSM path and the VSM per-page path bind it).
@@ -215,9 +235,12 @@ the frond slot only); wind-driven particle drift (smoke/embers bend downwind usi
   lockstep or detaches the shadow. This is the #1 thing to get right.
 - **Motion vectors:** the gbuffer VS MUST offset the prev-position with `prevTime` (and last
   frame's gust) or DLSS/TAA smears the moving leaves. This is the W4 pass/fail.
-- **`InstancePerObject` stays 208 bytes** — reuse `_pad0`, never grow it (the StructuredBuffer
-  stride is shared with every shadow reader; growing it silently corrupts shadow draws — see the
-  B3 stride lesson).
+- **`InstancePerObject` stride is shared with every shadow reader** — as of 2026-07-22 it is full at
+  208 bytes (no `_pad0` left; it became `mrMultiply`). Adding `windStrength` therefore **requires
+  growing it to 224** (16-byte aligned) and updating ALL mirrors in lockstep: the C++ struct +
+  `static_assert`, the HLSL `InstancePerObject` in `gbuffer_common.hlsli`, and the
+  `shadow_indirect_csm.hlsl:35` copy. Miss one and shadow draws silently corrupt (the B3 stride
+  lesson). Do the grow once in W3.
 - **Caster bounds** must be padded by the sway amplitude for tree casters, or the VSM per-page /
   Rung-0 cull clips swaying tips → shadow flicker at page/cascade edges.
 - **One clock:** wind time must equal the ocean's `elapsedTime_`, or waves and sway visibly drift

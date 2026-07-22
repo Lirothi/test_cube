@@ -452,6 +452,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         camera,
         PreviewLight{},
         EditorPreviewMode::Lit,
+        0u,
         renderSlot,
         existingColorTarget);
 }
@@ -466,6 +467,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     const OrbitCamera& camera,
     const PreviewLight& light,
     EditorPreviewMode mode,
+    std::uint32_t lod,
     std::uint32_t renderSlot,
     ID3D12Resource* existingColorTarget)
 {
@@ -480,8 +482,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     {
         return nullptr;
     }
-    if (!mesh.GetVertexBufferResource() || !mesh.GetIndexBufferResource() ||
-        mesh.GetIndexCount() == 0)
+    const Mesh::LodDrawInfo lodDraw = mesh.GetLodDrawInfo(lod);
+    if (!mesh.GetVertexBufferResource() || lodDraw.indexCount == 0 ||
+        lodDraw.vertexBufferView.BufferLocation == 0 ||
+        lodDraw.indexBufferView.BufferLocation == 0 || !lodDraw.submeshes)
     {
         return nullptr;
     }
@@ -593,20 +597,14 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     cl->SetDescriptorHeaps(1, heaps);
     // Bind the mesh IA directly (Mesh::Draw uses a global bind cache tied to the
     // main render's command list, which must not be touched here).
-    D3D12_VERTEX_BUFFER_VIEW vbv{};
-    vbv.BufferLocation = mesh.GetVertexBufferResource()->GetGPUVirtualAddress();
-    vbv.StrideInBytes = mesh.GetVertexStride();
-    vbv.SizeInBytes = static_cast<UINT>(mesh.GetVertexBufferResource()->GetDesc().Width);
-    D3D12_INDEX_BUFFER_VIEW ibv{};
-    ibv.BufferLocation = mesh.GetIndexBufferResource()->GetGPUVirtualAddress();
-    ibv.Format = mesh.GetIndexFormat();
-    ibv.SizeInBytes = static_cast<UINT>(mesh.GetIndexBufferResource()->GetDesc().Width);
+    const D3D12_VERTEX_BUFFER_VIEW& vbv = lodDraw.vertexBufferView;
+    const D3D12_INDEX_BUFFER_VIEW& ibv = lodDraw.indexBufferView;
 
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->IASetVertexBuffers(0, 1, &vbv);
     cl->IASetIndexBuffer(&ibv);
 
-    const std::vector<Mesh::Submesh>& submeshes = mesh.GetSubmeshes();
+    const std::vector<Mesh::Submesh>& submeshes = *lodDraw.submeshes;
     const std::uint32_t drawCount = std::max<std::uint32_t>(
         1u, static_cast<std::uint32_t>(submeshes.size()));
     for (std::uint32_t draw = 0; draw < drawCount; ++draw)
@@ -615,7 +613,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         const Mesh::Submesh& submesh = hasSubmesh
             ? submeshes[draw]
             : Mesh::Submesh{};
-        const UINT indexCount = hasSubmesh ? submesh.indexCount : mesh.GetIndexCount();
+        const UINT indexCount = hasSubmesh ? submesh.indexCount : lodDraw.indexCount;
         if (indexCount == 0)
         {
             continue;

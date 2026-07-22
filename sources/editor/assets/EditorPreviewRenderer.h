@@ -94,6 +94,7 @@ public:
         const OrbitCamera& camera,
         const PreviewLight& light,
         EditorPreviewMode mode,
+        std::uint32_t lod,
         std::uint32_t renderSlot,
         ID3D12Resource* existingColorTarget = nullptr);
 

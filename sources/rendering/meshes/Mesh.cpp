@@ -192,23 +192,27 @@ bool Mesh::RaycastLocal(const Math::float3& origin, const Math::float3& directio
 }
 #endif
 
-void Mesh::SelectLod(UINT lod, const D3D12_VERTEX_BUFFER_VIEW*& vbv,
-    const D3D12_INDEX_BUFFER_VIEW*& ibv, UINT& indexCount) const {
-    vbv = &vertexBufferView_; // LODs share the base vertex buffer (simplify only cuts indices)
+UINT Mesh::ResolveRuntimeLod(UINT lod) const {
+    if (!render::g_lodEnabled) { return 0u; }
+    if (render::g_forcedLod >= 0) { return static_cast<UINT>(render::g_forcedLod); }
+    return lod;
+}
 
-    // g_lodEnabled off -> full detail; else g_forcedLod (>=0) overrides per-object selection.
-    UINT effectiveLod = lod;
-    if (!render::g_lodEnabled) { effectiveLod = 0u; }
-    else if (render::g_forcedLod >= 0) { effectiveLod = static_cast<UINT>(render::g_forcedLod); }
-
-    if (effectiveLod == 0 || extraLods_.empty()) {
-        ibv = &indexBufferView_;
-        indexCount = indexCount_;
-        return;
+Mesh::LodDrawInfo Mesh::GetLodDrawInfo(UINT lod) const {
+    LodDrawInfo info;
+    info.vertexBufferView = vertexBufferView_; // all LODs share the base vertex buffer
+    if (lod == 0 || extraLods_.empty()) {
+        info.indexBufferView = indexBufferView_;
+        info.indexCount = indexCount_;
+        info.submeshes = &submeshes_;
+        return info;
     }
-    const UINT idx = std::min(effectiveLod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
-    ibv = &extraLods_[idx].indexBufferView;
-    indexCount = extraLods_[idx].indexCount;
+
+    const UINT idx = std::min(lod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
+    info.indexBufferView = extraLods_[idx].indexBufferView;
+    info.indexCount = extraLods_[idx].indexCount;
+    info.submeshes = &extraLods_[idx].submeshes;
+    return info;
 }
 
 void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
@@ -231,15 +235,7 @@ void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList
 }
 
 const std::vector<Mesh::Submesh>& Mesh::SubmeshesForLod(UINT lod) const {
-    // Mirror SelectLod's resolution: 0 (or LODs disabled/none) -> base table; else clamp to the
-    // coarsest available extra LOD.
-    UINT effectiveLod = lod;
-    if (!render::g_lodEnabled) { effectiveLod = 0u; }
-    else if (render::g_forcedLod >= 0) { effectiveLod = static_cast<UINT>(render::g_forcedLod); }
-
-    if (effectiveLod == 0 || extraLods_.empty()) { return submeshes_; }
-    const UINT idx = std::min(effectiveLod - 1u, static_cast<UINT>(extraLods_.size()) - 1u);
-    return extraLods_[idx].submeshes;
+    return *GetLodDrawInfo(ResolveRuntimeLod(lod)).submeshes;
 }
 
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the
@@ -264,42 +260,38 @@ void Mesh::BindIA(ID3D12GraphicsCommandList* cmdList,
 }
 
 void Mesh::Draw(ID3D12GraphicsCommandList* cmdList, UINT lod) const {
-    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
-    SelectLod(lod, vbv, ibv, indexCount);
-    BindIA(cmdList, *vbv, *ibv);
-    cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
-    render::g_renderStats.AddDraw(indexCount, 1);
+    const LodDrawInfo info = GetLodDrawInfo(ResolveRuntimeLod(lod));
+    BindIA(cmdList, info.vertexBufferView, info.indexBufferView);
+    cmdList->DrawIndexedInstanced(info.indexCount, 1, 0, 0, 0);
+    render::g_renderStats.AddDraw(info.indexCount, 1);
 }
 
 void Mesh::DrawSubmesh(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal, UINT lod) const {
-    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
-    SelectLod(lod, vbv, ibv, indexCount);
-    const std::vector<Submesh>& subs = SubmeshesForLod(lod); // same lod resolution as SelectLod
+    const LodDrawInfo info = GetLodDrawInfo(ResolveRuntimeLod(lod));
+    const std::vector<Submesh>& subs = *info.submeshes;
     if (submeshOrdinal >= subs.size()) { return; }
     const Submesh& s = subs[submeshOrdinal];
-    BindIA(cmdList, *vbv, *ibv); // repeated binds across submeshes are elided by the bind cache
+    BindIA(cmdList, info.vertexBufferView, info.indexBufferView);
     cmdList->DrawIndexedInstanced(s.indexCount, 1, s.indexOffset, 0, 0);
     render::g_renderStats.AddDraw(s.indexCount, 1);
 }
 
 void Mesh::DrawSubmeshInstanced(ID3D12GraphicsCommandList* cmdList, UINT submeshOrdinal,
     UINT instanceCount, UINT lod) const {
-    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
-    SelectLod(lod, vbv, ibv, indexCount);
-    const std::vector<Submesh>& subs = SubmeshesForLod(lod); // same lod resolution as SelectLod
+    const LodDrawInfo info = GetLodDrawInfo(ResolveRuntimeLod(lod));
+    const std::vector<Submesh>& subs = *info.submeshes;
     if (submeshOrdinal >= subs.size()) { return; }
     const Submesh& s = subs[submeshOrdinal];
-    BindIA(cmdList, *vbv, *ibv); // repeated binds across submeshes are elided by the bind cache
+    BindIA(cmdList, info.vertexBufferView, info.indexBufferView);
     cmdList->DrawIndexedInstanced(s.indexCount, instanceCount, s.indexOffset, 0, 0);
     render::g_renderStats.AddDraw(s.indexCount, instanceCount);
 }
 
 void Mesh::DrawInstanced(ID3D12GraphicsCommandList* cmdList, UINT instanceCount, UINT lod) const {
-    const D3D12_VERTEX_BUFFER_VIEW* vbv; const D3D12_INDEX_BUFFER_VIEW* ibv; UINT indexCount;
-    SelectLod(lod, vbv, ibv, indexCount);
-    BindIA(cmdList, *vbv, *ibv);
-    cmdList->DrawIndexedInstanced(indexCount, instanceCount, 0, 0, 0);
-    render::g_renderStats.AddDraw(indexCount, instanceCount);
+    const LodDrawInfo info = GetLodDrawInfo(ResolveRuntimeLod(lod));
+    BindIA(cmdList, info.vertexBufferView, info.indexBufferView);
+    cmdList->DrawIndexedInstanced(info.indexCount, instanceCount, 0, 0, 0);
+    render::g_renderStats.AddDraw(info.indexCount, instanceCount);
 }
 
 // ====== Normal and tangent generation ======

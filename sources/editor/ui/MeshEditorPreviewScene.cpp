@@ -72,6 +72,7 @@ struct MeshEditorPreviewScene::Impl
     std::array<MeshEditorPreviewCamera, render::kFrameCount> renderedCameras{};
     std::array<MeshEditorPreviewLight, render::kFrameCount> renderedLights{};
     std::array<EditorPreviewMode, render::kFrameCount> renderedModes{};
+    std::array<std::uint32_t, render::kFrameCount> renderedLods{};
     std::array<bool, render::kFrameCount> cameraValid{};
     std::string sourceSignature;
     std::string error;
@@ -164,7 +165,8 @@ struct MeshEditorPreviewScene::Impl
         std::uint32_t renderHeight,
         const MeshEditorPreviewCamera& camera,
         const MeshEditorPreviewLight& light,
-        EditorPreviewMode mode)
+        EditorPreviewMode mode,
+        std::uint32_t lod)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -212,6 +214,7 @@ struct MeshEditorPreviewScene::Impl
                 orbit,
                 previewLight,
                 mode,
+                lod,
                 frameIndex,
                 targets[frameIndex].Get());
         if (!target || !commands->Submit(&renderer))
@@ -225,6 +228,7 @@ struct MeshEditorPreviewScene::Impl
         renderedCameras[frameIndex] = camera;
         renderedLights[frameIndex] = light;
         renderedModes[frameIndex] = mode;
+        renderedLods[frameIndex] = lod;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -279,7 +283,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     std::uint32_t renderHeight,
     const MeshEditorPreviewCamera& camera,
     const MeshEditorPreviewLight& light,
-    EditorPreviewMode mode)
+    EditorPreviewMode mode,
+    std::uint32_t lod)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -306,6 +311,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         return view;
     }
 
+    view.lodCount = std::max(1u, impl_->mesh->GetLodCount());
+    lod = std::min(lod, view.lodCount - 1u);
+
     const std::uint32_t frameIndex = renderer.GetCurrentFrameIndex();
     if (frameIndex >= render::kFrameCount)
     {
@@ -322,7 +330,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     if (!impl_->targets[frameIndex] || !impl_->cameraValid[frameIndex] ||
         targetSizeChanged || !SameCamera(impl_->renderedCameras[frameIndex], camera) ||
         !SameLight(impl_->renderedLights[frameIndex], light) ||
-        impl_->renderedModes[frameIndex] != mode)
+        impl_->renderedModes[frameIndex] != mode ||
+        impl_->renderedLods[frameIndex] != lod)
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
@@ -330,7 +339,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 renderHeight,
                 camera,
                 light,
-                mode))
+                mode,
+                lod))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();

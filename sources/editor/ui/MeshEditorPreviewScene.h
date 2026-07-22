@@ -48,6 +48,7 @@ public:
         State state = State::Loading;
         ImTextureID texture = ImTextureID_Invalid;
         const char* error = nullptr;
+        std::uint32_t lodCount = 1;
     };
 
     MeshEditorPreviewScene();
@@ -66,7 +67,8 @@ public:
         std::uint32_t renderHeight,
         const MeshEditorPreviewCamera& camera,
         const MeshEditorPreviewLight& light,
-        EditorPreviewMode mode);
+        EditorPreviewMode mode,
+        std::uint32_t lod);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.
