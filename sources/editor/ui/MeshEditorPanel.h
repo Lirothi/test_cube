@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -10,9 +11,9 @@ class AssetRegistry;
 struct EditorContext;
 
 // Part J — dedicated Mesh Editor window. Opened by double-clicking a `models/<name>.mesh.json`
-// asset in the content browser. Edits the mesh asset's render defaults — per-slot materials,
-// renderLayer, spawnScale, texOffsScale tiling — and writes them back to the file (round-trip
-// preserving unknown keys). Shader is intentionally NOT editable here: it is a MATERIAL concern
+// asset in the content browser. Edits the mesh asset's render defaults — per-slot materials and
+// normal generation, renderLayer, spawnScale, texOffsScale tiling — and writes them back while
+// preserving unknown keys. Shader is intentionally NOT editable here: it is a MATERIAL concern
 // (Part I0), never a mesh one.
 class MeshEditorPanel
 {
@@ -36,6 +37,7 @@ private:
     nlohmann::json doc_;             // parsed document (the round-trip base — unknown keys preserved)
     bool          loaded_ = false;
     std::vector<std::string> slots_; // one material preset per submesh (auto-sized to the geometry)
+    std::vector<uint32_t> recomputeNormalSlots_; // submesh slots that discard authored normals
     std::string   status_;
 };
 

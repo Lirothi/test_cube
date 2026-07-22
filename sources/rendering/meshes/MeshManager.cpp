@@ -80,6 +80,68 @@ void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* u
         prevCount = lodIdx.size();
     }
 }
+
+std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots)
+{
+    std::vector<uint32_t> result = slots;
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::string MeshCacheKey(const std::string& path, const MeshLoadOptions& opt)
+{
+    const std::vector<uint32_t> slots = CanonicalNormalSlots(opt.recomputeNormalSlots);
+    if (slots.empty()) { return path; }
+
+    std::string key = path + "|recomputeNormalSlots=";
+    for (const uint32_t slot : slots)
+    {
+        key += std::to_string(slot);
+        key.push_back(',');
+    }
+    return key;
+}
+
+void DiscardNormalsForSlots(std::vector<VertexPNTUV>& vertices,
+    const std::vector<uint32_t>& indices,
+    const std::vector<Mesh::Submesh>& submeshes,
+    const std::vector<uint32_t>& requestedSlots)
+{
+    const std::vector<uint32_t> slots = CanonicalNormalSlots(requestedSlots);
+    if (vertices.empty() || indices.empty() || slots.empty()) { return; }
+
+    const auto clearRange = [&](size_t offset, size_t count)
+    {
+        if (offset >= indices.size()) { return; }
+        const size_t end = offset + std::min(count, indices.size() - offset);
+        for (size_t i = offset; i < end; ++i)
+        {
+            const uint32_t vertexIndex = indices[i];
+            if (vertexIndex < vertices.size())
+            {
+                vertices[vertexIndex].normal = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+            }
+        }
+    };
+
+    if (submeshes.empty())
+    {
+        if (std::binary_search(slots.begin(), slots.end(), 0u))
+        {
+            clearRange(0, indices.size());
+        }
+        return;
+    }
+
+    for (const Mesh::Submesh& submesh : submeshes)
+    {
+        if (std::binary_search(slots.begin(), slots.end(), submesh.materialSlot))
+        {
+            clearRange(submesh.indexOffset, submesh.indexCount);
+        }
+    }
+}
 } // namespace
 
 using Microsoft::WRL::ComPtr;
@@ -170,8 +232,10 @@ bool MeshManager::ParseFileCpu(const std::string& path, MeshCpuData& out,
         out = {};
         return false;
     }
-    if (opt.generateTangentSpace)
+    if (opt.generateTangentSpace || !opt.recomputeNormalSlots.empty())
     {
+        DiscardNormalsForSlots(out.vertices, out.indices, out.submeshes,
+            opt.recomputeNormalSlots);
         Mesh::GenerateNormalsTangents(out.vertices, out.indices.data(),
             static_cast<UINT>(out.indices.size()));
     }
@@ -206,7 +270,8 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
-    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
+    const std::string cacheKey = MeshCacheKey(path, opt);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(cacheKey);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -217,11 +282,13 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
         return std::shared_ptr<Mesh>();
     }
 
+    DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace);
+        verts, inds.data(), (UINT)inds.size(),
+        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
-    cache_[path] = m;
+    cache_[cacheKey] = m;
     return m;
 }
 
@@ -231,7 +298,8 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
-    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
+    const std::string cacheKey = MeshCacheKey(path, opt);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(cacheKey);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -242,11 +310,13 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
         return std::shared_ptr<Mesh>();
     }
 
+    DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace);
+        verts, inds.data(), (UINT)inds.size(),
+        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
-    cache_[path] = m;
+    cache_[cacheKey] = m;
     return m;
 }
 
@@ -256,8 +326,9 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
-    // Cache by the full path INCLUDING the fragment: "foo.glb#0" and "foo.glb#1" are distinct meshes.
-    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(path);
+    // Cache by the full path INCLUDING the fragment and normal-recompute policy.
+    const std::string cacheKey = MeshCacheKey(path, opt);
+    robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(cacheKey);
     if (it != cache_.end()) {
         return it->second;
     }
@@ -269,12 +340,14 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
         return std::shared_ptr<Mesh>();
     }
 
+    DiscardNormalsForSlots(verts, inds, submeshes, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(), opt.generateTangentSpace,
+        verts, inds.data(), (UINT)inds.size(),
+        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(),
         submeshes.size() > 1 ? &submeshes : nullptr);
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
-    cache_[path] = m;
+    cache_[cacheKey] = m;
     return m;
 }
 

@@ -287,15 +287,11 @@ inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
 // approximation, not volumetric subsurface scattering).
 //
 // N is the VISIBLE-side normal (already SV_IsFrontFace-corrected when the GBuffer is written),
-// so front lighting uses dot(N,L) exactly like DefaultLit and the transmission lobe uses the
-// opposite hemisphere via dot(-N,L). Front (diffuse+specular) and back (transmission) reach
-// full strength in disjoint directions; between them the wrap softens the hand-off so they do
-// not double-count at full strength.
-
-// Transmission-onset wrap width. A documented tuning constant (NOT a measured Unreal value):
-// it lets light bleed through near the terminator instead of switching on hard exactly at the
-// back-facing angle. 0 = hard onset at dot(-N,L)>=0; larger = softer/wider bleed.
-static const float kFoliageTransmitWrap = 0.5f;
+// so front lighting uses dot(N,L) exactly like DefaultLit. Transmission is restricted to light
+// behind that visible side via dot(-N,L), then gated by the view/light opposition. The second
+// gate is what makes a leaf glow when it is viewed against the source instead of tinting foliage
+// from every camera direction.
+static const float kFoliageTransmissionViewPower = 2.0f;
 
 struct FoliageResult
 {
@@ -318,11 +314,13 @@ inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload, flo
 	o.specBRDF = br.specBRDF;
 	o.NdotL = br.NdotL;
 
-	// Back side: wrapped -N·L. 0 when fully front-lit, 1 when the light is straight behind the
-	// leaf. View-independent thin-sheet approximation; kInvPi keeps it in the same radiometric
-	// units as the Lambert diffuse term.
-	float backNdotL = dot(-bi.N, bi.L);
-	float transmit = saturate((backNdotL + kFoliageTransmitWrap) / (1.0f + kFoliageTransmitWrap));
+	// Back side only: no terminator wrap, so front/grazing light cannot leak into transmission.
+	// The view gate peaks when the camera and light are on opposite sides of the leaf. Squaring
+	// it gives a broad but directional forward-scattering lobe without an all-around glow.
+    float backNdotL = 1;//    saturate(dot(-bi.N, bi.L));
+	float viewLightOpposition = saturate(dot(bi.V, -bi.L));
+	float viewScatter = pow(viewLightOpposition, kFoliageTransmissionViewPower);
+	float transmit = backNdotL * viewScatter;
 	o.transBRDF = subsurfacePayload * transmit * kInvPi;
 
 	return o;

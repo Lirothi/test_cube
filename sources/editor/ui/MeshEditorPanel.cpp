@@ -91,6 +91,7 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     status_.clear();
 
     slots_.clear();
+    recomputeNormalSlots_.clear();
 
     std::ifstream f(path_);
     if (f)
@@ -117,6 +118,24 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     else if (doc_.contains("material") && doc_["material"].is_string())
     {
         slots_[0] = doc_["material"].get<std::string>();
+    }
+
+    const auto normalSlots = doc_.find("recomputeNormalSlots");
+    if (normalSlots != doc_.end() && normalSlots->is_array())
+    {
+        for (const nlohmann::json& value : *normalSlots)
+        {
+            if (!value.is_number_integer()) { continue; }
+            const int64_t slot = value.get<int64_t>();
+            if (slot >= 0 && static_cast<size_t>(slot) < slotCount)
+            {
+                recomputeNormalSlots_.push_back(static_cast<uint32_t>(slot));
+            }
+        }
+        std::sort(recomputeNormalSlots_.begin(), recomputeNormalSlots_.end());
+        recomputeNormalSlots_.erase(
+            std::unique(recomputeNormalSlots_.begin(), recomputeNormalSlots_.end()),
+            recomputeNormalSlots_.end());
     }
 }
 
@@ -159,6 +178,29 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::PushID(static_cast<int>(i));
         const std::string label = (slots_.size() == 1) ? std::string("Material") : ("slot " + std::to_string(i));
         MaterialCombo(label.c_str(), slots_[i], presets, /*allowAuto=*/true); // edits slots_[i] in place
+
+        const uint32_t normalSlot = static_cast<uint32_t>(i);
+        bool recomputeNormals = std::binary_search(
+            recomputeNormalSlots_.begin(), recomputeNormalSlots_.end(), normalSlot);
+        if (ImGui::Checkbox("Recompute vertex normals", &recomputeNormals))
+        {
+            if (recomputeNormals)
+            {
+                recomputeNormalSlots_.push_back(normalSlot);
+                std::sort(recomputeNormalSlots_.begin(), recomputeNormalSlots_.end());
+            }
+            else
+            {
+                recomputeNormalSlots_.erase(std::remove(
+                    recomputeNormalSlots_.begin(), recomputeNormalSlots_.end(), normalSlot),
+                    recomputeNormalSlots_.end());
+            }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Discard authored normals for this submesh and regenerate them from triangles.\n"
+                              "Tangents are regenerated from the resulting normals and UVs.");
+        }
 
         // I3: promote a still-"auto" glTF slot into a named material file, then bind the slot to it
         // (in memory). The panel's Save persists materials[] AND fans out to every placed instance.
@@ -317,6 +359,9 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
         doc_.erase("material");
         doc_["materials"] = slots_; // per-slot list; slot i = entry i
     }
+
+    if (recomputeNormalSlots_.empty()) { doc_.erase("recomputeNormalSlots"); }
+    else { doc_["recomputeNormalSlots"] = recomputeNormalSlots_; }
 
     std::ofstream out(path_, std::ios::trunc);
     if (!out)

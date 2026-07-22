@@ -65,6 +65,7 @@ namespace editor_thumbnail_detail
         std::string resolvedPath;
         std::shared_ptr<MeshCpuData> meshData;
         std::vector<std::string> meshMaterialSlots;
+        std::vector<uint32_t> recomputeNormalSlots;
         std::string failureReason;
     };
 
@@ -203,10 +204,12 @@ namespace
     bool ResolveMeshSource(const std::string& assetPath,
         std::string& resolvedPath,
         std::vector<std::string>& materialSlots,
+        std::vector<uint32_t>& recomputeNormalSlots,
         std::string& failureReason)
     {
         resolvedPath = assetPath;
         materialSlots.clear();
+        recomputeNormalSlots.clear();
         if (!EndsWithNoCase(FilePart(assetPath), ".mesh.json"))
         {
             return true;
@@ -259,6 +262,24 @@ namespace
             {
                 materialSlots.push_back(material->get<std::string>());
             }
+        }
+
+        const auto normalSlots = asset.find("recomputeNormalSlots");
+        if (normalSlots != asset.end() && normalSlots->is_array())
+        {
+            for (const nlohmann::json& value : *normalSlots)
+            {
+                if (!value.is_number_integer()) { continue; }
+                const int64_t slot = value.get<int64_t>();
+                if (slot >= 0)
+                {
+                    recomputeNormalSlots.push_back(static_cast<uint32_t>(slot));
+                }
+            }
+            std::sort(recomputeNormalSlots.begin(), recomputeNormalSlots.end());
+            recomputeNormalSlots.erase(
+                std::unique(recomputeNormalSlots.begin(), recomputeNormalSlots.end()),
+                recomputeNormalSlots.end());
         }
         return !resolvedPath.empty();
     }
@@ -377,7 +398,8 @@ namespace
 
     DiskCacheInfo BuildDiskCacheInfo(const PreflightInput& input,
         const std::string& resolvedPath,
-        const std::vector<std::string>& meshMaterialSlots)
+        const std::vector<std::string>& meshMaterialSlots,
+        const std::vector<uint32_t>& recomputeNormalSlots)
     {
         DiskCacheInfo info;
         const std::uint32_t type = input.kind == PreflightKind::Mesh
@@ -400,6 +422,8 @@ namespace
         {
             HashText(signature, resolvedPath);
             HashValue(signature, FileWriteTime(FilePart(resolvedPath)));
+            HashValue(signature, recomputeNormalSlots.size());
+            for (const uint32_t slot : recomputeNormalSlots) { HashValue(signature, slot); }
             const std::string geometryPath = FilePart(resolvedPath);
             const bool gltfGeometry = EndsWithNoCase(geometryPath, ".gltf") ||
                 EndsWithNoCase(geometryPath, ".glb");
@@ -833,17 +857,20 @@ void AssetThumbnailCache::LaunchPreflightJobs()
             {
                 ResolveMeshSource(result.input.path, result.resolvedPath,
                     result.meshMaterialSlots,
+                    result.recomputeNormalSlots,
                     result.failureReason);
             }
             result.cache = BuildDiskCacheInfo(result.input, result.resolvedPath,
-                result.meshMaterialSlots);
+                result.meshMaterialSlots, result.recomputeNormalSlots);
             result.staleCachePaths = FindStaleDiskCacheFiles(result.cache);
             if (result.input.kind == PreflightKind::Mesh &&
                 !result.cache.hit && result.failureReason.empty())
             {
                 result.meshData = std::make_shared<MeshCpuData>();
                 MeshManager parser;
-                if (!parser.ParseFileCpu(result.resolvedPath, *result.meshData))
+                MeshLoadOptions options;
+                options.recomputeNormalSlots = result.recomputeNormalSlots;
+                if (!parser.ParseFileCpu(result.resolvedPath, *result.meshData, options))
                 {
                     result.meshData.reset();
                     result.failureReason = "Referenced mesh geometry could not be parsed.";

@@ -39,13 +39,25 @@ StaticMesh::StaticMesh(const std::string& modelName,
 {
 }
 
+void StaticMesh::SetRecomputeNormalSlots(std::vector<uint32_t> slots)
+{
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    recomputeNormalSlots_ = std::move(slots);
+}
+
 void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     // B2: load the mesh BEFORE the base Init — material-slot resolution needs the submesh count
     // (one slot per glTF material group).
     if (renderer && !modelName_.empty())
     {
-        SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
+        MeshLoadOptions options;
+        options.generateTangentSpace = true;
+        options.wantCW = false;
+        options.recomputeNormalSlots = recomputeNormalSlots_;
+        SetMesh(renderer->GetMeshManager()->Load(
+            modelName_, renderer, uploadCmdList, uploadKeepAlive, options));
     }
 
     GBufferRenderable::Init(renderer, uploadCmdList, uploadKeepAlive);

@@ -304,10 +304,21 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         {
             doc_["transmissionStrength"] = transmission;
         }
-        float indirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
-        if (ImGui::DragFloat("Indirect Specular Scale", &indirectSpecularScale, 0.01f, 0.0f, 1.0f))
+        const float serializedIndirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
+        float indirectSpecularScale = std::clamp(serializedIndirectSpecularScale, 0.0f, 1.0f);
+        if (indirectSpecularScale != serializedIndirectSpecularScale)
         {
             doc_["indirectSpecularScale"] = indirectSpecularScale;
+        }
+        if (ImGui::DragFloat("Indirect Specular Scale", &indirectSpecularScale, 0.01f, 0.0f, 1.0f,
+                             "%.3f", ImGuiSliderFlags_AlwaysClamp))
+        {
+            doc_["indirectSpecularScale"] = std::clamp(indirectSpecularScale, 0.0f, 1.0f);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Scales only indirect sky/SSR/RT reflections.\n"
+                              "Direct specular, diffuse, transmission and emissive are unchanged.");
         }
         float ambientOcclusion = doc_.value("ambientOcclusion", 1.0f);
         if (ImGui::DragFloat("Ambient Occlusion", &ambientOcclusion, 0.01f, 0.0f, 1.0f))

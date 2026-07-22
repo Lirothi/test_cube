@@ -137,6 +137,13 @@ TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
     SetUniformBinder(std::make_unique<TransparentUniformBinder>(scene_, this));
 }
 
+void TransparentStaticMesh::SetRecomputeNormalSlots(std::vector<uint32_t> slots)
+{
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    recomputeNormalSlots_ = std::move(slots);
+}
+
 void TransparentStaticMesh::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
@@ -144,7 +151,12 @@ void TransparentStaticMesh::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
     if (renderer && !modelName_.empty())
     {
-        SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
+        MeshLoadOptions options;
+        options.generateTangentSpace = true;
+        options.wantCW = false;
+        options.recomputeNormalSlots = recomputeNormalSlots_;
+        SetMesh(renderer->GetMeshManager()->Load(
+            modelName_, renderer, uploadCmdList, uploadKeepAlive, options));
     }
     hasNormalMap_ = false;
     if (renderer && uploadCmdList && !normalMapPath_.empty())

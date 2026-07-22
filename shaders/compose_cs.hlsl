@@ -69,7 +69,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float3 lit = LightTarget.SampleLevel(gSmp, uv, 0).rgb;
     float3 payload = GB2.SampleLevel(gSmp, uv, 0).rgb;
-    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
+    float indirectSpecularScale = saturate(gbAux.g);
+    uint shadingModel = DecodeShadingModel(gbAux.b);
     float3 color = lit;
     if (shadingModel == kShadingModelDefaultLit)
     {
@@ -108,8 +110,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             skyCol = SkyboxTex.SampleLevel(gSmp, Rw, rough * kSkyRoughMaxMip).rgb * skyboxIntensity;
         }
 
-        // Skybox as fallback: (ssrColor*α + sky*(1-α))
+        // Skybox as fallback: (ssrColor*α + sky*(1-α)). Apply the material
+        // control after the source/fallback blend so None, SkyOnly, SSR and RT
+        // share the same response without changing analytic direct specular.
         float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);
+        refl *= indirectSpecularScale;
 
         float cosT = saturate(dot(N_ws, Vw));
         float3 F = FresnelSchlick(cosT, F0);

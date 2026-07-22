@@ -426,9 +426,10 @@ validation diagnostics; this step does not claim a warning-free global GBV basel
 **Result:** Shader-only, exactly the declared touch-list. `shaders/utils.hlsl` gained a shared
 `EvalFoliageBRDF` helper (and `FoliageResult`) returning separate front `diffBRDF`, front `specBRDF`,
 and back `transBRDF` terms so F5 point/spot and F11 RT hit shading can reuse identical math. The front
-side is byte-for-byte the DefaultLit Lambert+GGX response (`EvalBRDF`); the back side is a
-view-independent wrapped `-dot(N,L)` transmission (documented tuning constant
-`kFoliageTransmitWrap = 0.5`, explicitly not a measured Unreal value) tinted by the GB2
+side is byte-for-byte the DefaultLit Lambert+GGX response (`EvalBRDF`); the back side is restricted to
+`saturate(dot(-N,L))` and multiplied by a directional view-scatter gate
+`pow(saturate(dot(V,-L)), 2)`. This makes transmission visible when the leaf is viewed against the
+source without leaking across the front/grazing hemisphere. The result is tinted by the GB2
 `subsurfaceColor * transmissionStrength` payload and scaled by `kInvPi`. `shaders/lighting_cs.hlsl`
 decodes the shading model from `GBAux.b` and branches: DefaultLit is unchanged (the CSM/VSM shadow
 select was refactored into a shared `SampleSunShadow` with identical behavior); foliage adds the
@@ -442,8 +443,9 @@ same leaf textures) under front and back sun: front-lit foliage is visually iden
 with the GGX sun highlight intact; back-lit foliage gains a soft tinted-green transmission glow on its
 camera-facing side while the DefaultLit palm shows only the unrelated silver sky-specular leak (that
 leak is F6/F8's target, not F4's). DefaultLit atoll baseline unchanged. Debug and Release built clean,
-both `--shot` captures exited 0, `git diff --check` clean, touched shaders remain CRLF. User confirmed
-transmission reads correctly. The temporary fixtures (`data/materials/__f4_leaf.json`,
+both `--shot` captures exited 0, `git diff --check` clean, touched shaders remain CRLF. A later atoll
+review removed the original view-independent wrap after it proved too broad. The temporary fixtures
+(`data/materials/__f4_leaf.json`,
 `data/levels/__f4_frontlit.json`, `data/levels/__f4_backlit.json`) are `__f4_`-prefixed test scaffolding
 and were kept untracked, not palm-material rewrites (those wait for F12).
 
@@ -458,8 +460,8 @@ and were kept untracked, not palm-material rewrites (those wait for F12).
 - **Implement:**
   - Reuse the F4 helper for point and spot lights; do not duplicate a slightly different BRDF.
   - Apply each light's attenuation and shadow visibility to transmission.
-  - For the existing flat ambient, add a conservative two-sided foliage response so the visible back
-    side does not go black. Do not turn ambient into emissive.
+  - Keep the existing albedo ambient for foliage, but do not add the subsurface/transmission payload
+    directionlessly. Proper two-sided irradiance belongs to F8.
   - Defer irradiance-cubemap ambient to F8; this step must work with the current renderer.
 - **Interface contract:** all analytic light shaders select the same shading-model ID and helper.
 - **Done-when:** directional/point/spot front and back lighting agree; light radius/cone falloff affects
@@ -476,10 +478,9 @@ transmission lobe samples the light's shadow with the visible normal flipped (`-
 own front face does not self-shadow the transmitted light to black — `PointShadowFactor(Ld, P, -N, …)`
 for point, `ComputeSpotShadow(light, P, -N, …)` for spot. The DefaultLit branch in each shader is
 behaviorally identical to before (its `NdotL <= 0` / `shadow <= 0` early-outs preserved).
-`shaders/lighting_cs.hlsl` additionally gained a conservative two-sided ambient term for foliage: the
-flat ambient adds `subsurfacePayload * ambientIntensity` so a leaf's shaded/back side does not collapse
-to black under the current flat-ambient model — scaled by `ambientIntensity` (zero ambient stays zero,
-i.e. ambient not emissive), and superseded by the F8 irradiance-cube two-sided ambient later. No
+`shaders/lighting_cs.hlsl` retains the ordinary albedo ambient but does not add the subsurface payload
+as flat ambient: that temporary response was removed after atoll validation showed it looked like
+view-independent transmission. Proper two-sided environment diffuse remains deferred to F8. No
 root-signature, descriptor, or GBuffer changes; `GBAux` (t9) and `GB2` (t2) were already bound in both
 light shaders. Verified on temporary two-palm fixtures (`__f5_point.json`, `__f5_spot.json`: a foliage
 palm beside an unchanged DefaultLit palm, dim sky, one warm light centered behind both so both crowns
@@ -488,11 +489,13 @@ glow under both point and spot while the DefaultLit palm shows only the silver s
 falloff and shadows behave correctly and transmission is not self-shadowed. DefaultLit is unchanged
 (atoll baseline mean |Δ| = 0.29/255 vs the F4 capture — DLSS jitter only). Debug and Release built clean;
 all Release and Debug `--shot` runs exited 0 (runtime shader compile + no debug-layer device removal);
-`git diff --check` clean; touched shaders remain CRLF.
+`git diff --check` clean; touched shaders remain CRLF. Follow-up fixed-camera Debug and Release_Editor
+captures with the directional view gate also exited 0; the front-lit view no longer receives the flat
+green subsurface lift.
 
 ---
 
-### F6 — Per-material indirect-specular control (targeted scene fix)
+### F6 — Per-material indirect-specular control (targeted scene fix) — DONE (2026-07-22)
 
 - **Depends:** F1, F3.
 - **Goal:** Stop sky/SSR/RT indirect reflection from overpowering foliage without removing direct spec.
@@ -510,6 +513,19 @@ all Release and Debug `--shot` runs exited 0 (runtime shader compile + no debug-
   DefaultLit at 1 is unchanged.
 - **Verify:** one camera across `None`, `SkyOnly`, SSR, RT; direct spec visible at scale 0; compare rough
   metal and dielectric controls.
+
+**Result:** `compose_cs.hlsl` now samples `GBAux` once, decodes the shading model from `.b`, and applies
+the saturated `.g` material value after the premultiplied SSR/RT reflection has been combined with the
+sky fallback. Only that composed indirect reflection is scaled: `LightTarget` (including analytic direct
+specular), diffuse, foliage transmission, and emissive remain untouched. The compose root signature and
+descriptor staging needed no F6 change because F3 already bound `GBAux` at `t7`. Material JSON loading
+and the Material Editor now clamp `indirectSpecularScale` to `[0,1]`; the editor control also always
+clamps during dragging and explains exactly which lighting paths it affects. Missing values still default
+to `1`, which preserves the previous response exactly. Verified on the fixed `atoll_a2_test` camera with
+the F4 leaf material at `0.35` across `None`, `SkyOnly`, SSR, and RT, plus a `SkyOnly` boundary capture at
+`0`: the sky/SSR/RT wash is reduced or removed while direct sun lighting remains. All temporary level and
+material substitutions were restored. Debug and Release_Editor builds pass; Debug runtime shader compile
+and every `--shot` run exited 0.
 
 ---
 

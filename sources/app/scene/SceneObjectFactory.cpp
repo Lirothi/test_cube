@@ -1,9 +1,11 @@
 #include "app/scene/SceneObjectFactory.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
@@ -43,6 +45,25 @@ namespace
         if (s == "Gizmo") { return RenderLayer::Gizmo; }
         if (s == "Debug") { return RenderLayer::Debug; }
         return RenderLayer::Default;
+    }
+
+    std::vector<uint32_t> ToUIntVector(const json& value)
+    {
+        std::vector<uint32_t> result;
+        if (!value.is_array()) { return result; }
+        for (const json& entry : value)
+        {
+            if (entry.is_number_unsigned())
+            {
+                result.push_back(entry.get<uint32_t>());
+            }
+            else if (entry.is_number_integer())
+            {
+                const int64_t slot = entry.get<int64_t>();
+                if (slot >= 0) { result.push_back(static_cast<uint32_t>(slot)); }
+            }
+        }
+        return result;
     }
 }
 
@@ -151,6 +172,9 @@ namespace SceneObjectFactory
 
     void ApplyStaticMeshJsonProperties(StaticMesh& mesh, const json& o)
     {
+        mesh.SetRecomputeNormalSlots(ToUIntVector(
+            o.value("recomputeNormalSlots", json::array())));
+
         if (o.contains("rotationDeg"))
         {
             mesh.SetRotationEulerDeg(ToFloat3(o["rotationDeg"]));
@@ -241,6 +265,8 @@ namespace SceneObjectFactory
         const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto glass = std::make_unique<TransparentStaticMesh>(&scene, model, pos, scale, 0.0f);
+        glass->SetRecomputeNormalSlots(ToUIntVector(
+            o.value("recomputeNormalSlots", json::array())));
         if (o.contains("tint")) { glass->SetTint(ToFloat3(o["tint"], float3(1.0f, 1.0f, 1.0f))); }
         if (o.contains("absorption")) { glass->SetAbsorption(ToFloat3(o["absorption"])); }
         if (o.contains("thickness")) { glass->SetThickness(o["thickness"].get<float>()); }

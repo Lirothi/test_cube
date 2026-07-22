@@ -71,7 +71,8 @@ namespace
             preset.surfaceParams.subsurfaceColor = float3(v4[0], v4[1], v4[2]);
         }
         preset.surfaceParams.transmissionStrength = p.value("transmissionStrength", 0.0f);
-        preset.surfaceParams.indirectSpecularScale = p.value("indirectSpecularScale", 1.0f);
+        preset.surfaceParams.indirectSpecularScale =
+            std::clamp(p.value("indirectSpecularScale", 1.0f), 0.0f, 1.0f);
         preset.surfaceParams.ambientOcclusion = p.value("ambientOcclusion", 1.0f);
 
         if (readFloats("tint", v4, 4))

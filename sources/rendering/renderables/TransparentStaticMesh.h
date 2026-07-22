@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "materials/Texture2D.h"
@@ -32,6 +33,7 @@ public:
     void SetRoughness(float roughness) { roughness_ = roughness; }
     void SetIor(float ior) { ior_ = ior; }
     void SetNormalMap(const std::wstring& path, bool normalIsRG = false);
+    void SetRecomputeNormalSlots(std::vector<uint32_t> slots);
 
     bool HasNormalMap() const { return hasNormalMap_; }
     bool IsNormalMapRG() const { return normalMapIsRG_; }
@@ -67,4 +69,5 @@ private:
     std::wstring normalMapPath_{};
     bool normalMapIsRG_ = false;
     bool hasNormalMap_ = false;
+    std::vector<uint32_t> recomputeNormalSlots_;
 };

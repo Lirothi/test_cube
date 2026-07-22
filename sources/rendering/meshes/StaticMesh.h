@@ -1,4 +1,7 @@
 #pragma once
+#include <cstdint>
+#include <vector>
+
 #include "rendering/renderables/GBufferRenderable.h"
 #include "core/math/Math.h"
 
@@ -12,6 +15,8 @@ public:
 
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
+    void SetRecomputeNormalSlots(std::vector<uint32_t> slots);
+
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return true; }
 
@@ -21,4 +26,5 @@ protected:
 
 private:
     std::string modelName_;
+    std::vector<uint32_t> recomputeNormalSlots_;
 };

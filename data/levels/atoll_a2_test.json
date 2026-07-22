@@ -5,7 +5,7 @@
     "zNear": 0.01
   },
   "directionalLight": {
-    "ambient": 0.15,
+    "ambient": 0.10999999940395355,
     "color": [
       1.0,
       0.95,
@@ -17,7 +17,7 @@
       -0.5
     ],
     "enabled": true,
-    "exposure": 1.0
+    "exposure": 2.0
   },
   "objects": [
     {
@@ -77,7 +77,7 @@
       "materials": [
         "coconut_palm_0",
         "coconut_palm_1",
-        "coconut_palm_2",
+        "__f4_leaf",
         "coconut_palm_3",
         "coconut_palm_4"
       ],
@@ -89,14 +89,14 @@
         0.0
       ],
       "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
+        180.0,
+        74.9720230102539,
+        180.0
       ],
       "scale": [
+        0.9999999403953552,
         1.0,
-        1.0,
-        1.0
+        0.9999999403953552
       ],
       "type": "staticMesh"
     },

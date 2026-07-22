@@ -237,15 +237,6 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // compose pass. Without the (1-metal) gate, metals get a flat albedo floor that washes
     // them out and kills highlight contrast.
     float3 ambient = albedo * (1.0 - metal) * ambientIntensity;
-    // F5: conservative two-sided foliage ambient. A thin leaf's shaded/back side would otherwise
-    // collapse toward black under the flat ambient, so add the transmitted subsurface tint. It is
-    // scaled by ambientIntensity (zero ambient stays zero -> this is ambient, not emissive); the
-    // proper irradiance-cube two-sided ambient replaces it in F8.
-    if (isFoliage)
-    {
-        ambient += subsurface * ambientIntensity;
-    }
-
     BRDFInput bi;
     bi.albedo = albedo;
     bi.rough = rough;
