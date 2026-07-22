@@ -75,6 +75,29 @@
     },
     {
       "enabled": true,
+      "id": 20,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "WindTest Palm",
+      "windStrength": 1.0,
+      "position": [
+        -12.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
       "id": 12,
       "mesh": "models/atoll_lagoon_floor.mesh.json",
       "name": "staticMesh #12",

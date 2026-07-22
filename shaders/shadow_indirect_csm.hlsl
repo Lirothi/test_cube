@@ -31,7 +31,9 @@
     "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 #endif
 
-// Matches render::InstancePerObject (208 bytes) / the InstanceArray element in gbuffer_common.
+// Matches render::InstancePerObject (224 bytes) / the InstanceArray element in gbuffer_common.
+// W3 grew it 208 -> 224 to add windStrength; the tail (emissive + pad) is unused by the shadow
+// pass, so it is aliased as padding. W5 will read `windStrength` here to sway the shadow.
 struct InstancePerObject
 {
     float4x4 world;
@@ -43,7 +45,9 @@ struct InstancePerObject
     float4   texOffsScale;
     float4   texFlags;
     uint     objectId;
-    uint3    _instPad1;
+    uint3    _instPad1;    // aliases the gbuffer's `emissive` (unused here)
+    float    windStrength; // W3: per-object foliage sway strength (consumed by the shadow VS in W5)
+    float3   _instPad2;    // pad to 224 (lockstep with render::InstancePerObject)
 };
 
 StructuredBuffer<InstancePerObject> Instances : register(t0);

@@ -64,6 +64,10 @@ struct MaterialParams
     // emissiveColor * emissiveStrength; default 0 => zero-cost for existing content.
     float3 emissiveColor    = {0.f, 0.f, 0.f};
     float  emissiveStrength = 0.f;
+    // W3: per-object wind sway strength (0 = rigid). Authored per object and written UNIFORMLY to
+    // every slot in GBufferRenderable::ResolveMaterialSlots (submesh sync). Read by the gbuffer VS
+    // (W4) via the b0 PerObject CB / InstancePerObject; the ocean-force analogue for foliage.
+    float  windStrength     = 0.f;
 
     float3 EmissiveLinear() const
     {

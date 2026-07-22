@@ -801,6 +801,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.dirLight = &dirLight_;
     frameData_.shadowGpu = &shadowGpu_;
     frameData_.vsm = &vsm_;
+    frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
     frameData_.settings = renderSettings_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectIds = selectedEditorObjectIds_;

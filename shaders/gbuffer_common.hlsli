@@ -26,6 +26,8 @@ struct InstancePerObject
     float4 texFlags;
     uint objectId;
     float3 emissive; // D: premultiplied color*strength
+    float windStrength; // W3: per-object foliage sway strength (0 = rigid)
+    float3 _pad0; // pad to 224 bytes (must match render::InstancePerObject + the shadow mirror)
 };
 
 #ifndef GBUFFER_SKIP_PEROBJECT
@@ -39,9 +41,10 @@ cbuffer PerObject : register(b0)
     float alphaCutoff; // C1 alpha test (-1 disables)
     float mrMultiply; // 0=MR texture overrides values, 1=texture*metalRough
     float4 texOffsScale;
-    float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=reserved
+    float4 texFlags; // x=useAlbedo, y=useMR, z=useNormalMap, w=normalStrength
     uint objectId;
     float3 emissive; // D: premultiplied color*strength, added to RT2
+    float windStrength; // W3: per-object foliage sway strength (0 = rigid); read by the VS in W4
 };
 #else
 // Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).
@@ -60,6 +63,16 @@ cbuffer PerView : register(b1)
     float4x4 viewProj;
     float4x4 viewProjNoJitter;
     float4x4 prevViewProjNoJitter;
+    // W3: global wind, filled from WindState by BuildGBufferViewCB. The gbuffer VS (W4) applies the
+    // sway offset from these; the depth-only shadow shaders declare a shorter PerView and ignore
+    // this tail (W5 adds the matching fields to the shadow CB). windGustMul defaults to 1.
+    float  windTime;
+    float  windPrevTime;
+    float2 windDirXZ;
+    float  windSwayAmp;
+    float  windSwayFreq;
+    float  windGustMul;
+    float  _windPad;
 };
 
 // Parameterized UV transform (per-instance texOffsScale). The non-instanced wrapper below

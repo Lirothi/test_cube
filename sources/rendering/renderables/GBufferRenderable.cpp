@@ -37,6 +37,7 @@ public:
             cbHandles_.texOffsScale = material->ComputeCBFieldHandle(0, "texOffsScale");
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
             cbHandles_.emissive = material->ComputeCBFieldHandle(0, "emissive");
+            cbHandles_.windStrength = material->ComputeCBFieldHandle(0, "windStrength");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
         }
 
@@ -66,6 +67,7 @@ public:
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
         UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
+        UpdateUniform(owner, cbHandles_.windStrength, material, p.windStrength, cbData);
         UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
     }
 
@@ -90,6 +92,7 @@ private:
         Material::CBFieldHandle texOffsScale;
         Material::CBFieldHandle texFlags;
         Material::CBFieldHandle emissive;
+        Material::CBFieldHandle windStrength;
         Material::CBFieldHandle objectId;
     } cbHandles_{};
 
@@ -339,6 +342,15 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         matParamses_[i].alphaCutoff = (md && md->alphaMask) ? md->alphaCutoff : -1.0f;
     }
 
+    // W3: write the object's wind sway strength into EVERY slot (uniform across submeshes — the
+    // submesh-sync anchor). glTF palms and preset meshes both flow through here, so a flagged tree
+    // bends identically across its trunk + frond slots. This runs AFTER MergeMaterialDefaults so it
+    // is never clobbered by the per-slot material reseed.
+    for (size_t i = 0; i < slotCount; ++i)
+    {
+        matParamses_[i].windStrength = windStrength_;
+    }
+
     // C1b: mixed defines across slots are fully supported now — each slot gets its own PSO in
     // BuildSlotMaterials (the old "slot 0's PSO wins" warning is obsolete).
 }
@@ -459,6 +471,8 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.objectId = ToObjectId32(GetEditorObjectId());
     const auto e = p.EmissiveLinear();
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
+    out.windStrength = p.windStrength; // W3: uniform per object (matParamses_ all carry the same value)
+    out._pad0 = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 }
 
 void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)

@@ -219,6 +219,13 @@ namespace SceneObjectFactory
             }
         }
 
+        // W3: per-object wind sway strength (0 = rigid). Applied uniformly to every slot at Init
+        // (submesh sync), so it is a per-object property rather than a slot-0 material override.
+        if (o.contains("windStrength"))
+        {
+            mesh.SetWindStrength(o["windStrength"].get<float>());
+        }
+
         if (o.contains("renderLayer"))
         {
             mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));

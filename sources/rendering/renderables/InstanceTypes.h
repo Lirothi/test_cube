@@ -5,7 +5,7 @@
 namespace render
 {
 // CPU mirror of the material-static SurfaceParams cbuffer used by all GBuffer variants.
-// Kept separate from InstancePerObject so adding foliage controls does not grow the 208-byte
+// Kept separate from InstancePerObject so adding foliage controls does not grow the (now 224-byte)
 // per-instance payload shared with shadow paths.
 struct alignas(16) MaterialSurfaceParamsGpu
 {
@@ -23,6 +23,12 @@ static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
 // padding must match the cbuffer layout exactly (constant-buffer packing rules put
 // metalRough at offset 144, texOffsScale at 160, and objectId at 192. Filled per
 // visible instance and uploaded as a root-CBV array (b0) indexed by SV_InstanceID.
+//
+// W3 grew this 208 -> 224 to add `windStrength` (the struct was full — the old free `_pad0` had
+// become `mrMultiply`). The stride is SHARED with every shadow reader, so this layout MUST stay in
+// lockstep with the HLSL `InstancePerObject` in gbuffer_common.hlsli AND the mirror in
+// shadow_indirect_csm.hlsl (which aliases the gbuffer-only `emissive`+pad tail). Miss one and shadow
+// draws silently corrupt (the B3 stride lesson).
 struct alignas(16) InstancePerObject
 {
     DirectX::XMFLOAT4X4 world;        // 0
@@ -35,9 +41,11 @@ struct alignas(16) InstancePerObject
     DirectX::XMFLOAT4   texFlags;     // 176
     uint32_t            objectId;     // 192
     DirectX::XMFLOAT3   emissive;     // 196 (D: premultiplied color*strength)
-};                                    // 208
-static_assert(sizeof(InstancePerObject) == 208,
-    "InstancePerObject must match the HLSL cbuffer layout (208 bytes)");
+    float               windStrength; // 208 (W3: per-object foliage sway strength; 0 = rigid)
+    DirectX::XMFLOAT3   _pad0;         // 212 (pad to the 16-byte boundary)
+};                                    // 224
+static_assert(sizeof(InstancePerObject) == 224,
+    "InstancePerObject must match the HLSL cbuffer layout (224 bytes)");
 
 // B2b multi-slot instancing: CPU mirror of HLSL `SlotParams` (b2) in shaders/gbuffer_instcb.hlsl
 // (INSTCB_SLOT_PARAMS variant). One upload per material slot per batch — the slot's

@@ -16,6 +16,7 @@ class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
 class VirtualShadowMap;
+namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
 
 enum class SsrTechnique : uint32_t
 {
@@ -102,6 +103,7 @@ struct SceneFrameData
     const DirectionalLight* dirLight = nullptr;
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
+    const vfx::WindState* wind = nullptr; // W3: global wind, folded into the gbuffer per-view CB
 
     CascadeData cascades{};
     std::array<std::uint64_t, kMaxEditorSelection> selectedEditorObjectIds{};

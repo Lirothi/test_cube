@@ -38,6 +38,12 @@ public:
         materialParamOverrideMask_ |= static_cast<uint32_t>(field);
     }
 
+    // W3: per-object wind sway strength (0 = rigid). Set pre-Init by the factory from the level
+    // JSON "windStrength"; ResolveMaterialSlots writes it UNIFORMLY into every slot's MaterialParams
+    // so all submeshes of a tree sway in lockstep (it is NOT a per-slot override).
+    void SetWindStrength(float w) { windStrength_ = w; }
+    float GetWindStrength() const { return windStrength_; }
+
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
 
     // B2: material slots (submesh i draws with slot subs[i].materialSlot). Single-slot objects
@@ -190,6 +196,7 @@ private:
     std::vector<std::string> slotPresets_;
     uint32_t currentDrawSlot_ = 0;
     uint32_t materialParamOverrideMask_ = 0;
+    float windStrength_ = 0.0f; // W3: per-object sway strength, applied to every slot at Init
 
     // Instanced (cbuffer-array) variants of the gbuffer + shadow materials, built once at
     // Init when this object's graphics shader has an instanced counterpart. Shared/cached

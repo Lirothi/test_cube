@@ -23,6 +23,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
+#include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -120,6 +121,18 @@ namespace
         mat4 viewProj;
         mat4 viewProjNoJitter;
         mat4 prevViewProjNoJitter;
+        // W3: global wind, consumed by the gbuffer VS (W4). Zero for the shadow pass until W5
+        // (the shadow shaders read only viewProj and ignore the tail). Layout matches the HLSL
+        // `cbuffer PerView` in gbuffer_common.hlsli: time, prevTime, float2 windDirXZ, then
+        // swayAmp, swayFreq, gustMul, pad.
+        float windTime = 0.0f;
+        float windPrevTime = 0.0f;
+        float windDirX = 1.0f;
+        float windDirZ = 0.0f;
+        float windSwayAmp = 0.0f;
+        float windSwayFreq = 0.0f;
+        float windGustMul = 1.0f;
+        float windPad = 0.0f;
     };
 
     // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
@@ -175,12 +188,23 @@ namespace
         return alloc.gpu;
     }
 
-    D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera)
+    D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera,
+                                                 const vfx::WindState* wind)
     {
         PerViewCB vc{};
         vc.viewProj = camera.GetViewProjMatrix();
         vc.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
         vc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+        if (wind) // W3: fold the global wind into the gbuffer per-view CB (W4 reads it in the VS)
+        {
+            vc.windTime = wind->time;
+            vc.windPrevTime = wind->prevTime;
+            vc.windDirX = wind->windDirXZ.x;
+            vc.windDirZ = wind->windDirXZ.y;
+            vc.windSwayAmp = wind->swayAmplitude;
+            vc.windSwayFreq = wind->swayFrequency;
+            vc.windGustMul = wind->gustMul;
+        }
         return UploadFrameCB(renderer, vc);
     }
 
@@ -1704,7 +1728,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const auto& D = renderer->GetDeferredForFrame();
 
     // Shared per-view CB (b1) for every opaque object in this pass.
-    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera);
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind);
 
     RenderGraph<kGBufferRenderGraphPassCount> rgGB(ctx.batchIndex);
     const size_t pDriver = rgGB.AddPass(RenderPass::GBuffer_Driver, {},
