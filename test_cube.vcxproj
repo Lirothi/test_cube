@@ -234,6 +234,7 @@
     <ClCompile Include="sources/editor/assets/EditorPreviewRenderer.cpp" />
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/ui/ImportPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/MeshEditorPreviewScene.cpp" />
     <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/MaterialEditorPanel.cpp" />
     <ClCompile Include="sources/editor/assets/MaterialFileGen.cpp" />
@@ -419,6 +420,7 @@
     <ClInclude Include="sources/editor/assets/EditorPreviewRenderer.h" />
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/ImportPanel.h" />
+    <ClInclude Include="sources/editor/ui/MeshEditorPreviewScene.h" />
     <ClInclude Include="sources/editor/ui/MeshEditorPanel.h" />
     <ClInclude Include="sources/editor/ui/MaterialEditorPanel.h" />
     <ClInclude Include="sources/editor/assets/MaterialFileGen.h" />

@@ -2,9 +2,11 @@
 #if WITH_EDITOR
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
+#include "editor/ui/MeshEditorPreviewScene.h"
 #include "third_party/json/json.hpp"
 
 class AssetRegistry;
@@ -18,14 +20,26 @@ struct EditorContext;
 class MeshEditorPanel
 {
 public:
+    using OpenMaterialHandler = std::function<void(
+        const std::string& materialName, const std::string& materialPath)>;
+
+    struct PersistentState
+    {
+        float previewPaneRatio = 0.55f;
+        MeshEditorPreviewLight previewLight;
+    };
+
     // Load a `.mesh.json` for editing (content-browser EditMesh action). Resets prior state.
     void Open(const std::string& meshAssetPath);
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
     // `ctx` gives access to the scene document so Save can live-apply to placed instances.
-    void Draw(EditorContext& ctx, AssetRegistry& registry, bool* open);
+    void Draw(EditorContext& ctx, AssetRegistry& registry, bool* open,
+        const OpenMaterialHandler& openMaterial);
 
     const std::string& CurrentPath() const { return path_; }
+    PersistentState GetPersistentState() const { return { previewPaneRatio_, previewLight_ }; }
+    void SetPersistentState(const PersistentState& state);
 
 private:
     void Save(EditorContext& ctx, AssetRegistry& registry);
@@ -39,6 +53,10 @@ private:
     std::vector<std::string> slots_; // one material preset per submesh (auto-sized to the geometry)
     std::vector<uint32_t> recomputeNormalSlots_; // submesh slots that discard authored normals
     std::string   status_;
+    MeshEditorPreviewScene previewScene_;
+    MeshEditorPreviewCamera previewCamera_;
+    MeshEditorPreviewLight previewLight_;
+    float previewPaneRatio_ = 0.55f;
 };
 
 #endif // WITH_EDITOR

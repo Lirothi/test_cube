@@ -86,7 +86,7 @@ namespace editor_thumbnail_detail
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 5;
+    constexpr std::uint32_t kThumbnailSchemaVersion = 7;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.
@@ -869,6 +869,7 @@ void AssetThumbnailCache::LaunchPreflightJobs()
                 result.meshData = std::make_shared<MeshCpuData>();
                 MeshManager parser;
                 MeshLoadOptions options;
+                options.wantCW = false;
                 options.recomputeNormalSlots = result.recomputeNormalSlots;
                 if (!parser.ParseFileCpu(result.resolvedPath, *result.meshData, options))
                 {

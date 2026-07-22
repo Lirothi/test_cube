@@ -1,21 +1,27 @@
 // Editor Content Browser thumbnail preview shader (Step 12E).
 //
-// A single neutral forward pass used only to generate asset thumbnails: it
-// transforms a PosNormTanUV mesh, shades it with one directional key light plus a
-// flat ambient term, and optionally modulates by an albedo texture (material
-// previews). Compiled at runtime as vs_5_0 / ps_5_0 by EditorPreviewRenderer, so
-// it must not depend on the engine's bindless/SM6.6 conventions.
+// A compact material-aware forward pass for asset thumbnails and editor mini-scenes.
+// It consumes the real albedo/MR/normal textures and material flags, including
+// alpha-test foliage, while keeping the preview scene isolated and lit by one
+// directional key light. Compiled at runtime as vs_5_0 / ps_5_0.
 
 cbuffer PreviewCB : register(b0)
 {
     row_major float4x4 gMVP;    // model * view * proj (row-vector convention)
-    row_major float4x4 gModel;  // world transform for the normal (identity here)
-    float4 gLightDir;           // xyz = world direction toward the key light
-    float4 gBaseColor;          // rgb = flat tint, a = hasAlbedo (1 = sample gAlbedo)
-    float4 gAmbient;            // rgb = ambient color
+    row_major float4x4 gModel;  // world transform (identity here)
+    float4 gLightDir;           // xyz = light ray direction, w = exposure
+    float4 gEyePosition;         // xyz = preview camera position
+    float4 gBaseColor;           // real material baseColor factor
+    float4 gMetalRoughAlpha;     // xy = metal/rough, z = alpha cutoff, w = MR multiply
+    float4 gTexOffsScale;        // xy = UV offset, zw = UV scale
+    float4 gTexFlags;            // xyz = use albedo/MR/normal, w = normal strength
+    float4 gMaterialFlags;       // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
+    float4 gAmbient;            // rgb = light color, w = ambient intensity
 };
 
 Texture2D gAlbedo : register(t0);
+Texture2D gMR : register(t1);
+Texture2D gNormalMap : register(t2);
 SamplerState gSampler : register(s0);
 
 struct VSInput
@@ -29,7 +35,9 @@ struct VSInput
 struct VSOutput
 {
     float4 position : SV_POSITION;
+    float3 worldPos : POSITION;
     float3 normalW  : NORMAL;
+    float4 tangentW : TANGENT;
     float2 uv       : TEXCOORD;
 };
 
@@ -37,26 +45,111 @@ VSOutput VSMain(VSInput input)
 {
     VSOutput output;
     output.position = mul(float4(input.position, 1.0), gMVP);
+    output.worldPos = mul(float4(input.position, 1.0), gModel).xyz;
     output.normalW = normalize(mul(input.normal, (float3x3)gModel));
+    output.tangentW = float4(normalize(mul(input.tangent.xyz,
+        (float3x3)gModel)), input.tangent.w);
     output.uv = input.uv;
     return output;
 }
 
-float4 PSMain(VSOutput input) : SV_TARGET
+float DistributionGGX(float3 N, float3 H, float roughness)
 {
-    float3 albedo = gBaseColor.rgb;
-    if (gBaseColor.a > 0.5)
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float ndh = saturate(dot(N, H));
+    float d = ndh * ndh * (a2 - 1.0) + 1.0;
+    return a2 / max(3.14159265 * d * d, 1.0e-5);
+}
+
+float GeometrySchlickGGX(float ndv, float roughness)
+{
+    float r = roughness + 1.0;
+    float k = (r * r) * 0.125;
+    return ndv / max(ndv * (1.0 - k) + k, 1.0e-5);
+}
+
+float3 FresnelSchlick(float cosTheta, float3 f0)
+{
+    return f0 + (1.0 - f0) * pow(1.0 - saturate(cosTheta), 5.0);
+}
+
+float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
+{
+    float2 uv = input.uv * gTexOffsScale.zw + gTexOffsScale.xy;
+    float4 albedoSample = float4(1.0, 1.0, 1.0, 1.0);
+    if (gMaterialFlags.w > 0.5)
     {
-        albedo *= gAlbedo.Sample(gSampler, input.uv).rgb;
+        albedoSample = gAlbedo.Sample(gSampler, uv);
+    }
+    if (gMetalRoughAlpha.z >= 0.0)
+    {
+        clip(albedoSample.a * gBaseColor.a - gMetalRoughAlpha.z);
     }
 
-    float3 N = normalize(input.normalW);
-    float3 L = normalize(gLightDir.xyz);
-    float ndl = saturate(dot(N, L));
+    float3 albedo = gBaseColor.rgb;
+    if (gTexFlags.x > 0.5)
+    {
+        albedo = gMaterialFlags.x > 0.5
+            ? albedoSample.rgb * gBaseColor.rgb
+            : albedoSample.rgb;
+    }
 
-    // Key light plus flat ambient; enough to read silhouette and surface without
-    // pretending to be the real material pipeline.
-    float3 lit = albedo * (gAmbient.rgb + ndl);
+    float2 mr = gMetalRoughAlpha.xy;
+    if (gTexFlags.y > 0.5)
+    {
+        float4 packedMR = gMR.Sample(gSampler, uv);
+        float2 texturedMR = gMaterialFlags.x > 0.5
+            ? packedMR.bg
+            : packedMR.rg;
+        texturedMR = lerp(texturedMR,
+            texturedMR * gMetalRoughAlpha.xy,
+            gMetalRoughAlpha.w);
+        mr = texturedMR;
+    }
+    float metallic = saturate(mr.x);
+    float roughness = clamp(mr.y, 0.04, 1.0);
+
+    float3 N = normalize(input.normalW);
+    if (gMaterialFlags.z > 0.5 && !isFrontFace)
+    {
+        N = -N;
+    }
+    if (gTexFlags.z > 0.5)
+    {
+        float3 normalTS;
+        if (gMaterialFlags.y > 0.5)
+        {
+            float2 xy = gNormalMap.Sample(gSampler, uv).rg * 2.0 - 1.0;
+            xy *= gTexFlags.w;
+            normalTS = float3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
+        }
+        else
+        {
+            normalTS = gNormalMap.Sample(gSampler, uv).xyz * 2.0 - 1.0;
+            normalTS.xy *= gTexFlags.w;
+            normalTS = normalize(normalTS);
+        }
+        float3 T = normalize(input.tangentW.xyz);
+        float3 B = normalize(cross(N, T) * input.tangentW.w);
+        N = normalize(T * normalTS.x + B * normalTS.y + N * normalTS.z);
+    }
+
+    float3 L = normalize(-gLightDir.xyz);
+    float3 V = normalize(gEyePosition.xyz - input.worldPos);
+    float3 H = normalize(L + V);
+    float ndl = saturate(dot(N, L));
+    float ndv = saturate(dot(N, V));
+    float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+    float3 F = FresnelSchlick(saturate(dot(H, V)), f0);
+    float D = DistributionGGX(N, H, roughness);
+    float G = GeometrySchlickGGX(ndv, roughness) *
+        GeometrySchlickGGX(ndl, roughness);
+    float3 specular = (D * G * F) / max(4.0 * ndv * ndl, 1.0e-4);
+    float3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / 3.14159265;
+
+    float3 lit = (albedo * gAmbient.w * (1.0 - metallic) +
+        (diffuse + specular) * ndl) * gAmbient.rgb * gLightDir.w;
     return float4(lit, 1.0);
 }
 

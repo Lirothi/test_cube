@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -9,8 +10,10 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include "core/math/Math.h"
 #include "rendering/meshes/MeshManager.h"
 #include "materials/MaterialDataManager.h"
+#include "rendering/core/RenderConstants.h"
 
 class Mesh;
 class MaterialData;
@@ -18,10 +21,9 @@ class Renderer;
 class TextureCube;
 class UploadBatch;
 
-// Self-contained offscreen renderer that produces Content Browser thumbnails for
-// mesh, material, and cubemap assets. It owns a tiny forward pipeline (two PSOs,
-// one root signature, a shared depth target, a reusable constant buffer) plus a
-// private MeshManager / MaterialDataManager so it never touches the edited scene.
+// Self-contained offscreen renderer for Content Browser thumbnails and editor
+// mini-scenes. It owns a tiny forward pipeline, per-frame render resources, and
+// private mesh/material caches, so it never touches the edited scene or its lights.
 //
 // Lifetime / threading: thumbnail draws are recorded on the editor thread by
 // AssetThumbnailCache, which polls a dedicated fence instead of waiting. Asset
@@ -31,10 +33,26 @@ class UploadBatch;
 class EditorPreviewRenderer
 {
 public:
-    // Create the pipeline objects once (shaders, root signature, PSO, heaps,
-    // shared depth target, reusable constant buffer, 1x1 white fallback). Returns
-    // false if any step fails; callers then mark the affected thumbnails Failed.
-    bool EnsureInitialized(ID3D12Device* device);
+    struct OrbitCamera
+    {
+        float yaw = 0.674741f;
+        float pitch = 0.500180f;
+        float zoom = 1.0f;
+        float panX = 0.0f;
+        float panY = 0.0f;
+    };
+
+    struct PreviewLight
+    {
+        Math::float3 direction{ -0.4f, -0.8f, 0.5f };
+        Math::float3 color{ 1.0f, 1.0f, 1.0f };
+        float exposure = 1.0f;
+        float ambient = 0.3f;
+    };
+
+    // Create the pipeline objects and independent per-frame render slots once.
+    // Returns false if any step fails; callers then mark the preview Failed.
+    bool EnsureInitialized(ID3D12Device* device, std::uint32_t maxRenderSize = 256);
     bool IsInitialized() const { return initialized_; }
 
     // Private asset caches used to build previews without touching the scene.
@@ -52,15 +70,30 @@ public:
     // Records upload work into `load` on first use; returns null on failure.
     std::shared_ptr<Mesh> EnsureSphere(Renderer& renderer, UploadBatch& load);
 
-    // Record one thumbnail draw of `mesh` into `cl` and return the freshly created
-    // color target (sRGB, left in PIXEL_SHADER_RESOURCE, ready for ImGui). The
-    // caller submits `cl`. A material entry is selected by each submesh's
-    // material slot; missing entries draw with the neutral mesh material.
+    // Record one mesh draw into `cl` and return its color target (sRGB, left in
+    // PIXEL_SHADER_RESOURCE, ready for ImGui). Passing an existing target updates
+    // it in place; renderSlot selects the per-frame descriptors/depth/constants.
+    // A material entry is selected by each submesh's material slot.
     Microsoft::WRL::ComPtr<ID3D12Resource> RecordThumbnail(Renderer& renderer,
         ID3D12GraphicsCommandList* cl,
         const Mesh& mesh,
         const std::vector<std::shared_ptr<MaterialData>>& materials,
-        std::uint32_t size);
+        std::uint32_t size,
+        const OrbitCamera& camera = {},
+        std::uint32_t renderSlot = 0,
+        ID3D12Resource* existingColorTarget = nullptr);
+
+    // Rectangular variant used by resizable editor mini-scenes.
+    Microsoft::WRL::ComPtr<ID3D12Resource> RecordPreview(Renderer& renderer,
+        ID3D12GraphicsCommandList* cl,
+        const Mesh& mesh,
+        const std::vector<std::shared_ptr<MaterialData>>& materials,
+        std::uint32_t width,
+        std::uint32_t height,
+        const OrbitCamera& camera,
+        const PreviewLight& light,
+        std::uint32_t renderSlot,
+        ID3D12Resource* existingColorTarget = nullptr);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
     // target. The caller submits `cl` and owns the returned color target.
@@ -70,9 +103,27 @@ public:
         std::uint32_t size);
 
 private:
+    struct RenderSlot
+    {
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
+        Microsoft::WRL::ComPtr<ID3D12Resource> depthTarget;
+        Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle{};
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle{};
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle{};
+        D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle{};
+        std::uint8_t* constantBufferMapped = nullptr;
+        std::uint32_t depthSize = 0;
+    };
+
     Microsoft::WRL::ComPtr<ID3D12Resource> CreateColorTarget(ID3D12Device* device,
-        std::uint32_t size);
-    bool CreateSharedDepth(ID3D12Device* device, std::uint32_t size);
+        std::uint32_t width,
+        std::uint32_t height);
+    bool CreateSharedDepth(ID3D12Device* device,
+        std::uint32_t size,
+        RenderSlot& slot);
 
     MeshManager meshes_;
     MaterialDataManager materials_;
@@ -80,21 +131,15 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> doubleSidedPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap_; // shader-visible, one per preview draw
-    Microsoft::WRL::ComPtr<ID3D12Resource> depthTarget_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer_;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle_{};
-    D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle_{};
-    std::uint8_t* constantBufferMapped_ = nullptr;
+    // Each swapchain frame gets independent descriptors, constants, and depth.
+    // This lets the Mesh Editor update its mini-scene every frame without
+    // overwriting resources still consumed by an older GPU frame. Thumbnail
+    // generation continues to use slot zero under its existing fence.
+    std::array<RenderSlot, render::kFrameCount> renderSlots_;
     std::uint32_t srvDescriptorSize_ = 0;
-    std::uint32_t depthSize_ = 0;
     bool initialized_ = false;
     bool presetsLoaded_ = false;
 };

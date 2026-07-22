@@ -14,9 +14,12 @@
 #include "rendering/renderables/RenderableObjectBase.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -67,6 +70,118 @@ bool IsGltfGeometry(const std::string& geometry)
                              p.compare(p.size() - 4, 4, ".glb") == 0);
 }
 
+void DrawMeshPreview(EditorContext& ctx,
+    AssetRegistry& registry,
+    MeshEditorPreviewScene& previewScene,
+    MeshEditorPreviewCamera& camera,
+    const MeshEditorPreviewLight& light,
+    const std::string& path,
+    const std::string& geometry,
+    const std::vector<std::string>& materialSlots,
+    const std::vector<std::uint32_t>& recomputeNormalSlots)
+{
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
+        ImGui::GetTextLineHeightWithSpacing();
+    const ImVec2 canvasSize(
+        std::max(1.0f, available.x),
+        std::max(64.0f, available.y - controlsHeight));
+    ImGui::InvisibleButton("##MeshPreview", canvasSize,
+        ImGuiButtonFlags_MouseButtonLeft |
+        ImGuiButtonFlags_MouseButtonRight |
+        ImGuiButtonFlags_MouseButtonMiddle);
+
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    const ImGuiIO& io = ImGui::GetIO();
+    if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f))
+    {
+        camera.yaw -= io.MouseDelta.x * 0.01f;
+        camera.yaw = std::remainder(camera.yaw, 6.2831853f);
+        camera.pitch = std::clamp(camera.pitch + io.MouseDelta.y * 0.01f,
+            -1.55334f, 1.55334f);
+    }
+    if (active &&
+        (ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f) ||
+         ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)))
+    {
+        const float panSpeed = 0.0025f * camera.zoom;
+        camera.panX -= io.MouseDelta.x * panSpeed;
+        camera.panY += io.MouseDelta.y * panSpeed;
+    }
+    if (hovered && io.MouseWheel != 0.0f)
+    {
+        camera.zoom = std::clamp(camera.zoom * std::pow(0.84f, io.MouseWheel),
+            0.12f, 8.0f);
+    }
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+    {
+        camera = {};
+    }
+
+    const float framebufferScaleX = std::max(1.0f, io.DisplayFramebufferScale.x);
+    const float framebufferScaleY = std::max(1.0f, io.DisplayFramebufferScale.y);
+    const float requestedWidth = std::max(1.0f, canvasSize.x * framebufferScaleX);
+    const float requestedHeight = std::max(1.0f, canvasSize.y * framebufferScaleY);
+    const float resolutionScale = std::min(1.0f,
+        1024.0f / std::max(requestedWidth, requestedHeight));
+    const std::uint32_t renderWidth = static_cast<std::uint32_t>(std::clamp(
+        std::round(requestedWidth * resolutionScale), 64.0f, 1024.0f));
+    const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::clamp(
+        std::round(requestedHeight * resolutionScale), 64.0f, 1024.0f));
+    const MeshEditorPreviewScene::View preview = previewScene.Update(ctx.renderer,
+        path,
+        geometry,
+        materialSlots,
+        recomputeNormalSlots,
+        registry.Revision(),
+        renderWidth,
+        renderHeight,
+        camera,
+        light);
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_FrameBg));
+
+    if (preview.state == MeshEditorPreviewScene::State::Ready &&
+        preview.texture != ImTextureID_Invalid)
+    {
+        drawList->AddImage(preview.texture, min, max);
+    }
+    else
+    {
+        const char* message = "Rendering preview...";
+        if (preview.state == MeshEditorPreviewScene::State::Failed)
+        {
+            message = preview.error ? preview.error : "Preview rendering failed.";
+        }
+        const float wrapWidth = std::max(1.0f, canvasSize.x - 16.0f);
+        const ImVec2 textSize = ImGui::CalcTextSize(message, nullptr, false, wrapWidth);
+        drawList->AddText(nullptr, 0.0f,
+            ImVec2(min.x + std::max(8.0f, (canvasSize.x - textSize.x) * 0.5f),
+                min.y + std::max(8.0f, (canvasSize.y - textSize.y) * 0.5f)),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled),
+            message,
+            nullptr,
+            wrapWidth);
+    }
+
+    drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
+    if (ImGui::SmallButton("Frame"))
+    {
+        camera = {};
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Reset the preview camera to fit the whole mesh.");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("LMB orbit | RMB/MMB pan | Wheel zoom | Double-click frame");
+    ImGui::TextDisabled("Preview scene | 1 directional light");
+}
+
 // Base name for a material file promoted from a glTF (parent folder when the file stem is the
 // generic "scene"/"model"/"mesh", else the stem) — mirrors the importer's naming (I3).
 std::string MaterialBaseName(const std::string& geometry)
@@ -92,6 +207,7 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
 
     slots_.clear();
     recomputeNormalSlots_.clear();
+    previewCamera_ = {};
 
     std::ifstream f(path_);
     if (f)
@@ -139,8 +255,23 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     }
 }
 
-void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open)
+void MeshEditorPanel::SetPersistentState(const PersistentState& state)
 {
+    previewPaneRatio_ = std::clamp(state.previewPaneRatio, 0.1f, 0.9f);
+    previewLight_ = state.previewLight;
+    previewLight_.color.x = std::clamp(previewLight_.color.x, 0.0f, 1.0f);
+    previewLight_.color.y = std::clamp(previewLight_.color.y, 0.0f, 1.0f);
+    previewLight_.color.z = std::clamp(previewLight_.color.z, 0.0f, 1.0f);
+    previewLight_.exposure = std::clamp(previewLight_.exposure, 0.0f, 100.0f);
+    previewLight_.ambient = std::clamp(previewLight_.ambient, 0.0f, 10.0f);
+}
+
+void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open,
+    const OpenMaterialHandler& openMaterial)
+{
+    ImGui::SetNextWindowSize(ImVec2(1080.0f, 720.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(700.0f, 420.0f),
+        ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Mesh Editor", open))
     {
         ImGui::End();
@@ -154,9 +285,6 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         return;
     }
 
-    ImGui::TextUnformatted(fs::path(path_).filename().string().c_str());
-    ImGui::Separator();
-
     if (!loaded_)
     {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", status_.c_str());
@@ -164,7 +292,69 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         return;
     }
 
-    ImGui::TextDisabled("Geometry: %s", doc_.value("geometry", std::string("(none)")).c_str());
+    constexpr float kMinPreviewWidth = 260.0f;
+    constexpr float kMinSettingsWidth = 300.0f;
+    constexpr float kSplitterWidth = 6.0f;
+    const ImVec2 workspaceSize = ImGui::GetContentRegionAvail();
+    const float splitWidth = std::max(1.0f, workspaceSize.x - kSplitterWidth);
+    const float maxPreviewWidth = std::max(kMinPreviewWidth,
+        workspaceSize.x - kMinSettingsWidth - kSplitterWidth);
+    float previewPaneWidth = std::clamp(previewPaneRatio_ * splitWidth,
+        kMinPreviewWidth, maxPreviewWidth);
+    float settingsWidth = std::max(kMinSettingsWidth,
+        workspaceSize.x - previewPaneWidth - kSplitterWidth);
+
+    const ImVec2 workspaceOrigin = ImGui::GetCursorScreenPos();
+    const ImRect splitterRect(
+        ImVec2(workspaceOrigin.x + previewPaneWidth, workspaceOrigin.y),
+        ImVec2(workspaceOrigin.x + previewPaneWidth + kSplitterWidth,
+            workspaceOrigin.y + workspaceSize.y));
+    if (ImGui::SplitterBehavior(splitterRect,
+            ImGui::GetID("##meshEditorSplitter"),
+            ImGuiAxis_X,
+            &previewPaneWidth,
+            &settingsWidth,
+            kMinPreviewWidth,
+            kMinSettingsWidth,
+            3.0f,
+            0.1f))
+    {
+        previewPaneRatio_ = std::clamp(previewPaneWidth / splitWidth, 0.1f, 0.9f);
+    }
+
+    ImGui::BeginChild("##meshPreviewPane",
+        ImVec2(previewPaneWidth, workspaceSize.y),
+        true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    DrawMeshPreview(ctx,
+        registry,
+        previewScene_,
+        previewCamera_,
+        previewLight_,
+        path_,
+        doc_.value("geometry", std::string()),
+        slots_,
+        recomputeNormalSlots_);
+    ImGui::EndChild();
+
+    ImGui::SameLine(0.0f, kSplitterWidth);
+    ImGui::BeginChild("##meshSettingsPane",
+        ImVec2(0.0f, workspaceSize.y),
+        true);
+    ImGui::TextUnformatted(fs::path(path_).filename().string().c_str());
+    ImGui::TextDisabled("Geometry: %s",
+        doc_.value("geometry", std::string("(none)")).c_str());
+    ImGui::Spacing();
+
+    ImGui::SeparatorText("Preview Directional Light");
+    ImGui::ColorEdit3("Color", &previewLight_.color.x);
+    ImGui::DragFloat("Exposure", &previewLight_.exposure, 0.05f, 0.0f, 100.0f);
+    ImGui::DragFloat("Ambient", &previewLight_.ambient, 0.005f, 0.0f, 10.0f);
+    ImGui::DragFloat3("Direction", &previewLight_.direction.x, 0.01f);
+    if (ImGui::Button("Reset preview light"))
+    {
+        previewLight_ = {};
+    }
     ImGui::Spacing();
 
     const std::vector<std::string> presets = CollectPresets(registry);
@@ -178,6 +368,47 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::PushID(static_cast<int>(i));
         const std::string label = (slots_.size() == 1) ? std::string("Material") : ("slot " + std::to_string(i));
         MaterialCombo(label.c_str(), slots_[i], presets, /*allowAuto=*/true); // edits slots_[i] in place
+
+        // An auto glTF slot has no editable file yet. Promote it first; named presets can be
+        // opened directly in Material Editor without returning to the Content Browser.
+        if (geometryIsGltf && slots_[i] == "auto")
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Save as material"))
+            {
+                const std::string name = MaterialBaseName(geometry) + "_" + std::to_string(i);
+                const std::string written = materialgen::WriteFromGltf(
+                    geometry, static_cast<int>(i), name, /*overwrite=*/false);
+                if (!written.empty() && written != "auto")
+                {
+                    slots_[i] = written;
+                    registry.Refresh();
+                    status_ = "Created data/materials/" + written + ".json - Save to apply.";
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Bake this glTF auto-material into an editable data/materials file.");
+            }
+        }
+        else if (!slots_[i].empty() && slots_[i] != "auto")
+        {
+            const EditorAssetId materialId{ EditorAssetType::MaterialPreset, slots_[i] };
+            const EditorAssetRecord* material = registry.FindById(materialId);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(material == nullptr || !openMaterial);
+            if (ImGui::SmallButton("Edit material") && material && openMaterial)
+            {
+                openMaterial(material->id.key, material->path);
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip(material
+                    ? "Open this slot in Material Editor."
+                    : "The material preset is not present in the Asset Registry.");
+            }
+        }
 
         const uint32_t normalSlot = static_cast<uint32_t>(i);
         bool recomputeNormals = std::binary_search(
@@ -202,27 +433,6 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "Tangents are regenerated from the resulting normals and UVs.");
         }
 
-        // I3: promote a still-"auto" glTF slot into a named material file, then bind the slot to it
-        // (in memory). The panel's Save persists materials[] AND fans out to every placed instance.
-        if (geometryIsGltf && slots_[i] == "auto")
-        {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Save as material"))
-            {
-                const std::string name = MaterialBaseName(geometry) + "_" + std::to_string(i);
-                const std::string written = materialgen::WriteFromGltf(
-                    geometry, static_cast<int>(i), name, /*overwrite=*/false);
-                if (!written.empty() && written != "auto")
-                {
-                    slots_[i] = written;
-                    status_ = "Created data/materials/" + written + ".json — Save to apply.";
-                }
-            }
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("Bake this glTF auto-material into an editable data/materials file.");
-            }
-        }
         ImGui::PopID();
     }
 
@@ -284,6 +494,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::TextDisabled("%s", status_.c_str());
     }
 
+    ImGui::EndChild();
     ImGui::End();
 }
 

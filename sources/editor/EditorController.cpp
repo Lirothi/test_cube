@@ -1166,12 +1166,62 @@ namespace
         viewportGizmo.SetPersistentState(state);
     }
 
+    nlohmann::json MeshEditorStateToJson(const MeshEditorPanel::PersistentState& state)
+    {
+        return nlohmann::json{
+            { "previewPaneRatio", state.previewPaneRatio },
+            { "previewLight", {
+                { "direction", {
+                    state.previewLight.direction.x,
+                    state.previewLight.direction.y,
+                    state.previewLight.direction.z } },
+                { "color", {
+                    state.previewLight.color.x,
+                    state.previewLight.color.y,
+                    state.previewLight.color.z } },
+                { "exposure", state.previewLight.exposure },
+                { "ambient", state.previewLight.ambient }
+            } }
+        };
+    }
+
+    void LoadMeshEditorState(const nlohmann::json& value, MeshEditorPanel& meshEditor)
+    {
+        if (!value.is_object())
+        {
+            return;
+        }
+
+        MeshEditorPanel::PersistentState state = meshEditor.GetPersistentState();
+        ReadFloatMember(value, "previewPaneRatio", 0.1f, 0.9f, state.previewPaneRatio);
+        const auto lightIt = value.find("previewLight");
+        if (lightIt != value.end() && lightIt->is_object())
+        {
+            const auto directionIt = lightIt->find("direction");
+            if (directionIt != lightIt->end())
+            {
+                TryReadFloat3(*directionIt, state.previewLight.direction);
+            }
+            const auto colorIt = lightIt->find("color");
+            if (colorIt != lightIt->end())
+            {
+                TryReadFloat3(*colorIt, state.previewLight.color);
+            }
+            ReadFloatMember(*lightIt, "exposure", 0.0f, 100.0f,
+                state.previewLight.exposure);
+            ReadFloatMember(*lightIt, "ambient", 0.0f, 10.0f,
+                state.previewLight.ambient);
+        }
+        meshEditor.SetPersistentState(state);
+    }
+
     nlohmann::json BuildPanelStateJson(bool showContentBrowser,
         bool showOutliner,
         bool showInspector,
         bool showCommandHistory,
         const ContentBrowserPanel& contentBrowser,
         const SceneOutlinerPanel& outliner,
+        const MeshEditorPanel& meshEditor,
         const ViewportGizmo& viewportGizmo)
     {
         return nlohmann::json{
@@ -1181,6 +1231,7 @@ namespace
             { "commandHistoryVisible", showCommandHistory },
             { "contentBrowser", ContentBrowserStateToJson(contentBrowser.GetPersistentState()) },
             { "outliner", OutlinerStateToJson(outliner.GetPersistentState()) },
+            { "meshEditor", MeshEditorStateToJson(meshEditor.GetPersistentState()) },
             { "viewportGizmo", ViewportGizmoStateToJson(viewportGizmo.GetPersistentState()) }
         };
     }
@@ -1257,12 +1308,27 @@ namespace
             a.transformSpace == b.transformSpace;
     }
 
+    bool MeshEditorStatesMatch(const MeshEditorPanel::PersistentState& a,
+        const MeshEditorPanel::PersistentState& b)
+    {
+        return a.previewPaneRatio == b.previewPaneRatio &&
+            a.previewLight.direction.x == b.previewLight.direction.x &&
+            a.previewLight.direction.y == b.previewLight.direction.y &&
+            a.previewLight.direction.z == b.previewLight.direction.z &&
+            a.previewLight.color.x == b.previewLight.color.x &&
+            a.previewLight.color.y == b.previewLight.color.y &&
+            a.previewLight.color.z == b.previewLight.color.z &&
+            a.previewLight.exposure == b.previewLight.exposure &&
+            a.previewLight.ambient == b.previewLight.ambient;
+    }
+
     void LoadEditorPanelState(bool& showContentBrowser,
         bool& showOutliner,
         bool& showInspector,
         bool& showCommandHistory,
         ContentBrowserPanel& contentBrowser,
         SceneOutlinerPanel& outliner,
+        MeshEditorPanel& meshEditor,
         ViewportGizmo& viewportGizmo)
     {
         const nlohmann::json root = LoadEditorStateJson();
@@ -1293,6 +1359,11 @@ namespace
         if (outlinerIt != panelState.end())
         {
             LoadOutlinerState(*outlinerIt, outliner);
+        }
+        const auto meshEditorIt = panelState.find("meshEditor");
+        if (meshEditorIt != panelState.end())
+        {
+            LoadMeshEditorState(*meshEditorIt, meshEditor);
         }
         const auto viewportGizmoIt = panelState.find("viewportGizmo");
         if (viewportGizmoIt != panelState.end())
@@ -2350,6 +2421,7 @@ EditorController::PanelStateSnapshot EditorController::CapturePanelState() const
         showCommandHistory_,
         contentBrowser_.GetPersistentState(),
         outliner_.GetPersistentState(),
+        meshEditor_.GetPersistentState(),
         viewportGizmo_.GetPersistentState()
     };
 }
@@ -2363,6 +2435,7 @@ bool EditorController::PanelStateMatches(const PanelStateSnapshot& a,
         a.showCommandHistory == b.showCommandHistory &&
         ContentBrowserStatesMatch(a.contentBrowser, b.contentBrowser) &&
         OutlinerStatesMatch(a.outliner, b.outliner) &&
+        MeshEditorStatesMatch(a.meshEditor, b.meshEditor) &&
         ViewportGizmoStatesMatch(a.viewportGizmo, b.viewportGizmo);
 }
 
@@ -2420,10 +2493,10 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         nextAssetRegistryPollTimeSec_ = ImGui::GetTime() + 2.0;
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
-            contentBrowser_, outliner_, viewportGizmo_);
+            contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
         lastObservedPanelStateSnapshot_ = CapturePanelState();
         lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-            showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
+            showInspector_, showCommandHistory_, contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
         panelStateLoaded_ = true;
         if (document_.LoadFromLevelFile("data/levels/demo.json"))
         {
@@ -2581,7 +2654,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 // J: edit a models/<name>.mesh.json's render defaults (materials/renderLayer/
                 // spawnScale/texOffsScale). Opened by double-clicking the mesh asset in the browser.
                 // Save live-applies to placed instances via panelCtx (scene/document/renderer).
-                meshEditor_.Draw(panelCtx, assetRegistry_, &showMeshEditor_);
+                meshEditor_.Draw(panelCtx, assetRegistry_, &showMeshEditor_,
+                    [this](const std::string& materialName, const std::string& materialPath)
+                    {
+                        materialEditor_.Open(materialName, materialPath);
+                        showMaterialEditor_ = true;
+                    });
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -3403,6 +3481,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         drawPanelToggle("inspector");
         drawPanelToggle("commandHistory");
         drawPanelToggle("importAssets");
+        drawPanelToggle("meshEditor");
+        drawPanelToggle("materialEditor");
         drawPanelToggle("levelErrors");
 
         ImGui::Separator();
@@ -3514,7 +3594,7 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         {
             CPU_SCOPE(ProfilerScopes::kEditorPanelStateBuildJson);
             lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-                showInspector_, showCommandHistory_, contentBrowser_, outliner_, viewportGizmo_);
+                showInspector_, showCommandHistory_, contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
             lastObservedPanelStateSnapshot_ = std::move(panelStateSnapshot);
             panelStateLoaded_ = true;
             panelStateDirty_ = true;

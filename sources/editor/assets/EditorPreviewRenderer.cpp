@@ -24,7 +24,6 @@ namespace
 
     constexpr DXGI_FORMAT kColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
-    constexpr std::uint32_t kThumbnailSize = 256;
     // Mesh assets may have several material slots. Keep a distinct descriptor
     // and 256-byte CBV for every draw recorded into one thumbnail command list.
     // Slot 255 is reserved as a neutral fallback if a pathological asset has
@@ -32,6 +31,9 @@ namespace
     constexpr std::uint32_t kPreviewMaterialSlots = 255;
     constexpr std::uint32_t kPreviewFallbackSlot = kPreviewMaterialSlots;
     constexpr std::uint32_t kPreviewDrawSlots = kPreviewMaterialSlots + 1;
+    constexpr std::uint32_t kPreviewTexturesPerDraw = 3;
+    constexpr std::uint32_t kPreviewSrvDescriptors =
+        kPreviewDrawSlots * kPreviewTexturesPerDraw;
     constexpr std::uint32_t kPreviewConstantStride = 256;
 
     // Matches the PreviewCB cbuffer in shaders/editor_preview.hlsl (16-byte packed).
@@ -40,7 +42,12 @@ namespace
         dx::XMFLOAT4X4 mvp;
         dx::XMFLOAT4X4 model;
         dx::XMFLOAT4 lightDir;
-        dx::XMFLOAT4 baseColor; // a = hasAlbedo
+        dx::XMFLOAT4 eyePosition;
+        dx::XMFLOAT4 baseColor;
+        dx::XMFLOAT4 metalRoughAlpha; // xy = MR, z = alpha cutoff, w = MR multiply
+        dx::XMFLOAT4 texOffsScale;
+        dx::XMFLOAT4 texFlags; // xyz = use albedo/MR/normal, w = normal strength
+        dx::XMFLOAT4 materialFlags; // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
         dx::XMFLOAT4 ambient;
     };
     static_assert(sizeof(PreviewConstants) <= 256, "PreviewConstants must fit one 256B CBV.");
@@ -70,14 +77,19 @@ namespace
     }
 }
 
-bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
+bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
+    std::uint32_t maxRenderSize)
 {
     if (initialized_)
     {
-        return true;
+        return maxRenderSize > 0 && std::all_of(renderSlots_.begin(), renderSlots_.end(),
+            [maxRenderSize](const RenderSlot& slot)
+            {
+                return slot.depthSize >= maxRenderSize;
+            });
     }
 
-    if (!device)
+    if (!device || maxRenderSize == 0)
     {
         return false;
     }
@@ -95,7 +107,7 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     // Root signature: CBV(b0) + table(SRV t0) + static linear sampler(s0).
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 1;
+    srvRange.NumDescriptors = kPreviewTexturesPerDraw;
     srvRange.BaseShaderRegister = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -154,7 +166,7 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     pso.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
     pso.InputLayout = { inputLayout, _countof(inputLayout) };
     pso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE; // robust vs. unknown winding
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
     pso.RasterizerState.FrontCounterClockwise = FALSE;
     pso.RasterizerState.DepthClipEnable = TRUE;
     pso.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
@@ -169,6 +181,12 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
     pso.DSVFormat = kDepthFormat;
     pso.SampleDesc.Count = 1;
     if (FAILED(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&pipeline_))))
+    {
+        return false;
+    }
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    if (FAILED(device->CreateGraphicsPipelineState(&pso,
+            IID_PPV_ARGS(&doubleSidedPipeline_))))
     {
         return false;
     }
@@ -202,84 +220,90 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device)
         return false;
     }
 
-    // Descriptor heaps: 1 RTV, 1 DSV, and a shader-visible SRV for every
-    // mesh-material draw that can appear in a thumbnail command list.
-    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    heapDesc.NumDescriptors = 1;
-    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&rtvHeap_))))
-    {
-        return false;
-    }
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&dsvHeap_))))
-    {
-        return false;
-    }
-    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    heapDesc.NumDescriptors = kPreviewDrawSlots;
-    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&srvHeap_))))
-    {
-        return false;
-    }
-    rtvHandle_ = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
-    dsvHandle_ = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
-    srvCpuHandle_ = srvHeap_->GetCPUDescriptorHandleForHeapStart();
-    srvGpuHandle_ = srvHeap_->GetGPUDescriptorHandleForHeapStart();
     srvDescriptorSize_ = device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    if (!CreateSharedDepth(device, kThumbnailSize))
+    for (RenderSlot& frame : renderSlots_)
     {
-        return false;
-    }
+        // One RTV/DSV/SRV set per frame prevents CPU descriptor rewrites from
+        // racing draws submitted by an older swapchain frame.
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heapDesc.NumDescriptors = 1;
+        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.rtvHeap))))
+        {
+            return false;
+        }
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.dsvHeap))))
+        {
+            return false;
+        }
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        heapDesc.NumDescriptors = kPreviewSrvDescriptors;
+        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.srvHeap))))
+        {
+            return false;
+        }
+        frame.rtvHandle = frame.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        frame.dsvHandle = frame.dsvHeap->GetCPUDescriptorHandleForHeapStart();
+        frame.srvCpuHandle = frame.srvHeap->GetCPUDescriptorHandleForHeapStart();
+        frame.srvGpuHandle = frame.srvHeap->GetGPUDescriptorHandleForHeapStart();
 
-    // One 256-byte CBV per material draw. A thumbnail job is fenced before this
-    // shared upload buffer is reused by a later job.
-    D3D12_HEAP_PROPERTIES uploadHeap{};
-    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-    D3D12_RESOURCE_DESC cbDesc{};
-    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    cbDesc.Width = static_cast<UINT64>(kPreviewConstantStride) * kPreviewDrawSlots;
-    cbDesc.Height = 1;
-    cbDesc.DepthOrArraySize = 1;
-    cbDesc.MipLevels = 1;
-    cbDesc.Format = DXGI_FORMAT_UNKNOWN;
-    cbDesc.SampleDesc.Count = 1;
-    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
-            &cbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&constantBuffer_))))
-    {
-        return false;
-    }
-    D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(constantBuffer_->Map(0, &noRead,
-            reinterpret_cast<void**>(&constantBufferMapped_))))
-    {
-        return false;
-    }
+        if (!CreateSharedDepth(device, maxRenderSize, frame))
+        {
+            return false;
+        }
 
-    // Mesh previews without an albedo use a null SRV. The shader branches to a
-    // neutral tint, avoiding a synchronous fallback-texture upload.
-    D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv{};
-    nullSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    nullSrv.Texture2D.MipLevels = 1;
-    for (std::uint32_t slot = 0; slot < kPreviewDrawSlots; ++slot)
-    {
-        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvCpuHandle_;
-        handle.ptr += static_cast<SIZE_T>(slot) * srvDescriptorSize_;
-        device->CreateShaderResourceView(nullptr, &nullSrv, handle);
+        D3D12_HEAP_PROPERTIES uploadHeap{};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC cbDesc{};
+        cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        cbDesc.Width = static_cast<UINT64>(kPreviewConstantStride) * kPreviewDrawSlots;
+        cbDesc.Height = 1;
+        cbDesc.DepthOrArraySize = 1;
+        cbDesc.MipLevels = 1;
+        cbDesc.Format = DXGI_FORMAT_UNKNOWN;
+        cbDesc.SampleDesc.Count = 1;
+        cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+                &cbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(&frame.constantBuffer))))
+        {
+            return false;
+        }
+        D3D12_RANGE noRead{ 0, 0 };
+        if (FAILED(frame.constantBuffer->Map(0, &noRead,
+                reinterpret_cast<void**>(&frame.constantBufferMapped))))
+        {
+            return false;
+        }
+
+        // Mesh previews without an albedo use a null SRV. The shader branches
+        // to a neutral tint, avoiding a synchronous fallback-texture upload.
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv{};
+        nullSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        nullSrv.Texture2D.MipLevels = 1;
+        for (std::uint32_t descriptor = 0;
+            descriptor < kPreviewSrvDescriptors;
+            ++descriptor)
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE handle = frame.srvCpuHandle;
+            handle.ptr += static_cast<SIZE_T>(descriptor) * srvDescriptorSize_;
+            device->CreateShaderResourceView(nullptr, &nullSrv, handle);
+        }
     }
 
     initialized_ = true;
     return true;
 }
 
-bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device, std::uint32_t size)
+bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device,
+    std::uint32_t size,
+    RenderSlot& slot)
 {
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -299,7 +323,7 @@ bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device, std::uint32_
     clear.DepthStencil.Depth = 1.0f;
 
     if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COMMON, &clear, IID_PPV_ARGS(&depthTarget_))))
+            D3D12_RESOURCE_STATE_COMMON, &clear, IID_PPV_ARGS(&slot.depthTarget))))
     {
         return false;
     }
@@ -307,21 +331,23 @@ bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device, std::uint32_
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
     dsv.Format = kDepthFormat;
     dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-    device->CreateDepthStencilView(depthTarget_.Get(), &dsv, dsvHandle_);
-    depthSize_ = size;
+    device->CreateDepthStencilView(slot.depthTarget.Get(), &dsv, slot.dsvHandle);
+    slot.depthSize = size;
     return true;
 }
 
 Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::CreateColorTarget(
-    ID3D12Device* device, std::uint32_t size)
+    ID3D12Device* device,
+    std::uint32_t width,
+    std::uint32_t height)
 {
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = size;
-    desc.Height = size;
+    desc.Width = width;
+    desc.Height = height;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
     desc.Format = kColorFormat;
@@ -379,10 +405,43 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     ID3D12GraphicsCommandList* cl,
     const Mesh& mesh,
     const std::vector<std::shared_ptr<MaterialData>>& materials,
-    std::uint32_t size)
+    std::uint32_t size,
+    const OrbitCamera& camera,
+    std::uint32_t renderSlot,
+    ID3D12Resource* existingColorTarget)
+{
+    return RecordPreview(renderer,
+        cl,
+        mesh,
+        materials,
+        size,
+        size,
+        camera,
+        PreviewLight{},
+        renderSlot,
+        existingColorTarget);
+}
+
+Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
+    Renderer& renderer,
+    ID3D12GraphicsCommandList* cl,
+    const Mesh& mesh,
+    const std::vector<std::shared_ptr<MaterialData>>& materials,
+    std::uint32_t width,
+    std::uint32_t height,
+    const OrbitCamera& camera,
+    const PreviewLight& light,
+    std::uint32_t renderSlot,
+    ID3D12Resource* existingColorTarget)
 {
     ID3D12Device* device = renderer.GetDevice();
-    if (!initialized_ || !device || !cl || size == 0 || size > depthSize_)
+    if (!initialized_ || !device || !cl || renderSlot >= renderSlots_.size())
+    {
+        return nullptr;
+    }
+    RenderSlot& frame = renderSlots_[renderSlot];
+    if (width == 0 || height == 0 ||
+        width > frame.depthSize || height > frame.depthSize)
     {
         return nullptr;
     }
@@ -392,7 +451,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         return nullptr;
     }
 
-    ComPtr<ID3D12Resource> color = CreateColorTarget(device, size);
+    ComPtr<ID3D12Resource> color = existingColorTarget;
+    if (!color)
+    {
+        color = CreateColorTarget(device, width, height);
+    }
     if (!color)
     {
         return nullptr;
@@ -401,7 +464,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     D3D12_RENDER_TARGET_VIEW_DESC rtv{};
     rtv.Format = kColorFormat;
     rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-    device->CreateRenderTargetView(color.Get(), &rtv, rtvHandle_);
+    device->CreateRenderTargetView(color.Get(), &rtv, frame.rtvHandle);
 
     // Use the mesh's actual enclosing sphere so every preview follows the same
     // edge-to-edge framing. This covers the geometry without treating empty AABB
@@ -417,27 +480,48 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     }
     radius = std::max(radius, 1.0e-3f);
 
-    const dx::XMVECTOR center = dx::XMVectorSet(centerPt.x, centerPt.y, centerPt.z, 1.0f);
-    const dx::XMVECTOR offset =
-        dx::XMVector3Normalize(dx::XMVectorSet(0.8f, 0.7f, -1.0f, 0.0f));
+    const float pitch = std::clamp(camera.pitch,
+        dx::XMConvertToRadians(-89.0f), dx::XMConvertToRadians(89.0f));
+    const float cosPitch = std::cos(pitch);
+    const dx::XMVECTOR offset = dx::XMVector3Normalize(dx::XMVectorSet(
+        cosPitch * std::sin(camera.yaw),
+        std::sin(pitch),
+        -cosPitch * std::cos(camera.yaw),
+        0.0f));
+    const dx::XMVECTOR worldUp = dx::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const dx::XMVECTOR right = dx::XMVector3Normalize(dx::XMVector3Cross(offset, worldUp));
+    const dx::XMVECTOR cameraUp = dx::XMVector3Normalize(dx::XMVector3Cross(right, offset));
+    dx::XMVECTOR center = dx::XMVectorSet(centerPt.x, centerPt.y, centerPt.z, 1.0f);
+    center = dx::XMVectorAdd(center, dx::XMVectorScale(right, camera.panX * radius));
+    center = dx::XMVectorAdd(center, dx::XMVectorScale(cameraUp, camera.panY * radius));
     const float fovY = dx::XMConvertToRadians(35.0f);
-    // A sphere of radius r viewed from r / sin(fov / 2) is tangent to both
-    // vertical viewport edges. The thumbnail target is square, so this also
-    // matches the horizontal edges.
-    const float distance = radius / std::sin(fovY * 0.5f);
-    const dx::XMVECTOR eye =
-        dx::XMVectorAdd(center, dx::XMVectorScale(offset, distance));
-    const dx::XMVECTOR up = dx::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-    const dx::XMMATRIX view = dx::XMMatrixLookAtLH(eye, center, up);
-    const float nearZ = std::max(radius * 0.01f, distance - radius * 1.01f);
-    const float farZ = distance + radius * 1.01f;
-    const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(fovY, 1.0f, nearZ, farZ);
+    // Fit the enclosing sphere against the tighter of the horizontal/vertical
+    // field-of-view limits so rectangular editor panes never crop the mesh.
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    const float horizontalHalfFov = std::atan(std::tan(fovY * 0.5f) * aspect);
+    const float framingHalfFov = std::min(fovY * 0.5f, horizontalHalfFov);
+    const float framedDistance = radius / std::sin(framingHalfFov) *
+        std::clamp(camera.zoom, 0.12f, 8.0f);
+    const dx::XMVECTOR framedEye =
+        dx::XMVectorAdd(center, dx::XMVectorScale(offset, framedDistance));
+    const float framedNearZ = std::max(radius * 0.005f,
+        framedDistance - radius * 1.05f);
+    const float framedFarZ = std::max(framedNearZ + radius * 0.01f,
+        framedDistance + radius * 1.05f);
+    const dx::XMMATRIX framedView = dx::XMMatrixLookAtLH(framedEye, center, cameraUp);
+    const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(
+        fovY, aspect, framedNearZ, framedFarZ);
     const dx::XMMATRIX model = dx::XMMatrixIdentity();
-    const dx::XMMATRIX mvp = dx::XMMatrixMultiply(dx::XMMatrixMultiply(model, view), proj);
+    const dx::XMMATRIX mvp = dx::XMMatrixMultiply(
+        dx::XMMatrixMultiply(model, framedView), proj);
 
-    const dx::XMVECTOR lightDir =
-        dx::XMVector3Normalize(dx::XMVectorSet(0.4f, 0.8f, -0.5f, 0.0f));
+    dx::XMVECTOR lightDirection = dx::XMVectorSet(
+        light.direction.x, light.direction.y, light.direction.z, 0.0f);
+    if (dx::XMVectorGetX(dx::XMVector3LengthSq(lightDirection)) < 1.0e-8f)
+    {
+        lightDirection = dx::XMVectorSet(-0.4f, -0.8f, 0.5f, 0.0f);
+    }
+    lightDirection = dx::XMVector3Normalize(lightDirection);
 
     auto barrier = [cl](ID3D12Resource* res,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -451,23 +535,28 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         cl->ResourceBarrier(1, &b);
     };
 
-    barrier(color.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    barrier(depthTarget_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    barrier(color.Get(), existingColorTarget
+            ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+            : D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(frame.depthTarget.Get(), D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-    cl->OMSetRenderTargets(1, &rtvHandle_, FALSE, &dsvHandle_);
+    cl->OMSetRenderTargets(1, &frame.rtvHandle, FALSE, &frame.dsvHandle);
     D3D12_VIEWPORT viewport{ 0.0f, 0.0f,
-        static_cast<float>(size), static_cast<float>(size), 0.0f, 1.0f };
+        static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f };
     cl->RSSetViewports(1, &viewport);
-    D3D12_RECT scissor{ 0, 0, static_cast<LONG>(size), static_cast<LONG>(size) };
+    D3D12_RECT scissor{ 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
     cl->RSSetScissorRects(1, &scissor);
 
     const float clearColor[4] = { 0.14f, 0.14f, 0.16f, 1.0f };
-    cl->ClearRenderTargetView(rtvHandle_, clearColor, 0, nullptr);
-    cl->ClearDepthStencilView(dsvHandle_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    cl->ClearRenderTargetView(frame.rtvHandle, clearColor, 0, nullptr);
+    cl->ClearDepthStencilView(frame.dsvHandle,
+        D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     cl->SetGraphicsRootSignature(rootSignature_.Get());
     cl->SetPipelineState(pipeline_.Get());
-    ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
+    ID3D12DescriptorHeap* heaps[] = { frame.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
     // Bind the mesh IA directly (Mesh::Draw uses a global bind cache tied to the
     // main render's command list, which must not be touched here).
@@ -514,28 +603,59 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         {
             material = materials.front().get();
         }
+        cl->SetPipelineState(material && material->doubleSided
+            ? doubleSidedPipeline_.Get()
+            : pipeline_.Get());
 
-        ID3D12Resource* albedo = nullptr;
-        DXGI_FORMAT albedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-        if (material && material->hasAlbedo && material->albedo.GetResource())
+        ID3D12Resource* textures[kPreviewTexturesPerDraw]{};
+        DXGI_FORMAT formats[kPreviewTexturesPerDraw] = {
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM
+        };
+        if (material)
         {
-            albedo = material->albedo.GetResource();
-            albedoFormat = material->albedo.GetSrvFormat();
+            if (material->hasAlbedo && material->albedo.GetResource())
+            {
+                textures[0] = material->albedo.GetResource();
+                formats[0] = material->albedo.GetSrvFormat();
+            }
+            if (material->hasMR && material->mr.GetResource())
+            {
+                textures[1] = material->mr.GetResource();
+                formats[1] = material->mr.GetSrvFormat();
+            }
+            if (material->hasNormal && material->normal.GetResource())
+            {
+                textures[2] = material->normal.GetResource();
+                formats[2] = material->normal.GetSrvFormat();
+            }
         }
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-        srv.Format = albedoFormat;
-        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv.Texture2D.MipLevels = 1;
-        D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvCpuHandle_;
-        srvHandle.ptr += static_cast<SIZE_T>(slot) * srvDescriptorSize_;
-        device->CreateShaderResourceView(albedo, &srv, srvHandle);
+        const std::uint32_t descriptorBase = slot * kPreviewTexturesPerDraw;
+        for (std::uint32_t textureIndex = 0;
+            textureIndex < kPreviewTexturesPerDraw;
+            ++textureIndex)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+            srv.Format = formats[textureIndex];
+            srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srv.Texture2D.MipLevels = textures[textureIndex]
+                ? std::max<UINT16>(textures[textureIndex]->GetDesc().MipLevels, 1)
+                : 1;
+            D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = frame.srvCpuHandle;
+            srvHandle.ptr += static_cast<SIZE_T>(descriptorBase + textureIndex) *
+                srvDescriptorSize_;
+            device->CreateShaderResourceView(textures[textureIndex], &srv, srvHandle);
+        }
 
         PreviewConstants cb{};
         dx::XMStoreFloat4x4(&cb.mvp, mvp);
         dx::XMStoreFloat4x4(&cb.model, model);
-        dx::XMStoreFloat4(&cb.lightDir, lightDir);
+        dx::XMStoreFloat4(&cb.lightDir, lightDirection);
+        cb.lightDir.w = std::max(0.0f, light.exposure);
+        dx::XMStoreFloat4(&cb.eyePosition, framedEye);
         if (material)
         {
             const MaterialParams& params = material->fromGltf
@@ -544,20 +664,48 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
                     ? material->presetParams
                     : MaterialParams{};
             cb.baseColor = dx::XMFLOAT4{ params.baseColor.x, params.baseColor.y,
-                params.baseColor.z, albedo ? 1.0f : 0.0f };
+                params.baseColor.z, params.baseColor.w };
+            cb.metalRoughAlpha = dx::XMFLOAT4{
+                params.metalRough.x,
+                params.metalRough.y,
+                material->alphaMask ? material->alphaCutoff : -1.0f,
+                params.mrMultiply };
+            cb.texOffsScale = dx::XMFLOAT4{
+                params.texOffsScale.x,
+                params.texOffsScale.y,
+                params.texOffsScale.z,
+                params.texOffsScale.w };
+            cb.texFlags = dx::XMFLOAT4{
+                textures[0] && params.texFlags.x > 0.5f ? 1.0f : 0.0f,
+                textures[1] && params.texFlags.y > 0.5f ? 1.0f : 0.0f,
+                textures[2] && params.texFlags.z > 0.5f ? 1.0f : 0.0f,
+                params.texFlags.w };
+            cb.materialFlags = dx::XMFLOAT4{
+                material->mrLayoutGltf ? 1.0f : 0.0f,
+                material->normalIsRG ? 1.0f : 0.0f,
+                material->doubleSided ? 1.0f : 0.0f,
+                textures[0] ? 1.0f : 0.0f };
         }
         else
         {
-            cb.baseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 0.0f };
+            cb.baseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 1.0f };
+            cb.metalRoughAlpha = dx::XMFLOAT4{ 0.0f, 0.35f, -1.0f, 0.0f };
+            cb.texOffsScale = dx::XMFLOAT4{ 0.0f, 0.0f, 1.0f, 1.0f };
+            cb.texFlags = dx::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 1.0f };
+            cb.materialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
         }
-        cb.ambient = dx::XMFLOAT4{ 0.28f, 0.30f, 0.34f, 1.0f };
-        std::memcpy(constantBufferMapped_ +
+        cb.ambient = dx::XMFLOAT4{
+            std::max(0.0f, light.color.x),
+            std::max(0.0f, light.color.y),
+            std::max(0.0f, light.color.z),
+            std::max(0.0f, light.ambient) };
+        std::memcpy(frame.constantBufferMapped +
             static_cast<std::size_t>(slot) * kPreviewConstantStride, &cb, sizeof(cb));
 
-        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvGpuHandle_;
-        gpuHandle.ptr += static_cast<UINT64>(slot) * srvDescriptorSize_;
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = frame.srvGpuHandle;
+        gpuHandle.ptr += static_cast<UINT64>(descriptorBase) * srvDescriptorSize_;
         cl->SetGraphicsRootConstantBufferView(0,
-            constantBuffer_->GetGPUVirtualAddress() +
+            frame.constantBuffer->GetGPUVirtualAddress() +
             static_cast<UINT64>(slot) * kPreviewConstantStride);
         cl->SetGraphicsRootDescriptorTable(1, gpuHandle);
         cl->DrawIndexedInstanced(indexCount, 1,
@@ -568,7 +716,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     // and return the depth target to COMMON for the next render.
     barrier(color.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    barrier(depthTarget_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+    barrier(frame.depthTarget.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
         D3D12_RESOURCE_STATE_COMMON);
 
     return color;
@@ -585,8 +733,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
     {
         return nullptr;
     }
+    RenderSlot& frame = renderSlots_[0];
 
-    ComPtr<ID3D12Resource> color = CreateColorTarget(device, size);
+    ComPtr<ID3D12Resource> color = CreateColorTarget(device, size, size);
     if (!color)
     {
         return nullptr;
@@ -595,7 +744,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
     D3D12_RENDER_TARGET_VIEW_DESC rtv{};
     rtv.Format = kColorFormat;
     rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-    device->CreateRenderTargetView(color.Get(), &rtv, rtvHandle_);
+    device->CreateRenderTargetView(color.Get(), &rtv, frame.rtvHandle);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = cube.GetFormat();
@@ -616,10 +765,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
         srv.TextureCube.MipLevels = cube.GetMips();
         srv.TextureCube.ResourceMinLODClamp = 0.0f;
     }
-    device->CreateShaderResourceView(cube.GetResource(), &srv, srvCpuHandle_);
+    device->CreateShaderResourceView(cube.GetResource(), &srv, frame.srvCpuHandle);
 
     PreviewConstants constants{};
-    std::memcpy(constantBufferMapped_, &constants, sizeof(constants));
+    std::memcpy(frame.constantBufferMapped, &constants, sizeof(constants));
 
     auto barrier = [cl](ID3D12Resource* resource,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -635,7 +784,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
 
     barrier(color.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
-    cl->OMSetRenderTargets(1, &rtvHandle_, FALSE, nullptr);
+    cl->OMSetRenderTargets(1, &frame.rtvHandle, FALSE, nullptr);
     D3D12_VIEWPORT viewport{ 0.0f, 0.0f,
         static_cast<float>(size), static_cast<float>(size), 0.0f, 1.0f };
     cl->RSSetViewports(1, &viewport);
@@ -643,13 +792,14 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
     cl->RSSetScissorRects(1, &scissor);
 
     const float clearColor[4] = { 0.14f, 0.14f, 0.16f, 1.0f };
-    cl->ClearRenderTargetView(rtvHandle_, clearColor, 0, nullptr);
+    cl->ClearRenderTargetView(frame.rtvHandle, clearColor, 0, nullptr);
     cl->SetGraphicsRootSignature(rootSignature_.Get());
     cl->SetPipelineState(cube.IsArray() ? cubeArrayPipeline_.Get() : cubePipeline_.Get());
-    ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
+    ID3D12DescriptorHeap* heaps[] = { frame.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
-    cl->SetGraphicsRootConstantBufferView(0, constantBuffer_->GetGPUVirtualAddress());
-    cl->SetGraphicsRootDescriptorTable(1, srvGpuHandle_);
+    cl->SetGraphicsRootConstantBufferView(0,
+        frame.constantBuffer->GetGPUVirtualAddress());
+    cl->SetGraphicsRootDescriptorTable(1, frame.srvGpuHandle);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->DrawInstanced(3, 1, 0, 0);
 

@@ -292,6 +292,20 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         const bool foliage = shadingModelValid && shadingModel == ShadingModel::TwoSidedFoliage;
         if (foliage) { doc_["twoSided"] = true; }
 
+        bool twoSided = foliage || doc_.value("twoSided", false);
+        ImGui::BeginDisabled(foliage);
+        if (ImGui::Checkbox("Two Sided (render backfaces)", &twoSided))
+        {
+            doc_["twoSided"] = twoSided;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip(foliage
+                ? "Two-Sided Foliage always renders both faces."
+                : "Disable back-face culling and render both sides of every triangle.");
+        }
+
         static const float kSubsurfaceDef[3] = { 1.0f, 1.0f, 1.0f };
         float subsurface[3];
         ReadFloats(doc_, "subsurfaceColor", subsurface, 3, kSubsurfaceDef);
@@ -332,14 +346,6 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         {
             float cutoff = doc_.value("alphaCutoff", 0.5f);
             if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f)) { doc_["alphaCutoff"] = cutoff; }
-        }
-        bool twoSided = foliage || doc_.value("twoSided", false);
-        ImGui::BeginDisabled(foliage);
-        if (ImGui::Checkbox("Two-sided", &twoSided)) { doc_["twoSided"] = twoSided; }
-        ImGui::EndDisabled();
-        if (foliage && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        {
-            ImGui::SetTooltip("Two-Sided Foliage always renders both faces.");
         }
         bool normalIsRG = doc_.value("normalIsRG", true);
         if (ImGui::Checkbox("Normal map is RG (BC5)", &normalIsRG)) { doc_["normalIsRG"] = normalIsRG; }

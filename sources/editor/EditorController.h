@@ -82,6 +82,7 @@ private:
         bool showCommandHistory = true;
         ContentBrowserPanel::PersistentState contentBrowser;
         SceneOutlinerPanel::PersistentState outliner;
+        MeshEditorPanel::PersistentState meshEditor;
         ViewportGizmo::PersistentState viewportGizmo;
     };
 

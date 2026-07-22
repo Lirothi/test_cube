@@ -621,6 +621,9 @@
     <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/ui/MeshEditorPreviewScene.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
     <ClCompile Include="third_party\DirectXTex\BC.cpp">
       <Filter>third_party\DirectXTex</Filter>
     </ClCompile>
@@ -1149,6 +1152,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/MeshEditorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/MeshEditorPreviewScene.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Screenshot.h">
