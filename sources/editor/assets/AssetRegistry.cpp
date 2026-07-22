@@ -1386,6 +1386,14 @@ namespace
                 continue;
             }
 
+            // Take a stable COPY of the base record before the inner loop: push_back below grows
+            // `assets`, which can reallocate its storage and leave the `base` reference (into
+            // assets[i]) dangling -> the next node's copy reads freed memory and throws
+            // std::length_error on the corrupted string length. The copy is unaffected by the
+            // reallocation. (Only glTF meshes with a valid split manifest reach here, so this
+            // extra copy is rare, not per-asset.)
+            const EditorAssetRecord baseRecord = base;
+
             std::set<std::string> unique;
             for (const nlohmann::json& nodeEntry : *nodesIt)
             {
@@ -1393,8 +1401,8 @@ namespace
                 const std::string nodeName = nodeEntry.get<std::string>();
                 if (nodeName.empty() || !unique.insert(nodeName).second) { continue; }
 
-                EditorAssetRecord variant = base;
-                variant.id.key = base.id.key + "#node:" + nodeName;
+                EditorAssetRecord variant = baseRecord;
+                variant.id.key = baseRecord.id.key + "#node:" + nodeName;
                 variant.displayName = nodeName;
                 std::string virtualName = nodeName;
                 std::replace(virtualName.begin(), virtualName.end(), '\\', '_');

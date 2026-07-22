@@ -56,6 +56,8 @@ struct ScenePointLightCBHandles
     Material::CBFieldHandle invPointShadowSize;
     Material::CBFieldHandle useVsm;
     Material::CBFieldHandle vsmRefDist;
+    Material::CBFieldHandle localLateralTexels;
+    Material::CBFieldHandle localDepthPushTexels;
 
     void Populate(Material* material);
 };
@@ -71,6 +73,8 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle invShadowSize;
     Material::CBFieldHandle useVsm;
     Material::CBFieldHandle vsmRefDist;
+    Material::CBFieldHandle localLateralTexels;
+    Material::CBFieldHandle localDepthPushTexels;
 
     void Populate(Material* material);
 };
@@ -174,6 +178,11 @@ struct PointLightPassConstants
     float invPointShadowSize = 0.0f; // 1 / pointShadowRes (cube face texel, for PCF)
     uint32_t useVsm = 0;      // Rung 2 / Step 21
     float vsmRefDist = 10.0f;
+    float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL PointLightFrame
+    float localDepthPushTexels = 0.5f;
+    float _vsmPad0 = 0.0f;
+    float _vsmPad1 = 0.0f;
+    float _vsmPad2 = 0.0f;
 };
 
 struct SpotLightPassConstants
@@ -187,6 +196,10 @@ struct SpotLightPassConstants
     float2 invShadowSize{};
     uint32_t useVsm = 0;      // Rung 2 / Step 21
     float vsmRefDist = 10.0f;
+    float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL SpotLightFrame
+    float localDepthPushTexels = 0.5f;
+    float _vsmPad0 = 0.0f;
+    float _vsmPad1 = 0.0f;
 };
 
 struct SsrPassConstants

@@ -112,6 +112,13 @@ namespace vsm
     // Step 24f: directional-clipmap normal offset in TEXELS — scaled per level by world-units-per-texel
     // (fine near, coarse far), so the receiver clears its own surface at every level. Tunable.
     inline float         g_clipmapNormalBias = 2.0f;
+    // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
+    // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
+    // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =
+    // along-the-light-ray, slope-scaled, so grazing acne clears without moving flat lit ground.
+    // Live-tunable in the Developer window's VSM section (fed to the spot/point CBs each frame).
+    inline float         g_localLateralTexels   = 1.0f;
+    inline float         g_localDepthPushTexels = 0.5f;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free

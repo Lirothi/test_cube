@@ -1981,6 +1981,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         constants.lightCount = static_cast<uint32_t>(spotLightCount);
         constants.useVsm = vsmSample ? 1u : 0u;
         constants.vsmRefDist = vsm::g_refDist;
+        constants.localLateralTexels = vsm::g_localLateralTexels;
+        constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
@@ -2081,6 +2083,8 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.invPointShadowSize = 1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)); // cube-face texel for PCF
         constants.useVsm = vsmSample ? 1u : 0u;
         constants.vsmRefDist = vsm::g_refDist;
+        constants.localLateralTexels = vsm::g_localLateralTexels;
+        constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
 
         // s2 = comparison sampler for the point shadow cube (B3).
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };

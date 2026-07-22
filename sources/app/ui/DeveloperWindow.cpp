@@ -557,6 +557,15 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     ImGui::SetTooltip("Receiver normal offset in texels, scaled per level by world-units-per-texel.\n"
                                       "Raise if far terrain self-shadows (the 'darkened area' when flying away).");
 
+                ImGui::SliderFloat("Local lateral bias (texels)", &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Spot + point VSM: surface-normal offset in shadow texels. ~1 texel.\n"
+                                      "Higher = less acne but the shadow Peter-pans (lifts off the base).");
+                ImGui::SliderFloat("Local depth push (texels)", &vsm::g_localDepthPushTexels, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Spot + point VSM: along-the-light-ray depth push in shadow texels,\n"
+                                      "slope-scaled by 1/N.L. The main acne knob; barely Peter-pans (depth-only).");
+
                 ImGui::Checkbox("Resident-only render (faster, may flicker)", &vsm::g_residentIterOnly);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"

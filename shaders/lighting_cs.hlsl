@@ -222,15 +222,29 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float3 V = normalize(camPosWS - P);
     const float3 L = normalize(-sunDirWS);
 
+    // GBAux.b carries the four-bit shading-model ID (F2). Foliage additionally reads its
+    // premultiplied subsurface/transmission payload from GB2 (F3).
+    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    const bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
+    float3 subsurface = 0.0f.xxx;
+    if (isFoliage)
+    {
+        subsurface = GB2.SampleLevel(gSmpPoint, uv, 0).rgb;
+    }
+
     // Q2: diffuse ambient applies to the dielectric (non-metal) fraction only. Metals have
     // no Lambertian response; their ambient arrives specularly via the env reflection in the
     // compose pass. Without the (1-metal) gate, metals get a flat albedo floor that washes
     // them out and kills highlight contrast.
-    const float3 ambient = albedo * (1.0 - metal) * ambientIntensity;
-
-    // GBAux.b carries the four-bit shading-model ID (F2). Foliage additionally reads its
-    // premultiplied subsurface/transmission payload from GB2 (F3).
-    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    float3 ambient = albedo * (1.0 - metal) * ambientIntensity;
+    // F5: conservative two-sided foliage ambient. A thin leaf's shaded/back side would otherwise
+    // collapse toward black under the flat ambient, so add the transmitted subsurface tint. It is
+    // scaled by ambientIntensity (zero ambient stays zero -> this is ambient, not emissive); the
+    // proper irradiance-cube two-sided ambient replaces it in F8.
+    if (isFoliage)
+    {
+        ambient += subsurface * ambientIntensity;
+    }
 
     BRDFInput bi;
     bi.albedo = albedo;
@@ -242,9 +256,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float3 color = ambient * lightRgb;
 
-    if (shadingModel == kShadingModelTwoSidedFoliage)
+    if (isFoliage)
     {
-        float3 subsurface = GB2.SampleLevel(gSmpPoint, uv, 0).rgb;
         FoliageResult fr = EvalFoliageBRDF(bi, subsurface, sunAngularSize);
 
         // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math

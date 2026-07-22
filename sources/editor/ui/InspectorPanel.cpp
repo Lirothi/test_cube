@@ -419,11 +419,12 @@ namespace
             if (changed) { p["color"] = { cv[0], cv[1], cv[2] }; }
             trackContinuousEdit(beforeItem, changed);
         };
-        auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi)
+        auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi,
+                         const char* fmt = "%.3f")
         {
             const nlohmann::json beforeItem = p;
             float v = JsonFloat(p, key, def);
-            const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi);
+            const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt);
             if (changed) { p[key] = v; }
             trackContinuousEdit(beforeItem, changed);
         };
@@ -506,8 +507,8 @@ namespace
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
             checkB("Cast Shadows", "shadowsEnabled", false);
-            dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f);
-            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f);
+            dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
+            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
         }
         else if (env.type == "directionalLight")
         {

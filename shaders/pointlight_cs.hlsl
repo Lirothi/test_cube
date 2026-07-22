@@ -52,6 +52,13 @@ cbuffer PointLightFrame : register(b0)
     float invPointShadowSize; // 1 / pointShadowRes (cube face texel, for PCF)
     uint   useVsm;      // Rung 2 / Step 21: sample the VSM page pool instead of the cube atlas
     float  vsmRefDist;  // VSM mip level-select reference distance
+    // VSM local-light shadow bias in shadow-texel units (live-tunable, vsm::g_local*Texels) — same
+    // model as the spot path. Lateral normal offset + slope-scaled along-ray depth push.
+    float  localLateralTexels;
+    float  localDepthPushTexels;
+    float  _vsmPad0;
+    float  _vsmPad1;
+    float  _vsmPad2;
 }
 
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Reconstructs the
@@ -73,15 +80,20 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
     // the atlas path, avoiding the crushed-perspective-depth bias problem).
     if (useVsm != 0u)
     {
-        // Match the spot path: coarse VSM mip levels far from the camera need a larger world-space
-        // offset than the near/atlas-tuned constant, else the receiver self-shadows into acne
-        // stripes. Scale both the normal offset and the toLight pull by the LOD coarsening
-        // (continuous ~distCam/refDist, the same quantity that selects the mip level).
-        float biasScale = clamp(length(P - camPosWS) / max(vsmRefDist, 1e-3f), 1.0f,
-                                (float)(1u << VSM_MAX_LEVEL));
-        float3 PoffV = P + N * (kPointNormalBias * biasScale);
-        float3 toLight = Ld.position - PoffV;
-        PoffV += normalize(toLight) * (Ld.shadowParams.y * biasScale);
+        // Same texel-sized, slope-scaled, world-space bias as the spot path (ZERO NDC bias). Size
+        // the offset to the ACTUAL shadow texel at the receiver so acne clears with the minimum
+        // push at every distance/level -> minimal Peter-panning. A cube face is a fixed 90deg
+        // frustum, so tan(halfFov)=1 and texelWorld = 2*distToLight/VSM_VIRTUAL_RES at the
+        // camera-selected level. Push ALONG the light ray (depth-only, crush-immune) slope-scaled
+        // by 1/N.L, plus a ~1-texel normal offset.
+        const uint  lvl        = VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        const float distLight  = length(Ld.position - P);
+        const float texelWorld = (2.0f * distLight / VSM_VIRTUAL_RES) * exp2((float)lvl);
+        const float3 toL       = normalize(Ld.position - P);
+        const float  ndl       = saturate(dot(N, toL));
+        const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
+        float3 PoffV = P + N * (texelWorld * localLateralTexels)
+                         + toL * (texelWorld * slope * localDepthPushTexels);
         return VsmPointShadow((uint)Ld.shadowParams.x, PoffV, Ld.position, Ld.shadowParams.z,
                               Ld.shadowParams.w, camPosWS, vsmRefDist, 0.0f,
                               VsmPageTable, VsmPool, gSmpShadowCmp);
@@ -150,6 +162,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
     float3 V = normalize(camPosWS - P);
 
+    // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).
+    uint shadingModel = DecodeShadingModel(GBAux.SampleLevel(gSmpPoint, uv, 0).b);
+    bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
+    float3 subsurface = 0.0f.xxx;
+    if (isFoliage)
+    {
+        subsurface = GB2.SampleLevel(gSmpPoint, uv, 0).rgb;
+    }
+
     float4 base = LightTarget[dispatchThreadId.xy];
     float3 accum = base.rgb;
 
@@ -176,20 +197,42 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         bi.V = V;
         bi.L = L;
 
-        BRDFResult br = EvalBRDF(bi);
-        if (br.NdotL <= 0.0)
-        {
-            continue;
-        }
+        const float3 radiance = Ld.color * Ld.intensity * atten;
 
-        float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
-        if (shadow <= 0.0f)
+        if (isFoliage)
         {
-            continue;
+            // F5: reuse the shared F4 foliage helper so point lights match the directional model
+            // exactly. Radius attenuation + shadow apply to both the front lobe and transmission.
+            FoliageResult fr = EvalFoliageBRDF(bi, subsurface);
+            if (fr.NdotL > 0.0)
+            {
+                float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
+                accum += (fr.diffBRDF + fr.specBRDF) * fr.NdotL * radiance * shadow;
+            }
+            // Transmission: flipped-normal shadow sample so the leaf's own front face does not
+            // self-shadow the light passing through it (mirrors lighting_cs F4).
+            if (any(fr.transBRDF > 0.0))
+            {
+                float shadowT = PointShadowFactor(Ld, P, -N, invPointShadowSize);
+                accum += fr.transBRDF * radiance * shadowT;
+            }
         }
+        else
+        {
+            BRDFResult br = EvalBRDF(bi);
+            if (br.NdotL <= 0.0)
+            {
+                continue;
+            }
 
-        float3 radiance = Ld.color * Ld.intensity * atten;
-        accum += (br.diffBRDF + br.specBRDF) * br.NdotL * radiance * shadow;
+            float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
+            if (shadow <= 0.0f)
+            {
+                continue;
+            }
+
+            accum += (br.diffBRDF + br.specBRDF) * br.NdotL * radiance * shadow;
+        }
     }
 
     LightTarget[dispatchThreadId.xy] = float4(accum, base.a);

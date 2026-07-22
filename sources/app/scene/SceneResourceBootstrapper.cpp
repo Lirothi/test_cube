@@ -62,6 +62,8 @@ void ScenePointLightCBHandles::Populate(Material* material)
     invPointShadowSize = material->ComputeCB0FieldHandle("invPointShadowSize");
     useVsm = material->ComputeCB0FieldHandle("useVsm");
     vsmRefDist = material->ComputeCB0FieldHandle("vsmRefDist");
+    localLateralTexels = material->ComputeCB0FieldHandle("localLateralTexels");
+    localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
 }
 
 void SceneSpotLightCBHandles::Populate(Material* material)
@@ -81,6 +83,8 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     invShadowSize = material->ComputeCB0FieldHandle("invShadowSize");
     useVsm = material->ComputeCB0FieldHandle("useVsm");
     vsmRefDist = material->ComputeCB0FieldHandle("vsmRefDist");
+    localLateralTexels = material->ComputeCB0FieldHandle("localLateralTexels");
+    localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
 }
 
 void SceneSsrCBHandles::Populate(Material* material)
@@ -519,6 +523,8 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.invPointShadowSize, data.invPointShadowSize, dest);
     matPointLightCS_->UpdateCBField(handles.useVsm, data.useVsm, dest);
     matPointLightCS_->UpdateCBField(handles.vsmRefDist, data.vsmRefDist, dest);
+    matPointLightCS_->UpdateCBField(handles.localLateralTexels, data.localLateralTexels, dest);
+    matPointLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
 }
 
 void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConstants& data, uint8_t* dest) const
@@ -538,6 +544,8 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.invShadowSize, data.invShadowSize, dest);
     matSpotLightCS_->UpdateCBField(handles.useVsm, data.useVsm, dest);
     matSpotLightCS_->UpdateCBField(handles.vsmRefDist, data.vsmRefDist, dest);
+    matSpotLightCS_->UpdateCBField(handles.localLateralTexels, data.localLateralTexels, dest);
+    matSpotLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
 }
 
 void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, uint8_t* dest) const
