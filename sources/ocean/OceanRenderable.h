@@ -42,6 +42,10 @@ public:
     OceanSimulation* GetSimulation() { return simulation_; }
     const OceanSimulation* GetSimulation() const { return simulation_; }
 
+    // W1: the ocean's simulation clock (seconds), accumulated in Tick and fed to the FFT sim. The
+    // wind system reads this as its shared clock so waves and foliage sway stay phase-coherent.
+    float GetElapsedTime() const { return elapsedTime_; }
+
     void SetGridVertexDensity(uint32_t density);
 
 private:

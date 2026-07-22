@@ -923,6 +923,9 @@
     <ClInclude Include="sources/vfx/ParticleTypes.h">
       <Filter>sources\vfx</Filter>
     </ClInclude>
+    <ClInclude Include="sources/vfx/WindState.h">
+      <Filter>sources\vfx</Filter>
+    </ClInclude>
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>

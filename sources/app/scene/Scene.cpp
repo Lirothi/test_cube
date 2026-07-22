@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cassert>
+#include <cstdio>
 #include <string>
 #include <utility>
 
@@ -14,6 +15,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -684,6 +686,25 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
 }
 #endif // WITH_EDITOR
 
+OceanRenderable* Scene::FindOceanRenderable()
+{
+    // W1: the ocean's clock lives on the OceanRenderable, which enters objects_ through several
+    // paths (level registry, editor spawn), and Clear() doesn't bump staticSetVersion_ — so a
+    // cached pointer would be fragile. A once-per-frame scan is robust and negligible next to the
+    // per-object Tick that just ran.
+    for (std::unique_ptr<RenderableObjectBase>& obj : objects_)
+    {
+        if (obj)
+        {
+            if (OceanRenderable* ocean = obj->AsOceanRenderable())
+            {
+                return ocean;
+            }
+        }
+    }
+    return nullptr;
+}
+
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
@@ -720,6 +741,31 @@ void Scene::Tick(float deltaTime) {
         obj->PostTick(deltaTime);
     }
 #endif
+
+    // W1: advance the global wind from the SAME clock the ocean uses (its elapsedTime_), so waves
+    // and foliage sway stay phase-coherent. No ocean -> standalone monotonic accumulator (coherence
+    // is moot). Runs after the object-Tick barrier above, so the ocean's clock is current.
+    {
+        OceanRenderable* ocean = FindOceanRenderable();
+        const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
+        windState_.Tick(clock);
+
+        // W1 verify (self-limiting): confirm the wind clock tracks the ocean and windDirXZ is unit.
+        static int s_windLogFrames = 0;
+        if (s_windLogFrames < 8)
+        {
+            ++s_windLogFrames;
+            const float len = std::sqrt(windState_.windDirXZ.x * windState_.windDirXZ.x +
+                                        windState_.windDirXZ.y * windState_.windDirXZ.y);
+            char buf[192];
+            std::snprintf(buf, sizeof(buf),
+                "[wind] frame=%d time=%.4f prevTime=%.4f ocean=%s dir=(%.3f,%.3f) |dir|=%.4f swayAmp=%.3f gustMul=%.3f\n",
+                s_windLogFrames, windState_.time, windState_.prevTime, ocean ? "yes" : "none",
+                windState_.windDirXZ.x, windState_.windDirXZ.y, len,
+                windState_.swayAmplitude, windState_.gustMul);
+            OutputDebugStringA(buf);
+        }
+    }
 }
 
 void Scene::PrepareViews(Renderer* renderer)

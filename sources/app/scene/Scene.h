@@ -19,9 +19,11 @@
 #include "app/scene/SceneView.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
+#include "vfx/WindState.h"
 
 class Renderer;
 class UploadBatch;
+class OceanRenderable;
 
 class Scene {
 public:
@@ -111,6 +113,12 @@ public:
 
     const SceneFrameData& FrameData() const { return frameData_; }
 
+    // W1: the global wind source of truth (drives the ocean's force/direction and, from W3 on,
+    // foliage sway). Advanced each Tick from the ocean's shared clock; authored by the "wind"
+    // level entity (W2).
+    vfx::WindState& GetWindState() { return windState_; }
+    const vfx::WindState& GetWindState() const { return windState_; }
+
     // Rung 1 (Step 11) foundation: monotonic version of the shadow-caster set — bumped when its
     // membership or editor visibility changes. A shadow cache compares it to know its data is
     // stale. Dynamic movers do NOT bump it (their motion is tracked per-caster via
@@ -123,6 +131,7 @@ private:
     static constexpr int kCascades = SceneFrameData::kCascades;
 
     void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
+    OceanRenderable* FindOceanRenderable(); // W1: locate the ocean's shared clock (null if no ocean)
     void UpdateCascades(const Camera& camera, Renderer* renderer);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 
@@ -165,6 +174,8 @@ private:
 
     SceneRenderSettings renderSettings_{};
     std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes
+
+    vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
 
     DirectionalLight dirLight_;
 

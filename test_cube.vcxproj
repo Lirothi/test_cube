@@ -491,6 +491,7 @@
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />
+    <ClInclude Include="sources/vfx/WindState.h" />
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
     <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
     <ClInclude Include="sources/ocean/OceanSpectrum.h" />
