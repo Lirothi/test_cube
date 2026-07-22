@@ -80,6 +80,90 @@ namespace
         return first ? first->id.key : std::string{};
     }
 
+    std::string ToLowerCopy(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    }
+
+    // Material picker used by both the single-material and per-slot static-mesh inspectors.
+    // Returns the selected preset (or "auto") through outSelection without mutating the scene;
+    // callers execute the appropriate undoable command after the popup has finished drawing.
+    bool MaterialCombo(const char* label,
+        const std::string& current,
+        const AssetRegistry& registry,
+        bool allowAuto,
+        std::string& outSelection)
+    {
+        static ImGuiID openCombo = 0;
+        static char filter[128] = {};
+
+        outSelection.clear();
+        const ImGuiID comboId = ImGui::GetID(label);
+        if (ImGui::BeginCombo(label,
+            current.empty() ? "(none)" : current.c_str(),
+            ImGuiComboFlags_HeightLargest))
+        {
+            if (openCombo != comboId)
+            {
+                openCombo = comboId;
+                filter[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputTextWithHint("##materialFilter", "Search materials...", filter, sizeof(filter));
+            ImGui::Separator();
+
+            const std::string needle = ToLowerCopy(filter);
+            int visibleCount = 0;
+            if (ImGui::BeginChild("##materialList", ImVec2(0.0f, 220.0f), false))
+            {
+                constexpr const char* autoLabel = "auto (from glTF)";
+                if (allowAuto &&
+                    (needle.empty() || ToLowerCopy(autoLabel).find(needle) != std::string::npos))
+                {
+                    ++visibleCount;
+                    if (ImGui::Selectable(autoLabel, current == "auto") && current != "auto")
+                    {
+                        outSelection = "auto";
+                    }
+                }
+
+                for (const EditorAssetRecord& rec : registry.Assets())
+                {
+                    if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
+                    if (!needle.empty() &&
+                        ToLowerCopy(rec.id.key).find(needle) == std::string::npos)
+                    {
+                        continue;
+                    }
+
+                    ++visibleCount;
+                    const bool selected = rec.id.key == current;
+                    if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                    {
+                        outSelection = rec.id.key;
+                    }
+                }
+
+                if (visibleCount == 0)
+                {
+                    ImGui::TextDisabled("No matching materials.");
+                }
+            }
+            ImGui::EndChild();
+            ImGui::EndCombo();
+        }
+        else if (openCombo == comboId)
+        {
+            openCombo = 0;
+        }
+
+        return !outSelection.empty();
+    }
+
     float JsonFloat(const nlohmann::json& p, const char* key, float def)
     {
         const auto it = p.find(key);
@@ -309,24 +393,11 @@ namespace
                     ImGui::PushID(static_cast<int>(i));
                     char label[32];
                     std::snprintf(label, sizeof(label), "Slot %zu", i);
-                    if (ImGui::BeginCombo(label, cur.c_str()))
+                    std::string selectedMaterial;
+                    if (MaterialCombo(label, cur, registry, /*allowAuto=*/true, selectedMaterial))
                     {
-                        if (ImGui::Selectable("auto (from glTF)", cur == "auto") && cur != "auto")
-                        {
-                            commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
-                                obj.id, static_cast<int>(i), "auto"));
-                        }
-                        for (const EditorAssetRecord& rec : registry.Assets())
-                        {
-                            if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
-                            const bool selected = (rec.id.key == cur);
-                            if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
-                            {
-                                commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
-                                    obj.id, static_cast<int>(i), rec.id.key));
-                            }
-                        }
-                        ImGui::EndCombo();
+                        commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
+                            obj.id, static_cast<int>(i), std::move(selectedMaterial)));
                     }
                     // "Save as material" (promote a still-"auto" glTF slot to a named file) lives
                     // in the Mesh Editor, not here — it's a per-mesh-asset op whose Save fans out
@@ -342,18 +413,11 @@ namespace
                 const std::string current = gbMat && slotCount == 1
                     ? gbMat->SlotPreset(0)
                     : obj.properties.value("material", std::string());
-                if (ImGui::BeginCombo("Material", current.empty() ? "(none)" : current.c_str()))
+                std::string selectedMaterial;
+                if (MaterialCombo("Material", current, registry, /*allowAuto=*/false, selectedMaterial))
                 {
-                    for (const EditorAssetRecord& rec : registry.Assets())
-                    {
-                        if (rec.id.type != EditorAssetType::MaterialPreset) { continue; }
-                        const bool selected = (rec.id.key == current);
-                        if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
-                        {
-                            commandStack.Execute(ctx, std::make_unique<SetMaterialCommand>(obj.id, rec.id.key));
-                        }
-                    }
-                    ImGui::EndCombo();
+                    commandStack.Execute(ctx, std::make_unique<SetMaterialCommand>(
+                        obj.id, std::move(selectedMaterial)));
                 }
             }
 

@@ -1098,7 +1098,6 @@ namespace
         return {
             { "shadingModel", "defaultLit" },
             { "normalIsRG", true },
-            { "useTBN", true },
             { "alphaTest", false },
             { "alphaCutoff", 0.5f },
             { "twoSided", false },

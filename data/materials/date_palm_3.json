@@ -14,6 +14,5 @@
   "transmissionAlbedoPower": 0.6000000238418579,
   "transmissionNormalWeight": 0.3499999940395355,
   "transmissionStrength": 0.0,
-  "twoSided": true,
-  "useTBN": true
+  "twoSided": true
 }

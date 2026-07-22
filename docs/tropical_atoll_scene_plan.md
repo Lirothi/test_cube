@@ -311,7 +311,7 @@ so palms reflect bark + green fronds instead of slot-0 everywhere; hit shaders u
 **C1b — per-slot pipeline materials.** *(exec: Fable — draw-loop/batching restructure; user
 decision 2026-07-14: kill the one-PSO-per-object limitation before shadows build on it)*
 Each material slot gets its OWN graphics `Material` (PSO): per-slot defines
-(`NORMALMAP_IS_RG` / `USE_TBN` / `MR_LAYOUT_GLTF` / `ALPHA_TEST`) and per-slot raster state
+(`NORMALMAP_IS_RG` / `MR_LAYOUT_GLTF` / `ALPHA_TEST`) and per-slot raster state
 (cull NONE only on genuinely two-sided slots) — replacing C1's union-of-flags. Scope:
 - `GBufferRenderable`: `slotGraphicsMaterials_[i]` built from slot i's `MaterialData` + flags;
   keep the base-class `graphicsMaterial_` as the slot-0 alias so every single-slot object and
@@ -727,7 +727,7 @@ Parameter-level editing of materials — still deliberately small: texture picke
 checkboxes. NOT a node graph, NOT shader authoring, no material-instance hierarchy. **Rewritten**
 because the original spec predated the importer pipeline and the content-browser file management,
 and audit against the code found three stale assumptions: (a) `MaterialPreset` is only 3 texture
-paths + `normalIsRG`/`useTBN` — most fields the editor must expose (tint, metal/rough scalars,
+paths + `normalIsRG` — most fields the editor must expose (tint, metal/rough scalars,
 emissive, alphaCutoff/twoSided, tiling) do NOT exist in the preset schema, they are per-OBJECT
 `MaterialParams`; (b) the monolithic `data/materials.json` now fights the content browser — file
 delete/move/status-badges are per-FILE and had to be disabled for presets; (c) infrastructure the
@@ -770,7 +770,7 @@ shader family). *(original spec below)* One material = one file:
 referencing materials by name — identity unchanged). Schema v2 per file: textures
 (`albedo`/`mr`/`normal`/`emissive`) + parameter DEFAULTS (`tint` rgba, `metalRough` xy,
 `emissiveColor`+`emissiveStrength`, `alphaTest`+`alphaCutoff`+`twoSided`, `texOffsScale`,
-`normalStrength`, `normalIsRG`, `useTBN`). Semantics: material params seed the per-object
+`normalStrength`, `normalIsRG`). Semantics: material params seed the per-object
 `MaterialParams` at Init; per-object overrides in level JSON keep working and WIN (demo levels
 must not change appearance — verify by diffing a demo screenshot before/after). Work: (1)
 `MaterialPreset`/`MaterialDataManager` extended to schema v2 + a folder loader
@@ -896,7 +896,7 @@ in the content browser or its "Edit Material..." context item (new `ContentBrows
 EditMaterial`; material `id.key` is the NAME, `record.path` the file). Edits the schema-v2 doc in
 place (round-trip, unknown keys preserved): albedo/mr/normal/emissive texture pickers (combo over
 registry Texture records), tint, metalRough, normalStrength, texOffsScale, alphaTest/alphaCutoff/
-twoSided, emissiveColor/strength, normalIsRG/useTBN, and the I0 feature-shader override — NO
+twoSided, emissiveColor/strength, normalIsRG, and the I0 feature-shader override — NO
 mrLayout (dead per H6). **The spec's two live-apply tiers collapsed into ONE safe mechanism**:
 "Save & Apply" writes the file → `MaterialDataManager::LoadPresetFromFile` (re-register) →
 `EvictCached(name)` (new) → respawns every placed static mesh whose EFFECTIVE material (resolved
@@ -924,7 +924,7 @@ requests exist.** *(original spec below)* Opened by double-clicking a material i
 content browser or an "edit" button next to the slot's preset picker (B4 inspector). Fields =
 schema v2: texture pickers for albedo/mr/normal/emissive (thumbnails via AssetThumbnailCache, DDS
 preferred per H2), tint, metal/rough scalars, normalStrength, texOffsScale tiling,
-alphaTest/alphaCutoff/twoSided, emissiveColor/emissiveStrength, normalIsRG/useTBN. NO mrLayout
+alphaTest/alphaCutoff/twoSided, emissiveColor/emissiveStrength, normalIsRG. NO mrLayout
 (dead per H6). **Live-apply, two tiers** (this replaces the old spec's "respawn everything"):
 - *Scalar params + texture swaps*: mutate the CACHED `MaterialData` in place — WaitForPreviousFrame,
   reload changed textures into the same MaterialData via UploadBatch, update params, then raise the

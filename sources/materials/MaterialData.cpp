@@ -75,12 +75,10 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
                                   [&](const auto& p){ return p.first == k; }), defs.end());
     };
     eraseKey("NORMALMAP_IS_RG");
-    eraseKey("USE_TBN");
     eraseKey("MR_LAYOUT_GLTF");
     eraseKey("SHADING_MODEL_ID");
 
     defs.emplace_back("NORMALMAP_IS_RG", normalIsRG   ? "1" : "0");
-    defs.emplace_back("USE_TBN",         useTBN       ? "1" : "0");
     defs.emplace_back("MR_LAYOUT_GLTF",  mrLayoutGltf ? "1" : "0");
     defs.emplace_back("SHADING_MODEL_ID", std::to_string(static_cast<uint32_t>(shadingModel)));
 }

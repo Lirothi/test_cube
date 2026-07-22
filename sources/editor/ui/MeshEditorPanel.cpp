@@ -42,19 +42,68 @@ std::vector<std::string> CollectPresets(const AssetRegistry& registry)
     return out;
 }
 
-// A combo over ("auto" + every preset). Returns true and writes `value` when the user picks a new
-// entry. `allowAuto` offers the glTF "resolve from the asset" sentinel.
+std::string ToLowerCopy(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+// A searchable combo over ("auto" + every preset). Returns true and writes `value` when the user
+// picks a new entry. `allowAuto` offers the glTF "resolve from the asset" sentinel.
 bool MaterialCombo(const char* label, std::string& value, const std::vector<std::string>& presets, bool allowAuto)
 {
+    static ImGuiID openCombo = 0;
+    static char filter[128] = {};
+
     bool changed = false;
-    if (ImGui::BeginCombo(label, value.empty() ? "(none)" : value.c_str()))
+    const ImGuiID comboId = ImGui::GetID(label);
+    if (ImGui::BeginCombo(label,
+        value.empty() ? "(none)" : value.c_str(),
+        ImGuiComboFlags_HeightLargest))
     {
-        if (allowAuto && ImGui::Selectable("auto", value == "auto")) { value = "auto"; changed = true; }
-        for (const std::string& p : presets)
+        if (openCombo != comboId)
         {
-            if (ImGui::Selectable(p.c_str(), value == p)) { value = p; changed = true; }
+            openCombo = comboId;
+            filter[0] = '\0';
+            ImGui::SetKeyboardFocusHere();
         }
+
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##materialFilter", "Search materials...", filter, sizeof(filter));
+        ImGui::Separator();
+
+        const std::string needle = ToLowerCopy(filter);
+        int visibleCount = 0;
+        if (ImGui::BeginChild("##materialList", ImVec2(0.0f, 220.0f), false))
+        {
+            if (allowAuto && (needle.empty() || std::string("auto").find(needle) != std::string::npos))
+            {
+                ++visibleCount;
+                if (ImGui::Selectable("auto", value == "auto") && value != "auto")
+                {
+                    value = "auto";
+                    changed = true;
+                }
+            }
+            for (const std::string& p : presets)
+            {
+                if (!needle.empty() && ToLowerCopy(p).find(needle) == std::string::npos) { continue; }
+                ++visibleCount;
+                if (ImGui::Selectable(p.c_str(), value == p) && value != p)
+                {
+                    value = p;
+                    changed = true;
+                }
+            }
+            if (visibleCount == 0) { ImGui::TextDisabled("No matching materials."); }
+        }
+        ImGui::EndChild();
         ImGui::EndCombo();
+    }
+    else if (openCombo == comboId)
+    {
+        openCombo = 0;
     }
     return changed;
 }

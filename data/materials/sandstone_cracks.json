@@ -7,6 +7,5 @@
   "mr": "textures/sandstone_cracks_1k/textures/sandstone_cracks_mr.dds",
   "multiplyMR": true,
   "normal": "textures/sandstone_cracks_1k/textures/sandstone_cracks_normal.dds",
-  "normalIsRG": false,
-  "useTBN": true
+  "normalIsRG": false
 }

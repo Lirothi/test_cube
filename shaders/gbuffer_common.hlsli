@@ -203,9 +203,11 @@ inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D tx
 #if NORMALMAP_IS_RG
     // --- RG (BC5/R8G8_UNORM): n.xy in [-1..1], reconstruct n.z ---
     float2 nrg = txNorm.Sample(samp, tfUVp(uv, texOffsScale)).rg * 2.0 - 1.0;
-    nrg *= texFlags.w;
-    float  nz2 = saturate(1.0 - dot(nrg, nrg));
-    float3 nTS = float3(nrg, sqrt(nz2));
+    // Reconstruct the source normal before applying strength. Scaling XY first can push it
+    // outside the unit circle; saturating the resulting negative Z then creates flat Z=0
+    // patches for strengths above one.
+    float  nz = sqrt(saturate(1.0 - dot(nrg, nrg)));
+    float3 nTS = normalize(float3(nrg * texFlags.w, max(nz, 1e-4)));
 #else
     // --- RGB(A): standard path ---
     float3 nTS = txNorm.Sample(samp, tfUVp(uv, texOffsScale)).xyz * 2.0 - 1.0;

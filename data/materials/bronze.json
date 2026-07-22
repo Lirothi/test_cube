@@ -2,6 +2,5 @@
   "albedo": "textures/bronze_albedo.dds",
   "mr": "textures/bronze_mr.dds",
   "normal": "textures/bronze_normal.dds",
-  "normalIsRG": false,
-  "useTBN": true
+  "normalIsRG": false
 }

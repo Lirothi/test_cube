@@ -141,8 +141,8 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         if (gMaterialFlags.y > 0.5)
         {
             float2 xy = gNormalMap.Sample(gSampler, uv).rg * 2.0 - 1.0;
-            xy *= gTexFlags.w;
-            normalTS = float3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
+            float z = sqrt(saturate(1.0 - dot(xy, xy)));
+            normalTS = normalize(float3(xy * gTexFlags.w, max(z, 1e-4)));
         }
         else
         {

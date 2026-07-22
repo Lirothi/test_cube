@@ -16,6 +16,5 @@
   "normal": "textures/bronze_normal.dds",
   "normalIsRG": false,
   "normalStrength": 1.0,
-  "useMR": true,
-  "useTBN": true
+  "useMR": true
 }

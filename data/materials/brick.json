@@ -2,6 +2,5 @@
   "albedo": "textures/brick_albedo.dds",
   "mr": "textures/brick_mr.dds",
   "normal": "textures/brick_normal.dds",
-  "normalIsRG": false,
-  "useTBN": true
+  "normalIsRG": false
 }

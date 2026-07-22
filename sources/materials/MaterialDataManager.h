@@ -20,7 +20,6 @@ struct MaterialPreset {
     std::wstring normalPath;
     std::wstring emissivePath; // RESERVED: parsed + persisted, not consumed yet (gbuffer SRV table is 3)
     bool normalIsRG = true;
-    bool useTBN     = true;
     ShadingModel shadingModel = ShadingModel::DefaultLit;
     MaterialSurfaceParams surfaceParams;
 
@@ -49,7 +48,7 @@ public:
     void RegisterPreset(const std::string& name, const MaterialPreset& preset);
 
     // Register all presets from a JSON file ({"presets": {name: {albedo, mr,
-    // normal, normalIsRG, useTBN}}}). Returns false if the file is missing or
+    // normal, normalIsRG}}}). Returns false if the file is missing or
     // malformed. LEGACY (pre-I0 monolith) — kept for migration safety.
     bool LoadPresetsFromJsonFile(const std::wstring& path);
 

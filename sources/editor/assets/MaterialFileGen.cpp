@@ -39,7 +39,6 @@ namespace materialgen
         m["indirectSpecularScale"] = 1.0f;
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;
-        m["useTBN"] = true;
         if (d.alphaMask) { m["alphaTest"] = true; m["alphaCutoff"] = d.alphaCutoff; }
         if (d.doubleSided) { m["twoSided"] = true; }
         // Factors are baked into the DDS by H6 when a texture exists; only surface them as a param

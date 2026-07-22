@@ -669,7 +669,6 @@ void WritePresets(const std::vector<PresetEntry>& entries, Log& log)
         if (!e.mr.empty()) { p["mr"] = e.mr; }
         if (!e.normal.empty()) { p["normal"] = e.normal; }
         p["normalIsRG"] = false;
-        p["useTBN"] = true;
 
         std::ofstream out(path, std::ios::trunc);
         out << p.dump(2) << "\n";

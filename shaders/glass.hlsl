@@ -316,9 +316,8 @@ PSOut PSMain(VSOut i)
         float3 B = normalize(i.bitangentWS);
 #if NORMALMAP_IS_RG
         float2 nrg = NormalMap.Sample(LinearSampler, i.uv).rg * 2.0f - 1.0f;
-        float2 scaled = nrg * normalStrength;
-        float nz2 = saturate(1.0f - dot(scaled, scaled));
-        float3 nTS = float3(scaled, sqrt(nz2));
+        float nz = sqrt(saturate(1.0f - dot(nrg, nrg)));
+        float3 nTS = normalize(float3(nrg * normalStrength, max(nz, 1e-4f)));
 #else
         float3 nRGB = NormalMap.Sample(LinearSampler, i.uv).xyz * 2.0f - 1.0f;
         float3 nTS = float3(nRGB.xy * normalStrength, nRGB.z);

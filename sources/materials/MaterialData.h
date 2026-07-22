@@ -86,7 +86,6 @@ class MaterialData {
 public:
     // Feature flags (can be passed as defines when building shader permutations)
     bool normalIsRG = true; // RG/BC5 vs RGB(A)
-    bool useTBN     = true; // TBN path (otherwise derivatives)
     ShadingModel shadingModel = ShadingModel::DefaultLit;
     MaterialSurfaceParams surfaceParams;
     bool mrLayoutGltf = false; // true => RAW glTF preview: MR is glTF-packed + factors multiply; emits

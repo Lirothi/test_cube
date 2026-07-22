@@ -11,7 +11,7 @@ struct EditorContext;
 // Part I2 — Material Editor window. Opened by double-clicking a `data/materials/<name>.json` in the
 // content browser (or the "Edit Material" context item). Edits the schema-v2 fields — albedo / mr /
 // normal / emissive texture pickers, tint, metal/rough, normal strength, texOffsScale tiling,
-// alphaTest / alphaCutoff / twoSided, emissive color/strength, normalIsRG / useTBN, and the I0
+// alphaTest / alphaCutoff / twoSided, emissive color/strength, normalIsRG, and the I0
 // feature-shader override — and writes them back to the file (round-trip, unknown keys preserved).
 //
 // Save is one safe live-apply mechanism (the spec's two tiers collapse into a respawn): write file

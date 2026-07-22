@@ -1,6 +1,6 @@
 {
   "albedo": "textures/damaged_plaster_albedo.dds",
   "mr": "textures/damaged_plaster_mr.dds",
-  "normal": "textures/damaged_plaster_normal.dds",
-  "normalIsRG": false
+  "normal": "textures/damaged_plaster_normal_rg.dds",
+  "normalIsRG": true
 }

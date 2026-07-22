@@ -30,7 +30,6 @@ namespace
         preset.emissivePath = widen(p.value("emissive", std::string{}));
         preset.shaderPath   = widen(p.value("shader", std::string{}));
         preset.normalIsRG   = p.value("normalIsRG", true);
-        preset.useTBN       = p.value("useTBN", true);
 
         if (const auto it = p.find("shadingModel"); it != p.end())
         {
@@ -258,7 +257,6 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     const MaterialPreset& p = pit->second;
     auto md = std::make_shared<MaterialData>();
     md->normalIsRG = p.normalIsRG;
-    md->useTBN     = p.useTBN;
     md->shadingModel = p.shadingModel;
     md->surfaceParams = p.surfaceParams;
 
@@ -330,7 +328,6 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     }
     md->mrLayoutGltf = !mrIsEngineLayoutDds; // raw glTF MR packs B=metal, G=rough
     md->normalIsRG = false;      // glTF normal maps are RGB
-    md->useTBN = true;
     // Set the mask fields BEFORE LoadAlbedo: the WIC mip build preserves alpha-test coverage
     // for masked slots (LoadAlbedo reads alphaMask/alphaCutoff).
     md->alphaMask = d.alphaMask;

@@ -381,8 +381,6 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         }
         bool normalIsRG = doc_.value("normalIsRG", true);
         if (ImGui::Checkbox("Normal map is RG (BC5)", &normalIsRG)) { doc_["normalIsRG"] = normalIsRG; }
-        bool useTBN = doc_.value("useTBN", true);
-        if (ImGui::Checkbox("Use TBN", &useTBN)) { doc_["useTBN"] = useTBN; }
         if (ImGui::IsItemHovered())
         {
             ImGui::SetTooltip("Shading model / alpha test / two-sided / normal-RG change the slot's PSO — Save\n"
