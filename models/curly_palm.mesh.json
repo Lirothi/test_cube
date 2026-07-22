@@ -1,5 +1,6 @@
 {
-  "geometry": "models/curly_palm/scene.gltf",
+  "geometry": "models/curly_palm/curly_palm.mesh.bin",
+  "source": "import_staging/curly_palm/scene.gltf",
   "inputLayout": "PosNormTanUV",
   "materials": [
     "curly_palm_0",

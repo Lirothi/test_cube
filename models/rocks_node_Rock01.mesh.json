@@ -1,5 +1,6 @@
 {
-  "geometry": "models/rocks/scene.gltf#node:Rock01",
+  "geometry": "models/rocks/rocks_node_Rock01.mesh.bin",
+  "source": "import_staging/rocks/scene.gltf#node:Rock01",
   "material": "auto",
   "spawnScale": 0.035492148250341415
 }

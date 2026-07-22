@@ -306,6 +306,58 @@ gbuffer and shadow agree for free, rebasing included.
 **Verify:** build clean; `sizeof` assertions; a level with no baked assets renders byte-identically;
 `--scene-stress=30`.
 
+### W7.1b — Binary mesh: our `.mesh.bin` becomes the committed geometry asset  *(exec: Opus 4.8)*
+
+**REFINED 2026-07-23 (supersedes the earlier gitignored-cache decision).** Since we have our own
+binary, the glTF + its `.bin` should NOT live in `models/` — they stay in `import_staging/` (source,
+gitignored) and our `.mesh.bin` takes their place in `models/` (COMMITTED — a fresh clone has no
+staging, so the committed `.bin` is the only geometry) with `mesh.json` referencing it. Net pipeline:
+- `import_staging/<name>/` : raw glTF + its `.bin` + source textures (gitignored, kept for re-import).
+- `models/<name>.mesh.bin` : our baked geometry (verts incl. wind color + normals/tangents + LODs), COMMITTED.
+- `models/<name>.mesh.json` : `"geometry": "models/<name>.mesh.bin"` (+ `"source": "import_staging/<name>/scene.gltf"` for re-import) + materials/windFoliage/etc. COMMITTED.
+- `models/<name>/*.dds` : converted textures, still emitted to `models/` (needed at runtime).
+- Runtime: `mesh.json.geometry` → `.mesh.bin` → `MeshManager::Load` reads it directly (no cgltf ever). No glTF in the shipped tree, so **no runtime fallback** for a `.mesh.bin` reference (a missing `.bin` is a content error, not a soft-fall to glTF).
+
+**DONE (keystone, builds clean):** `MeshManager::Load` handles a `.mesh.bin` geometry path directly
+(`LoadBinaryDirect` — version-checked read, no source hash, no fallback); the binary format +
+`BuildLodsCpu` + `BakeToBinary` + `--bake-meshes` all in place from the first pass. `ReadMeshBinary`
+freshness checks are now optional (null for a directly-referenced committed `.bin`).
+
+**Final decisions (user, 2026-07-23):** `.bin` **gitignored** (already covered by `/models/**` — only `.mesh.json` is tracked; nothing to commit). Don't copy glTF back to staging — the source already lives in `import_staging/<name>/`. `mesh.json` gains `"source"` → the staging glTF (for re-import). The earlier hashed `cache/` path + `--bake-meshes` bake-mode were removed; a headless CPU-only `--reimport-src=<glTF> --reimport-out=<.bin> [--reimport-recompute=n,n]` CLI (no device/window) bakes explicitly.
+
+**DONE + verified (3 palms migrated):** `date_palm`/`coconut_palm`/`curly_palm`.mesh.json now `"geometry":"models/<name>.mesh.bin"` + `"source":"import_staging/<name>/scene.gltf"`; `.bin`s baked via `--reimport` (coconut `--reimport-recompute=2,3,4`, curly `=1` — MUST match the mesh.json recomputeNormalSlots or the baked normals differ from the runtime look). wind_test + atoll render correctly with **0 palm glTF loads** (all from `.bin`); Debug+Release clean.
+
+**FIXES (2026-07-23, after user testing):**
+- **Winding bug**: the runtime loads glTF with `wantCW=false` (`StaticMesh.cpp:57`, `TransparentStaticMesh.cpp:156`); the bake used the default `wantCW=true` → flipped triangles → backfaces. Fix: `--reimport` sets `opt.wantCW=false`. Re-baked all assets.
+- **Location**: `.bin` now lives in `models/<name>/<name>.mesh.bin` (same folder as the glTF was), not `models/` root. mesh.json `geometry` updated.
+
+**DONE + verified:**
+- **Item 3** — removed dead hashed-cache methods (`BinCachePath`/`TryLoadBinary`/old `BakeToBinary(path,opt)`) + `/cache/` gitignore line. Builds clean.
+- **Item 2** — ALL glTF assets migrated to `.bin` + glTF+`scene.bin` **pruned** from `models/` (DDS kept): 3 palms + 2 boulders + rocks (2 `#node` sub-meshes). mesh.json `geometry`→`.bin` + `source`→staging glTF. atoll renders all of them from `.bin` with correct winding, glTF absent from `models/`.
+
+**REMAINING:**
+1. **Item 1 — ImportPanel rework (DEFERRED, needs an in-editor import to verify):** on import, bake `stagingGlTF → models/<name>/<name>.mesh.bin` + write `mesh.json` `geometry`=`.bin`+`source`=staging, and stop copying glTF/glb/bin into `models/` (`IsEngineReady` → `.dds` only). Tangled: `WriteImportedMeshAsset` uses `geometry` for BOTH the ref AND material-gen/submesh-count (must split → source), plus the `#node`-split path. All-or-nothing (a partial change breaks imports), and GUI-verified — so a focused editor pass, not a blind tail-end edit. The `--reimport` CLI is the verified headless equivalent of the bake step.
+2. W7.2: fill `VertexPNTUV.color` (geodesic bake) inside `BakeToBinary` before serialize.
+
+--- (original W7.1b spec below, now partly superseded by the above) ---
+
+### W7.1b — Binary mesh cache (`.mesh.bin`) — the store the bake needs  *(exec: Opus 4.8)* — **CORE DONE (2026-07-23), uncommitted**
+
+Landed + verified: format `cache/meshes/<hash>.mesh.bin` (header magic/version/sourceHash/optionsHash + `VertexPNTUV[]` incl. color + per-LOD index/submesh tables). `GenerateLods` split into CPU `BuildLodsCpu` (reused) + GPU `AddLod`. `MeshManager::BakeToBinary` (parse→regen normals/tangents→[W7.2 color TODO]→CPU LOD simplify→serialize), `TryLoadBinary` (fresh `.bin` → `CreateGPU_PNTUV`+`AddLod`, no cgltf), `Load` = in-mem cache → bake-mode → `TryLoadBinary` → **runtime fallback**. `--bake-meshes` CLI (`g_meshBakeMode`: every Load rebakes with its exact (path,opt), quits ~2s after boot). `cache/` gitignored. Verified: Debug+Release clean; fallback (no `.bin`) renders correctly; `--bake-meshes` wrote 5 valid `.bin`s (date_palm 7175v/4 LODs, etc.); baked load renders identical geometry; `--scene-stress=30` CLEAN. **STILL TODO: Mesh Editor "Rebake" button** (thin wrapper on BakeToBinary; the headless CLI is the verified mechanism).
+
+
+
+Decided with the user 2026-07-23: `.mesh.json` is only a *reference* (geometry + materials), so today verts/indices are re-parsed from glTF and **normals/tangents regenerated + LODs simplified every load**, and there is **nowhere to persist a baked vertex color**. A geodesic Dijkstra bake (W7.2) per load is a non-starter. So introduce a baked binary mesh — the store for W7.2's color and the home for the (moved) import-time processing.
+
+- **Format** `cache/meshes/<hash>.bin`: header `{magic 'MSHB', MESH_BIN_VERSION, source-glTF content hash, optionsHash(recomputeNormalSlots)}` + AABB + `VertexPNTUV[]` (52 B incl. baked `COLOR_0`) + LOD count, then per LOD `{index[] + submesh[]}`. LODs are reduced **index** buffers over the SAME verts (see `GenerateLods`), so verts are stored once.
+- **Bake trigger = EXPLICIT (user's choice), not lazy-on-load.** A headless `--bake-meshes[=<level>]` CLI (bakes every mesh a level references; reusable for CI + `--shot` verification) plus a Mesh Editor "Reimport/Rebake" button. The bake: parse glTF → `DiscardNormalsForSlots`+`GenerateNormalsTangents` → [W7.2 geodesic color] → CPU LOD simplify → serialize.
+- **Load** (`MeshManager::Load`): compute cache path from (path, opt); if a fresh `.bin` exists (version + source hash + optionsHash all match) → read → `CreateGPU_PNTUV`(LOD0) + `AddLod` per LOD (no cgltf, no normal regen, no simplify). **Else → today's runtime path** (parse + normal gen + `GenerateLods`), `color=0`. The **fallback is mandatory** because the cache is gitignored (user's choice) — fresh clone / headless / CI have no `.bin` until an asset is imported, and unbaked meshes must stay byte-identical.
+- **Invalidation:** bump `MESH_BIN_VERSION` (algo/format change) or a source-glTF hash change → stale → fallback until re-baked. `windFoliage`/`windTrunkStiffness` are RUNTIME shader params → NOT in the hash (editing them never re-bakes).
+- **Refactor:** split `GenerateLods` into a CPU part (produce LOD index+submesh arrays) reused by both the bake (serialize) and the runtime fallback (`AddLod`).
+- Add `cache/` to `.gitignore`.
+
+**Verify:** build clean; a level with no `.bin` renders byte-identically (fallback); `--bake-meshes` writes valid `.bin`s; loading the baked `.bin` renders identically to the fallback + skips cgltf/normal-gen/simplify; `--scene-stress=30`.
+
 ### W7.2 — Importer bake
 
 At import (cached — do not recompute per load):

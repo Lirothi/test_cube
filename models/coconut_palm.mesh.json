@@ -1,5 +1,6 @@
 {
-  "geometry": "models/coconut_palm/scene.gltf",
+  "geometry": "models/coconut_palm/coconut_palm.mesh.bin",
+  "source": "import_staging/coconut_palm/scene.gltf",
   "materials": [
     "coconut_palm_0",
     "coconut_palm_1",

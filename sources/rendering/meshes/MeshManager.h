@@ -112,7 +112,25 @@ public:
     std::shared_ptr<Mesh> Get(const std::string& key) const;
     void Clear();
 
+    // W7.1b reimport: bake `srcPath` (a glTF in import_staging/) to an EXPLICIT output path
+    // (models/<name>/<name>.mesh.bin, referenced by mesh.json "geometry"). Runs the full CPU import
+    // off the load path (parse glTF, regen normals/tangents, [W7.2 wind-color bake], simplify LODs)
+    // and serializes verts+LODs. CPU-only (no GPU/device), so the `--reimport` CLI runs it headless
+    // without booting the app. Pass the SAME opt the runtime loads with (wantCW=false, the mesh's
+    // recomputeNormalSlots) or the baked winding/normals won't match.
+    bool BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
+                      const MeshLoadOptions& opt);
+
 private:
+    // W7.1b: geometry referenced directly as our committed .mesh.bin (the glTF source
+    // lives in import_staging/, never loaded at runtime). Reads the binary at `binPath` (version
+    // check only — it IS the asset, no source to hash) and uploads GPU buffers + LODs. nullptr on
+    // failure (a bad/absent .mesh.bin has no glTF fallback — the source isn't in the shipped tree).
+    std::shared_ptr<Mesh> LoadBinaryDirect(const std::string& binPath,
+                                           Renderer* renderer,
+                                           ID3D12GraphicsCommandList* uploadCmdList,
+                                           std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+
     // Internal parsers
     bool ParseTextFile(const std::string& path,
                        std::vector<VertexPNTUV>& outVerts,

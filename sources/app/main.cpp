@@ -12,6 +12,7 @@
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
+#include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "text/TextManager.h"
@@ -219,6 +220,38 @@ int WINAPI WinMain(
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
+        }
+        // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
+        // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our
+        // binary geometry that mesh.json's "geometry" references. The explicit content reimport step.
+        if (std::strstr(lpCmdLine, "--reimport-src=")) {
+            const auto getArg = [lpCmdLine](const char* key) -> std::string {
+                const char* flag = std::strstr(lpCmdLine, key);
+                if (!flag) { return {}; }
+                const char* p = flag + std::strlen(key);
+                std::string v;
+                while (*p && !std::isspace(static_cast<unsigned char>(*p))) { v.push_back(*p); ++p; }
+                return v;
+            };
+            const std::string src = getArg("--reimport-src=");
+            const std::string out = getArg("--reimport-out=");
+            if (src.empty() || out.empty()) { return 2; }
+            MeshLoadOptions opt{};
+            // Match the runtime mesh load exactly (StaticMesh/TransparentStaticMesh): the engine
+            // loads glTF with CCW winding (wantCW=false) for its FrontCounterClockwise=FALSE PSOs.
+            // Baking with the default wantCW=true flips the triangles -> the .bin renders backfaces.
+            opt.wantCW = false;
+            // "--reimport-recompute=2,3,4" mirrors the mesh.json recomputeNormalSlots so the baked
+            // normals/tangents match what the runtime glTF path produced (two-sided foliage fix).
+            const std::string recompute = getArg("--reimport-recompute=");
+            for (size_t i = 0; i < recompute.size();) {
+                size_t j = recompute.find(',', i);
+                if (j == std::string::npos) { j = recompute.size(); }
+                if (j > i) { opt.recomputeNormalSlots.push_back(static_cast<uint32_t>(std::atoi(recompute.substr(i, j - i).c_str()))); }
+                i = j + 1;
+            }
+            MeshManager mm;
+            return mm.BakeToBinary(src, out, opt) ? 0 : 1;
         }
     }
 

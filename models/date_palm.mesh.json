@@ -1,5 +1,6 @@
 {
-  "geometry": "models/date_palm/scene.gltf",
+  "geometry": "models/date_palm/date_palm.mesh.bin",
+  "source": "import_staging/date_palm/scene.gltf",
   "materials": [
     "date_palm_0",
     "date_palm_1",

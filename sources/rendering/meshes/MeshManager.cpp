@@ -6,6 +6,9 @@
 #include <algorithm>
 #include "third_party/robin_hood.h"
 #include <cstring> // strchr, atoi
+#include <cstdint>
+#include <cstdio>
+#include <filesystem> // W7.1b binary mesh cache
 #include <DirectXMath.h>
 #include <queue>
 #include "meshoptimizer.h"
@@ -16,41 +19,39 @@ using namespace DirectX;
 
 namespace
 {
-// Step 6 / Part B: generate coarser LODs as reduced index buffers (meshopt_simplify, over the
-// same vertices) and append them to the mesh. Each submesh range is simplified INDEPENDENTLY and
-// the LOD carries its own rebuilt submesh table — simplifying the whole buffer as one blob would
-// dissolve the per-material boundaries. Single-submesh meshes reduce to the original behavior.
-// Called once at load on the upload command list.
-void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
-    std::vector<ComPtr<ID3D12Resource>>* keepAlive,
-    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+// One LOD as CPU arrays: indices over the SAME base vertices + its own submesh table. Shared by
+// the runtime GenerateLods (uploads) and the W7.1b bake (serializes).
+struct MeshLodCpu {
+    std::vector<uint32_t> indices;
+    std::vector<Mesh::Submesh> submeshes;
+};
+
+// Step 6 / Part B: build coarser LODs as reduced index buffers (meshopt_simplify, over the same
+// vertices). Each submesh range is simplified INDEPENDENTLY and the LOD carries its own rebuilt
+// submesh table — simplifying the whole buffer as one blob would dissolve the per-material
+// boundaries. Single-submesh meshes reduce to the original behavior. CPU-only (no GPU).
+std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
+    const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs)
 {
+    std::vector<MeshLodCpu> out;
     const size_t baseIdx = indices.size();
     constexpr size_t kMinIndicesForLod = 384;  // ~128 tris; skip tiny meshes (box = 6 tris)
     constexpr size_t kMinRangeIndices  = 96;    // per-range floor; smaller ranges copy through
-    if (!mesh || verts.empty() || baseIdx < kMinIndicesForLod) { return; }
-
-    const std::vector<Mesh::Submesh>& baseSubs = mesh->GetSubmeshes();
-    if (baseSubs.empty()) { return; }
+    if (verts.empty() || baseIdx < kMinIndicesForLod || baseSubs.empty()) { return out; }
 
     const float ratios[] = { 0.5f, 0.25f, 0.12f };
     const float errors[] = { 0.02f, 0.05f, 0.12f };
-
-    std::vector<uint32_t> lodIdx;
-    std::vector<Mesh::Submesh> lodSubs;
     std::vector<uint32_t> simplified;
     size_t prevCount = baseIdx;
 
     for (int i = 0; i < 3; ++i)
     {
-        lodIdx.clear();
-        lodSubs.clear();
-
+        MeshLodCpu lod;
         for (const Mesh::Submesh& s : baseSubs)
         {
             const uint32_t* src = indices.data() + s.indexOffset;
             const size_t srcCount = s.indexCount;
-            const uint32_t outOffset = static_cast<uint32_t>(lodIdx.size());
+            const uint32_t outOffset = static_cast<uint32_t>(lod.indices.size());
 
             size_t n = srcCount;
             bool didSimplify = false;
@@ -69,16 +70,138 @@ void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* u
             }
 
             const uint32_t* from = didSimplify ? simplified.data() : src;
-            lodIdx.insert(lodIdx.end(), from, from + n);
-            lodSubs.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(n), s.materialSlot });
+            lod.indices.insert(lod.indices.end(), from, from + n);
+            lod.submeshes.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(n), s.materialSlot });
         }
 
         // Overall shrink gate (same spirit as before): stop once a level is < ~10% smaller.
-        if (lodIdx.empty() || lodIdx.size() + (lodIdx.size() / 10) >= prevCount) { break; }
-        mesh->AddLod(device, uploadCmdList, keepAlive,
-            lodIdx.data(), static_cast<UINT>(lodIdx.size()), lodSubs);
-        prevCount = lodIdx.size();
+        if (lod.indices.empty() || lod.indices.size() + (lod.indices.size() / 10) >= prevCount) { break; }
+        prevCount = lod.indices.size();
+        out.push_back(std::move(lod));
     }
+    return out;
+}
+
+// Called once at load on the upload command list (runtime fallback path).
+void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive,
+    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+{
+    if (!mesh) { return; }
+    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes()))
+    {
+        mesh->AddLod(device, uploadCmdList, keepAlive,
+            lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes);
+    }
+}
+
+// ---------- W7.1b: baked binary mesh cache (cache/meshes/<hash>.mesh.bin) ----------
+std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots); // defined below
+constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
+constexpr uint32_t kMeshBinVersion = 1u;          // bump on any bake-algo / format change -> stale
+
+struct MeshBinHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t sourceHash;   // FNV-1a of the geometry file bytes (freshness vs the source glTF/glb)
+    uint64_t optionsHash;  // FNV-1a of the load options that change geometry (recomputeNormalSlots, tangents)
+    uint32_t vertexCount;
+    uint32_t lodCount;     // includes LOD 0
+};
+
+uint64_t Fnv1a(const void* data, size_t n, uint64_t h = 1469598103934665603ull)
+{
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+std::string GeometryFilePart(const std::string& path)
+{
+    const size_t frag = path.find('#');
+    return frag == std::string::npos ? path : path.substr(0, frag);
+}
+
+uint64_t HashSourceFile(const std::string& pathWithFragment)
+{
+    std::ifstream f(GeometryFilePart(pathWithFragment), std::ios::binary);
+    if (!f) { return 0; }
+    std::vector<char> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return buf.empty() ? 0 : Fnv1a(buf.data(), buf.size());
+}
+
+uint64_t HashOptions(const MeshLoadOptions& opt)
+{
+    const std::vector<uint32_t> slots = CanonicalNormalSlots(opt.recomputeNormalSlots);
+    const uint8_t tangents = opt.generateTangentSpace ? 1u : 0u;
+    uint64_t h = Fnv1a(&tangents, 1);
+    if (!slots.empty()) { h = Fnv1a(slots.data(), slots.size() * sizeof(uint32_t), h); }
+    return h;
+}
+
+bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t optionsHash,
+    const std::vector<VertexPNTUV>& verts,
+    const std::vector<uint32_t>& lod0Indices, const std::vector<Mesh::Submesh>& lod0Subs,
+    const std::vector<MeshLodCpu>& extraLods)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(binPath).parent_path(), ec);
+    std::ofstream f(binPath, std::ios::binary | std::ios::trunc);
+    if (!f) { return false; }
+
+    MeshBinHeader h{ kMeshBinMagic, kMeshBinVersion, sourceHash, optionsHash,
+        static_cast<uint32_t>(verts.size()), 1u + static_cast<uint32_t>(extraLods.size()) };
+    f.write(reinterpret_cast<const char*>(&h), sizeof(h));
+    f.write(reinterpret_cast<const char*>(verts.data()),
+        static_cast<std::streamsize>(verts.size() * sizeof(VertexPNTUV)));
+
+    const auto writeLod = [&](const std::vector<uint32_t>& idx, const std::vector<Mesh::Submesh>& subs)
+    {
+        const uint32_t ic = static_cast<uint32_t>(idx.size());
+        const uint32_t sc = static_cast<uint32_t>(subs.size());
+        f.write(reinterpret_cast<const char*>(&ic), sizeof(ic));
+        f.write(reinterpret_cast<const char*>(&sc), sizeof(sc));
+        f.write(reinterpret_cast<const char*>(idx.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
+        f.write(reinterpret_cast<const char*>(subs.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+    };
+    writeLod(lod0Indices, lod0Subs);
+    for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes); }
+    return f.good();
+}
+
+// Reads + validates a .bin. `expectSourceHash`/`expectOptionsHash` null => skip that freshness
+// check (a directly-referenced committed .bin has no runtime source to compare against; only the
+// magic + format version matter). `lods[0]` = LOD 0.
+bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash,
+    const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods)
+{
+    std::ifstream f(binPath, std::ios::binary);
+    if (!f) { return false; }
+    MeshBinHeader h{};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    if (!f || h.magic != kMeshBinMagic || h.version != kMeshBinVersion ||
+        (expectSourceHash && h.sourceHash != *expectSourceHash) ||
+        (expectOptionsHash && h.optionsHash != *expectOptionsHash) ||
+        h.vertexCount == 0 || h.lodCount == 0)
+    {
+        return false; // missing/stale -> caller falls back to the runtime parse
+    }
+    verts.resize(h.vertexCount);
+    f.read(reinterpret_cast<char*>(verts.data()),
+        static_cast<std::streamsize>(h.vertexCount * sizeof(VertexPNTUV)));
+    lods.resize(h.lodCount);
+    for (uint32_t i = 0; i < h.lodCount && f; ++i)
+    {
+        uint32_t ic = 0, sc = 0;
+        f.read(reinterpret_cast<char*>(&ic), sizeof(ic));
+        f.read(reinterpret_cast<char*>(&sc), sizeof(sc));
+        if (!f) { return false; }
+        lods[i].indices.resize(ic);
+        lods[i].submeshes.resize(sc);
+        f.read(reinterpret_cast<char*>(lods[i].indices.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
+        f.read(reinterpret_cast<char*>(lods[i].submeshes.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+    }
+    return static_cast<bool>(f);
 }
 
 std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots)
@@ -172,12 +295,79 @@ static inline std::string tolower_str(std::string s) {
     return s;
 }
 
+bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
+    const MeshLoadOptions& opt)
+{
+    MeshCpuData cpu;
+    if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
+
+    // TODO W7.2: bake the geodesic wind weight into cpu.vertices[i].color here (currently 0).
+
+    std::vector<Mesh::Submesh> lod0Subs = cpu.submeshes;
+    if (lod0Subs.empty())
+    {
+        lod0Subs.push_back(Mesh::Submesh{ 0u, static_cast<uint32_t>(cpu.indices.size()), 0u });
+    }
+    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs);
+    const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
+        cpu.vertices, cpu.indices, lod0Subs, extra);
+    char msg[512];
+    std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs)\n",
+        ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(), extra.size() + 1);
+    OutputDebugStringA(msg);
+    return ok;
+}
+
+std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
+    Renderer* renderer,
+    ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
+{
+    if (!renderer || !uploadCmdList) { return nullptr; }
+    std::vector<VertexPNTUV> verts;
+    std::vector<MeshLodCpu> lods;
+    if (!ReadMeshBinary(binPath, nullptr, nullptr, verts, lods) || verts.empty() || lods.empty())
+    {
+        OutputDebugStringA(("[meshbin] FAILED to read '" + binPath + "'\n").c_str());
+        return nullptr;
+    }
+    std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>();
+    mesh->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
+        verts, lods[0].indices.data(), static_cast<UINT>(lods[0].indices.size()),
+        /*generateTangentSpace=*/false, &lods[0].submeshes);
+    for (size_t i = 1; i < lods.size(); ++i)
+    {
+        mesh->AddLod(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
+            lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes);
+    }
+    return mesh;
+}
+
 std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
     Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
+    // New pipeline: geometry referenced directly as our committed .mesh.bin (glTF stays in
+    // import_staging/, never loaded at runtime). No hash cache + no glTF fallback — the .bin IS the
+    // shipped geometry.
+    {
+        const std::string geom = GeometryFilePart(path); // .mesh.bin never carries a #fragment
+        if (geom.size() >= 9 && geom.compare(geom.size() - 9, 9, ".mesh.bin") == 0)
+        {
+            const std::string memKeyBin = MeshCacheKey(path, opt);
+            if (auto cit = cache_.find(memKeyBin); cit != cache_.end()) { return cit->second; }
+            std::shared_ptr<Mesh> m = LoadBinaryDirect(geom, renderer, uploadCmdList, uploadKeepAlive);
+            if (m) { cache_[memKeyBin] = m; }
+            return m;
+        }
+    }
+
+    // In-memory cache (the sub-loaders also cache; this short-circuits repeat loads).
+    const std::string memKey = MeshCacheKey(path, opt);
+    if (auto cit = cache_.find(memKey); cit != cache_.end()) { return cit->second; }
+
     // Match the extension on the file part only (a "#fragment" selector may follow, e.g. .glb#2).
     std::string low = tolower_str(path);
     const size_t frag = low.find('#');

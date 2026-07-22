@@ -529,6 +529,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
             }
 
+
             Profiler::Get().EndFrame();
         }
 
