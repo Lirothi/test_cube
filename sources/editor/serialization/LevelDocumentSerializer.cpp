@@ -40,6 +40,7 @@ namespace LevelDocumentSerializer
                 if (env.type == "camera") { out["camera"] = env.properties; }
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
+                else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
                 else if (env.type == "ocean") { out["ocean"] = env.properties; haveOcean = true; }
                 else if (env.type == "spotLight") { spotLights.push_back(env.properties); haveSpot = true; }
                 else if (env.type == "pointLight") { pointLights.push_back(env.properties); havePoint = true; }

@@ -300,6 +300,7 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     addArray("pointLights", "pointLight", "Point Light");
     addSingleton("skybox", "skybox", "Skybox");
     addSingleton("ocean", "ocean", "Ocean");
+    addSingleton("wind", "wind", "Wind"); // W2: global wind entity (round-trips; inspector in W6)
 }
 
 #endif // WITH_EDITOR

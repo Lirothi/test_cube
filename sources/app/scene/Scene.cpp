@@ -750,19 +750,26 @@ void Scene::Tick(float deltaTime) {
         const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
         windState_.Tick(clock);
 
-        // W1 verify (self-limiting): confirm the wind clock tracks the ocean and windDirXZ is unit.
+        // W1/W2 verify (self-limiting): the wind clock tracks the ocean, windDirXZ is unit, and (W2)
+        // the ocean's wind dir/force reflect the authored wind entity when it is active.
         static int s_windLogFrames = 0;
         if (s_windLogFrames < 8)
         {
             ++s_windLogFrames;
             const float len = std::sqrt(windState_.windDirXZ.x * windState_.windDirXZ.x +
                                         windState_.windDirXZ.y * windState_.windDirXZ.y);
-            char buf[192];
+            float oceanDir = -1.0f, oceanForce = -1.0f;
+            if (ocean && ocean->GetSimulation())
+            {
+                oceanDir = ocean->GetSimulation()->GetLocalWindDirectionDegrees();
+                oceanForce = ocean->GetSimulation()->GetWindForce01();
+            }
+            char buf[256];
             std::snprintf(buf, sizeof(buf),
-                "[wind] frame=%d time=%.4f prevTime=%.4f ocean=%s dir=(%.3f,%.3f) |dir|=%.4f swayAmp=%.3f gustMul=%.3f\n",
-                s_windLogFrames, windState_.time, windState_.prevTime, ocean ? "yes" : "none",
-                windState_.windDirXZ.x, windState_.windDirXZ.y, len,
-                windState_.swayAmplitude, windState_.gustMul);
+                "[wind] frame=%d time=%.4f active=%d windDir=%.1f strength=%.2f swayAmp=%.3f | ocean=%s oceanDir=%.1f oceanForce=%.2f |dir|=%.4f\n",
+                s_windLogFrames, windState_.time, windState_.active ? 1 : 0,
+                windState_.directionDeg, windState_.strength, windState_.swayAmplitude,
+                ocean ? "yes" : "none", oceanDir, oceanForce, len);
             OutputDebugStringA(buf);
         }
     }

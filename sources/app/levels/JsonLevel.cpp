@@ -355,6 +355,31 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     }
 #endif
 
+    // W2: the global wind entity (top-level "wind"). Populates the scene's WindState — the single
+    // source of truth the foliage sway reads from W3 on, and (when present) the ocean's wind driver.
+    // Reset to calm/inactive every load; absent section => wind disabled (rigid foliage; the ocean
+    // keeps its own preset below — back-compat).
+    {
+        vfx::WindState& wind = scene.GetWindState();
+        wind = vfx::WindState{};
+        if (j.contains("wind") && j["wind"].is_object())
+        {
+            const json& w = j["wind"];
+            wind.active = true;
+            wind.directionDeg = w.value("directionDeg", wind.directionDeg);
+            wind.strength = Saturate(w.value("strength", wind.strength));
+            wind.swayFrequency = w.value("swayFrequency", wind.swayFrequency);
+            wind.foliageSwayMeters = w.value("foliageSwayMeters", wind.foliageSwayMeters);
+            if (w.contains("gust") && w["gust"].is_object())
+            {
+                const json& g = w["gust"];
+                wind.gustAmplitude = g.value("amplitude", wind.gustAmplitude);
+                wind.gustFrequencyHz = g.value("frequencyHz", wind.gustFrequencyHz);
+                wind.gustSeed = g.value("seed", wind.gustSeed);
+            }
+        }
+    }
+
     if (j.contains("ocean"))
     {
         const json& oceanJson = j["ocean"];
@@ -376,6 +401,21 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                 const float swellDir = oceanJson.value("swellDirectionDeg", ocean->GetSwellDirectionDegrees());
                 const float windForce = oceanJson.value("windForce", ocean->GetWindForce01());
                 ocean->SetSceneVariables(&renderer, windDir, swellDir, windForce);
+            }
+        }
+
+        // W2: when a global wind entity is authored, it is the ocean's wind source of truth — its
+        // direction + strength override the preset applied above (the ocean's own swell is kept).
+        // Done here at load, where the GPU is idle: SetSceneVariables rebuilds the FFT initial
+        // spectrum (ResetInitialSpectrum), so it must NOT be called per frame. Live wind edits will
+        // re-push under a GPU idle in W6.
+        if (scene.GetWindState().active)
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                const vfx::WindState& wind = scene.GetWindState();
+                ocean->SetSceneVariables(&renderer, wind.directionDeg,
+                    ocean->GetSwellDirectionDegrees(), wind.strength);
             }
         }
     }

@@ -1,0 +1,109 @@
+{
+  "camera": {
+    "hfovDeg": 90.0,
+    "zFar": 10000.0,
+    "zNear": 0.009999999776482582
+  },
+  "directionalLight": {
+    "ambient": 0.05000000074505806,
+    "color": [
+      1.0,
+      0.8999999761581421,
+      0.8500000238418579
+    ],
+    "direction": [
+      -1.5,
+      -0.699999988079071,
+      -0.5
+    ],
+    "exposure": 1.0
+  },
+  "wind": {
+    "directionDeg": 90.0,
+    "strength": 0.3,
+    "swayFrequency": 0.9,
+    "gust": {
+      "amplitude": 0.5,
+      "frequencyHz": 0.15,
+      "seed": 3
+    },
+    "foliageSwayMeters": 0.25
+  },
+  "objects": [
+    {
+      "enabled": true,
+      "id": 7,
+      "name": "FreeCameraStart",
+      "position": [
+        -21.330015182495117,
+        10.810644149780273,
+        0.7756994962692261
+      ],
+      "rotationDeg": [
+        35.52336883544922,
+        91.10021209716797,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "freeCameraStart"
+    },
+    {
+      "enabled": true,
+      "id": 11,
+      "mesh": "models/atoll_island.mesh.json",
+      "name": "staticMesh #11",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 12,
+      "mesh": "models/atoll_lagoon_floor.mesh.json",
+      "name": "staticMesh #12",
+      "position": [
+        0.0,
+        0.10000000149011612,
+        0.0
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    }
+  ],
+  "ocean": {
+    "enabled": true,
+    "preset": "data/ocean/default.json",
+    "windForce": 0.6000000238418579
+  },
+  "pointLights": [],
+  "skybox": {
+    "texture": "textures/skybox.dds"
+  },
+  "spotLights": []
+}

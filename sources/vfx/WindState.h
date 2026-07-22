@@ -14,6 +14,9 @@ namespace vfx
 struct WindState
 {
     // ---- Authored params (populated from the level's "wind" section in W2; defaults = calm) ----
+    bool  active            = false; // true only when the level has a "wind" section. Gates the ocean
+                                     // push: no wind section => ocean keeps its own preset (back-compat),
+                                     // distinct from an authored strength of 0 (which flattens the water).
     float directionDeg      = 0.0f;  // horizontal wind heading (deg); shared with the ocean wave direction
     float strength          = 0.0f;  // 0..1 master force. 0 = wind disabled (rigid foliage; ocean keeps its preset)
     float swayFrequency     = 0.9f;  // base foliage sway rate fed into the sway sines
