@@ -18,17 +18,6 @@
     ],
     "exposure": 1.0
   },
-  "wind": {
-    "directionDeg": 90.0,
-    "strength": 1.0,
-    "swayFrequency": 0.9,
-    "gust": {
-      "amplitude": 0.5,
-      "frequencyHz": 0.15,
-      "seed": 3
-    },
-    "foliageSwayMeters": 0.5
-  },
   "objects": [
     {
       "enabled": true,
@@ -78,7 +67,6 @@
       "id": 20,
       "mesh": "models/date_palm.mesh.json",
       "name": "WindTest Palm",
-      "windStrength": 1.0,
       "position": [
         -12.0,
         0.10000000149011612,
@@ -94,7 +82,8 @@
         3.0,
         3.0
       ],
-      "type": "staticMesh"
+      "type": "staticMesh",
+      "windStrength": 1.0
     },
     {
       "enabled": true,
@@ -117,6 +106,204 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 26,
+      "mesh": "models/coconut_palm.mesh.json",
+      "name": "staticMesh #26",
+      "position": [
+        43.31547164916992,
+        2.1268444061279297,
+        73.22728729248047
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 27,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #27",
+      "position": [
+        45.398162841796875,
+        2.4676647186279297,
+        68.5118637084961
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 28,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #28",
+      "position": [
+        39.874271392822266,
+        2.4947471618652344,
+        70.81580352783203
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 29,
+      "mesh": "models/coconut_palm.mesh.json",
+      "name": "staticMesh #26 Copy",
+      "position": [
+        46.312744140625,
+        2.1268444061279297,
+        68.38768768310547
+      ],
+      "rotationDeg": [
+        0.0,
+        45.0,
+        0.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 30,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #27 Copy",
+      "position": [
+        44.45111846923828,
+        2.4676647186279297,
+        63.58069610595703
+      ],
+      "rotationDeg": [
+        0.0,
+        45.0,
+        0.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 31,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #28 Copy",
+      "position": [
+        42.17427062988281,
+        2.4947471618652344,
+        69.11580657958984
+      ],
+      "rotationDeg": [
+        0.0,
+        45.0,
+        0.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 32,
+      "mesh": "models/coconut_palm.mesh.json",
+      "name": "staticMesh #26 Copy Copy",
+      "position": [
+        42.28456497192383,
+        2.1268444061279297,
+        64.7737808227539
+      ],
+      "rotationDeg": [
+        180.0,
+        89.98021697998047,
+        180.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 33,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #27 Copy Copy",
+      "position": [
+        37.568424224853516,
+        2.4676647186279297,
+        62.69271469116211
+      ],
+      "rotationDeg": [
+        180.0,
+        89.98021697998047,
+        180.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 34,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #28 Copy Copy",
+      "position": [
+        39.874271392822266,
+        2.4947471618652344,
+        68.21580505371094
+      ],
+      "rotationDeg": [
+        180.0,
+        89.98021697998047,
+        180.0
+      ],
+      "scale": [
+        0.9999999403953552,
+        1.0,
+        0.9999999403953552
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -128,5 +315,16 @@
   "skybox": {
     "texture": "textures/skybox.dds"
   },
-  "spotLights": []
+  "spotLights": [],
+  "wind": {
+    "directionDeg": 90.0,
+    "foliageSwayMeters": 0.5,
+    "gust": {
+      "amplitude": 0.5,
+      "frequencyHz": 0.15,
+      "seed": 3
+    },
+    "strength": 1.0,
+    "swayFrequency": 0.8999999761581421
+  }
 }

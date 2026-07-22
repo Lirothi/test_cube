@@ -12,7 +12,7 @@ VSOutD VSMain(VSIn i)
     // W5: same sway as the gbuffer BaseVS (shared ApplyWindWS/WindOffset), so this fallback path's
     // shadow tracks the swaying tree exactly like the indirect path does.
     float4 wp = mul(float4(i.P, 1.0f), world);
-    wp.xyz += ApplyWindWS(i.P, world, windStrength, windTime);
+    wp.xyz += ApplyWindWS(i.P, world, windStrength, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;
 }

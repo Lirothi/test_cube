@@ -27,6 +27,7 @@ namespace
         Cameras,
         Skybox,
         Ocean,
+        Wind,
         Other
     };
 
@@ -64,6 +65,7 @@ namespace
         { "Cameras",          OutlinerTypeFilter::Cameras },
         { "Skybox",           OutlinerTypeFilter::Skybox },
         { "Ocean",            OutlinerTypeFilter::Ocean },
+        { "Wind",             OutlinerTypeFilter::Wind },
         { "Other",            OutlinerTypeFilter::Other },
     };
 
@@ -173,7 +175,7 @@ namespace
     bool IsKnownType(const std::string& type)
     {
         return IsMeshType(type) || IsLightType(type) || IsCameraType(type) ||
-            type == "skybox" || type == "ocean";
+            type == "skybox" || type == "ocean" || type == "wind";
     }
 
     OutlinerGroup GroupForObject(const EditorObject& object)
@@ -190,7 +192,7 @@ namespace
         {
             return OutlinerGroup::Cameras;
         }
-        if (object.type == "skybox" || object.type == "ocean")
+        if (object.type == "skybox" || object.type == "ocean" || object.type == "wind")
         {
             return OutlinerGroup::Environment;
         }
@@ -231,6 +233,7 @@ namespace
         case OutlinerTypeFilter::Cameras:         return IsCameraType(type);
         case OutlinerTypeFilter::Skybox:          return type == "skybox";
         case OutlinerTypeFilter::Ocean:           return type == "ocean";
+        case OutlinerTypeFilter::Wind:            return type == "wind";
         case OutlinerTypeFilter::Other:           return !IsKnownType(type);
         }
         return true;

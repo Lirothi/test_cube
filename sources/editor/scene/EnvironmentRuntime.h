@@ -14,6 +14,7 @@ struct EditorObject;
 //   camera                  -> Scene camera (fov / near / far)
 //   skybox                  -> rebuild Scene skybox texture
 //   ocean                   -> Simulation wind overrides
+//   wind                    -> Scene WindState + ocean direction/strength
 // The renderer re-reads these each frame, so no dirty flag is needed for the
 // runtime.
 namespace EnvironmentRuntime

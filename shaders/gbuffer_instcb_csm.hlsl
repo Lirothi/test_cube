@@ -18,7 +18,7 @@ VSOutD VSMain(VSInInst i)
     // unlike the non-instanced b0 which UpdateShadowCB has to populate explicitly.
     const float4x4 w = inst[i.IID].world;
     float4 wp = mul(float4(i.P, 1.0f), w);
-    wp.xyz += ApplyWindWS(i.P, w, inst[i.IID].windStrength, windTime);
+    wp.xyz += ApplyWindWS(i.P, w, inst[i.IID].windStrength, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;
 }

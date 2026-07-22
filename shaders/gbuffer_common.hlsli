@@ -73,7 +73,7 @@ cbuffer PerView : register(b1)
     float  windSwayAmp;
     float  windSwayFreq;
     float  windGustMul;
-    float  _windPad;
+    float  windPrevGustMul;
 };
 
 // W4/W5: single call site of the PerView wind fields for every shader that includes this header
@@ -81,10 +81,11 @@ cbuffer PerView : register(b1)
 // position and windPrevTime for the motion-vector prev position. The shadow VS in
 // shadow_indirect_csm.hlsl declares its own PerView copy and mirrors this helper — the two MUST
 // stay identical or the shadow detaches from the tree.
-inline float3 ApplyWindWS(float3 objPos, float4x4 w, float windStrengthValue, float t)
+inline float3 ApplyWindWS(float3 objPos, float4x4 w, float windStrengthValue,
+                          float gustMulValue, float t)
 {
     return WindOffset(objPos, float3(w._41, w._42, w._43), windStrengthValue,
-                      windDirXZ, windSwayAmp, windSwayFreq, windGustMul, t);
+                      windDirXZ, windSwayAmp, windSwayFreq, gustMulValue, t);
 }
 
 // Parameterized UV transform (per-instance texOffsScale). The non-instanced wrapper below
@@ -161,12 +162,12 @@ inline VSOut BaseVS(float3 pos,
     // submesh/slot (and, in W5, the shadow) bends in lockstep. The SAME offset is applied to the
     // prev world position with windPrevTime, so DLSS/TAA motion vectors track the sway (else the
     // moving leaves smear). windStrengthValue 0 => zero offset => byte-identical to no-wind.
-    // gustMul is constant (1.0) until W6, so the prev frame reuses windGustMul here.
     float4 worldPos = mul(posH, world);
-    worldPos.xyz += ApplyWindWS(pos, world, windStrengthValue, windTime);
+    worldPos.xyz += ApplyWindWS(pos, world, windStrengthValue, windGustMul, windTime);
 
     float4 prevWorldPos = mul(posH, prevWorld);
-    prevWorldPos.xyz += ApplyWindWS(pos, prevWorld, windStrengthValue, windPrevTime);
+    prevWorldPos.xyz += ApplyWindWS(pos, prevWorld, windStrengthValue,
+                                    windPrevGustMul, windPrevTime);
 
     o.H = mul(worldPos, viewProj);
     o.clipH = mul(worldPos, viewProjNoJitter);

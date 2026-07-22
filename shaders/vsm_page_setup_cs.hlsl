@@ -32,7 +32,7 @@ cbuffer SetupCB : register(b0)
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
     float4 gWind0;      // x=time, y=prevTime, z=windDirXZ.x, w=windDirXZ.y
-    float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=pad
+    float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=prevGustMul
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
 };

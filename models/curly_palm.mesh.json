@@ -10,5 +10,6 @@
   "recomputeNormalSlots": [
     1
   ],
-  "texOffsScale": null
+  "texOffsScale": null,
+  "windStrength": 1.0
 }

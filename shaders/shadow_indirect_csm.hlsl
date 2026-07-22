@@ -69,7 +69,7 @@ cbuffer PerView : register(b1)
     float  windSwayAmp;   // 208
     float  windSwayFreq;  // 212
     float  windGustMul;   // 216
-    float  _windPad;      // 220
+    float  windPrevGustMul; // 220 (unused: depth-only, but kept layout-identical to gbuffer)
 };
 
 // Mirrors gbuffer_common.hlsli::ApplyWindWS exactly (that header is not included here — this shader

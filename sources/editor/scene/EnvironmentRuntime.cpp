@@ -20,6 +20,7 @@
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/SpotLight.h"
+#include "vfx/WindState.h"
 
 namespace
 {
@@ -103,6 +104,51 @@ namespace
         uploads.SubmitAndWait(&ctx.renderer);
         ctx.scene.SetSkybox(std::move(skybox));
     }
+
+    void ApplyWind(EditorContext& ctx, const nlohmann::json& p)
+    {
+        vfx::WindState& wind = ctx.scene.GetWindState();
+        const float directionDeg = JF(p, "directionDeg", wind.directionDeg);
+        const float strength = Math::Saturate(JF(p, "strength", wind.strength));
+        const bool oceanDriveChanged =
+            directionDeg != wind.directionDeg || strength != wind.strength;
+
+        wind.active = true;
+        wind.directionDeg = directionDeg;
+        wind.strength = strength;
+        wind.swayFrequency = std::max(0.0f, JF(p, "swayFrequency", wind.swayFrequency));
+        wind.foliageSwayMeters = std::max(
+            0.0f,
+            JF(p, "foliageSwayMeters", wind.foliageSwayMeters));
+
+        const auto gustIt = p.find("gust");
+        if (gustIt != p.end() && gustIt->is_object())
+        {
+            wind.gustAmplitude = std::max(
+                0.0f,
+                JF(*gustIt, "amplitude", wind.gustAmplitude));
+            wind.gustFrequencyHz = std::max(
+                0.0f,
+                JF(*gustIt, "frequencyHz", wind.gustFrequencyHz));
+            wind.gustSeed = JF(*gustIt, "seed", wind.gustSeed);
+        }
+
+        // Direction/strength are also the ocean's source of truth. ResetInitialSpectrum retires
+        // GPU resources, so make the same edit-time GPU-idle guarantee used by other rebuilds.
+        // Gust/sway-only edits avoid touching the FFT and apply on the next Scene::Tick.
+        if (oceanDriveChanged)
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                ctx.renderer.WaitForPreviousFrame();
+                ocean->SetSceneVariables(
+                    &ctx.renderer,
+                    wind.directionDeg,
+                    ocean->GetSwellDirectionDegrees(),
+                    wind.strength);
+            }
+        }
+    }
 }
 
 void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
@@ -176,6 +222,10 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
         }
     }
+    else if (env.type == "wind")
+    {
+        ApplyWind(ctx, p);
+    }
 }
 
 void EnvironmentRuntime::ApplyChange(
@@ -240,6 +290,11 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     {
         ctx.renderer.WaitForPreviousFrame();
         ctx.scene.SetSkybox(nullptr);
+    }
+    else if (env.type == "wind")
+    {
+        ctx.scene.GetWindState() = vfx::WindState{};
+        vfx::g_maxSwayExtentMeters = 0.0f;
     }
 }
 

@@ -124,7 +124,7 @@ namespace
         // W3: global wind, consumed by the gbuffer VS (W4) and — since W5 — by the shadow VS too
         // (shadow_indirect_csm.hlsl declares the same tail at offset 192). Layout matches the HLSL
         // `cbuffer PerView` in gbuffer_common.hlsli: time, prevTime, float2 windDirXZ, then
-        // swayAmp, swayFreq, gustMul, pad.
+        // swayAmp, swayFreq, gustMul, prevGustMul.
         float windTime = 0.0f;
         float windPrevTime = 0.0f;
         float windDirX = 1.0f;
@@ -132,8 +132,9 @@ namespace
         float windSwayAmp = 0.0f;
         float windSwayFreq = 0.0f;
         float windGustMul = 1.0f;
-        float windPad = 0.0f;
+        float windPrevGustMul = 1.0f;
     };
+    static_assert(sizeof(PerViewCB) == 224, "PerViewCB must match the gbuffer/shadow HLSL layout");
 
     // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
     struct GlassViewCB
@@ -200,6 +201,7 @@ namespace
         vc.windSwayAmp = wind->swayAmplitude;
         vc.windSwayFreq = wind->swayFrequency;
         vc.windGustMul = wind->gustMul;
+        vc.windPrevGustMul = wind->prevGustMul;
     }
 
     D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera,

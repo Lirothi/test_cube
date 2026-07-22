@@ -774,7 +774,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
         // `cbuffer PerView` in gbuffer_common.hlsli / shadow_indirect_csm.hlsl.
         DirectX::XMFLOAT4 wind0{ 0.0f, 0.0f, 1.0f, 0.0f }; // time, prevTime, dirX, dirZ
-        DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 0.0f }; // swayAmp, swayFreq, gustMul, pad
+        DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
     };
@@ -797,7 +797,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 cb.wind0 = DirectX::XMFLOAT4(wind->time, wind->prevTime,
                                              wind->windDirXZ.x, wind->windDirXZ.y);
                 cb.wind1 = DirectX::XMFLOAT4(wind->swayAmplitude, wind->swayFrequency,
-                                             wind->gustMul, 0.0f);
+                                             wind->gustMul, wind->prevGustMul);
             }
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }

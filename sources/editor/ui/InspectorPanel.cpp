@@ -337,7 +337,7 @@ namespace
     // Inspector for the top-level environment sections (Step 24). Edits write the
     // entity's `properties` (round-tripped on save via the entity-driven
     // serializer) and patch the live runtime; lights/camera update instantly,
-    // skybox texture edits rebuild the live skybox.
+    // skybox texture edits rebuild the live skybox, and wind edits update the shared WindState.
     void DrawEnvironmentInspector(
         EditorContext& ctx,
         EditorCommandStack& commandStack,
@@ -355,6 +355,7 @@ namespace
             env.type == "camera" ? "Edit Camera" :
             env.type == "skybox" ? "Edit Skybox" :
             env.type == "ocean" ? "Edit Ocean" :
+            env.type == "wind" ? "Edit Wind" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -675,6 +676,53 @@ namespace
                 if (swellDirectionChanged) { p["swellDirectionDeg"] = swellDirection; }
                 trackContinuousEdit(swellDirectionBefore, swellDirectionChanged);
             }
+        }
+        else if (env.type == "wind")
+        {
+            const vfx::WindState& wind = ctx.scene.GetWindState();
+
+            ImGui::SeparatorText("Flow");
+            dragF("Direction", "directionDeg", wind.directionDeg,
+                0.5f, -360.0f, 360.0f, "%.1f deg");
+
+            const nlohmann::json strengthBefore = p;
+            float strength = JsonFloat(p, "strength", wind.strength);
+            const bool strengthChanged = ImGui::SliderFloat("Strength", &strength, 0.0f, 1.0f);
+            if (strengthChanged) { p["strength"] = strength; }
+            trackContinuousEdit(strengthBefore, strengthChanged);
+
+            dragF("Sway Frequency", "swayFrequency", wind.swayFrequency,
+                0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Foliage Sway", "foliageSwayMeters", wind.foliageSwayMeters,
+                0.01f, 0.0f, 5.0f, "%.2f m");
+
+            ImGui::SeparatorText("Gusts");
+            const auto dragGust = [&](const char* label, const char* key, float def,
+                float speed, float lo, float hi, const char* fmt)
+            {
+                const nlohmann::json beforeItem = p;
+                float value = def;
+                const auto gustIt = p.find("gust");
+                if (gustIt != p.end() && gustIt->is_object())
+                {
+                    value = JsonFloat(*gustIt, key, def);
+                }
+                const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi, fmt);
+                if (changed)
+                {
+                    if (!p.contains("gust") || !p["gust"].is_object())
+                    {
+                        p["gust"] = nlohmann::json::object();
+                    }
+                    p["gust"][key] = value;
+                }
+                trackContinuousEdit(beforeItem, changed);
+            };
+            dragGust("Amplitude", "amplitude", wind.gustAmplitude,
+                0.01f, 0.0f, 2.0f, "%.2f");
+            dragGust("Frequency", "frequencyHz", wind.gustFrequencyHz,
+                0.005f, 0.0f, 2.0f, "%.3f Hz");
+            ImGui::TextDisabled("Current envelope: %.2fx", wind.gustMul);
         }
         else
         {

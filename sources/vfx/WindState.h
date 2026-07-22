@@ -30,7 +30,22 @@ struct WindState
     float prevTime = 0.0f;           // last frame's `time`; feeds the prev-position for motion vectors (W4)
     Math::float2 windDirXZ = Math::float2(1.0f, 0.0f); // unit heading; same convention as OceanSimulation::GetLocalWindDirectionVector
     float swayAmplitude = 0.0f;      // metres actually used by the shader = foliageSwayMeters * strength
-    float gustMul = 1.0f;            // W6: gust-envelope multiplier (stays 1.0 until gusts land)
+    float gustMul = 1.0f;            // current smooth gust-envelope multiplier
+    float prevGustMul = 1.0f;        // previous frame's multiplier (motion-vector correctness)
+
+    // Smooth, deterministic, coherent gust noise in [0, 1]. The three incommensurate sine layers
+    // keep the envelope from reading as a metronome while remaining continuous frame-to-frame.
+    // `phaseCycles` is time * gustFrequencyHz; `seed` only shifts the phases.
+    static float GustNoise(float phaseCycles, float seed)
+    {
+        constexpr float kTau = 6.28318530718f;
+        const float n =
+            0.52f * std::sin(kTau * (phaseCycles + seed * 0.1031f)) +
+            0.31f * std::sin(kTau * (phaseCycles * 0.47f + seed * 0.2317f) + 0.7f) +
+            0.17f * std::sin(kTau * (phaseCycles * 1.91f + seed * 0.0713f) + 2.1f);
+        const float u = Math::Saturate(0.5f + 0.5f * n);
+        return u * u * (3.0f - 2.0f * u); // smoothstep: longer relaxed/strong-gust shoulders
+    }
 
     // Advance the derived values. `clockSeconds` is the shared elapsed time — the ocean's
     // elapsedTime_ when the level has an ocean, otherwise a standalone monotonic accumulator
@@ -38,13 +53,16 @@ struct WindState
     void Tick(float clockSeconds)
     {
         prevTime = time;
+        prevGustMul = gustMul;
         time = clockSeconds;
 
         const float rad = directionDeg * Math::DEG2RAD;
         windDirXZ = Math::float2(std::cos(rad), std::sin(rad)); // matches the ocean's degrees->vector
 
         swayAmplitude = foliageSwayMeters * strength;
-        gustMul = 1.0f; // W6 replaces this with the gust envelope
+        const float gustAmp = gustAmplitude > 0.0f ? gustAmplitude : 0.0f;
+        const float gustFreq = gustFrequencyHz > 0.0f ? gustFrequencyHz : 0.0f;
+        gustMul = 1.0f + gustAmp * GustNoise(time * gustFreq, gustSeed);
     }
 
     // W5: worst-case horizontal displacement (metres) WindOffset can produce for a caster at

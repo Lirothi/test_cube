@@ -1,5 +1,6 @@
 #include "app/levels/JsonLevel.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <fstream>
@@ -368,13 +369,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             wind.active = true;
             wind.directionDeg = w.value("directionDeg", wind.directionDeg);
             wind.strength = Saturate(w.value("strength", wind.strength));
-            wind.swayFrequency = w.value("swayFrequency", wind.swayFrequency);
-            wind.foliageSwayMeters = w.value("foliageSwayMeters", wind.foliageSwayMeters);
+            wind.swayFrequency = std::max(0.0f, w.value("swayFrequency", wind.swayFrequency));
+            wind.foliageSwayMeters = std::max(0.0f, w.value("foliageSwayMeters", wind.foliageSwayMeters));
             if (w.contains("gust") && w["gust"].is_object())
             {
                 const json& g = w["gust"];
-                wind.gustAmplitude = g.value("amplitude", wind.gustAmplitude);
-                wind.gustFrequencyHz = g.value("frequencyHz", wind.gustFrequencyHz);
+                wind.gustAmplitude = std::max(0.0f, g.value("amplitude", wind.gustAmplitude));
+                wind.gustFrequencyHz = std::max(0.0f, g.value("frequencyHz", wind.gustFrequencyHz));
                 wind.gustSeed = g.value("seed", wind.gustSeed);
             }
         }
