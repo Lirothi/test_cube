@@ -485,6 +485,98 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
         }
     }
 
+    // ---- proximity edges: parts that rest against each other are one surface for wind ----
+    // Components come from TRIANGLES, but a plant's parts are modelled as separate meshes that merely
+    // rest against each other: bark scales on the trunk, a blade against its petiole, a trunk skin
+    // sleeved over a low-poly core. Wiring those contacts up front does three things at once. The
+    // weight fields become continuous across them (a scale inherits the r of the trunk it sits on
+    // instead of accumulating its own along a chain of siblings), the fields stop depending on which
+    // single point an island happened to be bridged through, and -- the reason this is up here rather
+    // than folded into the attachment loop -- almost every island is then reached by the plain
+    // Dijkstra below, so the O(islands * vertices) loop has nearly nothing left to do. That loop cost
+    // 132 s on date_palm in a Debug build; with this pass the whole bake is 0.4 s.
+    //
+    // K NEAREST, not a fixed radius. A radius has to be guessed per asset and gets it wrong both ways:
+    // 0.5 % of the diagonal is 1.6 cm on curly_palm, whose trunk skin sits 4 cm off its core, so the
+    // skin stayed unattached and slid over the trunk. Taking each vertex's two nearest neighbours in
+    // OTHER components is self-limiting instead -- where geometry actually touches the links are
+    // millimetres long, and a long link only appears where there is genuinely nothing closer.
+    {
+        WeldGrid pg;
+        pg.mn = bbMin;
+        pg.cell = std::max(diag / 48.0f, weldEps * 4.0f);
+        for (uint32_t i = 0; i < wcount; ++i)
+        {
+            int c[3]; pg.CellOf(wpos[i], c);
+            pg.buckets[pg.Key(c[0], c[1], c[2])].push_back(i);
+        }
+        // Beyond this the attachment loop takes over (it reaches 15 % of the diagonal). Bounding the
+        // ring expansion is what keeps a vertex deep inside a large isolated mesh from scanning the
+        // whole grid to discover that nothing is near it.
+        const float reachR = diag * 0.05f;
+        const int maxProxRing = static_cast<int>(std::ceil(reachR / pg.cell)) + 1;
+        // The nearest vertex in each of the K nearest DISTINCT components -- not simply the K
+        // nearest vertices. date_palm's trunk carries 96 separate bark scales and curly_palm's 100:
+        // a scale's two nearest vertices are both on the SAME neighbouring scale, so plain K-nearest
+        // just rebuilt the sibling chain it was meant to break. Insisting on distinct components is
+        // what gives every scale a direct link to the trunk core underneath it, and Dijkstra then
+        // routes it that way because going up the smooth core beats crawling over its siblings.
+        constexpr int kNear = 3;
+        struct NearComp { float d; uint32_t v; int c; };
+        NearComp nrst[kNear];
+        for (uint32_t i = 0; i < wcount; ++i)
+        {
+            for (int k = 0; k < kNear; ++k) { nrst[k] = NearComp{ reachR, 0xFFFFFFFFu, -1 }; }
+            int c[3]; pg.CellOf(wpos[i], c);
+            int firstHitRing = -1;
+            for (int r = 0; r <= maxProxRing; ++r)
+            {
+                for (int dz = -r; dz <= r; ++dz)
+                    for (int dy = -r; dy <= r; ++dy)
+                        for (int dx = -r; dx <= r; ++dx)
+                        {
+                            if (r > 0 && std::abs(dx) != r && std::abs(dy) != r && std::abs(dz) != r) { continue; }
+                            auto it = pg.buckets.find(pg.Key(c[0] + dx, c[1] + dy, c[2] + dz));
+                            if (it == pg.buckets.end()) { continue; }
+                            for (uint32_t j : it->second)
+                            {
+                                const int cj = comp[j];
+                                if (cj == comp[i]) { continue; } // already joined through triangles
+                                const float d = Dist3(wpos[i], wpos[j]);
+                                int at = -1;
+                                for (int k = 0; k < kNear; ++k) { if (nrst[k].c == cj) { at = k; break; } }
+                                if (at >= 0)
+                                {
+                                    if (d >= nrst[at].d) { continue; }
+                                    nrst[at].d = d; nrst[at].v = j;
+                                }
+                                else
+                                {
+                                    if (d >= nrst[kNear - 1].d) { continue; }
+                                    nrst[kNear - 1] = NearComp{ d, j, cj };
+                                    at = kNear - 1;
+                                }
+                                for (int k = at; k > 0 && nrst[k].d < nrst[k - 1].d; --k)
+                                {
+                                    std::swap(nrst[k], nrst[k - 1]);
+                                }
+                            }
+                        }
+                if (firstHitRing < 0 && nrst[0].v != 0xFFFFFFFFu) { firstHitRing = r; }
+                // One extra ring past the first hit: a closer component can sit in a diagonal
+                // neighbour. Not waiting for all K keeps a vertex with only one neighbouring part
+                // from scanning out to the cap.
+                if (firstHitRing >= 0 && r > firstHitRing) { break; }
+            }
+            for (int k = 0; k < kNear; ++k)
+            {
+                if (nrst[k].v == 0xFFFFFFFFu) { continue; }
+                adj[i].emplace_back(nrst[k].v, nrst[k].d);
+                adj[nrst[k].v].emplace_back(i, nrst[k].d);
+            }
+        }
+    }
+
     // ---- multi-source Dijkstra from the ground-contact band ----
     constexpr float kInf = std::numeric_limits<float>::infinity();
     std::vector<float> dist(wcount, kInf);
@@ -512,30 +604,50 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     };
     relax();
 
-    // ---- bridge unreachable islands to the nearest reached vertex, cheapest gap first ----
-    // Cheapest-gap-first is what builds the hierarchy: a frond blade sits ~0 mm from its own petiole
-    // but ~10 cm from the trunk, so it attaches to the petiole and the chain crown -> petiole -> blade
-    // comes out right. Do NOT "improve" this into attaching everything to the trunk first: maxBridge
-    // is 15 % of the diagonal, so the trunk is within reach of most of the canopy and the chain would
-    // collapse, rooting every blade at the trunk instead of at its own stem.
+    // ---- attach unreachable islands to the plant ----
+    // Foliage and bark detail are almost never welded to the trunk, so most of a plant arrives as
+    // separate islands that have to be attached. Two properties matter, and the obvious greedy
+    // version has neither:
+    //
+    //  * COST is `dist[target] + gap`, i.e. the geodesic distance the island would INHERIT -- not the
+    //    raw gap. Minimising the raw gap lets an island attach to a SIBLING island, and siblings
+    //    chain: date_palm's bark scales attached to each other instead of to the trunk 2 mm
+    //    underneath, so r accumulated along the chain and a scale ended up 0.11 (28/255) away from
+    //    the trunk it sits on -- it visibly slid across the bark as the tree bent. Minimising the
+    //    resulting distance is just Dijkstra with the bridge as an edge, and it cannot chain: routing
+    //    through a sibling can never beat routing through whatever that sibling itself hangs off.
+    //  * The grid holds ONLY REACHED vertices and every island caches its best candidate. The naive
+    //    version rescanned every unreached vertex against a grid full of (mostly unreached) vertices
+    //    once per attachment -- O(islands * vertices * ring-search), which cost 132 s for date_palm
+    //    in a Debug build.
+    std::vector<std::vector<uint32_t>> compVerts(compCount);
+    for (uint32_t i = 0; i < wcount; ++i) { compVerts[comp[i]].push_back(i); }
+    std::vector<bool> compReached(compCount, false);
+    for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(dist[i])) { compReached[comp[i]] = true; } }
+
     WeldGrid grid;
+    grid.mn = bbMin;
+    grid.cell = std::max(diag / 48.0f, weldEps * 4.0f);
+    const auto addToGrid = [&](uint32_t v)
     {
-        grid.mn = bbMin;
-        grid.cell = std::max(diag / 48.0f, weldEps * 4.0f);
-        for (uint32_t i = 0; i < wcount; ++i)
-        {
-            int c[3]; grid.CellOf(wpos[i], c);
-            grid.buckets[grid.Key(c[0], c[1], c[2])].push_back(i);
-        }
-    }
+        int c[3]; grid.CellOf(wpos[v], c);
+        grid.buckets[grid.Key(c[0], c[1], c[2])].push_back(v);
+    };
+    for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(dist[i])) { addToGrid(i); } }
+
     // A far-away stray island would otherwise attach through a huge bridge and inherit a high
     // weight. Cap it; anything past the cap stays unreached and bakes as rigid.
     const float maxBridge = diag * 0.15f;
-    const auto nearestReached = [&](const DirectX::XMFLOAT3& p, uint32_t& outIdx) -> float
+    const int maxRing = static_cast<int>(std::ceil(maxBridge / grid.cell)) + 1;
+
+    // Returns the cheapest inherited distance, and the vertex to hang off. Rings expand by GEOMETRY
+    // (so the search stays local and terminates fast) but candidates within the searched rings are
+    // scored by COST -- which is what stops the sibling chaining above: the trunk and the neighbouring
+    // scale are both a millimetre away and land in the same ring, so the cost is what separates them.
+    const auto bestAttach = [&](const DirectX::XMFLOAT3& p, uint32_t& outIdx) -> float
     {
         int c[3]; grid.CellOf(p, c);
-        float best = kInf; outIdx = 0xFFFFFFFFu;
-        const int maxRing = static_cast<int>(std::ceil(maxBridge / grid.cell)) + 1;
+        float best = kInf, bestGap = kInf; outIdx = 0xFFFFFFFFu;
         for (int r = 0; r <= maxRing; ++r)
         {
             for (int dz = -r; dz <= r; ++dz)
@@ -548,45 +660,44 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
                         if (it == grid.buckets.end()) { continue; }
                         for (uint32_t v : it->second)
                         {
-                            if (!std::isfinite(dist[v])) { continue; }
-                            const float d = Dist3(p, wpos[v]);
-                            if (d < best) { best = d; outIdx = v; }
+                            const float g = Dist3(p, wpos[v]);
+                            if (g > maxBridge) { continue; }
+                            const float cost = dist[v] + g;
+                            if (cost < best) { best = cost; bestGap = g; outIdx = v; }
                         }
                     }
-            // One extra ring after the first hit: a nearer vertex can sit in a diagonal neighbour.
-            if (std::isfinite(best) && best <= static_cast<float>(r) * grid.cell) { break; }
+            // One extra ring after the first hit: a better candidate can sit in a diagonal neighbour.
+            if (std::isfinite(bestGap) && bestGap <= static_cast<float>(r) * grid.cell) { break; }
         }
         return best;
     };
 
-    std::vector<std::vector<uint32_t>> compVerts(compCount);
-    for (uint32_t i = 0; i < wcount; ++i) { compVerts[comp[i]].push_back(i); }
-    std::vector<bool> compReached(compCount, false);
-    for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(dist[i])) { compReached[comp[i]] = true; } }
-
     for (;;)
     {
-        int bestComp = -1; float bestGap = kInf; uint32_t bestFrom = 0, bestTo = 0;
+        int bestComp = -1; float bestCost = kInf; uint32_t bestFrom = 0, bestTo = 0;
         for (int ci = 0; ci < compCount; ++ci)
         {
             if (compReached[ci]) { continue; }
             for (uint32_t v : compVerts[ci])
             {
-                uint32_t r = 0xFFFFFFFFu;
-                const float g = nearestReached(wpos[v], r);
-                if (g < bestGap) { bestGap = g; bestComp = ci; bestFrom = v; bestTo = r; }
+                uint32_t to = 0xFFFFFFFFu;
+                const float cost = bestAttach(wpos[v], to);
+                if (cost < bestCost) { bestCost = cost; bestComp = ci; bestFrom = v; bestTo = to; }
             }
         }
-        if (bestComp < 0 || !std::isfinite(bestGap) || bestGap > maxBridge) { break; }
-        dist[bestFrom] = dist[bestTo] + bestGap;
+        if (bestComp < 0 || !std::isfinite(bestCost)) { break; }
+
+        const float w = Dist3(wpos[bestFrom], wpos[bestTo]);
+        dist[bestFrom] = dist[bestTo] + w;
         parent[bestFrom] = bestTo;
         // The bridge is also a real edge of the graph from here on: the wood-distance pass below has
         // to be able to walk crown -> petiole -> blade, and those junctions are bridges, not triangles.
-        adj[bestFrom].emplace_back(bestTo, bestGap);
-        adj[bestTo].emplace_back(bestFrom, bestGap);
+        adj[bestFrom].emplace_back(bestTo, w);
+        adj[bestTo].emplace_back(bestFrom, w);
         pq.emplace(dist[bestFrom], bestFrom);
         relax();
         compReached[bestComp] = true;
+        for (uint32_t v : compVerts[bestComp]) { addToGrid(v); }
     }
 
     // ---- normalise -> R ----
@@ -641,6 +752,7 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     // 0 where a leaf meets wood, which is what keeps the runtime `foliage * b` continuous across that
     // boundary whatever per-slot weights the artist picked. A welded vertex shared by a wood and a
     // foliage submesh counts as WOOD, so a shared seam is pinned at 0 on both sides and cannot tear.
+    float leafScaleMeters = 0.0f; // longest arc from the wood surface; 0 = fell back to per-component
     if (!woodSeeds.empty() && haveLeaf)
     {
         std::vector<float> wdist(wcount, kInf);
@@ -660,6 +772,7 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
         for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(wdist[i])) { wmax = std::max(wmax, wdist[i]); } }
         if (wmax > 0.0f)
         {
+            leafScaleMeters = wmax;
             const float invW = 1.0f / wmax;
             // Anything the wood cannot reach at all keeps its per-component fallback above.
             for (uint32_t i = 0; i < wcount; ++i)
@@ -674,6 +787,14 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     {
         return static_cast<uint32_t>(std::lround(std::clamp(v01, 0.0f, 1.0f) * 255.0f)) & 0xFFu;
     };
+    // A: 0 still means "not baked" (legacy .bin -> rigid). Otherwise it carries 1 + the along-limb
+    // scale as a fraction of the bbox diagonal, which is what lets the shader turn the normalised B
+    // back into METRES of arc from a leaf's attachment. It needs that to keep the leaf's streaming
+    // bounded by the leaf's OWN length instead of by a global amplitude -- see wind.hlsli. The
+    // per-component fallback has no single scale, so it reports the whole diagonal: the weakest
+    // possible bound, i.e. exactly the old unbounded behaviour, rather than a wrong one.
+    const float leafFrac = (leafScaleMeters > 0.0f) ? std::min(1.0f, leafScaleMeters / diag) : 1.0f;
+    const uint32_t aVal = 1u + static_cast<uint32_t>(std::lround(leafFrac * 254.0f));
     for (size_t i = 0; i < vcount; ++i)
     {
         const uint32_t w = weldOf[i];
@@ -682,8 +803,7 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
         const uint32_t r = quant(r01);
         const uint32_t g = limbHash & 0xFFu;
         const uint32_t b = quant(alongLimb[w]);
-        constexpr uint32_t kBakedMarker = 255u; // A: distinguishes a baked mesh from a legacy .bin
-        verts[i].color = r | (g << 8) | (b << 16) | (kBakedMarker << 24);
+        verts[i].color = r | (g << 8) | (b << 16) | (aVal << 24);
     }
 }
 } // namespace

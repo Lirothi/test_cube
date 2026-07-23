@@ -20,7 +20,7 @@ cbuffer ScatterParams : register(b0)
     float  gSwayPad;       // W5: metres to grow the world AABB on X/Z for the sway (0 when rigid)
     float  gWindFoliage;   // GI objects are one mesh -> one foliage weight for the whole cloud
     float  gWindTrunkStiff;
-    float  _pad1;
+    float  gWindLeafScale; // W7.4: world metres of leaf arc per unit of COLOR_0.b
     float4 gAabbCenter;  // mesh-local AABB center (w unused)
     float4 gAabbExtent;  // mesh-local AABB half-extents (w unused)
     row_major float4x4 gObjectWorld; // object model matrix, folded onto each instance's local world
@@ -54,7 +54,7 @@ struct InstancePerObject
     uint     objectId;
     uint3    _instPad1;
     float    windStrength;  // 208
-    float    _windReserved;  // 212 (free since W7.3)
+    float    windLeafScale;  // 212 (W7.4: world metres of leaf arc per unit of COLOR_0.b)
     float    windFoliage;    // 216
     float    windTrunkStiff; // 220
 };
@@ -87,6 +87,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     gInst[dst].windStrength = gWindStrength;
     gInst[dst].windFoliage = gWindFoliage;
     gInst[dst].windTrunkStiff = gWindTrunkStiff;
+    gInst[dst].windLeafScale = gWindLeafScale;
 
     // Conservative world AABB from the mesh-local AABB under `world` (row-vector convention:
     // p' = mul(float4(p,1), world); extents map through abs of the upper-left 3x3).

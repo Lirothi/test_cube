@@ -46,10 +46,10 @@ struct alignas(16) InstancePerObject
     uint32_t            objectId;     // 192
     DirectX::XMFLOAT3   emissive;     // 196 (D: premultiplied color*strength)
     float               windStrength; // 208 (W3: per-object foliage sway strength; 0 = rigid)
-    float               _windReserved; // 212 (FREE since W7.3: the baked geodesic weight replaced the height
-                                     // profile. Kept as a named slot so the 224-byte stride and every
-                                     // field offset below it stay put — the next per-object wind param
-                                     // goes here instead of growing the struct again.)
+    float               windLeafScale; // 212 (W7.4: WORLD metres of arc that COLOR_0.b == 1 stands for,
+                                     // i.e. mesh->GetWindLeafScale() * the object's world scale. The
+                                     // shader needs it to bound a leaf's streaming by the leaf's OWN
+                                     // length; 0 = unbaked, and the bound is simply skipped.)
     float               windFoliage;   // 216 (PER-SLOT 0..1: 0 = trunk, 1 = leaves)
     float               windTrunkStiff;// 220 (per-object; divides the main bend)
 };                                    // 224

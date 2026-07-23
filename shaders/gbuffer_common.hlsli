@@ -28,7 +28,7 @@ struct InstancePerObject
     uint objectId;
     float3 emissive; // D: premultiplied color*strength
     float windStrength; // W3: per-object foliage sway strength (0 = rigid)
-    float _windReserved; // free since W7.3 (baked weight replaced the height profile)
+    float windLeafScale; // W7.4: WORLD metres of leaf arc per unit of COLOR_0.b (0 = unbaked)
     float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float windTrunkStiff; // per-object; divides the main bend
 };
@@ -48,7 +48,7 @@ cbuffer PerObject : register(b0)
     uint objectId;
     float3 emissive; // D: premultiplied color*strength, added to RT2
     float windStrength; // W3: per-object foliage sway strength (0 = rigid); read by the VS in W4
-    float _windReserved; // free since W7.3 (baked weight replaced the height profile)
+    float windLeafScale; // W7.4: WORLD metres of leaf arc per unit of COLOR_0.b (0 = unbaked)
     float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float windTrunkStiff; // per-object; divides the main bend
 };
@@ -88,10 +88,10 @@ cbuffer PerView : register(b1)
 // stay identical or the shadow detaches from the tree.
 inline float3 ApplyWindWS(float3 objPos, float3 posWS, float4x4 w, float windStrengthValue,
                           float4 windWeights, float foliageValue, float trunkStiffValue,
-                          float gustMulValue, float t)
+                          float leafScaleValue, float gustMulValue, float t)
 {
     return WindOffset(objPos, posWS, float3(w._41, w._42, w._43), windStrengthValue,
-                      windWeights, foliageValue, trunkStiffValue,
+                      windWeights, foliageValue, trunkStiffValue, leafScaleValue,
                       windDirXZ, windSwayAmp, windSwayFreq, gustMulValue, t);
 }
 
@@ -167,7 +167,8 @@ inline VSOut BaseVS(float3 pos,
                     float4 windWeights,
                     float windStrengthValue,
                     float windFoliageValue,
-                    float windTrunkStiffValue)
+                    float windTrunkStiffValue,
+                    float windLeafScaleValue)
 {
     VSOut o;
     float4 posH = float4(pos, 1.0f);
@@ -179,12 +180,13 @@ inline VSOut BaseVS(float3 pos,
     // The offset is a function of the UN-swayed world position, so read it before adding.
     float4 worldPos = mul(posH, world);
     worldPos.xyz += ApplyWindWS(pos, worldPos.xyz, world, windStrengthValue, windWeights,
-                                windFoliageValue, windTrunkStiffValue, windGustMul, windTime);
+                                windFoliageValue, windTrunkStiffValue, windLeafScaleValue,
+                                windGustMul, windTime);
 
     float4 prevWorldPos = mul(posH, prevWorld);
     prevWorldPos.xyz += ApplyWindWS(pos, prevWorldPos.xyz, prevWorld, windStrengthValue,
                                     windWeights, windFoliageValue, windTrunkStiffValue,
-                                    windPrevGustMul, windPrevTime);
+                                    windLeafScaleValue, windPrevGustMul, windPrevTime);
 
     o.H = mul(worldPos, viewProj);
     o.clipH = mul(worldPos, viewProjNoJitter);

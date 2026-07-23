@@ -27,6 +27,7 @@
 #include "editor/ui/EditorDragDrop.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
+#include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanSimulation.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -639,6 +640,153 @@ namespace
                     ImGui::EndCombo();
                 }
 
+                OceanRenderConfig render = ocean->GetRenderConfig();
+                const auto renderIt = p.find("render");
+                if (renderIt != p.end() && renderIt->is_object())
+                {
+                    OceanRenderConfigJson::ApplyOverrides(*renderIt, render);
+                }
+
+                const auto storeRender = [&]()
+                {
+                    p["render"] = OceanRenderConfigJson::ToJson(render);
+                };
+                const auto renderDrag = [&](const char* label,
+                    float& value,
+                    float speed,
+                    float minimum,
+                    float maximum,
+                    const char* format = "%.3f")
+                {
+                    const nlohmann::json beforeItem = p;
+                    const bool changed = ImGui::DragFloat(
+                        label, &value, speed, minimum, maximum, format);
+                    if (changed)
+                    {
+                        value = std::clamp(value, minimum, maximum);
+                        storeRender();
+                    }
+                    trackContinuousEdit(beforeItem, changed);
+                };
+                const auto renderColor = [&](const char* label, Math::float4& color)
+                {
+                    const nlohmann::json beforeItem = p;
+                    float values[3] = { color.x, color.y, color.z };
+                    const bool changed = ImGui::ColorEdit3(
+                        label,
+                        values,
+                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+                    if (changed)
+                    {
+                        color = Math::float4(values[0], values[1], values[2], color.w);
+                        storeRender();
+                    }
+                    trackContinuousEdit(beforeItem, changed);
+                };
+
+                ImGui::TextDisabled("Render settings are stored in this level and override the preset.");
+
+                if (ImGui::CollapsingHeader("Surface color", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    renderColor("Deep Scatter Tint", render.deepScatterColor);
+                    renderColor("Subsurface Tint", render.sssColor);
+                    renderColor("Diffuse Tint", render.diffuseColor);
+                }
+
+                if (ImGui::CollapsingHeader("Specular and reflection", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    renderDrag("Specular Strength", render.specularStrength, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Roughness Scale", render.roughnessScale, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Roughness Distance", render.roughnessDistance, 1.0f, 1.0f, 5000.0f, "%.1f");
+                    renderDrag("Reflection Normal Flattening", render.reflectionNormalStrength, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Horizon Fog Strength", render.horizonFogStrength, 0.005f, 0.01f, 5.0f);
+                    renderDrag("Horizon Fog Distance Scale", render.horizonFogDistanceScale, 0.01f, 0.0f, 20.0f);
+                    renderDrag("Cascade Fade Scale", render.cascadeFadeScale, 0.1f, 0.0f, 1000.0f);
+                    renderDrag("Minimum Mesh Scale", render.minMeshScale, 0.1f, 0.001f, 1000.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Refraction and volume"))
+                {
+                    renderDrag("Surface Refraction", render.surfaceRefractionStrength, 0.005f, 0.0f, 5.0f);
+                    renderDrag("Underwater Refraction", render.underwaterRefractionStrength, 0.005f, 0.0f, 5.0f);
+                    renderDrag("Absorption Depth", render.absorptionDepthScale, 0.1f, 1.0f, 1000.0f);
+                    renderDrag("Fog Density", render.fogDensity, 0.005f, 0.0f, 10.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Subsurface scattering"))
+                {
+                    renderDrag("Sun Scatter", render.sunScatterStrength, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Sky Scatter", render.skyScatterStrength, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Scatter Spread", render.scatterSpread, 0.005f, 0.001f, 2.0f);
+                    renderDrag("View Alignment", render.viewAlignmentStrength, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Height Bias", render.sssHeightBias, 0.01f, -10.0f, 10.0f);
+                    renderDrag("Distance Fade", render.sssFadeDistance, 0.1f, 0.0f, 1000.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Wind shading"))
+                {
+                    renderDrag("Wind Speed", render.windSpeed, 0.1f, 0.0f, 100.0f);
+                    renderDrag("Waves Scale", render.wavesScale, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Wind Alignment", render.windAlignment, 0.005f, 0.0f, 1.0f);
+                    renderDrag("UV Warp Strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Foam"))
+                {
+                    renderColor("Foam Tint", render.foamTint);
+                    renderDrag("Foam Normal Strength", render.foamNormalStrength, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Contact Foam Strength", render.contactFoamStrength, 0.005f, 0.0f, 5.0f);
+                    renderDrag("Underwater Foam Parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Absorption gradient"))
+                {
+                    bool curvedGradient = render.absorptionGradientType >= 0.5f;
+                    if (ImGui::Checkbox("Curved Interpolation", &curvedGradient))
+                    {
+                        OceanRenderConfig afterRender = render;
+                        afterRender.absorptionGradientType = curvedGradient ? 1.0f : 0.0f;
+                        nlohmann::json after = p;
+                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        executeChange(std::move(after), "Set Ocean Absorption Gradient");
+                    }
+
+                    for (size_t index = 0; index < render.absorptionColors.size(); ++index)
+                    {
+                        ImGui::PushID(static_cast<int>(index));
+                        Math::float4& key = render.absorptionColors[index];
+                        renderColor("Color", key);
+                        renderDrag("Position", key.w, 0.005f, 0.0f, 1.0f);
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
+
+                    if (render.absorptionColors.size() < 8u && ImGui::Button("Add Key"))
+                    {
+                        OceanRenderConfig afterRender = render;
+                        const Math::float4 last = afterRender.absorptionColors.empty()
+                            ? Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
+                            : afterRender.absorptionColors.back();
+                        afterRender.absorptionColors.push_back(last);
+                        nlohmann::json after = p;
+                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        executeChange(std::move(after), "Add Ocean Absorption Key");
+                    }
+                    if (render.absorptionColors.size() > 1u)
+                    {
+                        ImGui::SameLine();
+                        if (ImGui::Button("Remove Key"))
+                        {
+                            OceanRenderConfig afterRender = render;
+                            afterRender.absorptionColors.pop_back();
+                            nlohmann::json after = p;
+                            after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                            executeChange(std::move(after), "Remove Ocean Absorption Key");
+                        }
+                    }
+                }
+
+                ImGui::SeparatorText("Simulation overrides");
                 const nlohmann::json windForceBefore = p;
                 float windForce = JsonFloat(p, "windForce", ocean->GetWindForce01());
                 const bool windForceChanged =

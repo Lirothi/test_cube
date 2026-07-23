@@ -509,6 +509,72 @@ the three states needs no rebuild.
 
 **Verified:** Debug + Release clean; `--scene-stress=30` CLEAN; all three palms re-baked and measured.
 
+### W7.5 — leaves stopped being stretched; bake made 330x faster — **DONE (2026-07-23), uncommitted**
+
+Three separate defects, reported together ("ебически долго в дебаге", "листья как ломало так и ломает",
+"у мелкой и у date чешуйки катаются относительно ствола"). Each was measured before it was touched.
+
+**1. The bake took 132 s in a Debug build** (7.6 s Release). The island-attachment loop rescanned every
+unreached vertex against a grid holding all (mostly unreached) vertices, once per attachment. A first
+attempt at caching each island's best candidate made it *worse* (248 s): with a canopy full of islands
+the invalidation predicate fires nearly every iteration, and the grid grows as islands attach.
+
+The fix was to remove the need for the loop rather than speed it up: a **proximity pass** up front
+wires each vertex to the nearest vertex in each of the **K nearest DISTINCT components**. Almost every
+island is then reached by the plain Dijkstra and the loop has nothing left to do. **0.4 s in Debug.**
+Distinct *components*, not simply K nearest vertices: a bark scale's two nearest vertices both lie on
+the same neighbouring scale, so plain K-nearest just rebuilt the sibling chain it was meant to break.
+K-nearest also replaced a fixed radius, which has to be guessed per asset and gets it wrong both ways
+(0.5 % of the diagonal is 1.6 cm on curly_palm, whose trunk skin sits 4 cm off its core).
+
+**2. Bark scales slid across the trunk.** date_palm carries 96 separate scales, curly_palm 100. Islands
+were attached by the *cheapest gap*, so scales attached to each other and the chain accumulated
+geodesic distance instead of taking it from the trunk 2 mm underneath: r drifted 28/255 (date) and
+43/255 (curly) between a scale and the trunk vertex it rests on. Attachment cost is now
+`dist[target] + gap` — the distance the island would INHERIT, i.e. plain Dijkstra with the bridge as an
+edge, which cannot chain. Relative slide at swayAmp 0.98: **date 0.069 -> 0.008 m, curly 0.172 ->
+0.050 m** (the proximity pass does most of this; the cost change stops it coming back).
+
+**3. Leaves were being stretched, not bent.** The streaming displacement was `amp * bend * foliage *
+0.9 * b` with **b a NORMALISED position along the limb**, so its gradient along a leaf was
+`amp / leafLength` — completely decoupled from how long the leaf actually is. Measured as edge STRAIN
+(`|offset_i - offset_j| / restLength`, 1.0 meaning an edge's endpoints separated by the edge's own
+length), at the atoll's own swayAmp of 0.98: **coconut 1.02, date 0.99, curly 3.06**, with 26-57 % of
+all edges past 0.3. It scales linearly with wind, so it never went away — it just got less obvious in
+a light breeze. Note this was invisible to the earlier junction/tear metrics: it is not a seam coming
+apart, it is the leaf's own interior being pulled apart.
+
+Fixed by bounding the streaming to the leaf's own length. `COLOR_0.a` now carries `1 + leafScale/diag`
+(it was a constant 255 marker; 0 still means "not baked"), `Mesh::GetWindLeafScale()` recovers the
+metres, and the per-object `windLeafScale` — the slot freed in W7.3, so **the 224-byte stride and every
+offset are unchanged** — carries it times the object's world scale through all four mirrors. The shader
+then blends `want * ks / (ks + want)` with `ks = kWindLeafShear * b * windLeafScale`: equal to `want`
+while small, saturating at `kWindLeafShear * s`, and with a derivative along the leaf that never
+exceeds `kWindLeafShear`. A plain `min()` would bound it too but creases where the branches meet.
+Recovered leaf scales are physically right: coconut 2.00 m, date 1.95 m, curly 0.70 m.
+
+| swayAmp | | coconut | date | curly |
+|---|---|---|---|---|
+| 0.98 | unbounded | 1.02 | 0.99 | 3.06 |
+| 0.98 | **bounded** | **0.72** | **0.66** | **2.13** |
+| 4.00 | unbounded | 3.10 | 3.21 | 4.33 |
+| 4.00 | **bounded** | **1.85** | **1.79** | **2.32** |
+
+**KNOWN RESIDUAL, measured not guessed:** what is left is now dominated by the **main bend**, not the
+streaming — at swayAmp 0.98 the bend alone accounts for 0.56 of coconut's 0.72, 0.36 of date's 0.66 and
+1.88 of curly's 2.13. Same root cause one level up: `WindBendProfile(r)` uses r normalised by the
+GLOBAL geodesic max, so its gradient in metres is unbounded too, and it bites hardest on a small plant
+(curly is 2 m, so r sweeps its whole range over a short distance) and on canopies (r rises fastest
+there). The clean fix is to freeze r at the leaf's ATTACHMENT for foliage vertices — the wood-distance
+pass already knows which wood seed each vertex came from, so it costs no new channel — leaving the
+leaf's own motion entirely to the bounded streaming. It is deliberately NOT done here: it cuts frond-tip
+main bend from f(1.00)=1.00 to f(0.62)=0.36, a visible change in how the canopy reads, and the palms'
+amplitudes are hand-tuned.
+
+**Verified:** Debug + Release clean; all 9 wind VS variants plus the GI scatter CS compile standalone
+under dxc (incl. `SHADOW_MASKED=1` / `INSTCB_SLOT_PARAMS=1`); `--scene-stress=30` CLEAN; Debug bake
+0.44-0.48 s for both palms; all three palms re-baked.
+
 --- (original spec) ---
 
 ### W7.3 — Switch the shader over and DELETE the heuristics (spec)

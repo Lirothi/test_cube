@@ -110,6 +110,12 @@ public:
     UINT GetVertexStride() const { return vertexStride_; }
     DXGI_FORMAT GetIndexFormat() const { return indexFormat_; }
 
+    // OBJECT-space metres of arc that COLOR_0.b == 1 stands for: the longest path from this mesh's
+    // wood surface out to a leaf tip. The wind shader multiplies b by this (times the object's world
+    // scale) to recover how far along its own leaf a vertex sits, which is what bounds the leaf's
+    // streaming to its own length instead of to a global amplitude. 0 = the mesh has no wind bake.
+    float GetWindLeafScale() const { return windLeafScale_; }
+
     const AABB& GetBoundingBox() const { return bounds_; }
     // Radius of the mesh's vertex-enclosing sphere, centered on its AABB center.
     // Unlike AABB::GetRadius(), this does not include empty box corners.
@@ -148,6 +154,7 @@ private:
     UINT  indexCount_ = 0;
     AABB bounds_;
     float boundingSphereRadius_ = 0.0f;
+    float windLeafScale_ = 0.0f; // object-space metres per unit of COLOR_0.b (see GetWindLeafScale)
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs

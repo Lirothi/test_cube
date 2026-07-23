@@ -45,6 +45,16 @@
 // the wind instead of flapping symmetrically in place.
 static const float kWindFoliageStream = 0.9;
 
+// Hard ceiling on how fast the streaming may grow ALONG a leaf: metres of displacement per metre of
+// leaf. This is the whole reason windLeafScale exists, and without it foliage does not bend, it
+// TEARS. The streaming displacement used to be `amp * b` with b a NORMALISED position along the
+// limb, so its gradient along the leaf was amp/leafLength — decoupled from the leaf's actual size.
+// On date_palm at the atoll's own settings (swayAmp 0.98) that stretched leaf edges to 1.9x their
+// rest length, and 55 % of all edges past 1.3x; curly_palm, being a 2 m plant pushed just as hard as
+// a 7 m one, reached 3.7x. Bounding the gradient at g caps the stretch at sqrt(1+g^2), so 0.5 costs
+// 12 % — a leaf that bends instead of one that comes apart.
+static const float kWindLeafShear = 0.5;
+
 // Detail-flutter size relative to the main sway amplitude, and its rate relative to the sway rate.
 // Small: the streaming term carries the bulk of the foliage motion.
 static const float kWindFlutterAmp  = 0.15;
@@ -54,7 +64,7 @@ static const float kWindFlutterRate = 2.7;
 // steady term, or the tree leans upwind half the time and the wind direction stops reading.
 // osc is in [-1.5, 1.5], so bend stays in [1 - 1.5*kWindBendOsc, 1 + 1.5*kWindBendOsc] > 0.
 static const float kWindBendSteady = 1.0;
-static const float kWindBendOsc    = 0.35;
+static const float kWindBendOsc    = 0.55;
 
 // Peak of the bend envelope, i.e. max of (kWindBendSteady + kWindBendOsc * osc) — mirrored by
 // WindState::MaxSwayExtentMeters on the CPU for the shadow caster-bounds padding.
@@ -83,9 +93,12 @@ float WindBendProfile(float u)
 //   foliage      PER-SLOT 0..1 artistic multiplier from mesh.json "windFoliage" (0 = treat this
 //                submesh as woody). Rides ON TOP of the baked weights; it does not replace them.
 //   trunkStiff   PER-OBJECT: divides the main bend. >1 = stiffer trunk, <1 = whippier.
+//   windLeafScale PER-OBJECT: world metres of leaf arc that windWeights.b == 1 stands for, i.e. the
+//                mesh's baked scale times its world scale. Bounds the leaf streaming to the leaf's
+//                own length (kWindLeafShear). 0 = unbaked mesh, bound skipped.
 // windStrength 0 => exactly float3(0,0,0), so non-foliage objects are byte-identical to the no-wind path.
 float3 WindOffset(float3 objPos, float3 posWS, float3 worldOrigin, float windStrength,
-                  float4 windWeights, float foliage, float trunkStiff,
+                  float4 windWeights, float foliage, float trunkStiff, float windLeafScale,
                   float2 windDirXZ, float swayAmp, float swayFreq, float gustMul, float t)
 {
     if (windStrength <= 0.0)
@@ -111,12 +124,28 @@ float3 WindOffset(float3 objPos, float3 posWS, float3 worldOrigin, float windStr
     const float f = WindBendProfile(along) / max(trunkStiff, 0.05);
 
     // Leaves ride the plant's bend AND stream further downwind on their own, bending about THEIR OWN
-    // attachment (windWeights.b), which also keeps the term continuous with the trunk across the
-    // attachment. Folding the extra push into the SAME arc keeps the whole thing length-preserving.
+    // attachment (windWeights.b == 0 exactly where the leaf meets wood), which is also what keeps the
+    // term continuous with the trunk across that boundary whatever per-slot weight the artist picked.
     const float leaf = foliage * windWeights.b;
     const float3 rel = posWS - worldOrigin; // pivot -> vertex, world space
+
+    // The streaming has to be bounded by the LEAF, not by the global amplitude. `want` is how far
+    // this vertex would like to stream; `s` is how far it actually sits along its own leaf, in world
+    // metres. The blend is `want*ks/(ks + want)`: it equals want while want is small, saturates at
+    // kWindLeafShear * s, and — the property that matters — its derivative along the leaf never
+    // exceeds kWindLeafShear, so the leaf cannot be stretched past its own length however hard the
+    // wind blows. A plain min() would do the same but creases visibly where the two branches meet.
+    // The length-preserving normalize below is about the OBJECT PIVOT, metres away, so it does
+    // nothing for a leaf bending about its own base — this is what stands in for it.
+    const float want = amp * bend * leaf * kWindFoliageStream;
+    const float s = windWeights.b * windLeafScale;
+    const float ks = kWindLeafShear * s;
+    // windLeafScale == 0 means the mesh predates the bake; leave the old unbounded behaviour rather
+    // than silently freezing its foliage.
+    const float stream = (windLeafScale > 0.0) ? (want * ks / max(ks + want, 1.0e-5)) : want;
+
     float3 q = rel;
-    q.xz += windDirXZ * (amp * bend * (f + leaf * kWindFoliageStream));
+    q.xz += windDirXZ * (amp * bend * f + stream);
 
     const float len = length(rel);
     float3 offset = (len > 1.0e-4) ? (normalize(q) * len - rel) : float3(0.0, 0.0, 0.0);

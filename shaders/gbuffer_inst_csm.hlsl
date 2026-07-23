@@ -24,7 +24,7 @@ VSOutD VSMain(VSInInst i)
     // (0 for the instanced cloud today, so this is a no-op unless an instanced object is flagged).
     float4 wp = mul(float4(i.P, 1.0f), w);
     wp.xyz += ApplyWindWS(i.P, wp.xyz, w, windStrength, i.WIND, windFoliage,
-                          windTrunkStiff, windGustMul, windTime);
+                          windTrunkStiff, windLeafScale, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;
 }

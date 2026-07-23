@@ -19,17 +19,6 @@
     "enabled": true,
     "exposure": 2.5
   },
-  "wind": {
-    "directionDeg": 25.0,
-    "strength": 0.6,
-    "swayFrequency": 0.75,
-    "gust": {
-      "amplitude": 0.35,
-      "frequencyHz": 0.08,
-      "seed": 3.0
-    },
-    "foliageSwayMeters": 0.35
-  },
   "objects": [
     {
       "enabled": true,
@@ -75,8 +64,8 @@
       "texOffsScale": [
         0.0,
         0.0,
-        10.0,
-        10.0
+        20.0,
+        20.0
       ],
       "type": "staticMesh"
     },
@@ -2546,5 +2535,16 @@
   "skybox": {
     "texture": "textures/skybox.dds"
   },
-  "spotLights": []
+  "spotLights": [],
+  "wind": {
+    "directionDeg": 25.0,
+    "foliageSwayMeters": 0.699999988079071,
+    "gust": {
+      "amplitude": 0.35,
+      "frequencyHz": 0.08,
+      "seed": 3.0
+    },
+    "strength": 0.6,
+    "swayFrequency": 1.0
+  }
 }

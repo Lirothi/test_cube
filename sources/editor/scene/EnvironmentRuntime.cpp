@@ -9,6 +9,7 @@
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
+#include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanSimulation.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
@@ -211,15 +212,26 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     }
     else if (env.type == "ocean")
     {
-        // Live wind overrides (the "scene" block). Defaults are the sim's current
-        // values, so an absent override key is a no-op. Preset/enable are handled
-        // by the ocean inspector + the Ocean menu, not here (they are discrete).
         if (OceanSimulation* ocean = Systems::GetOceanSimulation())
         {
+            const auto renderIt = p.find("render");
+            if (renderIt != p.end() && renderIt->is_object())
+            {
+                OceanRenderConfig render = ocean->GetRenderConfig();
+                OceanRenderConfigJson::ApplyOverrides(*renderIt, render);
+                ocean->SetRenderConfig(render);
+            }
+
+            // Wind changes rebuild the FFT spectrum. Render-only inspector changes must not.
             const float windDir = JF(p, "windDirectionDeg", ocean->GetLocalWindDirectionDegrees());
             const float swellDir = JF(p, "swellDirectionDeg", ocean->GetSwellDirectionDegrees());
             const float windForce = JF(p, "windForce", ocean->GetWindForce01());
-            ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
+            if (windDir != ocean->GetLocalWindDirectionDegrees() ||
+                swellDir != ocean->GetSwellDirectionDegrees() ||
+                windForce != ocean->GetWindForce01())
+            {
+                ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
+            }
         }
     }
     else if (env.type == "wind")
@@ -260,6 +272,28 @@ void EnvironmentRuntime::ApplyChange(
             if (OceanSimulation* ocean = Systems::GetOceanSimulation())
             {
                 ocean->LoadConfig(&ctx.renderer, Widen(preset));
+            }
+        }
+        else
+        {
+            const bool hasRenderOverrides =
+                env.properties.contains("render") && env.properties["render"].is_object();
+            const bool hadRenderOverrides =
+                previous.properties.contains("render") && previous.properties["render"].is_object();
+            if (!hasRenderOverrides && hadRenderOverrides)
+            {
+                if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+                {
+                    OceanSimulationConfig presetConfig;
+                    if (LoadOceanSimulationConfigFromFile(ocean->GetConfigPath(), presetConfig))
+                    {
+                        ocean->SetRenderConfig(presetConfig.render);
+                    }
+                    else
+                    {
+                        ocean->SetRenderConfig(OceanRenderConfig{});
+                    }
+                }
             }
         }
 

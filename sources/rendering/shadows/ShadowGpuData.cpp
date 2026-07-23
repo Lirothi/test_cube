@@ -1229,7 +1229,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             {
                 std::uint32_t       giBase, count;
                 float               windStrength, swayPad; // W5 (mirrors gWindStrength/gSwayPad)
-                float               windFoliage, windTrunkStiff, _pad0b, _pad1;
+                float               windFoliage, windTrunkStiff, windLeafScale, _pad1;
                 DirectX::XMFLOAT4   aabbCenter;
                 DirectX::XMFLOAT4   aabbExtent;
                 DirectX::XMFLOAT4X4 objectWorld;
@@ -1252,6 +1252,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 const float giWind = giGb ? giGb->CurrentDrawParams().windStrength : 0.0f;
                 const float giFoliage = giGb ? giGb->FoliageForSlot(0) : 0.0f;
                 const float giStiff = giGb ? giGb->GetWindTrunkStiffness() : 1.0f;
+                const float giLeafScale = giGb ? giGb->GetWindLeafScaleWorld() : 0.0f;
 
                 renderer->Transition(cl, giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 RecordComputeDispatch(renderer, cl, giScatterMat_.get(), scatterCbSize,
@@ -1264,6 +1265,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                         c.swayPad = giWind > 0.0f ? giWind * vfx::g_maxSwayExtentMeters : 0.0f;
                         c.windFoliage = giFoliage;
                         c.windTrunkStiff = giStiff;
+                        c.windLeafScale = giLeafScale;
                         c.aabbCenter = gc.aabbCenter;
                         c.aabbExtent = gc.aabbExtent;
                         c.objectWorld = objWorld;

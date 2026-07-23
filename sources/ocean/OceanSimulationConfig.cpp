@@ -1,4 +1,5 @@
 #include "ocean/OceanSimulationConfig.h"
+#include "ocean/OceanRenderConfigJson.h"
 
 #include <algorithm>
 #include <cctype>
@@ -370,12 +371,7 @@ namespace
 
     void ReadRender(const json& object, OceanRenderConfig& render)
     {
-        render.deepScatterColor = ReadFloat4Member(object, "deepScatterColor", render.deepScatterColor);
-        render.sssColor = ReadFloat4Member(object, "sssColor", render.sssColor);
-        render.diffuseColor = ReadFloat4Member(object, "diffuseColor", render.diffuseColor);
-        render.foamTint = ReadFloat4Member(object, "foamTint", render.foamTint);
-        render.contactFoamStrength = std::max(0.0f,
-            ReadFloatMember(object, "contactFoamStrength", render.contactFoamStrength));
+        OceanRenderConfigJson::ApplyOverrides(object, render);
     }
 
     std::vector<EqualizerPreset::Filter> ReadFilters(const json& object, const char* key)
@@ -464,13 +460,7 @@ namespace
 
     json WriteRender(const OceanRenderConfig& render)
     {
-        json out;
-        out["deepScatterColor"] = WriteFloat4(render.deepScatterColor);
-        out["sssColor"] = WriteFloat4(render.sssColor);
-        out["diffuseColor"] = WriteFloat4(render.diffuseColor);
-        out["foamTint"] = WriteFloat4(render.foamTint);
-        out["contactFoamStrength"] = std::max(0.0f, render.contactFoamStrength);
-        return out;
+        return OceanRenderConfigJson::ToJson(render);
     }
 
     json WriteFilters(const std::vector<EqualizerPreset::Filter>& filters)

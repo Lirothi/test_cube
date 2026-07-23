@@ -1020,21 +1020,104 @@ namespace
             color = Math::float4(values[0], values[1], values[2], color.w);
             changed = true;
         };
+        const auto drag = [&changed](const char* label,
+            float& value,
+            float speed,
+            float minimum,
+            float maximum,
+            const char* format = "%.3f")
+        {
+            if (ImGui::DragFloat(label, &value, speed, minimum, maximum, format))
+            {
+                value = std::clamp(value, minimum, maximum);
+                changed = true;
+            }
+        };
 
+        ImGui::SeparatorText("Surface color");
         drawColor("Deep scatter tint", render.deepScatterColor);
         drawColor("Subsurface tint", render.sssColor);
         drawColor("Diffuse tint", render.diffuseColor);
-        drawColor("Foam tint", render.foamTint);
 
-        float contactFoamStrength = render.contactFoamStrength;
-        if (ImGui::DragFloat("Contact foam strength", &contactFoamStrength, 0.005f, 0.0f, 1.0f, "%.3f"))
+        ImGui::SeparatorText("Specular and reflection");
+        drag("Specular strength", render.specularStrength, 0.01f, 0.0f, 10.0f);
+        drag("Roughness scale", render.roughnessScale, 0.005f, 0.0f, 1.0f);
+        drag("Roughness distance", render.roughnessDistance, 1.0f, 1.0f, 5000.0f, "%.1f");
+        drag("Reflection normal flattening", render.reflectionNormalStrength, 0.005f, 0.0f, 1.0f);
+        drag("Horizon fog strength", render.horizonFogStrength, 0.005f, 0.01f, 5.0f);
+        drag("Horizon fog distance scale", render.horizonFogDistanceScale, 0.01f, 0.0f, 20.0f);
+        drag("Cascade fade scale", render.cascadeFadeScale, 0.1f, 0.0f, 1000.0f);
+        drag("Minimum mesh scale", render.minMeshScale, 0.1f, 0.001f, 1000.0f);
+
+        ImGui::SeparatorText("Refraction and volume");
+        drag("Surface refraction", render.surfaceRefractionStrength, 0.005f, 0.0f, 5.0f);
+        drag("Underwater refraction", render.underwaterRefractionStrength, 0.005f, 0.0f, 5.0f);
+        drag("Absorption depth", render.absorptionDepthScale, 0.1f, 1.0f, 1000.0f);
+        drag("Fog density", render.fogDensity, 0.005f, 0.0f, 10.0f);
+
+        ImGui::SeparatorText("Subsurface scattering");
+        drag("Sun scatter", render.sunScatterStrength, 0.01f, 0.0f, 10.0f);
+        drag("Sky scatter", render.skyScatterStrength, 0.01f, 0.0f, 10.0f);
+        drag("Scatter spread", render.scatterSpread, 0.005f, 0.001f, 2.0f);
+        drag("View alignment", render.viewAlignmentStrength, 0.005f, 0.0f, 1.0f);
+        drag("SSS height bias", render.sssHeightBias, 0.01f, -10.0f, 10.0f);
+        drag("SSS distance fade", render.sssFadeDistance, 0.1f, 0.0f, 1000.0f);
+
+        ImGui::SeparatorText("Wind shading");
+        drag("Wind speed", render.windSpeed, 0.1f, 0.0f, 100.0f);
+        drag("Waves scale", render.wavesScale, 0.01f, 0.0f, 10.0f);
+        drag("Wind alignment", render.windAlignment, 0.005f, 0.0f, 1.0f);
+        drag("UV warp strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
+
+        ImGui::SeparatorText("Foam");
+        drawColor("Foam tint", render.foamTint);
+        drag("Foam normal strength", render.foamNormalStrength, 0.005f, 0.0f, 1.0f);
+        drag("Contact foam strength", render.contactFoamStrength, 0.005f, 0.0f, 5.0f);
+        drag("Underwater foam parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
+
+        ImGui::SeparatorText("Absorption gradient");
+        bool curvedGradient = render.absorptionGradientType >= 0.5f;
+        if (ImGui::Checkbox("Curved interpolation", &curvedGradient))
         {
-            render.contactFoamStrength = Math::Saturate(contactFoamStrength);
+            render.absorptionGradientType = curvedGradient ? 1.0f : 0.0f;
             changed = true;
+        }
+        for (size_t index = 0; index < render.absorptionColors.size(); ++index)
+        {
+            ImGui::PushID(static_cast<int>(index));
+            Math::float4& key = render.absorptionColors[index];
+            drawColor("Color", key);
+            drag("Position", key.w, 0.005f, 0.0f, 1.0f);
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if (render.absorptionColors.size() < 8u && ImGui::Button("Add absorption key"))
+        {
+            const Math::float4 last = render.absorptionColors.empty()
+                ? Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
+                : render.absorptionColors.back();
+            render.absorptionColors.push_back(last);
+            changed = true;
+        }
+        if (render.absorptionColors.size() > 1u)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Remove absorption key"))
+            {
+                render.absorptionColors.pop_back();
+                changed = true;
+            }
         }
 
         if (changed)
         {
+            std::stable_sort(
+                render.absorptionColors.begin(),
+                render.absorptionColors.end(),
+                [](const Math::float4& lhs, const Math::float4& rhs)
+                {
+                    return lhs.w < rhs.w;
+                });
             ocean.SetRenderConfig(render);
         }
         return changed;

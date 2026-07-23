@@ -28,6 +28,7 @@
 #include "rendering/lighting/SpotLight.h"
 #include "rendering/core/UploadBatch.h"
 #include "app/Systems.h"
+#include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanSimulation.h"
 #if WITH_EDITOR
 #include "editor/scene/EditorSceneDocument.h"
@@ -390,6 +391,18 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         // available for controls, config edits, and live re-enable without reload.
         AddAnonymousObjects(scene, objectRegistry.Create("ocean", creationCtx, oceanJson));
         scene.SetOceanVisible(oceanEnabled);
+
+        // Render settings are level-local overrides layered over the selected ocean preset.
+        // Older levels without this block keep the preset/default values unchanged.
+        if (oceanJson.is_object() && oceanJson.contains("render") && oceanJson["render"].is_object())
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                OceanRenderConfig render = ocean->GetRenderConfig();
+                OceanRenderConfigJson::ApplyOverrides(oceanJson["render"], render);
+                ocean->SetRenderConfig(render);
+            }
+        }
 
         // Apply the level's inline wind overrides (the "scene" block) on top of the
         // preset, so editor-saved wind settings survive reload. No-op if no sim.

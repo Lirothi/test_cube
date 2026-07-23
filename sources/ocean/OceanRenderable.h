@@ -99,6 +99,7 @@ private:
     Math::float2 GetDepthParams() const;
     Math::float4 GetShoreViewParams() const;
     Math::float4 GetShoreDepthParams() const;
+    const OceanRenderConfig& GetRenderConfig() const;
     void UpdateFoamTrailState();
 
 private:
@@ -125,7 +126,6 @@ private:
     float prevCascadesFadeScale_ = 20.0f;
     bool clipMapHasHistory_ = false;
     float cascadesFadeScale_ = 20.0f;
-    float minMeshScale_ = 15.0f;
 
     Texture2D foamDetailTexture_;
     Texture2D foamAlbedoTexture_;

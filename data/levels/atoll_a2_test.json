@@ -416,13 +416,13 @@
   },
   "wind": {
     "directionDeg": 40.0,
-    "foliageSwayMeters": 0.9800000190734863,
+    "foliageSwayMeters": 1.0,
     "gust": {
-      "amplitude": 0.5,
+      "amplitude": 0.20000000298023224,
       "frequencyHz": 0.15000000596046448,
       "seed": 3.0
     },
-    "strength": 1.0,
-    "swayFrequency": 1.75
+    "strength": 0.6000000238418579,
+    "swayFrequency": 1.2000000476837158
   }
 }

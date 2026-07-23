@@ -94,5 +94,16 @@
   "skybox": {
     "texture": "textures/skybox.dds"
   },
-  "spotLights": []
+  "spotLights": [],
+  "wind": {
+    "directionDeg": 40.0,
+    "foliageSwayMeters": 0.3499999940395355,
+    "gust": {
+      "amplitude": 0.5,
+      "frequencyHz": 0.15000000596046448,
+      "seed": 3.0
+    },
+    "strength": 0.15000000596046448,
+    "swayFrequency": 0.8999999761581421
+  }
 }

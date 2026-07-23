@@ -34,16 +34,6 @@ namespace
 
     constexpr int kOverlap = 2;
 
-    const Math::float4 kAbsorptionGradientParams(4.0f, 0.0f, 0.0f, 0.0f);
-    const std::array<Math::float4, 4> kAbsorptionColors = {
-        Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),
-        Math::float4(0.0f, 0.17351386f, 0.43203577f, 0.2f),
-        Math::float4(0.16198544f, 0.68352747f, 0.79865986f, 0.66608685f),
-        Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
-    };
-
-    const Math::float4 kWindParams0(12.0f, 1.0f, 0.5f, 0.2f);
-
     int ClipLevelHalfSize(uint32_t vertexDensity)
     {
         return static_cast<int>((vertexDensity + 1u) * 4u - 1u);
@@ -632,7 +622,11 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
 
-    const auto samplers = std::array{ *SamplerManager::LinearWrap(), *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+    const auto samplers = std::array{
+        *SamplerManager::LinearWrap(),
+        *SamplerManager::LinearClamp(),
+        *SamplerManager::PointClamp(),
+        *SamplerManager::AnisoWrap(16) };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 
     const D3D12_RESOURCE_STATES srvState =
@@ -720,6 +714,7 @@ void OceanRenderable::BuildMesh(Renderer* renderer,
 void OceanRenderable::UpdateClipLevels()
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
+    const OceanRenderConfig& render = GetRenderConfig();
 
     const Math::float3 previousViewer = clipMapViewer_;
     const float previousScale = clipMapScale_;
@@ -727,13 +722,14 @@ void OceanRenderable::UpdateClipLevels()
     const float previousFade = cascadesFadeScale_;
     const bool hadHistory = clipMapHasHistory_;
 
+    cascadesFadeScale_ = render.cascadeFadeScale;
     clipMapLevelHalfSize_ = static_cast<float>(ClipLevelHalfSize(meshVertexDensity_));
     clipMapViewer_ = Math::float3(viewerXZ_.x, viewerHeight_, viewerXZ_.y);
     const float absHeight = std::abs(clipMapViewer_.y);
     int meshExponent = 0;
     if (absHeight > Math::EPS)
     {
-        const float denom = std::max(2.0f * minMeshScale_, Math::EPS);
+        const float denom = std::max(2.0f * render.minMeshScale, Math::EPS);
         const float ratio = absHeight / denom;
         if (ratio > Math::EPS)
         {
@@ -742,7 +738,7 @@ void OceanRenderable::UpdateClipLevels()
     }
 
     const float halfSize = std::max(1.0f, clipMapLevelHalfSize_);
-    clipMapScale_ = (minMeshScale_ / halfSize) * std::pow(2.0f, static_cast<float>(meshExponent));
+    clipMapScale_ = (render.minMeshScale / halfSize) * std::pow(2.0f, static_cast<float>(meshExponent));
     clipMapScale_ = std::max(clipMapScale_, 1.0e-3f);
 
     if (!hadHistory)
@@ -895,7 +891,11 @@ Math::float4 OceanRenderable::GetFoamParams0() const
 Math::float4 OceanRenderable::GetFoamParams1() const
 {
     FoamParams foam = simulation_ ? simulation_->GetFoamParams() : FoamParams::GetDefault();
-    return Math::float4(foam.trail, foam.trailTextureStrength, foam.underwater, 0.6f);
+    return Math::float4(
+        foam.trail,
+        foam.trailTextureStrength,
+        foam.underwater,
+        GetRenderConfig().foamNormalStrength);
 }
 
 Math::float4 OceanRenderable::GetFoamCascadeWeights() const
@@ -906,27 +906,42 @@ Math::float4 OceanRenderable::GetFoamCascadeWeights() const
 
 Math::float4 OceanRenderable::GetSpecularParams() const
 {
-    // spec strength, roughness scale, roughness distance, horizon fog strength
-    return Math::float4(1.1f, 0.7f, 150.0f, 0.55f);
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.specularStrength,
+        render.roughnessScale,
+        render.roughnessDistance,
+        render.horizonFogStrength);
 }
 
 Math::float4 OceanRenderable::GetRefractionParams() const
 {
-    // refraction strengths and absorption parameters
-    return Math::float4(0.35f, 0.75f, 10.0f, 0.1f);
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.surfaceRefractionStrength,
+        render.underwaterRefractionStrength,
+        render.absorptionDepthScale,
+        render.fogDensity);
 }
 
 Math::float4 OceanRenderable::GetSubsurfaceParams() const
 {
-    // subsurface scattering controls
-    // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
-    return Math::float4(0.35f, 0.35f, 0.2f, 0.8f);
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.sunScatterStrength,
+        render.skyScatterStrength,
+        render.scatterSpread,
+        render.viewAlignmentStrength);
 }
 
 Math::float4 OceanRenderable::GetHeightFogParams() const
 {
-    // sss height bias, fade distance, horizon fog distance scale, reflection normal strength
-    return Math::float4(0.0f, 6.0f, 2.5f, 0.05f);
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.sssHeightBias,
+        render.sssFadeDistance,
+        render.horizonFogDistanceScale,
+        render.reflectionNormalStrength);
 }
 
 Math::float4 OceanRenderable::GetSunDirAmbient() const
@@ -957,36 +972,39 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
 
 Math::float4 OceanRenderable::GetDeepScatterColor() const
 {
-    return simulation_ ? simulation_->GetRenderConfig().deepScatterColor : OceanRenderConfig{}.deepScatterColor;
+    return GetRenderConfig().deepScatterColor;
 }
 
 Math::float4 OceanRenderable::GetSssColor() const
 {
-    return simulation_ ? simulation_->GetRenderConfig().sssColor : OceanRenderConfig{}.sssColor;
+    return GetRenderConfig().sssColor;
 }
 
 Math::float4 OceanRenderable::GetDiffuseColor() const
 {
-    return simulation_ ? simulation_->GetRenderConfig().diffuseColor : OceanRenderConfig{}.diffuseColor;
+    return GetRenderConfig().diffuseColor;
 }
 
 Math::float4 OceanRenderable::GetAbsorptionGradientParams() const
 {
-    return kAbsorptionGradientParams;
+    const OceanRenderConfig& render = GetRenderConfig();
+    const float colorCount = static_cast<float>(std::min<size_t>(render.absorptionColors.size(), 8u));
+    return Math::float4(colorCount, render.absorptionGradientType, 0.0f, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetAbsorptionColor(uint32_t index) const
 {
-    if (index >= kAbsorptionColors.size())
+    const std::vector<Math::float4>& colors = GetRenderConfig().absorptionColors;
+    if (index >= colors.size() || index >= 8u)
     {
         return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
-    return kAbsorptionColors[index];
+    return colors[index];
 }
 
 uint32_t OceanRenderable::GetAbsorptionColorCount() const
 {
-    return static_cast<uint32_t>(kAbsorptionColors.size());
+    return static_cast<uint32_t>(std::min<size_t>(GetRenderConfig().absorptionColors.size(), 8u));
 }
 
 mat4 OceanRenderable::GetWorldToWindMatrix() const
@@ -1002,7 +1020,12 @@ mat4 OceanRenderable::GetWorldToWindMatrix() const
 
 Math::float4 OceanRenderable::GetWindParams0() const
 {
-    return kWindParams0;
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.windSpeed,
+        render.wavesScale,
+        render.windAlignment,
+        render.windUvWarpStrength);
 }
 
 Math::float4 OceanRenderable::GetWindParams1() const
@@ -1031,14 +1054,17 @@ Math::float4 OceanRenderable::GetFoamTrailParams1() const
 Math::float4 OceanRenderable::GetFoamParams2() const
 {
     const float blendValue = Math::Clamp(foamTrailBlendValue_, 0.0f, 1.0f);
-    const float contactFoam = simulation_ ? simulation_->GetRenderConfig().contactFoamStrength : 0.1f;
-    const float underwaterParallax = 1.6f;
-    return Math::float4(blendValue, contactFoam, underwaterParallax, 0.0f);
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        blendValue,
+        render.contactFoamStrength,
+        render.underwaterFoamParallax,
+        0.0f);
 }
 
 Math::float4 OceanRenderable::GetFoamTint() const
 {
-    return simulation_ ? simulation_->GetRenderConfig().foamTint : OceanRenderConfig{}.foamTint;
+    return GetRenderConfig().foamTint;
 }
 
 Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) const
@@ -1080,6 +1106,12 @@ Math::float4 OceanRenderable::GetShoreDepthParams() const
     }
 
     return { 0.1f, 50.0f, 0.0f, 0.0f };
+}
+
+const OceanRenderConfig& OceanRenderable::GetRenderConfig() const
+{
+    static const OceanRenderConfig defaultRenderConfig;
+    return simulation_ ? simulation_->GetRenderConfig() : defaultRenderConfig;
 }
 
 void OceanRenderable::SetGridVertexDensity(uint32_t density)

@@ -40,6 +40,7 @@ public:
             cbHandles_.windStrength = material->ComputeCBFieldHandle(0, "windStrength");
             cbHandles_.windFoliage = material->ComputeCBFieldHandle(0, "windFoliage");
             cbHandles_.windTrunkStiff = material->ComputeCBFieldHandle(0, "windTrunkStiff");
+            cbHandles_.windLeafScale = material->ComputeCBFieldHandle(0, "windLeafScale");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
         }
 
@@ -50,6 +51,7 @@ public:
             shadowHandles_.windStrength = shadowMaterial->ComputeCBFieldHandle(0, "windStrength");
             shadowHandles_.windFoliage = shadowMaterial->ComputeCBFieldHandle(0, "windFoliage");
             shadowHandles_.windTrunkStiff = shadowMaterial->ComputeCBFieldHandle(0, "windTrunkStiff");
+            shadowHandles_.windLeafScale = shadowMaterial->ComputeCBFieldHandle(0, "windLeafScale");
         }
     }
 
@@ -76,6 +78,8 @@ public:
         UpdateUniform(owner, cbHandles_.windFoliage, material, p.windFoliage, cbData); // per-slot
         UpdateUniform(owner, cbHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
+        UpdateUniform(owner, cbHandles_.windLeafScale, material,
+                      gb ? gb->GetWindLeafScaleWorld() : 0.0f, cbData);
         UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
     }
 
@@ -96,6 +100,8 @@ public:
         UpdateUniform(owner, shadowHandles_.windFoliage, material, sp.windFoliage, cbData);
         UpdateUniform(owner, shadowHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
+        UpdateUniform(owner, shadowHandles_.windLeafScale, material,
+                      gb ? gb->GetWindLeafScaleWorld() : 0.0f, cbData);
     }
 
 private:
@@ -113,6 +119,7 @@ private:
         Material::CBFieldHandle windStrength;
         Material::CBFieldHandle windFoliage;
         Material::CBFieldHandle windTrunkStiff;
+        Material::CBFieldHandle windLeafScale;
         Material::CBFieldHandle objectId;
     } cbHandles_{};
 
@@ -122,6 +129,7 @@ private:
         Material::CBFieldHandle windStrength;  // W5
         Material::CBFieldHandle windFoliage;
         Material::CBFieldHandle windTrunkStiff;
+        Material::CBFieldHandle windLeafScale;
     } shadowHandles_{};
 };
 } // namespace
@@ -515,11 +523,21 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     const auto e = p.EmissiveLinear();
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
     out.windStrength = p.windStrength; // W3: uniform per object (matParamses_ all carry the same value)
-    out._windReserved = 0.0f;
+    out.windLeafScale = GetWindLeafScaleWorld();
     // Slot 0's foliage weight. ShadowGpuData overwrites this PER SLOT (its caster ids are already
     // one per slot) and the multi-slot instanced gbuffer reads its own from the slot CB.
     out.windFoliage = p.windFoliage;
     out.windTrunkStiff = windTrunkStiffness_;
+}
+
+float GBufferRenderable::GetWindLeafScaleWorld() const
+{
+    const Mesh* mesh = GetMesh();
+    if (!mesh) { return 0.0f; }
+    const float objScale = mesh->GetWindLeafScale();
+    if (!(objScale > 0.0f)) { return 0.0f; }
+    const Math::float3 s = GetScale();
+    return objScale * std::max({ std::abs(s.x), std::abs(s.y), std::abs(s.z) });
 }
 
 void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)

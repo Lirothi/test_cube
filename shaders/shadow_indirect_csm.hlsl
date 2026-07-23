@@ -48,7 +48,7 @@ struct InstancePerObject
     uint     objectId;
     uint3    _instPad1;    // aliases the gbuffer's `emissive` (unused here)
     float    windStrength;  // W3: per-object foliage sway strength (consumed by the shadow VS in W5)
-    float    _windReserved;  // free since W7.3 (baked weight replaced the height profile)
+    float    windLeafScale;  // W7.4: WORLD metres of leaf arc per unit of COLOR_0.b (0 = unbaked)
     float    windFoliage;    // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float    windTrunkStiff; // per-object; divides the main bend
 };
@@ -77,11 +77,12 @@ cbuffer PerView : register(b1)
 // Mirrors gbuffer_common.hlsli::ApplyWindWS exactly (that header is not included here — this shader
 // declares its own leaner PerObject/PerView). Any drift between the two detaches the shadow.
 inline float4 WindTransformH(float3 objPos, float4x4 world, float4 windWeights,
-                             float windStrengthValue, float foliageValue, float trunkStiffValue)
+                             float windStrengthValue, float foliageValue, float trunkStiffValue,
+                             float leafScaleValue)
 {
     float4 wp = mul(float4(objPos, 1.0f), world);
     wp.xyz += WindOffset(objPos, wp.xyz, float3(world._41, world._42, world._43), windStrengthValue,
-                         windWeights, foliageValue, trunkStiffValue,
+                         windWeights, foliageValue, trunkStiffValue, leafScaleValue,
                          windDirXZ, windSwayAmp, windSwayFreq, windGustMul, windTime);
     return mul(wp, viewProj);
 }
@@ -113,7 +114,8 @@ VSOutMasked VSMain(VSInMasked i)
 {
     VSOutMasked o;
     const InstancePerObject ip = Instances[i.casterId];
-    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff);
+    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff,
+                         ip.windLeafScale);
     o.UV = i.UV;
     const uint2 gm = GroupMask[CasterGroup[i.casterId]];
     o.texSlot = gm.x;
@@ -144,7 +146,8 @@ VSOutD VSMain(VSInIndirect i)
 {
     VSOutD o;
     const InstancePerObject ip = Instances[i.casterId];
-    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff);
+    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff,
+                         ip.windLeafScale);
     return o;
 }
 

@@ -96,6 +96,27 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
         bounds.Expand(Math::float3(vert.position.x, vert.position.y, vert.position.z));
     }
     bounds_ = bounds;
+
+    // W7.4: the wind bake stores the along-limb scale in COLOR_0.a as a fraction of the bbox
+    // diagonal (0 = the mesh was never baked). Recovering it here gives the shader the metres it
+    // needs to bound a leaf's streaming by the leaf's own length. It is one constant for the whole
+    // mesh, so the first baked vertex is enough.
+    windLeafScale_ = 0.0f;
+    if (bounds_.IsValid())
+    {
+        const Math::float3 ext = bounds_.GetMax() - bounds_.GetMin();
+        const float diagonal = std::sqrt(ext.x * ext.x + ext.y * ext.y + ext.z * ext.z);
+        for (const VertexPNTUV& vert : verts)
+        {
+            const uint32_t a = vert.color >> 24;
+            if (a != 0u)
+            {
+                windLeafScale_ = (static_cast<float>(a - 1u) / 254.0f) * diagonal;
+                break;
+            }
+        }
+    }
+
     if (bounds_.IsValid())
     {
         const Math::float3 center = bounds_.GetCenter();

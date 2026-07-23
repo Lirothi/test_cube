@@ -39,6 +39,7 @@
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
 #include "ocean/OceanRenderable.h"
+#include "ocean/OceanRenderConfigJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "ocean/OceanSimulation.h"
@@ -3235,6 +3236,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                         oceanEntity.properties = nlohmann::json::object();
                         oceanEntity.properties["enabled"] = true;
                         oceanEntity.properties["preset"] = preset;
+                        if (const OceanSimulation* ocean = Systems::GetOceanSimulation())
+                        {
+                            oceanEntity.properties["render"] =
+                                OceanRenderConfigJson::ToJson(ocean->GetRenderConfig());
+                        }
                         document_.Environment().push_back(std::move(oceanEntity));
                         document_.SetDirty(true);
                     }

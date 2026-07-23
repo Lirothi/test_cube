@@ -905,6 +905,9 @@
     <ClInclude Include="sources/rendering/core/UploadManager.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/ocean/OceanRenderConfigJson.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
     <ClInclude Include="sources/ocean/OceanRenderable.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>

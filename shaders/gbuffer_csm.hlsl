@@ -13,7 +13,7 @@ VSOutD VSMain(VSIn i)
     // shadow tracks the swaying tree exactly like the indirect path does.
     float4 wp = mul(float4(i.P, 1.0f), world);
     wp.xyz += ApplyWindWS(i.P, wp.xyz, world, windStrength, i.WIND, windFoliage,
-                          windTrunkStiff, windGustMul, windTime);
+                          windTrunkStiff, windLeafScale, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;
 }

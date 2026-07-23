@@ -90,7 +90,7 @@ VSOutInst VSMain(VSInInst i)
     const float foliageW = d.windFoliage;
 #endif
     VSOut b = BaseVS(i.P, d.world, d.prevWorld, viewProj, i.N, i.T, i.UV, d.objectId,
-                     i.WIND, d.windStrength, foliageW, d.windTrunkStiff);
+                     i.WIND, d.windStrength, foliageW, d.windTrunkStiff, d.windLeafScale);
 
     VSOutInst o;
     o.H = b.H;

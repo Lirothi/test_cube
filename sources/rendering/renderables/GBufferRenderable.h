@@ -52,6 +52,11 @@ public:
     // slots (the staged palm's frond bases are opaque), which is why the explicit list exists.
     void SetWindTrunkStiffness(float s) { windTrunkStiffness_ = s; }
     float GetWindTrunkStiffness() const { return windTrunkStiffness_; }
+    // WORLD metres of arc that the baked COLOR_0.b == 1 stands for. The shader bounds a leaf's
+    // streaming by this so the leaf never outruns its own length. 0 when the mesh has no wind bake.
+    // Uses the largest axis scale: it is a length along the leaf, and over-estimating it only
+    // loosens the bound, whereas under-estimating would visibly stiffen the foliage.
+    float GetWindLeafScaleWorld() const;
     void SetWindFoliageWeights(std::vector<float> w) { windFoliageWeights_ = std::move(w); }
     // Resolved foliage weight of a material slot (slot 0 when the index is out of range).
     // ShadowGpuData uses this to give each per-slot caster id its own weight.

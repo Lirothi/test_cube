@@ -1,4 +1,4 @@
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
@@ -65,7 +65,8 @@ Texture2D ShoreDepthTexture : register(t12);
 Texture2D OceanReflectionTexture : register(t13);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
-SamplerState PointSampler : register(s2);
+SamplerState PointClampSampler : register(s2);
+SamplerState AnisotropicWrapSampler : register(s3);
 
 struct VSInput
 {
@@ -154,6 +155,7 @@ struct BrunetonInputs
 static const float3 kSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
+static const float kSkyRoughMaxMip = 5.0f;
 static const float kLodThreshold = 0.05f;
 
 static const uint kGradientMaxKeys = 8u;
@@ -213,7 +215,7 @@ float2 ScreenUVToNDC(float2 uv)
 
 float SampleSceneDepth(float2 uv)
 {
-    return SceneDepthTexture.SampleLevel(PointSampler, uv, 0).r;
+    return SceneDepthTexture.SampleLevel(PointClampSampler, uv, 0).r;
 }
 
 float3 ViewSpacePosition(float depthSample, float2 uv)
@@ -327,12 +329,11 @@ float3 SampleDisplacementCascadeTexture(Texture2DArray<float4> tex, float2 world
     return sample.xyz;
 }
 
-float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
+float4 SampleDerivativesCascade(float2 worldXZ, uint cascade, float mipBias)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
-    //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -2.0f); //give more details far away
+    float4 sample = DisplacementDerivatives.SampleBias(AnisotropicWrapSampler, uvw, mipBias);
     return sample;
 }
 
@@ -365,7 +366,7 @@ float3 SamplePreviousDisplacement(float2 worldXZ, float4 weights, uint cascadesC
     return SampleDisplacementTexture(PrevDisplacementDerivatives, worldXZ, weights, cascadesCount);
 }
 
-DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
+DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount, float mipBias)
 {
     DerivativesSet derivatives;
     [unroll]
@@ -383,9 +384,9 @@ DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCo
         }
 
         float w = weights[cascade];
-        if (cascade == 0 || w > kLodThreshold)
+        if (w > kLodThreshold)
         {
-            derivatives.cascades[cascade] = SampleDerivativesCascade(worldXZ, cascade) * w;
+            derivatives.cascades[cascade] = SampleDerivativesCascade(worldXZ, cascade, mipBias) * w;
         }
     }
     return derivatives;
@@ -430,7 +431,7 @@ float GetAttenuation(float2 worldUV)
             float viewDepth = ShoreViewDepth(shoreDepth);
             float terrainHeight = shoreViewParams.z - viewDepth;
             float waterDepth = -terrainHeight;
-            attenuation = max(saturate(waterDepth * 0.15f), 0.05f);
+            attenuation = max(saturate(waterDepth * 0.25f), 0.05f);
         }
     }
     return attenuation;
@@ -758,11 +759,15 @@ float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
     return saturate(fresnel);
 }
 
-float3 Specular(const LightingInput li, const BrunetonInputs bi)
+float OceanSurfaceRoughness(const LightingInput li)
+{
+    return saturate(specularParams.y * (1.0f + li.roughnessMap * 0.3f));
+}
+
+float3 Specular(const LightingInput li, const BrunetonInputs bi, float roughness)
 {
     //(void)bi;
     float3 halfDir = normalize(-li.mainLight.direction + li.viewDir);
-    float roughness = saturate(specularParams.y * (1.0f + li.roughnessMap * 0.3f));
     float specPower = lerp(kSpecularMinPower, kSpecularMaxPower, 1.0f - roughness);
     float spec = pow(saturate(dot(li.normal, halfDir)), specPower);
     spec *= specularParams.x * li.mainLight.shadowAttenuation;
@@ -787,13 +792,14 @@ float OceanReflectionEdgeFade(float2 uv)
     return saturate(min(edgeDist.x, edgeDist.y) * 64.0f);
 }
 
-float3 Reflection(const LightingInput li)
+float3 Reflection(const LightingInput li, float roughness)
 {
-    float reflectionNormalStrength = heightFogParams.w;
+    float reflectionNormalStrength = saturate(heightFogParams.w);
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
-    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, 3).rgb;
+    float skyMip = roughness * kSkyRoughMaxMip;
+    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, skyMip).rgb;
     float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
     float edgeFade = OceanReflectionEdgeFade(reflectionUV);
     float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);
@@ -909,19 +915,20 @@ float4 HorizonBlend(const LightingInput li)
     return float4(horizonColor, saturate(blend));
 }
 
-float3 GetOceanColor(const LightingInput li, const FoamData foamData)
+float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const FoamData foamData)
 {
-    BrunetonInputs bi = BuildBrunetonInputs(li);
-    float2 sss = SubsurfaceScatteringFactor(li);
+    BrunetonInputs bi = BuildBrunetonInputs(macroLi);
+    float2 sss = SubsurfaceScatteringFactor(macroLi);
     float3 foamLitColor = LitFoamColor(li, foamData);
+    float roughness = OceanSurfaceRoughness(li);
 
-    float fresnel = EffectiveFresnel(li, bi);
-    float3 specular = Specular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.y));
-    float3 reflected = Reflection(li);
+    float fresnel = EffectiveFresnel(macroLi, bi);
+    float3 specular = Specular(li, bi, roughness) * Pow5(1.0f - saturate(foamData.coverage.y));
+    float3 reflected = Reflection(macroLi, roughness);
     //return reflected;
-    float3 refracted = Refraction(li, foamData, sss, foamLitColor);
+    float3 refracted = Refraction(macroLi, foamData, sss, foamLitColor);
     //return refracted;
-    float4 horizon = HorizonBlend(li);
+    float4 horizon = HorizonBlend(macroLi);
     //return horizon.aaa;
 
     float3 color = specular + lerp(refracted, reflected, fresnel);
@@ -950,10 +957,20 @@ PSOut PSMain(VSOutput input)
     float attenuation = GetAttenuation(baseWorld.xz);
     
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
-    float4 activeCascades = ActiveCascadesMask(cascadesCount);
-    float4 combinedDerivatives = CombineDerivatives(deriv, max(attenuation.xxxx, 0.1f.xxxx) /*float4(1.0f, 1.0f, 1.0f, 1.0f)*/);
+    static const float kDetailNormalMipBias = 0.0f;
+    static const float kMacroNormalMipBias = 1.0f;
+    DerivativesSet macroDeriv = SampleDerivatives(input.baseXZ, weights, cascadesCount, kMacroNormalMipBias);
+    DerivativesSet deriv = macroDeriv;
+    if (weights.x > kLodThreshold)
+    {
+        deriv.cascades[0] = SampleDerivativesCascade(input.baseXZ, 0u, kDetailNormalMipBias) * weights.x;
+    }
+
+    float4 normalWeights = max(attenuation.xxxx, 0.1f.xxxx);
+    float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
+    float4 macroCombinedDerivatives = CombineDerivatives(macroDeriv, normalWeights);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
+    float3 macroNormal = NormalFromCombinedDerivatives(macroCombinedDerivatives);
     //return float4(normal, 1);
 
     float3 viewDir = normalize(clipMapViewer.xyz - input.worldPos);
@@ -1002,7 +1019,11 @@ PSOut PSMain(VSOutput input)
     li.mainLight = light;
     li.ambient = sunDirAmbient.w;
 
-    float3 color = GetOceanColor(li, foamData);
+    LightingInput macroLi = li;
+    macroLi.normal = macroNormal;
+    macroLi.slopeFactor = saturate(1.0f - macroNormal.y);
+
+    float3 color = GetOceanColor(li, macroLi, foamData);
     float4 outColor = float4(saturate(color), 1.0f);
 
     float2 currUv = ClipToUV(input.positionNDC);

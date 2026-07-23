@@ -485,6 +485,7 @@
     <ClInclude Include="sources/materials/Texture2D.h" />
     <ClInclude Include="sources/materials/TextureCube.h" />
     <ClInclude Include="sources/rendering/core/UploadManager.h" />
+    <ClInclude Include="sources/ocean/OceanRenderConfigJson.h" />
     <ClInclude Include="sources/ocean/OceanRenderable.h" />
     <ClInclude Include="sources/ocean/OceanSimulationConfig.h" />
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
