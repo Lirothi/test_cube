@@ -730,8 +730,12 @@ namespace
         return names;
     }
 
+    // W7.1b: `binGeometry` is our baked .mesh.bin under models/<name>/ (what the runtime loads;
+    // mesh.json "geometry"). `sourceGltf` is the staging glTF (mesh.json "source"), used to BAKE the
+    // .bin and to generate material files — the glTF is never copied into models/ anymore.
     bool WriteImportedMeshAsset(const fs::path& path,
-        const std::string& geometry,
+        const std::string& binGeometry,
+        const std::string& sourceGltf,
         float spawnScale,
         const std::string& materialBaseName)
     {
@@ -747,13 +751,33 @@ namespace
             }
         }
 
-        asset["geometry"] = geometry;
-        // First import (no material binding yet): promote the glTF's auto-materials to named
-        // files. A re-import keeps whatever material/materials the asset already carries.
+        // Bake the staging glTF -> our binary geometry (CPU-only). Match the runtime mesh load:
+        // wantCW=false winding, plus the mesh.json's authored recomputeNormalSlots (a Mesh Editor
+        // override survives re-import here) — otherwise the baked winding/normals would drift.
+        MeshLoadOptions bakeOpt;
+        bakeOpt.generateTangentSpace = true;
+        bakeOpt.wantCW = false;
+        if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
+        {
+            for (const nlohmann::json& s : asset["recomputeNormalSlots"])
+            {
+                if (s.is_number_integer()) { bakeOpt.recomputeNormalSlots.push_back(s.get<uint32_t>()); }
+            }
+        }
+        {
+            MeshManager mm;
+            if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt)) { return false; }
+        }
+
+        asset["geometry"] = binGeometry;
+        asset["source"] = sourceGltf;
+        // First import (no material binding yet): promote the glTF's auto-materials to named files
+        // (read from the SOURCE glTF; their texture paths are repointed staging->models by the
+        // caller). A re-import keeps whatever material/materials the asset already carries.
         if (!asset.contains("material") && !asset.contains("materials"))
         {
             const std::vector<std::string> names =
-                GenerateMaterialFilesForGltf(geometry, materialBaseName);
+                GenerateMaterialFilesForGltf(sourceGltf, materialBaseName);
             bool anyNamed = false;
             for (const std::string& n : names) { if (n != "auto") { anyNamed = true; break; } }
             if (!anyNamed || names.empty()) { asset["material"] = "auto"; }
@@ -855,13 +879,14 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         fs::path(item.gltfFile), fs::path(item.path), relEc);
     if (relEc || !IsSafeRelativePath(rel)) { return false; }
 
-    const fs::path dst = ProjectDest(item);
-    const std::string geometry = (dst / rel).generic_string();
-    const fs::path meshAssetRoot = dst.parent_path();
+    const fs::path dst = ProjectDest(item);           // models/<name>
+    const fs::path meshAssetRoot = dst.parent_path(); // models/
+    const std::string source = item.gltfFile;         // import_staging/<name>/scene.gltf (stays there)
     if (splitNodes.empty())
     {
+        const std::string binGeom = (dst / (item.name + ".mesh.bin")).generic_string();
         return WriteImportedMeshAsset(
-            meshAssetRoot / (item.name + ".mesh.json"), geometry, spawnScale, item.name);
+            meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name);
     }
 
     for (const std::string& node : splitNodes)
@@ -869,8 +894,10 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         const std::string component = MeshAssetFileComponent(node);
         const fs::path meshAssetPath = meshAssetRoot /
             (item.name + "_node_" + component + ".mesh.json");
-        if (!WriteImportedMeshAsset(meshAssetPath,
-                geometry + "#node:" + node, spawnScale, item.name + "_" + component))
+        const std::string binGeom =
+            (dst / (item.name + "_node_" + component + ".mesh.bin")).generic_string();
+        if (!WriteImportedMeshAsset(meshAssetPath, binGeom,
+                source + "#node:" + node, spawnScale, item.name + "_" + component))
         {
             return false;
         }
@@ -1514,7 +1541,10 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     if (ec) { break; }
                     if (!it->is_regular_file(ec)) { continue; }
                     const std::string ext = LowerExt(it->path());
-                    if (!IsEngineReady(ext)) { continue; }
+                    // W7.1b: copy only converted textures (.dds) into models/. Geometry ships as
+                    // our baked .mesh.bin (written by RecreateMeshAssets below); the glTF + its .bin
+                    // stay in import_staging/ (source, kept for re-import).
+                    if (ext != ".dds") { continue; }
 
                     std::error_code rec;
                     const fs::path rel = fs::relative(it->path(), activeItem_.path, rec);
@@ -1592,6 +1622,14 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
             {
                 finalizeFailed = !RecreateMeshAssets(activeItem_,
                     activeMeshSpawnScale_, activeMeshSplitNodes_);
+                // W7.1b: RecreateMeshAssets generated material files from the STAGING glTF, so their
+                // texture paths point into import_staging/; repoint them to the copied models/ DDS
+                // (mirrors the TextureSet repoint above). No-op on re-import (files preserved).
+                if (!finalizeFailed)
+                {
+                    RepointPresetPaths("import_staging/" + activeItem_.name + "/",
+                        "models/" + activeItem_.name + "/");
+                }
             }
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());

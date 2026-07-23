@@ -1,12 +1,12 @@
 {
   "geometry": "models/date_palm/date_palm.mesh.bin",
-  "source": "import_staging/date_palm/scene.gltf",
   "materials": [
     "date_palm_0",
     "date_palm_1",
     "date_palm_2",
     "date_palm_3"
   ],
+  "source": "import_staging\\date_palm\\scene.gltf",
   "texOffsScale": null,
   "windFoliage": [
     0.0,

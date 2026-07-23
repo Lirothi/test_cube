@@ -335,9 +335,15 @@ freshness checks are now optional (null for a directly-referenced committed `.bi
 - **Item 3** — removed dead hashed-cache methods (`BinCachePath`/`TryLoadBinary`/old `BakeToBinary(path,opt)`) + `/cache/` gitignore line. Builds clean.
 - **Item 2** — ALL glTF assets migrated to `.bin` + glTF+`scene.bin` **pruned** from `models/` (DDS kept): 3 palms + 2 boulders + rocks (2 `#node` sub-meshes). mesh.json `geometry`→`.bin` + `source`→staging glTF. atoll renders all of them from `.bin` with correct winding, glTF absent from `models/`.
 
+**Item 1 — ImportPanel rework — DONE (2026-07-23, Debug-build-verified; in-editor import test pending):**
+- `WriteImportedMeshAsset(path, binGeometry, sourceGltf, ...)`: bakes `sourceGltf → binGeometry` via `MeshManager::BakeToBinary` (wantCW=false + the mesh.json's authored `recomputeNormalSlots`, which survive re-import), writes `geometry`=`.bin` + `source`=staging glTF, and generates material files from the SOURCE glTF.
+- `RecreateMeshAssets`: `binGeom = models/<name>/<name>.mesh.bin` (+ per-node for splits), `source = item.gltfFile` (staging, +`#node:` for splits).
+- Copy loop: `.dds` only (glTF/glb/bin no longer copied into `models/`; the source stays in `import_staging/`).
+- After `RecreateMeshAssets`, `RepointPresetPaths(import_staging/<name>/ → models/<name>/)` (material texture paths; mirrors the TextureSet repoint). No-op on re-import (material files preserved).
+- Debug clean. Bake step = the same `BakeToBinary` the `--reimport` migration proved. **Still needs one real in-editor import of a NEW asset to confirm the full flow (copy/material-gen/repoint) end to end.**
+
 **REMAINING:**
-1. **Item 1 — ImportPanel rework (DEFERRED, needs an in-editor import to verify):** on import, bake `stagingGlTF → models/<name>/<name>.mesh.bin` + write `mesh.json` `geometry`=`.bin`+`source`=staging, and stop copying glTF/glb/bin into `models/` (`IsEngineReady` → `.dds` only). Tangled: `WriteImportedMeshAsset` uses `geometry` for BOTH the ref AND material-gen/submesh-count (must split → source), plus the `#node`-split path. All-or-nothing (a partial change breaks imports), and GUI-verified — so a focused editor pass, not a blind tail-end edit. The `--reimport` CLI is the verified headless equivalent of the bake step.
-2. W7.2: fill `VertexPNTUV.color` (geodesic bake) inside `BakeToBinary` before serialize.
+1. W7.2: fill `VertexPNTUV.color` (geodesic bake) inside `BakeToBinary` before serialize.
 
 --- (original W7.1b spec below, now partly superseded by the above) ---
 

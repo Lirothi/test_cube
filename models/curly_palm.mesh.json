@@ -1,6 +1,5 @@
 {
   "geometry": "models/curly_palm/curly_palm.mesh.bin",
-  "source": "import_staging/curly_palm/scene.gltf",
   "inputLayout": "PosNormTanUV",
   "materials": [
     "curly_palm_0",
@@ -11,6 +10,7 @@
   "recomputeNormalSlots": [
     1
   ],
+  "source": "import_staging\\curly_palm\\scene.gltf",
   "texOffsScale": null,
   "windFoliage": [
     0.0,

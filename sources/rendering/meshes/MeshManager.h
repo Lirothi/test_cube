@@ -10,7 +10,7 @@ class Renderer;
 
 struct MeshLoadOptions {
     bool generateTangentSpace = true; // Compute normals/tangents if the file does not provide them
-    bool wantCW = true;               // Convert triangles to CW (for D3D12 FrontCounterClockwise = FALSE)
+    bool wantCW = false;               // Convert triangles to CW (for D3D12 FrontCounterClockwise = FALSE)
     int  iBase  = 0;                  // Index base used in "i a b c"
     // Material/submesh slots whose authored vertex normals are discarded before tangent-space
     // generation. Tangents are regenerated as well so the resulting TBN stays coherent.

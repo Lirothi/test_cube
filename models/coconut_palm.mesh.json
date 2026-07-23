@@ -1,6 +1,5 @@
 {
   "geometry": "models/coconut_palm/coconut_palm.mesh.bin",
-  "source": "import_staging/coconut_palm/scene.gltf",
   "materials": [
     "coconut_palm_0",
     "coconut_palm_1",
@@ -13,7 +12,7 @@
     3,
     4
   ],
-  "spawnScale": 1.0,
+  "source": "import_staging\\coconut_palm\\scene.gltf",
   "texOffsScale": [
     0.0,
     0.0,
