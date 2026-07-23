@@ -142,6 +142,15 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     const uint8_t tangents = opt.generateTangentSpace ? 1u : 0u;
     uint64_t h = Fnv1a(&tangents, 1);
     if (!slots.empty()) { h = Fnv1a(slots.data(), slots.size() * sizeof(uint32_t), h); }
+    // Only the wood/foliage PATTERN reaches the baked geometry, not the weights: hashing the raw
+    // floats would invalidate every .bin whenever an artist nudges a slider that the runtime reads
+    // anyway. Bit i = "slot i is foliage".
+    uint64_t pattern = 0;
+    for (size_t i = 0; i < opt.slotFoliage.size() && i < 64; ++i)
+    {
+        if (opt.slotFoliage[i] > 0.0f) { pattern |= (1ull << i); }
+    }
+    if (pattern != 0) { h = Fnv1a(&pattern, sizeof(pattern), h); }
     return h;
 }
 
@@ -348,7 +357,15 @@ inline float Dist3(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b)
 
 // Fill VertexPNTUV::color for every vertex. No-op (leaves color 0 = rigid) if the mesh is too
 // degenerate to walk.
-void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+//
+// `submeshes` + `slotFoliage` (mesh.json "windFoliage", one entry per material slot) tell the bake
+// which geometry is WOOD (weight 0) and which is FOLIAGE. That classification is what lets the
+// along-limb channel be a distance from the wood surface rather than a per-component ramp; without it
+// the bake still works, it just falls back to the per-component ramp. Pass them whenever they exist:
+// a mesh baked without them and then given per-slot foliage weights can show a step at every junction
+// the modeller happened to cut.
+void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
+    const std::vector<Mesh::Submesh>& submeshes, const std::vector<float>& slotFoliage)
 {
     const size_t vcount = verts.size();
     if (vcount == 0 || indices.size() < 3) { return; }
@@ -397,6 +414,32 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     }
     const uint32_t wcount = static_cast<uint32_t>(wpos.size());
     if (wcount == 0) { return; }
+
+    // ---- wood/foliage classification from the per-slot weights ----
+    std::vector<uint32_t> woodSeeds;
+    bool haveLeaf = false;
+    if (!slotFoliage.empty() && !submeshes.empty())
+    {
+        std::vector<uint8_t> kind(vcount, 0); // bit0 = referenced, bit1 = referenced by a foliage slot
+        for (const Mesh::Submesh& s : submeshes)
+        {
+            const bool leaf = (s.materialSlot < slotFoliage.size()) && (slotFoliage[s.materialSlot] > 0.0f);
+            const size_t end = std::min<size_t>(indices.size(), static_cast<size_t>(s.indexOffset) + s.indexCount);
+            for (size_t i = s.indexOffset; i < end; ++i)
+            {
+                const uint32_t v = indices[i];
+                if (v < vcount) { kind[v] |= static_cast<uint8_t>(leaf ? 0x3 : 0x1); }
+            }
+        }
+        std::vector<uint8_t> seedMark(wcount, 0);
+        for (size_t i = 0; i < vcount; ++i)
+        {
+            if (!(kind[i] & 0x1)) { continue; }
+            if (kind[i] & 0x2) { haveLeaf = true; }
+            else { seedMark[weldOf[i]] = 1; }
+        }
+        for (uint32_t i = 0; i < wcount; ++i) { if (seedMark[i]) { woodSeeds.push_back(i); } }
+    }
 
     // ---- edge graph from triangles ----
     std::vector<std::vector<std::pair<uint32_t, float>>> adj(wcount);
@@ -470,6 +513,11 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     relax();
 
     // ---- bridge unreachable islands to the nearest reached vertex, cheapest gap first ----
+    // Cheapest-gap-first is what builds the hierarchy: a frond blade sits ~0 mm from its own petiole
+    // but ~10 cm from the trunk, so it attaches to the petiole and the chain crown -> petiole -> blade
+    // comes out right. Do NOT "improve" this into attaching everything to the trunk first: maxBridge
+    // is 15 % of the diagonal, so the trunk is within reach of most of the canopy and the chain would
+    // collapse, rooting every blade at the trunk instead of at its own stem.
     WeldGrid grid;
     {
         grid.mn = bbMin;
@@ -532,6 +580,10 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
         if (bestComp < 0 || !std::isfinite(bestGap) || bestGap > maxBridge) { break; }
         dist[bestFrom] = dist[bestTo] + bestGap;
         parent[bestFrom] = bestTo;
+        // The bridge is also a real edge of the graph from here on: the wood-distance pass below has
+        // to be able to walk crown -> petiole -> blade, and those junctions are bridges, not triangles.
+        adj[bestFrom].emplace_back(bestTo, bestGap);
+        adj[bestTo].emplace_back(bestFrom, bestGap);
         pq.emplace(dist[bestFrom], bestFrom);
         relax();
         compReached[bestComp] = true;
@@ -551,42 +603,70 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
     // palm it produced 164 distinct anchors across 35 fronds, because "1.34 m back from ME" is a
     // per-vertex point, not a per-limb one. A welded single-island mesh degrades to one phase for
     // the whole plant, which is correct-but-boring rather than broken.
-    // ---- B: distance from the limb's axis (anchor -> farthest vertex), per component ----
-    std::vector<float> edgeW(wcount, 0.0f);
+    // ---- B: position ALONG the limb, 0 at its own attachment -> 1 at its tip ----
+    // NOT the global geodesic r. A frond's streaming must bend it about ITS OWN base; driving that
+    // with r (which is 0.62..1.00 on a coconut frond) gives the frond BASE 62 % of the push, so the
+    // whole leaf translates away from the crown and the canopy tears into streaks.
+    //
+    // Per-component normalisation (below) is only the FALLBACK, because "component" is a modelling
+    // accident, not an anatomical limb. On the coconut palm a frond is a petiole (slot 3, 42 sticks)
+    // plus a blade (slot 2, 36 cards), and only some of those pairs are welded: on the rest, b runs
+    // 0..1 along the petiole and then RESTARTS at 0 on the blade. The two sides of that junction then
+    // differ by the full streaming term -- a measured 1.3 m step at swayAmp 1 -- which reads as a leaf
+    // snapped in half a third of the way out. Whether it shows depends on the authored windFoliage,
+    // which is why raising the petiole's weight to match the blade's exposed it.
+    std::vector<float> alongLimb(wcount, 0.0f);
     for (int ci = 0; ci < compCount; ++ci)
     {
         const std::vector<uint32_t>& vs = compVerts[ci];
-        if (vs.size() < 3) { continue; }
-        uint32_t anchor = 0xFFFFFFFFu, tip = 0xFFFFFFFFu;
         float dmin = kInf, dmax = -kInf;
         for (uint32_t v : vs)
         {
             if (!std::isfinite(dist[v])) { continue; }
-            if (dist[v] < dmin) { dmin = dist[v]; anchor = v; }
-            if (dist[v] > dmax) { dmax = dist[v]; tip = v; }
+            dmin = std::min(dmin, dist[v]);
+            dmax = std::max(dmax, dist[v]);
         }
-        if (anchor == 0xFFFFFFFFu || tip == 0xFFFFFFFFu || anchor == tip) { continue; }
-        // The seed component is the trunk: an "edge distance from its axis" is meaningless there, and
-        // leaving it non-zero would invite a shader to flutter the trunk. Keep B purely about leaves.
-        if (dmin <= 0.0f) { continue; }
-        DirectX::XMFLOAT3 ax{ wpos[tip].x - wpos[anchor].x, wpos[tip].y - wpos[anchor].y,
-                              wpos[tip].z - wpos[anchor].z };
-        const float axLen = std::sqrt(ax.x * ax.x + ax.y * ax.y + ax.z * ax.z);
-        if (!(axLen > 0.0f)) { continue; }
-        ax.x /= axLen; ax.y /= axLen; ax.z /= axLen;
-        float maxPerp = 0.0f;
-        std::vector<float> perp(vs.size(), 0.0f);
-        for (size_t k = 0; k < vs.size(); ++k)
+        if (!std::isfinite(dmin) || !(dmax > dmin)) { continue; }
+        const float inv = 1.0f / (dmax - dmin);
+        for (uint32_t v : vs)
         {
-            const DirectX::XMFLOAT3& p = wpos[vs[k]];
-            DirectX::XMFLOAT3 rel{ p.x - wpos[anchor].x, p.y - wpos[anchor].y, p.z - wpos[anchor].z };
-            const float along = rel.x * ax.x + rel.y * ax.y + rel.z * ax.z;
-            DirectX::XMFLOAT3 perpV{ rel.x - ax.x * along, rel.y - ax.y * along, rel.z - ax.z * along };
-            perp[k] = std::sqrt(perpV.x * perpV.x + perpV.y * perpV.y + perpV.z * perpV.z);
-            maxPerp = std::max(maxPerp, perp[k]);
+            if (!std::isfinite(dist[v])) { continue; }
+            alongLimb[v] = std::clamp((dist[v] - dmin) * inv, 0.0f, 1.0f);
         }
-        if (!(maxPerp > 0.0f)) { continue; }
-        for (size_t k = 0; k < vs.size(); ++k) { edgeW[vs[k]] = perp[k] / maxPerp; }
+    }
+
+    // The real definition, when the caller told us which slots are wood: b = geodesic distance from
+    // the WOOD SURFACE. That is a distance field on the same graph, so it is continuous everywhere by
+    // construction -- it cannot restart mid-leaf no matter how the mesh was cut up, and it is exactly
+    // 0 where a leaf meets wood, which is what keeps the runtime `foliage * b` continuous across that
+    // boundary whatever per-slot weights the artist picked. A welded vertex shared by a wood and a
+    // foliage submesh counts as WOOD, so a shared seam is pinned at 0 on both sides and cannot tear.
+    if (!woodSeeds.empty() && haveLeaf)
+    {
+        std::vector<float> wdist(wcount, kInf);
+        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> wq;
+        for (uint32_t v : woodSeeds) { wdist[v] = 0.0f; wq.emplace(0.0f, v); }
+        while (!wq.empty())
+        {
+            const Node n = wq.top(); wq.pop();
+            if (n.first > wdist[n.second]) { continue; }
+            for (const auto& e : adj[n.second])
+            {
+                const float nd = n.first + e.second;
+                if (nd < wdist[e.first]) { wdist[e.first] = nd; wq.emplace(nd, e.first); }
+            }
+        }
+        float wmax = 0.0f;
+        for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(wdist[i])) { wmax = std::max(wmax, wdist[i]); } }
+        if (wmax > 0.0f)
+        {
+            const float invW = 1.0f / wmax;
+            // Anything the wood cannot reach at all keeps its per-component fallback above.
+            for (uint32_t i = 0; i < wcount; ++i)
+            {
+                if (std::isfinite(wdist[i])) { alongLimb[i] = std::clamp(wdist[i] * invW, 0.0f, 1.0f); }
+            }
+        }
     }
 
     // ---- pack ----
@@ -601,12 +681,22 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
         const uint32_t limbHash = (static_cast<uint32_t>(comp[w] + 1) * 2654435761u) >> 24;
         const uint32_t r = quant(r01);
         const uint32_t g = limbHash & 0xFFu;
-        const uint32_t b = quant(edgeW[w]);
+        const uint32_t b = quant(alongLimb[w]);
         constexpr uint32_t kBakedMarker = 255u; // A: distinguishes a baked mesh from a legacy .bin
         verts[i].color = r | (g << 8) | (b << 16) | (kBakedMarker << 24);
     }
 }
 } // namespace
+
+bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOptions& opt)
+{
+    std::ifstream f(binPath, std::ios::binary);
+    if (!f) { return true; }
+    MeshBinHeader h{};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    if (!f || h.magic != kMeshBinMagic || h.version != kMeshBinVersion) { return true; }
+    return h.optionsHash != HashOptions(opt);
+}
 
 bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
     const MeshLoadOptions& opt)
@@ -614,13 +704,16 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     MeshCpuData cpu;
     if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
 
-    BakeWindWeightsCpu(cpu.vertices, cpu.indices); // W7.2: per-vertex wind weights into .color
-
     std::vector<Mesh::Submesh> lod0Subs = cpu.submeshes;
     if (lod0Subs.empty())
     {
         lod0Subs.push_back(Mesh::Submesh{ 0u, static_cast<uint32_t>(cpu.indices.size()), 0u });
     }
+
+    // W7.2: per-vertex wind weights into .color. After the submeshes exist, so the bake can tell wood
+    // from foliage; before LOD building, so every LOD inherits the same weights.
+    BakeWindWeightsCpu(cpu.vertices, cpu.indices, lod0Subs, opt.slotFoliage);
+
     const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs);
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
         cpu.vertices, cpu.indices, lod0Subs, extra);

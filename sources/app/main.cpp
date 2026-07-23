@@ -250,6 +250,16 @@ int WINAPI WinMain(
                 if (j > i) { opt.recomputeNormalSlots.push_back(static_cast<uint32_t>(std::atoi(recompute.substr(i, j - i).c_str()))); }
                 i = j + 1;
             }
+            // "--reimport-foliage=0,0,1,0,0" mirrors mesh.json "windFoliage" so the bake knows which
+            // slots are wood. Without it the along-limb weight falls back to a per-component ramp,
+            // which steps at every junction the modeller happened to cut a leaf at.
+            const std::string foliage = getArg("--reimport-foliage=");
+            for (size_t i = 0; i < foliage.size();) {
+                size_t j = foliage.find(',', i);
+                if (j == std::string::npos) { j = foliage.size(); }
+                opt.slotFoliage.push_back(static_cast<float>(std::atof(foliage.substr(i, j - i).c_str())));
+                i = j + 1;
+            }
             MeshManager mm;
             return mm.BakeToBinary(src, out, opt) ? 0 : 1;
         }

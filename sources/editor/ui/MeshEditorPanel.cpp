@@ -849,10 +849,45 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     out.close();
     registry.Refresh(); // re-index so any dependent views pick up the change
 
-    // Live-apply to placed instances (must happen AFTER the file is written — the respawn re-reads it).
+    // Which slots are foliage is a BAKE input, not just a runtime multiplier: it seeds the along-limb
+    // distance field that keeps the streaming term continuous across submesh junctions. Moving a slot
+    // between 0 and non-zero therefore invalidates the baked geometry, and leaving it stale makes the
+    // tree kink where the modeller happened to cut a leaf in two. The weights themselves are runtime,
+    // so nudging 0.6 -> 0.8 costs nothing here (BinaryNeedsRebake only sees the zero/non-zero pattern).
+    bool rebaked = false, rebakeFailed = false;
+    {
+        const std::string src = doc_.value("source", std::string());
+        const std::string geom = doc_.value("geometry", std::string());
+        const bool isBaked = geom.size() > 9 && geom.rfind(".mesh.bin") == geom.size() - 9;
+        if (!src.empty() && isBaked)
+        {
+            MeshLoadOptions opt;
+            opt.generateTangentSpace = true;
+            opt.wantCW = false; // match the runtime load, as ImportPanel does
+            opt.recomputeNormalSlots = recomputeNormalSlots_;
+            const auto wf = doc_.find("windFoliage");
+            if (wf != doc_.end() && wf->is_array())
+            {
+                for (const nlohmann::json& v : *wf)
+                {
+                    if (v.is_number()) { opt.slotFoliage.push_back(v.get<float>()); }
+                }
+            }
+            if (MeshManager::BinaryNeedsRebake(geom, opt))
+            {
+                MeshManager mm;
+                if (mm.BakeToBinary(src, geom, opt)) { rebaked = true; } else { rebakeFailed = true; }
+            }
+        }
+    }
+
+    // Live-apply to placed instances (must happen AFTER the file is written AND after any re-bake —
+    // the respawn re-reads both).
     const int applied = ApplyToScene(ctx);
     status_ = applied > 0 ? ("Saved — updated " + std::to_string(applied) + " placed instance(s).")
                           : "Saved.";
+    if (rebaked) { status_ += " Re-baked wind weights."; }
+    if (rebakeFailed) { status_ += " Wind weight re-bake FAILED (geometry left stale)."; }
 }
 
 #endif // WITH_EDITOR

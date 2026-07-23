@@ -146,35 +146,6 @@
     },
     {
       "enabled": true,
-      "id": 31,
-      "materials": [
-        "sandstone_cracks",
-        "auto",
-        "auto",
-        "auto",
-        "auto"
-      ],
-      "mesh": "models/coconut_palm.mesh.json",
-      "name": "palm.mixed.slots",
-      "position": [
-        8.0,
-        0.0,
-        -10.0
-      ],
-      "rotationDeg": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
       "id": 50,
       "mesh": "models/coconut_palm.mesh.json",
       "name": "palm.grove.0",
@@ -398,6 +369,28 @@
         0.014999999664723873
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 66,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #66",
+      "position": [
+        13.483366012573242,
+        0.0,
+        -5.407442092895508
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "pointLights": [
@@ -420,5 +413,16 @@
   ],
   "skybox": {
     "texture": "textures/skybox.dds"
+  },
+  "wind": {
+    "directionDeg": 40.0,
+    "foliageSwayMeters": 0.9800000190734863,
+    "gust": {
+      "amplitude": 0.5,
+      "frequencyHz": 0.15000000596046448,
+      "seed": 3.0
+    },
+    "strength": 1.0,
+    "swayFrequency": 1.75
   }
 }

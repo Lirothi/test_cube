@@ -28,7 +28,7 @@ struct InstancePerObject
     uint objectId;
     float3 emissive; // D: premultiplied color*strength
     float windStrength; // W3: per-object foliage sway strength (0 = rigid)
-    float windInvHeight; // 1 / mesh height (normalises the bend profile)
+    float _windReserved; // free since W7.3 (baked weight replaced the height profile)
     float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float windTrunkStiff; // per-object; divides the main bend
 };
@@ -48,7 +48,7 @@ cbuffer PerObject : register(b0)
     uint objectId;
     float3 emissive; // D: premultiplied color*strength, added to RT2
     float windStrength; // W3: per-object foliage sway strength (0 = rigid); read by the VS in W4
-    float windInvHeight; // 1 / mesh height (normalises the bend profile)
+    float _windReserved; // free since W7.3 (baked weight replaced the height profile)
     float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float windTrunkStiff; // per-object; divides the main bend
 };
@@ -87,11 +87,11 @@ cbuffer PerView : register(b1)
 // shadow_indirect_csm.hlsl declares its own PerView copy and mirrors this helper — the two MUST
 // stay identical or the shadow detaches from the tree.
 inline float3 ApplyWindWS(float3 objPos, float3 posWS, float4x4 w, float windStrengthValue,
-                          float invHeightValue, float foliageValue, float trunkStiffValue,
+                          float4 windWeights, float foliageValue, float trunkStiffValue,
                           float gustMulValue, float t)
 {
     return WindOffset(objPos, posWS, float3(w._41, w._42, w._43), windStrengthValue,
-                      invHeightValue, foliageValue, trunkStiffValue,
+                      windWeights, foliageValue, trunkStiffValue,
                       windDirXZ, windSwayAmp, windSwayFreq, gustMulValue, t);
 }
 
@@ -116,6 +116,9 @@ struct VSIn
     float3 N : NORMAL;
     float4 T : TANGENT; // .w = handedness
     float2 UV : TEXCOORD0;
+    // W7.2 baked wind weights (COLOR_0 at offset 48 of VertexPNTUV, R8G8B8A8_UNORM):
+    // r = geodesic weight, g = limb id, b = leaf-edge weight, a = baked marker.
+    float4 WIND : COLOR0;
 };
 
 struct VSInInst
@@ -124,6 +127,7 @@ struct VSInInst
     float3 N : NORMAL;
     float4 T : TANGENT;
     float2 UV : TEXCOORD0;
+    float4 WIND : COLOR0; // see VSIn
     uint IID : SV_InstanceID;
 };
 
@@ -160,8 +164,8 @@ inline VSOut BaseVS(float3 pos,
                     float4 tangent,
                     float2 uv,
                     uint objectIdValue,
+                    float4 windWeights,
                     float windStrengthValue,
-                    float windInvHeightValue,
                     float windFoliageValue,
                     float windTrunkStiffValue)
 {
@@ -174,12 +178,12 @@ inline VSOut BaseVS(float3 pos,
     // moving leaves smear). windStrengthValue 0 => zero offset => byte-identical to no-wind.
     // The offset is a function of the UN-swayed world position, so read it before adding.
     float4 worldPos = mul(posH, world);
-    worldPos.xyz += ApplyWindWS(pos, worldPos.xyz, world, windStrengthValue, windInvHeightValue,
+    worldPos.xyz += ApplyWindWS(pos, worldPos.xyz, world, windStrengthValue, windWeights,
                                 windFoliageValue, windTrunkStiffValue, windGustMul, windTime);
 
     float4 prevWorldPos = mul(posH, prevWorld);
     prevWorldPos.xyz += ApplyWindWS(pos, prevWorldPos.xyz, prevWorld, windStrengthValue,
-                                    windInvHeightValue, windFoliageValue, windTrunkStiffValue,
+                                    windWeights, windFoliageValue, windTrunkStiffValue,
                                     windPrevGustMul, windPrevTime);
 
     o.H = mul(worldPos, viewProj);

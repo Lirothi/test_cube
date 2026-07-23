@@ -423,7 +423,95 @@ instant at ~5k verts but needs a spatial grid for 100k-vert trees.
 **Verify:** dump the baked weights per material slot and assert the monotone ordering above; 0 %
 saturation on all three palms.
 
-### W7.3 — Switch the shader over and DELETE the heuristics
+### W7.3 — Switch the shader over and DELETE the heuristics — **DONE (2026-07-23), uncommitted**
+
+`wind.hlsli` now reads the baked COLOR_0. **Deleted:** `kWindCrownHeightFrac`, `kWindFrondSpanFrac`,
+the radial/crown-distance mask, and `windInvHeight` (the baked geodesic weight replaced the
+height profile, so the per-object field became dead — renamed to `_windReserved` in all four mirrors
+rather than removed, which keeps the 224-byte stride and every offset below it put).
+
+Channel meanings as shipped: **r** = geodesic weight (drives `WindBendProfile`, replacing
+`objPos.y * invHeight`), **g** = limb id -> per-frond phase, **b** = position ALONG the vertex's own
+limb, **a** = baked marker.
+
+**The one real trap, found by rendering it:** the foliage streaming term must use **b**, not **r**.
+Driving it with r gives a coconut frond BASE 0.62 of the push (r is 0.62..1.00 across a frond), so the
+whole leaf translates off the crown — the canopy visibly tore into thin streaks and the near palm was
+left as a tuft. b is renormalised per limb (0 at that limb's own attachment), which also makes the
+leaf term continuous with the trunk across the attachment instead of jumping 2x there. The B channel
+originally held a leaf-edge weight; along-limb is strictly more important, so the edge weight is
+deferred to W8.
+
+**Verified:** all 9 VS variants compile standalone (dxc, incl. `SHADOW_MASKED=1` and
+`INSTCB_SLOT_PARAMS=1`); coconut canopy intact with fronds streaming from their bases; shadow tracks
+(overhead sun: canopy +24.8 px, shadow +19.2 px); motion vectors clean at `swayFrequency 10`;
+atoll unregressed; `cull validation PASS`; 0 DXC failures; `--scene-stress=30` CLEAN; Debug+Release clean.
+
+**NOT re-baked:** everything except the three palms still has a == 0 and is therefore rigid. That is
+correct today (nothing else carries windStrength) but any NEW foliage asset must be baked or it will
+simply not move.
+
+### W7.4 — `b` becomes a distance from the wood surface — **DONE (2026-07-23), uncommitted**
+
+Two user-reported artifacts, one root cause: **`windFoliage[slot] * b` multiplies a vertex
+displacement, so it has to be continuous in SPACE, and both factors were discontinuous.**
+
+- `windFoliage` is per-slot and authored, so it steps wherever two slots meet on coincident vertices.
+  On coconut_palm slots 2 and 3 share 36 welded vertices (one per frond) — a **0.978 m tear** at
+  swayAmp 4, i.e. every frond ripped off its base. ("отрывает листья при сильном ветре")
+- `b` was renormalised per CONNECTED COMPONENT, and a component is a modelling accident rather than an
+  anatomical limb. A coconut frond is a petiole (slot 3, 42 sticks) plus a blade (slot 2, 36 cards),
+  and only *some* pairs are welded; on the rest `b` ran 0..1 along the petiole and **restarted at 0**
+  on the blade, so the two sides of that junction differed by the whole streaming term — a leaf
+  snapped in half a third of the way out. ("лист изломился")
+
+The first fix attempt unified `windFoliage` across welded slot groups at runtime
+(`Mesh::WeldedSlotGroups`). It removed the tear but silently overrode the artist's authoring, and
+promoting the petioles to full foliage turned the hidden 0 m step at the petiole/blade junction into
+**2.202 m**. That change is **reverted** — the accessor and its call site are gone.
+
+**Shipped instead:** `b` = geodesic distance from the **wood surface** (the slots whose windFoliage is
+0), normalised globally. `BakeWindWeightsCpu` takes the submesh table plus `MeshLoadOptions::
+slotFoliage`; the bridges built for the island pass are added to the adjacency so the wood pass can
+walk crown -> petiole -> blade. Being a distance FIELD is the whole point: it is continuous by
+construction, cannot restart mid-leaf however the mesh was cut, and is exactly 0 where a leaf meets
+wood, which pins `foliage * b` to 0 on *both* sides of a wood/leaf seam. No per-slot weight the artist
+picks can tear or kink the mesh any more. A welded vertex shared by a wood and a foliage submesh
+counts as wood. Absent classification -> falls back to the old per-component ramp.
+
+Measured at swayAmp 4 (coconut; date_palm 0.238 -> 0.079 with 26 bad junctions -> 0, curly 0.503 ->
+0.059 with 7 -> 0):
+
+| | tear | worst junction elbow | elbows > 10 cm |
+|---|---|---|---|
+| old `b` + authored foliage | **0.978 m** | 0.033 m | 0/76 |
+| old `b` + unified foliage (the first attempt) | 0.000 m | **2.202 m** | **41/76** |
+| **new `b` + authored foliage** | **0.000 m** | **0.033 m** | **0/76** |
+
+**Plumbing:** CLI `--reimport-foliage=0,0,1,0,0`; ImportPanel passes mesh.json's `windFoliage` into the
+bake; `HashOptions` folds in only the zero/non-zero **pattern** (hashing the floats would invalidate
+every `.bin` whenever a slider moves); `MeshManager::BinaryNeedsRebake` (32-byte header read) plus a
+hook in `MeshEditorPanel::Save` re-bakes when that pattern changed — without it the next slider change
+silently reintroduces the elbows. Weight *values* stay pure runtime.
+
+**Known gap:** with no authored `windFoliage` the runtime defaults foliage to the slot's alphaMask
+flag, but the bake has no material info and takes the fallback ramp. Author `windFoliage` explicitly
+on new foliage assets.
+
+**Measurement notes (two false trails burned first):** "distance from the trunk axis" is meaningless
+on a two-trunk palm, and channel **G is an 8-bit hash** of the component id so it collides — recompute
+real components in any analysis script. "Any two vertices within 2 cm" is not a junction either: it
+flagged a frond passing near a **coconut** (slot 4 = 32 fruit) as a 1.26 m break. What actually works:
+TEAR = displacement spread within exactly-coincident vertices; ELBOW = displacement difference at each
+component's own closest approach to another component, which is exactly where the bake bridges it.
+Both A/B off a single baked `.bin` (the old per-component `b` is recomputable from `r`), so comparing
+the three states needs no rebuild.
+
+**Verified:** Debug + Release clean; `--scene-stress=30` CLEAN; all three palms re-baked and measured.
+
+--- (original spec) ---
+
+### W7.3 — Switch the shader over and DELETE the heuristics (spec)
 
 `wind.hlsli` reads the baked weight instead of computing one. **Remove** `kWindCrownHeightFrac`,
 `kWindFrondSpanFrac` and the whole radial/crown-distance mask — the point is to retire the

@@ -21,7 +21,7 @@ VSOutD VSMain(VSInInst i)
     // NOTE: this CPU-fallback path has no b2, so foliage falls back to the object's slot-0 weight.
     // The MAIN bend (the large motion) is per-object and stays in exact lockstep with the gbuffer;
     // only the small leaf detail can differ here, and indirect shadows are the default path anyway.
-    wp.xyz += ApplyWindWS(i.P, wp.xyz, w, inst[i.IID].windStrength, inst[i.IID].windInvHeight,
+    wp.xyz += ApplyWindWS(i.P, wp.xyz, w, inst[i.IID].windStrength, i.WIND,
                           inst[i.IID].windFoliage, inst[i.IID].windTrunkStiff, windGustMul, windTime);
     o.H = mul(wp, viewProj);
     return o;

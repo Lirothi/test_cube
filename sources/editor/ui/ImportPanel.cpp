@@ -819,6 +819,16 @@ namespace
                 if (s.is_number_integer()) { bakeOpt.recomputeNormalSlots.push_back(s.get<uint32_t>()); }
             }
         }
+        // windFoliage tells the bake which slots are wood, so the along-limb weight can be a distance
+        // from the wood surface instead of a per-component ramp. A re-import that dropped it would
+        // silently re-introduce the step at every junction a leaf was cut at.
+        if (asset.contains("windFoliage") && asset["windFoliage"].is_array())
+        {
+            for (const nlohmann::json& f : asset["windFoliage"])
+            {
+                if (f.is_number()) { bakeOpt.slotFoliage.push_back(f.get<float>()); }
+            }
+        }
         {
             MeshManager mm;
             if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt)) { return false; }

@@ -338,6 +338,29 @@ namespace
         return skybox;
     }
 
+    // The global wind entity. Defaults mirror vfx::WindState's authored fields (see ApplyWind in
+    // EnvironmentRuntime for the exact keys it reads) with a gentle breeze rather than dead calm, so
+    // creating it from the menu produces something visibly moving instead of a no-op entity. The
+    // "gust" sub-object must be present or ApplyWind leaves the gust fields at their previous values.
+    EditorObject BuildWindObject()
+    {
+        EditorObject wind;
+        wind.name = "Wind";
+        wind.type = "wind";
+        wind.properties = {
+            { "directionDeg", 40.0f },
+            { "strength", 0.5f },
+            { "swayFrequency", 0.9f },
+            { "foliageSwayMeters", 0.35f },
+            { "gust", {
+                { "amplitude", 0.5f },
+                { "frequencyHz", 0.15f },
+                { "seed", 3.0f }
+            } }
+        };
+        return wind;
+    }
+
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
     {
         const Camera& camera = scene.CameraRef();
@@ -3171,6 +3194,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildSkyboxObject(assetRegistry_)));
+                }
+                // One wind per level: it is a global singleton driving BOTH the foliage sway and the
+                // ocean's wave direction/force, so a second one would just fight the first.
+                const bool hasWind = HasEnvironmentObject(document_, "wind");
+                if (MenuItemWithDisabledReason("Wind", !hasWind,
+                        "This level already has a wind entity."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildWindObject()));
                 }
                 if (ImGui::BeginMenu("VFX"))
                 {

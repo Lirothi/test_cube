@@ -38,7 +38,6 @@ public:
             cbHandles_.texFlags = material->ComputeCBFieldHandle(0, "texFlags");
             cbHandles_.emissive = material->ComputeCBFieldHandle(0, "emissive");
             cbHandles_.windStrength = material->ComputeCBFieldHandle(0, "windStrength");
-            cbHandles_.windInvHeight = material->ComputeCBFieldHandle(0, "windInvHeight");
             cbHandles_.windFoliage = material->ComputeCBFieldHandle(0, "windFoliage");
             cbHandles_.windTrunkStiff = material->ComputeCBFieldHandle(0, "windTrunkStiff");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
@@ -49,7 +48,6 @@ public:
             // viewProj (light) now comes from the shared per-view CB (b1).
             shadowHandles_.world = shadowMaterial->ComputeCBFieldHandle(0, "world");
             shadowHandles_.windStrength = shadowMaterial->ComputeCBFieldHandle(0, "windStrength");
-            shadowHandles_.windInvHeight = shadowMaterial->ComputeCBFieldHandle(0, "windInvHeight");
             shadowHandles_.windFoliage = shadowMaterial->ComputeCBFieldHandle(0, "windFoliage");
             shadowHandles_.windTrunkStiff = shadowMaterial->ComputeCBFieldHandle(0, "windTrunkStiff");
         }
@@ -75,7 +73,6 @@ public:
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
         UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
         UpdateUniform(owner, cbHandles_.windStrength, material, p.windStrength, cbData);
-        UpdateUniform(owner, cbHandles_.windInvHeight, material, gb ? gb->WindInvHeight() : 0.0f, cbData);
         UpdateUniform(owner, cbHandles_.windFoliage, material, p.windFoliage, cbData); // per-slot
         UpdateUniform(owner, cbHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
@@ -96,7 +93,6 @@ public:
         const MaterialParams shadowDefaults{};
         const auto& sp = gb ? gb->CurrentDrawParams() : shadowDefaults;
         UpdateUniform(owner, shadowHandles_.windStrength, material, sp.windStrength, cbData);
-        UpdateUniform(owner, shadowHandles_.windInvHeight, material, gb ? gb->WindInvHeight() : 0.0f, cbData);
         UpdateUniform(owner, shadowHandles_.windFoliage, material, sp.windFoliage, cbData);
         UpdateUniform(owner, shadowHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
@@ -115,7 +111,6 @@ private:
         Material::CBFieldHandle texFlags;
         Material::CBFieldHandle emissive;
         Material::CBFieldHandle windStrength;
-        Material::CBFieldHandle windInvHeight;
         Material::CBFieldHandle windFoliage;
         Material::CBFieldHandle windTrunkStiff;
         Material::CBFieldHandle objectId;
@@ -125,7 +120,6 @@ private:
     {
         Material::CBFieldHandle world;
         Material::CBFieldHandle windStrength;  // W5
-        Material::CBFieldHandle windInvHeight;
         Material::CBFieldHandle windFoliage;
         Material::CBFieldHandle windTrunkStiff;
     } shadowHandles_{};
@@ -392,6 +386,14 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
         }
     }
 
+    // A per-slot foliage weight scales a vertex DISPLACEMENT, so a step in it across a shared seam
+    // used to pull the two sides apart (coconut_palm slots 2/3 share 36 welded vertices and the
+    // authored 1.0/0.0 split tore every frond off its base by 0.94 m at strong wind). That is fixed
+    // in the BAKE, not here: the along-limb weight is now a distance from the wood surface, so it is
+    // exactly 0 wherever foliage meets wood and `foliage * b` is continuous whatever the artist
+    // authored. Do not "helpfully" unify the weights across welded slots here -- an earlier attempt
+    // did, and silently overriding the authored split promoted the petioles to full foliage, which
+    // exposed a 1.3 m step at the petiole/blade junction instead.
     // C1b: mixed defines across slots are fully supported now — each slot gets its own PSO in
     // BuildSlotMaterials (the old "slot 0's PSO wins" warning is obsolete).
 }
@@ -495,18 +497,6 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
     }
 }
 
-float GBufferRenderable::WindInvHeight() const
-{
-    const Mesh* mesh = GetMesh();
-    if (!mesh) { return 0.0f; }
-    const AABB& b = mesh->GetBoundingBox();
-    if (!b.IsValid()) { return 0.0f; }
-    // The bend pivots about the OBJECT ORIGIN (assets are authored base-at-0), so the height that
-    // matters is how far the mesh reaches above it — not the AABB's total Y span.
-    const float height = b.GetMax().y;
-    return height > 1.0e-3f ? 1.0f / height : 0.0f;
-}
-
 void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
 {
     out.world = GetModelMatrix().m;
@@ -525,7 +515,7 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     const auto e = p.EmissiveLinear();
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
     out.windStrength = p.windStrength; // W3: uniform per object (matParamses_ all carry the same value)
-    out.windInvHeight = WindInvHeight();
+    out._windReserved = 0.0f;
     // Slot 0's foliage weight. ShadowGpuData overwrites this PER SLOT (its caster ids are already
     // one per slot) and the multi-slot instanced gbuffer reads its own from the slot CB.
     out.windFoliage = p.windFoliage;

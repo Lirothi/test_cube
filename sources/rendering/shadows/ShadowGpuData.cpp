@@ -1229,7 +1229,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             {
                 std::uint32_t       giBase, count;
                 float               windStrength, swayPad; // W5 (mirrors gWindStrength/gSwayPad)
-                float               windInvHeight, windFoliage, windTrunkStiff, _pad1;
+                float               windFoliage, windTrunkStiff, _pad0b, _pad1;
                 DirectX::XMFLOAT4   aabbCenter;
                 DirectX::XMFLOAT4   aabbExtent;
                 DirectX::XMFLOAT4X4 objectWorld;
@@ -1250,7 +1250,6 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 // flagged GPU-instanced object sways identically in the gbuffer and in shadow.
                 const GBufferRenderable* giGb = gc.obj->AsGBufferRenderable();
                 const float giWind = giGb ? giGb->CurrentDrawParams().windStrength : 0.0f;
-                const float giInvH = giGb ? giGb->WindInvHeight() : 0.0f;
                 const float giFoliage = giGb ? giGb->FoliageForSlot(0) : 0.0f;
                 const float giStiff = giGb ? giGb->GetWindTrunkStiffness() : 1.0f;
 
@@ -1263,7 +1262,6 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                         c.count = gc.count;
                         c.windStrength = giWind;
                         c.swayPad = giWind > 0.0f ? giWind * vfx::g_maxSwayExtentMeters : 0.0f;
-                        c.windInvHeight = giInvH;
                         c.windFoliage = giFoliage;
                         c.windTrunkStiff = giStiff;
                         c.aabbCenter = gc.aabbCenter;

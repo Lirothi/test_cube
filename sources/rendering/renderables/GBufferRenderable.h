@@ -61,11 +61,6 @@ public:
         return matParamses_[slot < matParamses_.size() ? slot : 0].windFoliage;
     }
 
-    // 1 / mesh height in OBJECT space, from the mesh's local bounds (height = bounds.max.y, since
-    // the bend pivots about the object origin). Normalises the bend profile so each asset bends
-    // over its OWN height. 0 when there is no usable mesh => no bend, the safe default.
-    float WindInvHeight() const;
-
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
 
     // B2: material slots (submesh i draws with slot subs[i].materialSlot). Single-slot objects

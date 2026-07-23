@@ -18,7 +18,6 @@ cbuffer ScatterParams : register(b0)
     uint   gCount;         // instance count
     float  gWindStrength;  // W5: the object's foliage sway strength (0 = rigid), same value gbuffer_inst.hlsl passes
     float  gSwayPad;       // W5: metres to grow the world AABB on X/Z for the sway (0 when rigid)
-    float  gWindInvHeight; // 1 / mesh height
     float  gWindFoliage;   // GI objects are one mesh -> one foliage weight for the whole cloud
     float  gWindTrunkStiff;
     float  _pad1;
@@ -55,7 +54,7 @@ struct InstancePerObject
     uint     objectId;
     uint3    _instPad1;
     float    windStrength;  // 208
-    float    windInvHeight;  // 212
+    float    _windReserved;  // 212 (free since W7.3)
     float    windFoliage;    // 216
     float    windTrunkStiff; // 220
 };
@@ -86,7 +85,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // W5: the indirect shadow VS sways by this. It is NOT written anywhere else for GI ids, so
     // leaving it out feeds the sway uninitialised buffer memory (= scrambled GI shadows).
     gInst[dst].windStrength = gWindStrength;
-    gInst[dst].windInvHeight = gWindInvHeight;
     gInst[dst].windFoliage = gWindFoliage;
     gInst[dst].windTrunkStiff = gWindTrunkStiff;
 

@@ -100,6 +100,7 @@ public:
 
     // Part B plumbing (consumed by the queue in B2). lod 0 = base table; higher clamps like Draw.
     const std::vector<Submesh>& GetSubmeshes() const { return submeshes_; }
+
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
 

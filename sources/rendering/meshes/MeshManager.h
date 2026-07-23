@@ -15,6 +15,12 @@ struct MeshLoadOptions {
     // Material/submesh slots whose authored vertex normals are discarded before tangent-space
     // generation. Tangents are regenerated as well so the resulting TBN stays coherent.
     std::vector<uint32_t> recomputeNormalSlots;
+    // mesh.json "windFoliage": per material slot, 0 = wood, >0 = foliage. Only the bake reads it (to
+    // seed the along-limb distance field from the wood surface); the runtime still applies the values
+    // themselves, so changing a weight does not need a re-bake -- only changing a slot between 0 and
+    // non-zero does, because that moves the wood/foliage boundary. Empty = classification unknown,
+    // bake falls back to the per-component ramp.
+    std::vector<float> slotFoliage;
 };
 
 // CPU-side geometry prepared independently of D3D12. Thumbnail jobs parse and
@@ -120,6 +126,11 @@ public:
     // recomputeNormalSlots) or the baked winding/normals won't match.
     bool BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
                       const MeshLoadOptions& opt);
+
+    // True when binPath is missing, unreadable, or was baked under a different wood/foliage
+    // classification — its per-vertex wind weights no longer match `opt` and it must be re-baked.
+    // Cheap: reads the 32-byte header only.
+    static bool BinaryNeedsRebake(const std::string& binPath, const MeshLoadOptions& opt);
 
 private:
     // W7.1b: geometry referenced directly as our committed .mesh.bin (the glTF source

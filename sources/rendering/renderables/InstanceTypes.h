@@ -31,8 +31,8 @@ static_assert(sizeof(MaterialSurfaceParamsGpu) == 32,
 // (the GPU scatter — it was missed once and left the GI ids' tail uninitialised, which scrambled
 // every GPU-instanced shadow). Miss one and shadow draws silently corrupt (the B3 stride lesson).
 //
-// Tier 0 wind added windInvHeight/windInvRadius INSIDE the existing 12-byte pad, so the 224-byte
-// stride is unchanged and none of the ring/mega-buffer sizing moves.
+// Tier 0 wind fit its per-object fields INSIDE the existing 12-byte pad, so the 224-byte stride is
+// unchanged and none of the ring/mega-buffer sizing moves. W7.3 then freed one of them again.
 struct alignas(16) InstancePerObject
 {
     DirectX::XMFLOAT4X4 world;        // 0
@@ -46,7 +46,10 @@ struct alignas(16) InstancePerObject
     uint32_t            objectId;     // 192
     DirectX::XMFLOAT3   emissive;     // 196 (D: premultiplied color*strength)
     float               windStrength; // 208 (W3: per-object foliage sway strength; 0 = rigid)
-    float               windInvHeight; // 212 (1 / mesh height; normalises the bend profile)
+    float               _windReserved; // 212 (FREE since W7.3: the baked geodesic weight replaced the height
+                                     // profile. Kept as a named slot so the 224-byte stride and every
+                                     // field offset below it stay put — the next per-object wind param
+                                     // goes here instead of growing the struct again.)
     float               windFoliage;   // 216 (PER-SLOT 0..1: 0 = trunk, 1 = leaves)
     float               windTrunkStiff;// 220 (per-object; divides the main bend)
 };                                    // 224
