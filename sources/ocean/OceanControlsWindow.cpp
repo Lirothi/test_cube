@@ -1048,6 +1048,9 @@ namespace
         drag("Horizon fog distance scale", render.horizonFogDistanceScale, 0.01f, 0.0f, 20.0f);
         drag("Cascade fade scale", render.cascadeFadeScale, 0.1f, 0.0f, 1000.0f);
         drag("Minimum mesh scale", render.minMeshScale, 0.1f, 0.001f, 1000.0f);
+        drag("Detail normal mip bias", render.detailNormalMipBias, 0.05f, -4.0f, 4.0f);
+        drag("Macro normal mip bias (DLSS)", render.macroNormalMipBiasDlss, 0.05f, -4.0f, 4.0f);
+        drag("Macro normal mip bias (native)", render.macroNormalMipBiasNative, 0.05f, -4.0f, 4.0f);
 
         ImGui::SeparatorText("Refraction and volume");
         drag("Surface refraction", render.surfaceRefractionStrength, 0.005f, 0.0f, 5.0f);

@@ -263,6 +263,7 @@ public:
             refractionParamsHandle_ = material->ComputeCBFieldHandle(0, "refractionParams");
             subsurfaceParamsHandle_ = material->ComputeCBFieldHandle(0, "subsurfaceParams");
             heightFogParamsHandle_ = material->ComputeCBFieldHandle(0, "heightFogParams");
+            normalSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "normalSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
             deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
@@ -308,6 +309,7 @@ public:
             refractionParamsHandle_ = {};
             subsurfaceParamsHandle_ = {};
             heightFogParamsHandle_ = {};
+            normalSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
             deepScatterColorHandle_ = {};
@@ -367,6 +369,7 @@ public:
         UpdateUniform(owner, refractionParamsHandle_, material, owner_.GetRefractionParams(), cbData);
         UpdateUniform(owner, subsurfaceParamsHandle_, material, owner_.GetSubsurfaceParams(), cbData);
         UpdateUniform(owner, heightFogParamsHandle_, material, owner_.GetHeightFogParams(), cbData);
+        UpdateUniform(owner, normalSamplingParamsHandle_, material, owner_.GetNormalSamplingParams(renderer), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
@@ -417,6 +420,7 @@ private:
     Material::CBFieldHandle refractionParamsHandle_{};
     Material::CBFieldHandle subsurfaceParamsHandle_{};
     Material::CBFieldHandle heightFogParamsHandle_{};
+    Material::CBFieldHandle normalSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
     Material::CBFieldHandle deepScatterColorHandle_{};
@@ -942,6 +946,15 @@ Math::float4 OceanRenderable::GetHeightFogParams() const
         render.sssFadeDistance,
         render.horizonFogDistanceScale,
         render.reflectionNormalStrength);
+}
+
+Math::float4 OceanRenderable::GetNormalSamplingParams(const Renderer* renderer) const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    const float macroMipBias = renderer && renderer->IsDlssActive()
+        ? render.macroNormalMipBiasDlss
+        : render.macroNormalMipBiasNative;
+    return Math::float4(render.detailNormalMipBias, macroMipBias, 0.0f, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetSunDirAmbient() const

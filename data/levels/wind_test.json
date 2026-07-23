@@ -369,12 +369,12 @@
       "horizonFogDistanceScale": 2.5,
       "horizonFogStrength": 0.550000011920929,
       "minMeshScale": 15.0,
-      "reflectionNormalStrength": 0.05000000074505806,
+      "reflectionNormalStrength": 0.10000000149011612,
       "roughnessDistance": 150.0,
       "roughnessScale": 0.699999988079071,
       "scatterSpread": 0.20000000298023224,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 1.100000023841858,
+      "specularStrength": 1.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -408,7 +408,7 @@
       "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 0.6000000238418579,
+    "strength": 0.6179999709129333,
     "swayFrequency": 1.2000000476837158
   }
 }

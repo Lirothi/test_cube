@@ -36,6 +36,9 @@ struct OceanRenderConfig
     float reflectionNormalStrength = 0.05f;
     float cascadeFadeScale = 20.0f;
     float minMeshScale = 15.0f;
+    float detailNormalMipBias = 0.0f;
+    float macroNormalMipBiasDlss = 0.0f;
+    float macroNormalMipBiasNative = 1.0f;
 
     float windSpeed = 12.0f;
     float wavesScale = 1.0f;

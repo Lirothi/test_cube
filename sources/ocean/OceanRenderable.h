@@ -80,6 +80,7 @@ private:
     Math::float4 GetRefractionParams() const;
     Math::float4 GetSubsurfaceParams() const;
     Math::float4 GetHeightFogParams() const;
+    Math::float4 GetNormalSamplingParams(const Renderer* renderer) const;
     Math::float4 GetSunDirAmbient() const;
     Math::float4 GetSunColorExposure() const;
     Math::float4 GetDeepScatterColor() const;

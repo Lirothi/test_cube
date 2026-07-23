@@ -92,6 +92,12 @@ namespace OceanRenderConfigJson
             0.0f, ReadFloat(object, "cascadeFadeScale", render.cascadeFadeScale));
         render.minMeshScale = std::max(
             0.001f, ReadFloat(object, "minMeshScale", render.minMeshScale));
+        render.detailNormalMipBias = std::clamp(
+            ReadFloat(object, "detailNormalMipBias", render.detailNormalMipBias), -4.0f, 4.0f);
+        render.macroNormalMipBiasDlss = std::clamp(
+            ReadFloat(object, "macroNormalMipBiasDlss", render.macroNormalMipBiasDlss), -4.0f, 4.0f);
+        render.macroNormalMipBiasNative = std::clamp(
+            ReadFloat(object, "macroNormalMipBiasNative", render.macroNormalMipBiasNative), -4.0f, 4.0f);
 
         render.windSpeed = std::max(
             0.0f, ReadFloat(object, "windSpeed", render.windSpeed));
@@ -174,6 +180,9 @@ namespace OceanRenderConfigJson
         out["reflectionNormalStrength"] = render.reflectionNormalStrength;
         out["cascadeFadeScale"] = render.cascadeFadeScale;
         out["minMeshScale"] = render.minMeshScale;
+        out["detailNormalMipBias"] = render.detailNormalMipBias;
+        out["macroNormalMipBiasDlss"] = render.macroNormalMipBiasDlss;
+        out["macroNormalMipBiasNative"] = render.macroNormalMipBiasNative;
 
         out["windSpeed"] = render.windSpeed;
         out["wavesScale"] = render.wavesScale;

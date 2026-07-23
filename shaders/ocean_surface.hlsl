@@ -32,6 +32,7 @@ cbuffer OceanCB : register(b0)
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
     float4 subsurfaceParams;           // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     float4 heightFogParams;            // x: SSS height bias, y: SSS fade distance, z: horizon fog distance scale, w: reflection normal strength
+    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -957,13 +958,13 @@ PSOut PSMain(VSOutput input)
     float attenuation = GetAttenuation(baseWorld.xz);
     
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    static const float kDetailNormalMipBias = 0.0f;
-    static const float kMacroNormalMipBias = 1.0f;
-    DerivativesSet macroDeriv = SampleDerivatives(input.baseXZ, weights, cascadesCount, kMacroNormalMipBias);
+    DerivativesSet macroDeriv = SampleDerivatives(
+        input.baseXZ, weights, cascadesCount, normalSamplingParams.y);
     DerivativesSet deriv = macroDeriv;
     if (weights.x > kLodThreshold)
     {
-        deriv.cascades[0] = SampleDerivativesCascade(input.baseXZ, 0u, kDetailNormalMipBias) * weights.x;
+        deriv.cascades[0] =
+            SampleDerivativesCascade(input.baseXZ, 0u, normalSamplingParams.x) * weights.x;
     }
 
     float4 normalWeights = max(attenuation.xxxx, 0.1f.xxxx);
