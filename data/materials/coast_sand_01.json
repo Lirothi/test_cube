@@ -1,0 +1,6 @@
+{
+  "albedo": "textures/coast_sand_01_2k/textures/coast_sand_01_albedo.dds",
+  "mr": "textures/coast_sand_01_2k/textures/coast_sand_01_mr.dds",
+  "normal": "textures/coast_sand_01_2k/textures/coast_sand_01_normal.dds",
+  "normalIsRG": false
+}
