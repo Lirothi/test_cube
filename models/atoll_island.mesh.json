@@ -1,6 +1,13 @@
 {
-  "geometry": "models/atoll_island.obj",
+  "geometry": "models/atoll_island/atoll_island.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "material": "sandstone_cracks",
-  "renderLayer": "Terrain"
+  "renderLayer": "Terrain",
+  "source": "import_staging\\atoll_island\\atoll_island.obj",
+  "texOffsScale": [
+    0.0,
+    0.0,
+    20.0,
+    20.0
+  ]
 }

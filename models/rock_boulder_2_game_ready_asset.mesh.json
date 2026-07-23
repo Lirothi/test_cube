@@ -1,7 +1,7 @@
 {
   "geometry": "models/rock_boulder_2_game_ready_asset/rock_boulder_2_game_ready_asset.mesh.bin",
   "inputLayout": "PosNormTanUV",
-  "material": "auto",
+  "material": "rock_boulder_2_game_ready_asset_0",
   "source": "import_staging\\rock_boulder_2_game_ready_asset\\scene.gltf",
   "spawnScale": 0.010529209859669209
 }

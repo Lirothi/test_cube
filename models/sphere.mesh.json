@@ -1,3 +1,4 @@
 {
-  "geometry": "models/sphere.obj"
+  "geometry": "models/sphere/sphere.mesh.bin",
+  "source": "import_staging\\sphere\\sphere.obj"
 }

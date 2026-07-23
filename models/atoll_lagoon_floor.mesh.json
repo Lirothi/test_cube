@@ -1,6 +1,13 @@
 {
-  "geometry": "models/atoll_lagoon_floor.obj",
+  "geometry": "models/atoll_lagoon_floor/atoll_lagoon_floor.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "material": "sandstone_cracks",
-  "renderLayer": "Terrain"
+  "renderLayer": "Terrain",
+  "source": "import_staging\\atoll_lagoon_floor\\atoll_lagoon_floor.obj",
+  "texOffsScale": [
+    0.0,
+    0.0,
+    20.0,
+    20.0
+  ]
 }

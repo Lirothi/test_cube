@@ -403,6 +403,24 @@ bool MeshManager::ParseFileCpu(const std::string& path, MeshCpuData& out,
             filePart.compare(filePart.size() - length, length, suffix) == 0;
     };
 
+    // W7.1b: our baked binary geometry (glTF lives in import_staging/). Read LOD0's verts/indices/
+    // submeshes directly — they already carry regenerated normals/tangents (+ the wind color), so
+    // return WITHOUT re-parsing or regenerating. Editor CPU consumers (thumbnails, mesh preview) go
+    // through here, so they get the baked mesh instead of failing on the binary as "text".
+    if (endsWith(".mesh.bin"))
+    {
+        std::vector<MeshLodCpu> lods;
+        if (!ReadMeshBinary(GeometryFilePart(path), nullptr, nullptr, out.vertices, lods) ||
+            out.vertices.empty() || lods.empty())
+        {
+            out = {};
+            return false;
+        }
+        out.indices = std::move(lods[0].indices);
+        out.submeshes = std::move(lods[0].submeshes);
+        return true;
+    }
+
     bool parsed = false;
     if (endsWith(".obj"))
     {
@@ -1130,6 +1148,18 @@ size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
         }
         return true;
     };
+    if (endsWithNoCase(sel.file, ".mesh.bin"))
+    {
+        // W7.1b: our baked binary — the submesh count is stored (LOD0's table). The Mesh Editor uses
+        // this to show one material picker per slot, so a multi-slot palm must report all its slots.
+        std::vector<VertexPNTUV> verts;
+        std::vector<MeshLodCpu> lods;
+        if (ReadMeshBinary(sel.file, nullptr, nullptr, verts, lods) && !lods.empty())
+        {
+            return std::max<size_t>(1, lods[0].submeshes.size());
+        }
+        return 1;
+    }
     if (!endsWithNoCase(sel.file, ".gltf") && !endsWithNoCase(sel.file, ".glb"))
     {
         return 1; // .obj / .mesh.txt / .txt = a single material slot

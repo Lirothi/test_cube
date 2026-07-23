@@ -10,7 +10,8 @@
 #include "assets/AssetImporter.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
-#include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count
+#include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
+#include <cfloat>
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
 
@@ -81,6 +82,21 @@ namespace
     bool IsConvertibleTexture(const std::string& ext)
     {
         return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp";
+    }
+
+    // Source geometry we can import. glTF/GLB carry materials + a node graph; .obj carries neither,
+    // so the OBJ path skips material generation and node splitting (see the call sites). Both bake
+    // to our .mesh.bin the same way — MeshManager::ParseFileCpu already handles .obj.
+    bool IsMeshSource(const std::string& ext)
+    {
+        return ext == ".gltf" || ext == ".glb" || ext == ".obj";
+    }
+
+    bool IsGltfSource(const std::string& ext) { return ext == ".gltf" || ext == ".glb"; }
+
+    bool IsGltfPath(const std::string& path)
+    {
+        return IsGltfSource(LowerExt(fs::path(path.substr(0, path.find('#')))));
     }
 
     // Files that belong in the engine tree: converted textures (.dds) + mesh geometry (glTF/bin).
@@ -526,10 +542,44 @@ namespace
     // by each referencing node's world matrix. glTF has no unit guarantee: Sketchfab assets
     // are frequently cm-authored (a "rock" ends up ~115 m at scale 1.0), so the row surfaces
     // the baked size and the table warns when it is implausible for a prop.
+    // .obj carries no metadata and no cgltf; size it from the parsed geometry so the "normalize
+    // spawn scale" control still works, and report the triangle count as the meta line.
+    void DescribeObj(const fs::path& objPath, std::string& metaOut, float& maxDimOut)
+    {
+        maxDimOut = 0.0f;
+        MeshCpuData cpu;
+        MeshLoadOptions opt;
+        opt.generateTangentSpace = true;
+        opt.wantCW = false; // match the runtime/bake winding
+        MeshManager mm;
+        if (!mm.ParseFileCpu(objPath.string(), cpu, opt) || cpu.vertices.empty())
+        {
+            metaOut = "(unreadable OBJ)";
+            return;
+        }
+        float mn[3] = { FLT_MAX, FLT_MAX, FLT_MAX };
+        float mx[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (const VertexPNTUV& v : cpu.vertices)
+        {
+            const float p[3] = { v.position.x, v.position.y, v.position.z };
+            for (int k = 0; k < 3; ++k)
+            {
+                if (p[k] < mn[k]) { mn[k] = p[k]; }
+                if (p[k] > mx[k]) { mx[k] = p[k]; }
+            }
+        }
+        for (int k = 0; k < 3; ++k) { maxDimOut = std::max(maxDimOut, mx[k] - mn[k]); }
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "OBJ - %zu verts, %zu tris (no embedded materials)",
+            cpu.vertices.size(), cpu.indices.size() / 3);
+        metaOut = buf;
+    }
+
     void DescribeGltf(const fs::path& gltf, std::string& metaOut, std::string& copyrightOut,
         float& maxDimOut)
     {
         maxDimOut = 0.0f;
+        if (LowerExt(gltf) == ".obj") { DescribeObj(gltf, metaOut, maxDimOut); return; }
         cgltf_options opt{};
         cgltf_data* data = nullptr;
         if (cgltf_parse_file(&opt, gltf.string().c_str(), &data) != cgltf_result_success)
@@ -628,6 +678,7 @@ namespace
     std::vector<std::string> ListSplittableTopLevelNodes(const fs::path& gltf)
     {
         std::vector<std::string> result;
+        if (!IsGltfSource(LowerExt(gltf))) { return result; } // .obj has no node graph to split
         cgltf_options options{};
         cgltf_data* data = nullptr;
         if (cgltf_parse_file(&options, gltf.string().c_str(), &data) != cgltf_result_success)
@@ -719,6 +770,10 @@ namespace
         const std::string& baseName)
     {
         std::vector<std::string> names;
+        // .obj has no embedded PBR materials to promote. Return nothing so the mesh.json is written
+        // WITHOUT a materials key (same shape as models/box.mesh.json) and the slot is assigned by
+        // hand in the Mesh Editor — better than emitting a bogus "auto" the runtime cannot resolve.
+        if (!IsGltfPath(geometry)) { return names; }
         const size_t slotCount = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
         for (size_t i = 0; i < slotCount; ++i)
         {
@@ -773,14 +828,34 @@ namespace
         asset["source"] = sourceGltf;
         // First import (no material binding yet): promote the glTF's auto-materials to named files
         // (read from the SOURCE glTF; their texture paths are repointed staging->models by the
-        // caller). A re-import keeps whatever material/materials the asset already carries.
-        if (!asset.contains("material") && !asset.contains("materials"))
+        // caller). Generate when the asset has no binding yet OR carries a stale "auto": "auto" used
+        // to mean "resolve from the glTF at runtime", but the baked .mesh.bin pipeline never loads
+        // the glTF at runtime, so every slot needs a concrete named material. A slot whose glTF group
+        // is genuinely null-material stays "auto" (drawn flat). Valid named materials are preserved
+        // (Mesh Editor edits survive re-import — WriteFromGltf keeps existing files).
+        const auto isAuto = [](const nlohmann::json& j)
         {
+            return j.is_string() && j.get<std::string>() == "auto";
+        };
+        bool needsGen = !asset.contains("material") && !asset.contains("materials");
+        if (!needsGen && asset.contains("material")) { needsGen = isAuto(asset["material"]); }
+        if (!needsGen && asset.contains("materials") && asset["materials"].is_array())
+        {
+            for (const nlohmann::json& n : asset["materials"]) { if (isAuto(n)) { needsGen = true; break; } }
+        }
+        if (needsGen)
+        {
+            asset.erase("material");
+            asset.erase("materials");
             const std::vector<std::string> names =
                 GenerateMaterialFilesForGltf(sourceGltf, materialBaseName);
             bool anyNamed = false;
             for (const std::string& n : names) { if (n != "auto") { anyNamed = true; break; } }
-            if (!anyNamed || names.empty()) { asset["material"] = "auto"; }
+            // names.empty() == the source has no promotable materials at all (.obj). Leave BOTH
+            // keys off, matching models/box.mesh.json; "auto" would be a binding the runtime cannot
+            // resolve now that nothing loads the glTF at draw time.
+            if (names.empty()) { /* no material binding; assign one in the Mesh Editor */ }
+            else if (!anyNamed) { asset["material"] = "auto"; }
             else if (names.size() == 1) { asset["material"] = names[0]; }
             else { asset["materials"] = names; }
         }
@@ -1051,7 +1126,10 @@ void ImportPanel::Rescan()
             if (ec) { break; }
             if (!it->is_regular_file(ec)) { continue; }
             const std::string ext = LowerExt(it->path());
-            if (gltf.empty() && (ext == ".gltf" || ext == ".glb")) { gltf = it->path(); }
+            // A folder may hold both (some downloads ship .obj next to .gltf); prefer the glTF,
+            // it carries materials and a splittable node graph.
+            if (IsGltfSource(ext) && !IsGltfPath(gltf.string())) { gltf = it->path(); }
+            else if (gltf.empty() && ext == ".obj") { gltf = it->path(); }
             else if (ext == ".hdr") { hdrs.push_back(it->path()); }
             else if (IsConvertibleTexture(ext)) { hasTex = true; }
         }

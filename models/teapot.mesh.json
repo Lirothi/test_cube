@@ -1,4 +1,5 @@
 {
-  "geometry": "models/teapot.obj",
-  "material": "bronze"
+  "geometry": "models/teapot/teapot.mesh.bin",
+  "material": "bronze",
+  "source": "import_staging\\teapot\\teapot.obj"
 }

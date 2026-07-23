@@ -1,5 +1,6 @@
 {
   "geometry": "models/rock_boulder_game_ready_asset/rock_boulder_game_ready_asset.mesh.bin",
-  "source": "import_staging/rock_boulder_game_ready_asset/scene.gltf",
-  "material": "auto"
+  "material": "rock_boulder_game_ready_asset_0",
+  "source": "import_staging\\rock_boulder_game_ready_asset\\scene.gltf",
+  "spawnScale": 0.008685283362865448
 }

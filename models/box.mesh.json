@@ -1,3 +1,4 @@
 {
-  "geometry": "models/box.obj"
+  "geometry": "models/box/box.mesh.bin",
+  "source": "import_staging\\box\\box.obj"
 }

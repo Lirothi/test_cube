@@ -299,14 +299,38 @@ void DrawMeshPreview(EditorContext& ctx,
 // generic "scene"/"model"/"mesh", else the stem) — mirrors the importer's naming (I3).
 std::string MaterialBaseName(const std::string& geometry)
 {
-    const std::string p = geometry.substr(0, geometry.find('#'));
+    const size_t hash = geometry.find('#');
+    const std::string p = geometry.substr(0, hash);
     const fs::path fp(p);
     const std::string stem = fp.stem().string();
     std::string lo = stem;
     std::transform(lo.begin(), lo.end(), lo.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     const std::string folder = fp.parent_path().filename().string();
-    return ((lo == "scene" || lo == "model" || lo == "mesh") && !folder.empty()) ? folder : stem;
+    std::string base =
+        ((lo == "scene" || lo == "model" || lo == "mesh") && !folder.empty()) ? folder : stem;
+
+    // A split asset's source carries "#node:X". The importer names its materials
+    // "<asset>_<node>_<ordinal>", so the base must include the node too — otherwise every split of
+    // one glTF promotes to the SAME name and they overwrite each other.
+    if (hash != std::string::npos)
+    {
+        const std::string frag = geometry.substr(hash + 1);
+        const std::string kNodePrefix = "node:";
+        if (frag.rfind(kNodePrefix, 0) == 0)
+        {
+            // Mirror ImportPanel::MeshAssetFileComponent exactly (invalid runs collapse to one '_'),
+            // or the promoted name will not match the one the importer wrote.
+            std::string node;
+            for (const unsigned char ch : frag.substr(kNodePrefix.size()))
+            {
+                if (std::isalnum(ch) || ch == '_' || ch == '-') { node.push_back(static_cast<char>(ch)); }
+                else if (node.empty() || node.back() != '_') { node.push_back('_'); }
+            }
+            if (!node.empty()) { base += "_" + node; }
+        }
+    }
+    return base;
 }
 
 } // namespace
@@ -475,7 +499,15 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
 
     const std::vector<std::string> presets = CollectPresets(registry);
     const std::string geometry = doc_.value("geometry", std::string());
-    const bool geometryIsGltf = IsGltfGeometry(geometry);
+    // W7.1b moved geometry to our baked `.mesh.bin` and left the glTF in import_staging/, so the
+    // material source is `source`, NOT `geometry` — reading `geometry` here made IsGltfGeometry
+    // false for every migrated asset and the promote button vanished entirely. Fall back to
+    // `geometry` for legacy assets that still reference a glTF directly.
+    const std::string materialSource = doc_.contains("source") && doc_["source"].is_string() &&
+                                       !doc_["source"].get<std::string>().empty()
+        ? doc_["source"].get<std::string>()
+        : geometry;
+    const bool geometryIsGltf = IsGltfGeometry(materialSource);
 
     // One material picker per submesh — the slot count is auto-detected from the geometry (Open()).
     ImGui::SeparatorText(slots_.size() == 1 ? "Material" : "Material slots (per submesh)");
@@ -492,9 +524,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             ImGui::SameLine();
             if (ImGui::SmallButton("Save as material"))
             {
-                const std::string name = MaterialBaseName(geometry) + "_" + std::to_string(i);
+                const std::string name = MaterialBaseName(materialSource) + "_" + std::to_string(i);
                 const std::string written = materialgen::WriteFromGltf(
-                    geometry, static_cast<int>(i), name, /*overwrite=*/false);
+                    materialSource, static_cast<int>(i), name, /*overwrite=*/false);
                 if (!written.empty() && written != "auto")
                 {
                     slots_[i] = written;
