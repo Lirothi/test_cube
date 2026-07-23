@@ -26,6 +26,11 @@ extern std::string g_bootLevelPath;
 extern std::string g_shotPath;
 extern double g_shotDelaySec;
 
+// "--profdump=<path>" (temporary perf harness): after g_shotDelaySec of runtime, write the current
+// CPU+GPU profiler overlay rows (name / avg / max / usages) to a text file and exit. Used to sweep
+// VSM tunables headlessly without reading the on-screen HUD from a screenshot. Empty = disabled.
+extern std::string g_profDumpPath;
+
 class App {
 public:
     ~App();

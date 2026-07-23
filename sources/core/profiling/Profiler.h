@@ -210,6 +210,10 @@ public:
     // Overlay table (reads the double buffer without locks)
     void EmitOverlay(TextManager* tm, int x = 8, int y = 48, int maxLines = 16);
 
+    // Temporary perf harness: write the current CPU+GPU overlay rows (the same data the HUD shows)
+    // to a UTF-8 text file. Returns false on file-open failure. Reads the lock-free double buffer.
+    bool DumpOverlay(const std::string& path);
+
     // Controls
 #if PROF_ENABLED
     void SetEnabled(bool v) { enabled_.store(v, std::memory_order_relaxed); }

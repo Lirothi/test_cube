@@ -524,6 +524,17 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
 
+                // Shadow LOD bias applies to BOTH Legacy cascades and VSM (it shifts the per-view caster
+                // LOD the shadow passes rasterize), so it lives OUTSIDE the VSM-only disabled block below.
+                // A change triggers a GPU-idle caster rebuild (Scene::ReconcileShadowLodBias) next frame.
+                ImGui::SliderInt("Shadow LOD bias", &render::g_shadowLodBias, -2, 3);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD. Each shadow view (CSM cascade /\n"
+                                      "VSM clipmap level / local light) already picks a base LOD by its tier (near =\n"
+                                      "fine, far = coarse); this shifts the whole curve. 0 = the tier curve alone;\n"
+                                      "+ = coarser everywhere (cheaper), - = sharper. Shadows don't resolve fine\n"
+                                      "geometry, so coarser is usually invisible. Changing it rebuilds casters (a hitch).");
+
                 ImGui::BeginDisabled(!render::VsmActive());
 
                 ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");

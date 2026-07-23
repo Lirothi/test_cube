@@ -246,8 +246,12 @@ void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList
     UploadManager up(device, uploadCmdList);
     LodLevel lod;
     const UINT ibSize = sizeof(uint32_t) * indexCount;
+    // COMMON (not INDEX_BUFFER) so every reader reaches its state via implicit promotion — mirrors
+    // the base index buffer (see CreateGPUFlexible). The IA bind promotes COMMON->INDEX_BUFFER, and
+    // the shadow LOD mega-buffer copy promotes COMMON->COPY_SOURCE; a resource created in
+    // INDEX_BUFFER would fail that copy's implicit promotion (GPU-validation resource-state error).
     lod.indexBuffer = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        D3D12_RESOURCE_STATE_COMMON);
     lod.indexBufferView.BufferLocation = lod.indexBuffer->GetGPUVirtualAddress();
     lod.indexBufferView.SizeInBytes = ibSize;
     lod.indexBufferView.Format = DXGI_FORMAT_R32_UINT;

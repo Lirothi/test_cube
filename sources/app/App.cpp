@@ -15,6 +15,8 @@ std::string g_bootLevelPath;
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
 double g_shotDelaySec = 7.0;
+// Temporary VSM perf harness; see App.h.
+std::string g_profDumpPath;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/core/Screenshot.h"
@@ -525,6 +527,20 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     const bool ok = Screenshot::SaveBackbufferPng(renderer, g_shotPath);
                     OutputDebugStringA(ok ? "[shot] saved\n" : "[shot] FAILED\n");
                     g_shotPath.clear();
+                    isRunning_ = false;
+                }
+            }
+
+            // "--profdump=<path>": temporary VSM perf harness — after the same warmup delay, dump the
+            // profiler overlay to a file and quit. Independent of --shot so timings can be swept headlessly.
+            if (!g_profDumpPath.empty())
+            {
+                static double profStart = GetTimeSeconds();
+                if (GetTimeSeconds() - profStart >= g_shotDelaySec)
+                {
+                    const bool ok = Profiler::Get().DumpOverlay(g_profDumpPath);
+                    OutputDebugStringA(ok ? "[profdump] saved\n" : "[profdump] FAILED\n");
+                    g_profDumpPath.clear();
                     isRunning_ = false;
                 }
             }

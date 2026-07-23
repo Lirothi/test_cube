@@ -19,6 +19,8 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
     "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
+#define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
+#define KVIEWLOD_VEC4    11     // (render::kMaxShadowViews=44 cull-views + 3) / 4, packed 4/uint4
 
 cbuffer SetupCB : register(b0)
 {
@@ -27,14 +29,18 @@ cbuffer SetupCB : register(b0)
     uint gNumPages;     // kPoolPageCount
     uint gNumCasters;   // active caster count (ShadowGpuData::ActiveCasterCount) + per-page slice stride
     uint gForceAll;     // page cache: 1 = mark every resident page dirty (static caster moved / rebuild)
-    uint _pad0, _pad1, _pad2;
+    uint gMegaActive;   // 1 = consolidated mega buffer (absolute starts); 0 = per-mesh IB fallback (lod-relative)
+    uint gFlatLod;      // mega-off fallback LOD (uniform across pages; the per-page bind can't know each view)
+    uint gNumLods;      // render::kMaxShadowLods (stride into gGroupLodMega)
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
     float4 gWind0;      // x=time, y=prevTime, z=windDirXZ.x, w=windDirXZ.y
     float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=prevGustMul
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
-    uint4    gGroupMega[VSM_MAX_SETUP_GROUPS]; // per mesh-group mega-buffer offset: x=baseVertex, y=startIndex (0 when the mega path is off)
+    uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
+    // per (mesh-group, lod): x=mega absolute start, y=lod-relative start, z=index count, w=mega base vertex.
+    uint4    gGroupLodMega[VSM_MAX_SETUP_GROUPS * KMAX_SHADOW_LODS];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
@@ -175,16 +181,30 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint pageBase = p * gNumCasters;
 
     // Write per (page, group) args BEFORE the scatter (so perGroupBase can double as the scatter
-    // cursor below). InstanceCount + StartInstanceLocation are per-page; index count / offsets are
-    // the per-group constants (mega-rebased) read from Rung 0's args (view v -> Rung-0 slot v+4).
+    // cursor below). InstanceCount + StartInstanceLocation are per-page. The geometry (index count /
+    // start / base vertex) comes from this VIEW's shadow LOD: gViewLod[rung0View] picks the LOD, and
+    // gGroupLodMega[group * numLods + lod] gives {megaStart, lodRel, count, baseVertex} for it. Mega on
+    // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
     const uint rung0View = view + 4u;
+    uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
+    if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
     for (uint g2 = 0u; g2 < gNumGroups; ++g2)
     {
-        uint src = (gArgBaseElems + rung0View * gNumGroups + g2) * 20u;
-        uint4 a0 = Rung0Args.Load4(src);      // IndexCountPerInstance, InstanceCount(view), StartIndex, BaseVertex
+        uint4 a0;
+        if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
+        {
+            uint4 e = gGroupLodMega[g2 * gNumLods + viewLod]; // {megaStart, lodRel, count, baseVertex}
+            a0.x = e.z;                                       // IndexCountPerInstance = LOD's index count
+            a0.z = gMegaActive ? e.x : e.y;                   // StartIndexLocation: mega-absolute / lod-relative
+            a0.w = gMegaActive ? e.w : 0u;                    // BaseVertexLocation: mega base / mesh-own VB (0)
+        }
+        else // > VSM_MAX_SETUP_GROUPS (mega already off): fall back to the Rung0 args (perViewGroup LOD)
+        {
+            uint src = (gArgBaseElems + rung0View * gNumGroups + g2) * 20u;
+            uint4 r = Rung0Args.Load4(src);
+            a0.x = r.x; a0.z = r.z; a0.w = r.w;
+        }
         a0.y = perGroupCount[g2];             // OVERRIDE: this page's instance count
-        a0.z += gGroupMega[g2].y;             // startIndex mega-rebase
-        a0.w += gGroupMega[g2].x;             // baseVertex mega-rebase
         uint dst = (p * gNumGroups + g2) * 20u;
         PageDrawArgs.Store4(dst, a0);
         PageDrawArgs.Store(dst + 16u, pageBase + perGroupBase[g2]); // StartInstanceLocation -> page slice

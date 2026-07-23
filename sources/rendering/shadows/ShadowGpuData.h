@@ -118,6 +118,13 @@ public:
     std::uint32_t ViewFrustumCount() const { return viewFrustumCount_; }
     std::uint32_t MeshGroupCount() const { return numMeshGroups_; }
 
+    // The shadow LOD bias the current caster geometry was built with (see render::g_shadowLodBias).
+    // Scene compares this to the live global each frame and triggers a GPU-idle rebuild on a change.
+    int BuiltShadowLod() const { return builtShadowLod_; }
+    // Groups [0, StaticGroupCount()) are static submesh groups (biased to BuiltShadowLod()); groups
+    // at/after it are GI whole-buffer groups (always LOD0). The per-group fallback binds accordingly.
+    std::uint32_t StaticGroupCount() const { return numStaticGroups_; }
+
     // SRVs for ring region `frameIndex` (0..kFrameCount-1); {0} if not built. For the future
     // cull compute (Step 4) / indirect VS (Step 5); unused in Steps 1-2.
     D3D12_CPU_DESCRIPTOR_HANDLE InstanceSrv(UINT frameIndex) const;
@@ -191,6 +198,14 @@ public:
     DXGI_FORMAT MegaIndexFormat() const { return megaIndexFormat_; }
     std::uint32_t GroupBaseVertex(std::uint32_t g) const { return g < baseVertex_.size() ? baseVertex_[g] : 0u; }
     std::uint32_t GroupStartIndex(std::uint32_t g) const { return g < startIndex_.size() ? startIndex_[g] : 0u; }
+    // Per-view LOD + per-(group,lod) mega table for the VSM setup CB (see viewLod_/groupLodMega_).
+    const std::vector<std::uint32_t>& ViewLod() const { return viewLod_; }
+    const std::vector<std::uint32_t>& GroupLodMegaTable() const { return groupLodMega_; }
+    // Shadow LOD to bind a mesh's own index buffer at, for the per-page/per-view geometry FALLBACK
+    // (mega off) and the Legacy per-view path. `cullView` indexes the cull-view layout; clamp per mesh
+    // at the call site via Mesh::ClampExplicitLod. Returns 0 if out of range.
+    std::uint32_t ViewLodAt(std::uint32_t cullView) const { return cullView < viewLod_.size() ? viewLod_[cullView] : 0u; }
+    D3D12_CPU_DESCRIPTOR_HANDLE PerViewGroupSrv() const;
 
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
@@ -256,6 +271,8 @@ private:
     Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
     Ring casterMeta_;    // per-caster meta (uint: bit0=dynamic, bits1+=object slot count on its FIRST slot); static, region 0 only
     Ring perGroup_;      // per-group {base, indexCount, startIndex, 0} (uint4); static, region 0 only
+    Ring perViewGroup_;  // per (view, group) {base, indexCount@viewLOD, startIndex@viewLOD, 0} (uint4);
+                         // static, region 0. Seeds the cull-clear args with each view's LOD (Legacy + Rung0).
 
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
@@ -325,12 +342,24 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> megaIB_;
     std::vector<std::uint32_t> baseVertex_;   // per group: its MESH's vertex offset into megaVB_ (B3: submesh groups share it)
     std::vector<std::uint32_t> startIndex_;   // per group: its MESH's index offset into megaIB_ (the group's submesh range rides in the args)
-    // B3: mega copy list per UNIQUE mesh (submesh groups share one VB/IB slice).
-    struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT ibBytes = 0; };
+    // Per-view shadow LOD (cull-view layout: [cascades | spots | point-faces | clipmap]); = the view's
+    // tier base LOD + g_shadowLodBias, UNclamped per mesh (the mega table clamps per mesh). Consumed by
+    // the VSM setup CB + the Legacy per-view index-buffer bind.
+    std::vector<std::uint32_t> viewLod_;
+    // Per (group, lod) mega geometry, flat 4 uints/entry: {megaAbsStart, lodRelStart, indexCount,
+    // baseVertex}, pre-clamped to the mesh's available LODs. numMeshGroups_ * kMaxShadowLods entries.
+    std::vector<std::uint32_t> groupLodMega_;
+    // B3: mega copy list per UNIQUE mesh (submesh groups share one VB slice). Per-view shadow LOD: the
+    // mesh's IB slot concatenates its first `lodCount` LOD index buffers ([LOD0|LOD1|...]), so different
+    // shadow views can draw different LODs of the same mesh from one mega buffer. The VB (shared across
+    // LODs) is copied once; `lodCount` = mesh LOD count for static casters, 1 for GI-only (LOD0) meshes.
+    struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT lodCount = 1; };
     std::vector<MegaCopy> megaCopy_;
     UINT megaVBBytes_ = 0, megaIBBytes_ = 0, megaStride_ = 0;
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
+    int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
+    std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
 

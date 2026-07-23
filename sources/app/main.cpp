@@ -15,6 +15,8 @@
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
+#include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
+#include "rendering/meshes/LodSelect.h"          // render::g_shadowLodBias (--vsm-lodbias)
 #include "text/TextManager.h"
 
 #include <cctype>
@@ -220,6 +222,30 @@ int WINAPI WinMain(
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
+        }
+        // Temporary VSM perf harness (see App.h). "--profdump=<path>" dumps profiler rows + exits.
+        // "--vsm-extent=<f>" / "--vsm-refdist=<f>" pre-set the runtime VSM tunables for a sweep;
+        // "--vsm-resident" flips g_residentIterOnly on. All read the globals in VirtualShadowMap.h.
+        if (const char* flag = std::strstr(lpCmdLine, "--profdump=")) {
+            const char* p = flag + std::strlen("--profdump=");
+            std::string path;
+            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
+            g_profDumpPath = path;
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
+            vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-refdist=")) {
+            vsm::g_refDist = (float)std::atof(flag + std::strlen("--vsm-refdist="));
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-normalbias=")) {
+            vsm::g_clipmapNormalBias = (float)std::atof(flag + std::strlen("--vsm-normalbias="));
+        }
+        if (std::strstr(lpCmdLine, "--vsm-resident")) {
+            vsm::g_residentIterOnly = true;
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
+            render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

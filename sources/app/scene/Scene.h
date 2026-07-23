@@ -131,6 +131,11 @@ private:
     static constexpr int kCascades = SceneFrameData::kCascades;
 
     void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
+    // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
+    // editor caster-set refresh and the shadow-LOD-bias change). Waits for the GPU, so call sparingly.
+    void RebuildShadowCasters(Renderer& renderer);
+    // Poll render::g_shadowLodBias vs the LOD the caster geometry was built with; rebuild on a change.
+    void ReconcileShadowLodBias(Renderer* renderer);
     OceanRenderable* FindOceanRenderable(); // W1: locate the ocean's shared clock (null if no ocean)
     void UpdateCascades(const Camera& camera, Renderer* renderer);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)

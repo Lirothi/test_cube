@@ -104,6 +104,23 @@ public:
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
 
+    // Clamp an explicit LOD request to the LODs this mesh actually has (0..GetLodCount()-1). Unlike
+    // ResolveRuntimeLod this ignores the g_lodEnabled/g_forcedLod runtime overrides — the shadow LOD
+    // bias is a deliberate fixed level, not the per-camera LOD.
+    UINT ClampExplicitLod(UINT lod) const { const UINT last = GetLodCount() - 1u; return lod < last ? lod : last; }
+
+    // Explicit-LOD resource + range accessors for the GPU-driven shadow mega-buffer (which sources a
+    // coarser index buffer per the shadow LOD bias). LODs share the base vertex buffer, so only the
+    // index buffer varies. `lod` is clamped to the available LODs.
+    ID3D12Resource* GetLodIndexBufferResource(UINT lod) const {
+        const UINT r = ClampExplicitLod(lod);
+        return (r == 0 || extraLods_.empty()) ? indexBuffer_.Get() : extraLods_[r - 1u].indexBuffer.Get();
+    }
+    UINT GetLodIndexCount(UINT lod) const {
+        const UINT r = ClampExplicitLod(lod);
+        return (r == 0 || extraLods_.empty()) ? indexCount_ : extraLods_[r - 1u].indexCount;
+    }
+
     ID3D12Resource* GetVertexBufferResource() const { return vertexBuffer_.Get(); }
     ID3D12Resource* GetIndexBufferResource()  const { return indexBuffer_.Get(); }
 

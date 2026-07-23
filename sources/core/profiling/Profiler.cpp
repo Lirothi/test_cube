@@ -1364,6 +1364,40 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 #endif
 }
 
+bool Profiler::DumpOverlay(const std::string& path) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) { return false; }
+    auto writeRows = [&](const char* header, const std::vector<OverlayRow>& rows) {
+        f << header << " frame=" << frameNo_ << "\n";
+        for (const auto& r : rows) {
+            char line[256];
+            // ASCII-ify: the formatted wstring is ASCII in practice, but avoid locale issues by
+            // writing the numeric fields directly and the name from the formatted row's prefix.
+            // The formatted row is "%-35s  avg:...": the name is everything before the first run of
+            // two spaces (single spaces inside a scope name like "Whole Cycle" are preserved).
+            std::string name;
+            int spaceRun = 0;
+            for (wchar_t c : r.formatted) {
+                if (c == L' ') { if (++spaceRun >= 2) { break; } continue; }
+                if (spaceRun == 1) { name.push_back(' '); }
+                spaceRun = 0;
+                name.push_back((char)(c & 0x7F));
+                if (name.size() > 40) { break; }
+            }
+            std::snprintf(line, sizeof(line), "%-36s avg:%8.3f max:%8.3f usages:%u\n",
+                name.c_str(), r.avgMs, r.maxMs, r.usages);
+            f << line;
+        }
+    };
+    const int cpuIdx = overlayReadBuf_.load(std::memory_order_acquire);
+    writeRows("[CPU]", overlayRows_[cpuIdx]);
+#if PROF_GPU_ENABLED
+    const int gpuIdx = gpuOverlayReadBuf_.load(std::memory_order_acquire);
+    writeRows("[GPU]", gpuOverlayRows_[gpuIdx]);
+#endif
+    return f.good();
+}
+
 void Profiler::SetMaxCooldownSeconds(double sec) {
     if (sec < 0.1) { sec = 0.1; }
     std::lock_guard<std::mutex> lk(mtx_);

@@ -8,6 +8,7 @@
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
+#include "rendering/meshes/LodSelect.h" // render::kMaxShadowLods (per-view shadow LOD table)
 #include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
@@ -765,10 +766,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     renderer->Transition(cl, perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
+    constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
+    constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u; // 44 cull-views packed 4/uint4
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
-        std::uint32_t forceAll, _p0, _p1, _p2;
+        std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -776,7 +779,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4 wind0{ 0.0f, 0.0f, 1.0f, 0.0f }; // time, prevTime, dirX, dirZ
         DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
-        DirectX::XMUINT4 groupMega[kMaxMegaGroups]; // x=baseVertex, y=startIndex (0 = per-mesh args)
+        DirectX::XMUINT4 viewLod[kViewLodVec4];               // per cull-view shadow LOD (packed 4/vec)
+        DirectX::XMUINT4 groupLodMega[kMaxMegaGroups * kLods]; // per (group,lod): {megaStart, lodRel, count, baseVertex}
     };
     // Region base in 5-uint arg units. MUST come from the ring's PHYSICAL region stride: the args
     // ring is grow-only (EnsureUavRing reuses a larger prior-level allocation), so after a level
@@ -792,6 +796,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
+            cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
+            cb.numLods = kLods;
+            // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
+            // use one LOD = the near directional (clipmap level 0) view's LOD.
+            cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
             if (wind) // W5: null / swayAmp 0 leaves WindOffset returning exactly 0 (rigid casters)
             {
                 cb.wind0 = DirectX::XMFLOAT4(wind->time, wind->prevTime,
@@ -801,13 +810,22 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             }
             const std::uint32_t n = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
-            // Mega offsets (0 unless the consolidated path is active) so the setup rebases each
-            // group's draw args into the mega VB/IB.
-            const std::uint32_t gm = (groups < kMaxMegaGroups) ? groups : kMaxMegaGroups;
-            for (std::uint32_t g = 0; useMega && g < gm; ++g)
+            // Per-view shadow LOD (cull-view layout, packed 4/uint4) + per-(group,lod) mega geometry.
+            const std::vector<std::uint32_t>& vl = shadowGpu->ViewLod();
+            for (std::uint32_t v = 0; v < render::kMaxShadowViews && v < vl.size(); ++v)
             {
-                cb.groupMega[g].x = shadowGpu->GroupBaseVertex(g);
-                cb.groupMega[g].y = shadowGpu->GroupStartIndex(g);
+                reinterpret_cast<std::uint32_t*>(cb.viewLod)[v] = vl[v];
+            }
+            const std::vector<std::uint32_t>& glm = shadowGpu->GroupLodMegaTable();
+            const std::uint32_t gm = (groups < kMaxMegaGroups) ? groups : kMaxMegaGroups;
+            for (std::uint32_t g = 0; g < gm; ++g)
+            {
+                for (std::uint32_t L = 0; L < kLods; ++L)
+                {
+                    const size_t src = (static_cast<size_t>(g) * kLods + L) * 4u;
+                    DirectX::XMUINT4& e = cb.groupLodMega[g * kLods + L];
+                    if (src + 3 < glm.size()) { e = { glm[src], glm[src + 1], glm[src + 2], glm[src + 3] }; }
+                }
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },
@@ -955,7 +973,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             const Mesh* mesh = (g < groupMeshes.size()) ? groupMeshes[g] : nullptr;
             if (!mesh) { continue; }
             ID3D12Resource* vb = mesh->GetVertexBufferResource();
-            ID3D12Resource* ib = mesh->GetIndexBufferResource();
+            // Per-view LOD, mega-OFF path: the setup wrote flat-LOD args (it can't do per-view without
+            // the mega buffer, since this per-page bind can't know each page's view), so bind that same
+            // flat LOD = the near directional view's LOD. GI groups keep whole-buffer LOD0. VB shared.
+            const UINT flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
+            const UINT groupLod = (g < shadowGpu->StaticGroupCount()) ? mesh->ClampExplicitLod(flatLod) : 0u;
+            ID3D12Resource* ib = mesh->GetLodIndexBufferResource(groupLod);
             if (!vb || !ib) { continue; }
             D3D12_VERTEX_BUFFER_VIEW vbv{};
             vbv.BufferLocation = vb->GetGPUVirtualAddress();

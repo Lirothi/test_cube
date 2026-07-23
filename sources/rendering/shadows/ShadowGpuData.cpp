@@ -1,6 +1,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -11,6 +12,9 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/meshes/Mesh.h"
+#include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
+#include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumCascades / kNumClipmapLevels (view tiers)
+#include "rendering/lighting/LightManager.h"    // kMaxShadowedSpotLights / kMaxShadowedPointLights
 #include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
@@ -302,6 +306,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { re
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return casterMeta_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerViewGroupSrv() const { return perViewGroup_.Srv(0); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
 {
@@ -358,6 +363,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
     if (!renderer) { return; }
+
+    // Snapshot the shadow LOD BIAS this build baked into the per-view LOD tables (viewLod_/perViewGroup_/
+    // groupLodMega_). Scene compares BuiltShadowLod() to the live global and re-Rebuilds on a change.
+    builtShadowLod_ = render::g_shadowLodBias;
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -507,6 +516,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
 
     count_ = totalCount;
     numMeshGroups_ = numGroups;
+    numStaticGroups_ = staticGroups; // groups below this are static (LOD-biased); the rest are GI (LOD0)
 
     // (3) group id -> Mesh*: static groups from the first-seen map (B3: a mesh's submesh groups
     // are contiguous and all map to it), then one per folded GI object.
@@ -549,6 +559,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         casterMeta[i] = (slots << 1) | (staticDynamic[i] & 1u);
         if (g < numMeshGroups_) { ++groupCount[g]; }
     }
+    // perGroup_ carries LOD0 ranges + the visible-list base. Only its base (.x) is read at draw time
+    // now (by shadow_cull_cs); the per-VIEW LOD ranges live in perViewGroup_ / groupLodMega_ below.
     for (const auto& kv : meshToGroup)
     {
         const auto& subs = kv.first->GetSubmeshes();
@@ -582,6 +594,92 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     for (std::uint32_t g = 1; g < numMeshGroups_; ++g)
     {
         groupBase[g] = groupBase[g - 1] + groupCount[g - 1];
+    }
+
+    // --- Per-view shadow LOD (aggressive tier curve + g_shadowLodBias) --------------------------------
+    // Cull-view layout: [cascades | spots | point-faces | clipmap]. A view's tier picks a base LOD
+    // (near = fine, far = coarse); the global bias shifts it. Locals use the near tier. The final LOD
+    // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).
+    const int lodCap = static_cast<int>(render::kMaxShadowLods) - 1;
+    viewLod_.assign(render::kMaxShadowViews, 0u);
+    {
+        constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
+        constexpr std::uint32_t kLocalEnd = kCasc + LightManager::kMaxShadowedSpotLights
+                                          + LightManager::kMaxShadowedPointLights * 6u; // spots + point faces
+        for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
+        {
+            std::uint32_t tier;
+            if (v < kCasc)              { tier = v; }                  // CSM cascade index (near->far)
+            else if (v < kLocalEnd)     { tier = 0u; }                 // local light -> near tier
+            else                        { tier = v - kLocalEnd; }      // VSM clipmap level (near->far)
+            int lod = render::ShadowTierBaseLod(tier) + render::g_shadowLodBias;
+            lod = lod < 0 ? 0 : (lod > lodCap ? lodCap : lod);
+            viewLod_[v] = static_cast<std::uint32_t>(lod);
+        }
+    }
+
+    // --- Per (view, group) draw ranges at that view's LOD (seeds the cull-clear args -> Legacy + Rung0).
+    // For a static submesh group, use the mesh's clamped view LOD; GI groups stay whole-buffer LOD0.
+    // Layout mirrors the args: index = view * numMeshGroups_ + group. `base` (visible-list slice) is
+    // view-independent but replicated per view so the cull-clear reads one struct.
+    std::vector<std::uint32_t> perViewGroup(
+        static_cast<size_t>(render::kMaxShadowViews) * std::max<std::uint32_t>(numMeshGroups_, 1u) * 4u, 0u);
+    for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
+    {
+        for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+        {
+            std::uint32_t count = groupIndexCount[g]; // LOD0 default (GI groups + no-LOD meshes)
+            std::uint32_t start = groupStartIndex[g];
+            const Mesh* m = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
+            if (m && g < staticGroups) // static submesh group -> per-view LOD
+            {
+                const auto it = meshToGroup.find(m);
+                const std::uint32_t s = (it != meshToGroup.end()) ? (g - it->second) : 0u;
+                const UINT lod = m->ClampExplicitLod(viewLod_[v]);
+                const auto& subs = m->SubmeshesForLod(lod);
+                if (s < subs.size()) { count = subs[s].indexCount; start = subs[s].indexOffset; }
+                else                 { count = m->GetLodIndexCount(lod); start = 0u; }
+            }
+            const size_t o = (static_cast<size_t>(v) * numMeshGroups_ + g) * 4u;
+            perViewGroup[o + 0] = groupBase[g];
+            perViewGroup[o + 1] = count;
+            perViewGroup[o + 2] = start;
+            perViewGroup[o + 3] = 0u;
+        }
+    }
+    if (EnsureRing(renderer, perViewGroup_,
+            std::max<size_t>(static_cast<size_t>(render::kMaxShadowViews) * numMeshGroups_, 1),
+            4 * sizeof(std::uint32_t), L"ShadowGpuData.PerViewGroup") &&
+        numMeshGroups_ > 0)
+    {
+        std::memcpy(perViewGroup_.Region(0), perViewGroup.data(),
+                    static_cast<size_t>(render::kMaxShadowViews) * numMeshGroups_ * 4u * sizeof(std::uint32_t));
+    }
+
+    // --- Per (group, lod) draw ranges, mesh-IB-relative (the VSM setup CB's gGroupLodMega). Filled for
+    // EVERY group/lod here so the non-mega fallback works; the mega block below adds the absolute mega
+    // start (.x) + baseVertex (.w). Entry = {megaAbsStart, lodRelStart, indexCount, baseVertex}.
+    groupLodMega_.assign(static_cast<size_t>(numMeshGroups_) * render::kMaxShadowLods * 4u, 0u);
+    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    {
+        const Mesh* m = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
+        const bool isStatic = (m && g < staticGroups);
+        std::uint32_t sOrd = 0;
+        if (isStatic) { const auto it = meshToGroup.find(m); sOrd = (it != meshToGroup.end()) ? (g - it->second) : 0u; }
+        for (std::uint32_t L = 0; L < render::kMaxShadowLods; ++L)
+        {
+            std::uint32_t lodRel = 0u, count = groupIndexCount[g]; // GI / no-LOD default = whole LOD0
+            if (isStatic)
+            {
+                const UINT cl = m->ClampExplicitLod(L);
+                const auto& subs = m->SubmeshesForLod(cl);
+                if (sOrd < subs.size()) { lodRel = subs[sOrd].indexOffset; count = subs[sOrd].indexCount; }
+                else                    { lodRel = 0u; count = m->GetLodIndexCount(cl); }
+            }
+            const size_t o = (static_cast<size_t>(g) * render::kMaxShadowLods + L) * 4u;
+            groupLodMega_[o + 1] = lodRel;
+            groupLodMega_[o + 2] = count;
+        }
     }
 
     // Upload the static cull inputs (region 0; never rewritten after Rebuild). CasterGroup is sized
@@ -655,10 +753,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     }
     if (numMeshGroups_ > 0 && numMeshGroups_ <= kMaxMegaGroups)
     {
-        // B3: submesh groups share their mesh's buffers — lay the mega buffer out per UNIQUE
-        // mesh (one VB/IB copy each) and point every group at its mesh's base offsets. The
-        // group's own submesh range rides in the indirect args' StartIndexLocation (seeded by
-        // the cull-clear from PerGroup), and the VSM setup ADDS these mesh-base offsets on top.
+        // Per-view shadow LOD: lay the mega buffer out per UNIQUE mesh — one VB copy + its LOD index
+        // buffers concatenated ([LOD0|LOD1|...]) — so different shadow views draw different LODs of the
+        // same mesh from one buffer. A static mesh contributes all its LODs; a GI-only mesh just LOD0.
+        // The per-(group, lod) start/count/baseVertex land in groupLodMega_ for the VSM setup shader.
         bool uniform = true;
         UINT stride0 = 0;
         DXGI_FORMAT fmt0 = DXGI_FORMAT_UNKNOWN;
@@ -667,35 +765,65 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         {
             const Mesh* m = groupMesh_[g];
             ID3D12Resource* vb = m ? m->GetVertexBufferResource() : nullptr;
-            ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr;
+            ID3D12Resource* ib = m ? m->GetIndexBufferResource() : nullptr; // LOD0 exists for any mesh
             if (!vb || !ib) { uniform = false; break; }
             if (meshSlot.empty()) { stride0 = m->GetVertexStride(); fmt0 = m->GetIndexFormat(); }
             else if (m->GetVertexStride() != stride0 || m->GetIndexFormat() != fmt0) { uniform = false; break; }
             if (meshSlot.find(m) == meshSlot.end())
             {
+                // Static-used meshes carry all LODs; GI-only meshes just LOD0 (they draw whole-buffer).
+                // Static groups precede GI groups, so first-see order classifies correctly.
+                const UINT lodCount = (g < staticGroups) ? m->GetLodCount() : 1u;
                 meshSlot.emplace(m, static_cast<std::uint32_t>(megaCopy_.size()));
-                megaCopy_.push_back(MegaCopy{ m,
-                    static_cast<UINT>(vb->GetDesc().Width), static_cast<UINT>(ib->GetDesc().Width) });
+                megaCopy_.push_back(MegaCopy{ m, static_cast<UINT>(vb->GetDesc().Width), lodCount });
             }
         }
         if (uniform && stride0 > 0 && fmt0 == DXGI_FORMAT_R32_UINT) // consolidated path is R32-only
         {
             const UINT idxBytes = 4u;
-            std::vector<std::uint32_t> meshBaseVertex(megaCopy_.size(), 0u);
-            std::vector<std::uint32_t> meshStartIndex(megaCopy_.size(), 0u);
+            std::vector<std::uint32_t> meshBaseVertex(megaCopy_.size(), 0u); // in vertices, into megaVB_
+            // meshLodIBBase[m][L] = index offset of mesh m's LOD-L IB within megaIB_ (kMaxShadowLods deep;
+            // entries past lodCount reuse the coarsest present LOD's base, matching ClampExplicitLod).
+            std::vector<std::array<std::uint32_t, render::kMaxShadowLods>> meshLodIBBase(megaCopy_.size());
             UINT voff = 0, ioff = 0;
-            for (size_t m = 0; m < megaCopy_.size(); ++m)
+            for (size_t mi = 0; mi < megaCopy_.size(); ++mi)
             {
-                meshBaseVertex[m] = voff / stride0;  // exact: widths are stride*count
-                meshStartIndex[m] = ioff / idxBytes; // exact: widths are 4*count
-                voff += megaCopy_[m].vbBytes;
-                ioff += megaCopy_[m].ibBytes;
+                const MegaCopy& mc = megaCopy_[mi];
+                meshBaseVertex[mi] = voff / stride0; // exact: width is stride*count
+                UINT lodBase = ioff / idxBytes;
+                std::uint32_t lastBase = lodBase;
+                for (std::uint32_t L = 0; L < render::kMaxShadowLods; ++L)
+                {
+                    if (L < mc.lodCount)
+                    {
+                        meshLodIBBase[mi][L] = lodBase;
+                        lastBase = lodBase;
+                        lodBase += mc.mesh->GetLodIndexCount(L); // advance past this LOD's IB
+                    }
+                    else { meshLodIBBase[mi][L] = lastBase; } // clamp: coarsest present LOD
+                }
+                voff += mc.vbBytes;
+                ioff += (lodBase - (ioff / idxBytes)) * idxBytes; // total indices of all this mesh's LODs
             }
+            // Add the mega-absolute start (.x) + baseVertex (.w) to each group's per-LOD entries (the
+            // lod-relative start + count were filled mesh-relative in the pre-pass above). GI groups use
+            // the mesh's LOD0 base at every LOD index (they draw the whole LOD0 buffer). megaStart =
+            // this LOD's mega base + the lod-relative submesh offset already stored in .y.
             for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
             {
-                const std::uint32_t m = meshSlot[groupMesh_[g]];
-                baseVertex_[g] = meshBaseVertex[m];
-                startIndex_[g] = meshStartIndex[m];
+                const Mesh* m = groupMesh_[g];
+                const std::uint32_t mo = meshSlot[m];
+                baseVertex_[g] = meshBaseVertex[mo];
+                startIndex_[g] = meshLodIBBase[mo][0];
+                const bool isStatic = (g < staticGroups);
+                for (std::uint32_t L = 0; L < render::kMaxShadowLods; ++L)
+                {
+                    const UINT cl = m->ClampExplicitLod(L);
+                    const size_t o = (static_cast<size_t>(g) * render::kMaxShadowLods + L) * 4u;
+                    const std::uint32_t lodBase = isStatic ? meshLodIBBase[mo][cl] : meshLodIBBase[mo][0];
+                    groupLodMega_[o + 0] = lodBase + groupLodMega_[o + 1]; // mega base + lod-relative start
+                    groupLodMega_[o + 3] = meshBaseVertex[mo];
+                }
             }
             megaVBBytes_ = voff; megaIBBytes_ = ioff;
             megaStride_ = stride0; megaIndexFormat_ = fmt0;
@@ -1165,7 +1293,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     if (!cullClearMat_ || !cullMat_) { return; }
     if (count_ == 0 || numMeshGroups_ == 0) { return; }
     if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
-    if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid()) { return; }
+    if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
+        !perViewGroup_.Valid()) { return; }
     if (!cullUavHeap_) { return; }
 
     const UINT f = renderer->GetCurrentFrameIndex();
@@ -1290,9 +1419,10 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
 
-    // Clear/init the per-(view, mesh-group) indirect args + per-view draw counts.
+    // Clear/init the per-(view, mesh-group) indirect args + per-view draw counts. Reads perViewGroup_
+    // so each view's args carry THAT view's shadow-LOD index count + start (per-view LOD, Legacy + Rung0).
     RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCB,
-        { perGroup_.Srv(0) },
+        { perViewGroup_.Srv(0) },
         { cullUav_[f], cullUav_[2 * render::kFrameCount + f] },
         noSampler,
         numViews * numGroups, 1,
@@ -1388,7 +1518,11 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
         const Mesh* mesh = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
         if (!mesh) { continue; }
         ID3D12Resource* vb = mesh->GetVertexBufferResource();
-        ID3D12Resource* ib = mesh->GetIndexBufferResource();
+        // Per-view shadow LOD: bind THIS view's shadow-LOD index buffer for static groups (the args'
+        // IndexCount/StartIndex were seeded from perViewGroup_ = this view+LOD's submesh ranges).
+        // GI groups (g >= numStaticGroups_) draw the whole LOD0 buffer, so keep LOD0. VB shared.
+        const UINT groupLod = (g < numStaticGroups_) ? mesh->ClampExplicitLod(ViewLodAt(viewSlot)) : 0u;
+        ID3D12Resource* ib = mesh->GetLodIndexBufferResource(groupLod);
         if (!vb || !ib) { continue; }
 
         if (mesh != boundMesh)
@@ -1461,14 +1595,17 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
     for (const MegaCopy& mc : megaCopy_)
     {
         ID3D12Resource* vb = mc.mesh ? mc.mesh->GetVertexBufferResource() : nullptr;
-        ID3D12Resource* ib = mc.mesh ? mc.mesh->GetIndexBufferResource() : nullptr;
-        if (vb && ib)
-        {
-            cl->CopyBufferRegion(megaVB_.Get(), voff, vb, 0, mc.vbBytes);
-            cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, mc.ibBytes);
-        }
+        if (vb) { cl->CopyBufferRegion(megaVB_.Get(), voff, vb, 0, mc.vbBytes); }
         voff += mc.vbBytes;
-        ioff += mc.ibBytes;
+        // Concatenate this mesh's LOD index buffers ([LOD0|LOD1|...]); layout in Rebuild matched this
+        // order (meshLodIBBase). Each LOD IB is COMMON (Mesh::AddLod) so the copy implicitly promotes.
+        for (std::uint32_t L = 0; mc.mesh && L < mc.lodCount; ++L)
+        {
+            ID3D12Resource* ib = mc.mesh->GetLodIndexBufferResource(L);
+            const UINT bytes = mc.mesh->GetLodIndexCount(L) * 4u; // R32 indices
+            if (ib && bytes > 0) { cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, bytes); }
+            ioff += bytes;
+        }
     }
     megaReady_ = true;
 }

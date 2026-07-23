@@ -13,6 +13,31 @@ inline bool g_lodEnabled = true;
 // inspect each level. (No effect when g_lodEnabled is false — that forces full detail.)
 inline int g_forcedLod = -1;
 
+// Maximum distinct shadow LODs the GPU-driven caster path plumbs per mesh (mega slices +
+// per-(group,lod) table depth). Meshes with fewer LODs clamp to their coarsest. Keep in sync with
+// KMAX_SHADOW_LODS in vsm_page_setup_cs.hlsl.
+inline constexpr unsigned int kMaxShadowLods = 4u;
+
+// Shadow LOD bias: an ADDITIVE offset on top of the PER-VIEW base LOD the GPU-driven shadow casters
+// rasterize at. Each shadow view (CSM cascade i / VSM clipmap level i / local light) gets a base LOD
+// from its tier (near = fine, far = coarse); this bias shifts the whole curve. Shadow maps don't
+// resolve fine geometry, so coarser caster LODs cut VsmPageRender / cascade triangles for free.
+// Default 0 (the tier curve alone); positive = coarser everywhere, negative = sharper. Changing it
+// needs a GPU-idle caster rebuild (Scene polls BuiltShadowLod() vs this each frame).
+inline int g_shadowLodBias = 0;
+
+// Per-view BASE shadow LOD from a view's tier (aggressive curve: even the near tier coarsens, so the
+// default already saves in a close-up VSM scene where the finest levels dominate). `tier` is the CSM
+// cascade index or the VSM clipmap level (0 = finest/near); locals pass a small fixed tier. The final
+// LOD adds g_shadowLodBias and is clamped per mesh to its available LODs by the caster tables.
+inline int ShadowTierBaseLod(unsigned int tier)
+{
+    // near tier -> LOD 1, then +1 per tier: level 0->1, 1->2, 2->3, 3+ -> capped by kMaxShadowLods-1.
+    const int lod = static_cast<int>(tier) + 1;
+    const int cap = static_cast<int>(kMaxShadowLods) - 1;
+    return lod < cap ? lod : cap;
+}
+
 // Step 6: pick a LOD tier (0 = full) from screen size (distance / instance radius), with
 // HYSTERESIS off the current tier so it doesn't flip back and forth near a boundary. Called
 // once per frame per object in Scene::PrepareViews (NOT during recording); the result is

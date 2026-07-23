@@ -14,6 +14,7 @@
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -513,19 +514,7 @@ void Scene::RefreshShadowGpuForEditor(Renderer& renderer)
     // Rebuild and drop megaReady_ — but nothing rebuilds the consolidated mega VB/IB mid-game (it is
     // only built at level load). Without it, VirtualShadowMap::RecordPageRender falls back to per-group
     // binding: 1024 pool pages × mesh-groups × (bind VB/IB + ExecuteIndirect) → ~10ms CPU, forever.
-    // Rebuild the caster data + mega now, on a fresh GPU-idle upload batch (the meshes' buffers have
-    // decayed to COMMON, so EnsureMegaBuffer's implicit-promotion copies are valid). Mirrors
-    // FinalizeLevelLoad. The Rebuild here also pre-empts the per-frame UpdateForFrame rebuild (counts
-    // already match), so there is no double work.
-    renderer.WaitForPreviousFrame(); // no in-flight frame references the old mega buffers before we free them
-    UploadBatch uploads;
-    if (!uploads.Begin(&renderer)) { return; }
-    shadowGpu_.Rebuild(&renderer, objects_);
-    shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
-    uploads.SubmitAndWait(&renderer);
-    // Material/geometry content may have changed without a transform change. Keep the next VSM
-    // frame from reusing cached pages rendered with the previous masked texture descriptors.
-    shadowGpu_.ForceContentRefreshNextFrame();
+    RebuildShadowCasters(renderer);
 }
 
 RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id)
@@ -685,6 +674,33 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
     return best;
 }
 #endif // WITH_EDITOR
+
+void Scene::RebuildShadowCasters(Renderer& renderer)
+{
+    // Rebuild the caster data + consolidated mega VB/IB on a fresh GPU-idle upload batch (the meshes'
+    // buffers have decayed to COMMON, so EnsureMegaBuffer's implicit-promotion copies are valid).
+    // Mirrors FinalizeLevelLoad. The Rebuild pre-empts the per-frame UpdateForFrame rebuild (counts
+    // already match), so there is no double work. Used by the editor caster-set refresh and the
+    // shadow-LOD-bias change — both need the mega buffer (only ever built here) regenerated.
+    renderer.WaitForPreviousFrame(); // no in-flight frame references the old mega buffers before we free them
+    UploadBatch uploads;
+    if (!uploads.Begin(&renderer)) { return; }
+    shadowGpu_.Rebuild(&renderer, objects_);
+    shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
+    uploads.SubmitAndWait(&renderer);
+    // Content (materials/geometry) may have changed without a transform change. Keep the next VSM
+    // frame from reusing cached pages rendered with the previous descriptors / previous LOD.
+    shadowGpu_.ForceContentRefreshNextFrame();
+}
+
+void Scene::ReconcileShadowLodBias(Renderer* renderer)
+{
+    // The shadow LOD bias picks a coarser (or finer) caster LOD to rasterize into the shadow maps.
+    // The geometry lives in the consolidated mega buffer built at load, so a change needs a GPU-idle
+    // rebuild. Cheap to poll (one int compare); only rebuilds on an actual change (slider drag).
+    if (!renderer || shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias) { return; }
+    RebuildShadowCasters(*renderer);
+}
 
 OceanRenderable* Scene::FindOceanRenderable()
 {
@@ -1044,6 +1060,7 @@ void Scene::Render(Renderer* renderer) {
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
+    ReconcileShadowLodBias(renderer); // apply a pending shadow-LOD-bias change (GPU-idle caster rebuild)
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {

@@ -49,6 +49,21 @@ The trade the executor must respect:
 - Cost scales with rays/pixel × lights and with BVH/any-hit work, not with shadow-map resolution.
   For the sun it is ~1 ray/pixel; for many overlapping locals it trades per-light memory for
   per-light ray cost. Do not assume RT is universally faster — **measure per scene**.
+- **Vertex-animated casters do not exist in the BVH.** Wind sway in this engine is a pure vertex-
+  shader displacement (`shaders/wind.hlsli`), and a BLAS is built once from the static vertex buffer
+  and cached per `Mesh*`. Every RT shadow of a swaying plant is therefore a shadow of its **rest
+  pose** until a deform+refit path exists (step **RW**). This is the single largest scope item this
+  plan gained after the readiness review — it is not a tuning detail, it is missing geometry.
+
+### Why the cost curves differ (the structural argument)
+
+The shadow-map cost is *world-space*: pages × geometry rasterized per page. It grows when the camera
+approaches casters (finer clipmap levels become resident) and it is traded against texel size — which
+is exactly the `clipmapBaseExtent` quality-vs-cost dial that has no good setting on the atoll. The RT
+cost is *screen-space*: ~1 ray per render pixel, independent of clipmap extent, shadow-map resolution
+and camera proximity. RT is the structurally right answer for a scene whose shadow cost is dominated
+by dense masked foliage near the camera. That is the case for choosing it — not a raw ms ratio, which
+is expected to be roughly 2× rather than an order of magnitude (see §4.1).
 
 **Locked decision:** the sun (directional) lands first via a dedicated, denoisable full-screen
 visibility mask. Local lights come later and trace inline in their existing compute loops. The
@@ -91,7 +106,7 @@ Official references (background only; do not copy private constants):
 
 ---
 
-## 4. Current engine state (verified 2026-07-22, confirm before relying on any item)
+## 4. Current engine state (verified 2026-07-22, code re-audited 2026-07-23; confirm before relying on any item)
 
 - **Shadow modes** live in `sources/rendering/renderables/InstanceTypes.h`: `render::ShadowMode
   { Legacy = 0, VSM = 1 }`, `render::g_shadowMode` (default **VSM**), `render::VsmActive()`. Legacy =
@@ -130,6 +145,65 @@ Official references (background only; do not copy private constants):
 - Screenshot capture: `test_cube.exe --level=<level> --shot=<out.png> --shot-delay=<seconds>` reads
   back the last-presented backbuffer (reliable; external screen-grab of the flip-model swapchain is
   not).
+
+### 4.1 Measured baseline — what RT is actually competing against (atoll, 2026-07-23)
+
+The atoll is the scene that motivates this work, so its numbers are the acceptance target. Captured
+in Release with VSM active, camera at ground level under the palm cluster, DLSS render scale 0.58:
+
+| | |
+|---|---|
+| `Pass_VsmPageRender` | **1.46 ms GPU** avg / 2.05 max (0.28 ms CPU) |
+| `Pass_ShadowCull` + `Pass_VsmPageRequest` | 0.05 + 0.04 ms GPU |
+| `GPU.Frame` | 2.55 ms — i.e. VSM is **~60 % of the whole frame** |
+| `Pass_RTReflections` (cost-of-a-ray reference) | 0.08 ms at half display res, incl. hit shading **and** a secondary shadow ray |
+
+**All of that VSM cost is the sun.** `data/levels/atoll.json` has `pointLights: []` and
+`spotLights: []`, so the local-light half of the VSM pipeline is idle and the directional clipmap is
+100 % of `Pass_VsmPageRender`. R2 therefore does not shave a slice off this pass — it retires the
+pass, the shadow cull and the page request outright for this scene. That makes the atoll the cleanest
+possible A/B and it should be the primary benchmark for R2/R3.
+
+Scene shape driving the cost: 100 palms (34 coconut / 33 date / 33 curly) of 6630 / 9941 / 4490 tris
+at LOD 0, plus island, lagoon floor and 4 rocks — ~107 CPU-placed instances, all already present in
+the TLAS. 281 resident pages × 128² = **4.6 Mtexel of alpha-tested foliage rasterization per frame**,
+versus ~0.7 Mpixel of render-resolution rays that would replace it.
+
+`clipmapBaseExtent = 12.0` over `kVirtualRes = 2048` is **5.9 mm per texel** at the finest level.
+Raising the extent is the only shadow-map lever that meaningfully cuts the page count, and it costs
+quality on two axes at once: texel size, and — because `VsmClipmapShadow` derives its world-space
+normal bias from `max(dist, 0.5*baseExtent) / (0.5*VSM_VIRTUAL_RES)` (`shaders/vsm_sample.hlsli:141`)
+— a proportionally larger bias push, i.e. peter-panning. This coupling is why the extent dial feels
+worse than a pure resolution trade. Any RT-vs-VSM comparison must be made against a *fairly tuned*
+VSM baseline, so re-tune `clipmapNormalBias` whenever the extent is changed for a measurement.
+
+### 4.2 RT-readiness audit findings (pre-answers R0 — verify, do not re-derive)
+
+Read from the code on 2026-07-23. These are gaps R0 must confirm and later steps must close; they are
+recorded here so no executor plans around a BVH that does not contain what they think it does.
+
+1. **Every BLAS geometry is forced opaque.** `AccelerationStructure.cpp:90` sets
+   `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` unconditionally. Masked foliage is a solid quad in the BVH
+   today (already visible in RT reflections). Without R3 an RT sun shadow of a palm is a **black
+   rectangle**, not a cut-out crown. R3 is not an enhancement here, it is a correctness prerequisite —
+   R2 sign-off on the atoll is meaningless without it.
+2. **BLAS is static and cached per mesh, and cannot be refit.** `AccelerationStructure.h:17-24`
+   ("Geometry in this engine is static, so a BLAS is built once and cached per mesh"), built with
+   `PREFER_FAST_TRACE` only — no `ALLOW_UPDATE` (`AccelerationStructure.cpp:109`), so `PERFORM_UPDATE`
+   is not even legal on it. Wind sway is invisible to RT. See step **RW**.
+3. **Wind phase is per-instance, so BLAS sharing dies under deformation.** The per-plant phase is
+   `dot(worldOrigin.xz, float2(0.13, 0.17))` (`shaders/wind.hlsli:114`), unique per palm. 100 palms
+   share 3 BLASes today; deformed, they need 100. This is the cost driver of RW, not the triangle
+   count.
+4. **TLAS is a non-issue.** 107 instances, transforms only; in-place refit already implemented and
+   shipping (`AccelerationStructure.h:104-109`, S12), with a periodic full rebuild to bound BVH-quality
+   drift. Rebuilding it every frame is microseconds. Do not spend effort here — sway is not a
+   transform, so no amount of TLAS work addresses item 2.
+5. **Caster coverage is otherwise good but not total.** `SceneRenderer.cpp:1030-1098` gathers opaque,
+   single-mesh, CPU-placed visible instances plus GPU-instanced models, with per-slot material records
+   (so palms already carry bark/frond materials for hit shading). Excluded by design: ocean
+   (GPU-displaced, planar path), transparent/glass. Confirm the exclusions are acceptable as shadow
+   casters before R2 sign-off — an unshadowed ocean is fine, an unshadowed glass object may not be.
 
 ---
 
@@ -191,17 +265,19 @@ float TraceShadowVisibility(RaytracingAccelerationStructure tlas, float3 origin,
 ```text
 R0 baseline/readiness ─> R1 helper+TLAS binding (dormant) ─> R2 sun RT (opaque, hard)
                                                               ├─> R3 masked/two-sided rays
+                                                              │     └─> RW wind-deformed BLAS
                                                               └─> R4 sun denoise ─> R5 soft penumbra
 R2 + R3 ─> R6 local (spot/point) RT ─> R7 hybrid policy + perf
-R3 + R5 + R6 ─> R8 parity/fallback/hardening/sign-off
+R3 + R5 + R6 + RW ─> R8 parity/fallback/hardening/sign-off
 ```
 
 Milestones:
 
 - **M0 — RT-shadow readiness:** R0-R1. AS proven to cover casters; a shadow ray traces correctly;
   toggle plumbed; nothing visually changed yet.
-- **M1 — usable RT sun:** R2-R4. Opaque + masked sun shadows with a denoiser; the atoll/demo sun reads
-  cleanly with no bias artifacts.
+- **M1 — usable RT sun:** R2-R4 (+ RW for any wind scene). Opaque + masked sun shadows with a
+  denoiser; the atoll/demo sun reads cleanly with no bias artifacts. **R2 alone is a measurement, not
+  a shippable state** on the atoll: without R3 the crowns are solid, without RW they do not sway.
 - **M2 — soft + locals:** R5-R6. Penumbra for the sun; RT for spot/point to kill the overlapping-light
   page pressure.
 - **M3 — production:** R7-R8. Hybrid selection, measured budgets, hardware fallback, full parity.
@@ -303,6 +379,61 @@ report the dependency instead of silently widening the change.
   cards cast from both faces.
 - **Verify:** masked-foliage scene A/B vs the masked shadow-map path; measure the added per-ray cost of
   the alpha path; GPU validation.
+
+---
+
+### RW — Wind-deformed casters in the BVH (deform pass + per-instance updatable BLAS)
+
+- **Depends:** R3 (a rest-pose RT shadow that is already alpha-correct, so this step's only variable is
+  the pose).
+- **Goal:** Make RT shadows track the wind sway, i.e. put the deformed geometry into the BVH. Without
+  this every plant casts the shadow of its rest pose: the trunk survives (bend ≈ 0 at the base) but
+  frond shadows stand still under fronds that visibly move — a hard blocker for the atoll.
+- **Touch:** `sources/rendering/rt/AccelerationStructure.{h,cpp}` (per-instance BLAS keyed by
+  (mesh, instance) rather than `Mesh*`, `ALLOW_UPDATE` build flag, a refit entry point); a new compute
+  deform pass writing per-instance deformed position buffers; `SceneRenderer.cpp` AS gather (mark
+  wind casters, drive the deform + refit); `shaders/wind.hlsli` (reused verbatim — see the invariant
+  below).
+- **Why this is not "just refit the TLAS":** sway is a per-vertex displacement, not a transform. The
+  TLAS holds transforms and is already refit-capable; it can never represent this. The work is
+  entirely at BLAS level.
+- **Implement:**
+  - A compute pass evaluates `WindOffset()` per vertex into a per-instance deformed position buffer.
+    **The shader must include `shaders/wind.hlsli` and call `WindOffset` with identical arguments** —
+    the same invariant the gbuffer VS and the depth-only shadow VS already obey. A re-implementation
+    drifts and the RT shadow detaches from the tree exactly the way the raster shadow would.
+  - Build those instances' BLASes with `ALLOW_UPDATE` and `PERFORM_UPDATE` them per frame from the
+    deformed buffer. Keep the shared static per-`Mesh*` BLAS cache for everything that does not sway —
+    only wind casters pay.
+  - Round-robin a full rebuild across wind instances (N per frame). Frond tips move on the order of a
+    metre, which is a large deformation relative to the mesh; pure refit degrades traversal quality.
+  - Budget controls, all three expected to be needed:
+    - **Deform only near casters.** Distant plants keep the shared rest-pose BLAS — their shadow sway
+      is sub-pixel. A distance/screen-size threshold, mirroring the shadow LOD selection.
+    - **Deform a shadow LOD.** The palms ship 3-4 LODs with identical UVs, so the alpha cutout still
+      works; LOD 1-2 cuts the refit triangle count 4-8×.
+    - **Amortize.** `swayFrequency` is ~1 rad/s; a one-frame-stale pose is invisible at these frame
+      rates, so refitting every other frame is free quality-wise.
+- **Interface contract:** a wind caster's RT shadow matches its rasterized silhouette within one
+  frame of sway; non-wind casters keep the shared cached BLAS and are byte-identical to R3; with the
+  deform disabled the behaviour degrades to the R3 rest-pose result, never to a missing shadow.
+- **Cost model to validate (atoll, all 100 palms, worst case with no budget controls):**
+
+  | Item | Quantity | Estimate |
+  |---|---|---|
+  | Deform compute | 100 × ~5.3k verts = 530k | ~0.03 ms |
+  | BLAS refit | 100 × ~7k tris = 700k tris, 100 calls | 0.1-0.3 ms (per-call overhead dominates on small BLASes) |
+  | BLAS + deformed VB memory | | ~30-50 MB + ~6 MB |
+
+  With near-only + shadow-LOD deform (10-15 plants, LOD 1-2) this should fall to noise. If the
+  measured refit cost lands far above this model, report it — it changes the RT-vs-VSM verdict and is
+  the one number in this plan most likely to be wrong.
+- **Done-when:** palm frond shadows sway in lockstep with the fronds; no per-frame popping from the
+  round-robin rebuild; the cost sits inside the budget established in §4.1 (the whole RT sun path,
+  including RW, must stay under the 1.55 ms of VSM passes it replaces).
+- **Verify:** atoll under wind, camera static, side-by-side raster vs shadow; a high-`swayFrequency`
+  stress (the wind system's own DLSS smear test setting) to expose staleness; GPU validation over the
+  new AS lifetime; `--scene-stress` for BLAS churn on level switch.
 
 ---
 
@@ -426,7 +557,16 @@ report the dependency instead of silently widening the change.
 
 - **AS coverage gap:** if `Pass_BuildAS` omits masked/two-sided/instanced casters, RT shadows will be
   wrong for exactly the content that matters. R0 must audit this; extend the AS build if needed before
-  R2.
+  R2. **Three gaps are already known** (§4.2): forced-opaque geometry flags, static per-mesh BLASes,
+  and vertex-animated casters absent from the BVH entirely.
+- **Vertex animation is invisible to RT (the big one):** any future GPU-side vertex work — wind,
+  skinning, GPU-displaced water, morphs — does not exist in the BVH unless a deform+refit path feeds
+  it. RW covers wind; anything added later must either join that path or be documented as
+  RT-shadow-exempt. A silently rest-pose shadow is worse than no shadow because it looks correct in a
+  screenshot and wrong only in motion — exactly the failure mode screenshots do not catch.
+- **Per-instance BLAS memory/CPU blowup:** deformation kills BLAS sharing (unique sway phase per
+  plant). Without the near-only + shadow-LOD budget controls, a dense foliage level multiplies BLAS
+  count by the instance count. Cap the deformed-caster set explicitly; never let it be unbounded.
 - **Any-hit cost:** alpha-tested shadow rays (foliage) are the dominant per-ray cost. Keep an opaque
   fast path; measure; consider limiting alpha evaluation range or LOD.
 - **Denoiser artifacts:** 1 spp soft shadows without a denoiser dance; over-strong denoise smears
@@ -447,7 +587,71 @@ report the dependency instead of silently widening the change.
 
 ## Suggested execution order
 
-R0 -> R1 -> R2 -> R3 -> R4 gives the shortest route to a user-visible, correct RT **sun** shadow that
-removes the artifact classes this codebase has fought. Then R5 (soft) and R6 (locals, the
+R0 -> R1 -> R2 -> R3 -> RW -> R4 gives the shortest route to a user-visible, correct RT **sun** shadow
+that removes the artifact classes this codebase has fought. Then R5 (soft) and R6 (locals, the
 overlapping-light memory win), R7 hybrid/measurement, and R8 parity/fallback/sign-off. Do not remove
 or regress the shadow-map path at any point — RT is added beside it and defaults off until M3.
+
+**Measure at two gates before committing to the remaining scope.** The whole plan rests on an
+estimate — that ~0.7 Mpixel of rays beats 4.6 Mtexel of foliage rasterization — and two steps can
+falsify it cheaply:
+
+- **After R2** (rest-pose, opaque): the shadows are wrong on purpose (solid crowns, no sway), but the
+  pass timing is the honest cost of a sun ray in this scene. Compare against the §4.1 baseline.
+- **After R3** (alpha-tested rays): this is where the estimate is most likely to break. Foliage
+  any-hit is the dominant per-ray cost and the atoll is nothing but foliage. If R3 lands far above
+  budget, stop and reconsider before paying for RW.
+
+Do not skip straight to RW to "see the trees sway" — it is the most expensive step and the least
+informative about whether RT is the right answer.
+
+## 11. Relationship to the shadow-map work (measured 2026-07-23 — do not double-invest blindly)
+
+RT is not the only lever on the §4.1 number, and the competing VSM work is cheaper per unit of effort.
+The two are not mutually exclusive — locals will keep the shadow-map path for a long time, so VSM
+improvements are not wasted if RT wins for the sun — but the *ordering* matters. A headless sweep on
+`wind_test.json` (10 clustered palms, camera under them; `Pass_VsmPageRender` GPU, healthy-clock
+runs) pins down what actually moves it:
+
+| lever | result | verdict |
+|---|---|---|
+| `clipmapBaseExtent` 12 → 24 → 36 | **1.60 → 1.18 → 0.86 ms** | the real lever; render clean at 24 (screenshot-verified) |
+| `g_residentIterOnly` (skip free pages) | 1.63 vs 1.60 ms | **no effect** — measured, not theorized |
+| `Pass_VsmPageRequest` | 0.05–0.16 ms in every config | not worth touching |
+
+The measured facts that redirect effort:
+
+- **The per-page CPU loop is NOT the bottleneck.** `RecordPageRender` iterates all `kPoolPageCount`
+  = 1024 pool pages issuing a viewport + scissor + root CBV + `ExecuteIndirect(maxCount=groups)` per
+  page while only ~281 are resident, so a compacted resident-page list looks tempting — but
+  `g_residentIterOnly`, which does exactly that skip, changes the GPU time by ~2 % (noise). The empty
+  pages' zero-instance `ExecuteIndirect`s are effectively free on the GPU. **Do not build the
+  resident-list compaction; it was measured to do nothing here.** The cost is the real rasterization
+  of the resident pages — dense alpha-tested foliage.
+- **So the two levers that move it are page COUNT and geometry-PER-page**, not loop overhead:
+  - **Per-view shadow LOD** — each shadow view (CSM cascade / VSM clipmap level / local light) picks a
+    base mesh LOD from its tier (near = fine, far = coarse; `render::ShadowTierBaseLod`), plus an
+    additive `render::g_shadowLodBias` ("Shadow LOD bias" dev-window slider, default **0**). The
+    GPU-driven caster mega-buffer holds ALL LODs per mesh; the VSM setup shader picks each page's LOD
+    from its view, and the Legacy per-view path binds per-cascade. **Implemented + measured 2026-07-23:**
+    wind_test `Pass_VsmPageRender` GPU, default aggressive curve (bias 0) **1.29 → 0.51 ms (~2.5×)** vs
+    near-sharp; slider spans 1.29 ms (bias −2, near ≈ LOD0) → 0.31 ms (bias +3, max coarse), a 4.1×
+    range, all screenshot-clean (shadows don't resolve fine geometry; visible meshes keep their camera
+    LOD, only casters coarsen). A bias change triggers a GPU-idle caster rebuild
+    (Scene::ReconcileShadowLodBias). The single biggest win found, at no visible cost.
+  - `clipmapBaseExtent` up (fewer, coarser pages): ~1/extent^0.6 here, palm shadows still read clean
+    at extent 24. Re-tune `clipmapNormalBias` down when raising it — the two are coupled through
+    `VsmClipmapShadow` (§4.1), which is why the extent dial *feels* like a bigger quality loss than
+    the texel-size change alone. Stacks with the LOD bias.
+
+Run the extent re-tune first if the goal is "the atoll frame is too slow today" — it is one slider and
+it is already known to work. Run this plan if the goal is "remove the shadow-map artifact classes and
+stop trading texel size against cost" — that is what the extent dial keeps forcing. Both are valid and
+different goals; do not confuse them in a perf review.
+
+> Measurement caveat: this dev machine downclocks its GPU aggressively when apps are launched
+> back-to-back (a run that sustains ~1500 frames/14 s instead of ~5000 is throttled; its absolute ms
+> are 2-4× inflated). The numbers above are from healthy-clock runs (>2500 frames), and the *ordering*
+> held in every run regardless of throttle. Space perf runs out (cooldown) or trust only the
+> high-frame-count samples. The harness (`--profdump`, `--vsm-extent`, `--vsm-resident`) is uncommitted
+> temporary instrumentation.

@@ -5,18 +5,18 @@
     "zNear": 0.009999999776482582
   },
   "directionalLight": {
-    "ambient": 0.05000000074505806,
+    "ambient": 0.10000000149011612,
     "color": [
       1.0,
-      0.8999999761581421,
-      0.8500000238418579
+      0.7519378662109375,
+      0.6279069781303406
     ],
     "direction": [
       -1.5,
       -0.699999988079071,
       -0.5
     ],
-    "exposure": 1.0
+    "exposure": 2.0
   },
   "objects": [
     {
@@ -24,13 +24,13 @@
       "id": 7,
       "name": "FreeCameraStart",
       "position": [
-        -28.0,
-        9.0,
-        0.7756994962692261
+        51.60548400878906,
+        7.422194957733154,
+        77.98143005371094
       ],
       "rotationDeg": [
-        12.0,
-        91.10021209716797,
+        10.886350631713867,
+        -140.55722045898438,
         0.0
       ],
       "scale": [
@@ -63,8 +63,8 @@
       "texOffsScale": [
         0.0,
         0.0,
-        20.0,
-        20.0
+        25.0,
+        25.0
       ],
       "type": "staticMesh"
     },
@@ -315,6 +315,84 @@
   "ocean": {
     "enabled": true,
     "preset": "data/ocean/default.json",
+    "render": {
+      "absorptionColors": [
+        [
+          0.0,
+          0.0410255566239357,
+          0.09441279619932175,
+          0.0
+        ],
+        [
+          0.0,
+          0.17351385951042175,
+          0.43203577399253845,
+          0.20000000298023224
+        ],
+        [
+          0.16198544204235077,
+          0.6835274696350098,
+          0.7986598610877991,
+          0.6660868525505066
+        ],
+        [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      ],
+      "absorptionDepthScale": 10.0,
+      "absorptionGradientType": 0.0,
+      "cascadeFadeScale": 20.0,
+      "contactFoamStrength": 0.10000000149011612,
+      "deepScatterColor": [
+        0.0,
+        0.01274509821087122,
+        0.04019607976078987,
+        1.0
+      ],
+      "diffuseColor": [
+        0.0,
+        0.02549019642174244,
+        0.027450980618596077,
+        1.0
+      ],
+      "foamNormalStrength": 0.6000000238418579,
+      "foamTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "fogDensity": 0.10000000149011612,
+      "horizonFogDistanceScale": 2.5,
+      "horizonFogStrength": 0.550000011920929,
+      "minMeshScale": 15.0,
+      "reflectionNormalStrength": 0.05000000074505806,
+      "roughnessDistance": 150.0,
+      "roughnessScale": 0.699999988079071,
+      "scatterSpread": 0.20000000298023224,
+      "skyScatterStrength": 0.3499999940395355,
+      "specularStrength": 1.100000023841858,
+      "sssColor": [
+        0.13333334028720856,
+        0.9411764740943909,
+        0.6039215922355652,
+        1.0
+      ],
+      "sssFadeDistance": 6.0,
+      "sssHeightBias": 0.0,
+      "sunScatterStrength": 0.3499999940395355,
+      "surfaceRefractionStrength": 0.3499999940395355,
+      "underwaterFoamParallax": 1.600000023841858,
+      "underwaterRefractionStrength": 0.75,
+      "viewAlignmentStrength": 0.800000011920929,
+      "wavesScale": 1.0,
+      "windAlignment": 0.5,
+      "windSpeed": 12.0,
+      "windUvWarpStrength": 0.20000000298023224
+    },
     "windForce": 0.6000000238418579
   },
   "pointLights": [],
@@ -324,13 +402,13 @@
   "spotLights": [],
   "wind": {
     "directionDeg": 90.0,
-    "foliageSwayMeters": 1.5,
+    "foliageSwayMeters": 1.100000023841858,
     "gust": {
-      "amplitude": 0.0,
-      "frequencyHz": 0.15,
+      "amplitude": 0.20000000298023224,
+      "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 1.0,
+    "strength": 0.6000000238418579,
     "swayFrequency": 1.2000000476837158
   }
 }
