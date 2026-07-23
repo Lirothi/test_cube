@@ -11,6 +11,12 @@
 #include <filesystem> // W7.1b binary mesh cache
 #include <DirectXMath.h>
 #include <queue>
+#include <cfloat>
+#include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include "meshoptimizer.h"
 #include "third_party/cgltf/cgltf.h"
 #include <Windows.h> // OutputDebugStringA for load diagnostics
@@ -295,13 +301,320 @@ static inline std::string tolower_str(std::string s) {
     return s;
 }
 
+// ---------------------------------------------------------------------------------------------
+// W7.2 — per-vertex wind weights, baked from the mesh's own topology (no tuning constants, no
+// assumed crown position). Geodesic distance ALONG THE SURFACE from the plant's ground contact:
+// trunk base -> 0, frond tips -> 1. Multi-trunk falls out for free (each trunk seeds from its own
+// contact patch), and a frond hanging DOWN the trunk measures "up the trunk, then out along the
+// frond" instead of reading as trunk, which is exactly what the old radial heuristic got wrong.
+//
+// Channels (R8G8B8A8_UNORM in VertexPNTUV::color):
+//   R = geodesic weight 0..1
+//   G = per-limb id (hashed limb anchor) -> per-frond phase decorrelation
+//   B = along-limb edge weight (0 at the limb's axis, 1 at its edge) -> leaf-edge flutter
+//   A = 255 marks "weights are baked". Old .bin files predate the bake and have A = 0, so the
+//       runtime can tell them apart WITHOUT a format-version bump (a bump would invalidate every
+//       committed .bin at once and hard-fail the load, since LoadBinaryDirect has no fallback).
+namespace
+{
+struct WeldGrid
+{
+    // Uniform grid over welded vertex positions for nearest-neighbour queries. Brute force is
+    // O(unreached x reached) per bridge, which is fine at a few thousand verts but not at 100k.
+    float cell = 1.0f;
+    DirectX::XMFLOAT3 mn{};
+    int dim[3]{ 1, 1, 1 };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> buckets;
+
+    uint64_t Key(int x, int y, int z) const
+    {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 42) ^
+               (static_cast<uint64_t>(static_cast<uint32_t>(y)) << 21) ^
+                static_cast<uint64_t>(static_cast<uint32_t>(z));
+    }
+    void CellOf(const DirectX::XMFLOAT3& p, int out[3]) const
+    {
+        out[0] = static_cast<int>(std::floor((p.x - mn.x) / cell));
+        out[1] = static_cast<int>(std::floor((p.y - mn.y) / cell));
+        out[2] = static_cast<int>(std::floor((p.z - mn.z) / cell));
+    }
+};
+
+inline float Dist3(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b)
+{
+    const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// Fill VertexPNTUV::color for every vertex. No-op (leaves color 0 = rigid) if the mesh is too
+// degenerate to walk.
+void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+{
+    const size_t vcount = verts.size();
+    if (vcount == 0 || indices.size() < 3) { return; }
+
+    // ---- weld by quantised position: UV seams would otherwise cut the graph in half ----
+    DirectX::XMFLOAT3 bbMin{ FLT_MAX, FLT_MAX, FLT_MAX };
+    DirectX::XMFLOAT3 bbMax{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    for (const VertexPNTUV& v : verts)
+    {
+        bbMin.x = std::min(bbMin.x, v.position.x); bbMax.x = std::max(bbMax.x, v.position.x);
+        bbMin.y = std::min(bbMin.y, v.position.y); bbMax.y = std::max(bbMax.y, v.position.y);
+        bbMin.z = std::min(bbMin.z, v.position.z); bbMax.z = std::max(bbMax.z, v.position.z);
+    }
+    const float diag = Dist3(bbMin, bbMax);
+    if (!(diag > 0.0f)) { return; }
+    // Scale-relative so a mesh authored in centimetres welds the same as one in metres.
+    const float weldEps = std::max(1.0e-6f, diag * 1.0e-4f);
+    const float invWeld = 1.0f / weldEps;
+
+    std::unordered_map<uint64_t, uint32_t> weldMap;
+    weldMap.reserve(vcount * 2);
+    std::vector<uint32_t> weldOf(vcount, 0u);
+    std::vector<DirectX::XMFLOAT3> wpos;
+    wpos.reserve(vcount);
+    for (size_t i = 0; i < vcount; ++i)
+    {
+        const DirectX::XMFLOAT3& p = verts[i].position;
+        const int64_t qx = static_cast<int64_t>(std::llround(p.x * invWeld));
+        const int64_t qy = static_cast<int64_t>(std::llround(p.y * invWeld));
+        const int64_t qz = static_cast<int64_t>(std::llround(p.z * invWeld));
+        const uint64_t key = (static_cast<uint64_t>(qx) * 0x9E3779B97F4A7C15ull) ^
+                             (static_cast<uint64_t>(qy) * 0xC2B2AE3D27D4EB4Full) ^
+                             (static_cast<uint64_t>(qz) * 0x165667B19E3779F9ull);
+        auto it = weldMap.find(key);
+        if (it == weldMap.end())
+        {
+            const uint32_t idx = static_cast<uint32_t>(wpos.size());
+            weldMap.emplace(key, idx);
+            wpos.push_back(p);
+            weldOf[i] = idx;
+        }
+        else
+        {
+            weldOf[i] = it->second;
+        }
+    }
+    const uint32_t wcount = static_cast<uint32_t>(wpos.size());
+    if (wcount == 0) { return; }
+
+    // ---- edge graph from triangles ----
+    std::vector<std::vector<std::pair<uint32_t, float>>> adj(wcount);
+    {
+        std::unordered_set<uint64_t> seen;
+        seen.reserve(indices.size());
+        const auto addEdge = [&](uint32_t a, uint32_t b)
+        {
+            if (a == b) { return; }
+            const uint64_t k = a < b ? (static_cast<uint64_t>(a) << 32 | b)
+                                     : (static_cast<uint64_t>(b) << 32 | a);
+            if (!seen.insert(k).second) { return; }
+            const float w = Dist3(wpos[a], wpos[b]);
+            adj[a].emplace_back(b, w);
+            adj[b].emplace_back(a, w);
+        };
+        for (size_t t = 0; t + 2 < indices.size(); t += 3)
+        {
+            const uint32_t a = weldOf[indices[t]], b = weldOf[indices[t + 1]], c = weldOf[indices[t + 2]];
+            addEdge(a, b); addEdge(b, c); addEdge(c, a);
+        }
+    }
+
+    // ---- connected components (islands): foliage is usually separate cards ----
+    std::vector<int> comp(wcount, -1);
+    int compCount = 0;
+    {
+        std::vector<uint32_t> stack;
+        for (uint32_t s = 0; s < wcount; ++s)
+        {
+            if (comp[s] >= 0) { continue; }
+            comp[s] = compCount;
+            stack.push_back(s);
+            while (!stack.empty())
+            {
+                const uint32_t u = stack.back(); stack.pop_back();
+                for (const auto& e : adj[u])
+                {
+                    if (comp[e.first] < 0) { comp[e.first] = compCount; stack.push_back(e.first); }
+                }
+            }
+            ++compCount;
+        }
+    }
+
+    // ---- multi-source Dijkstra from the ground-contact band ----
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+    std::vector<float> dist(wcount, kInf);
+    std::vector<uint32_t> parent(wcount, 0xFFFFFFFFu);
+    using Node = std::pair<float, uint32_t>;
+    std::priority_queue<Node, std::vector<Node>, std::greater<Node>> pq;
+
+    const float seedBand = std::max(1.0e-5f, diag * 0.01f);
+    for (uint32_t i = 0; i < wcount; ++i)
+    {
+        if (wpos[i].y <= bbMin.y + seedBand) { dist[i] = 0.0f; parent[i] = i; pq.emplace(0.0f, i); }
+    }
+    const auto relax = [&]()
+    {
+        while (!pq.empty())
+        {
+            const auto [d, u] = pq.top(); pq.pop();
+            if (d > dist[u]) { continue; }
+            for (const auto& e : adj[u])
+            {
+                const float nd = d + e.second;
+                if (nd < dist[e.first]) { dist[e.first] = nd; parent[e.first] = u; pq.emplace(nd, e.first); }
+            }
+        }
+    };
+    relax();
+
+    // ---- bridge unreachable islands to the nearest reached vertex, cheapest gap first ----
+    WeldGrid grid;
+    {
+        grid.mn = bbMin;
+        grid.cell = std::max(diag / 48.0f, weldEps * 4.0f);
+        for (uint32_t i = 0; i < wcount; ++i)
+        {
+            int c[3]; grid.CellOf(wpos[i], c);
+            grid.buckets[grid.Key(c[0], c[1], c[2])].push_back(i);
+        }
+    }
+    // A far-away stray island would otherwise attach through a huge bridge and inherit a high
+    // weight. Cap it; anything past the cap stays unreached and bakes as rigid.
+    const float maxBridge = diag * 0.15f;
+    const auto nearestReached = [&](const DirectX::XMFLOAT3& p, uint32_t& outIdx) -> float
+    {
+        int c[3]; grid.CellOf(p, c);
+        float best = kInf; outIdx = 0xFFFFFFFFu;
+        const int maxRing = static_cast<int>(std::ceil(maxBridge / grid.cell)) + 1;
+        for (int r = 0; r <= maxRing; ++r)
+        {
+            for (int dz = -r; dz <= r; ++dz)
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx)
+                    {
+                        // ring shell only
+                        if (r > 0 && std::abs(dx) != r && std::abs(dy) != r && std::abs(dz) != r) { continue; }
+                        auto it = grid.buckets.find(grid.Key(c[0] + dx, c[1] + dy, c[2] + dz));
+                        if (it == grid.buckets.end()) { continue; }
+                        for (uint32_t v : it->second)
+                        {
+                            if (!std::isfinite(dist[v])) { continue; }
+                            const float d = Dist3(p, wpos[v]);
+                            if (d < best) { best = d; outIdx = v; }
+                        }
+                    }
+            // One extra ring after the first hit: a nearer vertex can sit in a diagonal neighbour.
+            if (std::isfinite(best) && best <= static_cast<float>(r) * grid.cell) { break; }
+        }
+        return best;
+    };
+
+    std::vector<std::vector<uint32_t>> compVerts(compCount);
+    for (uint32_t i = 0; i < wcount; ++i) { compVerts[comp[i]].push_back(i); }
+    std::vector<bool> compReached(compCount, false);
+    for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(dist[i])) { compReached[comp[i]] = true; } }
+
+    for (;;)
+    {
+        int bestComp = -1; float bestGap = kInf; uint32_t bestFrom = 0, bestTo = 0;
+        for (int ci = 0; ci < compCount; ++ci)
+        {
+            if (compReached[ci]) { continue; }
+            for (uint32_t v : compVerts[ci])
+            {
+                uint32_t r = 0xFFFFFFFFu;
+                const float g = nearestReached(wpos[v], r);
+                if (g < bestGap) { bestGap = g; bestComp = ci; bestFrom = v; bestTo = r; }
+            }
+        }
+        if (bestComp < 0 || !std::isfinite(bestGap) || bestGap > maxBridge) { break; }
+        dist[bestFrom] = dist[bestTo] + bestGap;
+        parent[bestFrom] = bestTo;
+        pq.emplace(dist[bestFrom], bestFrom);
+        relax();
+        compReached[bestComp] = true;
+    }
+
+    // ---- normalise -> R ----
+    float maxDist = 0.0f;
+    for (uint32_t i = 0; i < wcount; ++i) { if (std::isfinite(dist[i])) { maxDist = std::max(maxDist, dist[i]); } }
+    if (!(maxDist > 0.0f)) { return; }
+    const float invMax = 1.0f / maxDist;
+
+    // ---- G: per-limb id -> per-frond phase decorrelation ----
+    // The limb IS the connected component: game foliage is card-based (each frond is its own island,
+    // bridged to the trunk above), so hashing the component id gives every vertex of one frond the
+    // SAME phase, which is what matters — a phase that varies WITHIN a leaf tears it apart.
+    // Rejected alternative: walking the parent chain back a fixed distance. Measured on the staged
+    // palm it produced 164 distinct anchors across 35 fronds, because "1.34 m back from ME" is a
+    // per-vertex point, not a per-limb one. A welded single-island mesh degrades to one phase for
+    // the whole plant, which is correct-but-boring rather than broken.
+    // ---- B: distance from the limb's axis (anchor -> farthest vertex), per component ----
+    std::vector<float> edgeW(wcount, 0.0f);
+    for (int ci = 0; ci < compCount; ++ci)
+    {
+        const std::vector<uint32_t>& vs = compVerts[ci];
+        if (vs.size() < 3) { continue; }
+        uint32_t anchor = 0xFFFFFFFFu, tip = 0xFFFFFFFFu;
+        float dmin = kInf, dmax = -kInf;
+        for (uint32_t v : vs)
+        {
+            if (!std::isfinite(dist[v])) { continue; }
+            if (dist[v] < dmin) { dmin = dist[v]; anchor = v; }
+            if (dist[v] > dmax) { dmax = dist[v]; tip = v; }
+        }
+        if (anchor == 0xFFFFFFFFu || tip == 0xFFFFFFFFu || anchor == tip) { continue; }
+        // The seed component is the trunk: an "edge distance from its axis" is meaningless there, and
+        // leaving it non-zero would invite a shader to flutter the trunk. Keep B purely about leaves.
+        if (dmin <= 0.0f) { continue; }
+        DirectX::XMFLOAT3 ax{ wpos[tip].x - wpos[anchor].x, wpos[tip].y - wpos[anchor].y,
+                              wpos[tip].z - wpos[anchor].z };
+        const float axLen = std::sqrt(ax.x * ax.x + ax.y * ax.y + ax.z * ax.z);
+        if (!(axLen > 0.0f)) { continue; }
+        ax.x /= axLen; ax.y /= axLen; ax.z /= axLen;
+        float maxPerp = 0.0f;
+        std::vector<float> perp(vs.size(), 0.0f);
+        for (size_t k = 0; k < vs.size(); ++k)
+        {
+            const DirectX::XMFLOAT3& p = wpos[vs[k]];
+            DirectX::XMFLOAT3 rel{ p.x - wpos[anchor].x, p.y - wpos[anchor].y, p.z - wpos[anchor].z };
+            const float along = rel.x * ax.x + rel.y * ax.y + rel.z * ax.z;
+            DirectX::XMFLOAT3 perpV{ rel.x - ax.x * along, rel.y - ax.y * along, rel.z - ax.z * along };
+            perp[k] = std::sqrt(perpV.x * perpV.x + perpV.y * perpV.y + perpV.z * perpV.z);
+            maxPerp = std::max(maxPerp, perp[k]);
+        }
+        if (!(maxPerp > 0.0f)) { continue; }
+        for (size_t k = 0; k < vs.size(); ++k) { edgeW[vs[k]] = perp[k] / maxPerp; }
+    }
+
+    // ---- pack ----
+    const auto quant = [](float v01) -> uint32_t
+    {
+        return static_cast<uint32_t>(std::lround(std::clamp(v01, 0.0f, 1.0f) * 255.0f)) & 0xFFu;
+    };
+    for (size_t i = 0; i < vcount; ++i)
+    {
+        const uint32_t w = weldOf[i];
+        const float r01 = std::isfinite(dist[w]) ? dist[w] * invMax : 0.0f;
+        const uint32_t limbHash = (static_cast<uint32_t>(comp[w] + 1) * 2654435761u) >> 24;
+        const uint32_t r = quant(r01);
+        const uint32_t g = limbHash & 0xFFu;
+        const uint32_t b = quant(edgeW[w]);
+        constexpr uint32_t kBakedMarker = 255u; // A: distinguishes a baked mesh from a legacy .bin
+        verts[i].color = r | (g << 8) | (b << 16) | (kBakedMarker << 24);
+    }
+}
+} // namespace
+
 bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
     const MeshLoadOptions& opt)
 {
     MeshCpuData cpu;
     if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
 
-    // TODO W7.2: bake the geodesic wind weight into cpu.vertices[i].color here (currently 0).
+    BakeWindWeightsCpu(cpu.vertices, cpu.indices); // W7.2: per-vertex wind weights into .color
 
     std::vector<Mesh::Submesh> lod0Subs = cpu.submeshes;
     if (lod0Subs.empty())

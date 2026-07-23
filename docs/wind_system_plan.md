@@ -364,7 +364,41 @@ Decided with the user 2026-07-23: `.mesh.json` is only a *reference* (geometry +
 
 **Verify:** build clean; a level with no `.bin` renders byte-identically (fallback); `--bake-meshes` writes valid `.bin`s; loading the baked `.bin` renders identically to the fallback + skips cgltf/normal-gen/simplify; `--scene-stress=30`.
 
-### W7.2 — Importer bake
+### W7.2 — Importer bake  — **DONE (2026-07-23), uncommitted**
+
+Landed as `BakeWindWeightsCpu` in MeshManager.cpp, called from `BakeToBinary` before serialize.
+Verified by reading the baked `.bin` back and comparing per material slot against the Python
+prototype — identical within 8-bit quantisation, **0 % saturation on all three palms**:
+
+| asset | slot | R range | distinct G |
+|---|---|---|---|
+| date_palm | 0 trunk | 0.00-0.61 | 1 |
+| date_palm | 1 fronds | 0.64-1.00 | **35** (= its 35 frond islands) |
+| coconut_palm | 0 trunk | 0.00-0.61 | **2** (= its two trunks) |
+| coconut_palm | 2 fronds | 0.62-1.00 | **36** |
+| curly_palm | 1 leaves | 0.33-1.00 | 14 |
+
+Decisions made during the bake that differ from the spec below:
+- **G is the hashed CONNECTED-COMPONENT id, not a parent-walk anchor.** The parent walk was tried
+  first and measured 164 distinct anchors across 35 fronds — "walk back k metres from ME" is a
+  per-VERTEX point, not a per-limb one, so a single leaf got ~5 phases and would tear. Game foliage
+  is card-based (each frond is its own island), so the component IS the limb. A welded single-island
+  mesh degrades to one phase for the whole plant: boring, not broken.
+- **B is zeroed on any component that touches the ground** (the trunk): an "edge distance from the
+  limb axis" is meaningless there and a non-zero value would invite a shader to flutter the trunk.
+- **No `MESH_BIN_VERSION` bump.** `LoadBinaryDirect` has no fallback, so a bump would hard-fail every
+  already-baked `.bin` at once. Instead **A = 255 marks "weights baked"**; legacy `.bin` have A = 0,
+  which W7.3 uses to keep them on the old heuristic until re-baked.
+- Bridging uses a uniform spatial grid (the prototype's brute-force NN is O(unreached x reached) and
+  does not scale past a few thousand verts), with the bridge capped at 15 % of the bbox diagonal —
+  anything further stays unreached and bakes rigid, which is the documented stray-geometry guard.
+
+Re-bake command (must match the mesh.json `recomputeNormalSlots` or the normals drift):
+`test_cube.exe --reimport-src=import_staging/<n>/scene.gltf --reimport-out=models/<n>/<n>.mesh.bin [--reimport-recompute=2,3,4]`
+
+--- (original spec) ---
+
+### W7.2 — Importer bake (spec)
 
 At import (cached — do not recompute per load):
 1. Weld vertices by position (UV seams would otherwise cut the graph).
