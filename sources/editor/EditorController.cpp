@@ -140,7 +140,7 @@ namespace
             {
                 continue;
             }
-            if (rec.id.key == "models/box.obj")
+            if (rec.id.key == "models/box.mesh.json")
             {
                 return rec.id.key;
             }
@@ -716,7 +716,7 @@ namespace
             {
                 { "name", "Floor" },
                 { "type", "staticMesh" },
-                { "model", "models/box.obj" },
+                { "mesh", "models/box.mesh.json" },
                 { "material", "sandstone_cracks" },
                 { "shader", "shaders/gbuffer.hlsl" },
                 { "inputLayout", "PosNormTanUV" },

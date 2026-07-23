@@ -96,7 +96,15 @@ public:
         EditorPreviewMode mode,
         std::uint32_t lod,
         std::uint32_t renderSlot,
-        ID3D12Resource* existingColorTarget = nullptr);
+        ID3D12Resource* existingColorTarget = nullptr,
+        // Mesh-asset level UV tiling (mesh.json "texOffsScale"). It is NOT part of the material, so
+        // the preview cannot read it from MaterialData — the Mesh Editor passes its live value here
+        // so dragging the control retiles immediately. Null = use the material's own value.
+        const Math::float4* texOffsScaleOverride = nullptr,
+        // Mesh Editor hover highlight: index of the MATERIAL SLOT to tint, or -1 for none.
+        // Matched against each submesh's materialSlot, so a slot spanning several submeshes
+        // lights all of them.
+        int highlightMaterialSlot = -1);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
     // target. The caller submits `cl` and owns the returned color target.

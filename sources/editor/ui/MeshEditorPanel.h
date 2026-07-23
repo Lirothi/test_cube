@@ -59,6 +59,10 @@ private:
     bool          loaded_ = false;
     std::vector<std::string> slots_; // one material preset per submesh (auto-sized to the geometry)
     std::vector<uint32_t> recomputeNormalSlots_; // submesh slots that discard authored normals
+    // Material slot whose controls were hovered LAST frame (-1 = none); the preview tints it so it
+    // is obvious which part of the model a control drives. One frame stale by construction: the
+    // preview pane is drawn before the settings pane that detects the hover.
+    int           hoveredSlot_ = -1;
     std::string   status_;
     MeshEditorPreviewScene previewScene_;
     MeshEditorPreviewCamera previewCamera_;

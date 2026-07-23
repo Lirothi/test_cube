@@ -139,7 +139,9 @@ void DrawMeshPreview(EditorContext& ctx,
     const std::string& path,
     const std::string& geometry,
     const std::vector<std::string>& materialSlots,
-    const std::vector<std::uint32_t>& recomputeNormalSlots)
+    const std::vector<std::uint32_t>& recomputeNormalSlots,
+    const Math::float4* texOffsScaleOverride,
+    int highlightMaterialSlot)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -201,7 +203,9 @@ void DrawMeshPreview(EditorContext& ctx,
         camera,
         light,
         mode,
-        lod);
+        lod,
+        texOffsScaleOverride,
+        highlightMaterialSlot);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -464,6 +468,21 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImVec2(previewPaneWidth, workspaceSize.y),
         true,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    // Live mesh-asset tiling. It is not part of any material, so the preview cannot discover it —
+    // pass the document's current value so dragging Tex Offset/Scale retiles immediately instead of
+    // only showing up after Save + reload.
+    Math::float4 texOffsScale(0.0f, 0.0f, 1.0f, 1.0f);
+    bool hasTexOffsScale = false;
+    {
+        const auto it = doc_.find("texOffsScale");
+        if (it != doc_.end() && it->is_array() && it->size() == 4)
+        {
+            float v[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+            for (int k = 0; k < 4; ++k) { if ((*it)[k].is_number()) { v[k] = (*it)[k].get<float>(); } }
+            texOffsScale = Math::float4(v[0], v[1], v[2], v[3]);
+            hasTexOffsScale = true;
+        }
+    }
     DrawMeshPreview(ctx,
         registry,
         previewScene_,
@@ -474,7 +493,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         path_,
         doc_.value("geometry", std::string()),
         slots_,
-        recomputeNormalSlots_);
+        recomputeNormalSlots_,
+        hasTexOffsScale ? &texOffsScale : nullptr,
+        hoveredSlot_);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -509,6 +530,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         : geometry;
     const bool geometryIsGltf = IsGltfGeometry(materialSource);
 
+    // Collected while drawing the settings pane; consumed by the preview on the NEXT frame.
+    int hoveredSlotThisFrame = -1;
+
     // One material picker per submesh — the slot count is auto-detected from the geometry (Open()).
     ImGui::SeparatorText(slots_.size() == 1 ? "Material" : "Material slots (per submesh)");
     for (size_t i = 0; i < slots_.size(); ++i)
@@ -516,6 +540,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::PushID(static_cast<int>(i));
         const std::string label = (slots_.size() == 1) ? std::string("Material") : ("slot " + std::to_string(i));
         MaterialCombo(label.c_str(), slots_[i], presets, /*allowAuto=*/true); // edits slots_[i] in place
+        if (ImGui::IsItemHovered()) { hoveredSlotThisFrame = static_cast<int>(i); }
 
         // An auto glTF slot has no editable file yet. Promote it first; named presets can be
         // opened directly in Material Editor without returning to the Content Browser.
@@ -581,23 +606,6 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "Tangents are regenerated from the resulting normals and UVs.");
         }
 
-        // Per-slot wind foliage weight. Geometry alone cannot tell a frond hanging down against the
-        // trunk from the trunk itself, so this is authored rather than inferred; unauthored slots
-        // fall back to the slot's alpha-mask flag, which misses OPAQUE foliage (frond bases).
-        {
-            float foliage = WindFoliageForSlot(i);
-            if (ImGui::SliderFloat("Wind foliage", &foliage, 0.0f, 1.0f, "%.2f"))
-            {
-                SetWindFoliageForSlot(i, foliage);
-            }
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("How much this submesh behaves as leaves in the wind.\n"
-                                  "0 = woody (trunk/branch): only the main bend.\n"
-                                  "1 = foliage: streams downwind and flutters on top of the bend.");
-            }
-        }
-
         ImGui::PopID();
     }
 
@@ -632,9 +640,16 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         }
     }
 
-    // Wind (asset-wide). Per-slot foliage weights live next to each material slot above.
+    // Everything wind lives here - including the PER-SLOT foliage weights, which used to sit
+    // inside the material-slot loop. They are one coherent set of knobs (a trunk/foliage split
+    // means nothing without the strength above it), so they get tuned together.
+    //
+    // Collapsed by default: only foliage assets use any of this, so on the average mesh it is dead
+    // space above the controls people actually reach for. CollapsingHeader is closed unless
+    // ImGuiTreeNodeFlags_DefaultOpen is passed; ImGui then persists the open/closed state per header
+    // id in imgui.ini, so a user who opens it keeps it open.
     ImGui::Spacing();
-    ImGui::SeparatorText("Wind");
+    if (ImGui::CollapsingHeader("Wind"))
     {
         float strength = doc_.value("windStrength", 0.0f);
         if (ImGui::SliderFloat("Wind Strength", &strength, 0.0f, 1.0f, "%.2f"))
@@ -659,9 +674,39 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             ImGui::SetTooltip("Divides the main bend: >1 stiffer woody trunk, <1 whippier stem.\n"
                               "Only affects the trunk-driven bend, not the foliage streaming.");
         }
+
+        // Per-slot foliage weight. Geometry alone cannot tell a frond hanging down against the trunk
+        // from the trunk itself, so this is authored rather than inferred; leaving every slot at 0
+        // drops the key entirely and the runtime falls back to the slot alpha-mask flag, which
+        // misses OPAQUE foliage (a palm frond bases).
+        ImGui::Spacing();
+        ImGui::TextDisabled("Foliage weight per material slot (0 = woody, 1 = leaves)");
+        for (size_t i = 0; i < slots_.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(1000 + i));
+            const std::string label = slots_.size() == 1
+                ? std::string("Foliage")
+                : ("slot " + std::to_string(i) + " (" + slots_[i] + ")");
+            float foliage = WindFoliageForSlot(i);
+            if (ImGui::SliderFloat(label.c_str(), &foliage, 0.0f, 1.0f, "%.2f"))
+            {
+                SetWindFoliageForSlot(i, foliage);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                hoveredSlotThisFrame = static_cast<int>(i);
+                ImGui::SetTooltip("How much this submesh behaves as leaves in the wind.\n"
+                                  "0 = woody (trunk/branch): only the main bend.\n"
+                                  "1 = foliage: streams downwind and flutters on top of the bend.");
+            }
+            ImGui::PopID();
+        }
     }
 
-    // Texture offset/scale tiling [offsX, offsY, scaleX, scaleY].
+    // Texturing (separate from Wind above — unrelated knobs, and mixing them made the wind block
+    // look like it owned the tiling).
+    ImGui::Spacing();
+    ImGui::SeparatorText("Texturing");
     {
         float tos[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
         const auto& j = doc_["texOffsScale"];
@@ -674,6 +719,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             doc_["texOffsScale"] = { tos[0], tos[1], tos[2], tos[3] };
         }
     }
+
+    hoveredSlot_ = hoveredSlotThisFrame;
 
     ImGui::Separator();
     if (ImGui::Button("Save"))

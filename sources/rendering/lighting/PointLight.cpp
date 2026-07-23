@@ -110,7 +110,7 @@ mat4 PointLight::BuildModel() const
 void PointLight::Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    sphere_ = r->GetMeshManager()->Load("models/sphere.obj", r, uploadCmdList, uploadKeepAlive, { true, false, 0 });
+    sphere_ = r->GetMeshManager()->Load("models/sphere/sphere.mesh.bin", r, uploadCmdList, uploadKeepAlive, { true, false, 0 });
 
     // --- Z-FAIL ---
     {

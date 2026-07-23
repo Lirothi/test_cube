@@ -68,7 +68,13 @@ public:
         const MeshEditorPreviewCamera& camera,
         const MeshEditorPreviewLight& light,
         EditorPreviewMode mode,
-        std::uint32_t lod);
+        std::uint32_t lod,
+        // Live mesh.json "texOffsScale" (null = use each material's own). Per-frame only: it feeds
+        // the draw constants and must never take part in the reload key, or every drag would
+        // rebuild the scene.
+        const Math::float4* texOffsScaleOverride = nullptr,
+        // Material slot to highlight while its Mesh Editor control is hovered (-1 = none).
+        int highlightMaterialSlot = -1);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.

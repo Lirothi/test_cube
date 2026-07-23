@@ -16,6 +16,7 @@
 #include "materials/MaterialData.h"
 #include "core/math/Math.h"
 #include "app/camera/Camera.h"
+#include <cstdio>
 #include <cstring>
 
 using namespace DirectX;
@@ -67,6 +68,16 @@ void GpuInstancedModels::Init(Renderer* renderer,
 
     // Model
     SetMesh(renderer->GetMeshManager()->Load(modelName_, renderer, uploadCmdList, uploadKeepAlive, { true, false, 0 }));
+    if (!mesh_) {
+        // A level referencing geometry that no longer exists (e.g. a raw .obj after the asset was
+        // migrated to .mesh.bin) must not take the process down — report and leave this object
+        // inert. Everything below dereferences mesh_.
+        char msg[512];
+        std::snprintf(msg, sizeof(msg),
+            "[GpuInstancedModels] '%s' failed to load; object disabled.\n", modelName_.c_str());
+        OutputDebugStringA(msg);
+        return;
+    }
     {   // Resource states for VB/IB
         if (ID3D12Resource* vb = mesh_->GetVertexBufferResource()) {
             renderer->SetResourceState(vb, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);

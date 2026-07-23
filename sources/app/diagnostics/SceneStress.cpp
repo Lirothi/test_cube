@@ -887,7 +887,7 @@ private:
     {
         nlohmann::json o = nlohmann::json::object();
         o["type"] = "staticMesh";
-        o["model"] = "models/box.obj";
+        o["model"] = "models/box/box.mesh.bin";
         o["material"] = "damaged_plaster";
         o["shader"] = "shaders/gbuffer.hlsl";
         o["inputLayout"] = "PosNormTanUV";

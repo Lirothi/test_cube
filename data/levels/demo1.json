@@ -1922,7 +1922,7 @@
       "enabled": true,
       "id": 68,
       "material": "bronze",
-      "model": "models/teapot.obj",
+      "model": "models/teapot/teapot.mesh.bin",
       "name": "instancedModels #68",
       "position": [
         0.0,
@@ -1976,7 +1976,7 @@
       "enabled": true,
       "id": 79,
       "material": "bronze",
-      "model": "models/teapot.obj",
+      "model": "models/teapot/teapot.mesh.bin",
       "name": "instancedModels #68 Copy",
       "position": [
         0.0,

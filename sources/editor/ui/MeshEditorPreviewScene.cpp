@@ -48,7 +48,14 @@ namespace
             a.panX == b.panX && a.panY == b.panY;
     }
 
-    bool SameLight(const MeshEditorPreviewLight& a,
+    // The absent override is identity tiling, so a mesh with no texOffsScale never counts as dirty.
+bool SameTexOffsScale(const Math::float4& cached, const Math::float4* current)
+{
+    const Math::float4 v = current ? *current : Math::float4(0.0f, 0.0f, 1.0f, 1.0f);
+    return cached.x == v.x && cached.y == v.y && cached.z == v.z && cached.w == v.w;
+}
+
+bool SameLight(const MeshEditorPreviewLight& a,
         const MeshEditorPreviewLight& b)
     {
         return a.direction.x == b.direction.x &&
@@ -73,6 +80,11 @@ struct MeshEditorPreviewScene::Impl
     std::array<MeshEditorPreviewLight, render::kFrameCount> renderedLights{};
     std::array<EditorPreviewMode, render::kFrameCount> renderedModes{};
     std::array<std::uint32_t, render::kFrameCount> renderedLods{};
+    // The preview only re-renders a frame when something it draws changed. The mesh-asset tiling is
+    // one of those things, so it has to take part in the check or dragging Tex Offset/Scale would
+    // leave the cached image on screen.
+    std::array<Math::float4, render::kFrameCount> renderedTexOffsScale{};
+    std::array<int, render::kFrameCount> renderedHighlights{ -1, -1, -1 };
     std::array<bool, render::kFrameCount> cameraValid{};
     std::string sourceSignature;
     std::string error;
@@ -166,7 +178,9 @@ struct MeshEditorPreviewScene::Impl
         const MeshEditorPreviewCamera& camera,
         const MeshEditorPreviewLight& light,
         EditorPreviewMode mode,
-        std::uint32_t lod)
+        std::uint32_t lod,
+        const Math::float4* texOffsScaleOverride,
+        int highlightMaterialSlot)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -216,7 +230,9 @@ struct MeshEditorPreviewScene::Impl
                 mode,
                 lod,
                 frameIndex,
-                targets[frameIndex].Get());
+                targets[frameIndex].Get(),
+                texOffsScaleOverride,
+                highlightMaterialSlot);
         if (!target || !commands->Submit(&renderer))
         {
             error = "Could not submit the mesh preview render.";
@@ -229,6 +245,9 @@ struct MeshEditorPreviewScene::Impl
         renderedLights[frameIndex] = light;
         renderedModes[frameIndex] = mode;
         renderedLods[frameIndex] = lod;
+        renderedTexOffsScale[frameIndex] = texOffsScaleOverride
+            ? *texOffsScaleOverride : Math::float4(0.0f, 0.0f, 1.0f, 1.0f);
+        renderedHighlights[frameIndex] = highlightMaterialSlot;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -284,7 +303,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     const MeshEditorPreviewCamera& camera,
     const MeshEditorPreviewLight& light,
     EditorPreviewMode mode,
-    std::uint32_t lod)
+    std::uint32_t lod,
+    const Math::float4* texOffsScaleOverride,
+    int highlightMaterialSlot)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -331,7 +352,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         targetSizeChanged || !SameCamera(impl_->renderedCameras[frameIndex], camera) ||
         !SameLight(impl_->renderedLights[frameIndex], light) ||
         impl_->renderedModes[frameIndex] != mode ||
-        impl_->renderedLods[frameIndex] != lod)
+        impl_->renderedLods[frameIndex] != lod ||
+        !SameTexOffsScale(impl_->renderedTexOffsScale[frameIndex], texOffsScaleOverride) ||
+        impl_->renderedHighlights[frameIndex] != highlightMaterialSlot)
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
@@ -340,7 +363,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 camera,
                 light,
                 mode,
-                lod))
+                lod,
+                texOffsScaleOverride,
+                highlightMaterialSlot))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();

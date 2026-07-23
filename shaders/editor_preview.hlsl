@@ -18,7 +18,8 @@ cbuffer PreviewCB : register(b0)
     float4 gTexFlags;           // xyz = use albedo/MR/normal, w = normal strength
     float4 gMaterialFlags;      // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
     float4 gSurfaceParams;      // rgb = subsurface color, w = transmission strength
-    float4 gSurfaceFlags;       // x = shading model ID, y = albedo power, z = normal weight
+    float4 gSurfaceFlags;       // x = shading model ID, y = albedo power, z = normal weight,
+                                // w = highlight 0..1 (Mesh Editor hover over a slot's controls)
     float4 gAmbient;            // rgb = light color, w = ambient intensity
     float4 gDebugParams;        // x = normal length, yzw = diagnostic line color
 };
@@ -184,6 +185,18 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         BRDFResult brdf = EvalBRDF(bi);
         lit += (brdf.diffBRDF + brdf.specBRDF) * brdf.NdotL * radiance;
+    }
+
+    // Mesh Editor: tint the submesh whose material slot / wind-foliage control is hovered, so it is
+    // obvious WHICH part of the model a control affects. A rim term makes it readable even on a
+    // submesh that is mostly facing away or in shadow.
+    const float highlight = saturate(gSurfaceFlags.w);
+    if (highlight > 0.0)
+    {
+        const float rim = pow(saturate(1.0 - saturate(dot(N, V))), 2.0);
+        const float3 tint = float3(0.15, 0.55, 1.0);
+        lit = lerp(lit, lit * 0.45 + tint * 0.55, highlight * 0.65);
+        lit += tint * (rim * highlight * 1.4);
     }
     return float4(lit, 1.0);
 }

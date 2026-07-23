@@ -427,7 +427,7 @@ std::shared_ptr<Mesh> EditorPreviewRenderer::EnsureSphere(Renderer& renderer,
 {
     if (!sphere_)
     {
-        sphere_ = meshes_.Load("models/sphere.obj", &renderer,
+        sphere_ = meshes_.Load("models/sphere/sphere.mesh.bin", &renderer,
             load.CommandList(), load.KeepAlive());
     }
     return sphere_;
@@ -469,7 +469,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     EditorPreviewMode mode,
     std::uint32_t lod,
     std::uint32_t renderSlot,
-    ID3D12Resource* existingColorTarget)
+    ID3D12Resource* existingColorTarget,
+    const Math::float4* texOffsScaleOverride,
+    int highlightMaterialSlot)
 {
     ID3D12Device* device = renderer.GetDevice();
     if (!initialized_ || !device || !cl || renderSlot >= renderSlots_.size())
@@ -707,11 +709,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 params.metalRough.y,
                 material->alphaMask ? material->alphaCutoff : -1.0f,
                 params.mrMultiply };
-            cb.texOffsScale = dx::XMFLOAT4{
-                params.texOffsScale.x,
-                params.texOffsScale.y,
-                params.texOffsScale.z,
-                params.texOffsScale.w };
+            cb.texOffsScale = texOffsScaleOverride
+                ? dx::XMFLOAT4{ texOffsScaleOverride->x, texOffsScaleOverride->y,
+                                texOffsScaleOverride->z, texOffsScaleOverride->w }
+                : dx::XMFLOAT4{ params.texOffsScale.x, params.texOffsScale.y,
+                                params.texOffsScale.z, params.texOffsScale.w };
             cb.texFlags = dx::XMFLOAT4{
                 textures[0] && params.texFlags.x > 0.5f ? 1.0f : 0.0f,
                 textures[1] && params.texFlags.y > 0.5f ? 1.0f : 0.0f,
@@ -737,7 +739,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         {
             cb.baseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 1.0f };
             cb.metalRoughAlpha = dx::XMFLOAT4{ 0.0f, 0.35f, -1.0f, 0.0f };
-            cb.texOffsScale = dx::XMFLOAT4{ 0.0f, 0.0f, 1.0f, 1.0f };
+            cb.texOffsScale = texOffsScaleOverride
+                ? dx::XMFLOAT4{ texOffsScaleOverride->x, texOffsScaleOverride->y,
+                                texOffsScaleOverride->z, texOffsScaleOverride->w }
+                : dx::XMFLOAT4{ 0.0f, 0.0f, 1.0f, 1.0f };
             cb.texFlags = dx::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 1.0f };
             cb.materialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
             cb.surfaceParams = dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 0.0f };
@@ -746,6 +751,13 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 MaterialSurfaceParams{}.transmissionAlbedoPower,
                 MaterialSurfaceParams{}.transmissionNormalWeight,
                 0.0f };
+        }
+        // Highlight is driven by the SUBMESH's material slot, not the draw index: one material slot
+        // can cover several submeshes and they must all light up together.
+        const int drawMaterialSlot = hasSubmesh ? static_cast<int>(submesh.materialSlot) : 0;
+        if (highlightMaterialSlot >= 0 && drawMaterialSlot == highlightMaterialSlot)
+        {
+            cb.surfaceFlags.w = 1.0f;
         }
         cb.ambient = dx::XMFLOAT4{
             std::max(0.0f, light.color.x),
