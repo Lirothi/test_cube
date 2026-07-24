@@ -1,4 +1,4 @@
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
@@ -33,6 +33,14 @@ cbuffer OceanCB : register(b0)
     float4 subsurfaceParams;           // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     float4 heightFogParams;            // x: SSS height bias, y: SSS fade distance, z: horizon fog distance scale, w: reflection normal strength
     float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias
+    float4 shoreBehaviorParams0;       // x: vertical fade depth, y: horizontal minimum, z: horizontal fade depth, w: normal fade depth
+    float4 shoreBehaviorParams1;       // x: run-up depth, y: run-up strength, z: max wave height, w: bottom clearance
+    float4 shoreNormalMinWeights;      // minimum normal/foam weight for each cascade at the shoreline
+    float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
+    float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
+    float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
+    float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
+    float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -44,7 +52,7 @@ cbuffer OceanCB : register(b0)
     float4 windParams1;                // xy: wind direction, z: reference wave height, w: padding
     float4 foamTrailParams0;           // xy: trail size 0, zw: trail size 1
     float4 foamTrailParams1;           // xy: trail dir 0, zw: trail dir 1
-    float4 foamParams2;                // x: trail blend, y: contact foam strength, z: underwater parallax, w: padding
+    float4 foamParams2;                // x: trail blend, y: unused, z: underwater parallax, w: padding
     float4 foamTint;                   // xyz: foam tint, w: unused
     float4 depthTextureSize;           // xy: texel size, zw: texture size
     float2 depthParams;                // x: zNear / (zNear - zFar) y :(zNear * zFar) / (zFar - zNear)
@@ -60,10 +68,11 @@ Texture2D FoamDetailMap : register(t6);
 Texture2D FoamAlbedoTex : register(t7);
 Texture2D FoamUnderwaterTex : register(t8);
 Texture2D FoamTrailTex : register(t9);
-Texture2D ContactFoamTex : register(t10);
-Texture2D SceneDepthTexture : register(t11);
-Texture2D ShoreDepthTexture : register(t12);
-Texture2D OceanReflectionTexture : register(t13);
+Texture2D ShoreFoamBreakupMaskTex : register(t10);
+Texture2D ShoreFoamAlbedoTex : register(t11);
+Texture2D SceneDepthTexture : register(t12);
+Texture2D ShoreDepthTexture : register(t13);
+Texture2D OceanReflectionTexture : register(t14);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointClampSampler : register(s2);
@@ -84,6 +93,7 @@ struct VSOutput
     float viewDepth : TEXCOORD3;
     float4 prevPositionNDC : TEXCOORD4;
     float4 positionNDCJitter : TEXCOORD5;
+    float3 shoreData : TEXCOORD6;      // x: predicted depth, y: source depth, z: shore-effect weight
 };
 
 struct DerivativesSet
@@ -98,11 +108,14 @@ struct FoamInput
     float viewDist;
     float4 lodWeights;
     float4 shoreWeights;
-    float4 positionNDC;
-    float viewDepth;
     float time;
     float3 viewDir;
     float3 normal;
+    float shoreDepth;
+    float fallbackShoreDepth;
+    float fallbackShoreWeight;
+    float shoreFieldWeight;
+    float shoreEffectWeight;
 };
 
 struct FoamData
@@ -255,6 +268,68 @@ float2 ShoreDepthUV(float2 baseXZ)
 float ShoreViewDepth(float depthSample)
 {
     return lerp(shoreDepthParams.x, shoreDepthParams.y, depthSample);
+}
+
+struct ShoreData
+{
+    float waterDepth;
+    float2 depthGradient;
+    float fieldWeight;
+};
+
+float ShoreWaterDepth(float2 shoreUV)
+{
+    return ShoreViewDepth(SampleShoreDepth(shoreUV)) - shoreViewParams.z;
+}
+
+float ShoreFieldWeight(float2 shoreUV)
+{
+    float2 texelUV = max(shoreSamplingParams.xy, float2(1e-6f, 1e-6f));
+    float2 edgeDistanceUV = min(shoreUV, 1.0f - shoreUV);
+    float2 edgeDistanceTexels = edgeDistanceUV / texelUV;
+    float nearestEdgeTexels = min(edgeDistanceTexels.x, edgeDistanceTexels.y);
+    return smoothstep(2.0f, 12.0f, nearestEdgeTexels);
+}
+
+float ShoreEffectDepthWeight(float waterDepth)
+{
+    return 1.0f - smoothstep(4.0f, 5.0f, max(waterDepth, 0.0f));
+}
+
+ShoreData GetShoreData(float2 worldXZ)
+{
+    ShoreData shore;
+    shore.waterDepth = 1000.0f;
+    shore.depthGradient = float2(0.0f, 0.0f);
+    shore.fieldWeight = 0.0f;
+
+    float2 shoreUV = ShoreDepthUV(worldXZ);
+    float2 texelUV = max(shoreSamplingParams.xy, float2(1e-6f, 1e-6f));
+    if (all(shoreUV >= texelUV) && all(shoreUV <= 1.0f - texelUV))
+    {
+        float centerDepth = ShoreWaterDepth(shoreUV);
+        float xDepth = ShoreWaterDepth(shoreUV + float2(texelUV.x, 0.0f));
+        // Shore UV runs opposite world Z.
+        float zDepth = ShoreWaterDepth(shoreUV - float2(0.0f, texelUV.y));
+        float2 texelWorld = max(shoreSamplingParams.zw, float2(1e-3f, 1e-3f));
+
+        shore.waterDepth = centerDepth;
+        shore.fieldWeight =
+            ShoreFieldWeight(shoreUV) *
+            ShoreEffectDepthWeight(centerDepth);
+        shore.depthGradient = float2(
+            (xDepth - centerDepth) / texelWorld.x,
+            (zDepth - centerDepth) / texelWorld.y);
+    }
+    return shore;
+}
+
+float2 ShorewardDirection(float2 depthGradient)
+{
+    float lengthSquared = dot(depthGradient, depthGradient);
+    return lengthSquared > 1e-8f
+        ? -depthGradient * rsqrt(lengthSquared)
+        : float2(0.0f, 0.0f);
 }
 
 float ModifiedManhattanDistance(float3 a, float3 b)
@@ -420,24 +495,6 @@ float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
     return NormalFromCombinedDerivatives(combined);
 }
 
-float GetAttenuation(float2 worldUV)
-{
-    float attenuation = 1.0f;
-    float2 shoreUV = ShoreDepthUV(worldUV);
-    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
-    {
-        float shoreDepth = SampleShoreDepth(shoreUV);
-        if (shoreDepth > 0.0f)
-        {
-            float viewDepth = ShoreViewDepth(shoreDepth);
-            float terrainHeight = shoreViewParams.z - viewDepth;
-            float waterDepth = -terrainHeight;
-            attenuation = max(saturate(waterDepth * 0.25f), 0.05f);
-        }
-    }
-    return attenuation;
-}
-
 [RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {
@@ -447,6 +504,9 @@ VSOutput VSMain(VSInput input)
 
     float3 baseWorld = ClipMapVertex(input.position.xyz, input.uv);
     //float3 prevBaseWorld = ClipMapVertexPrev(input.position.xyz, input.uv);
+
+    ShoreData shore = GetShoreData(baseWorld.xz);
+    float2 shoreDirection = ShorewardDirection(shore.depthGradient);
 
     float2 worldUV = baseWorld.xz;
     //float2 prevWorldUV = prevBaseWorld.xz;
@@ -467,18 +527,72 @@ VSOutput VSMain(VSInput input)
 
     float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
     //float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
+    float geometryFadeDistance = max(shoreSlopeParams.w, 1.0f);
+    float geometryWaveWeight = 1.0f - smoothstep(
+        geometryFadeDistance * 0.65f,
+        geometryFadeDistance,
+        viewDist);
+    displacement *= geometryWaveWeight;
 
-    float attenuation = GetAttenuation(worldUV);
+    float waterDepth = shore.waterDepth;
+    float shoreFieldWeight = shore.fieldWeight;
+    float positiveDepth = max(waterDepth, 0.0f);
+    float shoreVerticalFade = smoothstep(
+        0.0f,
+        max(shoreBehaviorParams0.x, 0.01f),
+        positiveDepth);
+    float terrainSlope = length(shore.depthGradient);
+    float runupSlopeWeight = 1.0f - smoothstep(
+        shoreSlopeParams.x,
+        max(shoreSlopeParams.y, shoreSlopeParams.x + 1e-4f),
+        terrainSlope);
+    runupSlopeWeight *= shoreFieldWeight * geometryWaveWeight;
+    float horizontalDepthWeight = smoothstep(
+        0.0f,
+        max(shoreBehaviorParams0.z, 0.01f),
+        positiveDepth);
+    float shoreHorizontalFade = lerp(
+        saturate(shoreBehaviorParams0.y) * runupSlopeWeight,
+        1.0f,
+        horizontalDepthWeight);
+    float horizontalFade = lerp(1.0f, shoreHorizontalFade, shoreFieldWeight);
+    float shoreBand = 1.0f -
+        smoothstep(0.0f, max(shoreBehaviorParams1.x, 0.01f), positiveDepth);
+    shoreBand *= shoreFieldWeight;
 
-    displacement *= attenuation;
+    float runupWave = clamp(
+        displacement.y,
+        -max(shoreBehaviorParams1.z, 0.0f),
+        max(shoreBehaviorParams1.z, 0.0f));
+    float2 horizontalDisplacement = displacement.xz * horizontalFade;
+    horizontalDisplacement +=
+        shoreDirection * runupWave * max(shoreBehaviorParams1.y, 0.0f) *
+        shoreBand * runupSlopeWeight;
+
+    float predictedDepth = waterDepth + dot(shore.depthGradient, horizontalDisplacement);
+    float shoreVerticalDisplacement = displacement.y * shoreVerticalFade;
+    float bottomLimit = -max(predictedDepth - max(shoreBehaviorParams1.w, 0.0f), 0.0f);
+    shoreVerticalDisplacement = max(shoreVerticalDisplacement, bottomLimit);
+    float runupSheetHeight =
+        max(-predictedDepth + max(shoreBehaviorParams1.w, 0.0f), 0.0f) *
+        shoreBand * runupSlopeWeight;
+    shoreVerticalDisplacement = max(shoreVerticalDisplacement, runupSheetHeight);
+    float verticalDisplacement = lerp(
+        displacement.y,
+        shoreVerticalDisplacement,
+        shoreFieldWeight);
     //prevDisplacement *= attenuation;
 
-    float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
+    float3 world = float3(
+        baseWorld.x + horizontalDisplacement.x,
+        verticalDisplacement,
+        baseWorld.z + horizontalDisplacement.y);
     //float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);
     float3 prevWorldPos = world;
     output.worldPos = world;
 
     output.baseXZ = worldUV;
+    output.shoreData = float3(predictedDepth, waterDepth, shoreFieldWeight);
 
     float4 local = float4(world, 1.0f);
     float4 worldH = mul(local, model);
@@ -601,16 +715,121 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
-float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
+float2 ContactFoamMask(
+    float2 baseXZ,
+    float shoreDepth,
+    float time)
 {
-    float2 screenUV = positionNDC.xy / max(positionNDC.w, 1e-5f);
-    screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    float rawDepth = SampleSceneDepth(screenUV);
-    float depthDiff = DepthToViewZ_Fast(rawDepth) - viewDepth;
-    float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV, 0).r;
-    contactTexture = saturate(1.0f - contactTexture);
-    depthDiff = abs(depthDiff) * contactTexture;
-    return saturate(10 * (foamParams2.y * 2 - depthDiff));
+    float mainWidth = max(shoreFoamGeometryParams.x, 0.0f);
+    float breakupLength = min(
+        max(shoreFoamGeometryParams.y, 0.0f),
+        mainWidth);
+    float opacity = saturate(shoreFoamGeometryParams.w);
+    [branch]
+    if (mainWidth <= 1e-4f || opacity <= 1e-4f)
+    {
+        return float2(0.0f, 0.0f);
+    }
+
+    float maskScale = max(shoreFoamPatternParams.x, 1e-3f);
+    float depthWarpStrength = max(shoreFoamPatternParams.w, 0.0f);
+    float depthWarpRange = max(shoreFoamAlbedoParams.z, 0.0f);
+    float depthWarpScale = max(shoreFoamAlbedoParams.w, 1e-3f);
+    float warpedShoreDepth = shoreDepth;
+    [branch]
+    if (depthWarpStrength > 1e-4f && depthWarpRange > 1e-4f)
+    {
+        // Bend the signed depth with a stable, low-frequency world-space
+        // field before clamping it. This breaks the shared terminal isoline
+        // without camera-dependent screen-space noise.
+        float2 depthWarpUV =
+            baseXZ * depthWarpScale +
+            float2(0.37f, 0.71f);
+        float depthWarpSample = ShoreFoamBreakupMaskTex.SampleBias(
+            AnisotropicWrapSampler,
+            depthWarpUV,
+            2.0f).r;
+        float depthWarpWindow = 1.0f - smoothstep(
+            depthWarpRange,
+            depthWarpRange * 1.5f,
+            abs(shoreDepth));
+        warpedShoreDepth +=
+            (depthWarpSample * 2.0f - 1.0f) *
+            depthWarpStrength *
+            depthWarpWindow;
+    }
+
+    float depth = max(warpedShoreDepth, 0.0f);
+    float edgeFeather = max(fwidth(warpedShoreDepth) * 1.5f, 1e-4f);
+    float breakupStart = mainWidth - breakupLength;
+    [branch]
+    if (depth <= breakupStart - edgeFeather)
+    {
+        return float2(opacity, 1.0f);
+    }
+    [branch]
+    if (depth >= mainWidth)
+    {
+        return float2(0.0f, 0.0f);
+    }
+
+    [branch]
+    if (breakupLength <= 1e-4f)
+    {
+        float edgeCoverage = 1.0f - smoothstep(
+            mainWidth - edgeFeather,
+            mainWidth,
+            depth);
+        float contactCoverage = edgeCoverage * opacity;
+        return float2(
+            contactCoverage,
+            saturate(contactCoverage / max(opacity, 1e-3f)));
+    }
+
+    float2 scrollDirection = windParams1.xy;
+    float directionLengthSquared = dot(scrollDirection, scrollDirection);
+    scrollDirection = directionLengthSquared > 1e-8f
+        ? scrollDirection * rsqrt(directionLengthSquared)
+        : float2(1.0f, 0.0f);
+    float2 foamUV =
+        (baseXZ -
+            scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f)) *
+        maskScale;
+    float breakupSample = ShoreFoamBreakupMaskTex.Sample(
+        AnisotropicWrapSampler,
+        foamUV + float2(0.83f, 0.19f)).r;
+
+    float breakupProgress = smoothstep(
+        breakupStart,
+        mainWidth,
+        depth);
+    float densityBias =
+        (saturate(shoreFoamPatternParams.y) - 0.5f) * 0.5f;
+    float breakupPoint = clamp(
+        lerp(0.02f, 0.98f, breakupSample) + densityBias,
+        0.02f,
+        0.98f);
+    float breakupFeather = max(
+        fwidth(breakupSample) * 0.75f,
+        0.01f);
+    float breakupSelector = smoothstep(
+        breakupPoint - breakupFeather,
+        breakupPoint + breakupFeather,
+        breakupProgress);
+    float terminalFadeWidth = max(
+        edgeFeather * 2.0f,
+        min(mainWidth * 0.05f, 0.01f));
+    float terminalEnvelope = 1.0f - smoothstep(
+        mainWidth - terminalFadeWidth,
+        mainWidth,
+        depth);
+    float contactCoverage =
+        (1.0f - breakupSelector) *
+        terminalEnvelope *
+        opacity;
+    return float2(
+        contactCoverage,
+        saturate(contactCoverage / max(opacity, 1e-3f)));
 }
 
 float Pow5(float x)
@@ -666,11 +885,63 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
     data.coverage = Coverage(turbulence, mixWeights, input.worldUV, deepFoam, bias);
 
-    if (foamParams2.y > 0.0f)
+    float shoreAlbedoWeight = 0.0f;
+    float3 shoreFoamAlbedo = float3(1.0f, 1.0f, 1.0f);
+    if (shoreFoamGeometryParams.w > 0.0f)
     {
-        data.coverage.x = saturate(data.coverage.x + ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
-        //data.coverage.x = saturate(ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
-        //return data;
+        float fieldWeight = saturate(input.shoreFieldWeight);
+        float2 fieldContactFoam = float2(0.0f, 0.0f);
+        float2 fallbackContactFoam = float2(0.0f, 0.0f);
+        [branch]
+        if (fieldWeight > 1e-3f)
+        {
+            fieldContactFoam = ContactFoamMask(
+                input.worldUV,
+                input.shoreDepth,
+                input.time);
+            fieldContactFoam *= saturate(input.shoreEffectWeight);
+        }
+        [branch]
+        if (fieldWeight < 1.0f - 1e-3f)
+        {
+            fallbackContactFoam = ContactFoamMask(
+                input.worldUV,
+                input.fallbackShoreDepth,
+                input.time);
+            fallbackContactFoam *= saturate(input.fallbackShoreWeight);
+        }
+        float2 contactFoamMask = lerp(
+            fallbackContactFoam,
+            fieldContactFoam,
+            fieldWeight);
+        [branch]
+        if (contactFoamMask.x > 1e-3f)
+        {
+            float2 scrollDirection = windParams1.xy;
+            float directionLengthSquared = dot(scrollDirection, scrollDirection);
+            scrollDirection = directionLengthSquared > 1e-8f
+                ? scrollDirection * rsqrt(directionLengthSquared)
+                : float2(1.0f, 0.0f);
+            float2 shoreAlbedoUV =
+                (input.worldUV -
+                    scrollDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) *
+                max(shoreFoamAlbedoParams.x, 1e-3f);
+            shoreFoamAlbedo =
+                ShoreFoamAlbedoTex.Sample(AnisotropicWrapSampler, shoreAlbedoUV).rgb;
+
+            // Treat the dark bubble interiors as actual holes in contact
+            // foam coverage instead of merely tinting opaque foam gray.
+            float shoreFoamLuminance = dot(
+                shoreFoamAlbedo,
+                float3(0.2126f, 0.7152f, 0.0722f));
+            float bubbleCoverage = smoothstep(
+                0.30f,
+                0.68f,
+                shoreFoamLuminance);
+            contactFoamMask *= bubbleCoverage;
+        }
+        data.coverage.x = max(data.coverage.x, contactFoamMask.x);
+        shoreAlbedoWeight = contactFoamMask.y;
     }
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
@@ -678,7 +949,15 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     data.normal = foamNormal;
 
     float2 uv = input.worldUV * 1.0f;
-    data.albedo = FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
+    float3 peakFoamAlbedo =
+        FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
+    data.albedo = peakFoamAlbedo;
+    [branch]
+    if (shoreAlbedoWeight > 1e-3f)
+    {
+        data.albedo =
+            lerp(peakFoamAlbedo, shoreFoamAlbedo, shoreAlbedoWeight);
+    }
     return data;
 }
 
@@ -950,13 +1229,75 @@ PSOut PSMain(VSOutput input)
 {
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
+    float sourceWaterDepth = input.shoreData.y;
+    float shoreClipWidth = max(fwidth(sourceWaterDepth), 1e-4f);
+    clip(sourceWaterDepth + shoreClipWidth * 0.5f);
+    float geometryEdgeRefractionWeight = 1.0f;
+    float geometryEdgeRefractionFadeDepth =
+        max(shoreFoamGeometryParams.z, 0.0f);
+    [branch]
+    if (geometryEdgeRefractionFadeDepth > 1e-4f)
+    {
+        geometryEdgeRefractionWeight = smoothstep(
+            0.0f,
+            geometryEdgeRefractionFadeDepth,
+            max(sourceWaterDepth, 0.0f));
+    }
+
     float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);
     float3 viewVector = baseWorld - clipMapViewer.xyz;
     float viewDist = length(viewVector);
     float2 screenUV = ComputeScreenUV(input.positionNDCJitter);
+    float2 shoreUV = ShoreDepthUV(input.worldPos.xz);
+    float shoreFieldWeight = ShoreFieldWeight(shoreUV);
+    float contactShoreDepth = 1000.0f;
+    float shoreEffectWeight = 0.0f;
+    [branch]
+    if (shoreFieldWeight > 1e-3f)
+    {
+        contactShoreDepth = ShoreWaterDepth(shoreUV);
+        shoreEffectWeight =
+            ShoreEffectDepthWeight(contactShoreDepth);
+    }
 
-    float attenuation = GetAttenuation(baseWorld.xz);
-    
+    float fallbackShoreDepth = 1000.0f;
+    float fallbackShoreWeight = 0.0f;
+    [branch]
+    if (shoreFieldWeight < 1.0f - 1e-3f &&
+        shoreFoamGeometryParams.w > 0.0f)
+    {
+        float sceneDepthSample = SampleSceneDepth(screenUV);
+        if (sceneDepthSample < 1.0f - 1e-6f)
+        {
+            float sceneViewDepth = DepthToViewZ_Fast(sceneDepthSample);
+            float depthSeparation =
+                abs(sceneViewDepth - input.viewDepth);
+            float contactDepthThreshold =
+                max(shoreSlopeParams.z, 1e-3f);
+            fallbackShoreWeight = 1.0f - smoothstep(
+                contactDepthThreshold,
+                contactDepthThreshold * 2.0f,
+                depthSeparation);
+
+            float3 scenePositionWS =
+                PositionWsFromDepth(sceneDepthSample, screenUV);
+            fallbackShoreDepth = -scenePositionWS.y;
+        }
+    }
+
+    float refractionSoftEdge = 1.0f;
+    [branch]
+    if (shoreSlopeParams.z > 0.0f &&
+        sourceWaterDepth < max(shoreBehaviorParams1.x, 0.01f))
+    {
+        float sceneViewDepth = DepthToViewZ_Fast(SampleSceneDepth(screenUV));
+        float geometryDepthSeparation = max(sceneViewDepth - input.viewDepth, 0.0f);
+        refractionSoftEdge = smoothstep(
+            0.0f,
+            shoreSlopeParams.z,
+            geometryDepthSeparation);
+    }
+
     float4 weights = LodWeights(viewDist, clipMapParams.w);
     DerivativesSet macroDeriv = SampleDerivatives(
         input.baseXZ, weights, cascadesCount, normalSamplingParams.y);
@@ -967,7 +1308,14 @@ PSOut PSMain(VSOutput input)
             SampleDerivativesCascade(input.baseXZ, 0u, normalSamplingParams.x) * weights.x;
     }
 
-    float4 normalWeights = max(attenuation.xxxx, 0.1f.xxxx);
+    float normalFade = lerp(
+        1.0f,
+        smoothstep(
+            0.0f,
+            max(shoreBehaviorParams0.w, 0.01f),
+            max(input.shoreData.x, 0.0f)),
+        saturate(input.shoreData.z));
+    float4 normalWeights = lerp(saturate(shoreNormalMinWeights), 1.0f.xxxx, normalFade);
     float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
     float4 macroCombinedDerivatives = CombineDerivatives(macroDeriv, normalWeights);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
@@ -985,12 +1333,15 @@ PSOut PSMain(VSOutput input)
     foamInput.worldUV = input.baseXZ;
     foamInput.viewDist = viewDist;
     foamInput.lodWeights = weights;
-    foamInput.shoreWeights = attenuation.xxxx; //float4(1.0f, 1.0f, 1.0f, 1.0f);
-    foamInput.positionNDC = input.positionNDCJitter;
+    foamInput.shoreWeights = normalWeights;
     foamInput.time = simulationParams.z;
     foamInput.viewDir = viewDir;
     foamInput.normal = normal;
-    foamInput.viewDepth = input.viewDepth;
+    foamInput.shoreDepth = contactShoreDepth;
+    foamInput.fallbackShoreDepth = fallbackShoreDepth;
+    foamInput.fallbackShoreWeight = fallbackShoreWeight;
+    foamInput.shoreFieldWeight = shoreFieldWeight;
+    foamInput.shoreEffectWeight = shoreEffectWeight;
 
     FoamData foamData = GetFoamData(foamInput, cascadesCount);
     //return float4(foamData.coverage.xxx, 1);
@@ -1025,13 +1376,30 @@ PSOut PSMain(VSOutput input)
     macroLi.slopeFactor = saturate(1.0f - macroNormal.y);
 
     float3 color = GetOceanColor(li, macroLi, foamData);
+    float refractionEdgeWeight = min(
+        refractionSoftEdge,
+        geometryEdgeRefractionWeight);
+    [branch]
+    if (refractionEdgeWeight < 0.95f)
+    {
+        float3 softEdgeRefractionCoords = RefractionCoords(
+            refractionParams.x,
+            macroLi.positionNDC,
+            macroLi.viewDepth,
+            macroLi.normal);
+        float3 softEdgeRefraction = SceneColorTexture.SampleLevel(
+            LinearClampSampler,
+            softEdgeRefractionCoords.xy,
+            0).rgb;
+        color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
+    }
     float4 outColor = float4(saturate(color), 1.0f);
 
     float2 currUv = ClipToUV(input.positionNDC);
     float2 prevUv = ClipToUV(input.prevPositionNDC);
     float2 motion = currUv - prevUv;
 
-    //outColor = float4(attenuation.xxx, 1.0f);
+    //outColor = float4(normalWeights.xyz, 1.0f);
 
     PSOut o;
     o.color = outColor;

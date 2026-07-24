@@ -264,6 +264,14 @@ public:
             subsurfaceParamsHandle_ = material->ComputeCBFieldHandle(0, "subsurfaceParams");
             heightFogParamsHandle_ = material->ComputeCBFieldHandle(0, "heightFogParams");
             normalSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "normalSamplingParams");
+            shoreBehaviorParams0Handle_ = material->ComputeCBFieldHandle(0, "shoreBehaviorParams0");
+            shoreBehaviorParams1Handle_ = material->ComputeCBFieldHandle(0, "shoreBehaviorParams1");
+            shoreNormalMinWeightsHandle_ = material->ComputeCBFieldHandle(0, "shoreNormalMinWeights");
+            shoreFoamGeometryParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamGeometryParams");
+            shoreFoamPatternParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamPatternParams");
+            shoreFoamAlbedoParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamAlbedoParams");
+            shoreSlopeParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSlopeParams");
+            shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
             deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
@@ -310,6 +318,14 @@ public:
             subsurfaceParamsHandle_ = {};
             heightFogParamsHandle_ = {};
             normalSamplingParamsHandle_ = {};
+            shoreBehaviorParams0Handle_ = {};
+            shoreBehaviorParams1Handle_ = {};
+            shoreNormalMinWeightsHandle_ = {};
+            shoreFoamGeometryParamsHandle_ = {};
+            shoreFoamPatternParamsHandle_ = {};
+            shoreFoamAlbedoParamsHandle_ = {};
+            shoreSlopeParamsHandle_ = {};
+            shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
             deepScatterColorHandle_ = {};
@@ -370,6 +386,14 @@ public:
         UpdateUniform(owner, subsurfaceParamsHandle_, material, owner_.GetSubsurfaceParams(), cbData);
         UpdateUniform(owner, heightFogParamsHandle_, material, owner_.GetHeightFogParams(), cbData);
         UpdateUniform(owner, normalSamplingParamsHandle_, material, owner_.GetNormalSamplingParams(renderer), cbData);
+        UpdateUniform(owner, shoreBehaviorParams0Handle_, material, owner_.GetShoreBehaviorParams0(), cbData);
+        UpdateUniform(owner, shoreBehaviorParams1Handle_, material, owner_.GetShoreBehaviorParams1(), cbData);
+        UpdateUniform(owner, shoreNormalMinWeightsHandle_, material, owner_.GetShoreNormalMinWeights(), cbData);
+        UpdateUniform(owner, shoreFoamGeometryParamsHandle_, material, owner_.GetShoreFoamGeometryParams(), cbData);
+        UpdateUniform(owner, shoreFoamPatternParamsHandle_, material, owner_.GetShoreFoamPatternParams(), cbData);
+        UpdateUniform(owner, shoreFoamAlbedoParamsHandle_, material, owner_.GetShoreFoamAlbedoParams(), cbData);
+        UpdateUniform(owner, shoreSlopeParamsHandle_, material, owner_.GetShoreSlopeParams(), cbData);
+        UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
@@ -421,6 +445,14 @@ private:
     Material::CBFieldHandle subsurfaceParamsHandle_{};
     Material::CBFieldHandle heightFogParamsHandle_{};
     Material::CBFieldHandle normalSamplingParamsHandle_{};
+    Material::CBFieldHandle shoreBehaviorParams0Handle_{};
+    Material::CBFieldHandle shoreBehaviorParams1Handle_{};
+    Material::CBFieldHandle shoreNormalMinWeightsHandle_{};
+    Material::CBFieldHandle shoreFoamGeometryParamsHandle_{};
+    Material::CBFieldHandle shoreFoamPatternParamsHandle_{};
+    Material::CBFieldHandle shoreFoamAlbedoParamsHandle_{};
+    Material::CBFieldHandle shoreSlopeParamsHandle_{};
+    Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
     Material::CBFieldHandle deepScatterColorHandle_{};
@@ -492,7 +524,8 @@ void OceanRenderable::Init(Renderer* renderer,
     loadTexture(foamAlbedoTexture_, L"textures/ocean/FoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
-    loadTexture(contactFoamTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::AlbedoSRGB);
+    loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::LinearData);
+    loadTexture(shoreFoamAlbedoTexture_, L"textures/ocean/ShoreFoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
 
     UpdateFoamTrailState();
 }
@@ -538,7 +571,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -600,7 +633,8 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     pushTexture(foamAlbedoTexture_);
     pushTexture(foamUnderwaterTexture_);
     pushTexture(foamTrailTexture_);
-    pushTexture(contactFoamTexture_);
+    pushTexture(shoreFoamBreakupMaskTexture_);
+    pushTexture(shoreFoamAlbedoTexture_);
 
     D3D12_CPU_DESCRIPTOR_HANDLE depthSrv = deferred.depthCopySRV.ptr != 0 ? deferred.depthCopySRV : deferred.depthSRV;
     if (depthSrv.ptr == 0)
@@ -957,6 +991,89 @@ Math::float4 OceanRenderable::GetNormalSamplingParams(const Renderer* renderer) 
     return Math::float4(render.detailNormalMipBias, macroMipBias, 0.0f, 0.0f);
 }
 
+Math::float4 OceanRenderable::GetShoreBehaviorParams0() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.shoreVerticalFadeDepth,
+        render.shoreHorizontalMin,
+        render.shoreHorizontalFadeDepth,
+        render.shoreNormalFadeDepth);
+}
+
+Math::float4 OceanRenderable::GetShoreBehaviorParams1() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.shoreRunupDepth,
+        render.shoreRunupStrength,
+        render.shoreRunupMaxWave,
+        render.shoreBottomClearance);
+}
+
+Math::float4 OceanRenderable::GetShoreNormalMinWeights() const
+{
+    return GetRenderConfig().shoreNormalMinWeights;
+}
+
+Math::float4 OceanRenderable::GetShoreFoamGeometryParams() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.shoreContactFoamMainWidth,
+        render.shoreContactFoamBreakupLength,
+        render.shoreGeometryEdgeRefractionFadeDepth,
+        render.shoreContactFoamOpacity);
+}
+
+Math::float4 OceanRenderable::GetShoreFoamPatternParams() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.shoreContactFoamPatternScale,
+        render.shoreContactFoamPatternDensity,
+        render.shoreContactFoamPatternScrollSpeed,
+        render.shoreContactFoamDepthWarpStrength);
+}
+
+Math::float4 OceanRenderable::GetShoreFoamAlbedoParams() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        render.shoreContactFoamAlbedoScale,
+        render.shoreContactFoamAlbedoScrollSpeed,
+        render.shoreContactFoamDepthWarpRange,
+        render.shoreContactFoamDepthWarpScale);
+}
+
+Math::float4 OceanRenderable::GetShoreSlopeParams() const
+{
+    constexpr float kDegreesToRadians = 0.01745329251994329577f;
+    const OceanRenderConfig& render = GetRenderConfig();
+    const float startDegrees = std::clamp(render.shoreRunupSlopeStartDegrees, 0.0f, 89.0f);
+    const float endDegrees = std::clamp(
+        std::max(render.shoreRunupSlopeEndDegrees, startDegrees + 0.1f),
+        0.0f,
+        89.0f);
+    return Math::float4(
+        std::tan(startDegrees * kDegreesToRadians),
+        std::tan(endDegrees * kDegreesToRadians),
+        render.shoreEdgeSoftDepth,
+        render.shoreGeometryFadeDistance);
+}
+
+Math::float4 OceanRenderable::GetShoreSamplingParams() const
+{
+    const float width = simulation_
+        ? static_cast<float>(std::max(simulation_->GetShoreDepthWidth(), 1u))
+        : 1.0f;
+    const float height = simulation_
+        ? static_cast<float>(std::max(simulation_->GetShoreDepthHeight(), 1u))
+        : 1.0f;
+    const float extent = simulation_ ? simulation_->GetShoreDepthHalfExtent() * 2.0f : 500.0f;
+    return Math::float4(1.0f / width, 1.0f / height, extent / width, extent / height);
+}
+
 Math::float4 OceanRenderable::GetSunDirAmbient() const
 {
     Math::float3 dir = Math::float3(0.0f, -1.0f, 0.0f);
@@ -1070,7 +1187,7 @@ Math::float4 OceanRenderable::GetFoamParams2() const
     const OceanRenderConfig& render = GetRenderConfig();
     return Math::float4(
         blendValue,
-        render.contactFoamStrength,
+        0.0f,
         render.underwaterFoamParallax,
         0.0f);
 }

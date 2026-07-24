@@ -383,6 +383,10 @@ import_staging/
 !/models/**/
 !/models/**/*.mesh.json
 /textures/
+!/textures/
+/textures/**
+!/textures/ocean/
+!/textures/ocean/ShoreFoamAlbedo.png
 
 # Exclusions
 !/third_party/**

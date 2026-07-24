@@ -99,6 +99,150 @@ namespace OceanRenderConfigJson
         render.macroNormalMipBiasNative = std::clamp(
             ReadFloat(object, "macroNormalMipBiasNative", render.macroNormalMipBiasNative), -4.0f, 4.0f);
 
+        render.shoreVerticalFadeDepth = std::max(
+            0.01f, ReadFloat(object, "shoreVerticalFadeDepth", render.shoreVerticalFadeDepth));
+        render.shoreHorizontalMin = Math::Saturate(
+            ReadFloat(object, "shoreHorizontalMin", render.shoreHorizontalMin));
+        render.shoreHorizontalFadeDepth = std::max(
+            0.01f, ReadFloat(object, "shoreHorizontalFadeDepth", render.shoreHorizontalFadeDepth));
+        render.shoreNormalFadeDepth = std::max(
+            0.01f, ReadFloat(object, "shoreNormalFadeDepth", render.shoreNormalFadeDepth));
+        render.shoreNormalMinWeights = ReadFloat4(
+            object, "shoreNormalMinWeights", render.shoreNormalMinWeights);
+        render.shoreNormalMinWeights.x = Math::Saturate(render.shoreNormalMinWeights.x);
+        render.shoreNormalMinWeights.y = Math::Saturate(render.shoreNormalMinWeights.y);
+        render.shoreNormalMinWeights.z = Math::Saturate(render.shoreNormalMinWeights.z);
+        render.shoreNormalMinWeights.w = Math::Saturate(render.shoreNormalMinWeights.w);
+        render.shoreRunupDepth = std::max(
+            0.01f, ReadFloat(object, "shoreRunupDepth", render.shoreRunupDepth));
+        render.shoreRunupStrength = std::max(
+            0.0f, ReadFloat(object, "shoreRunupStrength", render.shoreRunupStrength));
+        render.shoreRunupMaxWave = std::max(
+            0.0f, ReadFloat(object, "shoreRunupMaxWave", render.shoreRunupMaxWave));
+        render.shoreRunupSlopeStartDegrees = std::clamp(
+            ReadFloat(object, "shoreRunupSlopeStartDegrees", render.shoreRunupSlopeStartDegrees),
+            0.0f, 89.0f);
+        render.shoreRunupSlopeEndDegrees = std::clamp(
+            ReadFloat(object, "shoreRunupSlopeEndDegrees", render.shoreRunupSlopeEndDegrees),
+            0.0f, 89.0f);
+        render.shoreBottomClearance = std::max(
+            0.0f, ReadFloat(object, "shoreBottomClearance", render.shoreBottomClearance));
+        render.shoreEdgeSoftDepth = std::max(
+            0.0f, ReadFloat(object, "shoreEdgeSoftDepth", render.shoreEdgeSoftDepth));
+        render.shoreGeometryEdgeRefractionFadeDepth = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreGeometryEdgeRefractionFadeDepth",
+                render.shoreGeometryEdgeRefractionFadeDepth));
+        render.shoreGeometryFadeDistance = std::max(
+            1.0f,
+            ReadFloat(
+                object,
+                "shoreGeometryFadeDistance",
+                render.shoreGeometryFadeDistance));
+        const float legacyContactFoamWidth = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamWidth",
+                render.shoreContactFoamMainWidth));
+        const float legacyCoreFraction = Math::Saturate(
+            ReadFloat(object, "shoreContactFoamCoreFraction", 1.0f));
+        render.shoreContactFoamMainWidth = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamMainWidth",
+                legacyContactFoamWidth * legacyCoreFraction));
+        const float legacyBreakupLength = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamMainFadeLength",
+                render.shoreContactFoamBreakupLength));
+        render.shoreContactFoamBreakupLength = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamBreakupLength",
+                legacyBreakupLength));
+        render.shoreContactFoamDepthWarpStrength = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamDepthWarpStrength",
+                render.shoreContactFoamDepthWarpStrength));
+        render.shoreContactFoamDepthWarpRange = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamDepthWarpRange",
+                render.shoreContactFoamDepthWarpRange));
+        render.shoreContactFoamDepthWarpScale = std::max(
+            0.001f,
+            ReadFloat(
+                object,
+                "shoreContactFoamDepthWarpScale",
+                render.shoreContactFoamDepthWarpScale));
+        const float legacyContactFoamSpeed = std::max(
+            0.0f, ReadFloat(
+                object,
+                "shoreContactFoamSpeed",
+                render.shoreContactFoamPatternScrollSpeed));
+        const float legacyPatternScrollSpeed = std::max(
+            0.0f, ReadFloat(
+                object,
+                "shoreContactFoamTailScrollSpeed",
+                legacyContactFoamSpeed));
+        render.shoreContactFoamPatternScrollSpeed = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamPatternScrollSpeed",
+                legacyPatternScrollSpeed));
+        const float legacyContactFoamScale = std::max(
+            0.001f, ReadFloat(
+                object,
+                "shoreContactFoamScale",
+                render.shoreContactFoamAlbedoScale));
+        render.shoreContactFoamAlbedoScale = std::max(
+            0.001f, ReadFloat(
+                object,
+                "shoreContactFoamAlbedoScale",
+                legacyContactFoamScale));
+        render.shoreContactFoamAlbedoScrollSpeed = std::max(
+            0.0f, ReadFloat(
+                object,
+                "shoreContactFoamAlbedoScrollSpeed",
+                render.shoreContactFoamAlbedoScrollSpeed));
+        const float legacyContactFoamOpacity = Math::Saturate(
+            ReadFloat(object, "contactFoamStrength", render.shoreContactFoamOpacity * 0.125f) * 8.0f);
+        render.shoreContactFoamOpacity = Math::Saturate(
+            ReadFloat(object, "shoreContactFoamOpacity", legacyContactFoamOpacity));
+        const float legacyPatternScale = std::max(
+            0.001f,
+            ReadFloat(
+                object,
+                "shoreContactFoamTailScale",
+                render.shoreContactFoamPatternScale));
+        render.shoreContactFoamPatternScale = std::max(
+            0.001f,
+            ReadFloat(
+                object,
+                "shoreContactFoamPatternScale",
+                legacyPatternScale));
+        const float legacyPatternDensity = Math::Saturate(
+            ReadFloat(
+                object,
+                "shoreContactFoamTailDensity",
+                render.shoreContactFoamPatternDensity));
+        render.shoreContactFoamPatternDensity = Math::Saturate(
+            ReadFloat(
+                object,
+                "shoreContactFoamPatternDensity",
+                legacyPatternDensity));
+
         render.windSpeed = std::max(
             0.0f, ReadFloat(object, "windSpeed", render.windSpeed));
         render.wavesScale = std::max(
@@ -110,8 +254,6 @@ namespace OceanRenderConfigJson
 
         render.foamNormalStrength = Math::Saturate(
             ReadFloat(object, "foamNormalStrength", render.foamNormalStrength));
-        render.contactFoamStrength = std::max(
-            0.0f, ReadFloat(object, "contactFoamStrength", render.contactFoamStrength));
         render.underwaterFoamParallax = std::max(
             0.0f, ReadFloat(object, "underwaterFoamParallax", render.underwaterFoamParallax));
 
@@ -184,13 +326,43 @@ namespace OceanRenderConfigJson
         out["macroNormalMipBiasDlss"] = render.macroNormalMipBiasDlss;
         out["macroNormalMipBiasNative"] = render.macroNormalMipBiasNative;
 
+        out["shoreVerticalFadeDepth"] = render.shoreVerticalFadeDepth;
+        out["shoreHorizontalMin"] = render.shoreHorizontalMin;
+        out["shoreHorizontalFadeDepth"] = render.shoreHorizontalFadeDepth;
+        out["shoreNormalFadeDepth"] = render.shoreNormalFadeDepth;
+        out["shoreNormalMinWeights"] = WriteFloat4(render.shoreNormalMinWeights);
+        out["shoreRunupDepth"] = render.shoreRunupDepth;
+        out["shoreRunupStrength"] = render.shoreRunupStrength;
+        out["shoreRunupMaxWave"] = render.shoreRunupMaxWave;
+        out["shoreRunupSlopeStartDegrees"] = render.shoreRunupSlopeStartDegrees;
+        out["shoreRunupSlopeEndDegrees"] = render.shoreRunupSlopeEndDegrees;
+        out["shoreBottomClearance"] = render.shoreBottomClearance;
+        out["shoreEdgeSoftDepth"] = render.shoreEdgeSoftDepth;
+        out["shoreGeometryEdgeRefractionFadeDepth"] =
+            render.shoreGeometryEdgeRefractionFadeDepth;
+        out["shoreGeometryFadeDistance"] = render.shoreGeometryFadeDistance;
+        out["shoreContactFoamMainWidth"] = render.shoreContactFoamMainWidth;
+        out["shoreContactFoamBreakupLength"] = render.shoreContactFoamBreakupLength;
+        out["shoreContactFoamDepthWarpStrength"] =
+            render.shoreContactFoamDepthWarpStrength;
+        out["shoreContactFoamDepthWarpRange"] =
+            render.shoreContactFoamDepthWarpRange;
+        out["shoreContactFoamDepthWarpScale"] =
+            render.shoreContactFoamDepthWarpScale;
+        out["shoreContactFoamPatternScrollSpeed"] =
+            render.shoreContactFoamPatternScrollSpeed;
+        out["shoreContactFoamAlbedoScale"] = render.shoreContactFoamAlbedoScale;
+        out["shoreContactFoamAlbedoScrollSpeed"] = render.shoreContactFoamAlbedoScrollSpeed;
+        out["shoreContactFoamOpacity"] = render.shoreContactFoamOpacity;
+        out["shoreContactFoamPatternScale"] = render.shoreContactFoamPatternScale;
+        out["shoreContactFoamPatternDensity"] = render.shoreContactFoamPatternDensity;
+
         out["windSpeed"] = render.windSpeed;
         out["wavesScale"] = render.wavesScale;
         out["windAlignment"] = render.windAlignment;
         out["windUvWarpStrength"] = render.windUvWarpStrength;
 
         out["foamNormalStrength"] = render.foamNormalStrength;
-        out["contactFoamStrength"] = render.contactFoamStrength;
         out["underwaterFoamParallax"] = render.underwaterFoamParallax;
         out["absorptionGradientType"] = render.absorptionGradientType;
 

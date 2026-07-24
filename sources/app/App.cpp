@@ -179,8 +179,17 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         const bool consumedByImGui =
             (mouseMessage && renderer.ImGuiWantsMouse()) ||
             (keyMessage && renderer.ImGuiWantsKeyboard());
+        const bool inputStateRelease =
+            message == WM_KEYUP ||
+            message == WM_SYSKEYUP ||
+            message == WM_LBUTTONUP ||
+            message == WM_MBUTTONUP ||
+            message == WM_RBUTTONUP;
 
-        if (!consumedByImGui) {
+        // Release messages must always reach InputManager. A modifier or mouse
+        // button may have gone down before ImGui acquired capture; swallowing
+        // its release would leave the engine-side state stuck indefinitely.
+        if (!consumedByImGui || inputStateRelease) {
             app->systems_->input.OnWndProc(hWnd, message, wParam, lParam);
         }
     }

@@ -81,6 +81,14 @@ private:
     Math::float4 GetSubsurfaceParams() const;
     Math::float4 GetHeightFogParams() const;
     Math::float4 GetNormalSamplingParams(const Renderer* renderer) const;
+    Math::float4 GetShoreBehaviorParams0() const;
+    Math::float4 GetShoreBehaviorParams1() const;
+    Math::float4 GetShoreNormalMinWeights() const;
+    Math::float4 GetShoreFoamGeometryParams() const;
+    Math::float4 GetShoreFoamPatternParams() const;
+    Math::float4 GetShoreFoamAlbedoParams() const;
+    Math::float4 GetShoreSlopeParams() const;
+    Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
     Math::float4 GetSunColorExposure() const;
     Math::float4 GetDeepScatterColor() const;
@@ -132,7 +140,8 @@ private:
     Texture2D foamAlbedoTexture_;
     Texture2D foamUnderwaterTexture_;
     Texture2D foamTrailTexture_;
-    Texture2D contactFoamTexture_;
+    Texture2D shoreFoamBreakupMaskTexture_;
+    Texture2D shoreFoamAlbedoTexture_;
     Texture2D distantRoughnessTexture_;
 
     Math::float2 foamTrailTextureSize0_ = Math::float2(100.0f, 50.0f);

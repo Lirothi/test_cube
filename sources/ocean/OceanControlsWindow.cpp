@@ -1033,6 +1033,23 @@ namespace
                 changed = true;
             }
         };
+        const auto dragVector4 = [&changed](const char* label,
+            Math::float4& value,
+            float speed,
+            float minimum,
+            float maximum)
+        {
+            float values[4] = { value.x, value.y, value.z, value.w };
+            if (ImGui::DragFloat4(label, values, speed, minimum, maximum, "%.3f"))
+            {
+                value = Math::float4(
+                    std::clamp(values[0], minimum, maximum),
+                    std::clamp(values[1], minimum, maximum),
+                    std::clamp(values[2], minimum, maximum),
+                    std::clamp(values[3], minimum, maximum));
+                changed = true;
+            }
+        };
 
         ImGui::SeparatorText("Surface color");
         drawColor("Deep scatter tint", render.deepScatterColor);
@@ -1072,10 +1089,81 @@ namespace
         drag("Wind alignment", render.windAlignment, 0.005f, 0.0f, 1.0f);
         drag("UV warp strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
 
+        ImGui::SeparatorText("Shore and surf");
+        drag("Vertical fade depth", render.shoreVerticalFadeDepth, 0.01f, 0.01f, 10.0f);
+        drag("Shallow XZ strength", render.shoreHorizontalMin, 0.005f, 0.0f, 1.0f);
+        drag("XZ restore depth", render.shoreHorizontalFadeDepth, 0.01f, 0.01f, 10.0f);
+        drag("Normal fade depth", render.shoreNormalFadeDepth, 0.01f, 0.01f, 10.0f);
+        dragVector4("Normal cascade minimums", render.shoreNormalMinWeights, 0.005f, 0.0f, 1.0f);
+        drag("Run-up depth", render.shoreRunupDepth, 0.01f, 0.01f, 10.0f);
+        drag("Run-up strength", render.shoreRunupStrength, 0.01f, 0.0f, 10.0f);
+        drag("Run-up max wave", render.shoreRunupMaxWave, 0.01f, 0.0f, 10.0f);
+        drag("Run-up slope fade start", render.shoreRunupSlopeStartDegrees, 0.25f, 0.0f, 89.0f);
+        drag("Run-up slope cutoff", render.shoreRunupSlopeEndDegrees, 0.25f, 0.0f, 89.0f);
+        drag("Bottom clearance", render.shoreBottomClearance, 0.005f, 0.0f, 1.0f);
+        drag("Refraction soft edge distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
+        drag(
+            "Geometry edge refraction fade",
+            render.shoreGeometryEdgeRefractionFadeDepth,
+            0.005f,
+            0.0f,
+            2.0f);
+        drag(
+            "Geometry wave fade distance",
+            render.shoreGeometryFadeDistance,
+            1.0f,
+            1.0f,
+            2000.0f,
+            "%.1f");
+
+        if (ImGui::TreeNodeEx(
+            "Contact foam",
+            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+        {
+            ImGui::SeparatorText("Coverage");
+            drag("Main width", render.shoreContactFoamMainWidth, 0.002f, 0.0f, 1.0f);
+            drag(
+                "Main breakup length",
+                render.shoreContactFoamBreakupLength,
+                0.001f,
+                0.0f,
+                1.0f);
+            drag("Opacity", render.shoreContactFoamOpacity, 0.005f, 0.0f, 1.0f);
+
+            ImGui::SeparatorText("Breakup pattern");
+            drag("Pattern scale", render.shoreContactFoamPatternScale, 0.005f, 0.001f, 2.0f);
+            drag("Pattern density", render.shoreContactFoamPatternDensity, 0.005f, 0.0f, 1.0f);
+            drag("Pattern scroll speed", render.shoreContactFoamPatternScrollSpeed, 0.01f, 0.0f, 10.0f);
+
+            ImGui::SeparatorText("Signed depth warp");
+            drag(
+                "Depth warp scale",
+                render.shoreContactFoamDepthWarpScale,
+                0.002f,
+                0.001f,
+                2.0f);
+            drag(
+                "Depth warp strength",
+                render.shoreContactFoamDepthWarpStrength,
+                0.002f,
+                0.0f,
+                0.5f);
+            drag(
+                "Depth warp range",
+                render.shoreContactFoamDepthWarpRange,
+                0.005f,
+                0.0f,
+                2.0f);
+
+            ImGui::SeparatorText("Appearance");
+            drag("Albedo scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
+            drag("Albedo scroll speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
+            ImGui::TreePop();
+        }
+
         ImGui::SeparatorText("Foam");
         drawColor("Foam tint", render.foamTint);
         drag("Foam normal strength", render.foamNormalStrength, 0.005f, 0.0f, 1.0f);
-        drag("Contact foam strength", render.contactFoamStrength, 0.005f, 0.0f, 5.0f);
         drag("Underwater foam parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
 
         ImGui::SeparatorText("Absorption gradient");

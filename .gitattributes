@@ -3,6 +3,19 @@
 ###############################################################################
 * text=auto
 
+# Windows-native source and shader files.
+*.c       text eol=crlf
+*.cc      text eol=crlf
+*.cpp     text eol=crlf
+*.cxx     text eol=crlf
+*.h       text eol=crlf
+*.hh      text eol=crlf
+*.hpp     text eol=crlf
+*.hxx     text eol=crlf
+*.inl     text eol=crlf
+*.hlsl    text eol=crlf
+*.hlsli   text eol=crlf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

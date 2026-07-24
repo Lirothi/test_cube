@@ -40,13 +40,38 @@ struct OceanRenderConfig
     float macroNormalMipBiasDlss = 0.0f;
     float macroNormalMipBiasNative = 1.0f;
 
+    float shoreVerticalFadeDepth = 1.25f;
+    float shoreHorizontalMin = 0.65f;
+    float shoreHorizontalFadeDepth = 2.0f;
+    float shoreNormalFadeDepth = 2.0f;
+    Math::float4 shoreNormalMinWeights = Math::float4(0.25f, 0.45f, 0.75f, 1.0f);
+    float shoreRunupDepth = 2.0f;
+    float shoreRunupStrength = 1.5f;
+    float shoreRunupMaxWave = 0.8f;
+    float shoreRunupSlopeStartDegrees = 25.0f;
+    float shoreRunupSlopeEndDegrees = 55.0f;
+    float shoreBottomClearance = 0.05f;
+    float shoreEdgeSoftDepth = 0.03f;
+    float shoreGeometryEdgeRefractionFadeDepth = 0.1f;
+    float shoreGeometryFadeDistance = 150.0f;
+    float shoreContactFoamMainWidth = 0.1225f;
+    float shoreContactFoamBreakupLength = 0.05f;
+    float shoreContactFoamDepthWarpStrength = 0.03f;
+    float shoreContactFoamDepthWarpRange = 0.25f;
+    float shoreContactFoamDepthWarpScale = 0.098f;
+    float shoreContactFoamPatternScrollSpeed = 0.2f;
+    float shoreContactFoamAlbedoScale = 0.15f;
+    float shoreContactFoamAlbedoScrollSpeed = 0.2f;
+    float shoreContactFoamOpacity = 0.8f;
+    float shoreContactFoamPatternScale = 0.28f;
+    float shoreContactFoamPatternDensity = 0.55f;
+
     float windSpeed = 12.0f;
     float wavesScale = 1.0f;
     float windAlignment = 0.5f;
     float windUvWarpStrength = 0.2f;
 
     float foamNormalStrength = 0.6f;
-    float contactFoamStrength = 0.1f;
     float underwaterFoamParallax = 1.6f;
 
     float absorptionGradientType = 0.0f;

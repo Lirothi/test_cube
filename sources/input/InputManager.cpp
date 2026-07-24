@@ -91,9 +91,6 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 keyReleased_[vk] = 1;
             }
             keyDown_[vk] = 0;
-            if (vk == VK_MENU) {
-                // if Alt was released we may drop capture if it was held solely for the camera (scene logic decides)
-            }
             break;
         }
         case WM_LBUTTONDOWN: { lButtonDown_ = true;  break; }

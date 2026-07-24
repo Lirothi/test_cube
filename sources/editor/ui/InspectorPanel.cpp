@@ -683,6 +683,27 @@ namespace
                     }
                     trackContinuousEdit(beforeItem, changed);
                 };
+                const auto renderVector4 = [&](const char* label,
+                    Math::float4& value,
+                    float speed,
+                    float minimum,
+                    float maximum)
+                {
+                    const nlohmann::json beforeItem = p;
+                    float values[4] = { value.x, value.y, value.z, value.w };
+                    const bool changed = ImGui::DragFloat4(
+                        label, values, speed, minimum, maximum, "%.3f");
+                    if (changed)
+                    {
+                        value = Math::float4(
+                            std::clamp(values[0], minimum, maximum),
+                            std::clamp(values[1], minimum, maximum),
+                            std::clamp(values[2], minimum, maximum),
+                            std::clamp(values[3], minimum, maximum));
+                        storeRender();
+                    }
+                    trackContinuousEdit(beforeItem, changed);
+                };
 
                 ImGui::TextDisabled("Render settings are stored in this level and override the preset.");
 
@@ -734,11 +755,84 @@ namespace
                     renderDrag("UV Warp Strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
                 }
 
+                if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    renderDrag("Vertical Fade Depth", render.shoreVerticalFadeDepth, 0.01f, 0.01f, 10.0f);
+                    renderDrag("Shallow XZ Strength", render.shoreHorizontalMin, 0.005f, 0.0f, 1.0f);
+                    renderDrag("XZ Restore Depth", render.shoreHorizontalFadeDepth, 0.01f, 0.01f, 10.0f);
+                    renderDrag("Normal Fade Depth", render.shoreNormalFadeDepth, 0.01f, 0.01f, 10.0f);
+                    renderVector4("Normal Cascade Minimums", render.shoreNormalMinWeights, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Run-up Depth", render.shoreRunupDepth, 0.01f, 0.01f, 10.0f);
+                    renderDrag("Run-up Strength", render.shoreRunupStrength, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Run-up Max Wave", render.shoreRunupMaxWave, 0.01f, 0.0f, 10.0f);
+                    renderDrag("Run-up Slope Fade Start", render.shoreRunupSlopeStartDegrees, 0.25f, 0.0f, 89.0f);
+                    renderDrag("Run-up Slope Cutoff", render.shoreRunupSlopeEndDegrees, 0.25f, 0.0f, 89.0f);
+                    renderDrag("Bottom Clearance", render.shoreBottomClearance, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Refraction Soft Edge Distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
+                    renderDrag(
+                        "Geometry Edge Refraction Fade",
+                        render.shoreGeometryEdgeRefractionFadeDepth,
+                        0.005f,
+                        0.0f,
+                        2.0f);
+                    renderDrag(
+                        "Geometry Wave Fade Distance",
+                        render.shoreGeometryFadeDistance,
+                        1.0f,
+                        1.0f,
+                        2000.0f,
+                        "%.1f");
+
+                    if (ImGui::TreeNodeEx(
+                        "Contact Foam",
+                        ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+                    {
+                        ImGui::SeparatorText("Coverage");
+                        renderDrag("Main Width", render.shoreContactFoamMainWidth, 0.002f, 0.0f, 1.0f);
+                        renderDrag(
+                            "Main Breakup Length",
+                            render.shoreContactFoamBreakupLength,
+                            0.001f,
+                            0.0f,
+                            1.0f);
+                        renderDrag("Opacity", render.shoreContactFoamOpacity, 0.005f, 0.0f, 1.0f);
+
+                        ImGui::SeparatorText("Breakup Pattern");
+                        renderDrag("Pattern Scale", render.shoreContactFoamPatternScale, 0.005f, 0.001f, 2.0f);
+                        renderDrag("Pattern Density", render.shoreContactFoamPatternDensity, 0.005f, 0.0f, 1.0f);
+                        renderDrag("Pattern Scroll Speed", render.shoreContactFoamPatternScrollSpeed, 0.01f, 0.0f, 10.0f);
+
+                        ImGui::SeparatorText("Signed Depth Warp");
+                        renderDrag(
+                            "Depth Warp Scale",
+                            render.shoreContactFoamDepthWarpScale,
+                            0.002f,
+                            0.001f,
+                            2.0f);
+                        renderDrag(
+                            "Depth Warp Strength",
+                            render.shoreContactFoamDepthWarpStrength,
+                            0.002f,
+                            0.0f,
+                            0.5f);
+                        renderDrag(
+                            "Depth Warp Range",
+                            render.shoreContactFoamDepthWarpRange,
+                            0.005f,
+                            0.0f,
+                            2.0f);
+
+                        ImGui::SeparatorText("Appearance");
+                        renderDrag("Albedo Scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
+                        renderDrag("Albedo Scroll Speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
+                        ImGui::TreePop();
+                    }
+                }
+
                 if (ImGui::CollapsingHeader("Foam"))
                 {
                     renderColor("Foam Tint", render.foamTint);
                     renderDrag("Foam Normal Strength", render.foamNormalStrength, 0.005f, 0.0f, 1.0f);
-                    renderDrag("Contact Foam Strength", render.contactFoamStrength, 0.005f, 0.0f, 5.0f);
                     renderDrag("Underwater Foam Parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
                 }
 

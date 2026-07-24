@@ -2522,7 +2522,9 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
         lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
             showInspector_, showCommandHistory_, contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
         panelStateLoaded_ = true;
-        if (document_.LoadFromLevelFile("data/levels/demo.json"))
+        const std::string activeLevelPath =
+            NormalizeLevelPath(std::string(levelManager.GetActiveLevelSourcePath()));
+        if (!activeLevelPath.empty() && document_.LoadFromLevelFile(activeLevelPath))
         {
             if (RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
             {
@@ -2530,6 +2532,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }
             cameraBookmarkSlots_ = LoadCameraBookmarkSlots(document_.LevelPath());
             levelStatus_ = "Loaded " + NormalizeLevelPath(document_.LevelPath());
+        }
+        else if (activeLevelPath.empty())
+        {
+            levelStatus_ = "Active level has no source path";
+        }
+        else
+        {
+            levelStatus_ = "Failed to load " + activeLevelPath;
         }
         firstOpenInitialized_ = true;
     }
