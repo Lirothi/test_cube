@@ -38,6 +38,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreNormalMinWeights;      // minimum normal/foam weight for each cascade at the shoreline
     float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
     float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
+    float4 shoreFoamBreakupParams;     // x: breakup-length variation, yzw: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
@@ -532,10 +533,13 @@ VSOutput VSMain(VSInput input)
         geometryFadeDistance * 0.65f,
         geometryFadeDistance,
         viewDist);
-    displacement *= geometryWaveWeight;
 
     float waterDepth = shore.waterDepth;
     float shoreFieldWeight = shore.fieldWeight;
+    displacement *= lerp(
+        1.0f,
+        geometryWaveWeight,
+        saturate(shoreFieldWeight));
     float positiveDepth = max(waterDepth, 0.0f);
     float shoreVerticalFade = smoothstep(
         0.0f,
@@ -761,18 +765,6 @@ float2 ContactFoamMask(
 
     float depth = max(warpedShoreDepth, 0.0f);
     float edgeFeather = max(fwidth(warpedShoreDepth) * 1.5f, 1e-4f);
-    float breakupStart = mainWidth - breakupLength;
-    [branch]
-    if (depth <= breakupStart - edgeFeather)
-    {
-        return float2(opacity, 1.0f);
-    }
-    [branch]
-    if (depth >= mainWidth)
-    {
-        return float2(0.0f, 0.0f);
-    }
-
     [branch]
     if (breakupLength <= 1e-4f)
     {
@@ -799,9 +791,33 @@ float2 ContactFoamMask(
         AnisotropicWrapSampler,
         foamUV + float2(0.83f, 0.19f)).r;
 
+    // Keep the dense foam boundary fixed and vary only the length of its
+    // breakup zone. The existing breakup field therefore creates local
+    // fingers and recesses instead of every fragment converging on one
+    // shared main-width contour.
+    float breakupStart = mainWidth - breakupLength;
+    float breakupLengthVariation =
+        max(shoreFoamBreakupParams.x, 0.0f);
+    float localBreakupLength = max(
+        breakupLength +
+            (breakupSample * 2.0f - 1.0f) *
+            breakupLengthVariation,
+        edgeFeather);
+    float localMainWidth = breakupStart + localBreakupLength;
+    [branch]
+    if (depth <= breakupStart - edgeFeather)
+    {
+        return float2(opacity, 1.0f);
+    }
+    [branch]
+    if (depth >= localMainWidth)
+    {
+        return float2(0.0f, 0.0f);
+    }
+
     float breakupProgress = smoothstep(
         breakupStart,
-        mainWidth,
+        localMainWidth,
         depth);
     float densityBias =
         (saturate(shoreFoamPatternParams.y) - 0.5f) * 0.5f;
@@ -818,10 +834,10 @@ float2 ContactFoamMask(
         breakupProgress);
     float terminalFadeWidth = max(
         edgeFeather * 2.0f,
-        min(mainWidth * 0.05f, 0.01f));
+        min(localBreakupLength * 0.05f, 0.01f));
     float terminalEnvelope = 1.0f - smoothstep(
-        mainWidth - terminalFadeWidth,
-        mainWidth,
+        localMainWidth - terminalFadeWidth,
+        localMainWidth,
         depth);
     float contactCoverage =
         (1.0f - breakupSelector) *

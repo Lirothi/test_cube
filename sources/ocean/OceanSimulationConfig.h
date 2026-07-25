@@ -56,6 +56,7 @@ struct OceanRenderConfig
     float shoreGeometryFadeDistance = 150.0f;
     float shoreContactFoamMainWidth = 0.1225f;
     float shoreContactFoamBreakupLength = 0.05f;
+    float shoreContactFoamBreakupLengthVariation = 0.05f;
     float shoreContactFoamDepthWarpStrength = 0.03f;
     float shoreContactFoamDepthWarpRange = 0.25f;
     float shoreContactFoamDepthWarpScale = 0.098f;

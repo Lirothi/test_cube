@@ -269,6 +269,7 @@ public:
             shoreNormalMinWeightsHandle_ = material->ComputeCBFieldHandle(0, "shoreNormalMinWeights");
             shoreFoamGeometryParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamGeometryParams");
             shoreFoamPatternParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamPatternParams");
+            shoreFoamBreakupParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamBreakupParams");
             shoreFoamAlbedoParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamAlbedoParams");
             shoreSlopeParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSlopeParams");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
@@ -323,6 +324,7 @@ public:
             shoreNormalMinWeightsHandle_ = {};
             shoreFoamGeometryParamsHandle_ = {};
             shoreFoamPatternParamsHandle_ = {};
+            shoreFoamBreakupParamsHandle_ = {};
             shoreFoamAlbedoParamsHandle_ = {};
             shoreSlopeParamsHandle_ = {};
             shoreSamplingParamsHandle_ = {};
@@ -391,6 +393,7 @@ public:
         UpdateUniform(owner, shoreNormalMinWeightsHandle_, material, owner_.GetShoreNormalMinWeights(), cbData);
         UpdateUniform(owner, shoreFoamGeometryParamsHandle_, material, owner_.GetShoreFoamGeometryParams(), cbData);
         UpdateUniform(owner, shoreFoamPatternParamsHandle_, material, owner_.GetShoreFoamPatternParams(), cbData);
+        UpdateUniform(owner, shoreFoamBreakupParamsHandle_, material, owner_.GetShoreFoamBreakupParams(), cbData);
         UpdateUniform(owner, shoreFoamAlbedoParamsHandle_, material, owner_.GetShoreFoamAlbedoParams(), cbData);
         UpdateUniform(owner, shoreSlopeParamsHandle_, material, owner_.GetShoreSlopeParams(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
@@ -450,6 +453,7 @@ private:
     Material::CBFieldHandle shoreNormalMinWeightsHandle_{};
     Material::CBFieldHandle shoreFoamGeometryParamsHandle_{};
     Material::CBFieldHandle shoreFoamPatternParamsHandle_{};
+    Material::CBFieldHandle shoreFoamBreakupParamsHandle_{};
     Material::CBFieldHandle shoreFoamAlbedoParamsHandle_{};
     Material::CBFieldHandle shoreSlopeParamsHandle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
@@ -1034,6 +1038,15 @@ Math::float4 OceanRenderable::GetShoreFoamPatternParams() const
         render.shoreContactFoamPatternDensity,
         render.shoreContactFoamPatternScrollSpeed,
         render.shoreContactFoamDepthWarpStrength);
+}
+
+Math::float4 OceanRenderable::GetShoreFoamBreakupParams() const
+{
+    return Math::float4(
+        GetRenderConfig().shoreContactFoamBreakupLengthVariation,
+        0.0f,
+        0.0f,
+        0.0f);
 }
 
 Math::float4 OceanRenderable::GetShoreFoamAlbedoParams() const

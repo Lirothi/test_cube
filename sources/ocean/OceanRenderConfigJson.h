@@ -167,6 +167,12 @@ namespace OceanRenderConfigJson
                 object,
                 "shoreContactFoamBreakupLength",
                 legacyBreakupLength));
+        render.shoreContactFoamBreakupLengthVariation = std::max(
+            0.0f,
+            ReadFloat(
+                object,
+                "shoreContactFoamBreakupLengthVariation",
+                render.shoreContactFoamBreakupLengthVariation));
         render.shoreContactFoamDepthWarpStrength = std::max(
             0.0f,
             ReadFloat(
@@ -343,6 +349,8 @@ namespace OceanRenderConfigJson
         out["shoreGeometryFadeDistance"] = render.shoreGeometryFadeDistance;
         out["shoreContactFoamMainWidth"] = render.shoreContactFoamMainWidth;
         out["shoreContactFoamBreakupLength"] = render.shoreContactFoamBreakupLength;
+        out["shoreContactFoamBreakupLengthVariation"] =
+            render.shoreContactFoamBreakupLengthVariation;
         out["shoreContactFoamDepthWarpStrength"] =
             render.shoreContactFoamDepthWarpStrength;
         out["shoreContactFoamDepthWarpRange"] =
