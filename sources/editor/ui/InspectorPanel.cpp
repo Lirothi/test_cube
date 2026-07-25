@@ -801,6 +801,12 @@ namespace
                             0.002f,
                             0.0f,
                             1.0f);
+                        renderDrag(
+                            "Breakup Variation Scale",
+                            render.shoreContactFoamBreakupVariationScale,
+                            0.002f,
+                            0.001f,
+                            1.0f);
                         renderDrag("Opacity", render.shoreContactFoamOpacity, 0.005f, 0.0f, 1.0f);
 
                         ImGui::SeparatorText("Breakup Pattern");

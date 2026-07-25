@@ -1052,7 +1052,7 @@ Math::float4 OceanRenderable::GetShoreFoamBreakupParams() const
 {
     return Math::float4(
         GetRenderConfig().shoreContactFoamBreakupLengthVariation,
-        0.0f,
+        GetRenderConfig().shoreContactFoamBreakupVariationScale,
         0.0f,
         0.0f);
 }

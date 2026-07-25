@@ -38,7 +38,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreNormalMinWeights;      // minimum normal/foam weight for each cascade at the shoreline
     float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
     float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
-    float4 shoreFoamBreakupParams;     // x: breakup-length variation, yzw: unused
+    float4 shoreFoamBreakupParams;     // x: breakup-length variation, y: variation scale, zw: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
@@ -783,25 +783,42 @@ float2 ContactFoamMask(
     scrollDirection = directionLengthSquared > 1e-8f
         ? scrollDirection * rsqrt(directionLengthSquared)
         : float2(1.0f, 0.0f);
-    float2 foamUV =
-        (baseXZ -
-            scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f)) *
-        maskScale;
+    float2 foamPosition =
+        baseXZ -
+        scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f);
+    float2 foamUV = foamPosition * maskScale;
     float breakupSample = ShoreFoamBreakupMaskTex.Sample(
         AnisotropicWrapSampler,
         foamUV + float2(0.83f, 0.19f)).r;
 
     // Keep the dense foam boundary fixed and vary only the length of its
-    // breakup zone. The existing breakup field therefore creates local
-    // fingers and recesses instead of every fragment converging on one
-    // shared main-width contour.
+    // breakup zone. A separate low-frequency field creates broad fingers
+    // and recesses, while breakupSample still handles the fine tearing.
     float breakupStart = mainWidth - breakupLength;
     float breakupLengthVariation =
         max(shoreFoamBreakupParams.x, 0.0f);
+    float breakupLengthOffset = 0.0f;
+    [branch]
+    if (breakupLengthVariation > 1e-4f)
+    {
+        float breakupVariationScale =
+            max(shoreFoamBreakupParams.y, 1e-3f);
+        float breakupVariationSample =
+            ShoreFoamBreakupMaskTex.SampleBias(
+                AnisotropicWrapSampler,
+                foamPosition * breakupVariationScale +
+                    float2(0.21f, 0.67f),
+                3.0f).r;
+        float signedBreakupVariation = clamp(
+            (breakupVariationSample - 0.36f) * 2.0f,
+            -1.0f,
+            1.0f);
+        breakupLengthOffset =
+            signedBreakupVariation *
+            breakupLengthVariation;
+    }
     float localBreakupLength = max(
-        breakupLength +
-            (breakupSample * 2.0f - 1.0f) *
-            breakupLengthVariation,
+        breakupLength + breakupLengthOffset,
         edgeFeather);
     float localMainWidth = breakupStart + localBreakupLength;
     [branch]
