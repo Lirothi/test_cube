@@ -32,8 +32,12 @@ struct alignas(16) GpuEmitterParams
     float lifeMin, lifeMax, speedMin, speedMax;  // 32
     float gravity, drag, rotMin, rotMax;         // 48
     float spinMin, spinMax; uint32_t maxParticles; uint32_t frameSeed; // 64
+    // W8 wind drift. windAccelXZ is ALREADY the finished acceleration in m/s^2 (the emitter folds
+    // its own windInfluence into the scene's gust-modulated wind push), so the CS just integrates it
+    // — no wind parameters or per-emitter authoring leak into the shader.
+    float windAccelXZ[2]; float _padW[2];        // 80
 };
-static_assert(sizeof(GpuEmitterParams) == 80, "GpuEmitterParams must match the HLSL cbuffer");
+static_assert(sizeof(GpuEmitterParams) == 96, "GpuEmitterParams must match the HLSL cbuffer");
 
 // Per-emitter draw constants — mirrors `DrawParams` (b2) in shaders/particles.hlsl (E2).
 struct alignas(16) GpuEmitterDrawParams
@@ -62,6 +66,11 @@ struct EmitterDesc
     float speedMax = 2.0f;
     float gravity = -2.5f;             // downward accel; NEGATIVE = buoyancy (fire rises)
     float drag = 0.0f;                 // 1/s velocity damping
+    // W8: horizontal acceleration from the global wind, in m/s^2 at wind strength 1. Per emitter
+    // because the engine has no particle mass: smoke and embers should be carried, sparks and debris
+    // should not, and only the author knows which this is. Default 0 keeps every existing emitter
+    // byte-identical, so enabling wind on a level cannot silently disturb its effects.
+    float windInfluence = 0.0f;
     float rotMin = 0.0f;               // initial billboard roll, radians
     float rotMax = 6.2831853f;
     float spinMin = -1.0f;             // roll speed, rad/s

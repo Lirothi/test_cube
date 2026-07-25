@@ -60,6 +60,27 @@ static const float kWindLeafShear = 0.5;
 static const float kWindFlutterAmp  = 0.15;
 static const float kWindFlutterRate = 2.7;
 
+// W8 grove variation. A stand of one asset is the same mesh at N transforms, so without this every
+// tree bends by exactly the same metres at exactly the same stiffness and the grove reads as one
+// object stamped repeatedly. Both are derived from the tree's WORLD ORIGIN — the anchor the phase
+// already uses — so they cost nothing, need no authoring, and stay in perfect lockstep across
+// submeshes and the shadow (any per-vertex or per-pass source here would tear the tree or detach its
+// shadow). Amplitude is +-kWindGroveAmp, stiffness +-kWindGroveStiff, both symmetric about the
+// authored value so a grove still averages to what the artist tuned.
+// NOTE: kWindGroveAmp is mirrored by WindState::MaxSwayExtentMeters — the shadow caster bounds must
+// cover the LOUDEST tree in the grove, not the average one, or its fronds clip at page edges.
+static const float kWindGroveAmp   = 0.25;
+static const float kWindGroveStiff = 0.20;
+
+// Two decorrelated values in [0,1) from a world XZ position. Trees sit on arbitrary coordinates, so
+// this must not be a smooth function of position: the phase used to be a plain dot(origin.xz, k),
+// which is LINEAR, so a row of evenly spaced palms marched in a visible travelling wave.
+float2 WindHash2(float2 p)
+{
+    float2 v = float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)));
+    return frac(sin(v) * 43758.5453);
+}
+
 // Steady (DC) share of the bend vs the oscillating share. The oscillation must not overpower the
 // steady term, or the tree leans upwind half the time and the wind direction stops reading.
 // osc is in [-1.5, 1.5], so bend stays in [1 - 1.5*kWindBendOsc, 1 + 1.5*kWindBendOsc] > 0.
@@ -106,12 +127,19 @@ float3 WindOffset(float3 objPos, float3 posWS, float3 worldOrigin, float windStr
         return float3(0.0, 0.0, 0.0);
     }
 
-    const float amp = swayAmp * windStrength;
     const float along = windWeights.r; // geodesic position along the plant, 0 root -> 1 extremity
 
-    // Per-tree phase from the world origin (the sync anchor: identical for all submeshes + the
-    // shadow instance). Layered sines (not one) read less robotic.
-    const float p = t * swayFreq + dot(worldOrigin.xz, float2(0.13, 0.17));
+    // W8: one hash of the world origin drives all three per-tree variations. The origin is the sync
+    // anchor — identical for every submesh and for the shadow instance — so this is free and cannot
+    // break lockstep.
+    const float2 groveHash = WindHash2(worldOrigin.xz);
+    const float amp = swayAmp * windStrength * (1.0 + kWindGroveAmp * (groveHash.x * 2.0 - 1.0));
+    const float stiff = max(trunkStiff * (1.0 + kWindGroveStiff * (groveHash.y * 2.0 - 1.0)), 0.05);
+
+    // Per-tree phase. Layered sines (not one) read less robotic. The hash term is what actually
+    // decorrelates a grove: the dot() alone is linear in position, so a row of evenly spaced trees
+    // got evenly spaced phases and swayed as one travelling wave.
+    const float p = t * swayFreq + dot(worldOrigin.xz, float2(0.13, 0.17)) + groveHash.x * 6.2831853;
     const float osc = sin(p) + 0.5 * sin(p * 2.3 + 1.7); // [-1.5, 1.5], zero-mean
 
     // The oscillation rides on a STEADY downwind lean. A zero-mean bend makes the tree spend as much
@@ -121,7 +149,7 @@ float3 WindOffset(float3 objPos, float3 posWS, float3 worldOrigin, float windStr
     // --- Main bend: displace along the wind, then restore the original distance from the pivot. ---
     // The rescale is what turns a shear into a bend: the tip travels along an arc and DROPS as it
     // leans out, instead of the trunk stretching. Without it the whole crown just slides sideways.
-    const float f = WindBendProfile(along) / max(trunkStiff, 0.05);
+    const float f = WindBendProfile(along) / stiff; // `stiff` already carries the grove jitter + floor
 
     // Leaves ride the plant's bend AND stream further downwind on their own, bending about THEIR OWN
     // attachment (windWeights.b == 0 exactly where the leaf meets wood), which is also what keeps the

@@ -57,6 +57,10 @@ public:
     // Uses the largest axis scale: it is a length along the leaf, and over-estimating it only
     // loosens the bound, whereas under-estimating would visibly stiffen the foliage.
     float GetWindLeafScaleWorld() const;
+    // W8: windStrength after the distance fade. Every path that feeds the sway — the per-object CB,
+    // the instanced array, the shadow CB, the GI scatter — must use THIS, not the raw material
+    // value, or the tree and its shadow fade by different amounts and the shadow detaches.
+    float EffectiveWindStrength(float rawWindStrength) const;
     void SetWindFoliageWeights(std::vector<float> w) { windFoliageWeights_ = std::move(w); }
     // Resolved foliage weight of a material slot (slot 0 when the index is out of range).
     // ShadowGpuData uses this to give each per-slot caster id its own weight.

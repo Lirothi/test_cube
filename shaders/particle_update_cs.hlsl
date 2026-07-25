@@ -24,6 +24,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
     }
 
     p.vel += float3(0.0, -gravity, 0.0) * dt;   // gravity > 0 falls; < 0 = buoyancy (fire)
+    // W8: wind pushes horizontally only. Applied as an ACCELERATION, before drag, so drag still
+    // bounds the terminal speed — smoke leans into a steady drift instead of being teleported, and a
+    // gust visibly leans it further because the envelope is already folded into windAccelXZ.
+    p.vel.xz += windAccelXZ * dt;
     p.vel *= max(0.0, 1.0 - drag * dt);
     p.pos += p.vel * dt;
     p.rot += p.spin * dt;

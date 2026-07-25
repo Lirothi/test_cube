@@ -19,7 +19,7 @@ namespace
         // assigning a preset deterministic rather than silently retaining the previous emitter.
         static constexpr const char* kEmitterSettings[] = {
             "maxParticles", "spawnRate", "lifetime", "coneDir", "coneAngleDeg",
-            "speed", "gravity", "drag", "seed", "rotation", "spin",
+            "speed", "gravity", "drag", "windInfluence", "seed", "rotation", "spin",
             "size", "texture", "additive", "softFade", "sort", "localSpace",
             "flipCols", "flipRows", "flipFps", "flipRandomStart", "frameBlend", "colorKeys"
         };

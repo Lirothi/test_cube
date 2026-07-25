@@ -589,9 +589,112 @@ there is no "unbaked" branch to maintain.
 unchanged or better; shadow still tracks (overhead-sun canopy-vs-shadow centroid test); motion
 vectors clean at high `swayFrequency`; `--scene-stress=30`.
 
-## W8 — Polish (was W7; revised 2026-07-23 now that most of the original list has shipped)
+## W8 — Polish — **DONE except the gust->ocean item (2026-07-23), uncommitted**
 
-*(exec: Opus 4.8 / GPT terra)*
+Four of five shipped; the fifth is deliberately NOT built and the evidence is below. Built in the
+plan's own order: the freeze toggle first, because it is the instrument the rest were verified with.
+
+### W8.1 — `vfx::g_windFreeze` debug time freeze — DONE
+
+Freezes the CLOCK, not the parameters, so the pose stays the real authored one. `--wind-freeze[=<s>]`
+for headless shots; a Freeze / Step / step-size control in the Wind inspector (debug state, never
+written into the level document or the undo stack).
+
+**It also pins the OCEAN clock**, `OceanRenderable::Tick`. That is not scope creep, it is the same
+clock: the wind derives its time from `elapsedTime_` precisely so waves and sway stay coherent, and
+freezing one without the other both desyncs them and leaves the water animating under a frozen frame.
+Measured, on `wind_test` — run-to-run noise vs the wind signal, as a fraction of changed pixels:
+
+| | noise (same frozen time, two runs) | signal (freeze 0 vs 1.5) |
+|---|---|---|
+| wind clock only | 15.5 % | 18.2 % — **unusable** |
+| + ocean clock pinned | **0.05 %** | **44.6 %** (~890x separation) |
+
+The residual 0.05 % is DLSS jitter phase, which depends on the frame index at capture. On the
+ocean-free `wind_shadow_test` the separation is 0.43 % vs 10.2 %.
+
+Doing the job it was built for: freeze 0 -> 1.5 s on `wind_shadow_test` changes 296 319 px of canopy
+AND 71 037 px of ground/shadow. A frozen or over-cached shadow shows ~0 in the second number while the
+first still moves — the diff that `swayFrequency: 0` structurally cannot produce.
+
+### W8.2 — Grove variation — DONE
+
+One `WindHash2(worldOrigin.xz)` drives amplitude (+-25 %), trunk stiffness (+-20 %) and a phase
+offset. All three come from the world origin — the anchor the phase already used — so they are free,
+need no authoring, and cannot break submesh/shadow lockstep. Both jitters are symmetric, so a grove
+still averages to the authored value.
+
+The phase offset is the part that matters most: the old phase was `dot(origin.xz, k)`, LINEAR in
+position, so evenly spaced trees got evenly spaced phases and a row swayed as one travelling wave.
+Measured over the 12 palms of `atoll_a2_test` (ratio of largest to smallest phase gap, 1.0 = perfectly
+even): **130.4 -> 17.7**. Amplitude now spans x0.750..x1.222.
+
+`WindState::MaxSwayExtentMeters` mirrors `kWindGroveAmp` — the shadow caster bounds must cover the
+LOUDEST tree in the stand, not the average, or the one hashed to +25 % clips at page edges.
+
+### W8.3 — Wind-driven particle drift — DONE
+
+`EmitterDesc::windInfluence` (m/s^2 at wind strength 1), folded on the CPU against the scene's
+gust-modulated `vfx::g_windDriftXZ` into a finished acceleration, so `particle_update_cs` integrates
+one vector and knows nothing about wind. Applied before drag, so drag still bounds terminal speed and
+a gust visibly leans the plume further. `GpuEmitterParams` 80 -> 96 B (both mirrors + static_assert);
+the emitter's swept culling AABB includes the drift, or a windblown plume drifts outside its own
+bounds and pops.
+
+Per emitter because the engine has no particle mass — smoke rides the wind, sparks do not — and
+default 0, so enabling wind on a level cannot silently disturb its existing effects. Set to 3.0 on
+`data/particles/smoke.json` so the feature is live rather than dormant.
+
+**Verification note worth keeping:** the first measurement showed signal == noise and I nearly shipped
+a no-op. The test level was wrong, not the code: `ResolveEmitterDesc` reads preset -> `overrides` ->
+inline fields and never looks at `properties`. Re-tested through `overrides`, the plume visibly leans
+while the fire at its base (no windInfluence) stays vertical — which is the per-emitter design working.
+Particle RNG is per-frame seeded, so a pixel diff ALWAYS needs a same-settings control run; without one
+the 0.9 % diff looks like a result.
+
+### W8.4 — Distance fade — DONE, default OFF
+
+`vfx::WindDistanceFade(objectOriginWS)` is a SINGLE definition scaling windStrength on both the
+gbuffer and the shadow, from the CAMERA position (published by `Scene::Tick`). Never per-vertex (tears
+the mesh) and never per-view (fading by distance from the LIGHT would detach the shadow).
+
+The trap: `ShadowGpuData::UpdateForFrame` deliberately skips anything that has not moved, and a fading
+caster changes without ever moving — so the tree would fade while its shadow kept swaying. Wind
+casters are therefore re-checked per frame, quantised to 1/255 so a panning camera does not re-upload
+every caster every frame. Guarded by one bool: with the fade off this is free and the O(movers)
+property is untouched.
+
+Default OFF because picking a distance blind is a worse regression than the hazard: the atoll vista
+legitimately shows palms hundreds of metres out, and freezing those is far more visible than aliasing
+nobody has reported. Sliders live in the Wind inspector.
+
+### W8.5 — Gust -> ocean coupling — **NOT BUILT, and should not be as specified**
+
+Every route from wind force to the water goes through `SetSceneVariables` ->
+`ResetInitialSpectrum` -> `ResetGpuResources`, which retires every ocean GPU resource, releases the CPU
+data and resets the descriptor heap; the editor path calls `WaitForPreviousFrame()` before it for
+exactly that reason. `SetDisplayWindForce` is an input to the same spectrum, not a shortcut. And the
+gust envelope changes EVERY FRAME by construction, so the coupling as specified is a full GPU idle
+plus a resource rebuild per frame. That is categorically wrong, not a tuning question.
+
+There is also no cheap per-frame lever to redirect it to: `ocean_surface.hlsl` declares
+`viewerParams.z` (amplitude) but never uses it, and wave height comes from the FFT displacement
+textures.
+
+The correct implementation is an OCEAN-side feature: a per-frame displacement multiplier applied in
+`SampleDisplacementTexture`, with the previous frame's gust for `SamplePreviousDisplacement` (same
+prev-value discipline the foliage already uses for motion vectors) and the surface derivatives scaled
+to match, or normals desync from the geometry. That is a change to a system under active refactor, so
+it is proposed rather than smuggled in.
+
+Worth noting the physics agrees: real gusts do not raise swell on a timescale of seconds — a sea has
+enormous inertia, which is why windForce is a slow variable. Gusts show up as cat's paws, local
+roughness patches. Coupling the envelope to the spectrum would look wrong even if it were cheap.
+
+**Verified:** Debug + Release clean; all 9 wind VS variants + the GI scatter CS + the particle update
+CS compile standalone under dxc; `--scene-stress=30` CLEAN; atoll renders with shadows tracking.
+
+--- (original list) ---
 
 Reassessed against what actually landed:
 

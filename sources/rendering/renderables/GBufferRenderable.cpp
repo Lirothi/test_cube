@@ -6,6 +6,7 @@
 #include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "materials/MaterialDataManager.h"
+#include "vfx/WindState.h" // W8: WindDistanceFade
 
 namespace
 {
@@ -74,7 +75,8 @@ public:
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
         UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
-        UpdateUniform(owner, cbHandles_.windStrength, material, p.windStrength, cbData);
+        UpdateUniform(owner, cbHandles_.windStrength, material,
+                      gb ? gb->EffectiveWindStrength(p.windStrength) : p.windStrength, cbData);
         UpdateUniform(owner, cbHandles_.windFoliage, material, p.windFoliage, cbData); // per-slot
         UpdateUniform(owner, cbHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
@@ -96,7 +98,8 @@ public:
         const GBufferRenderable* gb = owner.AsGBufferRenderable();
         const MaterialParams shadowDefaults{};
         const auto& sp = gb ? gb->CurrentDrawParams() : shadowDefaults;
-        UpdateUniform(owner, shadowHandles_.windStrength, material, sp.windStrength, cbData);
+        UpdateUniform(owner, shadowHandles_.windStrength, material,
+                      gb ? gb->EffectiveWindStrength(sp.windStrength) : sp.windStrength, cbData);
         UpdateUniform(owner, shadowHandles_.windFoliage, material, sp.windFoliage, cbData);
         UpdateUniform(owner, shadowHandles_.windTrunkStiff, material,
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
@@ -522,12 +525,18 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.objectId = ToObjectId32(GetEditorObjectId());
     const auto e = p.EmissiveLinear();
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
-    out.windStrength = p.windStrength; // W3: uniform per object (matParamses_ all carry the same value)
+    out.windStrength = EffectiveWindStrength(p.windStrength); // W3 uniform per object; W8 distance fade
     out.windLeafScale = GetWindLeafScaleWorld();
     // Slot 0's foliage weight. ShadowGpuData overwrites this PER SLOT (its caster ids are already
     // one per slot) and the multi-slot instanced gbuffer reads its own from the slot CB.
     out.windFoliage = p.windFoliage;
     out.windTrunkStiff = windTrunkStiffness_;
+}
+
+float GBufferRenderable::EffectiveWindStrength(float rawWindStrength) const
+{
+    if (rawWindStrength <= 0.0f) { return 0.0f; } // keep the exact no-wind early-out
+    return rawWindStrength * vfx::WindDistanceFade(GetPosition());
 }
 
 float GBufferRenderable::GetWindLeafScaleWorld() const

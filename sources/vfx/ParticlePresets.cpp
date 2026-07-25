@@ -50,6 +50,7 @@ void ApplyEmitterJson(const nlohmann::json& j, EmitterDesc& d)
     ReadRange(j, "speed", d.speedMin, d.speedMax);
     d.gravity = j.value("gravity", d.gravity);
     d.drag = j.value("drag", d.drag);
+    d.windInfluence = j.value("windInfluence", d.windInfluence);
     d.seed = j.value("seed", d.seed);
     ReadRange(j, "rotation", d.rotMin, d.rotMax);
     ReadRange(j, "spin", d.spinMin, d.spinMax);

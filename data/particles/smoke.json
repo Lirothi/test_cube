@@ -2,15 +2,34 @@
   "_comment": "E4 campfire smoke. The 4x2 atlas stores white RGB with alpha copied directly from its red channel; colorKeys provide the gray tint. Each particle is a constant-size airborne puff that rises through the scene.",
   "maxParticles": 64,
   "spawnRate": 10.15,
-  "lifetime": [2.6, 3.7],
-  "coneDir": [0.08, 1.0, 0.04],
+  "lifetime": [
+    2.6,
+    3.7
+  ],
+  "coneDir": [
+    0.08,
+    1.0,
+    0.04
+  ],
   "coneAngleDeg": 12.0,
-  "speed": [0.32, 0.58],
+  "speed": [
+    0.32,
+    0.58
+  ],
   "gravity": -0.18,
   "drag": 0.42,
-  "rotation": [-0.12, 0.12],
-  "spin": [-0.08, 0.08],
-  "size": [1.00, 1.00],
+  "rotation": [
+    -0.12,
+    0.12
+  ],
+  "spin": [
+    -0.08,
+    0.08
+  ],
+  "size": [
+    1.0,
+    1.0
+  ],
   "texture": "textures/particles/smoke_flipbook.png",
   "flipCols": 4,
   "flipRows": 2,
@@ -19,11 +38,32 @@
   "frameBlend": true,
   "additive": false,
   "sort": true,
-  "softFade": 0.70,
+  "softFade": 0.7,
   "colorKeys": [
-    [0.40, 0.40, 0.40, 0.0],
-    [0.35, 0.35, 0.35, 0.13],
-    [0.30, 0.30, 0.30, 0.09],
-    [0.25, 0.25, 0.25, 0.0]
-  ]
+    [
+      0.4,
+      0.4,
+      0.4,
+      0.0
+    ],
+    [
+      0.35,
+      0.35,
+      0.35,
+      0.13
+    ],
+    [
+      0.3,
+      0.3,
+      0.3,
+      0.09
+    ],
+    [
+      0.25,
+      0.25,
+      0.25,
+      0.0
+    ]
+  ],
+  "windInfluence": 3.0
 }

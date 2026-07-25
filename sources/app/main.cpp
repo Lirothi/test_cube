@@ -18,6 +18,7 @@
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
 #include "rendering/meshes/LodSelect.h"          // render::g_shadowLodBias (--vsm-lodbias)
 #include "text/TextManager.h"
+#include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 
 #include <cctype>
 #include <cstdlib>
@@ -222,6 +223,17 @@ int WINAPI WinMain(
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
+        }
+        // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
+        // pixel without touching a single authored wind parameter. Two runs at the SAME value must
+        // be byte-identical; two runs at DIFFERENT values differ by exactly that much wind time.
+        // That pair is the test a frozen/cached shadow cannot pass, and the reason this exists:
+        // authoring swayFrequency 0 for determinism instead makes a frozen shadow indistinguishable
+        // from a correct static lean.
+        if (const char* flag = std::strstr(lpCmdLine, "--wind-freeze")) {
+            vfx::g_windFreeze = true;
+            const char* p = flag + std::strlen("--wind-freeze");
+            vfx::g_windFrozenTime = (*p == '=') ? static_cast<float>(std::atof(p + 1)) : 0.0f;
         }
         // Temporary VSM perf harness (see App.h). "--profdump=<path>" dumps profiler rows + exits.
         // "--vsm-extent=<f>" / "--vsm-refdist=<f>" pre-set the runtime VSM tunables for a sweep;

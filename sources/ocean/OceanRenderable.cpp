@@ -12,6 +12,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
+#include "vfx/WindState.h" // W8: g_windFreeze pins the shared wind/ocean clock
 
 using Microsoft::WRL::ComPtr;
 
@@ -537,6 +538,13 @@ void OceanRenderable::Init(Renderer* renderer,
 void OceanRenderable::Tick(float deltaTime)
 {
     elapsedTime_ += deltaTime;
+    // W8: the debug wind freeze is a freeze of the SHARED clock, and this is the clock — the wind
+    // derives its time from elapsedTime_ precisely so waves and sway stay phase-coherent. Holding one
+    // and not the other would desync them, and would leave the water animating under an otherwise
+    // frozen frame (measured: the ocean alone put the run-to-run noise at 15.5 % of pixels, as large
+    // as the wind signal being measured). PINNED to the same number rather than merely paused, so a
+    // frozen frame is reproducible across runs instead of holding wherever wall-clock left it.
+    if (vfx::g_windFreeze) { elapsedTime_ = vfx::g_windFrozenTime; }
     if (camera_)
     {
         const auto pos = camera_->GetPosition();

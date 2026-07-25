@@ -913,6 +913,12 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
 
     std::uint32_t idx = 0;
     std::uint32_t uploaded = 0;
+    // W8: the distance fade scales windStrength from the CAMERA, so a swaying caster changes without
+    // ever moving — and Step 7 below deliberately skips anything that has not moved, which would
+    // leave the shadow swaying at full amplitude while the tree faded out. Re-check wind casters too,
+    // but ONLY while the fade is actually enabled: with it off (the default) this is a single bool
+    // and the O(movers) property is untouched.
+    const bool windFadeActive = vfx::g_windFadeEnd > vfx::g_windFadeStart;
     for (const auto& objPtr : objects)
     {
         const RenderableObjectBase* obj = objPtr.get();
@@ -923,7 +929,19 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // (no fill, no compare) — the per-frame cost is O(movers), not O(casters). The move
         // signal tracks transform changes, which is all a depth-only shadow entry depends on.
         const RenderableObject* ro = obj->AsRenderableObject();
-        if (ro && ro->MovedThisFrame())
+        bool windFadeChanged = false;
+        if (windFadeActive)
+        {
+            const GBufferRenderable* gbW = obj->AsGBufferRenderable();
+            if (gbW && gbW->GetWindStrength() > 0.0f)
+            {
+                // Quantised so a slowly panning camera does not re-upload every caster every frame
+                // (uploaded > 0 also drives the VSM "content changed" signal).
+                const float now = gbW->EffectiveWindStrength(gbW->GetWindStrength());
+                windFadeChanged = std::abs(now - cpuInstances_[idx].windStrength) > (1.0f / 255.0f);
+            }
+        }
+        if ((ro && ro->MovedThisFrame()) || windFadeChanged)
         {
             FillInstance(obj, cpuInstances_[idx]);
             FillBounds(obj, cpuBounds_[idx], cpuInstances_[idx].windStrength); // W5: sway padding
@@ -1378,7 +1396,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 // W5: the same per-object windStrength gbuffer_inst.hlsl feeds its BaseVS, so a
                 // flagged GPU-instanced object sways identically in the gbuffer and in shadow.
                 const GBufferRenderable* giGb = gc.obj->AsGBufferRenderable();
-                const float giWind = giGb ? giGb->CurrentDrawParams().windStrength : 0.0f;
+                const float giWind = giGb
+                    ? giGb->EffectiveWindStrength(giGb->CurrentDrawParams().windStrength) : 0.0f;
                 const float giFoliage = giGb ? giGb->FoliageForSlot(0) : 0.0f;
                 const float giStiff = giGb ? giGb->GetWindTrunkStiffness() : 1.0f;
                 const float giLeafScale = giGb ? giGb->GetWindLeafScaleWorld() : 0.0f;

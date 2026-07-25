@@ -767,6 +767,13 @@ void Scene::Tick(float deltaTime) {
         windState_.Tick(clock);
         // W5: publish the sway extent for ShadowGpuData::FillBounds (caster-bounds padding).
         vfx::g_maxSwayExtentMeters = windState_.MaxSwayExtentMeters();
+        // W8: the fade origin is the CAMERA, shared by the gbuffer and every shadow view, so both
+        // sides of vfx::WindDistanceFade agree and the shadow cannot detach from the tree.
+        vfx::g_windFadeOriginWS = camera_.GetPosition();
+        // W8: and the drift push for GPU particle emitters (they have no Scene pointer).
+        vfx::g_windDriftXZ = Math::float2(
+            windState_.windDirXZ.x * windState_.strength * windState_.gustMul,
+            windState_.windDirXZ.y * windState_.strength * windState_.gustMul);
 
         // W1/W2 verify (self-limiting): the wind clock tracks the ocean, windDirXZ is unit, and (W2)
         // the ocean's wind dir/force reflect the authored wind entity when it is active.

@@ -1,6 +1,7 @@
 #include "vfx/ParticleEmitterObject.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "core/Helpers.h"
 #include "core/math/Math.h"
 #include "materials/Material.h"
+#include "vfx/WindState.h" // W8: g_windDriftXZ
 #include "rendering/core/CommandListBindState.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
@@ -249,8 +251,13 @@ void ParticleEmitterObject::Tick(float dt)
     // Conservative swept bounds for culling/sorting: max travel + sprite radius, gravity drift
     // included. Cheap enough to refresh every frame (position may be animated/gizmo-dragged).
     const Math::float3 pos = GetPosition();
+    // W8: wind drift is a constant acceleration like gravity, so it enters the swept bound the same
+    // way. Leaving it out would let a windblown plume drift outside its own culling AABB and pop.
+    const float windAccel = std::abs(desc_.windInfluence) *
+        std::sqrt(vfx::g_windDriftXZ.x * vfx::g_windDriftXZ.x +
+                  vfx::g_windDriftXZ.y * vfx::g_windDriftXZ.y);
     const float travel = desc_.speedMax * desc_.lifetimeMax +
-        0.5f * std::abs(desc_.gravity) * desc_.lifetimeMax * desc_.lifetimeMax;
+        0.5f * (std::abs(desc_.gravity) + windAccel) * desc_.lifetimeMax * desc_.lifetimeMax;
     const float r = travel + std::max(desc_.sizeStart, desc_.sizeEnd);
     worldBounds_ = AABB(Math::float3(pos.x - r, pos.y - r, pos.z - r),
                         Math::float3(pos.x + r, pos.y + r, pos.z + r));
@@ -288,6 +295,10 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     prm.rotMin = desc_.rotMin; prm.rotMax = desc_.rotMax;
     prm.spinMin = desc_.spinMin; prm.spinMax = desc_.spinMax;
     prm.maxParticles = desc_.maxParticles;
+    // W8: fold the emitter's own influence into the scene's gust-modulated wind push here, so the CS
+    // integrates one finished acceleration and knows nothing about wind parameters.
+    prm.windAccelXZ[0] = vfx::g_windDriftXZ.x * desc_.windInfluence;
+    prm.windAccelXZ[1] = vfx::g_windDriftXZ.y * desc_.windInfluence;
     prm.frameSeed = HashU32(frameCounter_ * 0x9E3779B9u ^ desc_.seed * 0x85EBCA6Bu);
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(prm), render::kConstantBufferAlignment);

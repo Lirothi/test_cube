@@ -19,6 +19,7 @@ cbuffer EmitterParams : register(b1)
     float lifeMin;      float lifeMax;  float speedMin; float speedMax;
     float gravity;      float drag;     float rotMin;   float rotMax;
     float spinMin;      float spinMax;  uint maxParticles; uint frameSeed;
+    float2 windAccelXZ; float2 _padW;   // W8: finished m/s^2 drift (0 = this emitter ignores wind)
 };
 
 // Both CS share one root signature: b0 = spawn-batch constants (unused by update), b1 = emitter

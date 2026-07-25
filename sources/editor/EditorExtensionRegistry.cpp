@@ -663,6 +663,14 @@ namespace
                 d.drag = drag; setProp("drag", drag);
             }
 
+            // W8: m/s^2 of horizontal push at wind strength 1, scaled live by the gust envelope.
+            // Per emitter because there is no particle mass: smoke rides the wind, sparks do not.
+            float windInfluence = d.windInfluence;
+            if (ImGui::DragFloat("Wind Influence", &windInfluence, 0.02f, 0.0f, 20.0f, "%.2f m/s2"))
+            {
+                d.windInfluence = windInfluence; setProp("windInfluence", windInfluence);
+            }
+
             float coneAngle = d.coneAngleDeg;
             if (ImGui::DragFloat("Cone Angle (deg)", &coneAngle, 0.5f, 0.0f, 180.0f))
             {
