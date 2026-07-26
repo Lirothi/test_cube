@@ -1142,6 +1142,20 @@ namespace
                 1.0f);
             drag("Opacity", render.shoreContactFoamOpacity, 0.005f, 0.0f, 1.0f);
 
+            ImGui::SeparatorText("Wind response");
+            drag(
+                "Calm amount",
+                render.shoreContactFoamCalmAmount,
+                0.005f,
+                0.0f,
+                1.0f);
+            drag(
+                "Full at wind force",
+                render.shoreContactFoamFullWindForce,
+                0.005f,
+                0.01f,
+                1.0f);
+
             ImGui::SeparatorText("Breakup pattern");
             drag("Pattern scale", render.shoreContactFoamPatternScale, 0.005f, 0.001f, 2.0f);
             drag("Pattern density", render.shoreContactFoamPatternDensity, 0.005f, 0.0f, 1.0f);

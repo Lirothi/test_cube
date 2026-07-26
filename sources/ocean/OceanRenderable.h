@@ -87,6 +87,7 @@ private:
     Math::float4 GetShoreFoamGeometryParams() const;
     Math::float4 GetShoreFoamPatternParams() const;
     Math::float4 GetShoreFoamBreakupParams() const;
+    Math::float4 GetShoreFoamWindParams() const;
     Math::float4 GetShoreFoamAlbedoParams() const;
     Math::float4 GetShoreSlopeParams() const;
     Math::float4 GetShoreSamplingParams() const;

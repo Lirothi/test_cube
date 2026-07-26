@@ -65,6 +65,8 @@ struct OceanRenderConfig
     float shoreContactFoamAlbedoScale = 0.15f;
     float shoreContactFoamAlbedoScrollSpeed = 0.2f;
     float shoreContactFoamOpacity = 0.8f;
+    float shoreContactFoamCalmAmount = 0.1f;
+    float shoreContactFoamFullWindForce = 0.6f;
     float shoreContactFoamNormalStrength = 1.0f;
     float shoreContactFoamPatternScale = 0.28f;
     float shoreContactFoamPatternDensity = 0.55f;

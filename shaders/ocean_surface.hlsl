@@ -39,6 +39,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
     float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
     float4 shoreFoamBreakupParams;     // x: breakup-length variation, y: variation scale, z: contact normal strength, w: unused
+    float4 shoreFoamWindParams;        // x: wind force 0..1, y: calm amount, z: full amount wind force, w: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
@@ -719,14 +720,30 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
+float ContactFoamWindAmount()
+{
+    float windResponse = smoothstep(
+        0.0f,
+        max(shoreFoamWindParams.z, 1e-3f),
+        saturate(shoreFoamWindParams.x));
+    return lerp(
+        saturate(shoreFoamWindParams.y),
+        1.0f,
+        windResponse);
+}
+
 float2 ContactFoamMask(
     float2 baseXZ,
     float shoreDepth,
     float time)
 {
-    float mainWidth = max(shoreFoamGeometryParams.x, 0.0f);
+    float windAmount = ContactFoamWindAmount();
+    float mainWidth =
+        max(shoreFoamGeometryParams.x, 0.0f) *
+        windAmount;
     float breakupLength = min(
-        max(shoreFoamGeometryParams.y, 0.0f),
+        max(shoreFoamGeometryParams.y, 0.0f) *
+            windAmount,
         mainWidth);
     float opacity = saturate(shoreFoamGeometryParams.w);
     [branch]
@@ -735,19 +752,31 @@ float2 ContactFoamMask(
         return float2(0.0f, 0.0f);
     }
 
+    float2 scrollDirection = windParams1.xy;
+    float directionLengthSquared = dot(scrollDirection, scrollDirection);
+    scrollDirection = directionLengthSquared > 1e-8f
+        ? scrollDirection * rsqrt(directionLengthSquared)
+        : float2(1.0f, 0.0f);
+    float2 foamPosition =
+        baseXZ -
+        scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f);
+
     float maskScale = max(shoreFoamPatternParams.x, 1e-3f);
-    float depthWarpStrength = max(shoreFoamPatternParams.w, 0.0f);
+    float depthWarpStrength =
+        max(shoreFoamPatternParams.w, 0.0f) *
+        windAmount;
     float depthWarpRange = max(shoreFoamAlbedoParams.z, 0.0f);
     float depthWarpScale = max(shoreFoamAlbedoParams.w, 1e-3f);
     float warpedShoreDepth = shoreDepth;
     [branch]
     if (depthWarpStrength > 1e-4f && depthWarpRange > 1e-4f)
     {
-        // Bend the signed depth with a stable, low-frequency world-space
-        // field before clamping it. This breaks the shared terminal isoline
-        // without camera-dependent screen-space noise.
+        // Bend the signed depth with a low-frequency world-space field
+        // scrolling uniformly along the wind. Scaling its amplitude with
+        // windAmount prevents the warp from resurrecting isolated foam
+        // after the contact strip has otherwise collapsed.
         float2 depthWarpUV =
-            baseXZ * depthWarpScale +
+            foamPosition * depthWarpScale +
             float2(0.37f, 0.71f);
         float depthWarpSample = ShoreFoamBreakupMaskTex.SampleBias(
             AnisotropicWrapSampler,
@@ -778,14 +807,6 @@ float2 ContactFoamMask(
             saturate(contactCoverage / max(opacity, 1e-3f)));
     }
 
-    float2 scrollDirection = windParams1.xy;
-    float directionLengthSquared = dot(scrollDirection, scrollDirection);
-    scrollDirection = directionLengthSquared > 1e-8f
-        ? scrollDirection * rsqrt(directionLengthSquared)
-        : float2(1.0f, 0.0f);
-    float2 foamPosition =
-        baseXZ -
-        scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f);
     float2 foamUV = foamPosition * maskScale;
     float breakupSample = ShoreFoamBreakupMaskTex.Sample(
         AnisotropicWrapSampler,
@@ -796,7 +817,8 @@ float2 ContactFoamMask(
     // and recesses, while breakupSample still handles the fine tearing.
     float breakupStart = mainWidth - breakupLength;
     float breakupLengthVariation =
-        max(shoreFoamBreakupParams.x, 0.0f);
+        max(shoreFoamBreakupParams.x, 0.0f) *
+        windAmount;
     float breakupLengthOffset = 0.0f;
     [branch]
     if (breakupLengthVariation > 1e-4f)
@@ -917,6 +939,56 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
 
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
     data.coverage = Coverage(turbulence, mixWeights, input.worldUV, deepFoam, bias);
+
+    // Coverage() contains the simulated crest foam as well as the explicit
+    // contact mask below. Suppress its near-shore contribution with the same
+    // wind response, otherwise it survives as a detached breakup tail when
+    // contact foam reaches zero. The padded, unwarped envelope keeps this
+    // attenuation local to the contact strip and leaves open-ocean crests
+    // untouched.
+    float contactFoamWindAmount = ContactFoamWindAmount();
+    [branch]
+    if (contactFoamWindAmount < 1.0f - 1e-4f)
+    {
+        float contactFoamWindExtent =
+            max(shoreFoamGeometryParams.x, 0.0f) +
+            max(shoreFoamBreakupParams.x, 0.0f) +
+            max(shoreFoamPatternParams.w, 0.0f);
+        float fieldFeather =
+            max(fwidth(input.shoreDepth) * 2.0f, 1e-3f);
+        float fallbackFeather =
+            max(fwidth(input.fallbackShoreDepth) * 2.0f, 1e-3f);
+        float fieldWindZone = 0.0f;
+        if (input.shoreFieldWeight > 1e-3f)
+        {
+            fieldWindZone =
+                (1.0f - smoothstep(
+                    contactFoamWindExtent,
+                    contactFoamWindExtent + fieldFeather,
+                    max(input.shoreDepth, 0.0f))) *
+                saturate(input.shoreEffectWeight);
+        }
+
+        float fallbackWindZone = 0.0f;
+        if (input.shoreFieldWeight < 1.0f - 1e-3f)
+        {
+            fallbackWindZone =
+                (1.0f - smoothstep(
+                    contactFoamWindExtent,
+                    contactFoamWindExtent + fallbackFeather,
+                    max(input.fallbackShoreDepth, 0.0f))) *
+                saturate(input.fallbackShoreWeight);
+        }
+
+        float shoreWindZone = lerp(
+            fallbackWindZone,
+            fieldWindZone,
+            saturate(input.shoreFieldWeight));
+        data.coverage *= lerp(
+            1.0f,
+            contactFoamWindAmount,
+            saturate(shoreWindZone));
+    }
 
     float shoreAlbedoWeight = 0.0f;
     float3 shoreFoamAlbedo = float3(1.0f, 1.0f, 1.0f);
