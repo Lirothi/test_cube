@@ -232,6 +232,11 @@ namespace OceanRenderConfigJson
             ReadFloat(object, "contactFoamStrength", render.shoreContactFoamOpacity * 0.125f) * 8.0f);
         render.shoreContactFoamOpacity = Math::Saturate(
             ReadFloat(object, "shoreContactFoamOpacity", legacyContactFoamOpacity));
+        render.shoreContactFoamNormalStrength = Math::Saturate(
+            ReadFloat(
+                object,
+                "shoreContactFoamNormalStrength",
+                render.shoreContactFoamNormalStrength));
         const float legacyPatternScale = std::max(
             0.001f,
             ReadFloat(
@@ -370,6 +375,8 @@ namespace OceanRenderConfigJson
         out["shoreContactFoamAlbedoScale"] = render.shoreContactFoamAlbedoScale;
         out["shoreContactFoamAlbedoScrollSpeed"] = render.shoreContactFoamAlbedoScrollSpeed;
         out["shoreContactFoamOpacity"] = render.shoreContactFoamOpacity;
+        out["shoreContactFoamNormalStrength"] =
+            render.shoreContactFoamNormalStrength;
         out["shoreContactFoamPatternScale"] = render.shoreContactFoamPatternScale;
         out["shoreContactFoamPatternDensity"] = render.shoreContactFoamPatternDensity;
 

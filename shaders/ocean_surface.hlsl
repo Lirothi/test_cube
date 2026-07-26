@@ -38,7 +38,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreNormalMinWeights;      // minimum normal/foam weight for each cascade at the shoreline
     float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
     float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
-    float4 shoreFoamBreakupParams;     // x: breakup-length variation, y: variation scale, zw: unused
+    float4 shoreFoamBreakupParams;     // x: breakup-length variation, y: variation scale, z: contact normal strength, w: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
@@ -955,31 +955,32 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
             scrollDirection = directionLengthSquared > 1e-8f
                 ? scrollDirection * rsqrt(directionLengthSquared)
                 : float2(1.0f, 0.0f);
-            float2 shoreAlbedoUV =
-                (input.worldUV -
-                    scrollDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) *
-                max(shoreFoamAlbedoParams.x, 1e-3f);
-            shoreFoamAlbedo =
-                ShoreFoamAlbedoTex.Sample(AnisotropicWrapSampler, shoreAlbedoUV).rgb;
+            float2 shoreAlbedoUV = (input.worldUV - scrollDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) * max(shoreFoamAlbedoParams.x, 1e-3f);
+            shoreFoamAlbedo = ShoreFoamAlbedoTex.Sample(AnisotropicWrapSampler, shoreAlbedoUV).rgb;
 
             // Treat the dark bubble interiors as actual holes in contact
             // foam coverage instead of merely tinting opaque foam gray.
             float shoreFoamLuminance = dot(
                 shoreFoamAlbedo,
                 float3(0.2126f, 0.7152f, 0.0722f));
-            float bubbleCoverage = smoothstep(
-                0.30f,
-                0.68f,
-                shoreFoamLuminance);
+            float bubbleCoverage = max(smoothstep(0.30f, 0.68f, shoreFoamLuminance), 0.15f);
             contactFoamMask *= bubbleCoverage;
         }
         data.coverage.x = max(data.coverage.x, contactFoamMask.x);
         shoreAlbedoWeight = contactFoamMask.y;
+
+        //shoreFoamAlbedo = float3(1,0,0);
     }
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
     float3 foamNormal = NormalFromDerivatives(input.derivatives, foamNormalWeights);
-    data.normal = foamNormal;
+    float contactNormalReduction =
+        shoreAlbedoWeight *
+        (1.0f - saturate(shoreFoamBreakupParams.z));
+    data.normal = normalize(lerp(
+        foamNormal,
+        input.normal,
+        contactNormalReduction));
 
     float2 uv = input.worldUV * 1.0f;
     float3 peakFoamAlbedo =
@@ -988,8 +989,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     [branch]
     if (shoreAlbedoWeight > 1e-3f)
     {
-        data.albedo =
-            lerp(peakFoamAlbedo, shoreFoamAlbedo, shoreAlbedoWeight);
+        data.albedo = lerp(peakFoamAlbedo, shoreFoamAlbedo, shoreAlbedoWeight);
     }
     return data;
 }

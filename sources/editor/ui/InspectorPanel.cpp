@@ -837,6 +837,12 @@ namespace
                         ImGui::SeparatorText("Appearance");
                         renderDrag("Albedo Scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
                         renderDrag("Albedo Scroll Speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
+                        renderDrag(
+                            "Normal Strength",
+                            render.shoreContactFoamNormalStrength,
+                            0.005f,
+                            0.0f,
+                            1.0f);
                         ImGui::TreePop();
                     }
                 }
