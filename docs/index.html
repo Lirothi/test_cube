@@ -1,757 +1,2541 @@
-<!doctype html>
-<html lang="en">
+﻿<!DOCTYPE html>
+<html lang="ru" data-era="0">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
-  <title>Neon Survivors</title>
-  <style>
-    :root{
-      --bg:#05060a;
-      --panel:rgba(10,12,18,.78);
-      --stroke:rgba(120,255,255,.18);
-      --text:#d7f6ff;
-      --muted:#86cfe0;
-      --accent:#25f0ff;
-      --accent2:#b160ff;
-      --danger:#ff3b66;
-      --ok:#46ff8f;
-      --gold:#ffd94a;
-      --shadow:0 12px 42px rgba(0,0,0,.55);
-      --glow:0 0 18px rgba(37,240,255,.28), 0 0 34px rgba(177,96,255,.16);
-      --radius:18px;
-      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
-    }
-    body.mobile #mFpsWrap{display:inline-flex;}
-    #mFpsWrap{
-      display:none;
-      align-items:center;
-      gap:6px;
-      margin-left:auto;
-      background:rgba(10,12,18,.72);
-      border:1px solid rgba(120,255,255,.18);
-      border-radius:10px;
-      padding:4px 6px;
-      box-shadow:var(--shadow), var(--glow);
-      font-size:12px;
-      color:var(--text);
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>КОМПЬЮТЕРЩИК.EXE</title>
+<style>
+:root{
+  --bg:#141109; --bg2:#0a0806;
+  --panel:#1e1811; --panel2:#171208; --panel3:#241d13;
+  --line:#3a3025; --line2:#4e4130;
+  --ink:#efe3c8; --dim:#a2937a; --mut:#6d6252;
+  --acc:#ffb347; --acc2:#8ecb6a;
+  --ok:#7fc96a; --bad:#f2777a; --warn:#e8c66b; --ai:#c792ea; --coin:#f6d365;
+  --hdr1:#2a2013; --hdr2:#5c421a;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono","SF Mono",Consolas,"DejaVu Sans Mono",monospace;
+  --ui:"Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --r:11px; --r2:8px;
+  /* --hdrH и --actH синхронизируются из JS: шапка и панель активности
+     меняют высоту при переносе плашек и кнопок на вторую строку */
+  --pad:10px; --hdrH:41px; --actH:52px;
+}
+html[data-era="1"]{--bg:#0c1015;--bg2:#06090c;--panel:#141a21;--panel2:#101519;--panel3:#1a222b;
+  --line:#27323d;--line2:#36444f;--ink:#dbe8f2;--dim:#8798a6;--mut:#5d6b77;--acc:#4fc3f7;--acc2:#8ecb6a;--hdr1:#122130;--hdr2:#1d4664}
+html[data-era="2"]{--bg:#0a1213;--bg2:#050b0c;--panel:#111c1e;--panel2:#0d1618;--panel3:#16262a;
+  --line:#22383b;--line2:#2f4c50;--ink:#d6ecec;--dim:#82a09f;--mut:#5a7271;--acc:#57d0c4;--acc2:#8ecb6a;--hdr1:#0f2427;--hdr2:#1a5049}
+html[data-era="3"]{--bg:#0b1210;--bg2:#050a08;--panel:#111b17;--panel2:#0d1513;--panel3:#17251f;
+  --line:#22372e;--line2:#2f4a3e;--ink:#d9ecdf;--dim:#84a292;--mut:#5b7367;--acc:#7ee787;--acc2:#4fc3f7;--hdr1:#0f2419;--hdr2:#1c5230}
+html[data-era="4"]{--bg:#0c0d14;--bg2:#06060b;--panel:#14161f;--panel2:#101219;--panel3:#1c1f2b;
+  --line:#282c3a;--line2:#383d4f;--ink:#dfe2f2;--dim:#8d92aa;--mut:#62667c;--acc:#8b9dff;--acc2:#7ee787;--hdr1:#161a2c;--hdr2:#333d72}
+html[data-era="5"]{--bg:#120e0c;--bg2:#080606;--panel:#1c1613;--panel2:#16110f;--panel3:#261e1a;
+  --line:#3a2e28;--line2:#4d3d34;--ink:#f0e2d8;--dim:#a8938a;--mut:#736460;--acc:#ff9e64;--acc2:#7ee787;--hdr1:#2b1c14;--hdr2:#6b3d1f}
+html[data-era="6"]{--bg:#0e0b14;--bg2:#07050b;--panel:#17121f;--panel2:#120e19;--panel3:#1f1829;
+  --line:#31283f;--line2:#453855;--ink:#e9e0f6;--dim:#9b8db3;--mut:#6d6280;--acc:#c792ea;--acc2:#f5c66b;--hdr1:#1d1430;--hdr2:#4b2b78}
 
-    html,body{height:100%; margin:0; background:var(--bg); overflow:hidden; font-family:var(--font); color:var(--text);}
-    body{padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0);}
-    canvas{display:block; width:100vw; height:100vh; outline:none;}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;font-family:var(--ui);font-size:12.5px;color:var(--ink);background:var(--bg2);
+  background-image:radial-gradient(1100px 520px at 50% -12%,color-mix(in srgb,var(--acc) 9%,var(--bg)),var(--bg2) 72%);
+  -webkit-font-smoothing:antialiased}
+::selection{background:color-mix(in srgb,var(--acc) 40%,transparent)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--acc) 55%,var(--line2))}
 
-    #hud{
-      position:fixed; inset:0; pointer-events:none;
-      display:flex; flex-direction:column; gap:10px;
-      padding:12px;
-    }
-    .topRow{display:flex; gap:10px; align-items:flex-start; justify-content:space-between;}
-    .hudCard{
-      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.48));
-      border:1px solid var(--stroke);
-      border-radius:var(--radius);
-      box-shadow:var(--shadow), var(--glow);
-      padding:10px 12px;
-      backdrop-filter: blur(4px);
-      min-width: 280px;
-    }
-    #statusCard, #loadoutCard{
-      width:min(320px, 48vw);
-      max-width:320px;
-      align-self:flex-start;
-    }
-    .hudTitle{
-      font-size:12px; letter-spacing:.12em; text-transform:uppercase;
-      color:var(--muted); margin-bottom:6px;
-    }
-    .hudStats{
-      display:grid; grid-template-columns: repeat(2, minmax(120px,1fr));
-      gap:6px 14px; font-size:14px;
-    }
-    .kv{display:flex; justify-content:space-between; gap:10px;}
-    .kv span:first-child{color:rgba(215,246,255,.72)}
-    .kv span:last-child{color:var(--text); font-variant-numeric: tabular-nums;}
+.app{max-width:1420px;margin:0 auto;padding:var(--pad) 12px 16px;display:flex;flex-direction:column;gap:10px}
 
-    .buffs{
-      margin-top:10px;
-      border-top:1px solid rgba(120,255,255,.12);
-      padding-top:8px;
-      color:rgba(215,246,255,.70);
-      font-size:12.5px;
-      line-height:1.35;
-    }
-    .buffs b{color:rgba(215,246,255,.92)}
+/* ---------- ХЕДЕР ---------- */
+/* top совпадает с отступом .app, поэтому при прилипании шапка не дёргается вверх */
+/* Три зоны: бренд слева, часы с деньгами строго по центру, прочее справа.
+   Грид, а не флекс: центральная группа держится на середине шапки
+   независимо от того, насколько разъехались боковые. */
+.hdr{position:sticky;top:var(--pad);z-index:20;
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:8px 14px;
+  padding:9px 14px;border-radius:var(--r);border:1px solid var(--line);
+  background:linear-gradient(120deg,var(--hdr1),var(--hdr2) 65%,color-mix(in srgb,var(--hdr1) 70%,#000));
+  box-shadow:0 6px 22px -12px #000,inset 0 1px 0 rgba(255,255,255,.07)}
+.brand{font-weight:700;letter-spacing:.12em;font-size:12.5px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.brand .ext{color:var(--acc);opacity:.85;letter-spacing:.05em}
+.brand .dot{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 10px var(--acc);animation:pulse 2.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.pills{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.pills.mid{justify-content:center}
+.pills.side{justify-content:flex-end}
+/* Часы тикают каждый кадр: моноширинная ширина, чтобы шапка не дёргалась */
+.pill.clock b{font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.pill.money b{font-variant-numeric:tabular-nums}
+@media(max-width:820px){
+  .hdr{grid-template-columns:1fr;justify-items:center;text-align:center}
+  .pills.mid,.pills.side{justify-content:center}
+}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;
+  background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.12);font-family:var(--mono);font-size:11px;color:var(--dim)}
+.pill b{color:var(--ink);font-weight:600}
+.pill.money b{color:var(--coin)}
+.pill.money.neg b{color:var(--bad)}
+.pill.era{border-color:color-mix(in srgb,var(--acc) 45%,transparent);color:var(--acc)}
+.pill.warnp{border-color:color-mix(in srgb,var(--bad) 55%,transparent);color:var(--bad)}
+.pill.warnp b{color:var(--bad)}
 
-    #bars{
-      position:relative;
-      display:flex;
-      gap:10px;
-      align-items:flex-start;
-      justify-content:flex-end;
-      flex:1;
-      flex-wrap:wrap;
-      padding-left:80px;
-    }
-    .barCard{
-      width:min(420px, 58vw);
-      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.48));
-      border:1px solid var(--stroke);
-      border-radius:var(--radius);
-      box-shadow:var(--shadow), var(--glow);
-      padding:10px 12px;
-      backdrop-filter: blur(4px);
-    }
-    .barRow{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;}
-    .bossBars{display:flex; flex-direction:column; gap:12px;}
-    .bossRow{display:flex; flex-direction:column;}
-    .barLabel{font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);}
-    .barValue{font-size:12px; color:rgba(215,246,255,.9); font-variant-numeric: tabular-nums;}
-    .barOuter{
-      width:100%; height:8px; border-radius:999px;
-      background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.10);
-      overflow:hidden;
-    }
-    .barInner{
-      height:100%; width:50%;
-      background:linear-gradient(90deg, rgba(37,240,255,.95), rgba(177,96,255,.92));
-      box-shadow:0 0 10px rgba(37,240,255,.45), 0 0 18px rgba(177,96,255,.28);
-    }
-    #bossBarWrap{
-      position:absolute;
-      top:calc(12px + env(safe-area-inset-top,0));
-      left:50%;
-      transform:translateX(-50%);
-      display:none;
-      justify-content:center;
-      pointer-events:none;
-      width:100%;
-      z-index:2;
-    }
-    #bossBarWrap.on{display:flex;}
-    #bossBarCard{
-      display:none;
-      width:min(560px, 80vw);
-      border-color:rgba(255,87,115,.32);
-      box-shadow:var(--shadow), 0 0 22px rgba(255,87,115,.16), 0 0 30px rgba(255,158,51,.12);
-      pointer-events:none;
-    }
-    #bossBarCard.on{display:block;}
-    #bossBarCard .barLabel{letter-spacing:.18em;}
-    #bossBarCard .barInner.boss{
-      background:linear-gradient(90deg, rgba(255,87,115,.95), rgba(255,158,51,.92));
-      box-shadow:0 0 12px rgba(255,87,115,.45), 0 0 18px rgba(255,158,51,.28);
-    }
-    #bossBarCard .barValue.sub{
-      margin-top:6px;
-      color:rgba(215,246,255,.82);
-      font-variant-numeric: tabular-nums;
-    }
+/* ---------- ПАНЕЛЬ АКТИВНОСТИ ---------- */
+/* Липнет сразу под шапкой: чем ты занят и как быстро идёт время — видно всегда */
+.actbar{position:sticky;top:calc(var(--pad) + var(--hdrH) + 6px);z-index:19;
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:8px 12px;border-radius:var(--r);border:1px solid var(--line);
+  background:linear-gradient(180deg,var(--panel3),var(--panel));
+  box-shadow:0 8px 24px -18px #000,inset 0 1px 0 rgba(255,255,255,.05)}
+.actbar.paused{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+.actbar.busy{border-color:color-mix(in srgb,var(--acc) 42%,var(--line))}
+.spd{display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);flex:none}
+.spd button{background:transparent;border-color:transparent;color:var(--dim);
+  padding:4px 9px;border-radius:6px;font-family:var(--mono);font-size:10.5px}
+.spd button:hover:not(.on){color:var(--ink);transform:none;box-shadow:none;background:rgba(255,255,255,.05)}
+.spd button.on{color:var(--acc);background:color-mix(in srgb,var(--acc) 15%,var(--panel3));
+  border-color:color-mix(in srgb,var(--acc) 35%,transparent);transform:none}
+.spd button.play.on{color:var(--ok);background:color-mix(in srgb,var(--ok) 15%,var(--panel3));
+  border-color:color-mix(in srgb,var(--ok) 35%,transparent)}
+.nowbox{flex:1;min-width:170px;display:flex;flex-direction:column;gap:4px}
+.nowline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.nowline b{font-size:12.5px;font-weight:600;color:var(--ink)}
+.nowline span{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.nowbar{height:5px;border-radius:99px;background:color-mix(in srgb,var(--line) 75%,#000);overflow:hidden}
+.nowbar>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,color-mix(in srgb,var(--acc) 45%,#000),var(--acc));
+  transition:width .18s linear}
+.actbar.idlenow .nowline b{color:var(--mut);font-weight:500}
 
-    .overlay{
-      position:fixed; inset:0;
-      display:none;
-      align-items:center; justify-content:center;
-      background: radial-gradient(1200px 800px at 50% 40%, rgba(37,240,255,.10), transparent 60%),
-                  rgba(0,0,0,.62);
-      backdrop-filter: blur(4px);
-      z-index:10;
-    }
-    .overlay.on{display:flex;}
-    .panel{
-      width:min(980px, 92vw);
-      border-radius:24px;
-      border:1px solid rgba(120,255,255,.22);
-      background:linear-gradient(180deg, rgba(10,12,18,.92), rgba(10,12,18,.78));
-      box-shadow:var(--shadow), 0 0 60px rgba(37,240,255,.12), 0 0 90px rgba(177,96,255,.10);
-      padding:18px;
-    }
-    .panelHeader{
-      display:flex; justify-content:space-between; align-items:flex-end; gap:12px;
-      margin-bottom:12px;
-    }
-    .panelHeader h2{margin:0; font-size:20px; letter-spacing:.02em;}
-    .panelHeader .sub{color:rgba(215,246,255,.68); font-size:13px;}
-    .cards{
-      display:grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap:12px;
-    }
-    .devPanel{
-      display:none;
-      margin-top:14px;
-      padding:12px;
-      border-radius:16px;
-      border:1px dashed rgba(120,255,255,.22);
-      background:linear-gradient(180deg, rgba(10,12,18,.78), rgba(10,12,18,.60));
-      box-shadow:var(--shadow);
-    }
-    .devPanel.on{display:block;}
-    .devHeader{
-      display:flex;
-      justify-content:space-between;
-      align-items:flex-start;
-      gap:12px;
-      margin-bottom:10px;
-    }
-    .devTitle{
-      font-size:12px;
-      letter-spacing:.14em;
-      text-transform:uppercase;
-      color:var(--muted);
-      margin-bottom:4px;
-    }
-    .devHint{
-      color:rgba(215,246,255,.6);
-      font-size:12px;
-    }
-    .devStatus{
-      font-size:12px;
-      color:rgba(215,246,255,.8);
-      text-align:right;
-    }
-    .devGrid{
-      display:grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap:10px;
-    }
-    .devCard{
-      border-radius:14px;
-      border:1px solid rgba(120,255,255,.16);
-      background:rgba(10,12,18,.62);
-      padding:10px;
-    }
-    .devCard h4{
-      margin:0 0 8px 0;
-      font-size:14px;
-      color:var(--text);
-    }
-    .devRow{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      margin-bottom:8px;
-    }
-    .devRow:last-child{margin-bottom:0;}
-    .devStat{
-      display:inline-flex;
-      align-items:center;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid rgba(120,255,255,.16);
-      background:rgba(10,12,18,.55);
-      font-size:12px;
-      color:rgba(215,246,255,.85);
-    }
-    .devPanel select{
-      width:100%;
-      border:1px solid rgba(120,255,255,.22);
-      background:rgba(10,12,18,.7);
-      color:var(--text);
-      border-radius:12px;
-      padding:8px 10px;
-      font-size:13px;
-    }
-    .devField{
-      display:flex;
-      align-items:center;
-      gap:6px;
-      border:1px solid rgba(120,255,255,.16);
-      background:rgba(10,12,18,.55);
-      border-radius:12px;
-      padding:6px 8px;
-      font-size:12px;
-      color:rgba(215,246,255,.8);
-    }
-    .devField input{
-      width:72px;
-      border:none;
-      outline:none;
-      background:transparent;
-      color:var(--text);
-      font-size:12px;
-      text-align:right;
-    }
-    #levelup.trinket .panel{
-      width:min(720px, 92vw);
-    }
-    #levelup.trinket .cards{
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    #levelup.aug .panel{
-      width:min(720px, 92vw);
-    }
-    #levelup.aug .cards{
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .card{
-      border-radius:18px;
-      border:1px solid rgba(120,255,255,.18);
-      background:linear-gradient(180deg, rgba(10,12,18,.80), rgba(10,12,18,.54));
-      padding:14px;
-      cursor:pointer;
-      transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
-      position:relative;
-      overflow:hidden;
-      pointer-events:auto;
-    }
-    .card:before{
-      content:"";
-      position:absolute; inset:-2px;
-      background: radial-gradient(420px 220px at 25% 15%, rgba(37,240,255,.20), transparent 55%),
-                  radial-gradient(420px 220px at 75% 85%, rgba(177,96,255,.14), transparent 55%);
-      opacity:.8;
-      pointer-events:none;
-    }
-    .card:hover{
-      transform: translateY(-2px);
-      border-color: rgba(37,240,255,.45);
-      box-shadow: 0 0 22px rgba(37,240,255,.14), 0 0 28px rgba(177,96,255,.10);
-    }
-    .card.disabled{
-      opacity:0.55;
-      cursor:default;
-      pointer-events:none;
-      transform:none;
-      border-color: rgba(120,255,255,.18);
-      box-shadow:none;
-    }
-    .card h3{margin:0 0 6px 0; position:relative;}
-    .card p{margin:0; color:rgba(215,246,255,.70); font-size:13px; line-height:1.35; position:relative;}
-    .pill{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:4px 8px;
-      border-radius:999px;
-      border:1px solid rgba(120,255,255,.18);
-      background:rgba(255,255,255,.06);
-      color:rgba(215,246,255,.8);
-      font-size:12px;
-      margin-top:10px;
-      position:relative;
-    }
-    .pillRow{
-      display:flex; flex-wrap:wrap; gap:8px;
-      align-items:flex-start;
-      font-size:12px;
-      color:rgba(215,246,255,.78);
-    }
-    .pillRow .pill{ margin-top:0; }
+/* ---------- СЕТКА ---------- */
+.grid{display:grid;grid-template-columns:266px minmax(0,1fr) 336px;gap:10px;align-items:start;flex:1}
+@media(max-width:1180px){.grid{grid-template-columns:250px minmax(0,1fr)}.col-r{grid-column:1/-1}}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.panel{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);
+  box-shadow:0 10px 28px -22px #000,inset 0 1px 0 rgba(255,255,255,.035);padding:12px;min-width:0}
+.col-l,.col-r{position:sticky;top:calc(var(--pad) + var(--hdrH) + var(--actH) + 16px)}
+@media(max-width:1180px){.col-r{position:static}}
+@media(max-width:820px){.col-l{position:static}}
+.col-c{min-height:520px}
 
-    .btnRow{display:flex; justify-content:flex-end; gap:10px; margin-top:14px;}
-    button{
-      pointer-events:auto;
-      border:1px solid rgba(120,255,255,.22);
-      background:linear-gradient(180deg, rgba(10,12,18,.72), rgba(10,12,18,.50));
-      color:var(--text);
-      border-radius:14px;
-      padding:10px 14px;
-      cursor:pointer;
-      box-shadow:0 8px 26px rgba(0,0,0,.35), 0 0 18px rgba(37,240,255,.10);
-      transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
-      font-weight:700;
-      letter-spacing:.02em;
-    }
-    button:hover{transform:translateY(-1px); border-color: rgba(37,240,255,.45); box-shadow:0 12px 34px rgba(0,0,0,.42), 0 0 22px rgba(37,240,255,.16);}
-    button:active{transform:translateY(0px);}
+/* ---------- ТИПОГРАФИКА ---------- */
+h3.sec{font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:var(--mut);margin:0 0 8px;
+  display:flex;align-items:center;gap:8px;font-weight:700}
+h3.sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+h3.sec.mt{margin-top:16px}
+.hint{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.7}
+.hint b{color:var(--ink);font-weight:600}
+.mono{font-family:var(--mono)}
+.big{font-family:var(--mono);font-size:17px;color:var(--acc);letter-spacing:.02em}
+.mut{color:var(--mut)}
 
-    #hint{
-      position:fixed; left:12px; bottom:12px;
-      color:rgba(215,246,255,.55);
-      font-size:12px; letter-spacing:.02em;
-      user-select:none;
-      text-shadow:0 0 12px rgba(37,240,255,.10);
-      pointer-events:none;
-    }
+/* ---------- ПОЛОСКИ ---------- */
+.row{display:flex;align-items:center;gap:8px;margin:5px 0}
+.row .lbl{width:74px;flex:none;color:var(--dim);font-size:11px}
+.row .val{width:34px;flex:none;text-align:right;font-family:var(--mono);font-size:11px;color:var(--ink)}
+.bar{flex:1;height:7px;border-radius:99px;background:color-mix(in srgb,var(--line) 75%,#000);overflow:hidden;position:relative}
+.bar>i{display:block;height:100%;border-radius:99px;transition:width .35s cubic-bezier(.4,0,.2,1);
+  background:linear-gradient(90deg,color-mix(in srgb,var(--acc) 45%,#000),var(--acc))}
+.bar.sk>i{background:linear-gradient(90deg,color-mix(in srgb,var(--acc2) 45%,#000),var(--acc2))}
+.bar.mid>i{background:linear-gradient(90deg,#8a6a1f,var(--warn))}
+.bar.lo>i{background:linear-gradient(90deg,#7a2a2c,var(--bad))}
+.bar.burn>i{background:linear-gradient(90deg,#7a3a1c,#f2913f)}
+.bar.big{height:9px}
 
-    @media (max-width: 860px){
-      .cards{grid-template-columns:1fr; }
-      #bars .barCard{width:min(520px, 96vw);}
-      .hudCard{min-width:unset;}
-      .topRow{flex-direction:column; align-items:stretch;}
-      #bars{justify-content:stretch;}
-    }
+/* ---------- КНОПКИ ---------- */
+button{font-family:var(--ui);font-size:11.5px;font-weight:500;letter-spacing:.01em;cursor:pointer;
+  color:var(--ink);background:linear-gradient(180deg,color-mix(in srgb,var(--panel3) 92%,#fff 8%),var(--panel3));
+  border:1px solid var(--line2);border-radius:var(--r2);padding:6px 11px;
+  transition:transform .12s,border-color .14s,background .14s,box-shadow .14s;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+button:hover:not(:disabled){border-color:color-mix(in srgb,var(--acc) 62%,var(--line2));transform:translateY(-1px);
+  box-shadow:0 5px 14px -8px color-mix(in srgb,var(--acc) 65%,#000)}
+button:active:not(:disabled){transform:translateY(0);filter:brightness(.94)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.pri{background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 92%,#fff),color-mix(in srgb,var(--acc) 78%,#000));
+  color:#161206;border-color:transparent;font-weight:650}
+html[data-era="4"] button.pri,html[data-era="6"] button.pri{color:#0e0a14}
+button.dan{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line2))}
+button.dan:hover:not(:disabled){border-color:var(--bad);box-shadow:0 5px 14px -8px var(--bad)}
+button.gho{background:transparent;color:var(--dim)}
+button.gho:hover:not(:disabled){color:var(--ink)}
+button.tiny{padding:3px 8px;font-size:10.5px}
+button .k{font-family:var(--mono);font-size:10.5px;opacity:.75}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 
-    /* Mobile-first HUD */
-    #mobileHud{
-      position:fixed;
-      top:calc(8px + env(safe-area-inset-top,0));
-      left:calc(8px + env(safe-area-inset-left,0));
-      right:calc(8px + env(safe-area-inset-right,0));
-      display:none;
-      flex-direction:row; flex-wrap:wrap; gap:8px;
-      pointer-events:none;
-      z-index:9;
-      align-items:flex-start;
-    }
-    #mobileHud .mColumns{
-      display:flex; gap:8px; width:100%; align-items:flex-start;
-    }
-    #mobileHud .mCol{flex:1; min-width:0; display:flex; flex-direction:column; gap:6px;}
-    #mobileHud .mStats{
-      display:flex; gap:8px; flex-wrap:wrap;
-      background:rgba(10,12,18,.68);
-      border:1px solid rgba(120,255,255,.18);
-      border-radius:12px;
-      padding:6px 8px;
-      box-shadow:var(--shadow), var(--glow);
-      font-size:13px;
-      letter-spacing:.01em;
-    }
-    #mobileHud .mBar{
-      display:flex; flex-direction:column; gap:4px;
-      background:rgba(10,12,18,.68);
-      border:1px solid rgba(120,255,255,.18);
-      border-radius:12px;
-      padding:6px 8px;
-      box-shadow:var(--shadow), var(--glow);
-    }
-    #mobileHud .mBarLabel{
-      display:flex; justify-content:space-between; align-items:center;
-      font-size:12px; color:var(--muted);
-    }
-    #mobileHud .mBarLabel .mVal{color:var(--text);}
-    #mobileHud .mBarOuter{
-      width:100%; height:8px; border-radius:999px;
-      background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.08);
-      overflow:hidden;
-    }
-    #mobileHud .mBarInner{
-      height:100%; width:50%;
-      box-shadow:0 0 10px rgba(37,240,255,.35);
-    }
-    #mobileHud .mBarInner.xp{
-      background:linear-gradient(90deg, rgba(37,240,255,.95), rgba(177,96,255,.92));
-    }
-    #mobileHud .mBarInner.hp{
-      background:linear-gradient(90deg, rgba(70,255,143,.95), rgba(255,217,74,.92));
-      box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 14px rgba(255,217,74,.25);
-    }
-    #mBossBar{display:none !important;}
-    #mBossBar.on{display:flex !important;}
-    #mobileHud .mBarInner.boss{
-      background:linear-gradient(90deg, rgba(255,87,115,.95), rgba(255,158,51,.90));
-      box-shadow:0 0 12px rgba(255,87,115,.45), 0 0 16px rgba(255,158,51,.26);
-    }
-    #mobileHud .mMeta{
-      display:flex; flex-direction:column; gap:4px;
-      background:rgba(10,12,18,.68);
-      border:1px solid rgba(120,255,255,.18);
-      border-radius:12px;
-      padding:6px 8px;
-      box-shadow:var(--shadow), var(--glow);
-      font-size:11.5px;
-      color:rgba(215,246,255,.78);
-      line-height:1.25;
-    }
-    #mobileHud .mMetaLine{
-      display:-webkit-box;
-      -webkit-line-clamp:1;
-      -webkit-box-orient:vertical;
-      overflow:hidden;
-      word-break:break-word;
-    }
+/* ---------- ТАБЫ ---------- */
+.tabs{display:inline-flex;gap:3px;flex-wrap:wrap;padding:3px;border-radius:10px;
+  background:var(--panel2);border:1px solid var(--line);margin-bottom:12px}
+.tabs button{background:transparent;border-color:transparent;color:var(--dim);padding:5px 11px;border-radius:7px}
+.tabs button:hover:not(.on){color:var(--ink);transform:none;box-shadow:none;background:rgba(255,255,255,.04)}
+.tabs button.on{color:var(--acc);background:color-mix(in srgb,var(--acc) 13%,var(--panel3));
+  border-color:color-mix(in srgb,var(--acc) 32%,transparent);transform:none}
+.tabs button .bdg{font-family:var(--mono);font-size:9.5px;padding:0 4px;border-radius:5px;
+  background:color-mix(in srgb,var(--acc) 26%,transparent);color:var(--ink)}
 
-    #fps{
-      display:inline-flex; align-items:center; justify-content:center;
-      padding:4px 8px;
-      background:rgba(10,12,18,.72);
-      border:1px solid rgba(120,255,255,.22);
-      border-radius:10px;
-      color:var(--text);
-      font-size:12px;
-      box-shadow:var(--shadow), var(--glow);
-      pointer-events:none;
-      min-width:54px;
-      text-align:center;
-    }
-    body.mobile #fps{
-      font-size:11px;
-      padding:4px 6px;
-    }
+/* ---------- КАРТОЧКИ ---------- */
+.card{border:1px solid var(--line);border-radius:var(--r2);background:var(--panel2);padding:10px 11px;margin-bottom:8px;
+  transition:border-color .15s}
+.card:hover{border-color:var(--line2)}
+.card.hl{border-left:3px solid var(--acc);padding-left:9px}
+.card.ok{border-left:3px solid var(--ok);padding-left:9px}
+.card.warnc{border-left:3px solid var(--warn);padding-left:9px}
+.card.badc{border-left:3px solid var(--bad);padding-left:9px}
+.card h4{margin:0 0 5px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.card .meta{font-family:var(--mono);font-size:10.5px;color:var(--dim);line-height:1.65}
+.card .meta b{color:var(--ink);font-weight:600}
+.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:8px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
 
-    body.mobile #hud{display:none;}
-    body.mobile #mobileHud{display:flex;}
-    body.mobile #hint{
-      font-size:12px;
-      bottom:calc(10px + env(safe-area-inset-bottom,0));
-      left:8px; right:8px;
-      text-align:center;
-      white-space:normal;
-    }
-    #btnMobileMenu{
-      position:fixed;
-      bottom:calc(14px + env(safe-area-inset-bottom,0));
-      right:calc(14px + env(safe-area-inset-right,0));
-      width:58px; height:46px;
-      border-radius:14px;
-      border:1px solid rgba(120,255,255,.28);
-      background:rgba(10,12,18,.78);
-      color:var(--text);
-      box-shadow:var(--shadow), var(--glow);
-      font-size:16px;
-      display:none;
-      z-index:10;
-      pointer-events:auto;
-    }
-    body.mobile #btnMobileMenu{display:flex; align-items:center; justify-content:center;}
+/* ---------- ЧИПЫ ---------- */
+.chip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9.5px;letter-spacing:.03em;
+  padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,var(--acc) 40%,transparent);
+  color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent);text-transform:uppercase;font-weight:600}
+.chip.g{border-color:color-mix(in srgb,var(--ok) 45%,transparent);color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent)}
+.chip.b{border-color:color-mix(in srgb,var(--bad) 48%,transparent);color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.chip.w{border-color:color-mix(in srgb,var(--warn) 45%,transparent);color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.chip.ai{border-color:color-mix(in srgb,var(--ai) 50%,transparent);color:var(--ai);background:color-mix(in srgb,var(--ai) 10%,transparent)}
+.chip.n{border-color:var(--line2);color:var(--mut);background:transparent}
 
-    /* Virtual stick visuals */
-    #stick{
-      position:fixed; width:120px; height:120px;
-      bottom:calc(18px + env(safe-area-inset-bottom,0));
-      left:calc(12px + env(safe-area-inset-left,0));
-      pointer-events:none;
-      display:none;
-      z-index:9;
-    }
-    #stick.on{display:block;}
-    #stickOuter{
-      position:absolute; inset:0;
-      border-radius:50%;
-      border:2px solid rgba(37,240,255,.45);
-      background:radial-gradient(closest-side, rgba(37,240,255,.18), rgba(177,96,255,.08));
-      box-shadow:0 0 22px rgba(37,240,255,.22);
-      opacity:0.85;
-    }
-    #stickInner{
-      position:absolute; width:44px; height:44px;
-      left:38px; top:38px;
-      border-radius:50%;
-      background:rgba(37,240,255,.65);
-      box-shadow:0 0 18px rgba(37,240,255,.45);
-      transform:translate(0,0);
-    }
-  </style>
+/* ---------- СТРОКИ МАГАЗИНА ---------- */
+.srow{display:flex;justify-content:space-between;gap:8px;align-items:center;font-family:var(--mono);font-size:11px;
+  padding:5px 2px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.srow:last-child{border-bottom:none}
+.srow .nm{flex:1;min-width:0;line-height:1.45}
+.srow .nm small{display:block;color:var(--mut);font-size:9.5px;letter-spacing:.02em}
+.srow .nm small.no{color:color-mix(in srgb,var(--bad) 80%,var(--dim))}
+.srow.cur{background:color-mix(in srgb,var(--acc) 7%,transparent);border-radius:6px;padding:5px 6px}
+.own{color:var(--ok);font-family:var(--mono);font-size:10.5px}
+
+/* ---------- ТЕРМИНАЛ ---------- */
+.crt{background:var(--panel2);position:relative;overflow:hidden}
+.crt::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:var(--r);
+  background:repeating-linear-gradient(180deg,rgba(255,255,255,.022) 0 1px,transparent 1px 3px)}
+.ph{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ph h3{margin:0;font-size:9.5px;letter-spacing:.19em;text-transform:uppercase;color:var(--mut);font-weight:700}
+.ph .phx{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--mut)}
+.log{height:calc(100vh - var(--hdrH) - var(--actH) - 137px);min-height:280px;overflow-y:auto;font-family:var(--mono);font-size:11px;line-height:1.6;padding-right:4px}
+@media(max-width:1180px){.log{height:300px}}
+.log>div{margin-bottom:4px;color:var(--dim);display:flex;gap:7px;align-items:baseline}
+.log .t{color:var(--mut);flex:none;font-size:9.5px;opacity:.8;padding-top:1px}
+.log .m{flex:1}
+.log .good .m{color:var(--ok)}.log .bad .m{color:var(--bad)}.log .warn .m{color:var(--warn)}
+.log .ai .m{color:var(--ai)}.log .ev .m{color:var(--acc)}.log .money .m{color:var(--coin)}
+.caret{display:inline-block;width:6px;height:11px;background:var(--acc);vertical-align:-1px;animation:bl 1.05s steps(1) infinite}
+@keyframes bl{50%{opacity:0}}
+
+/* ---------- МОДАЛКА ---------- */
+.mask{position:fixed;inset:0;z-index:60;background:rgba(4,3,2,.74);backdrop-filter:blur(4px);
+  display:grid;place-items:center;padding:18px;animation:fade .18s}
+@keyframes fade{from{opacity:0}}
+.modal{width:100%;max-width:480px;border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);
+  box-shadow:0 30px 70px -20px #000;overflow:hidden;animation:pop .2s cubic-bezier(.2,1.2,.4,1)}
+@keyframes pop{from{transform:translateY(10px) scale(.97);opacity:0}}
+.modal .mh{padding:11px 14px;background:linear-gradient(120deg,var(--hdr1),var(--hdr2));
+  font-weight:700;font-size:12.5px;letter-spacing:.04em;display:flex;align-items:center;gap:8px}
+.modal .mb{padding:13px 14px;font-family:var(--mono);font-size:11px;line-height:1.75;color:var(--dim)}
+.modal .mo{padding:0 14px 14px;display:flex;flex-direction:column;gap:7px}
+.modal .mo button{justify-content:flex-start;text-align:left;padding:9px 11px;white-space:normal;line-height:1.45}
+.modal .mo button i{display:block;font-style:normal;font-family:var(--mono);font-size:10px;color:var(--mut);margin-top:3px}
+
+/* ---------- ТОСТ ---------- */
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:70;
+  background:var(--panel);color:var(--ink);border:1px solid color-mix(in srgb,var(--acc) 50%,var(--line2));
+  border-left:3px solid var(--acc);padding:9px 16px;border-radius:var(--r2);font-family:var(--mono);font-size:11.5px;
+  box-shadow:0 16px 40px -14px #000;pointer-events:none;animation:up .22s cubic-bezier(.2,1.2,.4,1)}
+@keyframes up{from{transform:translate(-50%,14px);opacity:0}}
+
+textarea{width:100%;height:72px;margin-top:8px;background:var(--panel2);color:var(--dim);border:1px solid var(--line);
+  border-radius:var(--r2);font-family:var(--mono);font-size:10px;padding:8px;resize:vertical}
+.flash{animation:fl .6s}
+@keyframes fl{0%{filter:brightness(1.9) saturate(.55)}100%{filter:none}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-family:var(--mono);font-size:10.5px;line-height:1.7}
+.kv dt{color:var(--mut)}
+.kv dd{margin:0;color:var(--ink);text-align:right}
+.kv dd.g{color:var(--ok)}.kv dd.b{color:var(--bad)}.kv dd.w{color:var(--warn)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
 </head>
 <body>
-  <canvas id="c" tabindex="0" aria-label="Neon Survivors canvas"></canvas>
-  <div id="hud">
-    <div id="bossBarWrap">
-      <div class="barCard" id="bossBarCard" aria-live="polite">
-        <div class="bossBars" id="bossBars"></div>
-      </div>
-    </div>
-    <div class="topRow">
-      <div class="hudCard" id="statusCard">
-        <div class="hudTitle">Status</div>
-        <div class="hudStats">
-          <div class="kv"><span>Time</span><span id="uiTime">00:00</span></div>
-          <div class="kv"><span>Level</span><span id="uiLevel">1</span></div>
-          <div class="kv"><span>HP</span><span id="uiHp">0 / 0</span></div>
-          <div class="kv"><span>Kills</span><span id="uiKills">0</span></div>
-        </div>
-        <div class="buffs" id="uiBuffs"><b>Buffs:</b> -</div>
-        <div class="buffs" id="uiQuest"><b>Quest:</b> -</div>
-      </div>
+<div class="app">
+ <header class="hdr">
+  <div class="brand"><span class="dot"></span>КОМПЬЮТЕРЩИК<span class="ext">.exe</span></div>
+  <div class="pills mid" id="hMid"></div>
+  <div class="pills side" id="hPills"></div>
+ </header>
+ <div class="actbar" id="actBar"></div>
+ <main class="grid">
+  <section class="panel col-l" id="colStats"></section>
+  <section class="panel col-c" id="colMain"></section>
+  <section class="panel col-r crt">
+   <div class="ph"><h3>Терминал</h3><span class="phx" id="logInfo"></span></div>
+   <div class="log" id="log"></div>
+  </section>
+ </main>
+</div>
+<div id="host"></div>
+<script>
+"use strict";
 
-      <div id="bars">
-        <div id="fps">0 fps</div>
-        <div class="barCard" style="padding:8px 10px; position:relative;">
-          <div class="barRow">
-            <div class="barLabel">XP</div>
-            <div class="barValue"><span id="uiXp">0</span> / <span id="uiXpNeed">0</span></div>
-          </div>
-          <div class="barOuter" style="height:8px;"><div id="xpFill" class="barInner" style="height:100%;"></div></div>
+/* ==================== УТИЛИТЫ ==================== */
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const ri=(a,b)=>a+Math.floor(Math.random()*(b-a+1));
+const rf=(a,b)=>a+Math.random()*(b-a);
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const chance=p=>Math.random()<p;
+const hhmm=h=>String(Math.floor(h)).padStart(2,"0")+":"+String(Math.floor((h%1)*60)).padStart(2,"0");
+const money=n=>(n<0?"−$":"$")+Math.abs(Math.round(n)).toLocaleString("en-US");
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const uid=()=>Math.random().toString(36).slice(2,9);
+const sum=a=>a.reduce((x,y)=>x+y,0);
 
-          <div class="barRow" style="margin-top:10px; margin-bottom:8px;">
-            <div class="barLabel">Health</div>
-            <div class="barValue"><span id="uiHpPct">100%</span></div>
-          </div>
-          <div class="barOuter" style="height:8px;"><div id="hpFill" class="barInner" style="height:100%; background:linear-gradient(90deg, rgba(70,255,143,.95), rgba(255,217,74,.92)); box-shadow:0 0 10px rgba(70,255,143,.45), 0 0 16px rgba(255,217,74,.22);"></div></div>
-        </div>
-      </div>
-    </div>
+/* ==================== ЭПОХИ И ИНФЛЯЦИЯ ==================== */
+/* Длительность эпохи растёт: чем дальше, тем дольше в ней живёшь.
+   25 → 36 → 43 → 50 → 57 → 63 дня. До эпохи ИИ — 275 дней. */
+const ERAS=[
+ {d:1,  y:1998,n:"BBS и FIDO",      t:"Модем 33.6, ночной трафик, синий Norton Commander."},
+ {d:26, y:2001,n:"Диалап",          t:"Мама кричит освободить телефон. ICQ уже поставили."},
+ {d:62, y:2005,n:"Выделенка",       t:"ADSL, форумы, первые заказы из интернета."},
+ {d:105,y:2010,n:"Фриланс",         t:"Биржи, соцсети, ноутбук в кофейне."},
+ {d:155,y:2016,n:"Стартапы",        t:"Гит, докер, инвесторы и питчи на салфетке."},
+ {d:212,y:2021,n:"Удалёнка",        t:"Ремоут, две зарплаты, кресло дороже машины."},
+ {d:275,y:2025,n:"ИИ и вайбкодинг", t:"Агенты пишут код. Ты пишешь промпты и ревью."}
+];
+/* Инфляция: цены на жильё, еду и услуги растут, ставки по заказам — тоже */
+const INFL=[1, 1.14, 1.34, 1.66, 2.02, 2.42, 2.86];
+const eraIdx=()=>{let i=0;for(let k=0;k<ERAS.length;k++)if(S.day>=ERAS[k].d)i=k;return i;};
+const era=()=>ERAS[eraIdx()];
+const inf=()=>INFL[eraIdx()];
+const gYear=()=>{const i=eraIdx(),a=ERAS[i],b=ERAS[i+1];
+  if(!b)return a.y+Math.floor((S.day-a.d)/20);
+  return a.y+Math.floor((S.day-a.d)/(b.d-a.d)*(b.y-a.y));};
 
-    <div class="hudCard" id="loadoutCard">
-      <div class="hudTitle">Loadout</div>
-      <div id="uiLoadout" class="pillRow"></div>
-      <div class="hudTitle" style="margin-top:10px;">Trinkets</div>
-      <div id="uiTrinkets" class="pillRow"></div>
-      <div class="hudTitle" style="margin-top:10px;">Companions</div>
-      <div id="uiCompanions" class="pillRow"></div>
-      <div class="hudTitle" style="margin-top:10px;">Bonuses</div>
-      <div id="uiBonuses" class="pillRow"></div>
-    </div>
+/* ==================== ЖЕЛЕЗО ====================
+   Совместимость держится на материнской плате:
+   sock — сокет процессора, ram — типы памяти, bus — слоты видеокарт,
+   dmin/dmax — интерфейсы накопителей, form — типоразмер платы.        */
+const RAMT={simm:"SIMM",sdram:"SDRAM",ddr:"DDR",ddr2:"DDR2",ddr3:"DDR3",ddr4:"DDR4",ddr5:"DDR5",ddr5e:"DDR5 ECC"};
+const BUSN={1:"PCI",2:"AGP",3:"PCIe 2.0",4:"PCIe 4.0",5:"PCIe 5.0"};
+const IFN={1:"IDE",2:"SATA",3:"NVMe"};
+const FORMN={1:"mATX",2:"ATX",3:"E-ATX"};
+const SOCKN={s3:"Socket 3",s7:"Socket 7",sl1:"Slot 1",s370:"Socket 370",sA:"Socket A",
+ s478:"Socket 478",s775:"LGA775",s1155:"LGA1155",s1150:"LGA1150",am4:"AM4",am5:"AM5",str5:"sTR5"};
+
+const HW={
+ mb:{L:"Материнская плата",S:"плата",items:[
+  {id:"mb0",n:"Baby-AT, Socket 3 (что было)",y:1998,p:0,   sock:["s3","s7"],ram:["simm"],bus:[1],  dmin:1,dmax:1,form:2},
+  {id:"mb1",n:"ATX i440BX, Slot 1",           y:1998,p:70,  sock:["sl1"],    ram:["sdram"],bus:[1,2],dmin:1,dmax:1,form:2},
+  {id:"mb2",n:"i815, Socket 370",             y:2000,p:85,  sock:["s370"],   ram:["sdram"],bus:[1,2],dmin:1,dmax:1,form:2},
+  {id:"mb3",n:"nForce2, Socket A",            y:2003,p:90,  sock:["sA"],     ram:["ddr"],  bus:[1,2],dmin:1,dmax:2,form:2},
+  {id:"mb4",n:"i865PE, Socket 478",           y:2003,p:105, sock:["s478"],   ram:["ddr"],  bus:[1,2],dmin:1,dmax:2,form:2},
+  {id:"mb5",n:"P35, LGA775",                  y:2007,p:120, sock:["s775"],   ram:["ddr2"], bus:[1,3],dmin:1,dmax:2,form:2},
+  {id:"mb6",n:"Z68, LGA1155",                 y:2011,p:150, sock:["s1155"],  ram:["ddr3"], bus:[3],  dmin:2,dmax:2,form:2},
+  {id:"mb7",n:"Z97 + M.2, LGA1150",           y:2014,p:165, sock:["s1150"],  ram:["ddr3"], bus:[3],  dmin:2,dmax:3,form:2},
+  {id:"mb8",n:"X570, AM4",                    y:2019,p:230, sock:["am4"],    ram:["ddr4"], bus:[4],  dmin:2,dmax:3,form:2},
+  {id:"mb9",n:"X670E, AM5",                   y:2023,p:400, sock:["am5"],    ram:["ddr5"], bus:[5],  dmin:2,dmax:3,form:2},
+  {id:"mb10",n:"TRX50 E-ATX, sTR5",           y:2025,p:900, sock:["str5"],   ram:["ddr5","ddr5e"],bus:[5],dmin:2,dmax:3,form:3}
+ ]},
+ cpu:{L:"Процессор",S:"процессор",items:[
+  {id:"c0",n:"486DX2-66",           y:1998,p:0,   sock:"s3",  pw:3,  w:12},
+  {id:"c1",n:"Pentium MMX 233",     y:1998,p:45,  sock:"s7",  pw:7,  w:17},
+  {id:"c1b",n:"AMD K6-2 400",       y:1999,p:70,  sock:"s7",  pw:11, w:21},
+  {id:"c2",n:"Pentium II 400",      y:1998,p:125, sock:"sl1", pw:13, w:25},
+  {id:"c3",n:"Celeron 600",         y:2000,p:75,  sock:"s370",pw:17, w:20},
+  {id:"c4",n:"Pentium III 1000",    y:2001,p:210, sock:"s370",pw:25, w:33},
+  {id:"c5",n:"Athlon XP 2000+",     y:2003,p:130, sock:"sA",  pw:35, w:60},
+  {id:"c6",n:"Pentium 4 3.0 HT",    y:2004,p:220, sock:"s478",pw:43, w:82},
+  {id:"c7",n:"Core 2 Duo E6600",    y:2007,p:290, sock:"s775",pw:58, w:65},
+  {id:"c8",n:"Core 2 Quad Q6600",   y:2008,p:250, sock:"s775",pw:67, w:95},
+  {id:"c9",n:"Core i5-2500K",       y:2011,p:220, sock:"s1155",pw:80,w:95},
+  {id:"c10",n:"Core i7-2600K",      y:2011,p:320, sock:"s1155",pw:89,w:95},
+  {id:"c11",n:"Core i7-4790K",      y:2014,p:340, sock:"s1150",pw:97,w:88},
+  {id:"c12",n:"Ryzen 5 3600",       y:2019,p:200, sock:"am4", pw:105,w:65},
+  {id:"c13",n:"Ryzen 9 5950X",      y:2021,p:750, sock:"am4", pw:126,w:105},
+  {id:"c14",n:"Ryzen 9 7950X",      y:2023,p:700, sock:"am5", pw:142,w:170},
+  {id:"c15",n:"Threadripper 7980X", y:2025,p:5000,sock:"str5",pw:178,w:350}
+ ]},
+ cooler:{L:"Охлаждение",S:"кулер",items:[
+  {id:"cl0",n:"Кулер из комплекта",     y:1998,p:0,  tdp:70, ns:.55},
+  {id:"cl1",n:"Башня Zalman",           y:2003,p:35, tdp:115,ns:.3},
+  {id:"cl2",n:"Noctua NH-U12",          y:2010,p:70, tdp:185,ns:.1},
+  {id:"cl3",n:"СЖО 240 мм",             y:2016,p:130,tdp:260,ns:.18},
+  {id:"cl4",n:"СЖО 360 мм + вентиляторы",y:2022,p:220,tdp:400,ns:.1}
+ ]},
+ ram:{L:"Память",S:"память",items:[
+  {id:"r0",n:"16 МБ SIMM",      y:1998,p:0,  type:"simm", pw:2},
+  {id:"r0b",n:"64 МБ SIMM",     y:1998,p:40, type:"simm", pw:5},
+  {id:"r1",n:"64 МБ SDRAM",     y:1998,p:40, type:"sdram",pw:6},
+  {id:"r2",n:"256 МБ SDRAM",    y:2001,p:70, type:"sdram",pw:11},
+  {id:"r3",n:"512 МБ DDR",      y:2003,p:80, type:"ddr",  pw:16},
+  {id:"r4",n:"1 ГБ DDR",        y:2004,p:110,type:"ddr",  pw:21},
+  {id:"r5",n:"2 ГБ DDR2",       y:2007,p:90, type:"ddr2", pw:28},
+  {id:"r6",n:"4 ГБ DDR2",       y:2008,p:130,type:"ddr2", pw:35},
+  {id:"r7",n:"8 ГБ DDR3",       y:2011,p:110,type:"ddr3", pw:45},
+  {id:"r8",n:"16 ГБ DDR3",      y:2013,p:140,type:"ddr3", pw:53},
+  {id:"r9",n:"32 ГБ DDR4",      y:2018,p:190,type:"ddr4", pw:69},
+  {id:"r10",n:"64 ГБ DDR5",     y:2023,p:260,type:"ddr5", pw:91},
+  {id:"r11",n:"128 ГБ DDR5 ECC",y:2025,p:900,type:"ddr5e",pw:114}
+ ]},
+ gpu:{L:"Видеокарта",S:"видеокарта",items:[
+  {id:"g0", n:"S3 Trio64 (2 МБ)",      y:1998,p:0,   bus:1,pw:1,  vr:0, w:5,  len:150,pg:0},
+  {id:"g1", n:"3dfx Voodoo2",          y:1998,p:60,  bus:1,pw:4,  vr:0, w:15, len:180,pg:0},
+  {id:"g2", n:"GeForce 256 (AGP)",     y:2000,p:120, bus:2,pw:9,  vr:0, w:25, len:180,pg:0},
+  {id:"g3", n:"GeForce 4 Ti 4200 (AGP)",y:2002,p:150,bus:2,pw:14, vr:0, w:45, len:190,pg:0},
+  {id:"g4", n:"Radeon 9800 Pro (AGP)", y:2004,p:230, bus:2,pw:20, vr:0, w:60, len:200,pg:1},
+  {id:"g5", n:"GeForce 8500 GT (PCIe)",y:2007,p:70,  bus:3,pw:22, vr:0, w:40, len:180,pg:0},
+  {id:"g6", n:"GeForce 8800 GT",       y:2008,p:180, bus:3,pw:29, vr:0, w:105,len:230,pg:1},
+  {id:"g7", n:"GTX 660",               y:2013,p:190, bus:3,pw:41, vr:2, w:140,len:240,pg:1},
+  {id:"g8", n:"GTX 1080",              y:2017,p:520, bus:3,pw:57, vr:8, w:180,len:270,pg:1},
+  {id:"g9", n:"RTX 3080",              y:2021,p:900, bus:4,pw:77, vr:10,w:320,len:285,pg:2},
+  {id:"g10",n:"RTX 4090",              y:2023,p:1800,bus:4,pw:101,vr:24,w:450,len:340,pg:3},
+  {id:"g11",n:"RTX 5090",              y:2025,p:2400,bus:5,pw:127,vr:32,w:575,len:360,pg:3}
+ ]},
+ disk:{L:"Накопитель",S:"диск",items:[
+  {id:"d0",n:"HDD 1.2 ГБ (IDE)",       y:1998,p:0,  if:1,pw:1},
+  {id:"d1",n:"HDD 4.3 ГБ (IDE)",       y:1998,p:75, if:1,pw:3},
+  {id:"d2",n:"HDD 40 ГБ (IDE)",        y:2001,p:90, if:1,pw:6},
+  {id:"d3",n:"HDD 250 ГБ (SATA)",      y:2005,p:110,if:2,pw:10},
+  {id:"d4",n:"SSD 120 ГБ (SATA)",      y:2012,p:130,if:2,pw:25},
+  {id:"d5",n:"SSD 1 ТБ (SATA)",        y:2016,p:180,if:2,pw:33},
+  {id:"d6",n:"NVMe 1 ТБ",              y:2017,p:200,if:3,pw:43},
+  {id:"d7",n:"NVMe 4 ТБ Gen4",         y:2022,p:350,if:3,pw:59},
+  {id:"d8",n:"NVMe 8 ТБ Gen5 + RAID",  y:2025,p:1100,if:3,pw:76}
+ ]},
+ psu:{L:"Блок питания",S:"блок питания",items:[
+  {id:"p0",n:"Noname 200 Вт",              y:1998,p:0,  w:200, pg:0},
+  {id:"p1",n:"350 Вт",                     y:1998,p:30, w:350, pg:0},
+  {id:"p2",n:"450 Вт, 6-pin",              y:2004,p:50, w:450, pg:1},
+  {id:"p3",n:"650 Вт 80+ Bronze",          y:2009,p:80, w:650, pg:2},
+  {id:"p4",n:"850 Вт Gold",                y:2014,p:130,w:850, pg:2},
+  {id:"p5",n:"1200 Вт Titanium, 12VHPWR",  y:2022,p:330,w:1200,pg:3},
+  {id:"p6",n:"1600 Вт Titanium",           y:2024,p:500,w:1600,pg:3}
+ ]},
+ case:{L:"Корпус",S:"корпус",items:[
+  {id:"cs0",n:"Корпус из 90-х (AT)",      y:1998,p:0,  form:2,gpu:200,air:.8},
+  {id:"cs1",n:"ATX midi-tower",           y:1999,p:45, form:2,gpu:250,air:1},
+  {id:"cs2",n:"Корпус с вентиляторами",   y:2007,p:70, form:2,gpu:300,air:1.15},
+  {id:"cs3",n:"Стеклянный mid-tower",     y:2016,p:110,form:2,gpu:350,air:1.2},
+  {id:"cs4",n:"Full-tower с меш-фронтом", y:2021,p:190,form:3,gpu:430,air:1.35}
+ ]},
+ mon:{L:"Монитор",S:"монитор",items:[
+  {id:"m0",n:'14" CRT, 60 Гц',            y:1998,p:0,  cf:.05,need:0},
+  {id:"m1",n:'17" CRT Samsung',           y:1999,p:150,cf:.22,need:3},
+  {id:"m2",n:'19" CRT Sony, 85 Гц',       y:2002,p:260,cf:.38,need:9},
+  {id:"m3",n:'20" TFT',                   y:2006,p:290,cf:.52,need:14},
+  {id:"m4",n:'2× 24" IPS',           y:2012,p:420,cf:.7, need:30},
+  {id:"m5",n:'34" 1440p, 144 Гц',         y:2018,p:650,cf:.85,need:50},
+  {id:"m6",n:'42" 4K OLED + вертикальный',y:2024,p:1500,cf:1, need:72}
+ ]},
+ net:{L:"Интернет",S:"канал",items:[
+  {id:"n0",n:"Модем 33.6k (по ночам)",y:1998,p:0,  sp:1, fee:10},
+  {id:"n1",n:"Модем 56k",             y:1999,p:40, sp:2, fee:16},
+  {id:"n2",n:"ISDN",                  y:2001,p:110,sp:4, fee:34},
+  {id:"n3",n:"ADSL 2 Мбит",           y:2004,p:60, sp:9, fee:22},
+  {id:"n4",n:"Домовая сеть 10 Мбит",  y:2007,p:25, sp:16,fee:14},
+  {id:"n5",n:"100 Мбит оптика",       y:2012,p:35, sp:30,fee:12},
+  {id:"n6",n:"GPON 1 Гбит",           y:2019,p:60, sp:55,fee:16},
+  {id:"n7",n:"1 Гбит + LTE-резерв",   y:2023,p:150,sp:70,fee:32}
+ ]},
+ chair:{L:"Кресло",S:"кресло",items:[
+  {id:"h0",n:"Табуретка с кухни",     y:1998,p:0,   cf:0,  hp:-1.5},
+  {id:"h1",n:"Стул с подушкой",       y:1998,p:18,  cf:.15,hp:-.8},
+  {id:"h2",n:"Офисное на колёсиках",  y:2002,p:90,  cf:.35,hp:-.25},
+  {id:"h3",n:"Геймерское с ушами",    y:2010,p:260, cf:.5, hp:0},
+  {id:"h4",n:"Ergohuman",             y:2015,p:700, cf:.8, hp:.55},
+  {id:"h5",n:"Herman Miller Embody",  y:2020,p:1800,cf:1,  hp:1.1}
+ ]},
+ kb:{L:"Клавиатура",S:"клавиатура",items:[
+  {id:"k0",n:"Мембрана из комплекта",   y:1998,p:0,  cf:0, ty:1},
+  {id:"k1",n:"IBM Model M (б/у)",       y:1998,p:25, cf:.3,ty:1.05},
+  {id:"k2",n:"Механика Cherry MX",      y:2010,p:120,cf:.6,ty:1.10},
+  {id:"k3",n:"Кастом на HHKB-раскладке",y:2019,p:450,cf:.9,ty:1.15}
+ ]}
+};
+const SLOTS=["mb","cpu","cooler","ram","gpu","disk","psu","case","mon","net","chair","kb"];
+const CORE=["mb","cpu","cooler","ram","gpu","disk","psu","case"];
+const DESK=["mon","net","chair","kb"];
+const item=(sl,id)=>HW[sl].items.find(i=>i.id===id)||HW[sl].items[0];
+const cur=sl=>item(sl,S.rig[sl]);
+const rIt=(r,sl)=>item(sl,r[sl]);
+const hwPrice=it=>Math.round(it.p*(S.buff.sale>0?.82:1));
+
+/* ==================== ПЛАТФОРМЫ (комплекты) ==================== */
+const PLATFORMS=[
+ {id:"pf1", y:1998,n:"Slot 1: Pentium II 400 + 64 МБ SDRAM",  set:{mb:"mb1",cpu:"c2",ram:"r1"}},
+ {id:"pf2", y:2000,n:"Socket 370: Celeron 600 + 256 МБ",      set:{mb:"mb2",cpu:"c3",ram:"r2"}},
+ {id:"pf3", y:2001,n:"Socket 370: Pentium III 1000 + 256 МБ", set:{mb:"mb2",cpu:"c4",ram:"r2"}},
+ {id:"pf4", y:2003,n:"Socket A: Athlon XP 2000+ + 512 МБ DDR",set:{mb:"mb3",cpu:"c5",ram:"r3",cooler:"cl1"}},
+ {id:"pf5", y:2004,n:"Socket 478: P4 3.0 HT + 1 ГБ DDR",      set:{mb:"mb4",cpu:"c6",ram:"r4",cooler:"cl1"}},
+ {id:"pf6", y:2007,n:"LGA775: Core 2 Duo + 2 ГБ DDR2 + PCIe-видео",set:{mb:"mb5",cpu:"c7",ram:"r5",gpu:"g5"}},
+ {id:"pf7", y:2011,n:"LGA1155: i5-2500K + 8 ГБ DDR3 + SATA",  set:{mb:"mb6",cpu:"c9",ram:"r7",disk:"d3",gpu:"g6",case:"cs1",psu:"p2"}},
+ {id:"pf8", y:2014,n:"LGA1150: i7-4790K + 16 ГБ DDR3",        set:{mb:"mb7",cpu:"c11",ram:"r8",cooler:"cl2"}},
+ {id:"pf9", y:2019,n:"AM4: Ryzen 5 3600 + 32 ГБ DDR4",        set:{mb:"mb8",cpu:"c12",ram:"r9"}},
+ {id:"pf10",y:2023,n:"AM5: Ryzen 9 7950X + 64 ГБ DDR5",       set:{mb:"mb9",cpu:"c14",ram:"r10",cooler:"cl4"}},
+ {id:"pf11",y:2025,n:"sTR5: Threadripper 7980X + 128 ГБ ECC", set:{mb:"mb10",cpu:"c15",ram:"r11",case:"cs4"}}
+];
+
+/* ==================== ПРОВЕРКА СОВМЕСТИМОСТИ ==================== */
+function tdpOf(r){return rIt(r,"cpu").w+rIt(r,"gpu").w+45;}
+function coolCap(r){return rIt(r,"cooler").tdp*rIt(r,"case").air*(has("ac")?1.08:1)*(has("fan")?1.06:1);}
+function issues(r){
+ r=r||S.rig;
+ const mb=rIt(r,"mb"),cpu=rIt(r,"cpu"),ram=rIt(r,"ram"),gpu=rIt(r,"gpu"),dk=rIt(r,"disk"),
+       ps=rIt(r,"psu"),cs=rIt(r,"case"),cl=rIt(r,"cooler"),mo=rIt(r,"mon");
+ const o=[],mbMax=Math.max(...mb.bus);
+ if(!mb.sock.includes(cpu.sock))
+  o.push({s:"cpu",hard:1,k:"сокет",m:`${cpu.n} — ${SOCKN[cpu.sock]}, а плата под ${mb.sock.map(x=>SOCKN[x]).join(" / ")}`});
+ if(!mb.ram.includes(ram.type))
+  o.push({s:"ram",hard:1,k:"тип памяти",m:`${RAMT[ram.type]} не встанет: плата принимает ${mb.ram.map(t=>RAMT[t]).join(" / ")}`});
+ if(!mb.bus.includes(gpu.bus)){
+  if(gpu.bus>=3&&mbMax>=3){ if(gpu.bus>mbMax)o.push({s:"gpu",hard:0,k:"шина",m:`${BUSN[gpu.bus]}-карта в слоте ${BUSN[mbMax]}: минус 7% мощности`}); }
+  else o.push({s:"gpu",hard:1,k:"слот видео",m:`${BUSN[gpu.bus]}-карта не встанет: у платы ${mb.bus.map(b=>BUSN[b]).join(" / ")}`});
+ }
+ if(dk.if<mb.dmin)o.push({s:"disk",hard:1,k:"интерфейс",m:`${IFN[dk.if]} эта плата уже не поддерживает`});
+ if(dk.if>mb.dmax)o.push({s:"disk",hard:1,k:"интерфейс",m:`Плата не умеет ${IFN[dk.if]} (максимум ${IFN[mb.dmax]})`});
+ if(cs.form<mb.form)o.push({s:"case",hard:1,k:"типоразмер",m:`Плата ${FORMN[mb.form]} не влезет в корпус под ${FORMN[cs.form]}`});
+ if(gpu.len>cs.gpu)o.push({s:"case",hard:1,k:"габариты",m:`Карта ${gpu.len} мм не влезает: в корпус входит ${cs.gpu} мм`});
+ if(gpu.pg>ps.pg)o.push({s:"psu",hard:1,k:"разъёмы",m:`У блока нет питания для этой карты (нужен ${["без доп. питания","6/8-pin","2×8-pin","12VHPWR"][gpu.pg]})`});
+ const td=tdpOf(r);
+ if(td>ps.w)o.push({s:"psu",hard:0,k:"ватты",m:`Потребление ${td} Вт против ${ps.w} Вт: выключения и риск хлопка`});
+ else if(td>ps.w*.88)o.push({s:"psu",hard:0,k:"ватты",m:`Блок на пределе: ${td} из ${ps.w} Вт`});
+ if(cpu.w>coolCap(r))o.push({s:"cooler",hard:0,k:"нагрев",m:`Кулер держит ${Math.round(coolCap(r))} Вт, процессор просит ${cpu.w}: троттлинг`});
+ if(mo.need>gpu.pw)o.push({s:"mon",hard:0,k:"видео",m:`Видеокарта не раскрывает монитор: комфорт ниже`});
+ return o;
+}
+function canInstall(sl,id){
+ const r={...S.rig};r[sl]=id;
+ const h=issues(r).filter(x=>x.hard);
+ return h.length?h[0]:null;
+}
+function canPlatform(pf){
+ const r={...S.rig};for(const k in pf.set)r[k]=pf.set[k];
+ const h=issues(r).filter(x=>x.hard);
+ return h.length?h[0]:null;
+}
+function platformParts(pf){
+ const out=[];
+ for(const k in pf.set){
+  const cIdx=HW[k].items.findIndex(x=>x.id===S.rig[k]);
+  const nIdx=HW[k].items.findIndex(x=>x.id===pf.set[k]);
+  if(nIdx>cIdx)out.push({sl:k,id:pf.set[k]});
+ }
+ return out;
+}
+function platformPrice(pf){
+ const ps=platformParts(pf);
+ const gross=sum(ps.map(x=>hwPrice(item(x.sl,x.id))));
+ const back=sum(ps.map(x=>Math.round(item(x.sl,S.rig[x.sl]).p*.35)));
+ return{gross:Math.round(gross*.92),back,net:Math.round(gross*.92)-back,parts:ps};
+}
+
+/* ==================== ЖИЛЬЁ ==================== */
+const HOMES=[
+ {n:"Комната у родителей",  y:1998,rent:0,  dep:0,    cf:0,  sl:.92,md:-.65,d:"Бесплатно, но за стенкой всегда кто-то есть."},
+ {n:"Съёмная комната",      y:1998,rent:22, dep:44,   cf:.12,sl:1,   md:0,   d:"Своя дверь. Соседи по квартире — лотерея."},
+ {n:"Однушка на окраине",   y:1998,rent:55, dep:110,  cf:.32,sl:1.06,md:.2,  d:"Наконец-то стол можно поставить нормально."},
+ {n:"Двушка в центре",      y:2004,rent:130,dep:260,  cf:.55,sl:1.12,md:.45, d:"Отдельная комната под технику."},
+ {n:"Лофт с кабинетом",     y:2012,rent:300,dep:600,  cf:.75,sl:1.18,md:.65, d:"Высокие потолки и дверь, которая закрывается."},
+ {n:"Свой дом за городом",  y:2018,rent:180,dep:18000,cf:.95,sl:1.25,md:.85, d:"Своё. Коммуналка есть, арендодателя нет."}
+];
+
+/* ==================== БЫТ ==================== */
+const PERKS=[
+ {id:"kettle",n:"Кофеварка",           p:40,  y:1998,d:"Кофе бесплатный и меньше бьёт по здоровью."},
+ {id:"cat",   n:"Кот",                 p:20,  y:1998,d:"Настроение растёт само. Иногда ходит по клавиатуре."},
+ {id:"dumb",  n:"Гантели",             p:45,  y:1998,d:"Спорт даёт вдвое больше здоровья."},
+ {id:"fan",   n:"Вентилятор",          p:25,  y:1998,d:"+6% к охлаждению: троттлинг наступает позже."},
+ {id:"lamp",  n:"Нормальный свет на столе",p:60,y:1998,d:"Глаза не текут: +комфорт и чуть быстрее работа."},
+ {id:"micro", n:"Микроволновка",       p:90,  y:1998,d:"Поесть занимает 15 минут вместо часа."},
+ {id:"ups",   n:"ИБП",                 p:120, y:1998,d:"Отключение света больше не съедает несохранённое."},
+ {id:"bike",  n:"Велосипед",           p:200, y:1998,d:"Прогулки бодрят сильнее, спорт эффективнее."},
+ {id:"bed",   n:"Нормальная кровать",  p:220, y:1998,d:"Сон восстанавливает на 15% больше."},
+ {id:"ac",    n:"Кондиционер",         p:450, y:2004,d:"Железо не троттлит, ты не плавишься: +настроение каждый день."},
+ {id:"server",n:"Домашний сервер под пет-проекты",p:400,y:2005,d:"Свои продукты приносят на 10% больше."},
+ {id:"matt",  n:"Ортопедический матрас",p:600,y:2008,d:"Ещё +15% ко сну и спина не ноет."},
+ {id:"tablet",n:"Графический планшет", p:250, y:2008,d:"Дизайнерские задачи идут на 12% быстрее."},
+ {id:"cans",  n:"Наушники с шумодавом",p:180, y:2010,d:"+10% к скорости работы."},
+ {id:"nas",   n:"NAS с автобэкапом",   p:700, y:2014,d:"Бэкап делается сам. Смерть диска больше не страшна."},
+ {id:"desk",  n:"Стол с регулировкой высоты",p:550,y:2016,d:"Здоровье почти не падает от сидения."},
+ {id:"llm",   n:"Локальная LLM (нужно 8+ ГБ VRAM)",p:0,y:2023,d:"Вайбкодинг без подписки, но слабее и медленнее."}
+];
+const has=id=>!!S.perks[id];
+
+/* ==================== НАВЫКИ, КНИГИ, КУРСЫ ==================== */
+const SKILLS={code:"Кодинг",algo:"Алгоритмы",hw:"Железо",net:"Сети",design:"Дизайн",prompt:"Промптинг",biz:"Бизнес"};
+const BOOKS=[
+ {id:"b1", n:"«Delphi для чайников»",            p:12, y:1998,sk:"code",  v:4},
+ {id:"b2", n:"Справочник по железу",             p:10, y:1998,sk:"hw",    v:4},
+ {id:"b3", n:"Кнут, «Искусство программирования»",p:55, y:1998,sk:"algo", v:6},
+ {id:"b4", n:"Подшивка «Хакер»",                 p:8,  y:1999,sk:"net",   v:4},
+ {id:"b5", n:"Танненбаум, «Компьютерные сети»",  p:40, y:2000,sk:"net",   v:6},
+ {id:"b6", n:"«Психология влияния»",             p:20, y:2002,sk:"biz",   v:5},
+ {id:"b7", n:"«Дизайн привычных вещей»",         p:22, y:2004,sk:"design",v:5},
+ {id:"b8", n:"Сертификация по сетям",            p:600,y:2004,sk:"net",   v:11},
+ {id:"b9", n:"«Совершенный код»",                p:30, y:2005,sk:"code",  v:6},
+ {id:"b10",n:"Курс по алгоритмам (онлайн)",      p:180,y:2012,sk:"algo",  v:10},
+ {id:"b11",n:"Курс по геймдизайну",              p:300,y:2014,sk:"design",v:10},
+ {id:"b12",n:"MBA-выжимка за выходные",          p:420,y:2015,sk:"biz",   v:12},
+ {id:"b13",n:"Курс по UI/UX с разбором работ",   p:250,y:2016,sk:"design",v:9},
+ {id:"b14",n:"«Clean Architecture»",             p:35, y:2018,sk:"code",  v:8},
+ {id:"b15",n:"Курс по машинному обучению",       p:200,y:2019,sk:"algo",  v:9},
+ {id:"b16",n:"Гайд по промпт-инжинирингу",       p:120,y:2024,sk:"prompt",v:12},
+ {id:"b17",n:"Продвинутые агенты и тулчейны",    p:400,y:2025,sk:"prompt",v:14}
+];
+
+/* ==================== ПОДРЯДЧИКИ ==================== */
+const HIRES=[
+ {id:"junior",n:"Джун на подряде", biz:18,cost:.17,rate:.075,bug:.55,d:"Пишет медленно и с багами, но пишет."},
+ {id:"qa",    n:"Тестировщик",     biz:28,cost:.11,rate:0,   fix:2.6, d:"Не двигает прогресс, зато выедает баги каждый день."},
+ {id:"mid",   n:"Мидл-фрилансер",  biz:42,cost:.29,rate:.145,bug:.22,d:"Дорого, но почти не создаёт проблем."},
+ {id:"studio",n:"Студия на субподряде",biz:62,cost:.44,rate:.24,bug:.14,d:"Закрывает большие куски, пока ты занят другим."}
+];
+
+/* ==================== ЕДА ==================== */
+/* Дёшево — значит вредно: на лапше долго не протянешь, а здоровье
+   отрастает максимум на 3 в сутки, так что минус от еды не отыграть. */
+const FOOD=[
+ {n:"Лапша быстрого приготовления",p:2, f:18,m:-4,h:-2.4,t:.5,y:1998},
+ {n:"Пожарить яичницу",            p:5, f:28,m:1, h:-.2, t:1, y:1998},
+ {n:"Шаверма у метро",             p:9, f:40,m:5, h:-2.6,t:1, y:1998},
+ {n:"Бизнес-ланч в столовой",      p:8, f:42,m:2, h:.2,  t:.75,y:1998},
+ {n:"Приготовить нормальный ужин", p:13,f:50,m:6, h:.9,  t:2, y:1998},
+ {n:"Протеиновый коктейль",        p:8, f:20,m:0, h:.7,  t:.25,y:2008},
+ {n:"Доставка суши",               p:42,f:46,m:11,h:.1,  t:.5,y:2004},
+ {n:"Ресторан с кем-нибудь",       p:95,f:56,m:22,h:.5,  t:2.5,y:2001}
+];
+const fp=f=>Math.max(1,Math.round(f.p*inf()));
+
+/* ==================== РЫНОК ==================== */
+/* dr — дневной снос, vol — дневной размах. Считается каждый день, поэтому
+   при растянутых эпохах ставки снижены: иначе биржа сама решала бы игру. */
+const ASSETS=[
+ {id:"gold",n:"Золото",            y:1998,dr:.0005,vol:.007,d:"Скучно и почти не падает."},
+ {id:"fund",n:"Индексный IT-фонд", y:2000,dr:.0012,vol:.016,d:"Растёт вместе с индустрией. Иногда очень нет."},
+ {id:"btc", n:"Биткоин",           y:2011,dr:.0085,vol:.085,d:"Либо дом, либо история про то, как было близко."}
+];
+
+/* ==================== ЗАКАЗЫ ====================
+   w — объём в единицах работы, r — ставка за единицу в ценах своей эпохи,
+   dl — срок в днях, bug — склонность к багам, rep — вклад в репутацию,
+   min — минимальный уровень основного навыка, чтобы заказ вообще предложили. */
+const JOBS=[
+ /* --- 1998 --- */
+ {e:0,n:"Переустановить винду соседу",              sk:"hw",             w:22, r:1.55,dl:3,bug:.4, rep:1},
+ {e:0,n:"Собрать ПК на заказ",                      sk:"hw",             w:40, r:1.75,dl:4,bug:.5, rep:2},
+ {e:0,n:"Вычистить вирусы с дискет",                sk:"net",            w:26, r:1.6, dl:3,bug:.5, rep:1},
+ {e:0,n:"Прошить BIOS и разогнать",                 sk:"hw",             w:18, r:2.05,dl:2,bug:1.2,rep:1,min:6},
+ {e:0,n:"Перебрать машины в кабинете информатики",  sk:"hw",             w:60, r:1.35,dl:6,bug:.3, rep:2},
+ {e:0,n:"Логотип в Paint Shop Pro",                 sk:"design",         w:30, r:1.65,dl:3,bug:.4, rep:1},
+ {e:0,n:"Табличка учёта в Excel с макросами",       sk:"code",           w:32, r:1.7, dl:4,bug:.8, rep:1},
+ {e:0,n:"Скрипт для бухгалтерии на Delphi",         sk:"code",           w:55, r:1.9, dl:5,bug:1,  rep:2,min:6},
+ {e:0,n:"Настроить BBS для клуба",                  sk:"net",            w:45, r:1.85,dl:4,bug:.8, rep:2,min:5},
+ {e:0,n:"Записать и подписать 200 дискет с прайсом",sk:"hw",             w:35, r:1.3, dl:3,bug:.2, rep:1},
+ /* --- 2001 --- */
+ {e:1,n:"Сайт-визитка на чистом HTML",              sk:"design",sk2:"code",w:60,r:2.25,dl:5,bug:.8, rep:2},
+ {e:1,n:"Гостевая книга и счётчик на Perl",         sk:"code",           w:55, r:2.05,dl:4,bug:1,  rep:2,min:8},
+ {e:1,n:"Локалка на 12 машин в офисе",              sk:"net",            w:80, r:2.2, dl:6,bug:.9, rep:3,min:10},
+ {e:1,n:"Флеш-интро для сайта турагентства",        sk:"design",         w:65, r:2.6, dl:5,bug:.6, rep:2,min:10},
+ {e:1,n:"База на Access для склада",                sk:"code",sk2:"biz", w:85, r:2.35,dl:7,bug:1.1,rep:3,min:12},
+ {e:1,n:"Парсер прайс-листов",                      sk:"code",sk2:"algo",w:90, r:2.5, dl:6,bug:1.1,rep:3,min:14},
+ {e:1,n:"Прокси и squid в конторе",                 sk:"net",            w:70, r:2.35,dl:5,bug:.7, rep:3,min:14},
+ {e:1,n:"Почтовая рассылка по базе",                sk:"net",sk2:"biz",  w:40, r:2.0, dl:3,bug:.5, rep:1},
+ {e:1,n:"Сервер, который «просто перестал»",        sk:"hw",sk2:"net",   w:50, r:2.95,dl:2,bug:.9, rep:3,min:16,rush:1},
+ /* --- 2005 --- */
+ {e:2,n:"Вёрстка макета в пиксель",                 sk:"design",         w:90, r:2.4, dl:4,bug:.9, rep:2,min:14},
+ {e:2,n:"SEO и семантическое ядро",                 sk:"biz",sk2:"net",  w:110,r:2.5, dl:7,bug:.5, rep:3,min:12},
+ {e:2,n:"Движок форума на PHP",                     sk:"code",           w:130,r:2.7, dl:7,bug:1.3,rep:4,min:18},
+ {e:2,n:"Интернет-магазин под ключ",                sk:"code",sk2:"design",w:180,r:2.9,dl:9,bug:1.4,rep:5,min:22},
+ {e:2,n:"Флеш-баннеры для рекламщиков",             sk:"design",         w:70, r:3.0, dl:4,bug:.7, rep:2,min:18},
+ {e:2,n:"Скрипт выгрузки в 1С",                     sk:"code",           w:95, r:3.1, dl:5,bug:1.2,rep:3,min:20},
+ {e:2,n:"Настроить телефонию на Asterisk",          sk:"net",            w:100,r:3.4, dl:6,bug:1,  rep:4,min:26},
+ {e:2,n:"Пентест по договору",                      sk:"net",sk2:"algo", w:120,r:3.5, dl:6,bug:1,  rep:5,min:28},
+ {e:2,n:"Спарсить конкурента, пока не заметили",    sk:"code",sk2:"net", w:80, r:3.8, dl:4,bug:1.3,rep:2,min:20,risk:.16},
+ /* --- 2010 --- */
+ {e:3,n:"Лендинг с A/B-тестами",                    sk:"design",sk2:"biz",w:110,r:3.2,dl:5,bug:.8, rep:3,min:22},
+ {e:3,n:"Админка на Django за две недели",          sk:"code",           w:150,r:3.5, dl:8,bug:1.2,rep:4,min:26},
+ {e:3,n:"Аутсорс-задачи с зарубежной биржи",        sk:"code",           w:160,r:3.7, dl:8,bug:1.1,rep:4,min:28},
+ {e:3,n:"Мобильное приложение под заказ",           sk:"code",sk2:"design",w:200,r:3.9,dl:9,bug:1.4,rep:5,min:30},
+ {e:3,n:"Перенести инфраструктуру в облако",        sk:"net",sk2:"code", w:190,r:4.1, dl:9,bug:1.1,rep:5,min:34},
+ {e:3,n:"Интеграция платежей в магазин",            sk:"code",sk2:"biz", w:170,r:4.3, dl:8,bug:1.5,rep:5,min:32},
+ {e:3,n:"Highload-бэкенд для сервиса",              sk:"algo",sk2:"code",w:240,r:4.5, dl:10,bug:1.3,rep:6,min:38},
+ {e:3,n:"Спасти проект, который сдают через три дня",sk:"code",sk2:"algo",w:130,r:4.8,dl:3,bug:1.8,rep:6,min:36,rush:1},
+ {e:3,n:"Накрутить трафик серыми методами",         sk:"net",sk2:"biz",  w:120,r:4.9, dl:5,bug:1,  rep:2,min:26,risk:.2},
+ /* --- 2016 --- */
+ {e:4,n:"CI/CD и тесты с нуля",                     sk:"code",sk2:"net", w:220,r:4.6, dl:9,bug:1,  rep:5,min:38},
+ {e:4,n:"Миграция монолита в контейнеры",           sk:"code",sk2:"biz", w:300,r:5.0, dl:12,bug:1.6,rep:6,min:40},
+ {e:4,n:"Дизайн-система для продукта",              sk:"design",         w:240,r:5.4, dl:10,bug:.7, rep:6,min:46},
+ {e:4,n:"Оптимизация шейдеров для инди-студии",     sk:"algo",sk2:"code",w:260,r:5.6, dl:10,bug:1.2,rep:7,min:44},
+ {e:4,n:"Рекомендательный алгоритм для магазина",   sk:"algo",sk2:"biz", w:270,r:6.2, dl:11,bug:1.4,rep:7,min:50},
+ {e:4,n:"MVP для стартапа за долю",                 sk:"code",sk2:"biz", w:200,r:1.6, dl:7,bug:1.5,rep:5,min:36,equity:1},
+ {e:4,n:"Разобраться, почему всё тормозит в пятницу",sk:"algo",          w:150,r:6.8, dl:3,bug:1.2,rep:6,min:48,rush:1},
+ {e:4,n:"Блокчейн-проект, в который ты не веришь",  sk:"code",sk2:"biz", w:230,r:6.6, dl:9,bug:1.6,rep:2,min:42,risk:.22},
+ /* --- 2021 --- */
+ {e:5,n:"Перевести команду на ремоут и процессы",   sk:"biz",sk2:"net",  w:230,r:5.0, dl:10,bug:.6, rep:6,min:44},
+ {e:5,n:"Наставничество для команды джунов",        sk:"biz",sk2:"code", w:180,r:5.3, dl:9,bug:.4, rep:7,min:48},
+ {e:5,n:"Профилирование мультиплеера на консоли",   sk:"algo",sk2:"code",w:340,r:5.9, dl:12,bug:1.3,rep:8,min:56},
+ {e:5,n:"Аудит утечек памяти в продакшене",         sk:"algo",           w:280,r:6.3, dl:9,bug:1.1,rep:8,min:58},
+ {e:5,n:"Античит для сетевой игры",                 sk:"algo",sk2:"net", w:320,r:6.7, dl:11,bug:1.5,rep:8,min:62},
+ {e:5,n:"Технический due diligence для фонда",      sk:"biz",sk2:"algo", w:200,r:7.1, dl:7,bug:.5, rep:8,min:64},
+ {e:5,n:"Разбор инцидента и постмортем",            sk:"net",sk2:"algo", w:160,r:7.4, dl:3,bug:.9, rep:7,min:60,rush:1},
+ /* --- 2025 --- */
+ {e:6,n:"ИИ-агент для техподдержки",                sk:"prompt",sk2:"code",w:300,r:6.6,dl:10,bug:1.7,rep:8,min:24},
+ {e:6,n:"RAG-поиск по базе документов",             sk:"prompt",sk2:"algo",w:280,r:7.2,dl:9,bug:1.5,rep:8,min:34},
+ {e:6,n:"Ревью кода, который написал ИИ",           sk:"code",sk2:"algo", w:260,r:7.0,dl:8,bug:.8, rep:9,min:58},
+ {e:6,n:"Дообучить модель на данных клиента",       sk:"algo",sk2:"prompt",w:320,r:8.0,dl:11,bug:1.4,rep:9,min:64},
+ {e:6,n:"Вытащить проект из ИИ-слопа",              sk:"code",sk2:"algo", w:340,r:9.0,dl:12,bug:1.2,rep:10,min:66},
+ {e:6,n:"MVP за выходные для стартапа",             sk:"prompt",sk2:"biz",w:200,r:8.6,dl:3,bug:2.2,rep:6,min:28,rush:1},
+ {e:6,n:"Спрятать, что всё написал ИИ",             sk:"prompt",sk2:"biz",w:180,r:9.4,dl:4,bug:2,  rep:1,min:30,risk:.25}
+];
+
+/* ==================== СВОИ ПРОДУКТЫ ==================== */
+const PRODUCTS=[
+ {e:0,n:"Shareware-утилита",           sk:"code",             w:130,inc:10, bug:1,  rep:4, d:"Регистрации капают каждый день."},
+ {e:0,n:"Сборник драйверов на CD",     sk:"hw",sk2:"net",     w:90, inc:6,  bug:.4, rep:3, d:"Продаётся на радиорынке."},
+ {e:1,n:"Своя игра на Delphi",         sk:"code",sk2:"design",w:280,inc:32, bug:1.4,rep:8, d:"Пишут в гостевую, что прошли."},
+ {e:1,n:"Каталог ссылок с баннерами",  sk:"net",sk2:"biz",    w:160,inc:20, bug:.7, rep:4, d:"Баннеры кормят."},
+ {e:2,n:"Движок для сайтов на продажу",sk:"code",             w:320,inc:55, bug:1.3,rep:9, d:"Лицензии уходят студиям."},
+ {e:2,n:"Форум по железу с рекламой",  sk:"net",sk2:"biz",    w:240,inc:42, bug:.8, rep:6, d:"Живое сообщество и блок рекламы."},
+ {e:3,n:"Плагин для популярной CMS",   sk:"code",             w:260,inc:66, bug:1,  rep:7, d:"Платная версия расходится сама."},
+ {e:3,n:"Блог-медиа про технологии",   sk:"design",sk2:"biz", w:300,inc:75, bug:.5, rep:9, d:"Реклама и партнёрские ссылки."},
+ {e:3,n:"Мобильная игра",              sk:"code",sk2:"design",w:420,inc:95, bug:1.5,rep:12,d:"Реклама в игре платит."},
+ {e:4,n:"Онлайн-курс по программированию",sk:"biz",sk2:"code",w:400,inc:170,bug:.5, rep:12,d:"Продаётся каждый месяц заново."},
+ {e:4,n:"Библиотека с платной поддержкой",sk:"code",sk2:"algo",w:480,inc:205,bug:.9,rep:18,d:"Открытый код, платные ответы."},
+ {e:4,n:"SaaS для малого бизнеса",     sk:"code",sk2:"biz",   w:620,inc:280,bug:1.6,rep:16,d:"MRR — лучшее слово в языке."},
+ {e:5,n:"Платный ньюслеттер для разработчиков",sk:"biz",sk2:"design",w:380,inc:200,bug:.3,rep:14,d:"Раз в неделю, по подписке."},
+ {e:5,n:"Плагин для геймдев-движка",   sk:"code",sk2:"algo",  w:600,inc:310,bug:1.1,rep:16,d:"Студии покупают лицензии пачками."},
+ {e:5,n:"Инди-игра в Steam",           sk:"code",sk2:"design",w:950,inc:480,bug:1.5,rep:24,d:"Вишлисты, отзывы, ночные патчи."},
+ {e:6,n:"Маркетплейс промптов и агентов",sk:"prompt",sk2:"code",w:700,inc:500,bug:1.5,rep:20,d:"Процент с каждой продажи."},
+ {e:6,n:"ИИ-инструмент для геймдева",  sk:"prompt",sk2:"algo",w:900,inc:640,bug:1.4,rep:26,d:"Студии подсели и не отпускают."},
+ {e:6,n:"ИИ-сервис по подписке",       sk:"prompt",sk2:"biz", w:850,inc:700,bug:1.8,rep:28,d:"Токены дорогие, маржа тоже."}
+];
+
+/* ==================== РАБОТА ПО НАЙМУ ==================== */
+/* Смена — 8 часов и минус настроение, зато платят всегда и опыт идёт вдвое
+   быстрее. Ставки посчитаны от реального часа фрилансера (работа + отладка):
+   в 1998-м, когда навыков нет, найм выгоднее; к эпохе диалапа сравнивается;
+   дальше держится примерно на 15% ниже — за стабильность платишь потолком. */
+const EMPLOY=[
+ {e:0,n:"Продавец в компьютерном салоне",pay:28,  xp:{hw:.4,biz:.35}},
+ {e:0,n:"Сисадмин в конторе",            pay:40,  xp:{hw:.5,net:.45}},
+ {e:1,n:"Админ в интернет-клубе (ночами)",pay:48, xp:{net:.5,hw:.3}},
+ {e:1,n:"Верстальщик в веб-студии",      pay:60,  xp:{design:.55,code:.4}},
+ {e:2,n:"Инженер техподдержки провайдера",pay:108,xp:{net:.7,hw:.3}},
+ {e:2,n:"Веб-программист в студии",      pay:135, xp:{code:.7,design:.3},min:{code:16}},
+ {e:3,n:"Джун в продуктовой компании",   pay:285, xp:{code:.9,algo:.35},min:{code:24}},
+ {e:3,n:"Тимлид в веб-студии",           pay:345, xp:{code:.6,biz:.6},  min:{code:32}},
+ {e:4,n:"DevOps в аутсорсе",             pay:600, xp:{net:.8,code:.5},  min:{net:36}},
+ {e:4,n:"Мидл в геймдев-студии",         pay:710, xp:{code:.9,algo:.6}, min:{code:42}},
+ {e:5,n:"Синьор на удалёнке",            pay:950, xp:{code:.8,algo:.8,biz:.3},min:{code:54}},
+ {e:5,n:"Архитектор в банке",            pay:1090,xp:{algo:.75,biz:.7}, min:{algo:56}},
+ {e:6,n:"ИИ-инженер в продукте",         pay:1420,xp:{prompt:.9,code:.6},min:{prompt:34}},
+ {e:6,n:"Принципал, два оффера сразу",   pay:1600,xp:{algo:.9,biz:.8,prompt:.5},min:{algo:64}}
+];
+
+/* ==================== ДОСТИЖЕНИЯ ==================== */
+const ACH=[
+ {id:"a1", n:"Первые деньги",       d:"Сдать первый заказ"},
+ {id:"a2", n:"Апгрейд",             d:"Купить первую железку"},
+ {id:"a3", n:"Не ламер",            d:"Прокачать любой навык до 25"},
+ {id:"a4", n:"Своя платформа",      d:"Собрать машину мощнее 60 без единой проблемы"},
+ {id:"a5", n:"Бэкап есть",          d:"Сделать бэкап до первой смерти диска"},
+ {id:"a6", n:"Пассивный доход",     d:"Выпустить свой продукт"},
+ {id:"a7", n:"Десять тысяч",        d:"Заработать $10 000 за игру"},
+ {id:"a8", n:"Стотысячник",         d:"Заработать $100 000 за игру"},
+ {id:"a9", n:"Миллион",             d:"Заработать $1 000 000 за игру"},
+ {id:"a10",n:"Голос в сети",        d:"1 000 подписчиков"},
+ {id:"a11",n:"Инфлюенсер",          d:"50 000 подписчиков"},
+ {id:"a12",n:"Вайбкодер",           d:"Сдать проект, сделанный с ИИ"},
+ {id:"a13",n:"Ноль багов",          d:"Сдать проект без единого бага"},
+ {id:"a14",n:"Легенда",             d:"Репутация 90+"},
+ {id:"a15",n:"Дожил до ИИ",         d:"Дойти до последней эпохи"},
+ {id:"a16",n:"Здоровый компьютерщик",d:"Здоровье 90+ после 150-го дня"},
+ {id:"a17",n:"Сеньор-помидор",      d:"Три навыка выше 70"},
+ {id:"a18",n:"Мастер на все руки",  d:"Все навыки выше 40"},
+ {id:"a19",n:"Работодатель",        d:"Взять подрядчика на проект"},
+ {id:"a20",n:"Домовладелец",        d:"Купить свой дом"},
+ {id:"a21",n:"Без долгов",          d:"Закрыть кредит полностью"},
+ {id:"a22",n:"Инвестор",            d:"Заработать на бирже $5 000"},
+ {id:"a23",n:"Отпускник",           d:"Съездить в отпуск"},
+ {id:"a24",n:"Выгорел и вернулся",  d:"Опуститься до выгорания 85 и восстановиться до 15"},
+ {id:"a25",n:"Портфель",            d:"Пять живых продуктов одновременно"},
+ {id:"a26",n:"Тысяча в день",       d:"Пассивный доход $1 000 в день"},
+ {id:"a27",n:"Трудоголик",          d:"Сдать 25 проектов"},
+ {id:"a28",n:"Сам себе фонд",       d:"Держать на счету $250 000"}
+];
+
+/* ==================== СОСТОЯНИЕ ==================== */
+const VER=5;
+let S,tab="work",toastT=null,needRender=false,lastSpeed=1;
+function fresh(){
+ const mk={};ASSETS.forEach(a=>mk[a.id]={p:a.id==="btc"?1.2:100,q:0});
+ return{
+  ver:VER,day:1,hour:8,money:200,earned:0,spent:0,periodEarned:0,
+  needs:{energy:100,food:75,hygiene:80,mood:70,health:90},
+  burn:0,sick:0,
+  sk:{code:2,algo:0,hw:4,net:1,design:0,prompt:0,biz:0},
+  rep:5,followers:0,home:0,
+  rig:{mb:"mb0",cpu:"c0",cooler:"cl0",ram:"r0",gpu:"g0",disk:"d0",psu:"p0",case:"cs0",mon:"m0",net:"n0",chair:"h0",kb:"k0"},
+  perks:{},books:{},
+  active:[],offers:[],passive:[],contracts:[],equity:[],
+  job:null,jobDays:0,jobBonus:1,
+  aiSub:false,aiSpent:0,aiFee:14,
+  backupDay:-99,diskDeath:false,diskDeaths:0,
+  debt:0,dep:0,mk,mkProfit:0,
+  buff:{sale:0,fast:0},
+  gigDay:0,gigN:0,coffeeDay:0,coffeeN:0,
+  act:{k:"idle"},speed:1,nextEv:18,aiAcc:0,
+  ach:[],log:[],eraSeen:0,seenYear:ERAS[0].y,coffee:0,shipped:0,paidOff:false,
+  vibeShipped:false,cleanShip:false,hired:false,vacations:0,burnedOut:false,
+  pending:null,tips:1
+ };
+}
+
+/* ==================== ПРОИЗВОДНЫЕ ==================== */
+function throttle(){
+ const c=cur("cpu").w,cap=coolCap(S.rig);
+ return c>cap?clamp(cap/c,.62,1):1;
+}
+function busPen(){
+ const mb=cur("mb"),g=cur("gpu"),mx=Math.max(...mb.bus);
+ return(!mb.bus.includes(g.bus)&&g.bus>mx)?.93:1;
+}
+function power(){
+ const raw=cur("cpu").pw*.5+cur("ram").pw*.26+cur("disk").pw*.16+cur("gpu").pw*.08;
+ return raw*throttle()*busPen();
+}
+function monK(){return cur("mon").need>cur("gpu").pw?.62:1;}
+function comfort(){
+ const base=(cur("mon").cf*monK()+cur("chair").cf+cur("kb").cf+HOMES[S.home].cf)/4;
+ return clamp(base+(has("lamp")?.04:0)+(has("desk")?.06:0),0,1);
+}
+function tdp(){return tdpOf(S.rig);}
+function overload(){return tdp()>cur("psu").w;}
+function broken(){return issues().some(x=>x.hard);}
+function localAI(){return has("llm")&&cur("gpu").vr>=8;}
+function cond(){
+ const n=S.needs;
+ let f=.24+.42*(n.energy/100)+.2*(n.mood/100)+.14*(n.health/100);
+ if(n.food<25)f*=.8; if(n.food<10)f*=.72; if(n.hygiene<20)f*=.93;
+ if(n.health<35)f*=.5+.5*(n.health/35);   /* разваливаться — дорого */
+ f*=1-S.burn/240;
+ if(S.sick>0)f*=.68;
+ if(S.coffee>0)f*=1.14;
+ return clamp(f,.1,1.12);
+}
+function skEff(p){return p.sk2?S.sk[p.sk]*.7+S.sk[p.sk2]*.3:S.sk[p.sk];}
+function speed(p){
+ if(broken())return 0;
+ const skF=.55+1.15*Math.pow(clamp(skEff(p),0,100)/100,.75);
+ const rigF=.65+.95*Math.sqrt(clamp(power(),0,190)/130);
+ const foc=(has("cans")?1.1:1)*(has("lamp")?1.03:1);
+ const tb=(has("tablet")&&(p.sk==="design"||p.sk2==="design"))?1.12:1;
+ return 9*rigF*skF*cond()*foc*tb*cur("kb").ty*(S.buff.fast>0?1.12:1);
+}
+function bugRate(p){
+ const s=S.sk[p.sk];
+ return p.bug*(1.45-s/85)*(1+(100-S.needs.mood)/280)*(S.needs.energy<25?1.5:1)*(1+S.burn/300);
+}
+function maxActive(){return 2+(S.sk.biz>=35?1:0)+(S.sk.biz>=70?1:0);}
+function payRate(o){return o.r*INFL[eraIdx()]/INFL[o.e];}
+function passiveTotal(){return sum(S.passive.map(p=>pInc(p)));}
+function pInc(p){
+ return Math.round(p.base*(.35+.65*p.hp/100)*(1+S.followers/14000)*(has("server")?1.1:1));
+}
+function netWorth(){return S.money+S.dep+sum(ASSETS.map(a=>S.mk[a.id].q*S.mk[a.id].p))-S.debt;}
+
+/* ==================== ЛОГ, ТОСТ ==================== */
+function log(m,c){
+ S.log.unshift({t:`${String(S.day).padStart(3,"0")}·${hhmm(S.hour)}`,m,c:c||""});
+ if(S.log.length>160)S.log.pop();
+}
+function toast(m){
+ let el=document.querySelector(".toast");
+ if(!el){el=document.createElement("div");el.className="toast";document.body.appendChild(el);}
+ el.textContent=m;clearTimeout(toastT);toastT=setTimeout(()=>el.remove(),1800);
+}
+function flash(){
+ document.querySelectorAll(".panel").forEach(e=>{e.classList.add("flash");setTimeout(()=>e.classList.remove("flash"),600);});
+}
+
+/* ==================== ДЕНЬГИ ==================== */
+function earn(v,why,cls){
+ v=Math.round(v);S.money+=v;S.earned+=v;S.periodEarned+=v;
+ if(why)log(`${why} +${money(v)}.`,cls||"money");
+}
+function pay(v){v=Math.round(v);S.money-=v;S.spent+=v;}
+function afford(v){return S.money>=v;}
+
+/* ==================== ВРЕМЯ ==================== */
+/* Отдача от опыта падает с уровнем. Делитель подобран под длину игры:
+   с растянутыми эпохами навык не должен упираться в 100 к середине. */
+function xp(k,v){S.sk[k]=clamp(S.sk[k]+v/(1+S.sk[k]/6.5),0,100);}
+
+/* ==================== ВРЕМЯ: РЕАЛТАЙМ ====================
+   Часы идут сами. SEC_HOUR — сколько реальных секунд в игровом часе
+   на скорости ×1: сутки при ×1 занимают ~72 с, при ×8 — девять секунд. */
+const SEC_HOUR=3, SPEEDS=[1,2,4,8];
+const gt=()=>(S.day-1)*24+S.hour;   /* абсолютное игровое время в часах */
+
+/* Полночь просто переводит день. Работать ночью можно — наказывает за это
+   не календарь, а падающая энергия (см. collapse). */
+function rollDays(){
+ let guard=0;
+ while(S.hour>=24&&guard++<40){S.hour-=24;endDay();}
+}
+function tickClock(h){
+ S.coffee=Math.max(0,S.coffee-h);
+ S.hour+=h;
+ rollDays();
+}
+function advance(h,intensity){
+ intensity=intensity==null?1:intensity;
+ const n=S.needs,c=1-comfort()*.32;
+ n.energy=clamp(n.energy-h*3.4*intensity*c,0,100);
+ n.food=clamp(n.food-h*2.9,0,100);
+ n.hygiene=clamp(n.hygiene-h*2.1,0,100);
+ n.mood=clamp(n.mood-h*1.25*intensity+(has("cat")?.28*h:0),0,100);
+ if(intensity>=.9)S.burn=clamp(S.burn+h*intensity*.44,0,100);
+ else S.burn=clamp(S.burn-h*.55,0,100);
+ tickClock(h);
+}
+/* Мгновенная трата времени: покупки, переезд, сдача проекта, события.
+   Дело сделано сразу, а часы списываются разом. */
+function spend(h,intensity){advance(h,intensity==null?.6:intensity);}
+function lose(h){
+ S.hour+=h;
+ S.needs.energy=clamp(S.needs.energy-h*3,0,100);
+ S.needs.food=clamp(S.needs.food-h*2.5,0,100);
+ rollDays();
+}
+
+/* ==================== АКТИВНОСТИ ====================
+   S.act — чем игрок занят прямо сейчас:
+     idle           бездельничает
+     work           пишет код (бесконечная, прогресс капает каждый кадр)
+     debug          чинит баги (бесконечная)
+     sleep          спит (пока не выспится)
+     timed + t      дело фиксированной длины из TIMED; эффект срабатывает
+                    в конце, деньги списываются в начале.
+   Прерванное timed-дело эффекта не даёт — потраченного не вернуть. */
+function proj(id){return S.active.find(x=>x.id===id);}
+function actInt(){
+ const a=S.act;
+ if(a.k==="sleep")return 0;
+ if(a.k==="idle")return .35;
+ if(a.k==="debug")return 1.2;
+ if(a.k==="work")return({norm:1.15,care:1.3,vibe:.82})[a.mode]||1.15;
+ if(a.k==="timed")return TIMED[a.t]?TIMED[a.t].int:.6;
+ return 1;
+}
+function actLabel(){
+ const a=S.act;
+ if(a.k==="idle")return "Ничего не делаешь";
+ if(a.k==="sleep")return "Спишь";
+ if(a.k==="work"){
+  const p=proj(a.id);
+  return `${({norm:"Кодишь",care:"Пишешь аккуратно",vibe:"Вайбкодишь"})[a.mode]||"Кодишь"} над «${p?p.n:"—"}»`;
+ }
+ if(a.k==="debug"){const p=proj(a.id);return `Отладка «${p?p.n:"—"}»`;}
+ if(a.k==="timed"){const T=TIMED[a.t];return T?(typeof T.n==="function"?T.n(a.pl):T.n):"Занят";}
+ return "Занят";
+}
+/* Подпись справа от названия: сколько осталось или на чём стоим */
+function actSub(){
+ const a=S.act;
+ if(a.k==="timed")return `осталось ${a.left.toFixed(1)} ч`;
+ if(a.k==="sleep")return `спит ${(a.slept||0).toFixed(1)} ч`;
+ if(a.k==="work"||a.k==="debug"){
+  const p=proj(a.id);if(!p)return "";
+  return a.k==="debug"?`багов ${p.bugs}`:`${Math.round(p.prog/p.w*100)}% · багов ${p.bugs}`;
+ }
+ return "";
+}
+function actProgress(){
+ const a=S.act;
+ if(a.k==="timed"&&a.total)return clamp((1-a.left/a.total)*100,0,100);
+ if(a.k==="sleep")return clamp((S.needs.energy/97)*100,0,100);
+ if(a.k==="work"){const p=proj(a.id);return p?clamp(p.prog/p.w*100,0,100):0;}
+ if(a.k==="debug"){const p=proj(a.id);return p&&a.bugs0?clamp((1-p.bugs/a.bugs0)*100,0,100):0;}
+ return 0;
+}
+function setAct(a){S.act=a;needRender=true;}
+function idle(){setAct({k:"idle"});}
+function startTimed(t,pl){
+ const T=TIMED[t];if(!T)return;
+ const h=typeof T.h==="function"?T.h(pl):T.h;
+ setAct({k:"timed",t,pl:pl==null?null:pl,left:h,total:h});
+}
+function startSleep(forced){
+ setAct({k:"sleep",slept:0});
+ if(!forced)log("Лёг спать.","");
+}
+
+/* --- шаги активностей: то же, что раньше делала кнопка «N часов»,
+       только размазанное по времени --- */
+function stepWork(h,a){
+ const p=proj(a.id);if(!p)return;
+ let sp=speed(p),br=bugRate(p);
+ if(a.mode==="vibe"){
+  const q=S.aiSub?1:.66;
+  sp*=(1.7+S.sk.prompt/75)*q; br*=(3.4-S.sk.prompt/48)*1.5;
+  p.vibe+=h;
+  if(!S.aiSub&&!localAI()){
+   S.aiAcc=(S.aiAcc||0)+h*7*inf();
+   const due=Math.floor(S.aiAcc);
+   if(due>0){S.aiAcc-=due;pay(due);S.aiSpent+=due;}
+  }
+ }
+ if(a.mode==="care"){sp*=.62;br*=.26;}
+ p.prog=Math.min(p.w,p.prog+sp*h);
+ /* Баги копятся дробно. Множитель 1.1 — среднее от прежнего rf(.6,1.6),
+    так что за те же часы их набегает столько же, сколько в пошаговой версии. */
+ p._bf=(p._bf||0)+br*h*1.1;
+ while(p._bf>=1){p._bf-=1;p.bugs++;}
+ xp(p.sk,h*(a.mode==="vibe"?.4:.8));
+ if(p.sk2)xp(p.sk2,h*(a.mode==="vibe"?.22:.45));
+ if(a.mode==="vibe")xp("prompt",h*1.1);
+}
+function stepDebug(h,a){
+ const p=proj(a.id);if(!p||p.bugs<=0)return;
+ p._df=(p._df||0)+h*(1.15+S.sk.algo/26)*cond();
+ while(p._df>=1&&p.bugs>0){p._df-=1;p.bugs--;}
+ xp("algo",h*.6);xp("code",h*.3);
+}
+function stepSleep(h){
+ const b=(1+(has("bed")?.15:0)+(has("matt")?.15:0))*HOMES[S.home].sl;
+ S.needs.energy=clamp(S.needs.energy+h*8.6*b,0,100);
+ S.needs.mood=clamp(S.needs.mood+h*1.05,0,100);
+ S.needs.food=clamp(S.needs.food-h*1.1,0,100);
+ S.needs.hygiene=clamp(S.needs.hygiene-h*.8,0,100);
+ S.burn=clamp(S.burn-h*(.75+S.burn*.02*b),0,100);
+ S.act.slept=(S.act.slept||0)+h;
+ tickClock(h);
+}
+/* Один шаг мира на h игровых часов */
+function stepAct(h){
+ const a=S.act;
+ if(a.k==="sleep"){stepSleep(h);return;}
+ if(a.k==="work")stepWork(h,a);
+ else if(a.k==="debug")stepDebug(h,a);
+ advance(h,actInt());
+ if(a.k==="timed"&&S.act===a){
+  a.left-=h;
+  if(a.left<=0){const t=a.t,pl=a.pl;idle();TIMED[t].done(pl);}
+ }
+}
+/* Силы кончились — вырубает прямо за машиной. Раньше это делала полночь. */
+function collapse(){
+ if(S.needs.energy>.5||S.act.k==="sleep")return false;
+ log("Ты вырубился прямо за клавиатурой. Спина этого не забудет.","bad");
+ S.needs.health=clamp(S.needs.health-4,0,100);
+ S.needs.mood=clamp(S.needs.mood-8,0,100);
+ S.burn=clamp(S.burn+6,0,100);
+ startSleep(true);
+ return true;
+}
+/* Проверки после каждого шага: доделанное, кончившееся, наступившее */
+function afterStep(){
+ const a=S.act;
+ if(collapse())return true;
+ if(a.k==="sleep"&&(S.needs.energy>=97||(a.slept||0)>=12)){
+  log(`Проснулся. Спал ${(a.slept||0).toFixed(1)} ч.`,"good");
+  idle();return true;
+ }
+ if(a.k==="work"||a.k==="debug"){
+  const p=proj(a.id);
+  if(!p){idle();return true;}
+  if(a.k==="work"&&p.prog>=p.w){
+   log(`«${p.n}» готов. Багов: ${p.bugs}.`,"good");toast("Проект готов");
+   idle();return true;
+  }
+  if(a.k==="debug"&&p.bugs<=0){log(`Багов в «${p.n}» не осталось.`,"good");idle();return true;}
+ }
+ if(gt()>=S.nextEv){scheduleEv();event();needRender=true;return true;}
+ /* Отошёл от машины, а персонаж сидит без дела и голодает — время само
+    встаёт на паузу, чтобы вернуться не к трупу. */
+ if(a.k==="idle"&&S.speed>0&&(S.needs.food<12||S.needs.energy<12)){
+  S.speed=0;
+  log("Пауза: ты ничего не делаешь, а силы и сытость на нуле.","warn");
+  toast("Пауза — пора поесть или поспать");
+  needRender=true;return true;
+ }
+ return false;
+}
+function scheduleEv(){S.nextEv=gt()+rf(20,60);}   /* в среднем ~0.6 события в сутки, как было */
+function endDay(){
+ S.day++;
+ const n=S.needs;
+ /* --- здоровье --- */
+ let hd=cur("chair").hp+(has("desk")?1:0)+HOMES[S.home].md*.35;
+ if(n.food<30)hd-=1.2; if(n.hygiene<30)hd-=.5; if(n.mood<25)hd-=.8;
+ if(S.burn>70)hd-=.9;
+ if(n.energy>60&&n.food>60)hd+=.9;
+ if(n.energy>75&&n.food>70&&n.hygiene>60)hd+=.6;
+ n.health=clamp(n.health+clamp(hd,-3,3),0,100);
+ n.mood=clamp(n.mood+HOMES[S.home].md+(has("ac")?.6:0)-(throttle()<1?.5:0),0,100);
+ S.burn=clamp(S.burn-1.2,0,100);
+ /* --- болезнь и больница --- */
+ if(n.health<14&&chance(.4)){
+  const bill=Math.round(rf(45,110)*inf());
+  pay(bill);n.health=42;S.sick=3;S.burn=clamp(S.burn-20,0,100);
+  S.active.forEach(p=>{if(p.dl)p.due+=2;});
+  log(`Организм сдался: скорая, капельница, ${money(bill)} и трое суток мимо. Так это и заканчивается.`,"bad");
+ }
+ else if(S.sick>0){S.sick--;if(!S.sick)log("Наконец отпустило. Можно работать нормально.","good");}
+ else if(chance(n.health<40?.09:n.health<65?.03:.008)){
+  S.sick=ri(2,3);log(`Разболелся. ${S.sick} дн. всё будет идти вязко.`,"bad");
+ }
+ /* --- подрядчики --- */
+ S.active.forEach(p=>{
+  (p.hires||[]).forEach(h=>{
+   const H=HIRES.find(x=>x.id===h);if(!H)return;
+   if(H.rate){
+    const g=p.w*H.rate*rf(.8,1.2);
+    p.prog=Math.min(p.w,p.prog+g);
+    p.bugs+=Math.round(H.bug*rf(.5,1.5));
+   }
+   if(H.fix&&p.bugs>0)p.bugs=Math.max(0,p.bugs-Math.round(H.fix*rf(.7,1.3)));
+  });
+ });
+ /* --- пассивный доход и износ продуктов --- */
+ if(S.passive.length){
+  let t=0;
+  S.passive.forEach(p=>{p.hp=clamp(p.hp-rf(.9,1.7),0,100);t+=pInc(p);});
+  earn(t,`Пассивный доход:`,"money");
+ }
+ /* --- доли в чужих стартапах --- */
+ S.equity=S.equity.filter(q=>{
+  if(S.day<q.day)return true;
+  const r=Math.random();
+  if(r<.55){log(`«${q.n}» закрылись, не дожив до раунда. Доля превратилась в опыт.`,"bad");mood(-6);}
+  else if(r<.85){earn(Math.round(q.val*rf(.3,.7)),`Долю в «${q.n}» выкупили на посевном раунде:`,"money");}
+  else{earn(Math.round(q.val*rf(1.5,3)),`«${q.n}» выстрелили. Твоя доля стоила настоящих денег:`,"good");mood(14);}
+  return false;
+ });
+ /* --- контракты на поддержку --- */
+ S.contracts=S.contracts.filter(c=>{
+  c.left--;
+  if(S.day%7===0)earn(c.weekly,`Поддержка «${c.n}»:`,"money");
+  if(c.left<=0){log(`Контракт на поддержку «${c.n}» закончился.`,"warn");return false;}
+  return true;
+ });
+ /* --- рынок --- */
+ ASSETS.forEach(a=>{
+  if(gYear()<a.y)return;
+  const m=S.mk[a.id];
+  m.p=Math.max(.05,m.p*(1+a.dr+(Math.random()-.5)*2*a.vol));
+ });
+ /* --- буффы --- */
+ if(S.buff.sale>0)S.buff.sale--;
+ if(S.buff.fast>0)S.buff.fast--;
+ /* --- счета и налоги --- */
+ if(S.day%7===0)bills();
+ if(S.day%28===0)taxes();
+ /* --- дедлайны --- */
+ S.active.forEach(p=>{
+  if(p.dl&&S.day>p.due&&!p.late){
+   p.late=true;
+   const d=p.rush?7:4;
+   S.rep=clamp(S.rep-d,0,100);
+   log(`Дедлайн по «${p.n}» сорван. Репутация −${d}.`,"bad");
+  }
+ });
+ if(S.job)S.jobDays++;
+ refreshOffers();
+ /* --- смена эпохи --- */
+ const i=eraIdx();
+ if(i>S.eraSeen){
+  S.eraSeen=i;
+  log(`—— ${era().y} год. ${era().n}. ${era().t}`,"ev");
+  document.documentElement.dataset.era=i;flash();
+ }
+ checkYear();
+ /* События больше не сыпятся в полночь пачкой — они назначены на случайное
+    время суток и срабатывают по ходу дня (см. scheduleEv / afterStep). */
+ check();needRender=true;
+ autosave();
+}
+/* Всё, что ещё не вышло, в интерфейсе скрыто — поэтому о новинках сообщаем в терминал */
+function newStuff(from,to){
+ const out=[];
+ SLOTS.forEach(sl=>HW[sl].items.forEach(it=>{if(it.y>from&&it.y<=to)out.push(it.n);}));
+ PLATFORMS.forEach(p=>{if(p.y>from&&p.y<=to)out.push(`комплект «${p.n}»`);});
+ PERKS.forEach(p=>{if(p.y>from&&p.y<=to)out.push(p.n);});
+ BOOKS.forEach(b=>{if(b.y>from&&b.y<=to)out.push(b.n);});
+ HOMES.forEach(x=>{if(x.y>from&&x.y<=to)out.push(x.n);});
+ ASSETS.forEach(a=>{if(a.y>from&&a.y<=to)out.push(a.n);});
+ FOOD.forEach(f=>{if(f.y>from&&f.y<=to)out.push(f.n);});
+ if(from<2023&&to>=2023)out.push("подписка на ИИ-ассистента");
+ return out;
+}
+function checkYear(){
+ const yr=gYear();
+ if(yr<=S.seenYear)return;
+ const nw=newStuff(S.seenYear,yr);
+ S.seenYear=yr;
+ if(!nw.length)return;
+ const head=nw.slice(0,6).join(", ");
+ log(`${yr}: появилось в продаже — ${head}${nw.length>6?` и ещё ${nw.length-6} поз.`:""}.`,"ev");
+}
+function bills(){
+ const H=HOMES[S.home];
+ const rent=Math.round(H.rent*inf());
+ const el=Math.round(tdp()*.035*inf()*(has("ac")?1.3:1));
+ const nt=Math.round(cur("net").fee*inf()/1.2);
+ const sub=S.aiSub?Math.round(S.aiFee*inf()/2):0;
+ const life=Math.round((6+eraIdx()*3)*inf());
+ let intr=0;
+ if(S.debt>0){intr=Math.round(S.debt*.028);S.debt+=intr;}
+ const total=rent+el+nt+sub+life;
+ pay(total);
+ const parts=[`жильё ${money(rent)}`,`свет ${money(el)}`,`связь ${money(nt)}`,`мелочи ${money(life)}`];
+ if(sub)parts.push(`ИИ ${money(sub)}`);
+ if(intr)parts.push(`проценты по кредиту ${money(intr)}`);
+ log(`Счета за неделю: ${parts.join(", ")}. Итого ${money(total)}.`,"warn");
+ if(S.dep>0){const d=Math.round(S.dep*.007);S.dep+=d;}
+ if(S.money<0){
+  const need=Math.ceil(-S.money/100)*100+100;
+  S.debt+=need;S.money+=need;
+  log(`Денег не хватило. Пришлось занять ${money(need)} под 5% в неделю.`,"bad");
+  S.needs.mood=clamp(S.needs.mood-10,0,100);
+ }
+}
+function taxes(){
+ if(S.periodEarned<=0){S.periodEarned=0;return;}
+ const rate=.06+eraIdx()*.025;
+ const turn=S.periodEarned,t=Math.round(turn*rate);
+ pay(t);S.periodEarned=0;
+ log(`Налоги за месяц: ${money(t)} — ${Math.round(rate*100)}% с оборота ${money(turn)}. Вечер в личном кабинете.`,"warn");
+}
+
+/* ==================== ПРЕДЛОЖЕНИЯ ==================== */
+function refreshOffers(paid){
+ const e=eraIdx();
+ let pool=JOBS.filter(j=>j.e<=e&&j.e>=e-2&&(!j.min||S.sk[j.sk]>=j.min*.75));
+ if(pool.length<4)pool=JOBS.filter(j=>j.e<=e);
+ const prods=PRODUCTS.filter(j=>j.e<=e&&j.e>=e-2);
+ const n=3+(S.rep>40?1:0)+(S.rep>70?1:0)+(paid?2:0);
+ S.offers=[];
+ for(let i=0;i<n;i++){
+  const t=pick(pool);
+  const mult=(.82+Math.random()*.42+S.rep/240+S.followers/60000)*(paid?1.12:1);
+  const w=Math.round(t.w*rf(.85,1.2));
+  S.offers.push({...t,id:uid(),w,pay:Math.round(w*payRate(t)*mult),type:"job"});
+ }
+ if(prods.length&&chance(.8)){
+  const t=pick(prods);
+  S.offers.push({...t,id:uid(),type:"prod",w:Math.round(t.w*rf(.9,1.1))});
+ }
+}
+
+/* ==================== СОБЫТИЯ ==================== */
+const fp1=()=>S.active[0];
+const mood=v=>S.needs.mood=clamp(S.needs.mood+v,0,100);
+const hp=v=>S.needs.health=clamp(S.needs.health+v,0,100);
+const en=v=>S.needs.energy=clamp(S.needs.energy+v,0,100);
+
+/* Простые события: to — до какой эпохи, fr — с какой, w — вес, if — условие */
+const EV=[
+ {w:3,to:1,f(){log("Мама требует освободить телефон. Модем отваливается на середине закачки.","warn");mood(-7);}},
+ {w:2,to:2,f(){log("На дискете от соседа был вирус. Час на лечение.","bad");lose(1);}},
+ {w:2,to:1,f(){log("Соседи сверлят с утра до вечера. Сосредоточиться невозможно.","warn");mood(-6);en(-8);}},
+ {w:2,to:2,f(){log("Монитор мигнул, свёлся в точку и запах горелого. CRT отжил своё.","bad");pay(ri(20,60));}},
+ {w:3,f(){
+  if(has("ups")){log("Свет мигнул, ИБП пискнул и всё удержал. Окупился.","good");return;}
+  const p=fp1();
+  if(p){const l=Math.min(p.prog,ri(8,32));p.prog-=l;log(`Отключили свет. Потеряно ${Math.round(l)} ед. работы по «${p.n}».`,"bad");}
+  else log("Отключили свет. Повезло — ничего не делал.","warn");
+ }},
+ {w:2,f(){
+  if(has("nas")||S.day-S.backupDay<5){log("Диск начал сыпаться, но бэкап свежий. Просто меняешь его.","good");pay(Math.round(60*inf()));}
+  else{const p=fp1();S.diskDeaths++;
+   if(p){p.prog=Math.max(0,p.prog*.35);S.diskDeath=true;log(`Диск умер. От «${p.n}» осталась треть. Бэкапов не было.`,"bad");}
+   else log("Диск щёлкнул и умер. Ничего важного не было — на этот раз.","warn");}
+ }},
+ {w:3,f(){earn(rf(.8,3.2)*20*inf(),"Знакомый попросил срочно помочь и заплатил наличкой:","good");lose(1);}},
+ {w:2,if:()=>has("cat"),f(){const p=fp1();if(p){p.bugs+=ri(1,4);log("Кот прошёлся по клавиатуре. В коде появилось нечто.","warn");}else{mood(4);log("Кот улёгся на тёплый корпус. Идиллия.");}}},
+ {w:2,f(){log("Провайдер порезал скорость «в связи с профилактикой». Сутки на морзянке.","warn");mood(-5);}},
+ {w:2,f(){const k=ri(40,500)+Math.round(S.followers*.04);S.followers+=k;log(`Твой старый пост внезапно разлетелся: +${k} подписчиков.`,"good");}},
+ {w:4,if:()=>overload(),f(){log("Блок питания хлопнул и запахло. Ты знал, что ватт не хватает.","bad");pay(Math.round(ri(60,220)*inf()));lose(2);S.rig.psu="p0";}},
+ {w:3,if:()=>throttle()<.95,f(){const p=fp1();log("Процессор перегрелся, машина ушла в ребут посреди работы.","bad");if(p)p.prog=Math.max(0,p.prog-ri(6,20));}},
+ {w:2,f(){log("Мышь начала двоить клики, клавиша пробела запала. Мелочь, но бесит.","warn");pay(Math.round(15*inf()));mood(-3);}},
+ {w:2,fr:1,f(){log("Клиент прислал ТЗ голосовым на сорок минут. Дважды.","warn");mood(-6);lose(.7);}},
+ {w:2,fr:2,if:()=>S.active.length>0,f(){const p=fp1();log(`Заказчик по «${p.n}» пропал и не отвечает неделю. Работа висит.`,"warn");p.due+=2;mood(-5);}},
+ {w:2,fr:1,f(){xp("code",1.2);xp("algo",.8);log("Нашёл баг в чужой библиотеке, отправил патч. Приняли.","good");S.rep=clamp(S.rep+1.2,0,100);}},
+ {w:2,fr:3,f(){S.jobBonus=Math.min(2.1,S.jobBonus+.08);log(`Рекрутер написал в личку. Сходил на собес и выторговал прибавку (×${S.jobBonus.toFixed(2)} к смене).`,"ev");}},
+ {w:2,fr:1,f(){log("Спина прострелила так, что не разогнуться. Кресло намекает.","bad");hp(-4);mood(-6);}},
+ {w:2,fr:1,f(){S.buff.sale=2;log("В магазине распродажа: два дня железо на 18% дешевле.","ev");}},
+ {w:2,fr:2,f(){const k=ri(30,240);S.followers+=k;log(`Тебя упомянули в статье как «известного в узких кругах». +${k} подписчиков.`,"good");}},
+ {w:2,fr:2,f(){log("Форумный срач на восемь страниц. Ты был прав, но какой ценой.","warn");mood(-8);S.followers+=ri(10,90);}},
+ {w:2,fr:3,f(){earn(Math.round(rf(10,90)*inf()),"Донат от подписчика с длинным благодарным письмом:","good");mood(6);}},
+ {w:2,fr:3,f(){log("Твой старый открытый проект попал в подборку. Приятно.","good");S.rep=clamp(S.rep+2,0,100);S.followers+=ri(60,400);}},
+ {w:1,fr:3,f(){log("Аккаунт взломали через переиспользованный пароль. Часть денег ушла.","bad");pay(Math.min(S.money,Math.round(ri(80,400)*inf())));}},
+ {w:2,fr:4,f(){log("Письмо из налоговой с уточнением по прошлому периоду.","bad");pay(Math.min(S.money,Math.round(ri(150,700)*inf())));lose(1.5);}},
+ {w:2,fr:4,if:()=>S.job,f(){log(`В «${S.job.n}» сокращения. Тебя не тронули, но атмосфера так себе.`,"warn");mood(-9);}},
+ {w:1,fr:4,f(){earn(Math.round(rf(200,1400)*inf()),"Опционы старой конторы неожиданно что-то стоили:","good");}},
+ {w:2,fr:5,f(){log("Позвали в подкаст рассказать, как ты дошёл до всего этого.","good");S.rep=clamp(S.rep+2.5,0,100);S.followers+=ri(200,1600);lose(2);}},
+ {w:2,fr:6,f(){log("ИИ уверенно предложил переписать всё на Rust и удалить node_modules. Ты вежливо отказался.","ai");}},
+ {w:2,fr:6,if:()=>S.active.length>0,f(){const p=fp1();const l=Math.min(p.prog,ri(10,40));p.prog-=l;log(`Агент решил «почистить репозиторий» и снёс ветку. −${Math.round(l)} ед. по «${p.n}».`,"ai");}},
+ {w:2,fr:6,f(){S.buff.fast=3;log("Вышла новая модель — заметно умнее. Три дня работа идёт бодрее.","ai");}},
+ {w:2,f(){log("Нашёл на балконе коробку с железом из прошлой жизни. Продал.","good");earn(Math.round(ri(15,120)*inf()));}},
+ {w:2,f(){mood(13);log("Позвонил старый друг, проболтали два часа. Стало легче.","good");lose(2);}},
+ {w:2,f(){log("Весь день лил дождь и никуда не хотелось. Зато сделал много.","");mood(-3);en(4);}},
+ {w:1,f(){log("Проспал. Утро потеряно, зато выспался.","warn");S.hour=Math.max(S.hour,12);en(12);}},
+ {w:2,fr:2,f(){earn(Math.round(rf(15,60)*inf()),"Сосед попросил настроить вайфай и сунул денег:","good");lose(.8);xp("net",.4);}},
+ {w:1,fr:1,f(){log("Пришло письмо от правообладателя про нелицензионный софт. Неприятно, но обошлось предупреждением.","warn");mood(-7);}},
+ {w:2,if:()=>S.burn>65,f(){log("Сел за машину и просто смотрел в экран сорок минут. Так тоже бывает.","warn");lose(.7);mood(-4);}},
+ {w:2,if:()=>S.passive.length>0,f(){const p=pick(S.passive);p.hp=clamp(p.hp-ri(8,22),0,100);log(`Пользователи «${p.n}» нашли неприятный баг. Доход просел, пока не обновишь.`,"warn");}},
+ {w:2,if:()=>S.passive.length>0,f(){const p=pick(S.passive);p.hp=clamp(p.hp+ri(6,18),0,100);S.followers+=ri(20,200);log(`Кто-то написал обзор на «${p.n}». Пришли новые пользователи.`,"good");}}
+];
+
+/* События с выбором */
+const ASK={
+ shortcut:{fr:1,w:3,if:()=>S.active.length>0,t:"«А можно побыстрее?»",
+  x:"Заказчик по текущему проекту спрашивает, нельзя ли сдать раньше. За скорость готов доплатить, но качество придётся урезать.",
+  o:[{t:"Срезать углы",d:"+35% к оплате, сразу +8 багов",f(){const p=fp1();p.pay=Math.round(p.pay*1.35);p.bugs+=8;log("Договорились на скорость. Ну, ты предупредил.","warn");}},
+     {t:"Сделать как надо",d:"Без изменений, +1 к репутации",f(){S.rep=clamp(S.rep+1,0,100);log("Объяснил, почему быстрее не выйдет. Отнеслись с уважением.","good");}}]},
+ grey:{fr:1,w:2,t:"Шабашка в серую",
+  x:"Знакомый предлагает работу без договора и без вопросов. Платят хорошо и сразу, но если что-то всплывёт — разбираться будешь сам.",
+  o:[{t:"Взять",d:"Деньги сразу, есть риск последствий",f(){
+      const s=Math.round(rf(60,240)*inf());earn(s,"Работа без бумаг:","money");
+      if(chance(.28)){const f=Math.round(s*rf(1.2,2.2));pay(f);S.rep=clamp(S.rep-5,0,100);log(`История всплыла. Штраф ${money(f)} и репутация вниз.`,"bad");}
+     }},
+     {t:"Отказаться",d:"Спокойнее спится",f(){mood(4);log("Отказался. Иногда это и есть решение.","");}}]},
+ flea:{w:2,t:"Барахолка",
+  x:"На радиорынке продают видеокарту заметно дороже твоей — за полцены. Проверить негде, продавец торопится.",
+  o:[{t:"Купить",d:"Половина цены, 30% что мёртвая",f(){
+      const i=HW.gpu.items.findIndex(x=>x.id===S.rig.gpu);
+      const cand=HW.gpu.items.filter((x,k)=>k>i&&x.y<=gYear()&&!canInstall("gpu",x.id));
+      if(!cand.length){log("Пока смотрел, карту забрали. Ничего подходящего не осталось.","warn");return;}
+      const g=cand[0],pr=Math.round(g.p*.5);
+      if(!afford(pr)){log("Денег не хватило даже на половину. Обидно.","warn");return;}
+      pay(pr);
+      if(chance(.3))log(`Купил ${g.n} за ${money(pr)}. Дома выяснилось: не показывает картинку. Деньги ушли.`,"bad");
+      else{S.rig.gpu=g.id;log(`Купил ${g.n} за ${money(pr)} — и она работает! Так тоже бывает.`,"good");}
+     }},
+     {t:"Пройти мимо",d:"Ничего не происходит",f(){log("Прошёл мимо. Скучно, зато без сюрпризов.","");}}]},
+ bounty:{fr:2,w:2,t:"Дыра в чужом сервисе",
+  x:"Ковырялся в API популярного сервиса и нашёл настоящую уязвимость. Данные лежат почти открыто.",
+  o:[{t:"Сообщить владельцам",d:"Репутация и, возможно, награда",f(){
+      S.rep=clamp(S.rep+4,0,100);xp("net",2.5);
+      if(chance(.55))earn(Math.round(rf(80,600)*inf()),"Выплатили баг-баунти:","good");
+      else log("Поблагодарили письмом и футболкой. Ну хоть так.","good");
+     }},
+     {t:"Написать статью",d:"Много подписчиков, немного скандала",f(){S.followers+=ri(300,2500);S.rep=clamp(S.rep-2,0,100);log("Статья разлетелась. Сервис в ярости, подписчики в восторге.","warn");}},
+     {t:"Закрыть вкладку",d:"Ничего не было",f(){log("Закрыл и забыл. Своих дел хватает.","");}}]},
+ relative:{w:2,t:"Родственник с компьютером",
+  x:"Звонит тётя: «у меня всё пропало». Работы часа на два, платить, разумеется, никто не собирается.",
+  o:[{t:"Помочь",d:"−2 ч, +настроение",f(){lose(2);mood(9);xp("hw",.6);log("Починил, объяснил, поел домашнего. Не худший обмен.","good");}},
+     {t:"Сослаться на занятость",d:"Экономия времени, −настроение",f(){mood(-7);log("Отказал. Потом весь день думал об этом.","warn");}}]},
+ speaker:{fr:3,w:2,t:"Приглашение на доклад",
+  x:"Организаторы конференции предлагают выступить. Готовиться придётся вечерами, зато тебя увидят.",
+  o:[{t:"Согласиться",d:"−6 ч, репутация и подписчики",f(){lose(6);S.rep=clamp(S.rep+5,0,100);S.followers+=ri(400,2600);xp("biz",2);mood(5);log("Выступил. Волновался, но зашло.","good");}},
+     {t:"Отказаться",d:"Ничего не происходит",f(){log("Ответил, что в этот раз не выйдет.","");}}]},
+ maint:{fr:2,w:2,t:"Открытый проект ищет мейнтейнера",
+  x:"Библиотеке, которой ты пользуешься, нужен человек. Это репутация и подписчики, но время будет уходить каждый день.",
+  o:[{t:"Взять на себя",d:"Репутация растёт сама, немного времени в день",f(){S.perks.maint=1;S.rep=clamp(S.rep+3,0,100);log("Теперь ты мейнтейнер. Уведомления начались сразу.","ev");}},
+     {t:"Отказаться",d:"Ничего не происходит",f(){log("Написал, что не потянешь. Честно.","");}}]},
+ doctor:{w:2,if:()=>S.needs.health<55||S.burn>70,t:"Врач говорит прямо",
+  x:"Давление, спина, глаза. Врач советует взять неделю и перестать делать вид, что всё нормально.",
+  o:[{t:"Взять отпуск на неделю",d:"7 дней без работы, зато как новый",f(){vacation(true);}},
+     {t:"Взять таблетки и работать",d:"−деньги, немного здоровья",f(){pay(Math.round(40*inf()));hp(5);log("Купил лекарств и вернулся за машину. Классика.","warn");}}]},
+ hacked:{fr:2,w:2,if:()=>S.passive.length>0,t:"Твой сервис взломали",
+  x:"Кто-то залил на сервер чужой код. Пользователи уже пишут.",
+  o:[{t:"Чинить сейчас, 4 часа",d:"−4 ч, продукт не страдает",f(){lose(4);xp("net",2);log("Всё выгреб, закрыл дыру, написал пост. Обошлось.","good");}},
+     {t:"Разберусь потом",d:"Продукт теряет здоровье и репутация вниз",f(){S.passive.forEach(p=>p.hp=clamp(p.hp-25,0,100));S.rep=clamp(S.rep-4,0,100);log("Оставил как есть. Пользователи это запомнили.","bad");}}]},
+ investor:{fr:4,w:2,if:()=>S.passive.length>0,t:"Инвестор в личке",
+  x:"Предлагают деньги за долю в одном из твоих продуктов. Сумма приятная, доход после сделки станет меньше.",
+  o:[{t:"Взять деньги",d:"Крупная сумма сразу, −35% дохода продукта",f(){
+      const p=pick(S.passive);const s=Math.round(pInc(p)*rf(55,90));
+      earn(s,`Продал 35% «${p.n}»:`,"money");p.base=Math.round(p.base*.65);
+     }},
+     {t:"Отказать",d:"Всё остаётся твоим",f(){mood(3);log("Ответил, что пока сам. Приятное чувство.","good");}}]},
+ buyout:{fr:4,w:2,if:()=>S.passive.length>0,t:"Предложение выкупить продукт",
+  x:"Компания хочет купить продукт целиком, с кодом и пользователями.",
+  o:[{t:"Продать",d:"Большая сумма, продукт уходит",f(){
+      const p=pick(S.passive);const s=Math.round(pInc(p)*rf(120,200));
+      earn(s,`Продал «${p.n}» целиком:`,"money");
+      S.passive=S.passive.filter(x=>x!==p);mood(-6);
+     }},
+     {t:"Оставить себе",d:"Доход продолжает капать",f(){log("Отказался. Это твоё.","good");}}]},
+ offer:{fr:3,w:2,if:()=>!S.job,t:"Оффер без собеседования",
+  x:"Знакомый затащил тебя в свою компанию — говорят, готовы взять сразу.",
+  o:[{t:"Согласиться",d:"Стабильная зарплата, минус свободные часы",f(){
+      const av=EMPLOY.filter(j=>j.e<=eraIdx()&&okEmploy(j));
+      if(!av.length){log("Пока разбирались, вакансию закрыли.","warn");return;}
+      S.job=av[av.length-1];S.jobDays=0;log(`Устроился без собеса: ${S.job.n}, ${money(S.job.pay)} за смену.`,"ev");
+     }},
+     {t:"Остаться на фрилансе",d:"Свобода дороже",f(){mood(5);log("Вежливо отказался. Свобода дороже.","good");}}]},
+ aiprice:{fr:6,w:2,if:()=>S.aiSub,t:"Подписка на ИИ подорожала",
+  x:"Письмо: «мы улучшили модель и обновили тарифы». Стало дороже на треть.",
+  o:[{t:"Платить",d:"Подписка дорожает",f(){S.aiFee=Math.round(S.aiFee*1.33);log(`Теперь подписка ${money(S.aiFee)} в неделю. Ну ладно.`,"warn");}},
+     {t:"Отменить",d:"Вайбкодинг только на локальной модели",f(){S.aiSub=false;log("Отменил. Придётся руками или локально.","warn");}}]},
+ crunch:{fr:4,w:2,if:()=>S.active.length>1,t:"Два дедлайна в один день",
+  x:"Так вышло, что два проекта сдавать почти одновременно. Можно попросить перенос у одного заказчика.",
+  o:[{t:"Попросить перенос",d:"+3 дня одному проекту, −1 репутации",f(){const p=S.active[1];p.due+=3;S.rep=clamp(S.rep-1,0,100);log(`Договорился о переносе по «${p.n}» на 3 дня.`,"warn");}},
+     {t:"Вывезти оба",d:"Ночь работы: прогресс, но здоровье и выгорание",f(){
+      S.active.slice(0,2).forEach(p=>p.prog=Math.min(p.w,p.prog+speed(p)*4));
+      S.burn=clamp(S.burn+16,0,100);hp(-4);en(-30);lose(4);
+      log("Ночь на кофе и злости. Оба сдвинулись, но так больше нельзя.","warn");
+     }}]}
+};
+function pickEvent(){
+ const e=eraIdx(),pool=[];
+ EV.forEach(ev=>{
+  if(ev.to!=null&&e>ev.to)return;
+  if(ev.fr!=null&&e<ev.fr)return;
+  if(ev.if&&!ev.if())return;
+  for(let i=0;i<ev.w;i++)pool.push({k:null,f:ev.f});
+ });
+ for(const k in ASK){
+  const a=ASK[k];
+  if(a.to!=null&&e>a.to)continue;
+  if(a.fr!=null&&e<a.fr)continue;
+  if(a.if&&!a.if())continue;
+  for(let i=0;i<a.w;i++)pool.push({k});
+ }
+ return pool.length?pick(pool):null;
+}
+function event(){
+ const x=pickEvent();if(!x)return;
+ if(x.k)S.pending=x.k; else x.f();
+}
+function resolveAsk(i){
+ const a=ASK[S.pending];S.pending=null;
+ if(a&&a.o[i])a.o[i].f();
+ check();render();
+}
+
+/* ==================== ПРОЕКТЫ ==================== */
+function take(id){
+ const o=S.offers.find(x=>x.id===id);if(!o)return;
+ if(S.active.length>=maxActive()){toast("Больше проектов не удержать в голове");return;}
+ S.offers=S.offers.filter(x=>x.id!==id);
+ S.active.push({...o,prog:0,bugs:0,vibe:0,hires:[],due:S.day+(o.dl||0),late:false});
+ if(o.type==="prod")log(`Начал свой продукт: «${o.n}». Сроков нет, предоплаты тоже.`,"ev");
+ else log(`Взял: «${o.n}». Срок ${o.dl} дн., оплата ${money(o.pay)}.`,"ev");
+ render();
+}
+/* Работа и отладка — бесконечные активности: садишься и делаешь, пока не
+   остановишь или пока не кончится (проект готов / баги вычищены). */
+function work(id,mode){
+ const p=proj(id);if(!p)return;
+ if(broken()){toast("Машина не собрана: сначала железо");return;}
+ if(S.needs.energy<5){toast("Сил нет совсем. Поспи.");return;}
+ if(p.prog>=p.w){toast("Проект уже готов — можно сдавать");return;}
+ if(mode==="vibe"){
+  if(!S.aiSub&&!localAI()){toast("Нужна подписка на ИИ или локальная модель");return;}
+  if(!localAI()&&cur("net").sp<9){toast("Канал слишком узкий для облачной модели");return;}
+ }
+ setAct({k:"work",id,mode});
+ const txt={norm:"Сел кодить",care:"Пишешь аккуратно, с тестами",vibe:"Вайбкодишь: описал задачу, ИИ насыпал файлов"}[mode];
+ log(`${txt} над «${p.n}».`,mode==="vibe"?"ai":"");
+ render();
+}
+function debug(id){
+ const p=proj(id);if(!p)return;
+ if(p.bugs<=0){toast("Багов не осталось. Пока что.");return;}
+ setAct({k:"debug",id,bugs0:p.bugs});
+ log(`Взялся за баги в «${p.n}»: их ${p.bugs}.`,"");
+ render();
+}
+function hire(id,hid){
+ const p=S.active.find(x=>x.id===id);if(!p)return;
+ const H=HIRES.find(x=>x.id===hid);if(!H)return;
+ if(S.sk.biz<H.biz){toast(`Нужен бизнес ${H.biz}`);return;}
+ p.hires=p.hires||[];
+ if(p.hires.length>=2){toast("Больше двух человек на проект не нужно");return;}
+ if(p.hires.includes(hid)){toast("Уже работает");return;}
+ const base=p.type==="prod"?p.inc*18:p.pay;
+ const c=Math.round(base*H.cost);
+ if(!afford(c)){toast("Не хватает денег на подрядчика");return;}
+ pay(c);p.hires.push(hid);S.hired=true;xp("biz",1.2);
+ log(`Взял на «${p.n}»: ${H.n} за ${money(c)}. Работает сам, каждый день.`,"ev");
+ spend(.5,.5);render();
+}
+function ship(id){
+ const p=S.active.find(x=>x.id===id);if(!p)return;
+ if(p.prog<p.w){toast("Ещё не готово");return;}
+ const q=clamp(1-p.bugs*.055,.25,1);
+ S.active=S.active.filter(x=>x.id!==id);S.shipped++;
+ if(p.type==="prod"){
+  const base=Math.round(p.inc*q*(1+S.rep/180));
+  S.passive.push({n:p.n,base,hp:100,sk:p.sk,sk2:p.sk2});
+  S.rep=clamp(S.rep+p.rep*q,0,100);S.followers+=Math.round(p.rep*ri(25,110)*q);
+  log(`Выпущен «${p.n}»! Приносит около ${money(base)} в день. Багов на релизе: ${p.bugs}.`,"good");
+ }else{
+  let v=p.pay*q*(p.late?.62:1);
+  if(p.bugs===0)v*=1.12;
+  if(p.equity){
+   const sh={n:p.n,val:Math.round(p.pay*rf(2.5,9)),day:S.day+ri(35,80)};
+   S.equity.push(sh);
+   log(`Сдал «${p.n}» за долю. Оплата символическая, но у тебя есть бумага.`,"ev");
+  }
+  earn(v,`Сдал «${p.n}» (качество ${Math.round(q*100)}%):`,"money");
+  const dr=p.bugs>10?-3:(p.bugs===0?p.rep*1.3:p.rep*q)*(1-S.rep/108);
+  S.rep=clamp(S.rep+dr,0,100);
+  log(`Репутация ${dr>=0?"+":""}${dr.toFixed(1)}.`,dr>=0?"good":"bad");
+  if(p.bugs>10)log("Заказчик нашёл всё, что не нашёл ты. Часть денег удержали.","bad");
+  if(p.risk&&chance(p.risk)){
+   const f=Math.round(p.pay*rf(.8,1.8));pay(f);S.rep=clamp(S.rep-7,0,100);
+   log(`По «${p.n}» пришли вопросы, которых ты не хотел. Минус ${money(f)} и репутация.`,"bad");
+  }
+  if(p.bugs<=1&&S.rep>18&&chance(.4)){
+   const c={n:p.n,weekly:Math.round(p.pay*.12),left:ri(60,120)};
+   S.contracts.push(c);
+   log(`Заказчик предложил контракт на поддержку: ${money(c.weekly)} в неделю.`,"good");
+  }
+ }
+ if(p.vibe>0)S.vibeShipped=true;
+ if(p.bugs===0)S.cleanShip=true;
+ if((S.act.k==="work"||S.act.k==="debug")&&S.act.id===id)idle();
+ mood(11);spend(1,.8);check();render();
+}
+/* Обновлять здоровый продукт нечего: прибавка к доходу пропорциональна тому,
+   насколько он успел просесть. Иначе можно было бы наращивать базу
+   по 3% каждые четыре часа до бесконечности. */
+function updateProd(i){
+ const p=S.passive[i];if(!p)return;
+ if(S.needs.energy<10){toast("Сил нет");return;}
+ if(p.hp>=88){toast("Продукт и так в порядке — чинить нечего");return;}
+ startTimed("upd",i);
+ log(`Сел обновлять «${p.n}».`,"");render();
+}
+function closeProd(i){
+ const p=S.passive[i];if(!p)return;
+ S.passive.splice(i,1);mood(-5);
+ log(`Закрыл «${p.n}». Написал пользователям, выложил код и всё. Освободилось время и голова.`,"warn");
+ spend(1,.6);render();
+}
+function drop(id){
+ const p=S.active.find(x=>x.id===id);if(!p)return;
+ S.active=S.active.filter(x=>x.id!==id);
+ if((S.act.k==="work"||S.act.k==="debug")&&S.act.id===id)idle();
+ if(p.type!=="prod"){S.rep=clamp(S.rep-6,0,100);log(`Отказался от «${p.n}». Репутация просела.`,"bad");}
+ else log(`Забросил «${p.n}». Как и все.`,"warn");
+ render();
+}
+/* Халтура — это затычка, а не профессия. Соседей на районе конечное число:
+   каждая следующая за день оплачивается заметно хуже. Ставка растёт от навыка
+   по корню и быстро упирается в потолок, поэтому обогнать смену или заказ
+   мелкой работой нельзя — ни на старте, ни в 2025-м. */
+function gig(){
+ startTimed("gig",pick(["принтер у соседей","винда у тёти","картридж и провода в офисе напротив","почта бабушке","роутер у знакомых"]));
+ render();
+}
+function callAround(){
+ refreshOffers();xp("biz",.7);
+ log("Обзвонил знакомых. Список предложений обновился.","ev");
+ spend(1,.6);render();
+}
+function platform(){
+ const fee=Math.round(25*inf());
+ if(!afford(fee)){toast("Не хватает на взнос биржи");return;}
+ pay(fee);refreshOffers(true);xp("biz",1);
+ log(`Оплатил доступ к бирже (${money(fee)}): предложений больше и они дороже.`,"ev");
+ spend(1.5,.7);render();
+}
+
+/* ==================== ЖИЗНЬ ====================
+   Всё, что занимает время, — это активность: деньги списываются сразу,
+   эффект срабатывает, когда дело доведено до конца. Бросишь на середине —
+   останешься и без денег, и без результата. */
+function eat(i){
+ const f=FOOD[i],p=fp(f);
+ if(!afford(p)){toast("Не хватает денег");return;}
+ pay(p);startTimed("eat",i);render();
+}
+function sleepNow(){startSleep();render();}
+/* Дремать имеет смысл только когда действительно вымотан:
+   иначе час сна был бы бесконечным источником энергии. */
+function nap(){
+ if(S.needs.energy>=70){toast("Не спится — ты не настолько устал");return;}
+ startTimed("nap");render();
+}
+function shower(){startTimed("shower");render();}
+function walk(){startTimed("walk");render();}
+function gym(){
+ if(S.sick>0){toast("Сначала выздоровей");return;}
+ if(S.needs.energy<25){toast("Сил на спорт нет");return;}
+ startTimed("gym");render();
+}
+function coffee(){
+ const p=has("kettle")?0:Math.round(3*inf());
+ if(!afford(p)){toast("Даже на кофе нет");return;}
+ pay(p);startTimed("coffee");render();
+}
+function party(){
+ const p=Math.round(25*inf());
+ if(!afford(p)){toast("На это нужны деньги");return;}
+ pay(p);startTimed("party");render();
+}
+function doctor(){
+ const p=Math.round(70*inf());
+ if(!afford(p)){toast("Приём стоит денег");return;}
+ pay(p);startTimed("doc");render();
+}
+/* Неделя отдыха сбивает выгорание, но не обнуляет: если довёл себя до края,
+   одной поездкой это не чинится — придётся ещё и жить по-человечески. */
+function vacation(free){
+ const p=free?0:Math.round(380*inf());
+ if(!free&&!afford(p)){toast("Отпуск тоже стоит денег");return;}
+ if(!free)pay(p);
+ for(let i=0;i<7;i++){
+  S.needs.food=70;S.needs.hygiene=85;
+  endDay();
+ }
+ S.burn=Math.min(S.burn,22);mood(32);hp(7);en(100);S.vacations++;
+ S.hour=9;idle();
+ log(free?"Взял неделю по совету врача. Ни строчки кода. Вернулся другим человеком."
+        :`Уехал на неделю (${money(p)}). Ни строчки кода. Вернулся другим человеком.`,"good");
+ check();render();
+}
+function backup(){
+ if(has("nas")){toast("NAS делает бэкап сам");return;}
+ startTimed("backup");render();
+}
+function moveHome(i){
+ const H=HOMES[i];
+ if(i===S.home){toast("Ты здесь и живёшь");return;}
+ if(H.y>gYear()){toast("Такого варианта пока нет");return;}
+ const d=Math.round(H.dep*inf());
+ if(!afford(d)){toast(`Нужен залог ${money(d)}`);return;}
+ pay(d);S.home=i;mood(i>S.home?8:-4);
+ log(`Переезд: ${H.n}. Залог ${money(d)}, аренда ${money(Math.round(H.rent*inf()))} в неделю.`,"ev");
+ spend(6,.9);render();
+}
+
+/* ==================== СЕТЬ И НАЙМ ==================== */
+function browse(){startTimed("browse");render();}
+function answers(){startTimed("answers");render();}
+function blog(){
+ if(S.needs.energy<15){toast("Нет сил писать");return;}
+ startTimed("blog");render();
+}
+function stream(){
+ if(cur("net").sp<9){toast("Канал не выдержит стрим");return;}
+ if(cur("gpu").pw<20){toast("Видеокарта не потянет кодирование");return;}
+ startTimed("stream");render();
+}
+function video(){
+ if(cur("net").sp<9){toast("Такой канал видео не выложит");return;}
+ if(S.needs.energy<20){toast("Нет сил");return;}
+ startTimed("video");render();
+}
+function course(){
+ if(S.sk.biz<25){toast("Нужен бизнес 25, иначе никто не купит");return;}
+ startTimed("course");render();
+}
+function meetup(){
+ const p=Math.round((45+eraIdx()*22)*inf());
+ if(!afford(p)){toast("Билет дороговат");return;}
+ if(S.needs.hygiene<30){toast("В таком виде на люди нельзя");return;}
+ pay(p);startTimed("meetup");render();
+}
+function okEmploy(j){
+ if(!j.min)return true;
+ for(const k in j.min)if(S.sk[k]<j.min[k])return false;
+ return true;
+}
+function takeJob(i){
+ const j=EMPLOY[i];
+ if(!okEmploy(j)){toast("Не хватает навыков для этой вакансии");return;}
+ S.job=j;S.jobDays=0;
+ log(`Устроился: ${j.n}. ${money(j.pay)} за смену.`,"ev");render();
+}
+function quitJob(){
+ log(`Ушёл с «${S.job.n}». Свобода.`,"warn");S.job=null;S.jobBonus=1;
+ if(S.act.k==="timed"&&S.act.t==="shift")idle();
+ render();
+}
+function goWork(){
+ if(!S.job)return;
+ if(S.needs.energy<15){toast("В таком состоянии на работу нельзя");return;}
+ startTimed("shift");
+ log(`Ушёл на смену: ${S.job.n}.`,"");render();
+}
+
+/* ==================== БАНК ==================== */
+function maxLoan(){return Math.round((400+S.rep*90+S.earned*.18)*inf());}
+function borrow(){
+ const a=Math.round(maxLoan()/2);
+ if(a<50){toast("Столько тебе никто не даст");return;}
+ if(S.debt+a>maxLoan()){toast("Лимит по кредиту исчерпан");return;}
+ S.debt+=a;S.money+=a;
+ log(`Взял кредит ${money(a)} под 2.8% в неделю. Долг: ${money(S.debt)}.`,"warn");render();
+}
+function repay(){
+ if(S.debt<=0){toast("Долгов нет");return;}
+ const a=Math.min(S.money,S.debt);
+ if(a<=0){toast("Платить пока нечем");return;}
+ S.money-=a;S.debt-=a;
+ if(S.debt<=0)S.paidOff=true;
+ log(S.debt<=0?`Кредит закрыт полностью. ${money(a)} и свобода.`:`Погасил ${money(a)}. Остаток долга ${money(S.debt)}.`,S.debt<=0?"good":"");
+ check();render();
+}
+function deposit(v){
+ if(v>0){if(!afford(v)){toast("Столько нет");return;}S.money-=v;S.dep+=v;log(`Положил ${money(v)} на депозит (0.7% в неделю).`,"");}
+ else{const a=Math.min(S.dep,-v);if(a<=0){toast("На депозите пусто");return;}S.dep-=a;S.money+=a;log(`Снял ${money(a)} с депозита.`,"");}
+ check();render();
+}
+function trade(id,dir){
+ const a=ASSETS.find(x=>x.id===id),m=S.mk[id];
+ if(gYear()<a.y){toast("Этого пока не существует");return;}
+ if(dir>0){
+  const budget=Math.floor(S.money*.25);
+  const q=Math.floor(budget/m.p);
+  if(q<1){toast("Не хватает даже на одну единицу");return;}
+  const c=Math.round(q*m.p*1.01);pay(c);m.q+=q;S.mkProfit-=c;
+  log(`Купил ${q} ${a.n.toLowerCase()} по ${money(m.p)}. Потрачено ${money(c)}.`,"");
+ }else{
+  if(m.q<1){toast("Нечего продавать");return;}
+  const v=Math.round(m.q*m.p*.99);
+  earn(v,`Продал ${m.q} ${a.n.toLowerCase()} по ${money(m.p)}:`,"money");
+  S.mkProfit+=v;m.q=0;
+ }
+ check();render();
+}
+
+/* ==================== УЧЁБА И ПОКУПКИ ==================== */
+function study(k){
+ if(S.needs.energy<12){toast("Голова не варит");return;}
+ startTimed("study",k);render();
+}
+function buyBook(id){
+ const b=BOOKS.find(x=>x.id===id);
+ if(S.books[id]){toast("Уже есть");return;}
+ const p=Math.round(b.p*inf());
+ if(!afford(p)){toast("Не хватает денег");return;}
+ pay(p);S.books[id]=1;xp(b.sk,b.v);
+ log(`Купил ${b.n} за ${money(p)}. Сразу +${b.v} к ${SKILLS[b.sk].toLowerCase()} и учёба быстрее.`,"good");render();
+}
+function buyHW(sl,id){
+ const it=item(sl,id);
+ const bad=canInstall(sl,id);
+ if(bad){toast(bad.m);return;}
+ if(it.y>gYear()){toast("Такого ещё не выпустили");return;}
+ const price=hwPrice(it),old=cur(sl);
+ const back=old.p?Math.round(old.p*.35):0;
+ if(!afford(price-back)){toast("Не хватает денег");return;}
+ pay(price);if(back)S.money+=back;
+ S.rig[sl]=id;
+ log(`Куплено: ${it.n} — ${money(price)}${back?`, старое сдал за ${money(back)}`:""}.`,"good");
+ const soft=issues().filter(x=>!x.hard);
+ soft.forEach(x=>log(`Замечание по сборке: ${x.m}`,"warn"));
+ spend(1.5,.6);check();render();
+}
+function buyPlatform(id){
+ const pf=PLATFORMS.find(x=>x.id===id);if(!pf)return;
+ if(pf.y>gYear()){toast("Такой платформы ещё нет");return;}
+ const bad=canPlatform(pf);
+ if(bad){toast(bad.m);return;}
+ const pr=platformPrice(pf);
+ if(!pr.parts.length){toast("У тебя уже всё это стоит");return;}
+ if(!afford(pr.net)){toast(`Нужно ${money(pr.net)}`);return;}
+ pay(pr.gross);S.money+=pr.back;
+ pr.parts.forEach(x=>S.rig[x.sl]=x.id);
+ log(`Собрал платформу: ${pf.n}. ${money(pr.gross)}${pr.back?`, сдал старое за ${money(pr.back)}`:""}.`,"good");
+ issues().filter(x=>!x.hard).forEach(x=>log(`Замечание по сборке: ${x.m}`,"warn"));
+ spend(3,.7);check();render();
+}
+function buyPerk(id){
+ const p=PERKS.find(x=>x.id===id);
+ if(S.perks[id]){toast("Уже есть");return;}
+ if(id==="llm"&&cur("gpu").vr<8){toast("Нужно минимум 8 ГБ VRAM");return;}
+ const pr=Math.round(p.p*(p.p?inf():1));
+ if(!afford(pr)){toast("Не хватает денег");return;}
+ pay(pr);S.perks[id]=1;
+ log(`Куплено: ${p.n}${pr?` за ${money(pr)}`:""}.`,"good");spend(.5,.3);render();
+}
+function toggleAI(){
+ S.aiSub=!S.aiSub;
+ log(S.aiSub?`Оформлена подписка на ИИ-ассистента: ${money(Math.round(S.aiFee*inf()/2))} в неделю.`:"Подписка на ИИ отменена.",S.aiSub?"ai":"warn");
+ render();
+}
+
+/* ==================== ДЕЛА С ФИКСИРОВАННОЙ ДЛИТЕЛЬНОСТЬЮ ====================
+   h — сколько игровых часов занимает, int — насколько выматывает,
+   n — что показывать в строке активности, done — что происходит в конце.
+   Деньги за дело списываются при старте, результат приходит только
+   если довести до конца: бросил на середине — потратил время впустую. */
+const TIMED={
+ eat:{int:.4,
+  n:pl=>`Ешь: ${FOOD[pl].n.toLowerCase()}`,
+  h:pl=>{let t=FOOD[pl].t;if(has("micro")&&t>=1)t=Math.max(.25,t-.75);return Math.max(.25,t);},
+  done(pl){const f=FOOD[pl];
+   S.needs.food=clamp(S.needs.food+f.f,0,100);mood(f.m);hp(f.h);
+   log(`${f.n}. −${money(fp(f))}.`);}},
+ nap:{n:"Дремлешь",h:1,int:.25,
+  done(){en(13);S.burn=clamp(S.burn-1.5,0,100);log("Прикорнул на час.");}},
+ shower:{n:"В душе",h:.5,int:.3,
+  done(){S.needs.hygiene=100;mood(4);log("Душ. Мир снова терпим.");}},
+ walk:{n:()=>has("bike")?"Катаешься по городу":"Гуляешь",h:1.5,int:.4,
+  done(){const k=has("bike")?1.4:1;
+   mood(15*k);hp(1.5*k);S.burn=clamp(S.burn-4*k,0,100);
+   log(has("bike")?"Покатался по городу без телефона. Помогает.":"Прогулка без телефона. Помогает.","good");}},
+ gym:{n:"Тренируешься",h:1.5,int:1,
+  done(){const k=has("dumb")?2:1;
+   hp(4*k);mood(6);en(-18);
+   S.needs.hygiene=clamp(S.needs.hygiene-25,0,100);
+   S.burn=clamp(S.burn-5,0,100);
+   log("Тренировка. Тело удивлено, но благодарно.","good");}},
+ /* Толерантность к кофеину: каждая следующая чашка за день бодрит вдвое хуже
+    и бьёт по здоровью сильнее. Пятая — это уже не про энергию. */
+ coffee:{n:"Пьёшь кофе",h:.25,int:.2,
+  done(){
+   if(S.coffeeDay!==S.day){S.coffeeDay=S.day;S.coffeeN=0;}
+   const k=Math.pow(.55,S.coffeeN);
+   en(15*k);hp(-(has("kettle")?.4:.9)*(1+S.coffeeN*.6));
+   S.coffeeN++;S.coffee=Math.max(S.coffee,3);
+   log(S.coffeeN>3?"Ещё чашка. Руки подрагивают, бодрее уже не становится.":"Кофе. Следующие три часа мир ускоряется.",S.coffeeN>3?"warn":"");}},
+ party:{n:"Вечер с друзьями",h:5,int:.6,
+  done(){mood(29);en(-25);hp(-2);S.burn=clamp(S.burn-9,0,100);
+   log("Вечер с друзьями. Утром будет тяжело, но сейчас хорошо.","good");}},
+ doc:{n:"У врача",h:3,int:.5,
+  done(){hp(13);S.sick=0;
+   log("Сходил к врачу: анализы, укол, лекции о режиме. Стало заметно лучше.","good");}},
+ backup:{n:"Делаешь бэкап",h:1,int:.6,
+  done(){S.backupDay=S.day;log("Бэкап на второй диск сделан. Спится спокойнее.","good");}},
+ study:{n:pl=>`Учишь: ${SKILLS[pl].toLowerCase()}`,h:3,int:1.1,
+  done(pl){
+   const b=Object.keys(S.books).some(id=>{const x=BOOKS.find(y=>y.id===id);return x&&x.sk===pl;})?1.5:1;
+   xp(pl,2.6*b*cond());mood(-3);
+   log(`Учил ${SKILLS[pl].toLowerCase()} 3 ч. Уровень: ${S.sk[pl].toFixed(1)}.`);}},
+ browse:{n:"Читаешь и копаешься",h:1.5,int:.5,
+  done(){const sk=pick(["code","net","hw","algo","design"]);
+   xp(sk,1.4);mood(3);
+   log(`Читал ${eraIdx()<2?"эхи FIDO и мануалы":eraIdx()<5?"форумы и Хабр":"треды и ченджлоги"}: немного ${SKILLS[sk].toLowerCase()}.`);}},
+ answers:{n:"Помогаешь в комментариях",h:1.5,int:.9,
+  done(){xp("algo",1);xp("code",.8);S.rep=clamp(S.rep+.9,0,100);S.followers+=ri(2,25);
+   log("Разобрал чужую проблему в комментариях. Репутация капнула.","good");}},
+ blog:{n:"Пишешь статью",h:2.5,int:1,
+  done(){const q=(S.sk.code+S.sk.algo+S.sk.design)/3;
+   const f=Math.round((8+q*1.6)*(1+S.rep/80)*rf(.6,1.6));
+   S.followers+=f;S.rep=clamp(S.rep+.7,0,100);xp("biz",.6);xp("design",.3);
+   log(`Написал статью. +${f} подписчиков (всего ${S.followers.toLocaleString("ru-RU")}).`,"good");}},
+ stream:{n:"Стримишь кодинг",h:3,int:1,
+  done(){const d=Math.round(S.followers*ri(1,5)/900*inf())+ri(0,4);
+   earn(d,"Стримил кодинг 3 ч. Донаты:","money");
+   S.followers+=ri(5,70);mood(5);xp("code",.8);}},
+ video:{n:"Пишешь и монтируешь видео",h:5,int:1.1,
+  done(){const f=Math.round((25+(S.sk.design+S.sk.code)/2*2.2)*rf(.5,2));
+   S.followers+=f;xp("design",.8);xp("biz",.5);mood(-3);
+   log(`Записал и смонтировал видео. +${f} подписчиков.`,"good");}},
+ course:{n:"Записываешь мини-курс",h:4,int:1,
+  done(){const v=Math.round((S.followers*rf(.02,.08)+20)*inf());
+   earn(v,"Продал запись своего мини-курса:","money");xp("biz",1.2);}},
+ meetup:{n:"На конференции",h:()=>has("bike")?6:7,int:.9,
+  done(){xp("biz",2.2);S.rep=clamp(S.rep+3,0,100);S.followers+=ri(30,320);mood(8);
+   log("Съездил на конференцию. Полезные знакомства и три стикера.","good");}},
+ shift:{n:()=>S.job?`Смена: ${S.job.n}`:"На работе",h:8,int:1.05,
+  done(){
+   if(!S.job)return;
+   earn(S.job.pay*S.jobBonus,"Смена на работе.","money");
+   for(const k in S.job.xp)xp(k,S.job.xp[k]*2.4);
+   mood(-6);}},
+ gig:{n:pl=>`Халтура: ${pl}`,h:1,int:1.15,
+  done(pl){
+   if(S.gigDay!==S.day){S.gigDay=S.day;S.gigN=0;}
+   const fade=Math.pow(.65,S.gigN);
+   const v=Math.max(1,Math.round((rf(2,4.5)+Math.sqrt(Math.max(0,S.sk.hw))*.7+S.rep*.05)*inf()*fade));
+   earn(v,`Час халтуры (${pl}):`,"money");
+   S.gigN++;
+   if(S.gigN===2)log("Больше мелочи по знакомым на сегодня нет — что осталось, платят неохотно.","warn");
+   xp("hw",.12);mood(-1.5);}},
+ upd:{n:pl=>`Обновляешь «${S.passive[pl]?S.passive[pl].n:"продукт"}»`,h:4,int:1.05,
+  done(pl){
+   const p=S.passive[pl];if(!p)return;
+   const gain=(100-p.hp)/100;
+   p.hp=clamp(p.hp+34,0,100);
+   p.base=Math.max(p.base+1,Math.round(p.base*(1+.035*gain)));
+   xp(p.sk,1.6);if(p.sk2)xp(p.sk2,.8);
+   log(`Обновил «${p.n}»: починил, что жаловались, добавил мелочей. Доход восстановлен.`,"good");}}
+};
+
+/* ==================== ДОСТИЖЕНИЯ ==================== */
+function unlock(id){
+ if(S.ach.includes(id))return;
+ S.ach.push(id);const a=ACH.find(x=>x.id===id);
+ log(`★ Достижение: ${a.n} — ${a.d}.`,"ev");toast("★ "+a.n);
+}
+function check(){
+ if(S.burn>=85)S.burnedOut=true;
+ if(S.shipped>0)unlock("a1");
+ if(SLOTS.some(s=>HW[s].items.indexOf(cur(s))>0))unlock("a2");
+ if(Object.values(S.sk).some(v=>v>=25))unlock("a3");
+ if(power()>60&&!issues().length)unlock("a4");
+ if(S.backupDay>0&&!S.diskDeath)unlock("a5");
+ if(S.passive.length)unlock("a6");
+ if(S.earned>=10000)unlock("a7");
+ if(S.earned>=100000)unlock("a8");
+ if(S.earned>=1000000)unlock("a9");
+ if(S.followers>=1000)unlock("a10");
+ if(S.followers>=50000)unlock("a11");
+ if(S.vibeShipped)unlock("a12");
+ if(S.cleanShip)unlock("a13");
+ if(S.rep>=90)unlock("a14");
+ if(eraIdx()>=6)unlock("a15");
+ if(S.day>150&&S.needs.health>=90)unlock("a16");
+ if(Object.values(S.sk).filter(v=>v>70).length>=3)unlock("a17");
+ if(Object.values(S.sk).every(v=>v>40))unlock("a18");
+ if(S.hired)unlock("a19");
+ if(S.home===HOMES.length-1)unlock("a20");
+ if(S.paidOff)unlock("a21");
+ if(S.mkProfit>=5000)unlock("a22");
+ if(S.vacations>0)unlock("a23");
+ if(S.burnedOut&&S.burn<=15)unlock("a24");
+ if(S.passive.length>=5)unlock("a25");
+ if(passiveTotal()>=1000)unlock("a26");
+ if(S.shipped>=25)unlock("a27");
+ if(S.money>=250000)unlock("a28");
+}
+
+/* ==================== СОХРАНЕНИЕ ==================== */
+const KEY="kompsim3";
+async function store(v){
+ try{if(window.storage){await window.storage.set(KEY,v);return true;}}catch(e){}
+ try{localStorage.setItem(KEY,v);return true;}catch(e){}
+ return false;
+}
+async function load(){
+ try{if(window.storage){const r=await window.storage.get(KEY);if(r&&r.value)return r.value;}}catch(e){}
+ try{const r=localStorage.getItem(KEY);if(r)return r;}catch(e){}
+ return null;
+}
+async function autosave(){try{await store(JSON.stringify(S));}catch(e){}}
+async function saveGame(){
+ const ok=await store(JSON.stringify(S));
+ const ta=document.getElementById("saveBox");
+ if(ta)ta.value=JSON.stringify(S);
+ toast(ok?"Сохранено":"Хранилище недоступно — скопируй текст ниже");
+}
+async function loadGame(){
+ const ta=document.getElementById("saveBox");
+ if(ta&&ta.value.trim()){
+  try{const o=JSON.parse(ta.value);if(o.ver!==VER)throw 0;S=o;repair();toast("Загружено из текста");render();return;}
+  catch(e){toast("Текст сохранения не читается");return;}
+ }
+ const r=await load();
+ if(!r){toast("Сохранения нет");return;}
+ try{const o=JSON.parse(r);if(o.ver!==VER)throw 0;S=o;repair();toast("Загружено");render();}
+ catch(e){toast("Сохранение от старой версии");}
+}
+function reset(){
+ S=fresh();refreshOffers();
+ log("Новая жизнь. Старый компьютер, немного денег и очень много времени.","ev");
+ document.documentElement.dataset.era=0;render();
+}
+
+/* ==================== РЕНДЕР: ХЕЛПЕРЫ ==================== */
+function B(o){
+ return `<button data-act="${o.act}"${o.a!=null?` data-a="${esc(o.a)}"`:""}${o.b!=null?` data-b="${esc(o.b)}"`:""}`+
+  ` class="${o.cls||""}"${o.dis?" disabled":""}${o.ttl?` title="${esc(o.ttl)}"`:""}>${o.t}</button>`;
+}
+function bar(label,v,cls){
+ const c=v<25?"lo":v<50?"mid":"";
+ return `<div class="row"><span class="lbl">${label}</span><span class="bar ${cls||""} ${cls==="burn"?"":c}">`+
+  `<i style="width:${clamp(v,0,100)}%"></i></span><span class="val">${Math.round(v)}</span></div>`;
+}
+function pbar(v){return `<span class="bar big"><i style="width:${clamp(v,0,100)}%"></i></span>`;}
+/* Подсветка кнопки того дела, которым игрок занят прямо сейчас */
+function busyOn(k,id,mode){
+ const a=S.act;
+ if(a.k!==k)return false;
+ if(id!=null&&a.id!==id)return false;
+ if(mode!=null&&a.mode!==mode)return false;
+ return true;
+}
+function busyTimed(t){return S.act.k==="timed"&&S.act.t===t;}
+
+/* ==================== ПАНЕЛЬ АКТИВНОСТИ ==================== */
+function renderActBar(){
+ const el=document.getElementById("actBar");if(!el)return;
+ const idleNow=S.act.k==="idle";
+ el.className="actbar"+(S.speed===0?" paused":"")+(idleNow?" idlenow":" busy");
+ const sp=[`<button data-act="spd" data-b="0" class="${S.speed===0?"on":""}" title="Пауза — пробел или 0">❙❙</button>`]
+  .concat(SPEEDS.map((v,i)=>`<button data-act="spd" data-b="${v}" class="${S.speed===v?"on play":""}" title="Скорость ×${v} — клавиша ${i+1}">${v===1?"▶":"×"+v}</button>`))
+  .join("");
+ el.innerHTML=`<div class="spd">${sp}</div>
+  <div class="nowbox">
+   <div class="nowline"><b id="actName">${esc(actLabel())}</b><span id="actSub">${esc(actSub())}</span></div>
+   <div class="nowbar"><i id="actProg" style="width:${actProgress()}%"></i></div>
   </div>
+  ${idleNow?"":B({act:"stopact",t:"Прекратить",cls:"gho tiny",ttl:"Дела с фиксированной длительностью при этом пропадают впустую"})}`;
+}
+/* Обновление того, что меняется каждый кадр. Кнопки не перерисовываются,
+   иначе по ним нельзя было бы попасть мышью. */
+function liveUpdate(){
+ renderHead();
+ const nb=document.getElementById("statNeeds");
+ if(nb)nb.innerHTML=needsHTML();
+ const an=document.getElementById("actName"),as=document.getElementById("actSub"),ap=document.getElementById("actProg");
+ if(an)an.textContent=actLabel();
+ if(as)as.textContent=actSub();
+ if(ap)ap.style.width=actProgress()+"%";
+ if(tab==="work")S.active.forEach(p=>{
+  const b=document.getElementById("pb-"+p.id),t=document.getElementById("pp-"+p.id),g=document.getElementById("pg-"+p.id);
+  const pct=Math.round(p.prog/p.w*100);
+  if(b)b.style.width=clamp(pct,0,100)+"%";
+  if(t)t.textContent=pct+"%";
+  if(g){g.textContent=p.bugs;g.style.color=p.bugs>8?"var(--bad)":"var(--ink)";}
+ });
+}
 
-  <div id="mobileHud" aria-hidden="true">
-    <div class="mColumns">
-      <div class="mCol" id="mColLeft">
-        <div class="mStats">
-          <span id="mUiTime">00:00</span>
-          <span id="mUiLevel">Lv 1</span>
-          <span id="mUiHp">120/120</span>
-          <span id="mUiKills">K 0</span>
-        </div>
-        <div class="mBar">
-          <div class="mBarLabel">XP <span class="mVal"><span id="mUiXp">0</span> / <span id="mUiXpNeed">0</span></span></div>
-          <div class="mBarOuter"><div id="mXpFill" class="mBarInner xp"></div></div>
-        </div>
-        <div class="mBar">
-          <div class="mBarLabel">HP <span class="mVal" id="mUiHpPct">100%</span></div>
-          <div class="mBarOuter"><div id="mHpFill" class="mBarInner hp"></div></div>
-        </div>
-        <div class="mBar" id="mBossBar" aria-live="polite">
-          <div class="mBarLabel"><span id="mBossName">Boss</span> <span class="mVal" id="mBossPct">100%</span></div>
-          <div class="mBarOuter"><div id="mBossFill" class="mBarInner boss"></div></div>
-        </div>
-      </div>
-      <div class="mCol" id="mColRight">
-        <div class="mBar" id="mWeaponsCard">
-          <div class="mBarLabel">Weapons</div>
-          <div class="pillRow" id="mWeapons"></div>
-        </div>
-        <div class="mMeta" id="mMetaCard">
-          <div class="mMetaLine" id="mMeta">Trinkets 0 | Companions 0</div>
-          <div class="mMetaLine" id="mBuffs">Buffs: -</div>
-          <div class="mMetaLine" id="mQuest">Quest: -</div>
-        </div>
-        <div id="mFpsWrap"><span id="mFps">0 fps</span></div>
-      </div>
-    </div>
-  </div>
+/* ==================== РЕНДЕР: ЛЕВАЯ КОЛОНКА ==================== */
+/* Полоски состояния меняются каждый кадр, поэтому живут в отдельном блоке:
+   его перерисовывает liveUpdate, не трогая остальную колонку с кнопками. */
+function needsHTML(){
+ const n=S.needs;
+ let h=bar("Энергия",n.energy)+bar("Сытость",n.food)+bar("Гигиена",n.hygiene)+bar("Настроение",n.mood)+bar("Здоровье",n.health);
+ h+=`<div class="row"><span class="lbl">Выгорание</span><span class="bar burn"><i style="width:${clamp(S.burn,0,100)}%"></i></span><span class="val">${Math.round(S.burn)}</span></div>`;
+ if(S.sick>0)h+=`<div class="hint" style="margin-top:4px"><span class="chip b">болеет</span> ещё ${S.sick} дн., всё идёт вязко</div>`;
+ if(S.burn>70)h+=`<div class="hint" style="margin-top:4px"><span class="chip w">выгорание</span> отдых сейчас дешевле, чем потом</div>`;
+ return h;
+}
+function renderStats(){
+ const iss=issues(),hard=iss.filter(x=>x.hard);
+ let h=`<h3 class="sec">Состояние</h3><div id="statNeeds">${needsHTML()}</div>`;
 
-  <button id="btnMobileMenu" aria-label="Menu">Menu</button>
+ h+=`<h3 class="sec mt">Навыки</h3>`;
+ for(const k in SKILLS){
+  if(k==="prompt"&&gYear()<2023&&S.sk.prompt<1)continue;
+  h+=bar(SKILLS[k],S.sk[k],"sk");
+ }
+ h+=`<h3 class="sec mt">Имя</h3>`+bar("Репутация",S.rep,"sk");
+ h+=`<dl class="kv" style="margin-top:6px">
+  <dt>Подписчики</dt><dd>${S.followers.toLocaleString("ru-RU")}</dd>
+  <dt>Сдано</dt><dd>${S.shipped}</dd>
+  <dt>Заработано</dt><dd>${money(S.earned)}</dd>
+  <dt>Состояние</dt><dd class="${netWorth()<0?"b":"g"}">${money(netWorth())}</dd></dl>`;
 
-  <div id="stick">
-    <div id="stickOuter"></div>
-    <div id="stickInner"></div>
-  </div>
+ h+=`<h3 class="sec mt">Машина</h3>`;
+ if(hard.length){
+  h+=`<div class="card badc"><div class="meta"><b style="color:var(--bad)">Не собрана</b><br>${hard.map(x=>x.m).join("<br>")}</div></div>`;
+ }
+ h+=`<dl class="kv">
+  <dt>Мощность</dt><dd style="color:var(--acc)">${hard.length?"— не работает":power().toFixed(0)}</dd>
+  <dt>Комфорт</dt><dd>${Math.round(comfort()*100)}%</dd>
+  <dt>Потребление</dt><dd class="${overload()?"b":""}">${tdp()} / ${cur("psu").w} Вт</dd>
+  <dt>Охлаждение</dt><dd class="${throttle()<1?"w":""}">${throttle()<1?`троттлит ${Math.round((1-throttle())*100)}%`:"в норме"}</dd>
+  <dt>Канал</dt><dd>${cur("net").sp} усл. Мбит</dd>
+  <dt>VRAM</dt><dd>${cur("gpu").vr} ГБ</dd>
+  <dt>Бэкап</dt><dd>${has("nas")?"авто":S.backupDay>0?`${S.day-S.backupDay} дн. назад`:"никогда"}</dd>
+  <dt>ИИ</dt><dd class="${S.aiSub||localAI()?"g":""}">${S.aiSub?"подписка":localAI()?"локально":"нет"}</dd></dl>`;
+ const soft=iss.filter(x=>!x.hard);
+ if(soft.length)h+=`<div class="hint" style="margin-top:6px">${soft.map(x=>`<span class="chip w">${x.k}</span> ${x.m}`).join("<br>")}</div>`;
 
-  <div id="levelup" class="overlay">
-    <div class="panel" id="levelupPanel">
-      <div class="panelHeader">
-        <div>
-          <h2 id="levelupTitle">Level Up</h2>
-          <div class="sub" id="levelupSub">Choose 1 upgrade. Game is paused.</div>
-        </div>
-        <div class="sub" id="uiBuild"></div>
-      </div>
-      <div class="cards" id="upgradeCards"></div>
-      <div class="devPanel" id="devPanel" aria-hidden="true">
-        <div class="devHeader">
-          <div>
-            <div class="devTitle">Dev Menu</div>
-            <div class="devHint">Ctrl+D toggles. Available on level up and pause menus.</div>
-          </div>
-          <div class="devStatus" id="devStatus"></div>
-        </div>
-        <div class="devGrid">
-          <div class="devCard">
-            <h4>Weapons</h4>
-            <div class="devRow">
-              <select id="devWeaponSelect"></select>
-            </div>
-            <div class="devRow">
-              <button id="devWeaponAdd">Unlock</button>
-              <button id="devWeaponUp">Upgrade +1</button>
-              <button id="devWeaponMax">Max</button>
-            </div>
-            <div class="devRow">
-              <button id="devWeaponMastery">Mastery +1</button>
-            </div>
-          </div>
-          <div class="devCard">
-            <h4>Trinkets</h4>
-            <div class="devRow">
-              <select id="devTrinketSelect"></select>
-            </div>
-            <div class="devRow">
-              <button id="devTrinketAdd">Add Trinket</button>
-            </div>
-          </div>
-          <div class="devCard">
-            <h4>Run</h4>
-            <div class="devRow">
-              <button id="devHeal">Heal Full</button>
-              <button id="devShield">Shield 10s</button>
-            </div>
-            <div class="devRow">
-              <button id="devAddLevel">+1 Level</button>
-              <button id="devClearEnemies">Clear Enemies</button>
-            </div>
-          </div>
-          <div class="devCard">
-            <h4>Spawn Scaling</h4>
-            <div class="devRow">
-              <div class="devField">HP %/100s <input id="devScaleHpInput" type="number" min="0" step="0.1" /></div>
-              <div class="devField">Speed %/100s <input id="devScaleSpeedInput" type="number" min="0" step="0.1" /></div>
-              <div class="devField">Dmg %/100s <input id="devScaleDmgInput" type="number" min="0" step="0.1" /></div>
-            </div>
-            <div class="devRow">
-              <button id="devScaleApply">Apply</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+ if(S.passive.length){
+  h+=`<h3 class="sec mt">Продукты</h3><dl class="kv">`;
+  S.passive.forEach(p=>h+=`<dt>${p.n}</dt><dd class="${p.hp<50?"w":"g"}">${money(pInc(p))}/дн</dd>`);
+  h+=`<dt><b>Итого</b></dt><dd class="g"><b>${money(passiveTotal())}/дн</b></dd></dl>`;
+ }
+ if(S.contracts.length){
+  h+=`<h3 class="sec mt">Поддержка</h3><dl class="kv">`;
+  S.contracts.forEach(c=>h+=`<dt>${c.n}</dt><dd>${money(c.weekly)}/нед · ${c.left} дн.</dd>`);
+  h+=`</dl>`;
+ }
+ document.getElementById("colStats").innerHTML=h;
+}
 
-  <div id="gameover" class="overlay">
-    <div class="panel">
-      <div class="panelHeader">
-        <div>
-          <h2 style="color: rgba(255,59,102,.95); text-shadow:0 0 18px rgba(255,59,102,.18);">Game Over</h2>
-          <div class="sub" id="uiSummary">You survived 00:00.</div>
-        </div>
-      </div>
+/* ==================== РЕНДЕР: ПРОЕКТЫ ==================== */
+function tWork(){
+ let h=`<h3 class="sec">В работе — ${S.active.length} из ${maxActive()}</h3>`;
+ if(broken())h+=`<div class="card badc"><div class="meta"><b style="color:var(--bad)">Машина не собрана.</b> Работать нельзя, пока сборка несовместима — зайди во вкладку «Железо».</div></div>`;
+ if(!S.active.length)h+=`<div class="hint">Пусто. Возьми заказ ниже — или начни свой продукт: он будет кормить каждый день.</div>`;
+ S.active.forEach(p=>{
+  const pct=Math.round(p.prog/p.w*100),ready=p.prog>=p.w;
+  const left=p.dl?p.due-S.day:null;
+  const hh=(p.hires||[]).map(id=>HIRES.find(x=>x.id===id)).filter(Boolean);
+  h+=`<div class="card ${ready?"ok":p.late?"badc":"hl"}"><h4>${p.n}
+   ${p.type==="prod"?'<span class="chip g">свой продукт</span>':""}
+   ${p.rush?'<span class="chip w">срочный</span>':""}
+   ${p.risk?'<span class="chip b">рискованный</span>':""}
+   ${p.equity?'<span class="chip ai">за долю</span>':""}
+   ${p.late?'<span class="chip b">просрочен</span>':""}
+   ${ready?'<span class="chip g">готов</span>':""}</h4>
+   <div class="row" style="margin:7px 0"><span class="bar big"><i id="pb-${p.id}" style="width:${clamp(pct,0,100)}%"></i></span><span class="val" id="pp-${p.id}">${pct}%</span></div>
+   <div class="meta">Навык: ${SKILLS[p.sk]}${p.sk2?" + "+SKILLS[p.sk2]:""} · багов <b id="pg-${p.id}" style="color:${p.bugs>8?"var(--bad)":"var(--ink)"}">${p.bugs}</b>
+   ${p.type==="prod"?` · при релизе ≈ <b>${money(p.inc)}</b>/день`:` · оплата <b>${money(p.pay)}</b> · ${left>=0?"осталось "+left+" дн.":"срок вышел"}`}
+   <br>скорость ≈ ${speed(p).toFixed(1)} ед./ч · осталось ≈ ${Math.max(0,Math.ceil((p.w-p.prog)/Math.max(.1,speed(p))))} ч
+   ${hh.length?`<br>подряд: ${hh.map(x=>x.n).join(", ")}`:""}</div>
+   <div class="acts">
+    ${B({act:"w",a:p.id,t:"Кодить",cls:busyOn("work",p.id,"norm")?"pri":"",dis:ready,ttl:"Обычный темп"})}
+    ${B({act:"wc",a:p.id,t:"Аккуратно",cls:busyOn("work",p.id,"care")?"pri":"",dis:ready,ttl:"Медленнее, но багов почти нет"})}
+    ${(S.aiSub||localAI())?B({act:"wv",a:p.id,t:"Вайбкодить",cls:busyOn("work",p.id,"vibe")?"pri":"",dis:ready,ttl:"Очень быстро, но багов много"}):""}
+    ${B({act:"dbg",a:p.id,t:"Отладка",cls:busyOn("debug",p.id)?"pri":"",dis:p.bugs<=0})}
+    ${B({act:"ship",a:p.id,t:p.type==="prod"?"Выпустить":"Сдать",cls:ready?"pri":"",dis:!ready})}
+    ${B({act:"drop",a:p.id,t:"Забросить",cls:"gho"})}
+   </div>`;
+  const av=HIRES.filter(x=>S.sk.biz>=x.biz&&!(p.hires||[]).includes(x.id));
+  if(av.length&&(p.hires||[]).length<2){
+   const base=p.type==="prod"?p.inc*18:p.pay;
+   h+=`<div class="acts" style="margin-top:6px">`+
+    av.map(x=>B({act:"hire",a:p.id,b:x.id,t:`${x.n} · ${money(Math.round(base*x.cost))}`,cls:"tiny gho",ttl:x.d})).join("")+`</div>`;
+  }
+  h+=`</div>`;
+ });
 
-      <div class="hudStats" style="grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:8px;">
-        <div class="hudCard" style="box-shadow:none; min-width:unset;">
-          <div class="hudTitle">Run Stats</div>
-          <div class="hudStats" style="grid-template-columns:1fr;">
-            <div class="kv"><span>Time Survived</span><span id="uiGoTime">00:00</span></div>
-            <div class="kv"><span>Final Level</span><span id="uiGoLvl">1</span></div>
-            <div class="kv"><span>Total Kills</span><span id="uiGoKills">0</span></div>
-          </div>
-        </div>
-        <div class="hudCard" style="box-shadow:none; min-width:unset;">
-          <div class="hudTitle">Upgrades</div>
-          <div style="font-size:13px; color:rgba(215,246,255,.70);" id="uiGoUpgrades">—</div>
-        </div>
-        <div class="hudCard" style="box-shadow:none; min-width:unset;">
-          <div class="hudTitle">Weapon DPS</div>
-          <div style="font-size:13px; color:rgba(215,246,255,.70);" id="uiGoDps">-</div>
-        </div>
-      </div>
+ if(S.passive.length){
+  h+=`<h3 class="sec mt">Свои продукты</h3>`;
+  S.passive.forEach((p,i)=>{
+   h+=`<div class="card ${p.hp<45?"warnc":""}"><h4>${p.n} <span class="chip ${p.hp<45?"w":"g"}">${money(pInc(p))}/день</span></h4>
+    <div class="row" style="margin:6px 0"><span class="lbl">Состояние</span>${pbar(p.hp)}<span class="val">${Math.round(p.hp)}</span></div>
+    <div class="meta">Со временем пользователи находят баги и уходят. Обновление возвращает доход и слегка его поднимает.</div>
+    <div class="acts">${B({act:"upd",a:i,t:"Обновить, 4 ч",cls:(busyTimed("upd")&&S.act.pl===i)||p.hp<60?"pri":"",dis:p.hp>=88})}
+    ${B({act:"closep",a:i,t:"Закрыть",cls:"gho tiny",ttl:"Убрать продукт из портфеля — освобождает внимание"})}</div></div>`;
+  });
+ }
 
-      <div class="btnRow">
-        <button id="btnRestart">Restart</button>
-      </div>
-    </div>
-  </div>
+ h+=`<h3 class="sec mt">Предложения</h3><div class="acts" style="margin:0 0 10px">
+  ${B({act:"gig",t:"Быстрая халтура, 1 ч",cls:busyTimed("gig")?"pri":"",ttl:"Мелкие деньги, когда нечем заняться. Каждая следующая за день платит на треть хуже"})}
+  ${B({act:"call",t:"Обзвонить знакомых, 1 ч"})}
+  ${eraIdx()>=3?B({act:"plat",t:`Биржа фриланса, ${money(Math.round(25*inf()))}`,ttl:"Больше предложений и ставки выше"}):""}
+ </div>`;
+ S.offers.forEach(o=>{
+  const s1=S.sk[o.sk],weak=o.min&&s1<o.min;
+  const hrs=Math.ceil(o.w/Math.max(.1,speed(o)));
+  h+=`<div class="card"><h4>${o.n}
+   ${o.type==="prod"?'<span class="chip g">свой продукт</span>':""}
+   ${o.rush?'<span class="chip w">срочный</span>':""}
+   ${o.risk?'<span class="chip b">риск</span>':""}
+   ${o.equity?'<span class="chip ai">за долю</span>':""}</h4>
+   <div class="meta">${o.type==="prod"?o.d+"<br>":""}Навык: ${SKILLS[o.sk]}${o.sk2?" + "+SKILLS[o.sk2]:""} (у тебя ${s1.toFixed(0)}${o.min?` из ${o.min}`:""})
+   · объём ${o.w} ед. ≈ ${hrs} ч
+   ${o.type==="prod"?`· доход ≈ <b>${money(o.inc)}</b>/день`:`· <b>${money(o.pay)}</b> · срок ${o.dl} дн. · ${money(Math.round(o.pay/Math.max(1,hrs)))}/ч`}
+   ${weak?'<br><span class="chip b">навыка мало</span> будет много багов и просрочка':""}</div>
+   <div class="acts">${B({act:"take",a:o.id,t:"Взять",cls:"pri",dis:S.active.length>=maxActive()})}</div></div>`;
+ });
+ return h;
+}
 
-  <div id="menu" class="overlay">
-    <div class="panel" id="menuPanel">
-      <div class="panelHeader">
-        <div>
-          <h2>Paused</h2>
-          <div class="sub">Press ESC to resume or choose an option.</div>
-        </div>
-        <div class="sub" id="uiMenuBuild"></div>
-        </div>
-        <div class="hudStats" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:8px 0 14px 0;">
-          <div class="hudCard" style="box-shadow:none; min-width:unset;">
-            <div class="hudTitle">Player Stats</div>
-            <div class="hudStats" id="menuPlayerStats" style="grid-template-columns:1fr; gap:6px;"></div>
-          </div>
-          <div class="hudCard" style="box-shadow:none; min-width:unset;">
-            <div class="hudTitle">Weapons</div>
-            <div class="hudStats" id="menuWeaponStats" style="grid-template-columns:1fr; gap:6px;"></div>
-          </div>
-        </div>
-        <div class="btnRow" style="justify-content:center;">
-          <button id="btnResume">Continue</button>
-          <button id="btnMenuRestart">Restart</button>
-          <button id="btnGod">God Mode: Off</button>
-          <button id="btnMute">Sound: On</button>
-        </div>
-      </div>
-    </div>
+/* ==================== РЕНДЕР: ЖЕЛЕЗО ==================== */
+function slotCard(sl){
+ const c=cur(sl),ci=HW[sl].items.indexOf(c);
+ let h=`<div class="card"><h4>${HW[sl].L}</h4>
+  <div class="srow cur"><span class="nm" style="color:var(--acc)">${c.n}${slotSpec(sl,c)}</span><span class="own">стоит</span></div>`;
+ const shown=HW[sl].items.filter(it=>it.id!==c.id&&it.y<=gYear());
+ shown.forEach(it=>{
+  const bad=canInstall(sl,it.id);
+  const price=hwPrice(it);
+  const back=c.p?Math.round(c.p*.35):0;
+  const aff=S.money>=price-back;
+  let note="";
+  if(bad)note=`<small class="no">${bad.k}: ${bad.m}</small>`;
+  else if(!aff)note=`<small>не хватает ${money(price-back-S.money)}</small>`;
+  h+=`<div class="srow"><span class="nm">${it.n}${slotSpec(sl,it)}${note}</span>
+   ${B({act:"buyhw",a:sl,b:it.id,t:price?money(price):"бесплатно",cls:"tiny"+(!bad&&aff?" pri":""),dis:!!bad||!aff,ttl:bad?bad.m:""})}</div>`;
+ });
+ if(!shown.length)h+=`<div class="hint" style="padding:5px 2px">Ничего другого пока не выпустили.</div>`;
+ return h+`</div>`;
+}
+function slotSpec(sl,it){
+ const t=[];
+ if(sl==="mb"){t.push(it.sock.map(x=>SOCKN[x]).join("/"),it.ram.map(x=>RAMT[x]).join("/"),it.bus.map(x=>BUSN[x]).join("/"),`${IFN[it.dmin]}–${IFN[it.dmax]}`,FORMN[it.form]);}
+ if(sl==="cpu")t.push(SOCKN[it.sock],`${it.w} Вт`,`мощь ${it.pw}`);
+ if(sl==="cooler")t.push(`держит ${it.tdp} Вт`);
+ if(sl==="ram")t.push(RAMT[it.type],`мощь ${it.pw}`);
+ if(sl==="gpu")t.push(BUSN[it.bus],`${it.w} Вт`,`${it.len} мм`,it.vr?`${it.vr} ГБ`:"без VRAM",["без доп. пит.","6/8-pin","2×8-pin","12VHPWR"][it.pg]);
+ if(sl==="disk")t.push(IFN[it.if],`мощь ${it.pw}`);
+ if(sl==="psu")t.push(`${it.w} Вт`,["без доп. разъёмов","6/8-pin","2×8-pin","12VHPWR"][it.pg]);
+ if(sl==="case")t.push(`до ${FORMN[it.form]}`,`видео ${it.gpu} мм`,`продув ×${it.air}`);
+ if(sl==="mon")t.push(`комфорт ${Math.round(it.cf*100)}%`,it.need?`нужна мощь видео ${it.need}`:"без требований");
+ if(sl==="net")t.push(`${it.sp} усл. Мбит`,`${money(Math.round(it.fee*inf()/1.2))}/нед`);
+ if(sl==="chair")t.push(`комфорт ${Math.round(it.cf*100)}%`,`здоровье ${it.hp>0?"+":""}${it.hp}/день`);
+ if(sl==="kb")t.push(`комфорт ${Math.round(it.cf*100)}%`,`скорость ×${it.ty}`);
+ return t.length?`<small>${t.join(" · ")}</small>`:"";
+}
+function tHW(){
+ const iss=issues(),hard=iss.filter(x=>x.hard),soft=iss.filter(x=>!x.hard);
+ let h=`<h3 class="sec">Сборка</h3>`;
+ if(hard.length)h+=`<div class="card badc"><h4><span class="chip b">не собрана</span> работать нельзя</h4>
+  <div class="meta">${hard.map(x=>`${HW[x.s].L}: ${x.m}`).join("<br>")}<br><br>Собери совместимый комплект во вкладке ниже или купи готовую платформу.</div></div>`;
+ else h+=`<div class="card ok"><h4><span class="chip g">всё совместимо</span> мощность ${power().toFixed(0)}</h4>
+  <div class="meta">${soft.length?soft.map(x=>`${x.k}: ${x.m}`).join("<br>"):"Замечаний нет. Машина работает как задумано."}</div></div>`;
+ h+=`<div class="hint">Материнская плата определяет всё: сокет процессора, тип памяти, слот видеокарты, интерфейс дисков и типоразмер корпуса.
+  Кулер и корпус решают, не будет ли троттлинга, блок питания — не хлопнет ли всё. Старое железо при покупке сдаётся за 35% цены.</div>`;
 
+ if(S.buff.sale>0)h+=`<div class="card warnc" style="margin-top:8px"><div class="meta"><span class="chip w">распродажа</span> ещё ${S.buff.sale} дн.: железо на 18% дешевле</div></div>`;
 
-  <script type="module" src="./game.js"></script>
+ h+=`<h3 class="sec mt">Готовые платформы</h3>
+  <div class="hint">Плата, процессор и память сразу — плюс всё, без чего комплект не заведётся. На 8% дешевле, чем по отдельности.</div><div style="margin-top:8px">`;
+ const pfs=PLATFORMS.filter(p=>p.y<=gYear()).slice(-4);
+ if(!pfs.length)h+=`<div class="hint">Пока ничего нового не выпустили.</div>`;
+ pfs.forEach(pf=>{
+  const parts=platformParts(pf);
+  const bad=canPlatform(pf);
+  const pr=platformPrice(pf);
+  const done=!parts.length;
+  h+=`<div class="srow"><span class="nm">${pf.n}
+   <small>${done?"уже стоит":parts.map(x=>item(x.sl,x.id).n).join(" + ")}</small>
+   ${bad?`<small class="no">${bad.k}: ${bad.m}</small>`:pr.back?`<small>из них ${money(pr.back)} вернётся за старое</small>`:""}</span>
+   ${B({act:"buypf",a:pf.id,t:done?"есть":money(pr.net),cls:"tiny"+(!bad&&!done&&S.money>=pr.net?" pri":""),dis:done||!!bad||S.money<pr.net})}</div>`;
+ });
+ h+=`</div>`;
+
+ h+=`<h3 class="sec mt">Ядро системы</h3><div class="grid2">`;
+ CORE.forEach(sl=>h+=slotCard(sl));
+ h+=`</div><h3 class="sec mt">Рабочее место</h3><div class="grid2">`;
+ DESK.forEach(sl=>h+=slotCard(sl));
+ return h+`</div>`;
+}
+
+/* ==================== РЕНДЕР: БЫТ ==================== */
+function tHome(){
+ let h=`<h3 class="sec">Где ты живёшь</h3><div class="hint">Жильё даёт комфорт, качество сна и настроение каждый день. Аренда растёт вместе с эпохой.</div><div style="margin-top:8px">`;
+ HOMES.forEach((H,i)=>{
+  if(H.y>gYear()&&i!==S.home)return;
+  const d=Math.round(H.dep*inf()),r=Math.round(H.rent*inf());
+  h+=`<div class="srow ${i===S.home?"cur":""}"><span class="nm">${H.n}
+   <small>${H.d}</small>
+   <small>аренда ${money(r)}/нед · комфорт ${Math.round(H.cf*100)}% · сон ×${H.sl} · настроение ${H.md>=0?"+":""}${H.md}/день</small></span>
+   ${i===S.home?'<span class="own">живёшь</span>':B({act:"move",a:i,t:d?`залог ${money(d)}`:"бесплатно",cls:"tiny",dis:S.money<d})}</div>`;
+ });
+ h+=`</div><h3 class="sec mt">Быт и мелочи, которые всё меняют</h3><div class="grid2">`;
+ let nPerk=0;
+ PERKS.forEach(p=>{
+  if(p.y>gYear()&&!S.perks[p.id])return;
+  nPerk++;
+  const pr=Math.round(p.p*inf()),got=!!S.perks[p.id];
+  const need=p.id==="llm"&&cur("gpu").vr<8;
+  h+=`<div class="card ${got?"ok":""}"><h4>${p.n} ${got?'<span class="chip g">есть</span>':""}</h4>
+   <div class="meta">${p.d}${need?'<br><span class="chip b">нужно 8 ГБ VRAM</span>':""}</div>
+   <div class="acts">${got?"":B({act:"perk",a:p.id,t:p.p?money(pr):"бесплатно",cls:!need&&S.money>=pr?"pri":"",dis:need||S.money<pr})}</div></div>`;
+ });
+ if(!nPerk)h+=`<div class="hint">Пока ничего из этого не придумали.</div>`;
+ h+=`</div>`;
+ if(gYear()>=2023){
+  h+=`<h3 class="sec mt">ИИ-ассистент</h3>
+  <div class="hint">${money(Math.round(S.aiFee*inf()/2))} в неделю. Разблокирует вайбкодинг: заметно быстрее, но багов втрое больше — пока не поднимешь промптинг.
+  Альтернатива — локальная модель: бесплатно, но слабее и нужна видеокарта с 8+ ГБ VRAM.</div>
+  <div class="acts">${B({act:"ai",t:S.aiSub?"Отменить подписку":"Подключить",cls:S.aiSub?"dan":"pri"})}</div>`;
+ }
+ return h;
+}
+
+/* ==================== РЕНДЕР: УЧЁБА ==================== */
+function tLearn(){
+ let h=`<h3 class="sec">Заниматься самому — 3 часа за раз</h3><div class="grid2">`;
+ for(const k in SKILLS){
+  if(k==="prompt"&&gYear()<2023)continue;
+  const bk=Object.keys(S.books).some(id=>{const x=BOOKS.find(y=>y.id===id);return x&&x.sk===k;});
+  h+=`<div class="card"><h4>${SKILLS[k]} <span class="chip n">${S.sk[k].toFixed(1)}</span>${bk?'<span class="chip g">есть книга</span>':""}</h4>
+   <div class="row">${pbar(S.sk[k])}</div>
+   <div class="acts">${B({act:"study",a:k,t:"Заниматься 3 ч"})}</div></div>`;
+ }
+ h+=`</div><h3 class="sec mt">Книги и курсы</h3>
+ <div class="hint">Дают уровни сразу и ускоряют самостоятельную учёбу по своей теме в 1.5 раза. Цены растут с инфляцией.</div><div style="margin-top:8px">`;
+ BOOKS.forEach(b=>{
+  if(b.y>gYear()&&!S.books[b.id])return;
+  const pr=Math.round(b.p*inf());
+  h+=`<div class="srow"><span class="nm">${b.n}
+   <small>${SKILLS[b.sk]} +${b.v}</small></span>
+   ${S.books[b.id]?'<span class="own">есть</span>':B({act:"book",a:b.id,t:money(pr),cls:"tiny"+(S.money>=pr?" pri":""),dis:S.money<pr})}</div>`;
+ });
+ return h+`</div>`;
+}
+
+/* ==================== РЕНДЕР: ЖИЗНЬ ==================== */
+function tLife(){
+ let h=`<h3 class="sec">Сон, отдых, тело</h3><div class="acts">
+  ${B({act:"sleep",t:"Спать",cls:S.act.k==="sleep"?"pri":"",ttl:"Спишь, пока не выспишься"})}
+  ${B({act:"nap",t:"Прикорнуть, 1 ч",cls:busyTimed("nap")?"pri":""})}
+  ${B({act:"shower",t:"Душ, 0.5 ч",cls:busyTimed("shower")?"pri":""})}
+  ${B({act:"walk",t:has("bike")?"Покататься, 1.5 ч":"Прогулка, 1.5 ч",cls:busyTimed("walk")?"pri":""})}
+  ${B({act:"gym",t:"Спорт, 1.5 ч",cls:busyTimed("gym")?"pri":"",dis:S.sick>0||S.needs.energy<25})}
+  ${B({act:"coffee",t:has("kettle")?"Кофе":`Кофе, ${money(Math.round(3*inf()))}`,cls:busyTimed("coffee")?"pri":"",ttl:"Каждая следующая чашка за день бодрит вдвое хуже и сильнее бьёт по здоровью"})}
+  ${B({act:"party",t:`Вечер с друзьями, ${money(Math.round(25*inf()))}`,cls:busyTimed("party")?"pri":""})}
+  ${B({act:"doc",t:`Врач, ${money(Math.round(70*inf()))}`,cls:busyTimed("doc")||S.sick>0||S.needs.health<45?"pri":""})}
+  ${B({act:"vac",t:`Отпуск на неделю, ${money(Math.round(380*inf()))}`,cls:S.burn>70?"pri":"",ttl:"Семь дней без работы. Выгорание сильно падает, но не в ноль"})}
+  ${B({act:"backup",t:"Сделать бэкап, 1 ч",cls:busyTimed("backup")?"pri":"",dis:has("nas")})}
+ </div>
+ <h3 class="sec mt">Поесть</h3><div>`;
+ FOOD.forEach((f,i)=>{
+  if(f.y>gYear())return;
+  const p=fp(f);
+  h+=`<div class="srow"><span class="nm">${f.n}
+   <small>сытость +${f.f} · настроение ${f.m>=0?"+":""}${f.m} · здоровье ${f.h>=0?"+":""}${f.h} · ${f.t} ч</small></span>
+   ${B({act:"eat",a:i,t:money(p),cls:"tiny"+(S.money>=p?"":""),dis:S.money<p})}</div>`;
+ });
+ h+=`</div><h3 class="sec mt">Как это работает</h3><div class="hint">
+ <b>Время идёт само.</b> Ты не тратишь часы кнопкой, а выбираешь, чем занят прямо сейчас, — и занимаешься этим, пока не переключишься.
+ Скорость и пауза — вверху: <b>пробел</b> — пауза и обратно, <b>1–4</b> — ×1/×2/×4/×8, <b>0</b> — пауза. Событие с выбором останавливает время само.
+ Дела с указанной длительностью дают результат только целиком: бросишь на середине — деньги потрачены, толку нет.
+ Работа и отладка идут, пока не остановишь; сон — пока не выспишься. Свернёшь вкладку — время замрёт.<br>
+ Энергия и настроение прямо режут скорость работы и плодят баги. Здоровье падает медленно и восстанавливается ещё медленнее — кресло, стол, еда и сон решают.<br>
+ <b>Еда</b> — это статья расходов, а не кнопка. Сытость уходит примерно на 3 в час, и дешёвое всегда бьёт по здоровью: организм отыгрывает максимум 3 очка в сутки, так что на лапше ты уходишь в минус быстрее, чем восстанавливаешься.<br>
+ <b>Выгорание</b> растёт от каждого рабочего часа и снижает всё сразу. Сон и прогулки его убирают понемногу, отпуск — сильно, но не до нуля.<br>
+ Счета приходят каждые 7 дней: жильё, электричество по ваттам сборки, связь, подписки, мелочи. Налоги — каждые 28 дней с оборота.</div>`;
+ return h;
+}
+
+/* ==================== РЕНДЕР: СЕТЬ ==================== */
+function tNet(){
+ const e=eraIdx();
+ let h=`<h3 class="sec">${e<2?"FIDO, BBS и телефонная линия":e<5?"Форумы, блоги, соцсети":"Треды, стримы, рассылки"}</h3><div class="acts">
+  ${B({act:"browse",t:"Читать и копаться, 1.5 ч",cls:busyTimed("browse")?"pri":""})}
+  ${B({act:"answers",t:"Помочь в комментариях, 1.5 ч",cls:busyTimed("answers")?"pri":""})}
+  ${B({act:"blog",t:"Написать статью, 2.5 ч",cls:busyTimed("blog")?"pri":""})}
+  ${B({act:"stream",t:"Стримить кодинг, 3 ч",cls:busyTimed("stream")?"pri":"",dis:cur("net").sp<9||cur("gpu").pw<20,ttl:"Нужен канал 9+ и видеокарта с мощностью 20+"})}
+  ${e>=3?B({act:"video",t:"Записать видео, 5 ч",cls:busyTimed("video")?"pri":"",dis:cur("net").sp<9}):""}
+  ${e>=4?B({act:"course",t:"Продать мини-курс, 4 ч",cls:busyTimed("course")?"pri":"",dis:S.sk.biz<25,ttl:"Нужен бизнес 25. Доход зависит от подписчиков"}):""}
+  ${B({act:"meetup",t:`Конференция, ${money(Math.round((45+e*22)*inf()))}`,cls:busyTimed("meetup")?"pri":""})}
+ </div><div class="hint" style="margin-top:8px">Подписчики повышают оплату заказов, дают донаты и поднимают доход своих продуктов. Репутация открывает больше предложений.</div>`;
+
+ h+=`<h3 class="sec mt">Работа по найму</h3>`;
+ if(S.job){
+  h+=`<div class="card hl"><h4>${S.job.n} ${S.jobBonus>1?`<span class="chip g">×${S.jobBonus.toFixed(2)}</span>`:""}</h4>
+  <div class="meta">${money(Math.round(S.job.pay*S.jobBonus))} за смену, 8 часов. Отработано смен: ${S.jobDays}.<br>
+  Опыт за смену: ${Object.keys(S.job.xp).map(k=>SKILLS[k]).join(", ")}.</div>
+  <div class="acts">${B({act:"gowork",t:"Идти на смену, 8 ч",cls:busyTimed("shift")?"pri":"",dis:S.needs.energy<15||busyTimed("shift")})}${B({act:"quit",t:"Уволиться",cls:"dan gho"})}</div></div>`;
+ }else{
+  h+=`<div class="hint">Смена — 8 часов и минус настроение, зато платят всегда и опыт идёт вдвое быстрее, чем на своих проектах. Ставка чуть ниже хорошего заказа: за стабильность платишь потолком, а не деньгами.</div><div style="margin-top:8px">`;
+  const av=EMPLOY.filter(j=>j.e<=e);
+  av.slice(-5).forEach(j=>{
+   const ok=okEmploy(j);
+   h+=`<div class="srow"><span class="nm">${j.n}
+    <small>${money(j.pay)}/смена · опыт: ${Object.keys(j.xp).map(k=>SKILLS[k].toLowerCase()).join(", ")}
+    ${j.min?` · нужно: ${Object.keys(j.min).map(k=>SKILLS[k].toLowerCase()+" "+j.min[k]).join(", ")}`:""}</small></span>
+    ${B({act:"job",a:EMPLOY.indexOf(j),t:ok?"Согласиться":"не берут",cls:"tiny",dis:!ok})}</div>`;
+  });
+  h+=`</div>`;
+ }
+ if(S.equity.length){
+  h+=`<h3 class="sec mt">Доли в чужих проектах</h3><div class="hint">Больше половины таких историй заканчивается ничем, но выстрелившая доля окупает все остальные.<br>`;
+  S.equity.forEach(q=>h+=`${q.n} — решится на ${q.day}-й день (через ${Math.max(0,q.day-S.day)} дн.)<br>`);
+  h+=`</div>`;
+ }
+ return h;
+}
+
+/* ==================== РЕНДЕР: БАНК ==================== */
+function tBank(){
+ let h=`<h3 class="sec">Счёт</h3><dl class="kv" style="font-size:11.5px">
+  <dt>На руках</dt><dd class="${S.money<0?"b":""}">${money(S.money)}</dd>
+  <dt>Депозит (0.7% в неделю)</dt><dd class="g">${money(S.dep)}</dd>
+  <dt>Долг (2.8% в неделю)</dt><dd class="${S.debt>0?"b":""}">${money(S.debt)}</dd>
+  <dt>Лимит кредита</dt><dd>${money(maxLoan())}</dd>
+  <dt>Итого состояние</dt><dd class="${netWorth()<0?"b":"g"}">${money(netWorth())}</dd></dl>
+ <div class="acts">
+  ${B({act:"dep",b:100,t:"На депозит 25%",ttl:"Переложить четверть наличных"})}
+  ${B({act:"dep",b:-1,t:"Снять всё с депозита",dis:S.dep<=0})}
+  ${B({act:"loan",t:`Взять кредит ${money(Math.round(maxLoan()/2))}`,dis:S.debt>=maxLoan()})}
+  ${B({act:"repay",t:"Погасить долг",cls:S.debt>0?"pri":"",dis:S.debt<=0||S.money<=0})}
+ </div>
+ <div class="hint" style="margin-top:8px">Если на счету минус в день оплаты счетов, банк сам выдаст займ — но под 5% в неделю. Лучше не доводить.</div>`;
+
+ h+=`<h3 class="sec mt">Рынок</h3><div class="hint">Цены двигаются каждый день. Покупка забирает четверть наличных, продажа — всю позицию. Комиссия 1%.</div><div style="margin-top:8px">`;
+ let nAsset=0;
+ ASSETS.forEach(a=>{
+  const m=S.mk[a.id];
+  if(gYear()<a.y&&!m.q)return;
+  nAsset++;
+  h+=`<div class="srow"><span class="nm">${a.n}
+   <small>${a.d} · курс ${money(m.p)}${m.q?` · у тебя ${m.q} на ${money(m.q*m.p)}`:""}</small></span>
+   ${B({act:"buya",a:a.id,t:"Купить",cls:"tiny",dis:S.money<m.p})}
+   ${B({act:"sella",a:a.id,t:"Продать",cls:"tiny gho",dis:m.q<1})}</div>`;
+ });
+ if(!nAsset)h+=`<div class="hint">Пока вкладывать некуда.</div>`;
+ h+=`</div><div class="hint" style="margin-top:8px">Итог по бирже за игру: <b class="${S.mkProfit>=0?"":""}" style="color:${S.mkProfit>=0?"var(--ok)":"var(--bad)"}">${money(S.mkProfit)}</b> (учитывая незакрытые позиции — прикидывай сам).</div>`;
+ return h;
+}
+
+/* ==================== РЕНДЕР: ИТОГИ ==================== */
+function tMeta(){
+ let h=`<h3 class="sec">Куда ты идёшь</h3>
+ <div class="big">${era().y} · ${era().n}</div><div class="hint" style="margin-top:4px">${era().t}</div>
+ <div class="hint" style="margin-top:8px">Игра не кончается. Ориентиры: миллион заработанных, три навыка выше 70, портфель продуктов, репутация 90, свой дом — и дожить до эпохи ИИ, не сгорев по дороге.</div>
+ <dl class="kv" style="margin-top:10px">
+  <dt>День</dt><dd>${S.day}</dd>
+  <dt>Заработано всего</dt><dd class="g">${money(S.earned)}</dd>
+  <dt>Потрачено всего</dt><dd>${money(S.spent)}</dd>
+  <dt>Сдано проектов</dt><dd>${S.shipped}</dd>
+  <dt>Живых продуктов</dt><dd>${S.passive.length}</dd>
+  <dt>Пассивно в день</dt><dd class="g">${money(passiveTotal())}</dd>
+  <dt>Потрачено на ИИ</dt><dd>${money(S.aiSpent)}</dd>
+  <dt>Смертей диска</dt><dd class="${S.diskDeaths?"b":""}">${S.diskDeaths}</dd>
+  <dt>Отпусков</dt><dd>${S.vacations}</dd></dl>
+ <h3 class="sec mt">Достижения — ${S.ach.length} из ${ACH.length}</h3><div class="grid2">`;
+ ACH.forEach(a=>{
+  const got=S.ach.includes(a.id);
+  h+=`<div class="card ${got?"ok":""}" style="${got?"":"opacity:.42"}"><h4>${got?"★":"☆"} ${a.n}</h4><div class="meta">${a.d}</div></div>`;
+ });
+ h+=`</div><h3 class="sec mt">Сохранение</h3>
+ <div class="acts">${B({act:"save",t:"Сохранить",cls:"pri"})}${B({act:"load",t:"Загрузить"})}${B({act:"reset",t:"Начать заново",cls:"dan gho"})}</div>
+ <textarea id="saveBox" placeholder="Резервная копия: нажми «Сохранить» — здесь появится текст. Чтобы восстановить, вставь его сюда и нажми «Загрузить»."></textarea>`;
+ return h;
+}
+
+/* ==================== РЕНДЕР: ОБЩЕЕ ==================== */
+const TABS=[["work","Проекты"],["hw","Железо"],["home","Быт"],["learn","Учёба"],["life","Жизнь"],["net","Сеть"],["bank","Банк"],["meta","Итоги"]];
+function renderMain(){
+ const ready=S.active.filter(p=>p.prog>=p.w).length;
+ const badge={work:ready||null,hw:issues().filter(x=>x.hard).length||null};
+ let h=`<div class="tabs">`+TABS.map(t=>
+  `<button data-act="tab" data-a="${t[0]}" class="${tab===t[0]?"on":""}">${t[1]}${badge[t[0]]?`<span class="bdg">${badge[t[0]]}</span>`:""}</button>`).join("")+`</div>`;
+ h+=({work:tWork,hw:tHW,home:tHome,learn:tLearn,life:tLife,net:tNet,bank:tBank,meta:tMeta}[tab])();
+ document.getElementById("colMain").innerHTML=h;
+}
+function renderLog(){
+ document.getElementById("log").innerHTML=
+  `<div><span class="caret"></span></div>`+
+  S.log.map(l=>`<div class="${l.c}"><span class="t">${l.t}</span><span class="m">${l.m}</span></div>`).join("");
+ document.getElementById("logInfo").textContent=`${S.log.length} записей`;
+}
+function renderModal(){
+ const host=document.getElementById("host");
+ if(!S.pending){host.innerHTML="";return;}
+ const a=ASK[S.pending];
+ if(!a){S.pending=null;host.innerHTML="";return;}
+ host.innerHTML=`<div class="mask"><div class="modal">
+  <div class="mh">${a.t}</div>
+  <div class="mb">${a.x}</div>
+  <div class="mo">${a.o.map((o,i)=>B({act:"ask",b:i,t:`${o.t}${o.d?`<i>${o.d}</i>`:""}`})).join("")}</div>
+ </div></div>`;
+}
+function renderHead(){
+ /* Центр — то, на что смотришь чаще всего: дата, часы, деньги */
+ const M=[
+  `<span class="pill">День <b>${S.day}</b> · ${gYear()}</span>`,
+  `<span class="pill clock"><b>${hhmm(S.hour)}</b></span>`,
+  `<span class="pill money${S.money<0?" neg":""}"><b>${money(S.money)}</b></span>`
+ ];
+ document.getElementById("hMid").innerHTML=M.join("");
+ const P=[];
+ if(S.debt>0)P.push(`<span class="pill warnp">долг <b>${money(S.debt)}</b></span>`);
+ if(passiveTotal()>0)P.push(`<span class="pill">пассив <b>${money(passiveTotal())}</b>/дн</span>`);
+ P.push(`<span class="pill era">${era().n}</span>`);
+ document.getElementById("hPills").innerHTML=P.join("");
+}
+function render(){
+ needRender=false;
+ document.documentElement.dataset.era=eraIdx();
+ renderHead();renderActBar();renderStats();renderMain();renderLog();renderModal();
+}
+/* Высота шапки меняется, когда плашки переносятся на вторую строку.
+   Держим её в переменной, чтобы липкие колонки не уезжали под шапку. */
+function syncHdr(){
+ const h=document.querySelector(".hdr");
+ if(h){const v=Math.round(h.getBoundingClientRect().height);
+  if(v>0)document.documentElement.style.setProperty("--hdrH",v+"px");}
+ const a=document.querySelector(".actbar");
+ if(a){const v=Math.round(a.getBoundingClientRect().height);
+  if(v>0)document.documentElement.style.setProperty("--actH",v+"px");}
+}
+
+/* ==================== КЛИКИ ==================== */
+document.addEventListener("click",ev=>{
+ const b=ev.target.closest("[data-act]");if(!b)return;
+ if(S.pending&&b.dataset.act!=="ask"){toast("Сначала реши, что делать с событием");return;}
+ const a=b.dataset.act,x=b.dataset.a,y=parseFloat(b.dataset.b);
+ const M={
+  tab:()=>{tab=x;render();},
+  ask:()=>resolveAsk(y),
+  spd:()=>{S.speed=y;if(y>0)lastSpeed=y;renderActBar();},
+  stopact:()=>{idle();log("Бросил начатое.","");render();},
+  take:()=>take(x), w:()=>work(x,"norm"), wc:()=>work(x,"care"), wv:()=>work(x,"vibe"),
+  dbg:()=>debug(x), ship:()=>ship(x), drop:()=>drop(x), upd:()=>updateProd(parseInt(x,10)),
+  closep:()=>closeProd(parseInt(x,10)),
+  hire:()=>hire(x,b.dataset.b),
+  gig:gig, call:callAround, plat:platform,
+  buyhw:()=>buyHW(x,b.dataset.b), buypf:()=>buyPlatform(x), perk:()=>buyPerk(x), ai:toggleAI,
+  move:()=>moveHome(parseInt(x,10)),
+  study:()=>study(x), book:()=>buyBook(x),
+  sleep:sleepNow, nap:nap, shower:shower, walk:walk, gym:gym, coffee:coffee, party:party,
+  doc:doctor, vac:()=>vacation(false), backup:backup, eat:()=>eat(parseInt(x,10)),
+  browse:browse, answers:answers, blog:blog, stream:stream, video:video, course:course, meetup:meetup,
+  job:()=>takeJob(parseInt(x,10)), quit:quitJob, gowork:goWork,
+  loan:borrow, repay:repay, dep:()=>deposit(y===-1?-1e12:Math.floor(S.money*.25)),
+  buya:()=>trade(x,1), sella:()=>trade(x,-1),
+  save:saveGame, load:loadGame,
+  reset:()=>{if(confirm("Начать заново? Текущая жизнь пропадёт."))reset();}
+ };
+ if(M[a])M[a]();
+});
+
+/* ==================== ИГРОВОЙ ЦИКЛ ====================
+   Время идёт само, пока не стоит пауза и пока событие не ждёт ответа.
+   Шаг дробится на куски по 0.25 игрового часа, чтобы на ×8 не проскочить
+   полночь, конец дела или момент, когда проект стал готов. */
+let lastT=0,liveAcc=0,checkAcc=0;
+function frame(now){
+ requestAnimationFrame(frame);
+ if(!lastT){lastT=now;return;}
+ let dt=(now-lastT)/1000;lastT=now;
+ /* Вкладку сворачивали: rAF стоял. Время не догоняем — это не идл-игра. */
+ if(dt>.5)dt=.5;
+ if(S.speed>0&&!S.pending){
+  let h=dt*S.speed/SEC_HOUR,guard=0;
+  while(h>1e-6&&guard++<64){
+   const chunk=Math.min(h,.25);
+   stepAct(chunk);h-=chunk;
+   if(afterStep()||S.pending)break;
+  }
+  checkAcc+=dt;
+  if(checkAcc>=1){checkAcc=0;check();}
+ }
+ if(needRender)render();
+ else{liveAcc+=dt;if(liveAcc>=.1){liveAcc=0;liveUpdate();}}
+}
+/* Сохранение могло прийти с делом, которого больше нет */
+function repair(){
+ if(!S.act||typeof S.act!=="object")S.act={k:"idle"};
+ if((S.act.k==="work"||S.act.k==="debug")&&!proj(S.act.id))S.act={k:"idle"};
+ if(S.act.k==="timed"&&!TIMED[S.act.t])S.act={k:"idle"};
+ if(S.speed!==0&&SPEEDS.indexOf(S.speed)<0)S.speed=1;
+ if(typeof S.nextEv!=="number")scheduleEv();
+ if(typeof S.aiAcc!=="number")S.aiAcc=0;
+}
+
+/* ==================== СТАРТ ==================== */
+(async function init(){
+ S=fresh();
+ const r=await load();
+ if(r){try{const o=JSON.parse(r);if(o.ver===VER)S=o;}catch(e){}}
+ repair();
+ if(!S.log.length){
+  log("1998 год. У тебя 486-й на Socket 3, табуретка вместо кресла и модем, который работает только когда мама не звонит.","ev");
+  log("Начни с мелких заказов на железе — они не требуют навыков, зато кормят. И помни: плата определяет, что вообще можно поставить.","");
+  log("Время идёт само: выбери занятие, а скоростью управляй сверху — пробел ставит на паузу, клавиши 1–4 дают ×1/×2/×4/×8. Есть и спать никто за тебя не будет.","ev");
+ }
+ if(!S.offers.length)refreshOffers();
+ render();
+ syncHdr();
+ const hd=document.querySelector(".hdr"),ab=document.querySelector(".actbar");
+ if(window.ResizeObserver){
+  const ro=new ResizeObserver(syncHdr);
+  if(hd)ro.observe(hd); if(ab)ro.observe(ab);
+ }else window.addEventListener("resize",syncHdr);
+ /* Горячие клавиши времени: пробел — пауза/продолжить (возвращает на ту
+    скорость, что была, а не на ×1), 1–4 — ×1/×2/×4/×8, 0 — пауза.
+    Ctrl/Alt/Cmd не перехватываем: там живут переключения вкладок браузера. */
+ document.addEventListener("keydown",e=>{
+  const t=e.target.tagName;
+  if(t==="TEXTAREA"||t==="INPUT"||e.ctrlKey||e.metaKey||e.altKey)return;
+  if(e.code==="Space"){
+   if(S.speed>0){lastSpeed=S.speed;S.speed=0;}else S.speed=lastSpeed||1;
+  }else if(e.code==="Digit0"||e.code==="Numpad0"){
+   if(S.speed>0)lastSpeed=S.speed;
+   S.speed=0;
+  }else{
+   const m=/^(?:Digit|Numpad)([1-4])$/.exec(e.code);
+   if(!m)return;
+   S.speed=SPEEDS[+m[1]-1];lastSpeed=S.speed;
+  }
+  e.preventDefault();
+  renderActBar();
+ });
+ requestAnimationFrame(frame);
+})();
+
+/* Доступ для автотестов баланса */
+window.G={get S(){return S},set S(v){S=v},get tab(){return tab},set tab(v){tab=v},
+ fresh,render,check,advance,spend,endDay,speed,power,cond,comfort,issues,broken,throttle,localAI,bugRate,
+ refreshOffers,take,work,debug,ship,drop,gig,callAround,platform,hire,updateProd,closeProd,
+ sleepNow,nap,eat,shower,walk,gym,coffee,party,doctor,vacation,backup,moveHome,
+ study,buyBook,buyHW,buyPlatform,buyPerk,toggleAI,platformPrice,canInstall,canPlatform,
+ browse,answers,blog,stream,video,course,meetup,takeJob,quitJob,goWork,okEmploy,
+ borrow,repay,deposit,trade,maxLoan,resolveAsk,ASK,
+ stepAct,afterStep,startTimed,startSleep,idle,scheduleEv,actLabel,TIMED,SEC_HOUR,SPEEDS,gt,proj,
+ PLATFORMS,HW,SLOTS,PERKS,BOOKS,HIRES,JOBS,PRODUCTS,EMPLOY,HOMES,FOOD,ASSETS,ERAS,INFL,ACH,SKILLS,
+ eraIdx,gYear,inf,bills,taxes,passiveTotal,netWorth,maxActive,payRate,pInc,item,cur};
+</script>
 </body>
 </html>
-
