@@ -19,7 +19,7 @@ SamplerState gSmp : register(s0);
 #endif
 
 #if INSTCB_SLOT_PARAMS
-// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 112 bytes, cbuffer packing.
+// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 144 bytes, cbuffer packing.
 cbuffer SlotParams : register(b2)
 {
     float4 slotBaseColor;
@@ -36,6 +36,8 @@ cbuffer SlotParams : register(b2)
     float slotIndirectSpecularScale;
     float slotTransmissionAlbedoPower;
     float slotTransmissionNormalWeight;
+    float4 slotTerrainTiling;
+    float4 slotTerrainEdgeParams;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -54,6 +56,8 @@ cbuffer SurfaceParams : register(b2)
     float surfaceIndirectSpecularScale;
     float surfaceTransmissionAlbedoPower;
     float surfaceTransmissionNormalWeight;
+    float4 surfaceTerrainTiling;
+    float4 surfaceTerrainEdgeParams;
 };
 
 #define GBUFFER_INSTCB_RS \
@@ -123,6 +127,8 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mIndirectSpecularScale = slotIndirectSpecularScale;
     const float  mTransmissionAlbedoPower = slotTransmissionAlbedoPower;
     const float  mTransmissionNormalWeight = slotTransmissionNormalWeight;
+    const float4 mTerrainTiling = slotTerrainTiling;
+    const float4 mTerrainEdgeParams = slotTerrainEdgeParams;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
@@ -137,9 +143,12 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mIndirectSpecularScale = surfaceIndirectSpecularScale;
     const float  mTransmissionAlbedoPower = surfaceTransmissionAlbedoPower;
     const float  mTransmissionNormalWeight = surfaceTransmissionNormalWeight;
+    const float4 mTerrainTiling = surfaceTerrainTiling;
+    const float4 mTerrainEdgeParams = surfaceTerrainEdgeParams;
 #endif
 
-    AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mBaseColor.a, mAlphaCutoff);
+    AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mTerrainTiling, mTerrainEdgeParams,
+                  mBaseColor.a, mAlphaCutoff);
 
     // Two-sided foliage: flip a backface normal to face out of the visible side (see gbuffer.hlsl).
     float3 NNorm = normalize(i.NWS);
@@ -148,7 +157,8 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     float3 albedo;
     float2 mr;
     float3 N = NNorm;
-    FetchShadingValuesP(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, mTexOffsScale, mTexFlags, albedo, mr, N);
+    FetchShadingValuesP(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, mTexOffsScale,
+                        mTexFlags, mTerrainTiling, mTerrainEdgeParams, albedo, mr, N);
 
 #if MR_LAYOUT_GLTF
     albedo = mTexFlags.x > 0.5 ? albedo * mBaseColor.rgb : mBaseColor.rgb;

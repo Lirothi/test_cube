@@ -25,7 +25,7 @@ namespace
     constexpr DXGI_FORMAT kColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
     // Mesh assets may have several material slots. Keep a distinct descriptor
-    // and 256-byte CBV for every draw recorded into one thumbnail command list.
+    // and an aligned CB region for every draw recorded into one thumbnail command list.
     // Slot 255 is reserved as a neutral fallback if a pathological asset has
     // more submeshes than the preview heap was sized for.
     constexpr std::uint32_t kPreviewMaterialSlots = 255;
@@ -34,7 +34,7 @@ namespace
     constexpr std::uint32_t kPreviewTexturesPerDraw = 3;
     constexpr std::uint32_t kPreviewSrvDescriptors =
         kPreviewDrawSlots * kPreviewTexturesPerDraw;
-    constexpr std::uint32_t kPreviewConstantStride = 256;
+    constexpr std::uint32_t kPreviewConstantStride = 512;
 
     // Matches the PreviewCB cbuffer in shaders/editor_preview.hlsl (16-byte packed).
     struct PreviewConstants
@@ -49,10 +49,13 @@ namespace
         dx::XMFLOAT4 materialFlags; // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
         dx::XMFLOAT4 surfaceParams; // rgb = subsurface color, w = transmission strength
         dx::XMFLOAT4 surfaceFlags; // x = shading model ID, y = albedo power, z = normal weight
+        dx::XMFLOAT4 terrainTiling; // x = zone size, y = rotation radians, z = scale variance, w = blend
+        dx::XMFLOAT4 terrainEdgeParams; // x = edge breakup, y = edge detail, zw reserved
         dx::XMFLOAT4 ambient;
         dx::XMFLOAT4 debugParams; // x = normal length, yzw = diagnostic line color
     };
-    static_assert(sizeof(PreviewConstants) <= 256, "PreviewConstants must fit one 256B CBV.");
+    static_assert(sizeof(PreviewConstants) <= kPreviewConstantStride,
+        "PreviewConstants must fit one aligned preview CB region.");
 
     ComPtr<ID3DBlob> CompilePreviewShader(const char* entry, const char* target)
     {
@@ -734,6 +737,16 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 material->surfaceParams.transmissionAlbedoPower,
                 material->surfaceParams.transmissionNormalWeight,
                 0.0f };
+            cb.terrainTiling = dx::XMFLOAT4{
+                material->surfaceParams.terrainZoneSize,
+                material->surfaceParams.terrainRotationDegrees * (dx::XM_PI / 180.0f),
+                material->surfaceParams.terrainScaleVariation,
+                material->surfaceParams.terrainBlend };
+            cb.terrainEdgeParams = dx::XMFLOAT4{
+                material->surfaceParams.terrainEdgeBreakup,
+                material->surfaceParams.terrainEdgeDetail,
+                0.0f,
+                0.0f };
         }
         else
         {
@@ -750,6 +763,16 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 static_cast<float>(ShadingModel::DefaultLit),
                 MaterialSurfaceParams{}.transmissionAlbedoPower,
                 MaterialSurfaceParams{}.transmissionNormalWeight,
+                0.0f };
+            cb.terrainTiling = dx::XMFLOAT4{
+                MaterialSurfaceParams{}.terrainZoneSize,
+                MaterialSurfaceParams{}.terrainRotationDegrees * (dx::XM_PI / 180.0f),
+                MaterialSurfaceParams{}.terrainScaleVariation,
+                MaterialSurfaceParams{}.terrainBlend };
+            cb.terrainEdgeParams = dx::XMFLOAT4{
+                MaterialSurfaceParams{}.terrainEdgeBreakup,
+                MaterialSurfaceParams{}.terrainEdgeDetail,
+                0.0f,
                 0.0f };
         }
         // Highlight is driven by the SUBMESH's material slot, not the draw index: one material slot

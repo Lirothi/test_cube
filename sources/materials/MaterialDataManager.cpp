@@ -77,6 +77,18 @@ namespace
             std::clamp(p.value("transmissionAlbedoPower", 0.6f), 0.0f, 4.0f);
         preset.surfaceParams.transmissionNormalWeight =
             std::clamp(p.value("transmissionNormalWeight", 0.35f), 0.0f, 1.0f);
+        preset.surfaceParams.terrainZoneSize =
+            std::clamp(p.value("terrainZoneSize", 4.0f), 0.25f, 64.0f);
+        preset.surfaceParams.terrainRotationDegrees =
+            std::clamp(p.value("terrainRotation", 180.0f), 0.0f, 180.0f);
+        preset.surfaceParams.terrainScaleVariation =
+            std::clamp(p.value("terrainScaleVariation", 0.25f), 0.0f, 0.75f);
+        preset.surfaceParams.terrainBlend =
+            std::clamp(p.value("terrainBlend", 0.35f), 0.0f, 1.0f);
+        preset.surfaceParams.terrainEdgeBreakup =
+            std::clamp(p.value("terrainEdgeBreakup", 0.09f), 0.0f, 0.45f);
+        preset.surfaceParams.terrainEdgeDetail =
+            std::clamp(p.value("terrainEdgeDetail", 3.5f), 0.5f, 12.0f);
 
         if (readFloats("tint", v4, 4))
         {

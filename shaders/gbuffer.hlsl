@@ -14,6 +14,8 @@ cbuffer SurfaceParams : register(b2)
     float indirectSpecularScale;
     float transmissionAlbedoPower;
     float transmissionNormalWeight;
+    float4 terrainTiling;
+    float4 terrainEdgeParams;
 };
 
 #define GBUFFER_RS \
@@ -34,7 +36,8 @@ VSOut VSMain(VSIn i)
 [RootSignature(GBUFFER_RS)]
 PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 {
-    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, baseColor.a, alphaCutoff);
+    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
+                  baseColor.a, alphaCutoff);
 
     // Two-sided foliage (CULL_NONE fronds): a backface reuses the front vertex normal, which points
     // away from the camera → wrong diffuse (dark) + spurious specular. Flip it to face out of the
@@ -45,7 +48,8 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float3 albedo;
     float2 mr;
     float3 N = NNorm;
-    FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, albedo, mr, N);
+    FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, terrainTiling,
+                       terrainEdgeParams, albedo, mr, N);
 
 #if MR_LAYOUT_GLTF
     // Raw (unimported) glTF preview: baseColorFactor multiplies the texture. MR multiplication is

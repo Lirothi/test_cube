@@ -14,6 +14,7 @@ const char* ShadingModelToString(ShadingModel model)
     {
     case ShadingModel::DefaultLit: return "defaultLit";
     case ShadingModel::TwoSidedFoliage: return "twoSidedFoliage";
+    case ShadingModel::Terrain: return "terrain";
     default: return "defaultLit";
     }
 }
@@ -28,6 +29,11 @@ bool TryParseShadingModel(std::string_view text, ShadingModel& outModel)
     if (text == "twoSidedFoliage")
     {
         outModel = ShadingModel::TwoSidedFoliage;
+        return true;
+    }
+    if (text == "terrain")
+    {
+        outModel = ShadingModel::Terrain;
         return true;
     }
     return false;
@@ -147,6 +153,16 @@ void MaterialData::StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UI
         dst->indirectSpecularScale = surfaceParams.indirectSpecularScale;
         dst->transmissionAlbedoPower = surfaceParams.transmissionAlbedoPower;
         dst->transmissionNormalWeight = surfaceParams.transmissionNormalWeight;
+        dst->terrainTiling = DirectX::XMFLOAT4(
+            surfaceParams.terrainZoneSize,
+            surfaceParams.terrainRotationDegrees * (3.14159265358979323846f / 180.0f),
+            surfaceParams.terrainScaleVariation,
+            surfaceParams.terrainBlend);
+        dst->terrainEdgeParams = DirectX::XMFLOAT4(
+            surfaceParams.terrainEdgeBreakup,
+            surfaceParams.terrainEdgeDetail,
+            0.0f,
+            0.0f);
         surfaceCbCache_.frameNumber = frameNumber;
         surfaceCbCache_.gpu = cb.gpu;
     }

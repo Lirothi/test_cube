@@ -33,7 +33,7 @@ namespace
         uint32_t _pad[3]{};
         render::MaterialSurfaceParamsGpu surface{};
     };
-    static_assert(sizeof(GpuInstDrawParams) == 48,
+    static_assert(sizeof(GpuInstDrawParams) == 80,
         "GpuInstDrawParams must match the HLSL InstDraw cbuffer layout");
 }
 
@@ -216,6 +216,16 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
         drawParams->surface.indirectSpecularScale = surface.indirectSpecularScale;
         drawParams->surface.transmissionAlbedoPower = surface.transmissionAlbedoPower;
         drawParams->surface.transmissionNormalWeight = surface.transmissionNormalWeight;
+        drawParams->surface.terrainTiling = XMFLOAT4(
+            surface.terrainZoneSize,
+            surface.terrainRotationDegrees * (XM_PI / 180.0f),
+            surface.terrainScaleVariation,
+            surface.terrainBlend);
+        drawParams->surface.terrainEdgeParams = XMFLOAT4(
+            surface.terrainEdgeBreakup,
+            surface.terrainEdgeDetail,
+            0.0f,
+            0.0f);
         ctx.cbv[2] = baseCB.gpu;
         mat->Bind(cl, ctx, wireframe);
         mesh_->DrawInstanced(cl, tierCount_[tier], tier);

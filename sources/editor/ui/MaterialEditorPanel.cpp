@@ -258,6 +258,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         const char* shadingModelPreview = "Default Lit";
         if (!shadingModelValid) { shadingModelPreview = "Invalid (Default Lit fallback)"; }
         else if (shadingModel == ShadingModel::TwoSidedFoliage) { shadingModelPreview = "Two-Sided Foliage"; }
+        else if (shadingModel == ShadingModel::Terrain) { shadingModelPreview = "Terrain"; }
 
         if (ImGui::BeginCombo("Shading Model", shadingModelPreview))
         {
@@ -268,7 +269,8 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             };
             constexpr ShadingModelOption kOptions[] = {
                 { ShadingModel::DefaultLit, "Default Lit" },
-                { ShadingModel::TwoSidedFoliage, "Two-Sided Foliage" }
+                { ShadingModel::TwoSidedFoliage, "Two-Sided Foliage" },
+                { ShadingModel::Terrain, "Terrain" }
             };
             for (const ShadingModelOption& option : kOptions)
             {
@@ -290,6 +292,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         }
 
         const bool foliage = shadingModelValid && shadingModel == ShadingModel::TwoSidedFoliage;
+        const bool terrain = shadingModelValid && shadingModel == ShadingModel::Terrain;
         if (foliage) { doc_["twoSided"] = true; }
 
         bool twoSided = foliage || doc_.value("twoSided", false);
@@ -349,6 +352,82 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         {
             ImGui::SetTooltip("0 keeps broad two-sided wrap; 1 uses abs(N.L) projected-area weighting.\n"
                               "Fresnel still suppresses grazing-angle transmission.");
+        }
+        if (terrain)
+        {
+            ImGui::Spacing();
+            ImGui::SeparatorText("Terrain de-tiling");
+
+            float zoneSize = std::clamp(doc_.value("terrainZoneSize", 4.0f), 0.25f, 64.0f);
+            if (ImGui::DragFloat("Zone Size (texture repeats)", &zoneSize, 0.05f, 0.25f, 64.0f,
+                                 "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainZoneSize"] = std::clamp(zoneSize, 0.25f, 64.0f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Average Voronoi zone size after Tex Offset / Scale.\n"
+                                  "Larger zones preserve longer continuous stretches of the source texture.");
+            }
+
+            float rotation = std::clamp(doc_.value("terrainRotation", 180.0f), 0.0f, 180.0f);
+            if (ImGui::DragFloat("Random Rotation (degrees)", &rotation, 1.0f, 0.0f, 180.0f,
+                                 "%.0f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainRotation"] = std::clamp(rotation, 0.0f, 180.0f);
+            }
+
+            float scaleVariation =
+                std::clamp(doc_.value("terrainScaleVariation", 0.25f), 0.0f, 0.75f);
+            if (ImGui::DragFloat("Random Scale Variation", &scaleVariation, 0.01f, 0.0f, 0.75f,
+                                 "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainScaleVariation"] = std::clamp(scaleVariation, 0.0f, 0.75f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("0 keeps scale at 1. A value of 0.25 chooses a stable per-zone\n"
+                                  "scale in the range 0.75..1.25.");
+            }
+
+            float blend = std::clamp(doc_.value("terrainBlend", 0.35f), 0.0f, 1.0f);
+            if (ImGui::DragFloat("Zone Edge Blend", &blend, 0.01f, 0.0f, 1.0f,
+                                 "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainBlend"] = std::clamp(blend, 0.0f, 1.0f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Blends the three nearest transformed zones.\n"
+                                  "0 is a hard boundary; larger values hide seams more broadly.");
+            }
+
+            float edgeBreakup =
+                std::clamp(doc_.value("terrainEdgeBreakup", 0.09f), 0.0f, 0.45f);
+            if (ImGui::DragFloat("Edge Breakup", &edgeBreakup, 0.005f, 0.0f, 0.45f,
+                                 "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainEdgeBreakup"] = std::clamp(edgeBreakup, 0.0f, 0.45f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Warps only the Voronoi zone mask, producing torn irregular edges.\n"
+                                  "0 restores clean geometric cell boundaries.\n"
+                                  "Capped against Edge Detail so the zone map cannot fold.");
+            }
+
+            float edgeDetail =
+                std::clamp(doc_.value("terrainEdgeDetail", 3.5f), 0.5f, 12.0f);
+            if (ImGui::DragFloat("Edge Detail", &edgeDetail, 0.05f, 0.5f, 12.0f,
+                                 "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["terrainEdgeDetail"] = std::clamp(edgeDetail, 0.5f, 12.0f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Noise frequency along zone borders. Higher values make smaller,\n"
+                                  "more ragged notches without changing source texture UVs.");
+            }
         }
         const float serializedIndirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
         float indirectSpecularScale = std::clamp(serializedIndirectSpecularScale, 0.0f, 1.0f);

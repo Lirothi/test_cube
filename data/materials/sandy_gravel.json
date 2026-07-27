@@ -1,0 +1,11 @@
+{
+  "albedo": "textures/sandy_gravel_1k/textures/sandy_gravel_albedo.dds",
+  "mr": "textures/sandy_gravel_1k/textures/sandy_gravel_mr.dds",
+  "normal": "textures/sandy_gravel_1k/textures/sandy_gravel_normal.dds",
+  "normalIsRG": false,
+  "normalStrength": 1.0,
+  "shadingModel": "terrain",
+  "terrainRotation": 180.0,
+  "terrainScaleVariation": 0.20000000298023224,
+  "terrainZoneSize": 2.0
+}

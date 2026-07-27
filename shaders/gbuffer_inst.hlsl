@@ -30,6 +30,8 @@ cbuffer InstDraw : register(b2)
     float indirectSpecularScale;
     float transmissionAlbedoPower;
     float transmissionNormalWeight;
+    float4 terrainTiling;
+    float4 terrainEdgeParams;
 };
 cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
 
@@ -48,7 +50,8 @@ VSOut VSMain(VSInInst i)
 [RootSignature(GBUFFER_INST_RS)]
 PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 {
-    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, baseColor.a, alphaCutoff);
+    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
+                  baseColor.a, alphaCutoff);
 
     // Two-sided foliage: flip a backface normal to face out of the visible side (see gbuffer.hlsl).
     float3 NNorm = normalize(i.NWS);
@@ -57,7 +60,8 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float3 albedo;
     float2 mr;
     float3 N = NNorm;
-    FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, albedo, mr, N);
+    FetchShadingValues(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, terrainTiling,
+                       terrainEdgeParams, albedo, mr, N);
 
 #if MR_LAYOUT_GLTF
     albedo = texFlags.x > 0.5 ? albedo * baseColor.rgb : baseColor.rgb;

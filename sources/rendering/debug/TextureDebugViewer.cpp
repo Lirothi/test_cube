@@ -208,7 +208,7 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GlassReflection, "Reflection", "Off-screen glass reflection (RT or SSR) sampled by the forward glass pass.", D.glassReflection.Get(), renderer.GetReflectionFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused.", D.gb1.Get(), renderer.GetGBuffer1Format()),
-            MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
+            MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2/15 gray=2 Terrain, 3..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "DefaultLit emissive; Two-Sided Foliage subsurface/transmission payload.", D.gb2.Get(), renderer.GetGBuffer2Format()),
             MakeTarget(TextureDebugViewer::Target::GBufferAux, "GBuffer", "Auxiliary material payload: AO R, indirect specular scale G, shading model B, reserved A.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::Velocity, "GBuffer", "Motion vectors.", D.gbVelocity.Get(), renderer.GetGBufferVelocityFormat()),

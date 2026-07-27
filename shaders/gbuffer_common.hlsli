@@ -1,5 +1,6 @@
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "terrain_tiling.hlsli"
 #include "wind.hlsli" // W4: shared WindOffset (same math as the shadow VS in W5)
 
 #ifndef GBUFFER_COMMON_HLSLI
@@ -245,9 +246,36 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
 // Parameterized shading fetch (per-instance texOffsScale/texFlags). The non-instanced
 // wrapper delegates with the PerObject globals so both paths produce identical math.
 inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
-                                float4 texOffsScale, float4 texFlags,
+                                float4 texOffsScale, float4 texFlags, float4 terrainTiling,
+                                float4 terrainEdgeParams,
                                 out float3 albedo, out float2 mr, inout float3 norm)
 {
+#if SHADING_MODEL_ID == 2
+    TerrainTileSample tile0;
+    TerrainTileSample tile1;
+    TerrainTileSample tile2;
+    TerrainBuildTileSamples(tfUVp(uv, texOffsScale), terrainTiling, terrainEdgeParams,
+                            tile0, tile1, tile2);
+
+    albedo = TerrainSampleTextureColor(
+        txAlbedo, samp, tile0, tile1, tile2).rgb;
+    const float4 packedMR = TerrainSampleTextureColor(
+        txMR, samp, tile0, tile1, tile2);
+#if MR_LAYOUT_GLTF
+    mr = packedMR.bg;
+#else
+    mr = packedMR.rg;
+#endif
+
+#if NORMALMAP_IS_RG
+    const bool terrainNormalIsRG = true;
+#else
+    const bool terrainNormalIsRG = false;
+#endif
+    const float2 blendedDerivative = TerrainBlendNormalDerivatives(
+        txNorm, samp, tile0, tile1, tile2, terrainNormalIsRG);
+    const float3 nTS = normalize(float3(-blendedDerivative * texFlags.w, 1.0));
+#else
     albedo = txAlbedo.Sample(samp, tfUVp(uv, texOffsScale)).rgb;
 #if MR_LAYOUT_GLTF
     // glTF packs metallic in B, roughness in G. Swizzle to the engine's (metal, rough) order
@@ -270,6 +298,7 @@ inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D tx
     float3 nTS = txNorm.Sample(samp, tfUVp(uv, texOffsScale)).xyz * 2.0 - 1.0;
     nTS.xy *= texFlags.w * 1;
 #endif
+#endif
     //norm = PerturbNormal_Deriv(nTS, norm, PVS, uv);
     float3 T = normalize(TWS.xyz);
     float3 B = normalize(cross(norm, T) * TWS.w);
@@ -279,9 +308,11 @@ inline void FetchShadingValuesP(Texture2D txAlbedo, Texture2D txMR, Texture2D tx
 
 #ifndef GBUFFER_SKIP_PEROBJECT
 inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txNorm, SamplerState samp, float2 uv, float4 TWS,
+                                float4 terrainTiling, float4 terrainEdgeParams,
                                 out float3 albedo, out float2 mr, inout float3 norm)
 {
-    FetchShadingValuesP(txAlbedo, txMR, txNorm, samp, uv, TWS, texOffsScale, texFlags, albedo, mr, norm);
+    FetchShadingValuesP(txAlbedo, txMR, txNorm, samp, uv, TWS, texOffsScale, texFlags,
+                        terrainTiling, terrainEdgeParams, albedo, mr, norm);
 }
 #endif
 
@@ -289,12 +320,22 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
 // cutoff disables the test for this slot (so an opaque submesh sharing an ALPHA_TEST PSO never
 // clips). Compiled out entirely unless the material's PSO defines ALPHA_TEST.
 inline void AlphaTestClip(Texture2D txAlbedo, SamplerState samp, float2 uv,
-                          float4 texOffsScaleV, float baseAlpha, float cutoff)
+                          float4 texOffsScaleV, float4 terrainTiling, float4 terrainEdgeParams,
+                          float baseAlpha, float cutoff)
 {
 #if defined(ALPHA_TEST) && ALPHA_TEST
     if (cutoff >= 0.0)
     {
+#if SHADING_MODEL_ID == 2
+        TerrainTileSample tile0;
+        TerrainTileSample tile1;
+        TerrainTileSample tile2;
+        TerrainBuildTileSamples(tfUVp(uv, texOffsScaleV), terrainTiling, terrainEdgeParams,
+                                tile0, tile1, tile2);
+        float a = TerrainSampleTexture(txAlbedo, samp, tile0, tile1, tile2).a * baseAlpha;
+#else
         float a = txAlbedo.Sample(samp, tfUVp(uv, texOffsScaleV)).a * baseAlpha;
+#endif
         clip(a - cutoff);
     }
 #endif

@@ -2,5 +2,9 @@
   "albedo": "textures/coast_sand_01_2k/textures/coast_sand_01_albedo.dds",
   "mr": "textures/coast_sand_01_2k/textures/coast_sand_01_mr.dds",
   "normal": "textures/coast_sand_01_2k/textures/coast_sand_01_normal.dds",
-  "normalIsRG": false
+  "normalIsRG": false,
+  "normalStrength": 1.0,
+  "shadingModel": "terrain",
+  "terrainScaleVariation": 0.15000000596046448,
+  "terrainZoneSize": 2.0
 }

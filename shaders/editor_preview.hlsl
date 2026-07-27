@@ -6,6 +6,7 @@
 // directional key light. Compiled at runtime as vs_5_0 / ps_5_0.
 
 #include "utils.hlsli"
+#include "terrain_tiling.hlsli"
 
 cbuffer PreviewCB : register(b0)
 {
@@ -20,6 +21,8 @@ cbuffer PreviewCB : register(b0)
     float4 gSurfaceParams;      // rgb = subsurface color, w = transmission strength
     float4 gSurfaceFlags;       // x = shading model ID, y = albedo power, z = normal weight,
                                 // w = highlight 0..1 (Mesh Editor hover over a slot's controls)
+    float4 gTerrainTiling;      // x = zone size, y = rotation radians, z = scale variance, w = blend
+    float4 gTerrainEdgeParams;  // x = edge breakup, y = edge detail, zw reserved
     float4 gAmbient;            // rgb = light color, w = ambient intensity
     float4 gDebugParams;        // x = normal length, yzw = diagnostic line color
 };
@@ -98,10 +101,26 @@ float4 DebugPS(float4 position : SV_POSITION) : SV_TARGET
 float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
     float2 uv = input.uv * gTexOffsScale.zw + gTexOffsScale.xy;
+    const uint shadingModel = (uint)round(gSurfaceFlags.x);
+    const bool terrain = shadingModel == kShadingModelTerrain;
+
+    TerrainTileSample terrainTile0 = TerrainIdentityTileSample(uv, 1.0);
+    TerrainTileSample terrainTile1 = TerrainIdentityTileSample(uv, 0.0);
+    TerrainTileSample terrainTile2 = TerrainIdentityTileSample(uv, 0.0);
+    if (terrain)
+    {
+        TerrainBuildTileSamples(
+            uv, gTerrainTiling, gTerrainEdgeParams,
+            terrainTile0, terrainTile1, terrainTile2);
+    }
+
     float4 albedoSample = float4(1.0, 1.0, 1.0, 1.0);
     if (gMaterialFlags.w > 0.5)
     {
-        albedoSample = gAlbedo.Sample(gSampler, uv);
+        albedoSample = terrain
+            ? TerrainSampleTextureColor(
+                gAlbedo, gSampler, terrainTile0, terrainTile1, terrainTile2)
+            : gAlbedo.Sample(gSampler, uv);
     }
     if (gMetalRoughAlpha.z >= 0.0)
     {
@@ -119,7 +138,10 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     float2 mr = gMetalRoughAlpha.xy;
     if (gTexFlags.y > 0.5)
     {
-        float4 packedMR = gMR.Sample(gSampler, uv);
+        float4 packedMR = terrain
+            ? TerrainSampleTextureColor(
+                gMR, gSampler, terrainTile0, terrainTile1, terrainTile2)
+            : gMR.Sample(gSampler, uv);
         float2 texturedMR = gMaterialFlags.x > 0.5
             ? packedMR.bg
             : packedMR.rg;
@@ -139,7 +161,14 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     if (gTexFlags.z > 0.5)
     {
         float3 normalTS;
-        if (gMaterialFlags.y > 0.5)
+        if (terrain)
+        {
+            const float2 blendedDerivative = TerrainBlendNormalDerivatives(
+                gNormalMap, gSampler, terrainTile0, terrainTile1, terrainTile2,
+                gMaterialFlags.y > 0.5);
+            normalTS = normalize(float3(-blendedDerivative * gTexFlags.w, 1.0));
+        }
+        else if (gMaterialFlags.y > 0.5)
         {
             float2 xy = gNormalMap.Sample(gSampler, uv).rg * 2.0 - 1.0;
             float z = sqrt(saturate(1.0 - dot(xy, xy)));
@@ -168,7 +197,6 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 
     const float3 radiance = gAmbient.rgb * gLightDir.w;
     float3 lit = albedo * (1.0 - metallic) * gAmbient.w * radiance;
-    const uint shadingModel = (uint)round(gSurfaceFlags.x);
     if (shadingModel == kShadingModelTwoSidedFoliage)
     {
         const float albedoPower = max(gSurfaceFlags.y, 0.0f);

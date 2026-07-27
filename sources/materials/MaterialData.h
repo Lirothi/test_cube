@@ -20,11 +20,13 @@ class Renderer;
 enum class ShadingModel : uint8_t
 {
     DefaultLit = 0,
-    TwoSidedFoliage = 1
+    TwoSidedFoliage = 1,
+    Terrain = 2
 };
 static_assert(static_cast<uint8_t>(ShadingModel::DefaultLit) == 0);
 static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) == 1);
-static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) < 16);
+static_assert(static_cast<uint8_t>(ShadingModel::Terrain) == 2);
+static_assert(static_cast<uint8_t>(ShadingModel::Terrain) < 16);
 
 const char* ShadingModelToString(ShadingModel model);
 bool TryParseShadingModel(std::string_view text, ShadingModel& outModel);
@@ -42,6 +44,18 @@ struct MaterialSurfaceParams
     float transmissionAlbedoPower = 0.6f;
     // Blend between broad thin-sheet wrap (0) and abs(N.L) projected-area weighting (1).
     float transmissionNormalWeight = 0.35f;
+    // Terrain texture-bombing controls. Zone size is measured in repeats of the already transformed
+    // source UV; rotation is authored in degrees and converted for the GPU upload.
+    float terrainZoneSize = 4.0f;
+    float terrainRotationDegrees = 180.0f;
+    float terrainScaleVariation = 0.25f;
+    float terrainBlend = 0.35f;
+    // Continuous domain warp applied only to the procedural zone map. Breakup is measured in
+    // zone-space; detail is the base noise frequency per zone. The shader caps breakup against
+    // detail so the warped zone map stays injective (see TerrainWarpZoneMap): this default pair
+    // sits just under that limit.
+    float terrainEdgeBreakup = 0.09f;
+    float terrainEdgeDetail = 3.5f;
 };
 
 // ---------------------

@@ -16,6 +16,7 @@ static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for
 // Keep these IDs in sync with the C++ ShadingModel enum in MaterialData.h.
 static const uint kShadingModelDefaultLit = 0u;
 static const uint kShadingModelTwoSidedFoliage = 1u;
+static const uint kShadingModelTerrain = 2u;
 static const uint kShadingModelMask = 15u;
 
 inline float EncodeShadingModel(uint id)

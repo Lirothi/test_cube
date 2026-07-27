@@ -141,6 +141,16 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             sp->surface.indirectSpecularScale = surface.indirectSpecularScale;
             sp->surface.transmissionAlbedoPower = surface.transmissionAlbedoPower;
             sp->surface.transmissionNormalWeight = surface.transmissionNormalWeight;
+            sp->surface.terrainTiling = DirectX::XMFLOAT4(
+                surface.terrainZoneSize,
+                surface.terrainRotationDegrees * (DirectX::XM_PI / 180.0f),
+                surface.terrainScaleVariation,
+                surface.terrainBlend);
+            sp->surface.terrainEdgeParams = DirectX::XMFLOAT4(
+                surface.terrainEdgeBreakup,
+                surface.terrainEdgeDetail,
+                0.0f,
+                0.0f);
             slotCbScratch_[slot] = cb.gpu;
         }
     }

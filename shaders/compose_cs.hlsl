@@ -73,7 +73,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float indirectSpecularScale = saturate(gbAux.g);
     uint shadingModel = DecodeShadingModel(gbAux.b);
     float3 color = lit;
-    if (shadingModel == kShadingModelDefaultLit)
+    if (shadingModel != kShadingModelTwoSidedFoliage)
     {
         color += payload;
     }
