@@ -43,6 +43,10 @@ void SceneLightingCBHandles::Populate(Material* material)
     clipmapBaseExtent = material->ComputeCB0FieldHandle("clipmapBaseExtent");
     clipmapNormalBias = material->ComputeCB0FieldHandle("clipmapNormalBias");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
+    causticsTint = material->ComputeCB0FieldHandle("causticsTint");
+    causticsParams0 = material->ComputeCB0FieldHandle("causticsParams0");
+    causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
+    causticsParams2 = material->ComputeCB0FieldHandle("causticsParams2");
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -500,6 +504,10 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);
     matLighting_->UpdateCBField(handles.clipmapBaseExtent, data.clipmapBaseExtent, dest);
     matLighting_->UpdateCBField(handles.clipmapNormalBias, data.clipmapNormalBias, dest);
+    matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
+    matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
+    matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
+    matLighting_->UpdateCBField(handles.causticsParams2, data.causticsParams2, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));

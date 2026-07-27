@@ -918,6 +918,22 @@
       "absorptionDepthScale": 10.0,
       "absorptionGradientType": 0.0,
       "cascadeFadeScale": 20.0,
+      "causticsBias": 0.0,
+      "causticsDepthFade": 4.0,
+      "causticsDispersion": 0.0,
+      "causticsEnabled": true,
+      "causticsIntensity": 2.0,
+      "causticsLayerBlend": 1.0,
+      "causticsScale": 10.0,
+      "causticsSpeed": 16.0,
+      "causticsSurfaceFade": 0.4000000059604645,
+      "causticsTint": [
+        0.8500000238418579,
+        1.0,
+        0.949999988079071,
+        1.0
+      ],
+      "causticsUpFacing": 0.699999988079071,
       "deepScatterColor": [
         0.0,
         0.01274509821087122,

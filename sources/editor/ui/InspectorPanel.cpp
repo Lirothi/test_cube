@@ -868,6 +868,52 @@ namespace
                     renderDrag("Underwater Foam Parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
                 }
 
+                if (ImGui::CollapsingHeader("Caustics"))
+                {
+                    bool causticsEnabled = render.causticsEnabled;
+                    if (ImGui::Checkbox("Caustics Enabled", &causticsEnabled))
+                    {
+                        OceanRenderConfig afterRender = render;
+                        afterRender.causticsEnabled = causticsEnabled;
+                        nlohmann::json after = p;
+                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        executeChange(std::move(after), "Set Ocean Caustics Enabled");
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip(
+                            "Sun caustics on everything below the water line. Applied in the\n"
+                            "deferred lighting pass, so they follow the sun shadow.");
+                    }
+                    renderDrag("Intensity", render.causticsIntensity, 0.01f, 0.0f, 6.0f);
+                    renderDrag("Tile Size (m)", render.causticsScale, 0.05f, 0.25f, 60.0f);
+                    renderDrag("Speed (frames/s)", render.causticsSpeed, 0.1f, 0.0f, 60.0f);
+                    renderDrag("Depth Fade (m)", render.causticsDepthFade, 0.1f, 0.1f, 120.0f);
+                    renderDrag("Surface Fade (m)", render.causticsSurfaceFade, 0.01f, 0.0f, 5.0f);
+                    renderDrag("Up-Facing Gate", render.causticsUpFacing, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Dark Bias", render.causticsBias, 0.005f, 0.0f, 1.0f);
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip(
+                            "Pattern value that means \"no gain\". The generator prints the value\n"
+                            "unfocused sunlight encodes to; at that setting the dark cells stay\n"
+                            "neutral and only the cords brighten.");
+                    }
+                    renderDrag("Dispersion (texels)", render.causticsDispersion, 0.01f, 0.0f, 8.0f);
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Chromatic split of the cords. 0 is monochrome and 3x cheaper.");
+                    }
+                    renderDrag("De-Tile Layer", render.causticsLayerBlend, 0.005f, 0.0f, 1.0f);
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip(
+                            "Second layer at another scale, min-combined, to hide the tiling\n"
+                            "period. 0 halves the texture taps.");
+                    }
+                    renderColor("Caustics Tint", render.causticsTint);
+                }
+
                 if (ImGui::CollapsingHeader("Absorption gradient"))
                 {
                     bool curvedGradient = render.absorptionGradientType >= 0.5f;

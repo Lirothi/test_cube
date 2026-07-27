@@ -79,6 +79,26 @@ struct OceanRenderConfig
     float foamNormalStrength = 0.6f;
     float underwaterFoamParallax = 1.6f;
 
+    // --- Caustics -----------------------------------------------------------------------------
+    // Sampled in the deferred lighting pass (lighting_cs.hlsl) for every surface below the water
+    // line, so they land on the lagoon floor, the submerged beach and any prop under water, and
+    // they inherit the sun shadow for free. Off when there is no ocean in the level.
+    bool  causticsEnabled = true;
+    float causticsIntensity = 2.6f;     // gain added to the direct sun term at a cord
+    float causticsScale = 6.0f;         // metres per tile; the pattern is ~16 cells wide, so this
+                                        // sets the cell size (6 m -> ~37 cm cells)
+    float causticsSpeed = 10.0f;        // flipbook frames per second (the loop is 16 frames)
+    float causticsDepthFade = 14.0f;    // metres below the surface over which it fades to nothing
+    float causticsSurfaceFade = 0.4f;   // metres of fade-in right under the surface (kills the waterline seam)
+    float causticsUpFacing = 0.7f;      // 0 = ignore the normal, 1 = full N.up gate
+    // The flipbook stores ray DENSITY, so there is one physically right value here: whatever
+    // unfocused sunlight encodes to (tools/gen_caustics.py prints it). At that setting the dark
+    // cells stay neutral and only the cords add light.
+    float causticsBias = 0.186f;
+    float causticsDispersion = 0.25f;   // chromatic split in texels (0 = monochrome, and 3x cheaper)
+    float causticsLayerBlend = 0.6f;    // second de-tiling layer, min-combined (0 = single layer)
+    Math::float4 causticsTint = Math::float4(0.85f, 1.0f, 0.95f, 1.0f);
+
     float absorptionGradientType = 0.0f;
     std::vector<Math::float4> absorptionColors = {
         Math::float4(0.0f, 0.041025557f, 0.094412796f, 0.0f),

@@ -1198,6 +1198,42 @@ namespace
         drag("Foam normal strength", render.foamNormalStrength, 0.005f, 0.0f, 1.0f);
         drag("Underwater foam parallax", render.underwaterFoamParallax, 0.01f, 0.0f, 10.0f);
 
+        ImGui::SeparatorText("Caustics");
+        if (ImGui::Checkbox("Caustics enabled", &render.causticsEnabled))
+        {
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Sun caustics on everything below the water line.\n"
+                              "Applied in the deferred lighting pass, so they follow the sun shadow.");
+        }
+        drag("Intensity", render.causticsIntensity, 0.01f, 0.0f, 6.0f);
+        drag("Tile size (m)", render.causticsScale, 0.05f, 0.25f, 60.0f);
+        drag("Speed (frames/s)", render.causticsSpeed, 0.1f, 0.0f, 60.0f);
+        drag("Depth fade (m)", render.causticsDepthFade, 0.1f, 0.1f, 120.0f);
+        drag("Surface fade (m)", render.causticsSurfaceFade, 0.01f, 0.0f, 5.0f);
+        drag("Up-facing gate", render.causticsUpFacing, 0.005f, 0.0f, 1.0f);
+        drag("Dark bias", render.causticsBias, 0.005f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Pattern value that means \"no gain\". Above it the filaments brighten,\n"
+                              "below it the cells between them darken.");
+        }
+        drag("Dispersion (texels)", render.causticsDispersion, 0.01f, 0.0f, 8.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Chromatic split of the filament edges. 0 is monochrome and 3x cheaper\n"
+                              "(the pattern is sampled once per channel).");
+        }
+        drag("De-tile layer", render.causticsLayerBlend, 0.005f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Blends in a second layer at another scale, min-combined, to hide the\n"
+                              "tiling period. 0 halves the texture taps.");
+        }
+        drawColor("Caustics tint", render.causticsTint);
+
         ImGui::SeparatorText("Absorption gradient");
         bool curvedGradient = render.absorptionGradientType >= 0.5f;
         if (ImGui::Checkbox("Curved interpolation", &curvedGradient))

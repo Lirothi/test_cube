@@ -41,6 +41,10 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle clipmapBaseExtent;
     Material::CBFieldHandle clipmapNormalBias;
     Material::CBFieldHandle clipmapViewProj;
+    Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
+    Material::CBFieldHandle causticsParams0;
+    Material::CBFieldHandle causticsParams1;
+    Material::CBFieldHandle causticsParams2;
 
     void Populate(Material* material);
 };
@@ -165,6 +169,12 @@ struct LightingPassConstants
     float clipmapBaseExtent = 0.0f;               // finest clipmap level's world extent
     float clipmapNormalBias = 0.0f;               // normal offset in texels
     std::array<mat4, 8> clipmapViewProj{};        // camera-centered ortho viewProj per clipmap level
+    // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,
+    // which is what a level without an ocean produces.
+    float4 causticsTint{};
+    float4 causticsParams0{};   // intensity, metres per tile, frames/sec, water level Y
+    float4 causticsParams1{};   // depth fade, surface fade, up-facing gate, bias
+    float4 causticsParams2{};   // dispersion, second-layer blend, time, world metres per pixel
 };
 
 struct PointLightPassConstants

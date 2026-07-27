@@ -286,6 +286,33 @@ namespace OceanRenderConfigJson
         render.underwaterFoamParallax = std::max(
             0.0f, ReadFloat(object, "underwaterFoamParallax", render.underwaterFoamParallax));
 
+        {
+            const auto it = object.find("causticsEnabled");
+            if (it != object.end() && it->is_boolean())
+            {
+                render.causticsEnabled = it->get<bool>();
+            }
+        }
+        render.causticsIntensity = std::max(
+            0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
+        render.causticsScale = std::max(
+            0.05f, ReadFloat(object, "causticsScale", render.causticsScale));
+        render.causticsSpeed = std::max(
+            0.0f, ReadFloat(object, "causticsSpeed", render.causticsSpeed));
+        render.causticsDepthFade = std::max(
+            0.01f, ReadFloat(object, "causticsDepthFade", render.causticsDepthFade));
+        render.causticsSurfaceFade = std::max(
+            0.0f, ReadFloat(object, "causticsSurfaceFade", render.causticsSurfaceFade));
+        render.causticsUpFacing = Math::Saturate(
+            ReadFloat(object, "causticsUpFacing", render.causticsUpFacing));
+        render.causticsBias = Math::Saturate(
+            ReadFloat(object, "causticsBias", render.causticsBias));
+        render.causticsDispersion = std::clamp(
+            ReadFloat(object, "causticsDispersion", render.causticsDispersion), 0.0f, 8.0f);
+        render.causticsLayerBlend = Math::Saturate(
+            ReadFloat(object, "causticsLayerBlend", render.causticsLayerBlend));
+        render.causticsTint = ReadFloat4(object, "causticsTint", render.causticsTint);
+
         render.absorptionGradientType = Math::Saturate(
             ReadFloat(object, "absorptionGradientType", render.absorptionGradientType));
         const auto colorsIt = object.find("absorptionColors");
@@ -402,6 +429,18 @@ namespace OceanRenderConfigJson
 
         out["foamNormalStrength"] = render.foamNormalStrength;
         out["underwaterFoamParallax"] = render.underwaterFoamParallax;
+
+        out["causticsEnabled"] = render.causticsEnabled;
+        out["causticsIntensity"] = render.causticsIntensity;
+        out["causticsScale"] = render.causticsScale;
+        out["causticsSpeed"] = render.causticsSpeed;
+        out["causticsDepthFade"] = render.causticsDepthFade;
+        out["causticsSurfaceFade"] = render.causticsSurfaceFade;
+        out["causticsUpFacing"] = render.causticsUpFacing;
+        out["causticsBias"] = render.causticsBias;
+        out["causticsDispersion"] = render.causticsDispersion;
+        out["causticsLayerBlend"] = render.causticsLayerBlend;
+        out["causticsTint"] = WriteFloat4(render.causticsTint);
         out["absorptionGradientType"] = render.absorptionGradientType;
 
         nlohmann::json colors = nlohmann::json::array();

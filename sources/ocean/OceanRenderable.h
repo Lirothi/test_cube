@@ -46,6 +46,13 @@ public:
     // wind system reads this as its shared clock so waves and foliage sway stay phase-coherent.
     float GetElapsedTime() const { return elapsedTime_; }
 
+    // Caustics: the flipbook lives with the ocean because it IS a water effect, but it is consumed
+    // by the deferred lighting pass (see SceneRenderer::Pass_Lighting), which needs the CPU-side
+    // SRV handle to stage into its own descriptor table. Null until Initialize has run.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetCausticsSrvCPU() const { return causticsTexture_.GetSRVCPU(); }
+    // World-space Y of the still water plane. Everything below it receives caustics.
+    float GetWaterLevel() const { return GetPosition().y; }
+
     void SetGridVertexDensity(uint32_t density);
 
 private:
@@ -145,6 +152,7 @@ private:
     Texture2D shoreFoamBreakupMaskTexture_;
     Texture2D shoreFoamAlbedoTexture_;
     Texture2D distantRoughnessTexture_;
+    Texture2D causticsTexture_;
 
     Math::float2 foamTrailTextureSize0_ = Math::float2(100.0f, 50.0f);
     Math::float2 foamTrailTextureSize1_ = Math::float2(100.0f, 50.0f);

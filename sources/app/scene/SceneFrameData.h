@@ -12,6 +12,7 @@
 
 class Camera;
 class DirectionalLight;
+class OceanRenderable;
 class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
@@ -104,6 +105,9 @@ struct SceneFrameData
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
     const vfx::WindState* wind = nullptr; // W3: global wind, folded into the gbuffer per-view CB
+    // Water in the level, or null. The deferred lighting pass reads its caustics settings, clock
+    // and flipbook; no ocean simply means no caustics.
+    OceanRenderable* ocean = nullptr;
 
     CascadeData cascades{};
     std::array<std::uint64_t, kMaxEditorSelection> selectedEditorObjectIds{};

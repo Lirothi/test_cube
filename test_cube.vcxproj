@@ -615,6 +615,8 @@
     <None Include="shaders\fxaa_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsli" />
+    <None Include="shaders\caustics.hlsli" />
+    <None Include="shaders\terrain_tiling.hlsli" />
     <None Include="shaders\rt_geometry.hlsli" />
     <None Include="shaders\rt_lights.hlsli" />
     <None Include="shaders\gbuffer_instcb.hlsl" />

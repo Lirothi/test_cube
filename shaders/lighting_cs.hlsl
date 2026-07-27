@@ -2,14 +2,17 @@
 // t4     : Depth (R32F)
 // t5     : Shadow atlas
 // t8     : GBAux (AO, indirect specular scale, shading model)
+// t9     : Caustics flipbook atlas (inert when there is no ocean)
 // u0     : Light accumulation target (RWTexture2D)
 // s0     : PointClamp
 // s1     : ComparisonLinearClamp
+// s2     : LinearWrap (caustics)
 
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
 #include "vsm_sample.hlsli"
+#include "caustics.hlsli"
 
 Texture2D GB0 : register(t0);
 Texture2D GB1 : register(t1);
@@ -20,10 +23,12 @@ Texture2D ShadowAtlas : register(t5);
 StructuredBuffer<uint> VsmPageTable : register(t6); // Rung 2 / Step 24f: directional clipmap page table
 Texture2D VsmPool : register(t7);                    // VSM physical page pool depth
 Texture2D GBAux : register(t8);
+Texture2D CausticsAtlas : register(t9);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerComparisonState gSmpLinear : register(s1);
+SamplerState gSmpLinearWrap : register(s2);
 
 cbuffer PerFrame : register(b0)
 {
@@ -62,6 +67,12 @@ cbuffer PerFrame : register(b0)
     float clipmapBaseExtent;  // finest clipmap level's world extent (for per-level texel-scaled bias)
     float clipmapNormalBias;  // normal offset in texels
     float4x4 clipmapViewProj[8];
+    // Underwater caustics (see caustics.hlsli). causticsTint.w == 0 disables the whole block:
+    // that is the state when the level has no ocean, or the ocean has caustics switched off.
+    float4 causticsTint;          // rgb = tint, w = master enable
+    float4 causticsParams0;       // x: intensity, y: metres per tile, z: frames/sec, w: water level Y
+    float4 causticsParams1;       // x: depth fade, y: surface fade, z: up-facing gate, w: bias
+    float4 causticsParams2;       // x: dispersion, y: second-layer blend, z: time, w: world metres per pixel
 }
 
 static const float pcfRadius = 1.0f;
@@ -183,11 +194,31 @@ float SampleSunShadow(float3 P, float3 N, float ndl)
     return SampleShadowCSM(P, ndl, N);
 }
 
+// Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.
+CausticsParams LoadCausticsParams()
+{
+    CausticsParams p;
+    p.tint = causticsTint.rgb;
+    p.intensity = causticsParams0.x;
+    p.scale = causticsParams0.y;
+    p.speed = causticsParams0.z;
+    p.waterLevel = causticsParams0.w;
+    p.depthFade = causticsParams1.x;
+    p.surfaceFade = causticsParams1.y;
+    p.upFacing = causticsParams1.z;
+    p.bias = causticsParams1.w;
+    p.dispersion = causticsParams2.x;
+    p.layerBlend = causticsParams2.y;
+    p.time = causticsParams2.z;
+    p.pixelWorldScale = causticsParams2.w;
+    return p;
+}
+
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+    "DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 
 [RootSignature(LIGHTING_RS)]
 [numthreads(8,8,1)]
@@ -249,6 +280,18 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float3 color = ambient * lightRgb;
 
+    // Caustics scale the sun's irradiance, so they multiply the direct term rather than being
+    // added on top: a surface the sun cannot reach gets none, and the bright filaments ride the
+    // same shadow and cosine as the light they come from. Clamped so a negative bias can dim the
+    // cells between filaments without ever going below black.
+    float3 causticsGain = 1.0.xxx;
+    if (causticsTint.w > 0.0)
+    {
+        causticsGain = max(0.0.xxx, 1.0.xxx + EvaluateCaustics(
+            CausticsAtlas, gSmpLinearWrap, LoadCausticsParams(),
+            P, N, dot(P - camPosWS, camDirWS)));
+    }
+
     if (isFoliage)
     {
         FoliageResult fr = EvalFoliageBRDF(
@@ -260,7 +303,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         {
             float shadow = SampleSunShadow(P, N, fr.NdotL);
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
-            color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow;
+            color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
 
         // View-opposed lobe: light transmitted through the thin leaf toward the viewer. Sample
@@ -285,7 +328,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);
-            float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow;
+            float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow * causticsGain;
             color += direct;
         }
     }

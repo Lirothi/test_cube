@@ -23,6 +23,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
@@ -1901,6 +1902,35 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
         constants.sunAngularSize = frame_->settings.sunAngularSize;
 
+        // Underwater caustics. Everything comes from the ocean: no water in the level means the
+        // whole block stays zeroed and the shader skips it (causticsTint.w == 0).
+        D3D12_CPU_DESCRIPTOR_HANDLE causticsSrv{};
+        if (frame_->ocean)
+        {
+            if (const OceanSimulation* oceanSim = frame_->ocean->GetSimulation())
+            {
+                const OceanRenderConfig& oc = oceanSim->GetRenderConfig();
+                causticsSrv = frame_->ocean->GetCausticsSrvCPU();
+                if (oc.causticsEnabled && oc.causticsIntensity > 0.0f && causticsSrv.ptr != 0)
+                {
+                    // World metres covered by one screen pixel at one metre of view depth; the
+                    // shader turns it into a mip level so distant caustics stop aliasing. Pixels
+                    // are square, so the horizontal FOV over the render width gives both axes.
+                    const float pixelWorldScale = width > 0.0f
+                        ? (2.0f * std::tan(0.5f * camera.GetHFov()) / width)
+                        : 0.0f;
+                    constants.causticsTint =
+                        float4(oc.causticsTint.x, oc.causticsTint.y, oc.causticsTint.z, 1.0f);
+                    constants.causticsParams0 = float4(oc.causticsIntensity, oc.causticsScale,
+                        oc.causticsSpeed, frame_->ocean->GetWaterLevel());
+                    constants.causticsParams1 = float4(oc.causticsDepthFade, oc.causticsSurfaceFade,
+                        oc.causticsUpFacing, oc.causticsBias);
+                    constants.causticsParams2 = float4(oc.causticsDispersion, oc.causticsLayerBlend,
+                        frame_->ocean->GetElapsedTime(), pixelWorldScale);
+                }
+            }
+        }
+
         // Step 24f: sample directional shadows from the VSM clipmap in VSM mode (else CSM cascades).
         // t6/t7 bind valid dummy SRVs when VSM isn't resident (Legacy) — useVsm=0 never samples them.
         const bool vsmDir = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
@@ -1918,13 +1948,16 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
             }
         }
 
-        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
+        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
+                                              *SamplerManager::ComparisonLinearClamp(),
+                                              *SamplerManager::LinearWrap() };
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV,
               vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
               vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t7 (inert in Legacy)
-              D.gbAuxSRV },                                                           // t8
+              D.gbAuxSRV,                                                             // t8
+              causticsSrv.ptr != 0 ? causticsSrv : renderer->VsmDummyTexSrv() },      // t9 (inert without water)
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
