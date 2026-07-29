@@ -1,4 +1,4 @@
-﻿import {
+import {
   COLORS,
   PLAYER_CONFIG,
   XP_CONFIG,
@@ -20,6 +20,9 @@ import { renderFrame } from "./render.js";
 import {
   ui,
   isMobile,
+  isDevMode,
+  isPerfMode,
+  isCanvasSyncMode,
   updateGodButton,
   updateMuteButton,
   updateMenuStats,
@@ -36,9 +39,10 @@ import {
   closeGameOverUI,
   wireUiEvents,
 } from "./ui.js";
+import { subscribeVisualSettings, visualSettings } from "./visual_settings.js";
 import { updateChests, resetChests, setChestRuntime } from "./chests.js";
 import { damageEnemy, updateEnemyShots, updateVoidZones, updateEnemies, cleanupDeadEnemies, setEnemyRuntime } from "./enemies.js";
-import { resetCompanions, updateCompanions, formatCompanionPills, addCompanion, companionSlotsFull, COMPANIONS } from "./companions.js";
+import { resetCompanions, updateCompanions, addCompanion, companionSlotsFull, COMPANIONS } from "./companions.js";
 import { addParticles, updateParticles, resetParticles } from "./particles.js";
 import { resetQuests, updateQuests, setQuestRuntime, onEnemyKilled, onEnemyDamaged, onGemCollected, onChestOpened } from "./quests.js";
 import {
@@ -57,12 +61,13 @@ import {
   railStats,
   orbStats,
   missileStats,
+  turretStats,
   setWeaponContext,
   setWeaponRuntime,
   spawnShockwave,
   updateWeapons,
 } from "./weapons.js";
-import { pickTrinkets, addTrinket, resetTrinkets, trinketSlotsFull, formatTrinketPills, TRINKETS } from "./trinkets.js";
+import { pickTrinkets, addTrinket, resetTrinkets, trinketSlotsFull, TRINKETS } from "./trinkets.js";
 import { getAugmentsForWeapon, getAugmentById } from "./augments.js";
 import {
   spawnObstacles,
@@ -82,6 +87,8 @@ import {
   enemies,
   bullets,
   missiles,
+  turrets,
+  toxinPools,
   rails,
   axes,
   orbs,
@@ -104,6 +111,8 @@ import {
   enemyPool,
   bulletPool,
   missilePool,
+  turretPool,
+  toxinPool,
   railPool,
   axePool,
   shotPool,
@@ -116,6 +125,11 @@ import {
   textPool,
 } from "./pools.js";
 import { popFloatText } from "./float_text.js";
+import {
+  resetCombatFx,
+  triggerHealFx,
+  updateCombatFx,
+} from "./combat_fx.js";
 
 (() => {
     "use strict";
@@ -124,24 +138,60 @@ import { popFloatText } from "./float_text.js";
        Canvas + DPR
        ============================ */
     const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    const ctx = canvas.getContext("2d", {
+      alpha: false,
+      desynchronized: !isCanvasSyncMode,
+    });
 
     let W = 0, H = 0, DPR = 1;
-    const BIG_SCREEN_PIXELS = 2000000; // ~2K and above screens; cap DPR to ease GPU load
-    function resize() {
-      const area = innerWidth * innerHeight;
-      const maxDpr = area > BIG_SCREEN_PIXELS ? 1 : 2;
-      DPR = Math.min(maxDpr, window.devicePixelRatio || 1);
-      W = Math.floor(innerWidth);
-      H = Math.floor(innerHeight);
-      canvas.width = Math.floor(W * DPR);
-      canvas.height = Math.floor(H * DPR);
-      canvas.style.width = W + "px";
-      canvas.style.height = H + "px";
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    let resizeRaf = 0;
+    const MAX_RENDER_DPR = 2;
+    const DPR_QUANTUM = 1 / 8;
+    const RENDER_PIXEL_BUDGET = {
+      high: 3600000,
+      efficient: 2400000,
+    };
+
+    function chooseRenderDpr(width, height) {
+      const area = Math.max(1, width * height);
+      const nativeDpr = Math.min(MAX_RENDER_DPR, window.devicePixelRatio || 1);
+      const budget = visualSettings.qualityMode === "efficient"
+        ? RENDER_PIXEL_BUDGET.efficient
+        : RENDER_PIXEL_BUDGET.high;
+      const minimumDpr = visualSettings.qualityMode === "efficient" ? 0.75 : 1;
+      const budgetDpr = Math.sqrt(budget / area);
+      const desiredDpr = Math.max(minimumDpr, Math.min(nativeDpr, budgetDpr));
+      return Math.max(minimumDpr, Math.floor(desiredDpr / DPR_QUANTUM) * DPR_QUANTUM);
     }
-    addEventListener("resize", resize);
+
+    function resize() {
+      resizeRaf = 0;
+      const nextW = Math.max(1, Math.floor(innerWidth));
+      const nextH = Math.max(1, Math.floor(innerHeight));
+      const nextDpr = chooseRenderDpr(nextW, nextH);
+      const backingW = Math.max(1, Math.floor(nextW * nextDpr));
+      const backingH = Math.max(1, Math.floor(nextH * nextDpr));
+      const logicalSizeChanged = nextW !== W || nextH !== H || nextDpr !== DPR;
+      const backingSizeChanged = canvas.width !== backingW || canvas.height !== backingH;
+
+      W = nextW;
+      H = nextH;
+      DPR = nextDpr;
+      if (canvas.width !== backingW) canvas.width = backingW;
+      if (canvas.height !== backingH) canvas.height = backingH;
+      if (canvas.style.width !== `${W}px`) canvas.style.width = `${W}px`;
+      if (canvas.style.height !== `${H}px`) canvas.style.height = `${H}px`;
+      if (logicalSizeChanged || backingSizeChanged) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+
+    function scheduleResize() {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(resize);
+    }
+
+    addEventListener("resize", scheduleResize, { passive: true });
     resize();
+    subscribeVisualSettings(scheduleResize);
 
     // Ensure keyboard focus (fixes WASD not working)
     function focusCanvas(){ try { canvas.focus({ preventScroll:true }); } catch {} }
@@ -160,18 +210,37 @@ import { popFloatText } from "./float_text.js";
     let state = STATE.PLAYING;
     let devMenuOpen = false;
     let fpsAccum = 0, fpsCount = 0;
+    let updateCpuAccum = 0, renderCpuAccum = 0;
     const START_NOTICE_TIME = 8.0;
     let startNoticeT = 0;
-    function updateFps(dt){
-      if (!ui.fps) return;
+    function updateFps(dt, updateCpuMs = 0, renderCpuMs = 0){
+      if ((!isDevMode && !isPerfMode) || !ui.fps) return;
       fpsAccum += (dt > 0 ? (1/dt) : 0);
+      updateCpuAccum += updateCpuMs;
+      renderCpuAccum += renderCpuMs;
       fpsCount++;
-      if (fpsCount >= 10){
+      if (fpsCount >= 15){
         const fps = fpsAccum / fpsCount;
-        ui.fps.textContent = `${Math.round(fps)} fps`;
-        if (ui.mFps) ui.mFps.textContent = `${Math.round(fps)} fps`;
+        const fpsLabel = `${Math.round(fps)} fps`;
+        if (isPerfMode) {
+          const backingMp = canvas.width * canvas.height / 1000000;
+          const projectileCount = bullets.length + missiles.length + rails.length
+            + axes.length + orbs.length + arcs.length + enemyShots.length;
+          const updateCpu = updateCpuAccum / fpsCount;
+          const renderCpu = renderCpuAccum / fpsCount;
+          const contextMode = isCanvasSyncMode ? "sync" : "desync";
+          const glowLayerMode = visualSettings.glowLayerMode === "lowres" ? "glow½" : "glow-inline";
+          ui.fps.textContent = `${fpsLabel} · ${DPR.toFixed(3)}x · ${backingMp.toFixed(2)}MP · U ${updateCpu.toFixed(2)} · Rcpu ${renderCpu.toFixed(2)} · E ${enemies.length} · FX ${particles.length} · P ${projectileCount} · T ${turrets.length}/${toxinPools.length} · ${glowLayerMode} · ${contextMode}`;
+          ui.fps.title = "U/Rcpu are CPU milliseconds; GPU completion is not included.";
+          if (ui.mFps) ui.mFps.textContent = `${fpsLabel} · ${DPR.toFixed(2)}x · ${backingMp.toFixed(1)}MP`;
+        } else {
+          ui.fps.textContent = fpsLabel;
+          if (ui.mFps) ui.mFps.textContent = fpsLabel;
+        }
         fpsAccum = 0;
         fpsCount = 0;
+        updateCpuAccum = 0;
+        renderCpuAccum = 0;
       }
     }
     const WEAPON_LABELS = [
@@ -182,9 +251,20 @@ import { popFloatText } from "./float_text.js";
       { key: "axe", label: "Axe Throw" },
       { key: "orb", label: "Singularity Orb" },
       { key: "missile", label: "Homing Missiles" },
+      { key: "turret", label: "Flux Turret" },
     ];
     const WEAPON_LABEL_MAP = new Map(WEAPON_LABELS.map((item) => [item.key, item.label]));
     const TRINKET_LABEL_MAP = new Map(TRINKETS.map((item) => [item.id, item.title]));
+    const TRINKET_DATA_MAP = new Map(TRINKETS.map((item) => [item.id, item]));
+    const COMPANION_DATA_MAP = new Map(COMPANIONS.map((item) => [item.id, item]));
+
+    function escapeHudText(value){
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
 
     function formatWeaponPills(){
       const pills = [];
@@ -199,9 +279,64 @@ import { popFloatText } from "./float_text.js";
       return pills.length ? pills.join("") : `<span class="pill">None</span>`;
     }
 
-    function formatBonusPills(){
-      const pills = [];
-      const add = (text) => pills.push(`<span class="pill">${text}</span>`);
+    function formatWeaponSlots(){
+      const slots = [];
+      for (const { key, label } of WEAPON_LABELS){
+        const w = weapons[key];
+        if (!w || !w.unlocked) continue;
+        const mastery = w.mastery ? ` · Mastery ${w.mastery}` : "";
+        const aug = w.aug ? (getAugmentById(w.aug)?.title || "Augmentation") : "";
+        const augText = aug ? ` · ${aug}` : "";
+        const title = escapeHudText(`${label} · Level ${w.level}${mastery}${augText}`);
+        slots.push(
+          `<span class="hudSlot weaponSlot weapon-${key}" title="${title}" aria-label="${title}">` +
+            `<span class="slotGlyph" aria-hidden="true"></span>` +
+            `<span class="slotLevel">${w.level}</span>` +
+          `</span>`
+        );
+      }
+      return slots.length
+        ? slots.join("")
+        : `<span class="hudCounter empty" title="No weapons"><span class="counterMark">0</span></span>`;
+    }
+
+    function formatTrinketSlots(){
+      if (!trinkets.length) {
+        return `<span class="hudCounter empty" title="No trinkets"><span class="counterMark">0</span></span>`;
+      }
+      const labels = trinkets.map((id) => {
+        const item = TRINKET_DATA_MAP.get(id);
+        return item ? `${item.title} · ${item.desc}` : id;
+      });
+      const title = escapeHudText(labels.join(" · "));
+      return (
+        `<span class="hudCounter trinketCounter" title="${title}" aria-label="${title}">` +
+          `<span class="slotGlyphText" aria-hidden="true">TK</span>` +
+          `<span class="counterMark">${trinkets.length}</span>` +
+        `</span>`
+      );
+    }
+
+    function formatCompanionSlots(){
+      if (!companions.length) {
+        return `<span class="hudCounter empty" title="No companions"><span class="counterMark">0</span></span>`;
+      }
+      return companions.map((companion) => {
+        const item = COMPANION_DATA_MAP.get(companion.id);
+        const label = companion.name || item?.name || companion.id;
+        const glyph = item?.visualGlyph || companion.visualGlyph || "core";
+        const title = escapeHudText(`${label}${item?.desc ? ` · ${item.desc}` : ""}`);
+        return (
+          `<span class="hudSlot companionSlot companion-${glyph}" title="${title}" aria-label="${title}">` +
+            `<span class="slotGlyph" aria-hidden="true"></span>` +
+          `</span>`
+        );
+      }).join("");
+    }
+
+    function getBonusLabels(){
+      const labels = [];
+      const add = (text) => labels.push(text);
 
       const speedPct = Math.round(((player.speed / BASE_STATS.speed) - 1) * 100);
       if (speedPct) add(`Speed ${speedPct > 0 ? "+" : ""}${speedPct}%`);
@@ -242,15 +377,26 @@ import { popFloatText } from "./float_text.js";
       const critMult = (upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel) + (trinketBonuses.critMult || 0);
       if (critMult) add(`Crit Dmg +${fmtFloat(critMult, 2)}x`);
 
-      return pills.length ? pills.join("") : `<span class="pill">No bonuses</span>`;
+      return labels;
+    }
+
+    function formatBonusCounter(){
+      const labels = getBonusLabels();
+      const title = escapeHudText(labels.length ? labels.join(" · ") : "No active bonuses");
+      return (
+        `<span class="hudCounter bonusCounter${labels.length ? "" : " empty"}" title="${title}" aria-label="${title}">` +
+          `<span class="bonusGlyph" aria-hidden="true"></span>` +
+          `<span class="counterMark">${labels.length}</span>` +
+        `</span>`
+      );
     }
 
     function updateLoadoutUi(){
-      if (ui.loadout) ui.loadout.innerHTML = formatWeaponPills();
-      if (ui.trinkets) ui.trinkets.innerHTML = formatTrinketPills();
-      if (ui.companions) ui.companions.innerHTML = formatCompanionPills();
-      if (ui.bonuses) ui.bonuses.innerHTML = formatBonusPills();
-      if (ui.mWeapons) ui.mWeapons.innerHTML = formatWeaponPills();
+      if (ui.loadout) ui.loadout.innerHTML = formatWeaponSlots();
+      if (ui.trinkets) ui.trinkets.innerHTML = formatTrinketSlots();
+      if (ui.companions) ui.companions.innerHTML = formatCompanionSlots();
+      if (ui.bonuses) ui.bonuses.innerHTML = formatBonusCounter();
+      if (ui.mWeapons) ui.mWeapons.innerHTML = formatWeaponSlots();
     }
 
     const AUG_FLOAT_LIFE = 3;
@@ -321,6 +467,7 @@ import { popFloatText } from "./float_text.js";
         title: "Skip",
         desc: "Leave this trinket behind.",
         tag: () => "No effect",
+        cardKind: "skip",
       });
       state = STATE.TRINKET;
       if (ui.levelup) ui.levelup.classList.add("trinket");
@@ -362,6 +509,8 @@ import { popFloatText } from "./float_text.js";
           desc: owned ? `${c.desc} Already recruited.` : c.desc,
           tag: () => owned ? `${c.tag()} | Owned` : c.tag(),
           disabled: owned,
+          cardKind: "companion",
+          visualGlyph: c.visualGlyph,
         };
       });
       state = STATE.COMPANION;
@@ -582,7 +731,9 @@ import { popFloatText } from "./float_text.js";
     }
 
     function devHeal(){
+      const hpBefore = player.hp;
       player.hp = player.maxHp;
+      triggerHealFx(player.hp - hpBefore);
       setDevStatus("HP full");
     }
 
@@ -709,6 +860,8 @@ import { popFloatText } from "./float_text.js";
       for (let i=enemies.length-1;i>=0;i--) enemyPool.put(enemies.pop());
       for (let i=bullets.length-1;i>=0;i--) bulletPool.put(bullets.pop());
       for (let i=missiles.length-1;i>=0;i--) missilePool.put(missiles.pop());
+      for (let i=turrets.length-1;i>=0;i--) turretPool.put(turrets.pop());
+      for (let i=toxinPools.length-1;i>=0;i--) toxinPool.put(toxinPools.pop());
       for (let i=rails.length-1;i>=0;i--) railPool.put(rails.pop());
       for (let i=axes.length-1;i>=0;i--) axePool.put(axes.pop());
       for (let i=orbs.length-1;i>=0;i--) orbPool.put(orbs.pop());
@@ -734,6 +887,7 @@ import { popFloatText } from "./float_text.js";
       resetTrinkets();
       resetCompanions();
       resetDps();
+      resetCombatFx();
       startNoticeT = START_NOTICE_TIME;
 
       closeGameOverUI();
@@ -853,11 +1007,13 @@ import { popFloatText } from "./float_text.js";
     /* ============================
        Rendering
        ============================ */
-    function render(){
+    function render(frameNow){
       const camX = player.x - W*0.5;
       const camY = player.y - H*0.5;
       const boss = getActiveBoss();
-      updateActiveObstacles(camX, camY, W, H, ACTIVE_OBSTACLE_PAD);
+      if (state !== STATE.PLAYING) {
+        updateActiveObstacles(camX, camY, W, H, ACTIVE_OBSTACLE_PAD);
+      }
       renderFrame({
         ctx,
         W,
@@ -872,6 +1028,8 @@ import { popFloatText } from "./float_text.js";
         STATE,
         fmtTime,
         ui,
+        frameNow,
+        renderDpr: DPR,
       });
     }
 
@@ -885,6 +1043,7 @@ import { popFloatText } from "./float_text.js";
       if (startNoticeT > 0) startNoticeT = Math.max(0, startNoticeT - dt);
 
       updateBuffs(dt);
+      updateCombatFx(dt);
       updatePlayer(dt);
       updateCompanions(dt);
 
@@ -915,6 +1074,7 @@ import { popFloatText } from "./float_text.js";
           player.iFrame = Math.max(player.iFrame, 1.0);
           buffs.shield = Math.max(buffs.shield, 1.6);
           buffs.reviveFlash = Math.max(buffs.reviveFlash, 1.6);
+          triggerHealFx(reviveHp, 1);
           spawnShockwave(player.x, player.y, 220, COLORS.heal);
           addParticles(player.x, player.y, COLORS.heal, 90, 900);
           popFloatText(player.x, player.y - player.r - 26, "SECOND CHANCE!", COLORS.heal, 30, 2.2, 22, 60, 120);
@@ -929,17 +1089,23 @@ import { popFloatText } from "./float_text.js";
     function frame(now){
       const dt = Math.min(LOOP_CONFIG.maxDt, (now - last) / 1000);
       last = now;
+      let updateCpuMs = 0;
+      let renderCpuMs = 0;
 
       if (state === STATE.PLAYING){
-        updateFps(dt);
+        const updateStart = isPerfMode ? performance.now() : 0;
         update(dt);
+        if (isPerfMode) updateCpuMs = performance.now() - updateStart;
       } else {
         if (particles.length) updateParticles(dt);
         if (dmgTexts.length || floatTexts.length) updateTexts(dt);
         if (telegraphs.length) updateTelegraphs(dt);
       }
 
-      render();
+      const renderStart = isPerfMode ? performance.now() : 0;
+      render(now);
+      if (isPerfMode) renderCpuMs = performance.now() - renderStart;
+      if (state === STATE.PLAYING) updateFps(dt, updateCpuMs, renderCpuMs);
       requestAnimationFrame(frame);
     }
 

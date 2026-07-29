@@ -143,12 +143,19 @@ export const enemyPool = makePool(
     burnT: 0,
     burnDps: 0,
     burnSource: null,
+    burnElement: "",
     bleedT: 0,
     bleedDps: 0,
     bleedSource: null,
     elite: false,
     knockResist: 0,
     gemBonus: 0,
+    hitFlash: 0,
+    hitFlashMax: 0,
+    hitCrit: false,
+    hitFxDx: 0,
+    hitFxDy: 0,
+    _lastHitElement: "",
   }),
   260
 );
@@ -190,6 +197,54 @@ export const missilePool = makePool(
     critMult: 1,
   }),
   140
+);
+export const turretPool = makePool(
+  () => ({
+    alive: false,
+    id: 0,
+    slotIndex: 0,
+    x: 0,
+    y: 0,
+    r: 12,
+    life: 0,
+    maxLife: 0,
+    angle: 0,
+    turnRate: 0,
+    range: 0,
+    width: 0,
+    streamLength: 0,
+    blockedObstacle: -1,
+    firing: false,
+    tick: 0,
+    tickRate: 0.16,
+    retarget: 0,
+    target: null,
+    dmg: 0,
+    critChance: 0,
+    critMult: 1,
+    element: "",
+    phase: 0,
+    poolT: 0,
+  }),
+  8
+);
+export const toxinPool = makePool(
+  () => ({
+    alive: false,
+    ownerId: 0,
+    x: 0,
+    y: 0,
+    radius: 48,
+    life: 0,
+    maxLife: 0,
+    tick: 0,
+    tickRate: 0.3,
+    dmg: 0,
+    critChance: 0,
+    critMult: 1,
+    phase: 0,
+  }),
+  16
 );
 export const railPool = makePool(
   () => ({
@@ -327,6 +382,8 @@ export const partPool = makePool(
     maxLife: 0,
     r: 2,
     color: COLORS.gem,
+    shape: "dot",
+    stretch: 1,
   }),
   520
 );
@@ -353,6 +410,7 @@ export const dmgPool = makePool(
     text: "",
     color: "#fff",
     size: 14,
+    crit: false,
   }),
   240
 );

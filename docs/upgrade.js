@@ -10,8 +10,9 @@ import {
 import { fmtFloat, randi } from "./math.js";
 import { weapons, weaponCount } from "./weapons.js";
 import { BASE_STATS, player } from "./state.js";
+import { triggerHealFx } from "./combat_fx.js";
 
-export const DPS_TRACKER = { magic:0, arc:0, aura:0, rail:0, axe:0, orb:0, missile:0 };
+export const DPS_TRACKER = { magic:0, arc:0, aura:0, rail:0, axe:0, orb:0, missile:0, turret:0 };
 
 export const upgradeState = { speedLv:0, hpLv:0, pickupLv:0, armorLv:0, resAllLv:0, resFireLv:0, resPoisonLv:0, resVoidLv:0, cdLv:0, xpLv:0, critChanceLv:0, critMultLv:0 };
 export function resetUpgradeState(){
@@ -28,7 +29,7 @@ export function resetUpgradeState(){
   upgradeState.critChanceLv=0;
   upgradeState.critMultLv=0;
 }
-export function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.arc=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; DPS_TRACKER.missile=0; }
+export function resetDps(){ DPS_TRACKER.magic=0; DPS_TRACKER.arc=0; DPS_TRACKER.aura=0; DPS_TRACKER.rail=0; DPS_TRACKER.axe=0; DPS_TRACKER.orb=0; DPS_TRACKER.missile=0; DPS_TRACKER.turret=0; }
 
 function weaponTag(weapon, maxLv, stats, extraParts = []){
   if (!weapon.unlocked) return "Weapon - Unlock";
@@ -65,12 +66,12 @@ function weaponTag(weapon, maxLv, stats, extraParts = []){
   return parts.join(" | ");
 }
 
-const MASTERY_INFO = `Mastery (after max): +${Math.round(WEAPON_MASTERY.dmgMult * 100)}% dmg, +${Math.round(WEAPON_MASTERY.critChance * 100)}% crit, +${fmtFloat(WEAPON_MASTERY.critMult, 2)}x crit dmg per rank.`;
+export const MASTERY_INFO = `+${Math.round(WEAPON_MASTERY.dmgMult * 100)}% DMG · +${Math.round(WEAPON_MASTERY.critChance * 100)}% crit · +${fmtFloat(WEAPON_MASTERY.critMult, 2)}x crit damage`;
 
 const UPGRADES = [
   {
     id: "magic", title: "Magic Bullet",
-    desc: `Shoots the nearest enemy automatically. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "Shoots the nearest enemy automatically.",
     tag: () => weaponTag(weapons.magic, WEAPON_CONFIG.magic.maxLevel),
     can: () => true,
     apply: () => {
@@ -81,7 +82,7 @@ const UPGRADES = [
   },
   {
     id: "arc", title: "Arc Lance",
-    desc: `A lightning strike that chains between enemies. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "A lightning strike that chains between enemies.",
     tag: () => weaponTag(weapons.arc, WEAPON_CONFIG.arc.maxLevel),
     can: () => (weapons.arc.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -92,7 +93,7 @@ const UPGRADES = [
   },
   {
     id: "aura", title: "Holy Aura",
-    desc: `A luminous field around you that damages and pushes enemies back. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "A luminous field around you that damages and pushes enemies back.",
     tag: () => weaponTag(weapons.aura, WEAPON_CONFIG.aura.maxLevel),
     can: () => (weapons.aura.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -103,7 +104,7 @@ const UPGRADES = [
   },
   {
     id: "rail", title: "Railgun",
-    desc: `Charges a piercing rail shot that crosses the map with huge damage. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "Charges a piercing shot with huge damage.",
     tag: () => weaponTag(weapons.rail, WEAPON_CONFIG.rail.maxLevel),
     can: () => (weapons.rail.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -114,7 +115,7 @@ const UPGRADES = [
   },
   {
     id: "axe", title: "Axe Throw",
-    desc: `Throws axes in a neon arc. Strong burst + heavy knockback. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "Throws axes in a neon arc with strong burst and knockback.",
     tag: () => weaponTag(weapons.axe, WEAPON_CONFIG.axe.maxLevel),
     can: () => (weapons.axe.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -125,7 +126,7 @@ const UPGRADES = [
   },
   {
     id: "orb", title: "Singularity Orb",
-    desc: `Launch an orb that parks, pulls enemies inward, pulses damage, then explodes. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "Parks, pulls enemies inward, pulses damage, then explodes.",
     tag: () => weaponTag(weapons.orb, WEAPON_CONFIG.orb.maxLevel),
     can: () => (weapons.orb.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
@@ -136,13 +137,24 @@ const UPGRADES = [
   },
   {
     id: "missile", title: "Homing Missiles",
-    desc: `Fire guided missiles that arc toward enemies and explode for splash damage. Max level unlocks mastery ranks. ${MASTERY_INFO}`,
+    desc: "Fires guided missiles that explode for splash damage.",
     tag: () => weaponTag(weapons.missile, WEAPON_CONFIG.missile.maxLevel),
     can: () => (weapons.missile.unlocked) || weaponCount() < MAX_WEAPONS,
     apply: () => {
       if (!weapons.missile.unlocked){ weapons.missile.unlocked=true; weapons.missile.level=1; return; }
       if (weapons.missile.level < WEAPON_CONFIG.missile.maxLevel) weapons.missile.level++;
       else weapons.missile.mastery++;
+    }
+  },
+  {
+    id: "turret", title: "Flux Turret",
+    desc: "Deploys independent plasma sentries. Additional turret slots unlock at levels 3 and 6.",
+    tag: () => weaponTag(weapons.turret, WEAPON_CONFIG.turret.maxLevel),
+    can: () => (weapons.turret.unlocked) || weaponCount() < MAX_WEAPONS,
+    apply: () => {
+      if (!weapons.turret.unlocked){ weapons.turret.unlocked=true; weapons.turret.level=1; return; }
+      if (weapons.turret.level < WEAPON_CONFIG.turret.maxLevel) weapons.turret.level++;
+      else weapons.turret.mastery++;
     }
   },
   {
@@ -172,7 +184,9 @@ const UPGRADES = [
       upgradeState.hpLv++;
       const add = UPGRADE_CONFIG.hpBaseGain + upgradeState.hpLv * UPGRADE_CONFIG.hpPerLevelGain;
       player.maxHp += add;
+      const hpBefore = player.hp;
       player.hp = Math.min(player.maxHp, player.hp + Math.floor(add * UPGRADE_CONFIG.hpHealPct));
+      triggerHealFx(player.hp - hpBefore, 0.7);
     }
   },
   {
@@ -330,6 +344,7 @@ export function listUpgradeSummary(){
   if (weapons.axe.unlocked) parts.push(`Axe Throw Lv ${weapons.axe.level}${mTag(weapons.axe)}`);
   if (weapons.orb.unlocked) parts.push(`Singularity Orb Lv ${weapons.orb.level}${mTag(weapons.orb)}`);
   if (weapons.missile.unlocked) parts.push(`Homing Missiles Lv ${weapons.missile.level}${mTag(weapons.missile)}`);
+  if (weapons.turret.unlocked) parts.push(`Flux Turret Lv ${weapons.turret.level}${mTag(weapons.turret)}`);
   if (upgradeState.speedLv) parts.push(`Speed +${upgradeState.speedLv}`);
   if (upgradeState.hpLv) parts.push(`Max HP +${upgradeState.hpLv}`);
   if (upgradeState.armorLv) parts.push(`Armor +${upgradeState.armorLv}`);
@@ -359,5 +374,6 @@ export function formatDpsSummary(){
   append("axe", weapons.axe.unlocked);
   append("orb", weapons.orb.unlocked);
   append("missile", weapons.missile.unlocked);
+  append("turret", weapons.turret.unlocked);
   return entries.length ? entries.join(" | ") : "No weapon damage";
 }

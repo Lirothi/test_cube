@@ -7,6 +7,16 @@ export const OBSTACLE_TYPE = { LAKE:"lake", FOREST:"forest", ROCK:"rock" };
 
 let runtime = { addParticles: null };
 
+function stableVisualHash(type, x, y, r) {
+  const typeSeed = type === OBSTACLE_TYPE.LAKE ? 17 : (type === OBSTACLE_TYPE.FOREST ? 31 : 47);
+  const xi = Math.floor(x * 0.125);
+  const yi = Math.floor(y * 0.125);
+  const ri = Math.floor(r * 4);
+  let h = Math.imul(xi, 374761393) ^ Math.imul(yi, 668265263) ^ Math.imul(ri + typeSeed, 1274126177);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
 export function setObstacleRuntime({ addParticles }) {
   runtime.addParticles = addParticles;
 }
@@ -19,7 +29,20 @@ function requireRuntime() {
 export function spawnObstacles(){
   obstacles.length = 0;
   const radius = Math.max(200, Math.min(OBSTACLE_CONFIG.spawnRadius, WORLD.halfSize + 400));
-  const addCircle = (type, x, y, r, hp=0) => obstacles.push({ type, x, y, r, hp, maxHp:hp });
+  const addCircle = (type, x, y, r, hp=0, visualGroup=0) => {
+    const visualHash = stableVisualHash(type, x, y, r);
+    obstacles.push({
+      type,
+      x,
+      y,
+      r,
+      hp,
+      maxHp: hp,
+      visualGroup,
+      visualVariant: visualHash % 4,
+      visualRotation: (visualHash >>> 2) % 8,
+    });
+  };
   const groups = [];
   const groupPad = 80;
   const placeGroup = (groupR) => {
@@ -72,7 +95,7 @@ export function spawnObstacles(){
     const center = placeGroup(maxReach);
     if (!center) continue;
     for (let s=0;s<segs.length;s++){
-      addCircle(OBSTACLE_TYPE.LAKE, center.x + segs[s].ox, center.y + segs[s].oy, segs[s].r, 0);
+      addCircle(OBSTACLE_TYPE.LAKE, center.x + segs[s].ox, center.y + segs[s].oy, segs[s].r, 0, i + 1);
     }
   }
 
@@ -99,20 +122,28 @@ export function spawnObstacles(){
   }
 
   // Rocks: mix of long ridges and clustered piles
+  const rockCfg = OBSTACLE_CONFIG.rocks;
+  const randomInclusive = (min, max) => randi(max + 1, min);
   for (let i=0;i<OBSTACLE_CONFIG.rocks.count;i++){
-    if (Math.random() < 0.55){
+    if (Math.random() < rockCfg.ridgeChance){
       const angle = rand(TAU, 0);
       const dirx = Math.cos(angle), diry = Math.sin(angle);
-      const nodes = randi(8, 5);
-      const step = rand(90, 60);
+      const largeRidge = Math.random() < rockCfg.largeRidgeChance;
+      const nodes = largeRidge
+        ? randomInclusive(rockCfg.largeRidgeNodesMin, rockCfg.largeRidgeNodesMax)
+        : randomInclusive(rockCfg.ridgeNodesMin, rockCfg.ridgeNodesMax);
+      const step = largeRidge
+        ? rand(rockCfg.largeRidgeStepMax, rockCfg.largeRidgeStepMin)
+        : rand(rockCfg.ridgeStepMax, rockCfg.ridgeStepMin);
+      const jitterRange = largeRidge ? rockCfg.largeRidgeJitter : rockCfg.ridgeJitter;
       const segs = [];
       let maxReach = 0;
       for (let n=0;n<nodes;n++){
         const offset = (n - (nodes-1)/2) * step;
-        const jitter = rand(20, -20);
+        const jitter = rand(jitterRange, -jitterRange);
         const ox = dirx * offset + -diry * jitter;
         const oy = diry * offset + dirx * jitter;
-        const r = rand(OBSTACLE_CONFIG.rocks.sizeMax, OBSTACLE_CONFIG.rocks.sizeMin);
+        const r = rand(rockCfg.sizeMax, rockCfg.sizeMin);
         segs.push({ ox, oy, r });
         const reach = Math.hypot(ox, oy) + r;
         if (reach > maxReach) maxReach = reach;
@@ -123,13 +154,17 @@ export function spawnObstacles(){
         addCircle(OBSTACLE_TYPE.ROCK, center.x + segs[n].ox, center.y + segs[n].oy, segs[n].r, OBSTACLE_CONFIG.rocks.hp);
       }
     } else {
-      const nodes = randi(7, 4);
+      const largePile = Math.random() < rockCfg.largePileChance;
+      const nodes = largePile
+        ? randomInclusive(rockCfg.largePileNodesMin, rockCfg.largePileNodesMax)
+        : randomInclusive(rockCfg.pileNodesMin, rockCfg.pileNodesMax);
+      const spreadMax = largePile ? rockCfg.largePileSpreadMax : rockCfg.pileSpreadMax;
       const segs = [];
       let maxReach = 0;
       for (let n=0;n<nodes;n++){
         const ang = rand(TAU, 0);
-        const dist = rand(70, 18);
-        const r = rand(OBSTACLE_CONFIG.rocks.sizeMax, OBSTACLE_CONFIG.rocks.sizeMin);
+        const dist = rand(spreadMax, rockCfg.pileSpreadMin);
+        const r = rand(rockCfg.sizeMax, rockCfg.sizeMin);
         const ox = Math.cos(ang) * dist;
         const oy = Math.sin(ang) * dist;
         segs.push({ ox, oy, r });

@@ -85,6 +85,20 @@ const AUGMENTS = {
       tag: () => `Slow ${Math.round((1 - AUGMENT_CONFIG.missile.concussive.slowMult) * 100)}% ${AUGMENT_CONFIG.missile.concussive.slowDuration.toFixed(1)}s / Knock ${Math.round(AUGMENT_CONFIG.missile.concussive.knock)} / Burn ${Math.round(AUGMENT_CONFIG.missile.concussive.burn.dpsPct * 100)}% ${AUGMENT_CONFIG.missile.concussive.burn.duration.toFixed(1)}s`,
     },
   ],
+  turret: [
+    {
+      id: "turret_thermite",
+      title: "Thermite Mix",
+      desc: "The plasma stream becomes fire damage and ignites enemies.",
+      tag: () => `Fire Damage / Burn ${Math.round(AUGMENT_CONFIG.turret.thermite.burn.dpsPct * 100)}% / ${AUGMENT_CONFIG.turret.thermite.burn.duration.toFixed(1)}s`,
+    },
+    {
+      id: "turret_plague",
+      title: "Plague Fuel",
+      desc: "The stream becomes poison damage, slows enemies, and paints toxic pools.",
+      tag: () => `Poison Damage / Slow ${Math.round((1 - AUGMENT_CONFIG.turret.plague.slowMult) * 100)}% / Pool ${Math.round(AUGMENT_CONFIG.turret.plague.pool.dpsMult * 100)}%`,
+    },
+  ],
   arc: [
     {
       id: "arc_capacitor",

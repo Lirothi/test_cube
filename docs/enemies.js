@@ -14,10 +14,14 @@ import { TAU, rand, randi, clamp, hypot } from "./math.js";
 import { sound } from "./audio.js";
 import { applyArmorDamage, applyElementalDamage } from "./player.js";
 import { getEnemyTier } from "./spawn.js";
-import { addTelegraph } from "./telegraph.js";
+import { addTelegraph, TELEGRAPH_KIND } from "./telegraph.js";
 import { obstacleAvoidance, damageObstacle, resolveObstacles, OBSTACLE_TYPE } from "./obstacles.js";
-import { addParticles } from "./particles.js";
+import { addDirectionalParticles, addParticles } from "./particles.js";
 import { spawnShockwave } from "./weapons.js";
+import {
+  triggerPlayerDamageFx,
+  triggerShieldBlockFx,
+} from "./combat_fx.js";
 import {
   clampPointToWorld,
   clampEntityToWorld,
@@ -60,17 +64,18 @@ export function setEnemyRuntime({ openAug, onEnemyKilled, onEnemyDamaged }) {
   runtime.onEnemyDamaged = onEnemyDamaged;
 }
 
-function spawnDmgText(x, y, amount, color = COLORS.dmg, size = 14) {
+function spawnDmgText(x, y, amount, color = COLORS.dmg, size = 14, crit = false) {
   const d = dmgPool.get();
   d.alive = true;
   d.x = x; d.y = y;
-  d.vx = rand(22, -22);
-  d.vy = -rand(64, 38);
-  d.maxLife = rand(0.62, 0.45);
+  d.vx = crit ? rand(16, -16) : rand(22, -22);
+  d.vy = crit ? -rand(86, 62) : -rand(64, 38);
+  d.maxLife = crit ? rand(0.82, 0.68) : rand(0.62, 0.45);
   d.life = d.maxLife;
   d.text = String(Math.round(amount));
   d.color = color;
   d.size = size;
+  d.crit = !!crit;
   dmgTexts.push(d);
 }
 
@@ -89,7 +94,7 @@ function dropGem(x, y, value = 1) {
   gems.push(g);
 }
 
-function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit = false, source = null, applyRiders = true, damageKind = "direct") {
+function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit = false, source = null, applyRiders = true, damageKind = "direct", element = "") {
   let inflicted = 0;
   if (dmg > 0) {
     inflicted = Math.min(dmg, Math.max(0, e.hp));
@@ -99,11 +104,44 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
       e._lastHitSource = source || "";
       e._lastHitCrit = !!crit;
       e._lastHitKind = damageKind || "direct";
+      e._lastHitElement = element || "";
+      if (damageKind === "direct") {
+        let fxDx = pushX || 0;
+        let fxDy = pushY || 0;
+        let fxLen = Math.hypot(fxDx, fxDy);
+        if (fxLen <= 0.001) {
+          fxDx = e.x - player.x;
+          fxDy = e.y - player.y;
+          fxLen = Math.hypot(fxDx, fxDy);
+        }
+        if (fxLen > 0.001) {
+          fxDx /= fxLen;
+          fxDy /= fxLen;
+        } else {
+          fxDx = 1;
+          fxDy = 0;
+        }
+        e.hitFlashMax = crit ? 0.16 : 0.085;
+        e.hitFlash = e.hitFlashMax;
+        e.hitCrit = !!crit;
+        e.hitFxDx = fxDx;
+        e.hitFxDy = fxDy;
+        addDirectionalParticles(
+          e.x,
+          e.y,
+          crit ? COLORS.crit : COLORS.dmg,
+          crit ? 7 : 3,
+          crit ? 420 : 260,
+          fxDx,
+          fxDy,
+          crit
+        );
+      }
     }
     if (showText) {
       const color = crit ? COLORS.crit : COLORS.dmg;
       const size = crit ? 18 : 14;
-      spawnDmgText(e.x, e.y - e.r - 6, dmg, color, size);
+      spawnDmgText(e.x, e.y - e.r - 6, dmg, color, size, crit);
     }
   }
   if (pushStrength > 0) {
@@ -118,6 +156,7 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
       crit: !!crit,
       source: source || "",
       damageKind: damageKind || "direct",
+      element: element || "",
       knock: pushStrength > 0,
       pushStrength: Math.max(0, pushStrength || 0),
     });
@@ -137,7 +176,7 @@ function damageEnemy(e, dmg, pushX, pushY, pushStrength, showText = true, crit =
     for (let i = 0; i < info.gem + extra; i++) {
       dropGem(e.x + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), e.y + rand(LOOT_CONFIG.dropJitter, -LOOT_CONFIG.dropJitter), xpValue);
     }
-    if (runtime.onEnemyKilled) runtime.onEnemyKilled(e, { source: e._lastHitSource || "", crit: !!e._lastHitCrit, damageKind: e._lastHitKind || "direct" });
+    if (runtime.onEnemyKilled) runtime.onEnemyKilled(e, { source: e._lastHitSource || "", crit: !!e._lastHitCrit, damageKind: e._lastHitKind || "direct", element: e._lastHitElement || "" });
     if (e.boss) {
       spawn.bossAlive = false;
       spawn.bossRef = null;
@@ -385,14 +424,18 @@ function applyShotDamage(dmg, elementType = "") {
     player.iFrame = PLAYER_CONFIG.shotIFrame;
     spawnDmgText(player.x, player.y - player.r - 12, final, COLORS.warnHit);
     addParticles(player.x, player.y, COLORS.warnHitDim, 8, 360);
+    triggerPlayerDamageFx(final);
   } else {
     addParticles(player.x, player.y, COLORS.shieldBlock, 4, 260);
+    if (buffs.shield > 0) triggerShieldBlockFx();
   }
 }
 
 function explodeEnemyShot(s) {
   const r = s.explosionRadius || 0;
-  if (r > 0) spawnShockwave(s.x, s.y, r, s.color);
+  if (r > 0) {
+    spawnShockwave(s.x, s.y, r, s.color);
+  }
   const dx = player.x - s.x;
   const dy = player.y - s.y;
   const rr = r + player.r;
@@ -430,6 +473,7 @@ function updateVoidZones(dt, godMode) {
           const dmg = applyElementalDamage(z.dps * z.tick, z.type);
           player.hp -= dmg;
           spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit, 14);
+          triggerPlayerDamageFx(dmg);
         }
       } else {
         z.tickT = z.tick;
@@ -460,7 +504,7 @@ function updateRiderTimers(e, dt, burnSource = null, bleedSource = null) {
     while (e.burnTickT <= 0 && e.burnT > 0) {
       e.burnTickT += DOT_CONFIG.burnTick;
       const dmg = e.burnDps * DOT_CONFIG.burnTick;
-      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, burnSource, false, "burn");
+      if (dmg > 0) damageEnemy(e, dmg, 0, 0, 0, true, false, burnSource, false, "burn", e.burnElement || "fire");
       addParticles(e.x, e.y, COLORS.enemyF, 6, 160);
     }
     if (e.burnT <= 0) e.burnTickT = DOT_CONFIG.burnTick;
@@ -609,6 +653,8 @@ function updateRangedAttacks(e, dt, d, nx, ny) {
       const marker = ++e.shotSeq;
       addTelegraph({
         x: tx, y: ty, radius: e.spitRadius, color: e.spitColor, time: e.spitTelegraph,
+        kind: TELEGRAPH_KIND.AOE,
+        element: e.spitType,
         fire: () => {
           spawnVoidZone(tx, ty, e.spitRadius, e.spitDuration, e.spitDps, e.spitColor, e.spitType, e.spitTick);
         }
@@ -622,6 +668,9 @@ function updateRangedAttacks(e, dt, d, nx, ny) {
       const marker = ++e.shotSeq;
       addTelegraph({
         x: e.x, y: e.y, dx: nx, dy: ny, radius: RANGED_SHOT_CONFIG.telegraphRadius, color: COLORS.warn, time: RANGED_SHOT_CONFIG.telegraphTime,
+        kind: TELEGRAPH_KIND.PROJECTILE,
+        length: d,
+        dangerWidth: ((e.shotRadius || RANGED_SHOT_CONFIG.radius) + player.r) * 2,
         follow: (tg) => {
           if (!e.alive) return;
           tg.x = e.x;
@@ -683,6 +732,7 @@ function updateBossNova(e, dt) {
     const marker = ++e.novaSeq;
     addTelegraph({
       x: e.x, y: e.y, radius: e.novaRadius, color: BOSS_CONFIG.telegraph.color, time: e.novaTelegraph,
+      kind: TELEGRAPH_KIND.NOVA,
       follow: (tg) => {
         if (!e.alive) return;
         tg.x = e.x;
@@ -714,6 +764,8 @@ function updateBossAoe(e, dt) {
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
         x: tx, y: ty, radius: e.aoeRadius, color: e.aoeColor, time: e.aoeTelegraph,
+        kind: TELEGRAPH_KIND.AOE,
+        element: e.aoeType,
         fire: () => {
           if (e.alive && e.aoeSeq === marker) {
             spawnVoidZone(tx, ty, e.aoeRadius, e.aoeDuration, e.aoeDps, e.aoeColor, e.aoeType, e.aoeTick);
@@ -760,6 +812,7 @@ function updateBossSlam(e, dt, godMode) {
     const marker = ++e.slamSeq;
     addTelegraph({
       x: e.x, y: e.y, radius: e.slamRadius || 120, color: e.slamColor || COLORS.warn, time: e.slamTelegraph || 0.9,
+      kind: TELEGRAPH_KIND.IMPACT,
       follow: (tg) => {
         if (!e.alive) return;
         tg.x = e.x; tg.y = e.y;
@@ -775,6 +828,9 @@ function updateBossSlam(e, dt, godMode) {
             player.hp -= dmg;
             player.iFrame = PLAYER_CONFIG.meleeIFrame;
             spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
+            triggerPlayerDamageFx(dmg);
+          } else if (!godMode && buffs.shield > 0) {
+            triggerShieldBlockFx();
           }
         }
         addParticles(e.x, e.y, e.slamColor || COLORS.warn, 18, 360);
@@ -799,6 +855,7 @@ function updateBossRock(e, dt, godMode) {
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
         x: tx, y: ty, radius: e.rockRadius || 90, color: e.rockColor || COLORS.rock, time: e.rockTelegraph || 0.9,
+        kind: TELEGRAPH_KIND.IMPACT,
         fire: () => {
           if (!e.alive || e.rockSeq !== marker) return;
           const r = e.rockRadius || 90;
@@ -809,6 +866,9 @@ function updateBossRock(e, dt, godMode) {
             player.hp -= dmg;
             player.iFrame = PLAYER_CONFIG.meleeIFrame;
             spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
+            triggerPlayerDamageFx(dmg);
+          } else if (dx * dx + dy * dy <= (player.r + r) * (player.r + r) && !godMode && buffs.shield > 0) {
+            triggerShieldBlockFx();
           }
           addParticles(tx, ty, e.rockColor || COLORS.rock, 14, 420);
           spawnShockwave(tx, ty, r, e.rockColor || COLORS.rock);
@@ -828,6 +888,9 @@ function updateBossHomingMissiles(e, dt) {
     const count = Math.max(1, e.homingCount || 1);
     addTelegraph({
       x: e.x, y: e.y, radius: e.homingTelegraphRadius || RANGED_SHOT_CONFIG.telegraphRadius, color: BOSS4_CONFIG.telegraph.color, time: e.homingTelegraphTime || RANGED_SHOT_CONFIG.telegraphTime,
+      kind: TELEGRAPH_KIND.PROJECTILE,
+      count,
+      dangerWidth: (RANGED_SHOT_CONFIG.radius + player.r) * 2,
       follow: (tg) => { if (e.alive) { tg.x = e.x; tg.y = e.y; } },
       fire: () => {
         if (!e.alive || e.homingSeq !== marker) return;
@@ -866,6 +929,7 @@ function updateBossMine(e, dt, godMode) {
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
         x: tx, y: ty, radius: e.mineRadius || 85, color: e.mineColor || COLORS.aoeFire, time: e.mineTelegraph || 1.0,
+        kind: TELEGRAPH_KIND.MINE,
         fire: () => {
           if (!e.alive || e.mineSeq !== marker) return;
           const r = e.mineRadius || 85;
@@ -876,6 +940,9 @@ function updateBossMine(e, dt, godMode) {
             player.hp -= dmg;
             player.iFrame = PLAYER_CONFIG.shotIFrame;
             spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
+            triggerPlayerDamageFx(dmg);
+          } else if (dx * dx + dy * dy <= (player.r + r) * (player.r + r) && !godMode && buffs.shield > 0) {
+            triggerShieldBlockFx();
           }
           addParticles(tx, ty, e.mineColor || COLORS.aoeFire, 16, 360);
           spawnShockwave(tx, ty, r, e.mineColor || COLORS.aoeFire);
@@ -903,6 +970,7 @@ function updateBossBlink(e, dt, godMode) {
     );
     addTelegraph({
       x: target.x, y: target.y, radius: e.blinkRadius || 120, color: e.blinkColor || COLORS.warn, time: e.blinkTelegraph || 0.9,
+      kind: TELEGRAPH_KIND.BLINK,
       fire: () => {
         if (!e.alive || e.blinkSeq !== marker) return;
         e.x = target.x;
@@ -917,6 +985,9 @@ function updateBossBlink(e, dt, godMode) {
             player.hp -= dmg;
             player.iFrame = PLAYER_CONFIG.meleeIFrame;
             spawnDmgText(player.x, player.y - player.r - 12, dmg, COLORS.warnHit);
+            triggerPlayerDamageFx(dmg);
+          } else if (!godMode && buffs.shield > 0) {
+            triggerShieldBlockFx();
           }
         }
         addParticles(target.x, target.y, e.blinkColor || COLORS.warn, 16, 360);
@@ -941,6 +1012,8 @@ function updateBossRift(e, dt) {
       const ty = player.y + Math.sin(ang) * dist;
       addTelegraph({
         x: tx, y: ty, radius: e.riftRadius || 100, color: e.riftColor || COLORS.aoeVoid, time: e.riftTelegraph || 0.8,
+        kind: TELEGRAPH_KIND.RIFT,
+        element: "void",
         fire: () => {
           if (!e.alive || e.riftSeq !== marker) return;
           spawnVoidZone(
@@ -969,7 +1042,21 @@ function updateBossSplit(e, dt) {
     const marker = ++e.splitSeq;
     addTelegraph({
       x: e.x, y: e.y, radius: RANGED_SHOT_CONFIG.telegraphRadius, color: e.splitColor || COLORS.warn, time: e.splitTelegraph || RANGED_SHOT_CONFIG.telegraphTime,
-      follow: (tg) => { if (e.alive) { tg.x = e.x; tg.y = e.y; } },
+      kind: TELEGRAPH_KIND.PROJECTILE,
+      dangerWidth: (RANGED_SHOT_CONFIG.radius + player.r) * 2,
+      count: e.splitCount || 3,
+      spread: e.splitSpread || 0.3,
+      follow: (tg) => {
+        if (!e.alive) return;
+        tg.x = e.x;
+        tg.y = e.y;
+        const tx = player.x - e.x;
+        const ty = player.y - e.y;
+        const distance = Math.hypot(tx, ty) || 1;
+        tg.dx = tx / distance;
+        tg.dy = ty / distance;
+        tg.length = distance;
+      },
       fire: () => {
         if (!e.alive || e.splitSeq !== marker) return;
         const dx = player.x - e.x;
@@ -1034,12 +1121,14 @@ function handleContactDamage(e, dt, godMode) {
       // floating damage numbers for melee hits too
       spawnDmgText(player.x, player.y - player.r - 12, hurt, COLORS.warnHit);
       addParticles(player.x, player.y, COLORS.warnHitDim, 6, 340);
+      triggerPlayerDamageFx(hurt);
 
       player.x += cnx * PLAYER_CONFIG.hitPush;
       player.y += cny * PLAYER_CONFIG.hitPush;
     } else {
       e.kx -= cnx * PLAYER_CONFIG.shieldPushback * dt;
       e.ky -= cny * PLAYER_CONFIG.shieldPushback * dt;
+      if (buffs.shield > 0) triggerShieldBlockFx();
     }
   }
 }
@@ -1050,6 +1139,7 @@ function updateEnemies(dt, godMode, viewW, viewH) {
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     if (!e.alive) continue;
+    if (e.hitFlash > 0) e.hitFlash = Math.max(0, e.hitFlash - dt);
     const startX = e.x;
     const startY = e.y;
 

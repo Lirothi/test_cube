@@ -40,14 +40,14 @@ const QUEST_LEVEL_SCALE = {
     valuePerLevel: 0.35,
     valueMin: 1,
   },
-  kill: { rollMax: 34, rollMin: 22, baseMult: 1.0, perLevel: 0.14 },
-  scavenge: { rollMax: 6, rollMin: 3, perLevel: 0.07 },
-  drop: { rollMax: 9, rollMin: 4, perLevel: 0.16 },
+  kill: { rollMax: 34, rollMin: 22, baseMult: 1.0, perLevel: 0.14, durationBase: 75, durationPerLevel: 0.8 },
+  scavenge: { rollMax: 6, rollMin: 3, perLevel: 0.07, durationBase: 90, durationPerLevel: 1.0 },
+  drop: { rollMax: 9, rollMin: 4, perLevel: 0.16, durationBase: 90, durationPerLevel: 1.0 },
   nohit: { durationMax: 21, durationMin: 12, perLevel: 0.26 },
-  closeQuarters: { base: 10, perLevel: 0.42 },
-  longShot: { base: 9, perLevel: 0.38, minRangeBase: 240, minRangePerLevel: 7 },
+  closeQuarters: { base: 10, perLevel: 0.42, rangeMultiplier: 7.5, durationBase: 55, durationPerLevel: 0.6 },
+  longShot: { base: 9, perLevel: 0.38, minRangeBase: 240, minRangePerLevel: 7, durationBase: 60, durationPerLevel: 0.7 },
   executionChain: { base: 6, perLevel: 0.16, windowBase: 3.0, windowPerLevel: 0.02, windowMin: 2.1, durationBase: 15, durationPerLevel: 0.22 },
-  elementPurge: { base: 8, perLevel: 0.28 },
+  elementPurge: { base: 8, perLevel: 0.28, durationBase: 65, durationPerLevel: 0.8 },
   eliteHunt: { twoTargetLevel: 18, oneTarget: 1, twoTarget: 2, durationBase: 30, durationPerLevel: 0.25 },
   overkill: { base: 220, perLevel: 36, durationBase: 14, durationPerLevel: 0.18 },
   auraDiscipline: { base: 6, perLevel: 0.34, durationBase: 10, durationPerLevel: 0.2 },
@@ -58,7 +58,7 @@ const QUEST_LEVEL_SCALE = {
   treasureRoute: { durationBase: 28, durationPerLevel: 0.12 },
   hazardSurvivor: { base: 4, perLevel: 0.08, durationBase: 20, durationPerLevel: 0.2 },
   pacifistPulse: { durationBase: 14, durationPerLevel: 0.14 },
-  crowdControl: { base: 18, perLevel: 0.85, durationBase: 18, durationPerLevel: 0.2 },
+  crowdControl: { base: 18, perLevel: 0.85, durationBase: 18, durationPerLevel: 0.2, durationMultiplier: 1.5 },
   bossPrep: { base: 180, perLevel: 30 },
   glassCannon: { base: 10, perLevel: 0.32, durationBase: 20, durationPerLevel: 0.2 },
   perfectSweep: { durationBase: 12, durationPerLevel: 0.18, radiusBase: 165, radiusPerLevel: 3, radiusMin: 165, radiusMax: 300 },
@@ -123,7 +123,9 @@ function hasAnyChestActive() {
 }
 
 function hasDotSourceAvailable() {
-  return weapons.rail.aug === "rail_fire" || weapons.axe.aug === "axe_bleed" || weapons.missile.aug === "missile_concussive";
+  return (weapons.rail.unlocked && weapons.rail.aug === "rail_fire")
+    || (weapons.axe.unlocked && weapons.axe.aug === "axe_bleed")
+    || (weapons.missile.unlocked && weapons.missile.aug === "missile_concussive");
 }
 
 function aliveEnemyCount(includeBoss = false) {
@@ -225,6 +227,22 @@ function enemyElement(e) {
   return "";
 }
 
+function getAliveElementTargetCounts() {
+  const counts = { fire: 0, poison: 0, void: 0 };
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (!e.alive || e.boss) continue;
+    const element = enemyElement(e);
+    if (element) counts[element]++;
+  }
+  return counts;
+}
+
+function hasAliveElementTargets() {
+  const counts = getAliveElementTargetCounts();
+  return counts.fire > 0 || counts.poison > 0 || counts.void > 0;
+}
+
 function elementLabel(el) {
   if (el === "fire") return "Fire";
   if (el === "poison") return "Poison";
@@ -319,17 +337,20 @@ function assignQuestByType(type) {
   if (type === "kill") {
     const s = QUEST_LEVEL_SCALE.kill;
     quest.target = clampTarget(randi(s.rollMax, s.rollMin) * (s.baseMult + lv * s.perLevel));
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
     return;
   }
   if (type === "scavenge") {
     const s = QUEST_LEVEL_SCALE.scavenge;
     quest.target = clampTarget(randi(s.rollMax, s.rollMin) + lv * s.perLevel);
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
     spawnQuestItems(quest.target, QUEST_ITEM_MIN_DIST, QUEST_ITEM_MAX_DIST, "scavenge");
     return;
   }
   if (type === "drop") {
     const s = QUEST_LEVEL_SCALE.drop;
     quest.target = clampTarget(randi(s.rollMax, s.rollMin) + lv * s.perLevel);
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
     quest.dropChance = rand(0.16, 0.09);
     return;
   }
@@ -342,11 +363,13 @@ function assignQuestByType(type) {
   if (type === "close_quarters") {
     const s = QUEST_LEVEL_SCALE.closeQuarters;
     quest.target = clampTarget(s.base + lv * s.perLevel);
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
     return;
   }
   if (type === "long_shot") {
     const s = QUEST_LEVEL_SCALE.longShot;
     quest.target = clampTarget(s.base + lv * s.perLevel);
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
     quest.zoneR = s.minRangeBase + lv * s.minRangePerLevel;
     return;
   }
@@ -360,17 +383,14 @@ function assignQuestByType(type) {
   if (type === "element_purge") {
     const s = QUEST_LEVEL_SCALE.elementPurge;
     quest.target = clampTarget(s.base + lv * s.perLevel);
+    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
+    const counts = getAliveElementTargetCounts();
     const options = ["fire", "poison", "void"];
-    let best = options[randi(options.length)];
+    let best = "";
     let bestCount = -1;
     for (let i = 0; i < options.length; i++) {
       const el = options[i];
-      let count = 0;
-      for (let j = 0; j < enemies.length; j++) {
-        const e = enemies[j];
-        if (!e.alive || e.boss) continue;
-        if (enemyElement(e) === el) count++;
-      }
+      const count = counts[el];
       if (count > bestCount) {
         bestCount = count;
         best = el;
@@ -446,7 +466,8 @@ function assignQuestByType(type) {
   if (type === "crowd_control") {
     const s = QUEST_LEVEL_SCALE.crowdControl;
     quest.target = clampTarget(s.base + lv * s.perLevel);
-    quest.duration = clampTarget(s.durationBase + lv * s.durationPerLevel);
+    const baseDuration = clampTarget(s.durationBase + lv * s.durationPerLevel);
+    quest.duration = Math.max(1, Math.round(baseDuration * s.durationMultiplier));
     return;
   }
   if (type === "boss_prep") {
@@ -497,7 +518,7 @@ function phaseFamilyWeights() {
 
 function canOfferQuestType(type) {
   const gate = QUEST_LEVEL_SCALE.gatingLevel;
-  if (type === "element_purge") return player.time >= 38;
+  if (type === "element_purge") return player.time >= 38 && hasAliveElementTargets();
   if (type === "elite_hunt") return player.time >= 35 || aliveEliteCount() > 0;
   if (type === "aura_discipline") return weapons.aura.unlocked;
   if (type === "pacifist_pulse") return weapons.aura.unlocked;
@@ -601,47 +622,47 @@ function chooseQuestType() {
   return fallback;
 }
 
-function formatTimeLeft() {
+function formatTimeLeft(justGiven = false) {
   if (quest.duration <= 0) return "";
-  const left = Math.max(0, Math.ceil(quest.duration - quest.timer));
-  return ` | ${left}s`;
+  const left = justGiven ? Math.ceil(quest.duration) : Math.max(0, Math.ceil(quest.duration - quest.timer));
+  return ` | T-${left}s`;
 }
 
 function formatQuestObjective(justGiven = false) {
   const p = Math.max(0, Math.floor(quest.progress));
   const t = Math.max(1, Math.floor(quest.target || 1));
+  let text = "-";
 
-  if (quest.type === "kill") return justGiven ? `Kill ${t} mobs` : `Kill ${p}/${t} mobs`;
-  if (quest.type === "scavenge") return justGiven ? `Loot ${t} relics` : `Loot ${p}/${t} relics`;
+  if (quest.type === "kill") text = justGiven ? `Kill ${t} mobs` : `Kill ${p}/${t} mobs`;
+  else if (quest.type === "scavenge") text = justGiven ? `Loot ${t} relics` : `Loot ${p}/${t} relics`;
   if (quest.type === "drop") {
     const pct = Math.round(clamp(quest.dropChance, 0, 1) * 100);
-    return justGiven ? `Collect ${t} trophies (${pct}% drop)` : `Collect ${p}/${t} trophies (${pct}% drop)`;
-  }
-  if (quest.type === "nohit") return justGiven ? `No hit for ${t}s` : `No hit ${p}/${t}s`;
-  if (quest.type === "close_quarters") return justGiven ? `Close-range kills: ${t}` : `Close-range kills ${p}/${t}`;
-  if (quest.type === "long_shot") return justGiven ? `Long-range kills: ${t}` : `Long-range kills ${p}/${t}`;
-  if (quest.type === "execution_chain") return justGiven ? `Kill chain x${t} in ${quest.comboWindow.toFixed(1)}s` : `Chain ${quest.combo}/${t}${formatTimeLeft()}`;
-  if (quest.type === "element_purge") return justGiven ? `${elementLabel(quest.element)} kills: ${t}` : `${elementLabel(quest.element)} kills ${p}/${t}`;
-  if (quest.type === "elite_hunt") return justGiven ? `Hunt ${t} elite${t > 1 ? "s" : ""}` : `Elite kills ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "overkill") return justGiven ? `Deal ${t} total damage` : `Damage ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "aura_discipline") return justGiven ? `Aura kills ${t} in ${quest.duration}s (no Magic)` : `Aura kills ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "crit_festival") return justGiven ? `Land ${t} critical hits` : `Critical hits ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "dot_trial") return justGiven ? `Deal ${t} DoT damage` : `DoT damage ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "orbital_defense") {
+    text = justGiven ? `Collect ${t} trophies (${pct}% drop)` : `Collect ${p}/${t} trophies (${pct}% drop)`;
+  } else if (quest.type === "nohit") text = justGiven ? "Take no damage" : `No hit ${p}/${t}s`;
+  else if (quest.type === "close_quarters") text = justGiven ? `Close-range kills: ${t}` : `Close-range kills ${p}/${t}`;
+  else if (quest.type === "long_shot") text = justGiven ? `Long-range kills: ${t}` : `Long-range kills ${p}/${t}`;
+  else if (quest.type === "execution_chain") text = justGiven ? `Kill chain x${t} in ${quest.comboWindow.toFixed(1)}s` : `Chain ${quest.combo}/${t}`;
+  else if (quest.type === "element_purge") text = justGiven ? `Kill ${t} ${elementLabel(quest.element)} enemies` : `${elementLabel(quest.element)} enemies ${p}/${t}`;
+  else if (quest.type === "elite_hunt") text = justGiven ? `Hunt ${t} elite${t > 1 ? "s" : ""}` : `Elite kills ${p}/${t}`;
+  else if (quest.type === "overkill") text = justGiven ? `Deal ${t} total damage` : `Damage ${p}/${t}`;
+  else if (quest.type === "aura_discipline") text = justGiven ? `Aura kills ${t} (no Magic)` : `Aura kills ${p}/${t}`;
+  else if (quest.type === "crit_festival") text = justGiven ? `Land ${t} critical hits` : `Critical hits ${p}/${t}`;
+  else if (quest.type === "dot_trial") text = justGiven ? `Deal ${t} DoT damage` : `DoT damage ${p}/${t}`;
+  else if (quest.type === "orbital_defense") {
     const s = QUEST_LEVEL_SCALE.orbitalDefense;
     const needMove = Math.floor(quest.duration * (s.requiredMoveRatio || 1));
     const moveT = Math.floor(quest.moveTimer || 0);
-    return justGiven ? `Stay fast ${needMove}s and kill ${t}` : `Move ${moveT}/${needMove}s | Kills ${p}/${t}`;
-  }
-  if (quest.type === "magnet_sprint") return justGiven ? `Collect ${t} gems fast` : `Gems ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "treasure_route") return justGiven ? `Open a chest within ${quest.duration}s` : `Chest ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "hazard_survivor") return justGiven ? `Stay in hazards ${t}s total` : `Hazard time ${p}/${t}s${formatTimeLeft()}`;
-  if (quest.type === "pacifist_pulse") return justGiven ? `Survive ${t}s with aura-only kills` : `Aura-only survival ${p}/${t}s`;
-  if (quest.type === "crowd_control") return justGiven ? `Control ${t} enemies` : `Crowd control ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "boss_prep") return justGiven ? `Deal ${t} damage before next elite` : `Prep damage ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "glass_cannon") return justGiven ? `Kill ${t} while defenses are reduced` : `Glass kills ${p}/${t}${formatTimeLeft()}`;
-  if (quest.type === "perfect_sweep") return justGiven ? `Clear marked zone (${t} enemies)` : `Sweep ${p}/${t}${formatTimeLeft()}`;
-  return "-";
+    text = justGiven ? `Stay fast ${needMove}s and kill ${t}` : `Move ${moveT}/${needMove}s | Kills ${p}/${t}`;
+  } else if (quest.type === "magnet_sprint") text = justGiven ? `Collect ${t} gems fast` : `Gems ${p}/${t}`;
+  else if (quest.type === "treasure_route") text = justGiven ? "Open a chest" : `Chest ${p}/${t}`;
+  else if (quest.type === "hazard_survivor") text = justGiven ? `Stay in hazards ${t}s total` : `Hazard time ${p}/${t}s`;
+  else if (quest.type === "pacifist_pulse") text = justGiven ? "Aura-only survival" : `Aura-only survival ${p}/${t}s`;
+  else if (quest.type === "crowd_control") text = justGiven ? `Knock back ${t} different enemies` : `Different enemies knocked back ${p}/${t}`;
+  else if (quest.type === "boss_prep") text = justGiven ? `Deal ${t} damage before next elite` : `Prep damage ${p}/${t}`;
+  else if (quest.type === "glass_cannon") text = justGiven ? `Kill ${t} while defenses are reduced` : `Glass kills ${p}/${t}`;
+  else if (quest.type === "perfect_sweep") text = justGiven ? `Clear marked zone (${t} enemies)` : `Sweep ${p}/${t}`;
+
+  return `${text}${formatTimeLeft(justGiven)}`;
 }
 function pushQuestNotice(text, color = COLORS.quest, size = 18) {
   popFloatText(player.x, player.y - 28, text, color, size, QUEST_NOTICE_LIFE, 16, 50, 80);
@@ -811,6 +832,7 @@ function updateTimedBasic(dt) {
 function updateActiveQuest(dt) {
   if (quest.type === "scavenge" || quest.type === "drop") {
     updateQuestItems(dt);
+    if (!quest.completed) updateTimedBasic(dt);
     return;
   }
   if (quest.type === "nohit") {
@@ -953,7 +975,7 @@ export function onEnemyKilled(e, meta = {}) {
     if (e.boss) return;
     const dx = e.x - player.x;
     const dy = e.y - player.y;
-    const closeR = (player.r + e.r) * 2.5;
+    const closeR = (player.r + e.r) * QUEST_LEVEL_SCALE.closeQuarters.rangeMultiplier;
     if (dx * dx + dy * dy <= closeR * closeR) quest.progress = Math.min(quest.target, quest.progress + 1);
     return;
   }

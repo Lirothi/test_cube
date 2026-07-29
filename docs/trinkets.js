@@ -1,10 +1,13 @@
 import { TRINKET_CONFIG } from "./config.js";
 import { randi } from "./math.js";
 import { player, trinkets, trinketBonuses } from "./state.js";
+import { triggerHealFx } from "./combat_fx.js";
 
 const applyMaxHp = (amount) => {
   player.maxHp += amount;
+  const hpBefore = player.hp;
   player.hp = Math.min(player.maxHp, player.hp + amount);
+  triggerHealFx(player.hp - hpBefore, 0.7);
 };
 
 const TRINKETS = [

@@ -14,7 +14,7 @@ import {
 import { COLORS } from "./colors.js";
 import { clamp, rand, randi } from "./math.js";
 import { sound } from "./audio.js";
-import { addTelegraph } from "./telegraph.js";
+import { addTelegraph, TELEGRAPH_KIND } from "./telegraph.js";
 import {
   WORLD,
   player,
@@ -104,6 +104,7 @@ function spawnBossWithTelegraph(typeKey, camX, camY, W, H, hpMult, spdMult, dmgM
     radius: tele.radius,
     color: tele.color,
     time: tele.time,
+    kind: TELEGRAPH_KIND.SPAWN,
     fire: () => {
       spawn.bossAlive = true;
       spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, false, pos);
@@ -213,6 +214,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: BOSS_CONFIG.telegraph.radius,
       color: BOSS_CONFIG.telegraph.color,
       time: BOSS_CONFIG.telegraph.time,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         spawn.bossAlive = true;
         spawnEnemy("X", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
@@ -228,6 +230,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: BOSS2_CONFIG.telegraph.radius,
       color: BOSS2_CONFIG.telegraph.color,
       time: BOSS2_CONFIG.telegraph.time,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         spawn.bossAlive = true;
         spawnEnemy("Y", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
@@ -243,6 +246,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: BOSS3_CONFIG.telegraph.radius,
       color: BOSS3_CONFIG.telegraph.color,
       time: BOSS3_CONFIG.telegraph.time,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         spawn.bossAlive = true;
         spawnEnemy("Z", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
@@ -258,6 +262,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: BOSS4_CONFIG.telegraph.radius,
       color: BOSS4_CONFIG.telegraph.color,
       time: BOSS4_CONFIG.telegraph.time,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         spawn.bossAlive = true;
         spawnEnemy("W", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
@@ -273,6 +278,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: BOSS5_CONFIG.telegraph.radius,
       color: BOSS5_CONFIG.telegraph.color,
       time: BOSS5_CONFIG.telegraph.time,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         spawn.bossAlive = true;
         spawnEnemy("Q", camX, camY, W, H, bossHpMult, bossSpdMult, bossDmgMult, false, pos);
@@ -314,6 +320,7 @@ export function spawnController(dt, camX, camY, W, H){
       radius: ELITE_CONFIG.telegraphRadius,
       color: ELITE_CONFIG.telegraphColor,
       time: ELITE_CONFIG.telegraphTime,
+      kind: TELEGRAPH_KIND.SPAWN,
       fire: () => {
         const eliteType = pickEliteType(t);
         spawnEnemy(eliteType, camX, camY, W, H, hpMult, spdMult, dmgMult, true, pos);
@@ -524,11 +531,17 @@ export function spawnEnemy(typeKey, camX, camY, W, H, hpMult, spdMult, dmgMult, 
   e.splitT = info.split ? rand(info.split.cd * RANGED_SHOT_CONFIG.startDelayMax, info.split.cd * RANGED_SHOT_CONFIG.startDelayMin) : 0;
   e.splitSeq = 0;
   e.slowT = 0; e.slowMul = 1;
-  e.burnT = 0; e.burnDps = 0; e.burnSource = null;
+  e.burnT = 0; e.burnDps = 0; e.burnSource = null; e.burnElement = "";
   e.bleedT = 0; e.bleedDps = 0; e.bleedSource = null;
+  e._lastHitElement = "";
   e.stuckT = 0;
   e.elite = elite;
   e.knockResist = (info.knockResist || 0) + (elite ? ELITE_CONFIG.knockResist : 0);
+  e.hitFlash = 0;
+  e.hitFlashMax = 0;
+  e.hitCrit = false;
+  e.hitFxDx = 0;
+  e.hitFxDy = 0;
   const bossLoot = info.lootGems != null ? info.lootGems : (e.boss ? BOSS_CONFIG.lootGems : 0);
   e.gemBonus = (elite ? ELITE_CONFIG.extraGems : 0) + (e.boss ? bossLoot : 0);
   if (e.boss) {

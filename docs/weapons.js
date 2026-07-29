@@ -2,16 +2,20 @@ import { WEAPON_CONFIG, WEAPON_MASTERY, UPGRADE_CONFIG, CRIT_UPGRADES, AUGMENT_C
 import { COLORS } from "./colors.js";
 import { clamp, rand, TAU, hypot } from "./math.js";
 import { sound } from "./audio.js";
+import { triggerHealFx } from "./combat_fx.js";
 import {
   player,
   enemies,
   activeObstacles,
   obstacles,
+  clampPointToWorld,
   bullets,
   rails,
   axes,
   orbs,
   missiles,
+  turrets,
+  toxinPools,
   arcs,
   trinketBonuses,
 } from "./state.js";
@@ -21,17 +25,20 @@ import {
   axePool,
   orbPool,
   missilePool,
+  turretPool,
+  toxinPool,
   arcPool,
 } from "./pools.js";
 
 export const weapons = {
   magic: { unlocked: true, level: 1, mastery: 0, t: 0, aug: null, augSeq: 0 },
   arc: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null, augSeq: 0 },
-  aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25, tickWaveFx: 0, tickWaveFxMax: 0.12 },
+  aura: { unlocked: false, level: 0, mastery: 0, tick: 0, aug: null, pulse: 0, pulseFx: 0, pulseFxMax: 0.25 },
   rail: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   axe: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   orb: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
   missile: { unlocked: false, level: 0, mastery: 0, t: 0, aug: null },
+  turret: { unlocked: false, level: 0, mastery: 0, slotTimers: [], aug: null, spawnSeq: 0 },
 };
 
 let ctxBuffs = null;
@@ -92,6 +99,7 @@ function applyBurn(e, dmg, cfg, source){
   e.burnT = Math.max(e.burnT || 0, cfg.duration);
   e.burnDps = Math.max(e.burnDps || 0, dmg * cfg.dpsPct);
   if (source) e.burnSource = source;
+  e.burnElement = "fire";
 }
 
 function applyBleed(e, dmg, cfg, source){
@@ -112,11 +120,12 @@ function getTrinketMods() {
 export function resetWeapons() {
   weapons.magic.unlocked = true; weapons.magic.level = 1; weapons.magic.mastery = 0; weapons.magic.t = 0; weapons.magic.aug = null; weapons.magic.augSeq = 0;
   weapons.arc.unlocked = false; weapons.arc.level = 0; weapons.arc.mastery = 0; weapons.arc.t = 0; weapons.arc.aug = null; weapons.arc.augSeq = 0;
-  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25; weapons.aura.tickWaveFx = 0; weapons.aura.tickWaveFxMax = 0.12;
+  weapons.aura.unlocked = false; weapons.aura.level = 0; weapons.aura.mastery = 0; weapons.aura.tick = 0; weapons.aura.aug = null; weapons.aura.pulse = 0; weapons.aura.pulseFx = 0; weapons.aura.pulseFxMax = 0.25;
   weapons.rail.unlocked = false; weapons.rail.level = 0; weapons.rail.mastery = 0; weapons.rail.t = 0; weapons.rail.aug = null;
   weapons.axe.unlocked = false; weapons.axe.level = 0; weapons.axe.mastery = 0; weapons.axe.t = 0; weapons.axe.aug = null;
   weapons.orb.unlocked = false; weapons.orb.level = 0; weapons.orb.mastery = 0; weapons.orb.t = 0; weapons.orb.aug = null;
   weapons.missile.unlocked = false; weapons.missile.level = 0; weapons.missile.mastery = 0; weapons.missile.t = 0; weapons.missile.aug = null;
+  weapons.turret.unlocked = false; weapons.turret.level = 0; weapons.turret.mastery = 0; weapons.turret.slotTimers.length = 0; weapons.turret.aug = null; weapons.turret.spawnSeq = 0;
 }
 
 export function weaponCount() {
@@ -128,6 +137,7 @@ export function weaponCount() {
   if (weapons.axe.unlocked) c++;
   if (weapons.orb.unlocked) c++;
   if (weapons.missile.unlocked) c++;
+  if (weapons.turret.unlocked) c++;
   return c;
 }
 
@@ -332,6 +342,37 @@ export function missileStats() {
   return { dmg, cd, speed, maxSpeed, accel, turnRate, count, explosion, life, range, critChance: critChanceTotal, critMult, radius: cfg.projectile.radius };
 }
 
+export function turretStats() {
+  const { buffs, upgradeState } = requireContext();
+  const trinket = getTrinketMods();
+  const cfg = WEAPON_CONFIG.turret;
+  const lv = weapons.turret.level;
+  const mastery = weapons.turret.mastery || 0;
+  const masteryDmgMult = 1 + mastery * WEAPON_MASTERY.dmgMult;
+  const masteryCrit = mastery * WEAPON_MASTERY.critChance;
+  const masteryCritMult = mastery * WEAPON_MASTERY.critMult;
+  const powerMul = (buffs.power > 0) ? cfg.powerDmgMult : 1.0;
+  const cdMul = (buffs.power > 0) ? cfg.powerCdMult : 1.0;
+  const dmg = (cfg.dmgBase + lv * cfg.dmgPerLevel) * powerMul * masteryDmgMult * trinket.dmg;
+  const cdRaw = Math.max(cfg.cdMin, cfg.cdBase - lv * cfg.cdPerLevel) * cdMul;
+  const cdReduce = Math.max(0.1, 1 - upgradeState.cdLv * UPGRADE_CONFIG.cdReduction);
+  const cd = Math.max(cfg.cdMin, cdRaw * cdReduce * trinket.cd);
+  const tick = Math.max(cfg.tickMin, cfg.tickBase + (lv - 1) * cfg.tickPerLevel);
+  const life = cfg.lifeBase + lv * cfg.lifePerLevel;
+  const range = cfg.rangeBase + lv * cfg.rangePerLevel;
+  const width = cfg.widthBase + lv * cfg.widthPerLevel;
+  const turnRate = (cfg.turnRateBaseDeg + lv * cfg.turnRatePerLevelDeg) * (Math.PI / 180);
+  let count = 0;
+  for (let i = 0; i < cfg.countLevels.length; i++) {
+    if (lv >= cfg.countLevels[i]) count++;
+  }
+  count = Math.min(cfg.maxActive, count);
+  const critChance = Math.min(1, cfg.crit.base + lv * cfg.crit.perLevel + masteryCrit);
+  const critMult = cfg.crit.multBase + lv * cfg.crit.multPerLevel + masteryCritMult + upgradeState.critMultLv * CRIT_UPGRADES.multPerLevel + trinket.critMult;
+  const critChanceTotal = clamp(critChance + upgradeState.critChanceLv * CRIT_UPGRADES.chancePerLevel + trinket.critChance, 0, 1);
+  return { dmg, cd, tick, life, range, width, turnRate, count, critChance: critChanceTotal, critMult };
+}
+
 export function findNearestEnemy(px, py, maxDist) {
   let best = null;
   let bestD = maxDist * maxDist;
@@ -465,10 +506,14 @@ function fireArcLance(){
   const slowCfg = WEAPON_CONFIG.arc.slow;
 
   for (let i = 0; i < chainCount && current; i++) {
+    const origin = path[path.length - 1];
+    const hitDx = current.x - origin.x;
+    const hitDy = current.y - origin.y;
+    const hitLength = Math.hypot(hitDx, hitDy) || 1;
     hit.add(current);
     path.push({ x: current.x, y: current.y });
     const crit = calcCrit(dmg, s.critChance, s.critMult);
-    damageEnemy(current, crit.dmg, 0, 0, 0, true, crit.crit, "arc");
+    damageEnemy(current, crit.dmg, hitDx / hitLength, hitDy / hitLength, 0, true, crit.crit, "arc");
     if (slowCfg) applySlow(current, slowCfg.mult, slowCfg.duration);
     if (addParticles) addParticles(current.x, current.y, COLORS.arc, 6, 220);
     last = current;
@@ -490,7 +535,8 @@ function fireArcLance(){
         const dy = e.y - last.y;
         if (dx * dx + dy * dy <= r2) {
           const crit = calcCrit(shockDmg, s.critChance, s.critMult);
-          damageEnemy(e, crit.dmg, 0, 0, 0, true, crit.crit, "arc");
+          const length = Math.hypot(dx, dy) || 1;
+          damageEnemy(e, crit.dmg, dx / length, dy / length, 0, true, crit.crit, "arc");
         }
       }
       damageObstaclesInRadius(last.x, last.y, radius, shockDmg, true);
@@ -620,6 +666,351 @@ function fireMissile(){
   }
 }
 
+function angleDelta(target, current) {
+  return ((target - current + Math.PI * 3) % TAU) - Math.PI;
+}
+
+function turretSpawnPoint(radius, bodyRadius, sequence) {
+  const goldenAngle = 2.399963229728653;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const angle = sequence * goldenAngle + attempt * TAU / 10;
+    const distance = radius + (attempt % 3) * 12;
+    const point = clampPointToWorld(
+      player.x + Math.cos(angle) * distance,
+      player.y + Math.sin(angle) * distance,
+      bodyRadius + 4
+    );
+    let clear = true;
+    for (let i = 0; i < activeObstacles.length; i++) {
+      const obstacle = obstacles[activeObstacles[i]];
+      if (!obstacle) continue;
+      const dx = point.x - obstacle.x;
+      const dy = point.y - obstacle.y;
+      const reach = bodyRadius + obstacle.r + 5;
+      if (dx * dx + dy * dy < reach * reach) {
+        clear = false;
+        break;
+      }
+    }
+    if (!clear) continue;
+    for (let i = 0; i < turrets.length; i++) {
+      const other = turrets[i];
+      const dx = point.x - other.x;
+      const dy = point.y - other.y;
+      const reach = bodyRadius + other.r + 12;
+      if (dx * dx + dy * dy < reach * reach) {
+        clear = false;
+        break;
+      }
+    }
+    if (clear) return point;
+  }
+  return clampPointToWorld(player.x, player.y, bodyRadius + 4);
+}
+
+function turretTargetClaimed(enemy, self) {
+  for (let i = 0; i < turrets.length; i++) {
+    const turret = turrets[i];
+    if (turret !== self && turret.alive && turret.target === enemy) return true;
+  }
+  return false;
+}
+
+function findTurretTarget(turret) {
+  let best = null;
+  let bestD2 = turret.range * turret.range;
+  let fallback = null;
+  let fallbackD2 = bestD2;
+  for (let i = 0; i < enemies.length; i++) {
+    const enemy = enemies[i];
+    if (!enemy.alive) continue;
+    const dx = enemy.x - turret.x;
+    const dy = enemy.y - turret.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 >= fallbackD2) continue;
+    fallback = enemy;
+    fallbackD2 = d2;
+    if (!turretTargetClaimed(enemy, turret) && d2 < bestD2) {
+      best = enemy;
+      bestD2 = d2;
+    }
+  }
+  return best || fallback;
+}
+
+function turretElement() {
+  if (weapons.turret.aug === "turret_thermite") return "fire";
+  if (weapons.turret.aug === "turret_plague") return "poison";
+  return "";
+}
+
+function removeTurretForSlot(slotIndex) {
+  for (let i = turrets.length - 1; i >= 0; i--) {
+    const old = turrets[i];
+    if (old.slotIndex !== slotIndex) continue;
+    turrets[i] = turrets[turrets.length - 1];
+    turrets.pop();
+    old.alive = false;
+    old.target = null;
+    turretPool.put(old);
+    return;
+  }
+}
+
+function hasActiveTurretForSlot(slotIndex) {
+  for (let i = 0; i < turrets.length; i++) {
+    if (turrets[i].alive && turrets[i].slotIndex === slotIndex) return true;
+  }
+  return false;
+}
+
+function deployTurret(slotIndex, s) {
+  const cfg = WEAPON_CONFIG.turret;
+  const sequence = ++weapons.turret.spawnSeq;
+  const point = turretSpawnPoint(cfg.spawnRadius, cfg.bodyRadius, sequence);
+  const turret = turretPool.get();
+  turret.alive = true;
+  turret.id = sequence;
+  turret.slotIndex = slotIndex;
+  turret.x = point.x;
+  turret.y = point.y;
+  turret.r = cfg.bodyRadius;
+  turret.life = s.life;
+  turret.maxLife = s.life;
+  turret.range = s.range;
+  turret.width = s.width;
+  turret.streamLength = 0;
+  turret.blockedObstacle = -1;
+  turret.firing = false;
+  turret.tick = 0;
+  turret.tickRate = s.tick;
+  turret.retarget = 0;
+  turret.target = null;
+  turret.dmg = s.dmg;
+  turret.critChance = s.critChance;
+  turret.critMult = s.critMult;
+  turret.turnRate = s.turnRate;
+  turret.element = turretElement();
+  turret.phase = rand(TAU, 0);
+  turret.poolT = 0;
+  turret.angle = sequence * 2.399963229728653;
+  turret.target = findTurretTarget(turret);
+  if (turret.target) turret.angle = Math.atan2(turret.target.y - turret.y, turret.target.x - turret.x);
+  turrets.push(turret);
+  sound.play("shoot");
+}
+
+function updateTurretDeployments(dt) {
+  const s = turretStats();
+  const timers = weapons.turret.slotTimers;
+
+  while (timers.length < s.count) timers.push(0);
+  if (timers.length > s.count) {
+    for (let slotIndex = s.count; slotIndex < timers.length; slotIndex++) {
+      removeTurretForSlot(slotIndex);
+    }
+    timers.length = s.count;
+  }
+
+  for (let slotIndex = 0; slotIndex < timers.length; slotIndex++) {
+    timers[slotIndex] = Math.max(0, timers[slotIndex] - dt);
+    if (timers[slotIndex] <= 0 && !hasActiveTurretForSlot(slotIndex)) {
+      timers[slotIndex] = s.cd;
+      deployTurret(slotIndex, s);
+    }
+  }
+}
+
+function updateTurretStreamBlock(turret) {
+  const ux = Math.cos(turret.angle);
+  const uy = Math.sin(turret.angle);
+  let length = turret.range;
+  let blockedObstacle = -1;
+  for (let i = 0; i < activeObstacles.length; i++) {
+    const obstacleIndex = activeObstacles[i];
+    const obstacle = obstacles[obstacleIndex];
+    if (!obstacle || obstacle.type === "lake") continue;
+    const dx = obstacle.x - turret.x;
+    const dy = obstacle.y - turret.y;
+    const along = dx * ux + dy * uy;
+    if (along <= 0 || along >= length + obstacle.r) continue;
+    const side = Math.abs(dx * uy - dy * ux);
+    const streamHalfWidth = turret.width * (0.48 - 0.20 * clamp(along / turret.range, 0, 1));
+    if (side > obstacle.r + streamHalfWidth) continue;
+    const hitDistance = Math.max(turret.r + 3, along - obstacle.r);
+    if (hitDistance < length) {
+      length = hitDistance;
+      blockedObstacle = obstacleIndex;
+    }
+  }
+  turret.streamLength = length;
+  turret.blockedObstacle = blockedObstacle;
+}
+
+function enemyInsideTurretStream(enemy, turret, ux, uy) {
+  const dx = enemy.x - turret.x;
+  const dy = enemy.y - turret.y;
+  const along = dx * ux + dy * uy;
+  if (along < -enemy.r || along > turret.streamLength + enemy.r) return false;
+  const side = Math.abs(dx * uy - dy * ux);
+  const t = clamp(along / Math.max(1, turret.streamLength), 0, 1);
+  const halfWidth = turret.width * (0.48 - 0.20 * t);
+  return side <= halfWidth + enemy.r;
+}
+
+function damageTurretStream(turret) {
+  const { damageEnemy, damageObstacle } = requireRuntime();
+  const ux = Math.cos(turret.angle);
+  const uy = Math.sin(turret.angle);
+  const aug = weapons.turret.aug;
+  for (let i = 0; i < enemies.length; i++) {
+    const enemy = enemies[i];
+    if (!enemy.alive || !enemyInsideTurretStream(enemy, turret, ux, uy)) continue;
+    const hit = calcCrit(turret.dmg, turret.critChance, turret.critMult);
+    damageEnemy(enemy, hit.dmg, ux, uy, 0, hit.crit, hit.crit, "turret", true, "direct", turret.element);
+    if (aug === "turret_thermite") {
+      applyBurn(
+        enemy,
+        turret.dmg / Math.max(0.01, turret.tickRate),
+        AUGMENT_CONFIG.turret.thermite.burn,
+        "turret"
+      );
+    } else if (aug === "turret_plague") {
+      applySlow(enemy, AUGMENT_CONFIG.turret.plague.slowMult, AUGMENT_CONFIG.turret.plague.slowDuration);
+    }
+  }
+  if (turret.blockedObstacle >= 0) {
+    const obstacle = obstacles[turret.blockedObstacle];
+    if (obstacle?.type === "forest") damageObstacle(turret.blockedObstacle, turret.dmg, false);
+  }
+}
+
+function countToxinPools(ownerId) {
+  let count = 0;
+  for (let i = 0; i < toxinPools.length; i++) {
+    if (toxinPools[i].alive && toxinPools[i].ownerId === ownerId) count++;
+  }
+  return count;
+}
+
+function spawnToxinPool(turret) {
+  const cfg = AUGMENT_CONFIG.turret.plague.pool;
+  if (toxinPools.length >= WEAPON_CONFIG.turret.maxActive * cfg.maxPerTurret) return;
+  if (countToxinPools(turret.id) >= cfg.maxPerTurret) return;
+  const ux = Math.cos(turret.angle);
+  const uy = Math.sin(turret.angle);
+  let poolDistance = turret.streamLength;
+  if (turret.target?.alive) {
+    const targetAlong = (turret.target.x - turret.x) * ux + (turret.target.y - turret.y) * uy;
+    poolDistance = clamp(targetAlong, turret.r * 1.5, turret.streamLength);
+  }
+  const pool = toxinPool.get();
+  pool.alive = true;
+  pool.ownerId = turret.id;
+  pool.x = turret.x + ux * poolDistance;
+  pool.y = turret.y + uy * poolDistance;
+  pool.radius = cfg.radius;
+  pool.life = cfg.life;
+  pool.maxLife = cfg.life;
+  pool.tick = 0;
+  pool.tickRate = cfg.tick;
+  pool.dmg = (turret.dmg / Math.max(0.01, turret.tickRate)) * cfg.dpsMult * cfg.tick;
+  pool.critChance = turret.critChance;
+  pool.critMult = turret.critMult;
+  pool.phase = turret.phase;
+  toxinPools.push(pool);
+}
+
+function updateTurrets(dt) {
+  const cfg = WEAPON_CONFIG.turret;
+  for (let i = turrets.length - 1; i >= 0; i--) {
+    const turret = turrets[i];
+    turret.life -= dt;
+    turret.phase += dt * 5.2;
+    turret.retarget -= dt;
+    if (
+      turret.retarget <= 0
+      || !turret.target
+      || !turret.target.alive
+      || (turret.target.x - turret.x) ** 2 + (turret.target.y - turret.y) ** 2 > turret.range * turret.range
+    ) {
+      turret.target = findTurretTarget(turret);
+      turret.retarget = cfg.retargetInterval;
+    }
+
+    if (turret.target) {
+      const desired = Math.atan2(turret.target.y - turret.y, turret.target.x - turret.x);
+      const delta = angleDelta(desired, turret.angle);
+      const maxTurn = turret.turnRate * dt;
+      turret.angle += clamp(delta, -maxTurn, maxTurn);
+      turret.firing = Math.abs(delta) <= cfg.alignmentAngle;
+    } else {
+      turret.firing = false;
+    }
+
+    if (turret.firing) {
+      updateTurretStreamBlock(turret);
+      turret.tick -= dt;
+      if (turret.tick <= 0) {
+        turret.tick += turret.tickRate;
+        damageTurretStream(turret);
+      }
+      if (weapons.turret.aug === "turret_plague") {
+        turret.poolT -= dt;
+        if (turret.poolT <= 0) {
+          turret.poolT += AUGMENT_CONFIG.turret.plague.pool.interval;
+          spawnToxinPool(turret);
+        }
+      }
+    } else {
+      turret.streamLength = Math.max(0, turret.streamLength - turret.range * dt * 7);
+      turret.blockedObstacle = -1;
+      turret.tick = 0;
+      turret.poolT = Math.max(0, turret.poolT);
+    }
+
+    if (turret.life <= 0) turret.alive = false;
+    if (!turret.alive) {
+      turrets[i] = turrets[turrets.length - 1];
+      turrets.pop();
+      turret.target = null;
+      turretPool.put(turret);
+    }
+  }
+}
+
+function updateToxinPools(dt) {
+  const { damageEnemy } = requireRuntime();
+  const slowCfg = AUGMENT_CONFIG.turret.plague;
+  for (let i = toxinPools.length - 1; i >= 0; i--) {
+    const pool = toxinPools[i];
+    pool.life -= dt;
+    pool.phase += dt * 1.7;
+    pool.tick -= dt;
+    if (pool.tick <= 0) {
+      pool.tick += pool.tickRate;
+      const r2 = pool.radius * pool.radius;
+      for (let j = 0; j < enemies.length; j++) {
+        const enemy = enemies[j];
+        if (!enemy.alive) continue;
+        const dx = enemy.x - pool.x;
+        const dy = enemy.y - pool.y;
+        const reach = pool.radius + enemy.r;
+        if (dx * dx + dy * dy > Math.max(r2, reach * reach)) continue;
+        const hit = calcCrit(pool.dmg, pool.critChance, pool.critMult);
+        damageEnemy(enemy, hit.dmg, 0, 0, 0, hit.crit, hit.crit, "turret", true, "poison", "poison");
+        applySlow(enemy, slowCfg.slowMult, slowCfg.slowDuration);
+      }
+    }
+    if (pool.life <= 0) pool.alive = false;
+    if (!pool.alive) {
+      toxinPools[i] = toxinPools[toxinPools.length - 1];
+      toxinPools.pop();
+      toxinPool.put(pool);
+    }
+  }
+}
+
 export function updateWeapons(dt){
   const { damageEnemy, damageObstacle } = requireRuntime();
 
@@ -644,9 +1035,6 @@ export function updateWeapons(dt){
     const aug = weapons.aura.aug;
     if (weapons.aura.pulseFx > 0) {
       weapons.aura.pulseFx = Math.max(0, weapons.aura.pulseFx - dt);
-    }
-    if (weapons.aura.tickWaveFx > 0) {
-      weapons.aura.tickWaveFx = Math.max(0, weapons.aura.tickWaveFx - dt);
     }
     weapons.aura.tick -= dt;
     if (weapons.aura.tick <= 0){
@@ -681,11 +1069,11 @@ export function updateWeapons(dt){
         }
       }
       
-      weapons.aura.tickWaveFx = weapons.aura.tickWaveFxMax || 0.12;
-
       if (aug === "aura_leech" && hitCount > 0) {
         const heal = player.maxHp * AUGMENT_CONFIG.aura.leechPct;
+        const hpBefore = player.hp;
         player.hp = Math.min(player.maxHp, player.hp + heal);
+        triggerHealFx(player.hp - hpBefore, 0.45);
       }
     }
 
@@ -749,6 +1137,12 @@ export function updateWeapons(dt){
     }
   }
 
+  if (weapons.turret.unlocked){
+    updateTurretDeployments(dt);
+  }
+
+  updateTurrets(dt);
+  updateToxinPools(dt);
   updateBullets(dt);
   updateMissiles(dt);
   updateRailShots(dt);
@@ -910,10 +1304,10 @@ export function updateMissiles(dt){
         const dy = e.y - m.y;
         const d2 = dx*dx + dy*dy;
         if (d2 <= r2){
-          damageEnemy(e, crit.dmg, 0, 0, 0, true, crit.crit, "missile");
+          const d = Math.sqrt(d2) || 1;
+          damageEnemy(e, crit.dmg, dx / d, dy / d, 0, true, crit.crit, "missile");
           if (missileAug === "missile_concussive") {
             applySlow(e, AUGMENT_CONFIG.missile.concussive.slowMult, AUGMENT_CONFIG.missile.concussive.slowDuration);
-            const d = Math.sqrt(d2) || 1;
             const nx = dx / d, ny = dy / d;
             const knock = AUGMENT_CONFIG.missile.concussive.knock;
             e.kx += nx * knock;
@@ -1155,7 +1549,7 @@ export function updateOrbs(dt){
             e.kx -= nx * pull;
             e.ky -= ny * pull;
             const hit = calcCrit(o.dmg, o.critChance, o.critMult);
-            damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
+            damageEnemy(e, hit.dmg, nx, ny, 0, true, hit.crit, "orb");
           }
         }
         damageObstaclesInRadius(o.x, o.y, o.radius, o.dmg, false);
@@ -1169,9 +1563,11 @@ export function updateOrbs(dt){
           if (!e.alive) continue;
           const dx = e.x - o.x;
           const dy = e.y - o.y;
-          if (dx*dx + dy*dy <= r2){
+          const d2 = dx*dx + dy*dy;
+          if (d2 <= r2){
             const hit = calcCrit(o.explosion, o.critChance, o.critMult);
-            damageEnemy(e, hit.dmg, 0, 0, 0, true, hit.crit, "orb");
+            const d = Math.sqrt(d2) || 1;
+            damageEnemy(e, hit.dmg, dx / d, dy / d, 0, true, hit.crit, "orb");
           }
         }
         damageObstaclesInRadius(o.x, o.y, expRadius, o.explosion, true);

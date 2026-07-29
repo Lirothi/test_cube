@@ -7,6 +7,7 @@ import { damageEnemy } from "./enemies.js";
 import { trinketSlotsFull } from "./trinkets.js";
 import { companionSlotsFull } from "./companions.js";
 import { popFloatText } from "./float_text.js";
+import { triggerHealFx } from "./combat_fx.js";
 import {
   player,
   buffs,
@@ -96,7 +97,9 @@ const CHEST_BONUSES = [
     apply: () => {
       requireRuntime();
       const amt = player.maxHp * CHEST_CONFIG.bonuses.healPct;
+      const hpBefore = player.hp;
       player.hp = Math.min(player.maxHp, player.hp + amt);
+      triggerHealFx(player.hp - hpBefore);
       popFloatText(player.x, player.y - 14, `+${Math.ceil(amt)} HP`, COLORS.heal, 16, FLOAT_LIFE);
     }
   },
