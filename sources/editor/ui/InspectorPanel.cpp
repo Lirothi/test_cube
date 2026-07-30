@@ -651,6 +651,35 @@ namespace
                 {
                     p["render"] = OceanRenderConfigJson::ToJson(render);
                 };
+                const auto beginRenderContinuousEdit = [&]()
+                {
+                    if (ImGui::IsItemActivated())
+                    {
+                        activeEditObject = env.id;
+                        propertiesBeforeEdit = p;
+                    }
+                };
+                const auto finishRenderContinuousEdit = [&](bool changed)
+                {
+                    if (changed)
+                    {
+                        EnvironmentRuntime::Apply(ctx, env);
+                        ctx.document.SetDirty(true);
+                    }
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
+                        nlohmann::json before =
+                            activeEditObject.value == env.id.value ?
+                                std::move(propertiesBeforeEdit) :
+                                p;
+                        commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
+                            env.id,
+                            std::move(before),
+                            p,
+                            historyLabel));
+                        activeEditObject = EditorObjectId{};
+                    }
+                };
                 const auto renderDrag = [&](const char* label,
                     float& value,
                     float speed,
@@ -658,30 +687,30 @@ namespace
                     float maximum,
                     const char* format = "%.3f")
                 {
-                    const nlohmann::json beforeItem = p;
                     const bool changed = ImGui::DragFloat(
                         label, &value, speed, minimum, maximum, format);
+                    beginRenderContinuousEdit();
                     if (changed)
                     {
                         value = std::clamp(value, minimum, maximum);
                         storeRender();
                     }
-                    trackContinuousEdit(beforeItem, changed);
+                    finishRenderContinuousEdit(changed);
                 };
                 const auto renderColor = [&](const char* label, Math::float4& color)
                 {
-                    const nlohmann::json beforeItem = p;
                     float values[3] = { color.x, color.y, color.z };
                     const bool changed = ImGui::ColorEdit3(
                         label,
                         values,
                         ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+                    beginRenderContinuousEdit();
                     if (changed)
                     {
                         color = Math::float4(values[0], values[1], values[2], color.w);
                         storeRender();
                     }
-                    trackContinuousEdit(beforeItem, changed);
+                    finishRenderContinuousEdit(changed);
                 };
                 const auto renderVector4 = [&](const char* label,
                     Math::float4& value,
@@ -689,10 +718,10 @@ namespace
                     float minimum,
                     float maximum)
                 {
-                    const nlohmann::json beforeItem = p;
                     float values[4] = { value.x, value.y, value.z, value.w };
                     const bool changed = ImGui::DragFloat4(
                         label, values, speed, minimum, maximum, "%.3f");
+                    beginRenderContinuousEdit();
                     if (changed)
                     {
                         value = Math::float4(
@@ -702,7 +731,7 @@ namespace
                             std::clamp(values[3], minimum, maximum));
                         storeRender();
                     }
-                    trackContinuousEdit(beforeItem, changed);
+                    finishRenderContinuousEdit(changed);
                 };
 
                 ImGui::TextDisabled("Render settings are stored in this level and override the preset.");
