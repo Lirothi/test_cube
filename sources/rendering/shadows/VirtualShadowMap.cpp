@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h" // GPU_SCOPE(kVsmPageSetup): per-page cull sub-scope
 #include "rendering/core/Renderer.h"
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/shadows/ShadowGpuData.h"
@@ -789,6 +791,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // level switch that shrank the mesh-group count).
     const std::uint32_t argBaseElems = f * static_cast<std::uint32_t>(
         shadowGpu->IndirectArgsRegionBytes() / sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
+    // Sub-scope: this dispatch is the per-page instance cull (O(pages x casters)), which scales with the
+    // CASTER COUNT, while the draws below scale with triangles/fill. Split so a regression is attributable.
+    { GPU_SCOPE(cl, ProfilerScopes::kVsmPageSetup);
     RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
         [&](std::uint8_t* dst)
         {
@@ -836,6 +841,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         pageDrawArgs_.Get());
     renderer->UAVBarrier(cl, pageProj_.Get());
     renderer->UAVBarrier(cl, pageVisibleList_.Get());
+    } // end VsmPageRender.Setup scope
 
     // Page cache: after the setup has READ physOwnerPrev, snapshot this frame's physOwner into it for
     // next frame's new-page detection, and make the dirty bits readable by the gated clear (VS SRV).

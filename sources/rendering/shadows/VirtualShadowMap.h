@@ -126,7 +126,7 @@ namespace vsm
     // pool pages → far fewer CPU draw calls). DEFAULT OFF: the snapshot latency makes shadows blink
     // for ~kFrameCount frames when the resident set changes (camera motion / light churn). ON =
     // cheaper CPU, minor motion flicker; OFF = iterate the whole pool every frame (correct, ~4x CPU).
-    inline bool g_residentIterOnly = false;
+    inline bool g_residentIterOnly = true;
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net

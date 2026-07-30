@@ -134,10 +134,22 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[4] = pt[2];         // near (z >= 0)
     planes[5] = pt[3] - pt[2]; // far
 
+    const uint rung0View = view + 4u;
+
     // Pass 1: count the casters visible in THIS page, per mesh-group, and note whether any DYNAMIC
     // caster overlaps (page-cache invalidation). B3: an object's submesh slots are CONSECUTIVE and
     // share its bounds, so test once per OBJECT (CasterMeta slot count) and apply the result to all
     // its slots — otherwise the (pages x casters) plane tests scale with the submesh split.
+    //
+    // MEASURED DEAD END (2026-07-23) — do not re-attempt without changing the approach: iterating the
+    // per-VIEW visible set Rung 0 already produced (via the args' InstanceCount + StartInstanceLocation)
+    // instead of all casters makes this pass ~1.8x SLOWER on a dense grove (Setup 0.435 -> 0.791 ms,
+    // 610 palms). Two reasons: the visible-list entries are per SLOT so the per-object dedupe below is
+    // lost (~4.5x more plane tests here), and — the structural one — most RESIDENT pages belong to the
+    // COARSE clipmap levels, which see nearly every caster anyway, while the fine levels that do have a
+    // small visible set own only a handful of pages. Making this loop cheap needs the real inversion:
+    // scatter each caster into the page rect its AABB covers (a caster touches a few pages, not 1024),
+    // which requires a page-table lookup + per-page atomics, not a different iteration order here.
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
     for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
     bool dynamicOverlap = false;
@@ -185,7 +197,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // start / base vertex) comes from this VIEW's shadow LOD: gViewLod[rung0View] picks the LOD, and
     // gGroupLodMega[group * numLods + lod] gives {megaStart, lodRel, count, baseVertex} for it. Mega on
     // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
-    const uint rung0View = view + 4u;
     uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
     for (uint g2 = 0u; g2 < gNumGroups; ++g2)

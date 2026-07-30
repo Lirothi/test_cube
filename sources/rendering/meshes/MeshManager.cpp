@@ -37,7 +37,8 @@ struct MeshLodCpu {
 // submesh table — simplifying the whole buffer as one blob would dissolve the per-material
 // boundaries. Single-submesh meshes reduce to the original behavior. CPU-only (no GPU).
 std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
-    const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs)
+    const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs,
+    const MeshLoadOptions& opt)
 {
     std::vector<MeshLodCpu> out;
     const size_t baseIdx = indices.size();
@@ -45,8 +46,9 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
     constexpr size_t kMinRangeIndices  = 96;    // per-range floor; smaller ranges copy through
     if (verts.empty() || baseIdx < kMinIndicesForLod || baseSubs.empty()) { return out; }
 
-    const float ratios[] = { 0.5f, 0.25f, 0.12f };
-    const float errors[] = { 0.02f, 0.05f, 0.12f };
+    // Per-level target ratio + error budget; overridable per import (see MeshLoadOptions).
+    const float ratios[] = { 0.5f * opt.lodRatioScale, 0.25f * opt.lodRatioScale, 0.12f * opt.lodRatioScale };
+    const float errors[] = { 0.02f * opt.lodErrorScale, 0.05f * opt.lodErrorScale, 0.12f * opt.lodErrorScale };
     std::vector<uint32_t> simplified;
     size_t prevCount = baseIdx;
 
@@ -67,9 +69,19 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
             {
                 simplified.resize(srcCount);
                 float resultError = 0.0f;
+                // Options are per-import (MeshLoadOptions::lodSimplifyOptions, exposed in the mesh
+                // import window) and default to 0 = meshopt's safe behaviour.
+                //
+                // WARNING about meshopt_SimplifyPermissive on FOLIAGE (measured + eyeballed 2026-07-23):
+                // it does unstick the hard topological floor that alpha-card leaves hit (date_palm's
+                // foliage slot otherwise stalls at 5600 -> 4006 tris across LOD 2 AND 3), and it reports
+                // a LOWER geometric error while doing it (0.0018 vs 0.0427 at LOD3) — but the result is
+                // visually destroyed: the leaf blades collapse into spikes, because the position-only
+                // error metric is blind to what actually carries a leaf card's shape (its silhouette
+                // and UV island). Do not trust `resultError` on masked foliage; look at the wireframe.
                 n = meshopt_simplify(simplified.data(), src, srcCount,
                     &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
-                    target, errors[i], 0, &resultError);
+                    target, errors[i], opt.lodSimplifyOptions, &resultError);
                 if (n == 0) { n = srcCount; }  // simplify gave up -> keep the range as-is
                 else { didSimplify = true; }
                 (void)resultError;
@@ -91,10 +103,11 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
 // Called once at load on the upload command list (runtime fallback path).
 void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive,
-    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices)
+    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
+    const MeshLoadOptions& opt)
 {
     if (!mesh) { return; }
-    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes()))
+    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt))
     {
         mesh->AddLod(device, uploadCmdList, keepAlive,
             lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes);
@@ -105,6 +118,9 @@ void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* u
 std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots); // defined below
 constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
 constexpr uint32_t kMeshBinVersion = 1u;          // bump on any bake-algo / format change -> stale
+// NOTE when bumping: a directly-referenced models/*.mesh.bin has no runtime source to rebuild from,
+// so a bump makes every one of them stale -> they must ALL be re-baked (--reimport-src/--reimport-out)
+// or their meshes silently fail to load. LOD *settings* do not need a bump: they ride in optionsHash.
 
 struct MeshBinHeader {
     uint32_t magic;
@@ -151,6 +167,12 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
         if (opt.slotFoliage[i] > 0.0f) { pattern |= (1ull << i); }
     }
     if (pattern != 0) { h = Fnv1a(&pattern, sizeof(pattern), h); }
+    // LOD generation knobs change the baked index buffers, so a cached .bin made with different
+    // settings must not be reused (only affects the runtime cache; a directly-referenced .bin skips
+    // the options check by design). Non-default values only, so existing caches stay valid.
+    if (opt.lodRatioScale != 1.0f) { h = Fnv1a(&opt.lodRatioScale, sizeof(float), h); }
+    if (opt.lodErrorScale != 1.0f) { h = Fnv1a(&opt.lodErrorScale, sizeof(float), h); }
+    if (opt.lodSimplifyOptions != 0u) { h = Fnv1a(&opt.lodSimplifyOptions, sizeof(unsigned int), h); }
     return h;
 }
 
@@ -834,7 +856,7 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     // from foliage; before LOD building, so every LOD inherits the same weights.
     BakeWindWeightsCpu(cpu.vertices, cpu.indices, lod0Subs, opt.slotFoliage);
 
-    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs);
+    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt);
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
         cpu.vertices, cpu.indices, lod0Subs, extra);
     char msg[512];
@@ -1021,7 +1043,7 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, inds.data(), (UINT)inds.size(),
         opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
     cache_[cacheKey] = m;
     return m;
 }
@@ -1049,7 +1071,7 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, inds.data(), (UINT)inds.size(),
         opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
     cache_[cacheKey] = m;
     return m;
 }
@@ -1080,7 +1102,7 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
         verts, inds.data(), (UINT)inds.size(),
         opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(),
         submeshes.size() > 1 ? &submeshes : nullptr);
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
     cache_[cacheKey] = m;
     return m;
 }
@@ -1102,7 +1124,9 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
     std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV may modify the data
     m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
         verts, indices.data(), (UINT)indices.size(), generateTangentSpace);
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, indices);
+    // This overload builds from raw vertex data (no import options in scope) — default LOD settings.
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, indices,
+                 MeshLoadOptions{});
     cache_[key] = m;
     return m;
 }

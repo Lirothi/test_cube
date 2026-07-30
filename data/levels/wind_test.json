@@ -24,13 +24,13 @@
       "id": 7,
       "name": "FreeCameraStart",
       "position": [
-        27.01515007019043,
-        8.659615516662598,
-        112.63629150390625
+        -30.73821258544922,
+        4.747895240783691,
+        70.70248413085938
       ],
       "rotationDeg": [
-        25.783395767211914,
-        139.43565368652344,
+        4.05643367767334,
+        -141.22747802734375,
         0.0
       ],
       "scale": [
@@ -12441,7 +12441,7 @@
       "name": "staticMesh #26 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -60.78471374511719,
-        2.4876794815063477,
+        1.2637574672698975,
         20.81386947631836
       ],
       "rotationDeg": [
@@ -12463,7 +12463,7 @@
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -55.63974380493164,
-        2.3138480186462402,
+        0.13224387168884277,
         21.133651733398438
       ],
       "rotationDeg": [

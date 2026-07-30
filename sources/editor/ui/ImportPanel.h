@@ -128,6 +128,12 @@ private:
     bool meshDialogNormalizeSpawn_ = false;
     float meshDialogTargetM_ = 6.0f;
     bool meshDialogSplitTopLevelNodes_ = false;
+    // LOD generation knobs for this import (defaults = the shipped chain; see MeshLoadOptions).
+    // Read straight by RecreateMeshAssets, which is where every mesh bake funnels through.
+    float meshDialogLodRatio_ = 1.0f;
+    float meshDialogLodError_ = 1.0f;
+    bool  meshDialogLodPermissive_ = false; // meshopt_SimplifyPermissive — shreds masked foliage
+    bool  meshDialogLodPrune_ = false;      // meshopt_SimplifyPrune — drops small loose components
     std::vector<std::string> meshDialogTopLevelNodes_;
 };
 

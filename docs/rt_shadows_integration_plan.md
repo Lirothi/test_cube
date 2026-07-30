@@ -417,17 +417,48 @@ report the dependency instead of silently widening the change.
 - **Interface contract:** a wind caster's RT shadow matches its rasterized silhouette within one
   frame of sway; non-wind casters keep the shared cached BLAS and are byte-identical to R3; with the
   deform disabled the behaviour degrades to the R3 rest-pose result, never to a missing shadow.
-- **Cost model to validate (atoll, all 100 palms, worst case with no budget controls):**
+- **Cost model — naive per-instance refit DOES NOT SCALE (recomputed 2026-07-23 on the real
+  `wind_test` grove: 610 palms, 222 coconut / 217 date / 171 curly):**
 
   | Item | Quantity | Estimate |
   |---|---|---|
-  | Deform compute | 100 × ~5.3k verts = 530k | ~0.03 ms |
-  | BLAS refit | 100 × ~7k tris = 700k tris, 100 calls | 0.1-0.3 ms (per-call overhead dominates on small BLASes) |
-  | BLAS + deformed VB memory | | ~30-50 MB + ~6 MB |
+  | Deform compute | 610 plants = **3.29M verts** | ~0.1-0.2 ms (fine) |
+  | BLAS refit @LOD0 | **4.40M tris**, **610 separate refit calls** | **~2-5 ms** + per-call overhead |
+  | BLAS + deformed-VB memory | | **~150-250 MB** + ~40 MB |
 
-  With near-only + shadow-LOD deform (10-15 plants, LOD 1-2) this should fall to noise. If the
-  measured refit cost lands far above this model, report it — it changes the RT-vs-VSM verdict and is
-  the one number in this plan most likely to be wrong.
+  That is **worse than the ~1.5 ms of VSM it is meant to replace**, and it grows linearly with plant
+  count. The earlier version of this model was written for 100 palms and is wrong at grove scale. The
+  budget controls below are therefore **mandatory, not optional** — an unbudgeted RW is a regression.
+
+- **Phase bucketing is the load-bearing idea (do this first, not last).** The refit bill is a function
+  of how much geometry is *deformed*, which is a design choice, not a scene property. The per-plant
+  wind phase is `dot(worldOrigin.xz, float2(0.13, 0.17))` (`shaders/wind.hlsli`) — continuous, hence
+  610 unique poses. But a grove does not need 610 distinct phases: **quantize the phase into N buckets
+  so a deformed BLAS is keyed by (mesh, phaseBucket), not by instance.** 3 mesh types × 12 buckets =
+  **36 BLASes instead of 610**. Combine with a coarse BLAS LOD (the same lever as the shadow LOD work
+  — note `models/` LOD chains vary: coconut 6630→792 is 8.4×, date 9941→4507 only 2.2×) and near-only
+  exact deform:
+
+  | Tier | Treatment | Rough cost |
+  |---|---|---|
+  | Nearest ~20 plants | own deformed BLAS, exact phase, LOD 1-2 | ~40k tris |
+  | Mid | bucketed BLAS (mesh, phase), coarse LOD | ~70k tris |
+  | Far | shared rest-pose BLAS, no deform | 0 |
+
+  ≈ **0.1 ms and a few MB** — and, the property that actually matters, **capped**: adding 2000 more
+  distant plants adds *nothing* to refit, whereas the VSM per-page cull it replaces grows linearly
+  with caster count (measured in §11).
+
+- **Bucketing caveat that must be honoured:** the gbuffer draws each plant at its *exact* phase while
+  a bucketed shadow uses the bucket's phase, so the shadow desynchronises from its tree by up to half
+  a bucket (≈15° at 12 buckets ≈ 0.3 m of crown displacement at `foliageSwayMeters` 1.1). Invisible at
+  distance, visible up close — which is exactly why the near tier keeps an exact per-instance BLAS.
+  Bucket assignment should also be spatially dithered so two adjacent plants rarely share a bucket.
+  If the plant's world rotation varies, either fold yaw into the bucket key or deform in a canonical
+  frame — otherwise a shared pose leans the wrong way relative to world wind.
+
+  If the measured refit cost lands far above this model, report it — it changes the RT-vs-VSM verdict
+  and is the one number in this plan most likely to be wrong.
 - **Done-when:** palm frond shadows sway in lockstep with the fronds; no per-frame popping from the
   round-robin rebuild; the cost sits inside the budget established in §4.1 (the whole RT sun path,
   including RW, must stay under the 1.55 ms of VSM passes it replaces).
@@ -564,9 +595,11 @@ report the dependency instead of silently widening the change.
   it. RW covers wind; anything added later must either join that path or be documented as
   RT-shadow-exempt. A silently rest-pose shadow is worse than no shadow because it looks correct in a
   screenshot and wrong only in motion — exactly the failure mode screenshots do not catch.
-- **Per-instance BLAS memory/CPU blowup:** deformation kills BLAS sharing (unique sway phase per
-  plant). Without the near-only + shadow-LOD budget controls, a dense foliage level multiplies BLAS
-  count by the instance count. Cap the deformed-caster set explicitly; never let it be unbounded.
+- **Per-instance BLAS memory/CPU blowup (measured, not hypothetical):** deformation kills BLAS sharing
+  (unique sway phase per plant). On the real 610-palm grove the naive path is 4.40M tris / 610 refit
+  calls / ~150-250 MB ≈ 2-5 ms — *worse than the VSM it replaces*. Phase bucketing + coarse BLAS LOD +
+  near-only exact deform (step RW) are mandatory. Cap the deformed-caster set explicitly; never let it
+  be unbounded, and re-measure whenever the cap changes.
 - **Any-hit cost:** alpha-tested shadow rays (foliage) are the dominant per-ray cost. Keep an opaque
   fast path; measure; consider limiting alpha evaluation range or LOD.
 - **Denoiser artifacts:** 1 spp soft shadows without a denoiser dance; over-strong denoise smears
@@ -618,6 +651,36 @@ runs) pins down what actually moves it:
 | `clipmapBaseExtent` 12 → 24 → 36 | **1.60 → 1.18 → 0.86 ms** | the real lever; render clean at 24 (screenshot-verified) |
 | `g_residentIterOnly` (skip free pages) | 1.63 vs 1.60 ms | **no effect** — measured, not theorized |
 | `Pass_VsmPageRequest` | 0.05–0.16 ms in every config | not worth touching |
+
+### What `Pass_VsmPageRender` is actually made of (610-palm grove, camera inside it, 2026-07-23)
+
+Once the grove got dense (610 palms) the earlier levers saturated, so the pass was split with a
+`VsmPageRender.Setup` GPU sub-scope (the per-page cull dispatch) to see where the time really goes:
+
+| config | PageRender | Setup (per-page cull) | rasterization |
+|---|---|---|---|
+| shadow LOD bias 0 (default) | 1.50 ms | 0.40 | **1.10** |
+| bias +3 (coarsest geometry) | 1.27 ms | 0.47 | **0.79** |
+| `clipmapBaseExtent` 24 | 1.28 ms | 0.43 | 0.84 |
+| `g_residentIterOnly` on | 1.51 ms | 0.41 | 1.10 (CPU 0.27→0.13) |
+
+Three conclusions, each of which kills a candidate optimization:
+
+1. **The geometry lever is exhausted.** Coarsening every caster to its coarsest LOD removes only
+   ~0.3 ms of the 1.10 ms raster. Alpha-tested frond *fill* does not shrink with LOD — the cards cover
+   the same shadow texels at any triangle count. The remaining ~0.79 ms is LOD-immune by construction.
+2. **The per-page cull is O(pages × casters) and grows linearly with plant count** — 1024 pages × 610
+   objects × 2 passes ≈ 1.25M AABB tests for 0.40 ms. It is the term that will dominate as the scene
+   grows, and it is unmoved by LOD (as expected).
+3. **Free pages are not a GPU cost.** `g_residentIterOnly` is a GPU no-op (1.51 vs 1.50) and only
+   halves the *CPU* submission (0.27→0.13 ms). The GPU time is resident pages doing real work.
+
+So the VSM path is near the ceiling of "for every page, test every caster, then issue a draw per
+group": both remaining terms are fixed relative to how much geometry actually lands in a page. The
+structural moves left are (a) invert/scatter the cull so casters write into the pages they cover
+instead of every page testing everything, and (b) attack alpha-test fill (fewer pages via extent, or
+a cheaper masked shadow PS). This is also precisely the regime where RT wins structurally: ray cost
+scales with screen pixels, not with caster count or crown overlap — provided RW stays budgeted.
 
 The measured facts that redirect effort:
 

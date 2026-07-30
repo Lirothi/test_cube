@@ -21,6 +21,20 @@ struct MeshLoadOptions {
     // non-zero does, because that moves the wood/foliage boundary. Empty = classification unknown,
     // bake falls back to the per-component ramp.
     std::vector<float> slotFoliage;
+
+    // --- LOD generation knobs (exposed per-import in the mesh import window) ---------------------
+    // Defaults reproduce the shipped chain exactly: per-level target ratios 0.5/0.25/0.12 at error
+    // budgets 0.02/0.05/0.12 (relative to mesh extents), with meshopt's safe options.
+    //
+    // `lodSimplifyOptions` takes meshopt_Simplify* flags. Handle with care on MASKED FOLIAGE:
+    // meshopt_SimplifyPermissive removes the topological floor that alpha-card leaves hit (a palm's
+    // foliage slot otherwise barely reduces across the whole chain) and even reports a LOWER geometric
+    // error — but it visibly shreds leaf blades into spikes, because a position-only error metric
+    // cannot see that a leaf card's shape lives in its silhouette and UV island. Judge foliage LODs by
+    // the wireframe, not by the reported error. Off by default for that reason.
+    float lodRatioScale = 1.0f;         // scales the per-level triangle targets (<1 = more aggressive)
+    float lodErrorScale = 1.0f;         // scales the per-level error budgets (<1 = preserve shape more)
+    unsigned int lodSimplifyOptions = 0; // meshopt_Simplify* flags; 0 = safe default
 };
 
 // CPU-side geometry prepared independently of D3D12. Thumbnail jobs parse and

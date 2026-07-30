@@ -11,6 +11,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
 #include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
+#include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
 #include <cfloat>
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
@@ -792,7 +793,8 @@ namespace
         const std::string& binGeometry,
         const std::string& sourceGltf,
         float spawnScale,
-        const std::string& materialBaseName)
+        const std::string& materialBaseName,
+        const MeshLoadOptions& lodOpt)
     {
         nlohmann::json asset = nlohmann::json::object();
         std::ifstream existingFile(path);
@@ -812,6 +814,10 @@ namespace
         MeshLoadOptions bakeOpt;
         bakeOpt.generateTangentSpace = true;
         bakeOpt.wantCW = false;
+        // LOD knobs chosen in the import dialog (defaults reproduce the shipped chain exactly).
+        bakeOpt.lodRatioScale = lodOpt.lodRatioScale;
+        bakeOpt.lodErrorScale = lodOpt.lodErrorScale;
+        bakeOpt.lodSimplifyOptions = lodOpt.lodSimplifyOptions;
         if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
         {
             for (const nlohmann::json& s : asset["recomputeNormalSlots"])
@@ -959,6 +965,14 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
 {
     if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
 
+    // Every mesh bake funnels through here, so this is where the dialog's LOD knobs are applied.
+    MeshLoadOptions lodOpt;
+    lodOpt.lodRatioScale = meshDialogLodRatio_;
+    lodOpt.lodErrorScale = meshDialogLodError_;
+    lodOpt.lodSimplifyOptions =
+        (meshDialogLodPermissive_ ? meshopt_SimplifyPermissive : 0u) |
+        (meshDialogLodPrune_ ? meshopt_SimplifyPrune : 0u);
+
     std::error_code relEc;
     const fs::path rel = fs::relative(
         fs::path(item.gltfFile), fs::path(item.path), relEc);
@@ -971,7 +985,7 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     {
         const std::string binGeom = (dst / (item.name + ".mesh.bin")).generic_string();
         return WriteImportedMeshAsset(
-            meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name);
+            meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name, lodOpt);
     }
 
     for (const std::string& node : splitNodes)
@@ -982,7 +996,7 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         const std::string binGeom =
             (dst / (item.name + "_node_" + component + ".mesh.bin")).generic_string();
         if (!WriteImportedMeshAsset(meshAssetPath, binGeom,
-                source + "#node:" + node, spawnScale, item.name + "_" + component))
+                source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt))
         {
             return false;
         }
@@ -1519,6 +1533,55 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     ImGui::TextWrapped(
         "Normalization records a default spawn scale in the import manifest. "
         "It does not modify the glTF or its vertex data.");
+
+    // --- LOD generation (collapsed: the defaults are the shipped chain and rarely need touching) ---
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("LOD generation"))
+    {
+        ImGui::TextDisabled("Coarser levels are built per submesh (meshopt_simplify).");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Triangle target", &meshDialogLodRatio_, 0.25f, 2.0f, "x%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scales the per-level triangle targets (base 0.5 / 0.25 / 0.12).\n"
+                              "Below 1 = more aggressive LODs, above 1 = keep more geometry.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Error budget", &meshDialogLodError_, 0.25f, 4.0f, "x%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scales the per-level error limits (base 0.02 / 0.05 / 0.12, relative\n"
+                              "to mesh extents). Simplification stops when the budget is spent, so a\n"
+                              "larger value reduces further at the cost of shape.");
+
+        ImGui::Checkbox("Allow collapses across attribute seams", &meshDialogLodPermissive_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "meshopt_SimplifyPermissive.\n\n"
+                "WARNING - wrecks masked FOLIAGE. Alpha-card leaves hit a hard topological floor\n"
+                "without it (a palm's frond slot barely reduces across the whole chain), and turning\n"
+                "it on does reduce them AND reports a LOWER geometric error - but the leaf blades\n"
+                "collapse into spikes, because a position-only metric cannot see that a leaf's shape\n"
+                "lives in its silhouette and UV island. Check the wireframe, not the error number.\n\n"
+                "Fine for solid props (rocks, trunks, hard-surface) that have UV seams but real volume.");
+        ImGui::Checkbox("Drop small disconnected parts", &meshDialogLodPrune_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("meshopt_SimplifyPrune. Removes whole loose components once their\n"
+                              "removal fits the error budget. No effect on meshes whose parts are\n"
+                              "large (a palm frond is one connected 80-triangle grid, not loose cards).");
+
+        const bool nonDefault = meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
+                                meshDialogLodPermissive_ || meshDialogLodPrune_;
+        if (nonDefault)
+        {
+            ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "Non-default LOD settings");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset"))
+            {
+                meshDialogLodRatio_ = 1.0f;
+                meshDialogLodError_ = 1.0f;
+                meshDialogLodPermissive_ = false;
+                meshDialogLodPrune_ = false;
+            }
+        }
+    }
     ImGui::Separator();
 
     const float selectedSpawnScale =
