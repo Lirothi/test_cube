@@ -1002,7 +1002,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
-    if (shadowGpu->MaskedShadowsActive())
+    const bool maskedActive = shadowGpu->MaskedShadowsActive();
+    if (maskedActive)
     {
         // C2: masked PSO — t0..t2 = instances + casterGroup + groupMask, t3.. = masked albedos.
         ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f),
@@ -1015,6 +1016,20 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
     }
+
+    // WHERE THIS PASS'S TIME IS *NOT* (measured 2026-07-30 on the 610-palm grove; raster = the pass
+    // minus its Setup/Scatter sub-scopes, baseline 1.083 ms). Each of these was tried by deleting the
+    // work outright, so the numbers are hard ceilings, not estimates:
+    //   - masked alpha texture fetch removed entirely .... 1.079  (free)
+    //   - wind sway removed from the shadow VS ........... 1.073  (free)
+    //   - whole-pool depth clear skipped ................. 1.086  (free)
+    //   - opaque/masked PSO split (opaque gets the null-PS
+    //     depth fast path + CULL_BACK) ................... 1.11 ms and CPU 0.137 -> 0.23  (REGRESSION)
+    // So there is nothing left to shave in the shaders, the sampler, or the clear: the cost is the raw
+    // rasterization of thin alpha-card foliage into the pages (triangle setup + quad coverage + depth),
+    // multiplied by how many pages each caster overlaps. The ONLY levers that move it are reducing
+    // geometry x pages: coarser caster LOD (render::g_shadowLodBias, ~-28% at max) and a larger
+    // vsm::g_clipmapBaseExtent (fewer, coarser pages). Do not spend time on a "cheaper masked shader".
     indirectMat->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
