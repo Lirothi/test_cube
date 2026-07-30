@@ -136,6 +136,9 @@ public:
     // Per-caster dynamic flag SRV (static, region 0; 1 = animating). The VSM page-cache marks a page
     // dirty when a dynamic caster overlaps it. {0} until Rebuild.
     D3D12_CPU_DESCRIPTOR_HANDLE CasterMetaSrv() const;
+    // Per-group {visible-list base, index count, start index, 0}. The VSM scatter cull reads .x as
+    // the group's global base inside every page's visible-list slice.
+    D3D12_CPU_DESCRIPTOR_HANDLE PerGroupSrv() const;
 
     // GI→VSM (Step 2): SRVs onto the DEFAULT-heap "unified" instance/bounds buffers for ring region
     // `frameIndex`. RecordCull copies the upload ring's region into these each frame (a compute

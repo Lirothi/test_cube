@@ -285,6 +285,8 @@ private:
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
     std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
     std::shared_ptr<Material> pageSetupMat_;         // vsm_page_setup_cs.hlsl (Step 22)
+    std::shared_ptr<Material> pageScatterMat_;       // vsm_page_scatter_cs.hlsl (spatial scatter cull)
+    std::shared_ptr<Material> pageScatterClearMat_;  // vsm_page_scatter_clear_cs.hlsl (zero the counts)
     std::shared_ptr<Material> pageClearMat_;         // vsm_page_clear.hlsl (page cache: gated depth clear)
     bool shaderResourcesTried_ = false;
 
@@ -301,6 +303,13 @@ private:
     // perPageDirty_ = per-page dirty bit the setup computes + the gated depth-clear reads.
     Microsoft::WRL::ComPtr<ID3D12Resource> physOwnerPrev_;
     Microsoft::WRL::ComPtr<ID3D12Resource> perPageDirty_;
+    // Spatial scatter cull (directional clipmap only): instead of every page testing every caster
+    // (O(pages x casters)), each caster projects its AABB into each clipmap level's page grid and
+    // writes itself into the few pages it actually covers. pageGroupCount_ = per (page, mesh-group)
+    // instance count, doubling as the append cursor (a caster's rank within its group's run);
+    // pageScatterDyn_ = per-page "a dynamic caster landed here" flag for the page cache.
+    Microsoft::WRL::ComPtr<ID3D12Resource> pageGroupCount_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> pageScatterDyn_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderHeap_; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav, physOwnerPrevSrv, perPageDirtyUav, perPageDirtySrv
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE rung0ArgsSrv_{};
@@ -310,7 +319,12 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerPrevSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtyUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtySrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageScatterDynUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageScatterDynSrv_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
+    std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
     bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
     ID3D12Resource* cachedRung0Args_ = nullptr;  // detect a ShadowGpuData rebuild (re-create the SRV)

@@ -1,0 +1,27 @@
+// Spatial scatter cull, pass 0: zero the per (page, mesh-group) instance counts and the per-page
+// dynamic-overlap flags before the scatter appends into them. One thread per count entry; the
+// (much smaller) per-page flag array is cleared by the first kPoolPageCount threads.
+#define VSM_SCATTER_CLEAR_RS \
+    "CBV(b0), " \
+    "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+
+cbuffer ClearCB : register(b0)
+{
+    uint gCountElems; // kPoolPageCount * gNumGroups
+    uint gNumPages;   // kPoolPageCount
+    uint _pad0, _pad1;
+};
+
+RWStructuredBuffer<uint> PageGroupCount : register(u0); // per (page, group) count / append cursor
+RWStructuredBuffer<uint> PageScatterDyn : register(u1); // per page: a dynamic caster landed here
+
+// numthreads(8,8,1) to match RecordComputeDispatch's group size; the dispatch is 1-D so rows y>0 exit.
+[numthreads(8, 8, 1)]
+[RootSignature(VSM_SCATTER_CLEAR_RS)]
+void CSMain(uint3 dtid : SV_DispatchThreadID)
+{
+    if (dtid.y != 0u) { return; }
+    const uint i = dtid.x;
+    if (i < gCountElems) { PageGroupCount[i] = 0u; }
+    if (i < gNumPages) { PageScatterDyn[i] = 0u; }
+}

@@ -346,6 +346,10 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
     pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
+    // Spatial scatter cull (directional clipmap). Optional: if either fails to compile the setup
+    // shader still culls those pages the brute-force way, so shadows stay correct (just slower).
+    pageScatterClearMat_ = makeCompute(L"shaders/vsm_page_scatter_clear_cs.hlsl");
+    pageScatterMat_      = makeCompute(L"shaders/vsm_page_scatter_cs.hlsl");
 
     // Page cache: the gated depth-clear graphics PSO (depth-only, ALWAYS-write z=1.0, no vertex input;
     // VS drives from SV_VertexID/SV_InstanceID). Optional — a failure just falls back to whole-pool clear.
@@ -589,7 +593,22 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         if (perPageDirty_) { renderer->SetResourceState(perPageDirty_.Get(), D3D12_RESOURCE_STATE_COMMON); }
         perPageDirtyUav_ = {}; perPageDirtySrv_ = {};
     }
-    if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_) { return; }
+    // Spatial scatter cull: per (page, mesh-group) count/cursor + per-page dynamic-overlap flag.
+    if (!pageGroupCount_ || groups > scatterGroups_)
+    {
+        pageGroupCount_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups, L"VSM.PageGroupCount");
+        scatterGroups_ = groups;
+        if (pageGroupCount_) { renderer->SetResourceState(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageGroupCountUav_ = {}; pageGroupCountSrv_ = {};
+    }
+    if (!pageScatterDyn_)
+    {
+        pageScatterDyn_ = CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageScatterDyn");
+        if (pageScatterDyn_) { renderer->SetResourceState(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageScatterDynUav_ = {}; pageScatterDynSrv_ = {};
+    }
+    if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_ ||
+        !pageGroupCount_ || !pageScatterDyn_) { return; }
 
     // Resident-set readback ring (physOwner snapshots), persistently mapped.
     if (!residentReadback_[0])
@@ -615,13 +634,15 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     const bool needHeap = !renderHeap_ || cachedRung0Args_ != rung0Args ||
                           physOwnerSrv_.ptr == 0 || pageDrawArgsUav_.ptr == 0 || pageProjUav_.ptr == 0 ||
                           pageVisibleListUav_.ptr == 0 || physOwnerPrevSrv_.ptr == 0 ||
-                          perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0;
+                          perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0 ||
+                          pageGroupCountUav_.ptr == 0 || pageGroupCountSrv_.ptr == 0 ||
+                          pageScatterDynUav_.ptr == 0 || pageScatterDynSrv_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 8; // + physOwnerPrevSrv, perPageDirtyUav, perPageDirtySrv (page cache)
+        hd.NumDescriptors = 12; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV (scatter cull)
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -640,6 +661,10 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     physOwnerPrevSrv_   = { base.ptr + static_cast<SIZE_T>(5) * incr };
     perPageDirtyUav_    = { base.ptr + static_cast<SIZE_T>(6) * incr };
     perPageDirtySrv_    = { base.ptr + static_cast<SIZE_T>(7) * incr };
+    pageGroupCountUav_  = { base.ptr + static_cast<SIZE_T>(8) * incr };
+    pageGroupCountSrv_  = { base.ptr + static_cast<SIZE_T>(9) * incr };
+    pageScatterDynUav_  = { base.ptr + static_cast<SIZE_T>(10) * incr };
+    pageScatterDynSrv_  = { base.ptr + static_cast<SIZE_T>(11) * incr };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -701,6 +726,16 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         ud.Buffer.NumElements = vsm::kPoolPageCount;
         ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
         dev->CreateUnorderedAccessView(perPageDirty_.Get(), nullptr, &ud, perPageDirtyUav_);
+        // Scatter cull: per-page dynamic-overlap flag (same shape as perPageDirty).
+        dev->CreateShaderResourceView(pageScatterDyn_.Get(), &sd, pageScatterDynSrv_);
+        dev->CreateUnorderedAccessView(pageScatterDyn_.Get(), nullptr, &ud, pageScatterDynUav_);
+
+        // Scatter cull: per (page, mesh-group) count/cursor — sized pool-pages x groups.
+        const UINT cntElems = static_cast<UINT>(pageGroupCount_->GetDesc().Width / sizeof(std::uint32_t));
+        D3D12_SHADER_RESOURCE_VIEW_DESC csd = sd; csd.Buffer.NumElements = cntElems;
+        dev->CreateShaderResourceView(pageGroupCount_.Get(), &csd, pageGroupCountSrv_);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC cud = ud; cud.Buffer.NumElements = cntElems;
+        dev->CreateUnorderedAccessView(pageGroupCount_.Get(), nullptr, &cud, pageGroupCountUav_);
     }
 
     cachedRung0Args_ = rung0Args;
@@ -767,6 +802,63 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    // --- Spatial scatter cull (directional clipmap): clear the per (page, group) counters, then let
+    // every caster append itself into the few pages its AABB covers. This replaces the O(pages x
+    // casters) brute force for clipmap pages; local (perspective) views still cull in the setup. ---
+    const D3D12_CPU_DESCRIPTOR_HANDLE perGroupSrv = shadowGpu->PerGroupSrv();
+    const bool scatterActive = pageScatterMat_ && pageScatterMat_->GetPipelineState() &&
+                               pageScatterClearMat_ && pageScatterClearMat_->GetPipelineState() &&
+                               pageGroupCountUav_.ptr != 0 && pageScatterDynUav_.ptr != 0 &&
+                               pageGroupCountSrv_.ptr != 0 && pageScatterDynSrv_.ptr != 0 &&
+                               pageTableSrv_.ptr != 0 && perGroupSrv.ptr != 0 &&
+                               viewCount > vsm::kNumLocalVirtualViews && activeCasters > 0;
+    if (scatterActive)
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kVsmPageScatter);
+        renderer->Transition(cl, pageGroupCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(cl, pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(cl, pageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        const std::uint32_t countElems = vsm::kPoolPageCount * groups;
+        struct ClearCB { std::uint32_t countElems, numPages, p0, p1; };
+        RecordComputeDispatch(renderer, cl, pageScatterClearMat_.get(), sizeof(ClearCB),
+            [&](std::uint8_t* dst) { ClearCB c{ countElems, vsm::kPoolPageCount, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); },
+            {}, { pageGroupCountUav_, pageScatterDynUav_ }, D3D12_GPU_DESCRIPTOR_HANDLE{},
+            countElems, 1, pageGroupCount_.Get());
+        renderer->UAVBarrier(cl, pageScatterDyn_.Get());
+
+        struct ScatterCB
+        {
+            std::uint32_t numCasters, numGroups, numLevels, pad0;
+            DirectX::XMFLOAT4X4 clipViewProj[vsm::kNumClipmapLevels];
+        };
+        RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
+            [&](std::uint8_t* dst)
+            {
+                ScatterCB c{};
+                c.numCasters = activeCasters;
+                c.numGroups = groups;
+                c.numLevels = vsm::kNumClipmapLevels;
+                // Clipmap views occupy VSM view slots [kNumLocalVirtualViews, kMaxVirtualViews).
+                for (std::uint32_t L = 0; L < vsm::kNumClipmapLevels; ++L)
+                {
+                    const std::uint32_t v = vsm::kNumLocalVirtualViews + L;
+                    if (v < viewCount) { c.clipViewProj[L] = views[v].viewProj; }
+                }
+                std::memcpy(dst, &c, sizeof(c));
+            },
+            { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv },
+            { pageGroupCountUav_, pageVisibleListUav_, pageScatterDynUav_ },
+            D3D12_GPU_DESCRIPTOR_HANDLE{},
+            activeCasters, vsm::kNumClipmapLevels,
+            pageGroupCount_.Get());
+        renderer->UAVBarrier(cl, pageVisibleList_.Get());
+        renderer->UAVBarrier(cl, pageScatterDyn_.Get());
+        // The setup pass reads the counts + dyn flags as SRVs.
+        renderer->Transition(cl, pageGroupCount_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
     constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
     constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
     constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u; // 44 cull-views packed 4/uint4
@@ -774,6 +866,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
+        std::uint32_t scatterActive, _p3, _p4, _p5;           // 1 = the scatter pass produced clipmap lists
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -803,6 +896,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
+            cb.scatterActive = scatterActive ? 1u : 0u;
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
@@ -834,7 +928,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },
-        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv },
+        { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv,
+          pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_ },
         { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,

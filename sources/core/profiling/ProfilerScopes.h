@@ -61,6 +61,8 @@ extern const Profiler::ScopeNameKey kPassVsmPageRender;
 // Sub-scope of Pass_VsmPageRender: the per-page instance cull / draw-arg setup compute (splits the
 // pass's cull cost from its rasterization cost — they scale with different things).
 extern const Profiler::ScopeNameKey kVsmPageSetup;
+// Sub-scope: the spatial scatter cull (clear + scatter) that feeds the clipmap pages.
+extern const Profiler::ScopeNameKey kVsmPageScatter;
 extern const Profiler::ScopeNameKey kPassCSM;
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;

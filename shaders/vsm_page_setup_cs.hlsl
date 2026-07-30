@@ -15,7 +15,7 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
@@ -32,6 +32,8 @@ cbuffer SetupCB : register(b0)
     uint gMegaActive;   // 1 = consolidated mega buffer (absolute starts); 0 = per-mesh IB fallback (lod-relative)
     uint gFlatLod;      // mega-off fallback LOD (uniform across pages; the per-page bind can't know each view)
     uint gNumLods;      // render::kMaxShadowLods (stride into gGroupLodMega)
+    uint gScatterActive; // 1 = vsm_page_scatter_cs ran this frame (clipmap pages read its output)
+    uint _pad3, _pad4, _pad5;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -51,6 +53,10 @@ StructuredBuffer<CasterBounds> Bounds        : register(t2); // per-caster world
 StructuredBuffer<uint>         CasterGroup   : register(t3); // per-caster mesh-group id
 StructuredBuffer<uint>         PhysOwnerPrev : register(t4); // physical page -> last frame's owner (new-page detect)
 StructuredBuffer<uint>         CasterMeta    : register(t5); // per-caster: bit0=dynamic, bits1+=object slot count on its FIRST slot (0 on continuation slots)
+// Spatial scatter cull outputs (directional clipmap pages only — local views still cull here):
+StructuredBuffer<uint>         PageGroupCount : register(t6); // per (page, group) instance count
+StructuredBuffer<uint4>        PerGroup       : register(t7); // .x = group's global base in a page slice
+StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dynamic caster landed here
 
 RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
@@ -136,39 +142,54 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     const uint rung0View = view + 4u;
 
-    // Pass 1: count the casters visible in THIS page, per mesh-group, and note whether any DYNAMIC
-    // caster overlaps (page-cache invalidation). B3: an object's submesh slots are CONSECUTIVE and
-    // share its bounds, so test once per OBJECT (CasterMeta slot count) and apply the result to all
-    // its slots — otherwise the (pages x casters) plane tests scale with the submesh split.
+    // DIRECTIONAL clipmap pages get their instance lists from the spatial scatter pass, which already
+    // wrote this page's per-group counts (and appended the caster ids into the page slice at each
+    // group's GLOBAL base). Nothing to cull here. LOCAL (spot/point) views are perspective, so an
+    // AABB page-rect is ill-defined for them and they keep the brute-force per-page cull below.
     //
-    // MEASURED DEAD END (2026-07-23) — do not re-attempt without changing the approach: iterating the
-    // per-VIEW visible set Rung 0 already produced (via the args' InstanceCount + StartInstanceLocation)
-    // instead of all casters makes this pass ~1.8x SLOWER on a dense grove (Setup 0.435 -> 0.791 ms,
-    // 610 palms). Two reasons: the visible-list entries are per SLOT so the per-object dedupe below is
-    // lost (~4.5x more plane tests here), and — the structural one — most RESIDENT pages belong to the
-    // COARSE clipmap levels, which see nearly every caster anyway, while the fine levels that do have a
-    // small visible set own only a handful of pages. Making this loop cheap needs the real inversion:
-    // scatter each caster into the page rect its AABB covers (a caster touches a few pages, not 1024),
-    // which requires a page-table lookup + per-page atomics, not a different iteration order here.
+    // NOTE, previously measured dead end: iterating Rung 0's per-VIEW visible set here instead of all
+    // casters is ~1.8x SLOWER (Setup 0.435 -> 0.791 ms at 610 palms) — most RESIDENT pages belong to
+    // the COARSE clipmap levels, which see nearly every caster anyway. Only the spatial scatter, which
+    // touches a handful of pages per caster instead of testing all of them, actually breaks the
+    // O(pages x casters) term. Do not "optimize" this loop by reordering the iteration.
+    // Clipmap pages consume the scatter pass's output; if that pass is unavailable (shader failed to
+    // compile) every page falls back to culling here, so shadows stay correct — just slower.
+    const bool scattered = (view >= VSM_NUM_LOCAL_VIEWS) && (gScatterActive != 0u);
+
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
-    for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
     bool dynamicOverlap = false;
-    for (uint c = 0u; c < gNumCasters; )
+    if (scattered)
     {
-        const uint meta = CasterMeta[c];
-        uint n = meta >> 1;
-        if (n == 0u) { n = 1u; } // safety: a continuation slot can't lead the loop by construction
-        CasterBounds b = Bounds[c];
-        if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
+        for (uint gs0 = 0u; gs0 < gNumGroups; ++gs0)
         {
-            for (uint s = 0u; s < n; ++s)
-            {
-                uint g = CasterGroup[c + s];
-                if (g < gNumGroups) { perGroupCount[g] += 1u; }
-            }
-            if ((meta & 1u) != 0u) { dynamicOverlap = true; }
+            perGroupCount[gs0] = PageGroupCount[p * gNumGroups + gs0];
         }
-        c += n;
+        dynamicOverlap = (PageScatterDyn[p] != 0u);
+    }
+    else
+    {
+        // Pass 1: count the casters visible in THIS page, per mesh-group, and note whether any DYNAMIC
+        // caster overlaps (page-cache invalidation). B3: an object's submesh slots are CONSECUTIVE and
+        // share its bounds, so test once per OBJECT (CasterMeta slot count) and apply the result to all
+        // its slots — otherwise the (pages x casters) plane tests scale with the submesh split.
+        for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
+        for (uint c = 0u; c < gNumCasters; )
+        {
+            const uint meta = CasterMeta[c];
+            uint n = meta >> 1;
+            if (n == 0u) { n = 1u; } // safety: a continuation slot can't lead the loop by construction
+            CasterBounds b = Bounds[c];
+            if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
+            {
+                for (uint s = 0u; s < n; ++s)
+                {
+                    uint g = CasterGroup[c + s];
+                    if (g < gNumGroups) { perGroupCount[g] += 1u; }
+                }
+                if ((meta & 1u) != 0u) { dynamicOverlap = true; }
+            }
+            c += n;
+        }
     }
 
     // Cache decision: dirty pages clear + redraw; clean pages keep their cached depth (draw nothing).
@@ -185,10 +206,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         return;
     }
 
-    // Prefix-sum -> each group's base within this page's [p*gNumCasters, ...) list slice.
+    // Each group's base within this page's [p*gNumCasters, ...) list slice. SCATTERED pages use the
+    // group's GLOBAL base (PerGroup.x, the prefix sum of per-group TOTAL caster counts) because that
+    // is where the scatter pass appended — the slice is gNumCasters long, i.e. exactly the sum of
+    // those totals, so the fixed layout always fits. The brute-force path packs tightly instead, with
+    // a local prefix sum over what IT found, and reuses the array as its scatter cursor.
     uint perGroupBase[VSM_MAX_SETUP_GROUPS];
-    uint acc = 0u;
-    for (uint gp = 0u; gp < gNumGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
+    if (scattered)
+    {
+        for (uint gb = 0u; gb < gNumGroups; ++gb) { perGroupBase[gb] = PerGroup[gb].x; }
+    }
+    else
+    {
+        uint acc = 0u;
+        for (uint gp = 0u; gp < gNumGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
+    }
 
     const uint pageBase = p * gNumCasters;
 
@@ -222,7 +254,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     // Pass 2: scatter the visible caster ids into the page's slice, grouped (perGroupBase = cursor).
-    // Same once-per-object test as pass 1.
+    // Same once-per-object test as pass 1. Scattered (clipmap) pages already had their list written
+    // by vsm_page_scatter_cs, so they stop here — this loop is the local-light path only.
+    if (scattered) { return; }
     for (uint c2 = 0u; c2 < gNumCasters; )
     {
         uint n2 = CasterMeta[c2] >> 1;

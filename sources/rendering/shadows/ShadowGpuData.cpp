@@ -306,6 +306,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { re
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return casterMeta_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerGroupSrv() const { return perGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerViewGroupSrv() const { return perViewGroup_.Srv(0); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -639,6 +639,8 @@
     <None Include="shaders\vsm_page_clear.hlsl" />
     <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_request_cs.hlsl" />
+    <None Include="shaders\vsm_page_scatter_clear_cs.hlsl" />
+    <None Include="shaders\vsm_page_scatter_cs.hlsl" />
     <None Include="shaders\vsm_page_setup_cs.hlsl" />
     <None Include="shaders\vsm_sample.hlsli" />
     <None Include="textures\ocean\ContactFoam.png" />
