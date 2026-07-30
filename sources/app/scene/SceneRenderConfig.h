@@ -5,7 +5,7 @@
 struct CascadeShadowConfig
 {
     float maxDistance = 300.0f;
-    std::array<float, 4> sliceDistances = { 15.0f, 40.0f, 100.0f, 300.0f };
+    std::array<float, 4> sliceDistances = { 10.0f, 35.0f, 100.0f, 300.0f };
     float normalBiasInTexels = 0.75f;
     float depthBiasInTexels = 2.0f;
     float overlap = 2.0f;
