@@ -301,7 +301,7 @@ Notes on how this landed:
   the project root as cwd, and tees to a file. Only one system-wide listener may exist — it throws if
   DebugView is already running. This is the only way to see a soft PSO failure.
 
-### Step 3 — the flip
+### Step 3 — the flip — **DONE (uncommitted), visual gate PENDING**
 In `RecordPageRender`, when `singleDraw`:
 
 - bind `shadowGpu->IndirectShadowPageMaterial()` instead of `IndirectShadowMaterial()`;
@@ -339,6 +339,46 @@ verify newly resident pages no longer flash unshadowed for a few frames with the
 OFF and `g_residentIterOnly` ON, they still do). Capture `Pass_VsmPageRender` **CPU and GPU**,
 avg + max, in both flag states, on healthy clocks only (>2500 frames — see the throttling caveat
 in `docs/rt_shadows_integration_plan.md:715`).
+
+**Result (2026-08-01, default level, 282 casters / 6 mesh-groups → 6144 arg records).**
+Debug + Release `0/0`. Added `--vsm-singledraw=0|1` to the temporary VSM harness in `main.cpp` — the
+flag defaults ON, so without it there is no headless A/B at all.
+
+| `Pass_VsmPageRender` | loop (`=0`) | single (`=1`) | |
+|---|---|---|---|
+| CPU avg | 0.182 ms | **0.058 ms** | −68 % (3.1x) |
+| CPU max | 0.229 ms | **0.110 ms** | −52 % |
+| GPU avg | 0.407 ms | 0.400 ms | neutral |
+| GPU max | 0.758 ms | 0.754 ms | neutral |
+| CPU.Frame avg | 1.951 ms | 1.952 ms | **unchanged** |
+| GPU.Frame avg | 1.935 ms | 1.932 ms | unchanged |
+
+~20 500 frames per run on comparable clocks. Two things to read off this honestly:
+- **The GPU regression this plan warned about did not appear.** The baseline had
+  `g_residentIterOnly` at its default ON, i.e. the loop walked only ~55 % of the arg records while
+  single-draw walks 100 % — and the extra records plus the `SV_ClipDistance` clipping still came out
+  neutral. That is 6144 records; a scene with many more mesh-groups is where Step 4 would matter, so
+  do not generalise this number to one.
+- **The CPU win does not reach frame time**, exactly as predicted: `CPU.Frame` is identical because
+  the pass records on a render-graph worker. The deliverable here is the artifact, not FPS.
+
+**GBV TRAP — `--scene-stress-gbv` does nothing in Release.** The debug layer and
+`SetEnableGPUBasedValidation` are inside `#ifdef _DEBUG` (`GraphicsDevice.cpp:35-54`), so a Release
+run logs `info queue: unavailable (non-debug device?)` and validates **nothing** — it only proves the
+app does not crash. Run the gate on the **Debug** build. Done here:
+`x64\Debug\test_cube.exe --scene-stress-gbv=20` → `verdict: CLEAN`, `info queue: attached`, and the
+only message ids present are 939 (x2), 940 (x2), 1358 (x212) — all known noise, **nothing outside the
+set and nothing naming the `VsmPageRender` command list**, so the folded 20-descriptor table, the
+`NON_PIXEL_SHADER_RESOURCE` state on `pageProj_` and the 6144-record `ExecuteIndirect` all validate.
+
+**Still open — the user's gate, not verifiable headlessly:**
+1. **Seams at page borders.** A/B stills captured with `--wind-freeze=3.0` for determinism
+   (`scratchpad/vsm_loop.png` / `vsm_single.png`); they read identical to me, but a one-texel strip
+   is exactly the kind of thing a still at this scale can hide. Needs a look at the pool grid and the
+   clipmap level boundaries in motion.
+2. **The blink actually being gone.** It only manifests while the resident set churns under camera
+   motion, and there is no headless camera sweep — so this, the whole point of the plan, is
+   unverified by measurement so far.
 
 ### Step 4 — compacted args + count buffer (optional, only if a measurement asks for it)
 With the page id in the instance stream, record order is free. The setup can `InterlockedAdd` a

@@ -257,6 +257,12 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--vsm-resident")) {
             vsm::g_residentIterOnly = true;
         }
+        // "--vsm-singledraw=0|1" forces the single-draw page render off/on. The flag defaults ON, so
+        // without this there is no headless A/B of the flip at all — the per-page loop would only be
+        // reachable through the dev-window checkbox, i.e. not from --profdump.
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-singledraw=")) {
+            vsm::g_pageDrawSingle = (std::atoi(flag + std::strlen("--vsm-singledraw=")) != 0);
+        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
             render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
         }

@@ -888,10 +888,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 c.numCasters = activeCasters;
                 c.numGroups = groups;
                 c.numLevels = vsm::kNumClipmapLevels;
-                // Single-draw page render (Step 1): packing is PLUMBED but dormant — 0 = write bare
-                // caster ids, exactly as before. Step 2 introduces the `singleDraw` predicate and
-                // this becomes `singleDraw ? vsm::kPageIdShift : 0u` (same value in both CBs).
-                c.pageIdShift = 0u;
+                // Single-draw page render: pack the physical page index into the high bits of every
+                // visible-list entry so ONE draw can serve all pages. MUST match the setup CB below —
+                // both write the same list and the VS decodes it with one rule.
+                c.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u;
                 // Clipmap views occupy VSM view slots [kNumLocalVirtualViews, kMaxVirtualViews).
                 for (std::uint32_t L = 0; L < vsm::kNumClipmapLevels; ++L)
                 {
@@ -950,7 +950,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
             cb.scatterActive = scatterActive ? 1u : 0u;
-            cb.pageIdShift = 0u; // Step 1: plumbed, dormant — must match the scatter CB's value
+            cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
@@ -1006,13 +1006,15 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         cacheWarmup_ = false; // physOwnerPrev_ now holds this frame's owners -> new-page detect valid next frame
     }
 
-    // Resident-set for the draw loop (opt-in, g_residentIterOnly): read this ring slot's
+    // Resident-set for the draw LOOP (opt-in, g_residentIterOnly): read this ring slot's
     // kFrameCount-old physOwner snapshot (owner != INVALID was resident; skip the rest — the ~free
     // pages are what make the full-pool loop expensive). Then snapshot THIS frame's physOwner for
     // kFrameCount frames later. ON by default (the CPU saving is worth the artifact); OFF →
     // residentSet null → iterate the whole pool (no snapshot latency, no motion flicker).
+    // The single-draw path skips this entirely: it issues no per-page CPU work to skip, so there is
+    // nothing for a stale snapshot to get wrong — that is the artifact this whole path buys back.
     const std::uint32_t* residentSet = nullptr;
-    if (vsm::g_residentIterOnly && residentReadback_[f])
+    if (!singleDraw && vsm::g_residentIterOnly && residentReadback_[f])
     {
         residentSet = residentReadbackValid_[f] ? residentReadbackPtr_[f] : nullptr;
         renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -1021,9 +1023,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         residentReadbackValid_[f] = true;
     }
 
-    // Consume: args -> INDIRECT_ARGUMENT, projection -> root CBV, per-page list -> per-instance stream.
+    // Consume: args -> INDIRECT_ARGUMENT, per-page list -> per-instance stream, and the projection
+    // -> a VS SRV on the single-draw path (the VSM_PAGE shader reads it as StructuredBuffer<float4>)
+    // or a per-page root CBV on the loop path.
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-    renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    renderer->Transition(cl, pageProj_.Get(), singleDraw ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                                                         : D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
     // --- Render: clear then draw each pool page's casters into its 128² cell via ExecuteIndirect. The
@@ -1055,10 +1060,38 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
 
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
-    ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
     const bool maskedActive = shadowGpu->MaskedShadowsActive();
-    if (maskedActive)
+    if (singleDraw)
     {
+        // ONE table based at t0. The VSM_PAGE root signature folds what the loop path splits across
+        // t0 and t3, because Material::Bind keys tables by their base register and silently drops any
+        // base >= RenderContext::kMaxBindings (4) — a second table at t4 would never be bound.
+        // Only the descriptors actually used are staged (pageProj sits BEFORE the albedos precisely
+        // so the unused albedo slots of the 20-wide range need no dummy descriptors), matching what
+        // the loop path already does with its 16-wide albedo range.
+        // ctx.cbv[1] stays UNSET on purpose: this permutation has no CBV(b1) at all, and pageProj_ is
+        // held in NON_PIXEL_SHADER_RESOURCE here — binding it as a root CBV would contradict that.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 20> tbl{};
+        size_t n = 0;
+        tbl[n++] = shadowGpu->InstanceReadSrv(f);   // t0
+        if (maskedActive)
+        {
+            tbl[n++] = shadowGpu->CasterGroupSrv(); // t1
+            tbl[n++] = shadowGpu->GroupMaskSrv();   // t2
+            tbl[n++] = pageProjSrv_;                // t3
+            const std::uint32_t albedos = shadowGpu->MaskedAlbedoCount();
+            const auto& src = shadowGpu->MaskedAlbedoSrvs();
+            for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t4..
+        }
+        else
+        {
+            tbl[n++] = pageProjSrv_;                // t1
+        }
+        ctx.srvTable[0] = renderer->StageSrvUavTable(tbl, n).gpu;
+    }
+    else if (maskedActive)
+    {
+        ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
         // C2: masked PSO — t0..t2 = instances + casterGroup + groupMask, t3.. = masked albedos.
         ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f),
                                                        shadowGpu->CasterGroupSrv(),
@@ -1068,6 +1101,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     }
     else
     {
+        ctx.cbv[1] = pageProj_->GetGPUVirtualAddress(); // initial b1 (overridden per page below)
         ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
     }
 
@@ -1084,7 +1118,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // multiplied by how many pages each caster overlaps. The ONLY levers that move it are reducing
     // geometry x pages: coarser caster LOD (render::g_shadowLodBias, ~-28% at max) and a larger
     // vsm::g_clipmapBaseExtent (fewer, coarser pages). Do not spend time on a "cheaper masked shader".
-    indirectMat->Bind(cl, ctx, false);
+    (singleDraw ? pageMat : indirectMat)->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Per-instance stream = the per-PAGE visible list (the setup culled each page's casters into its
@@ -1109,6 +1143,25 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         ibv.SizeInBytes = shadowGpu->MegaIndexBytes();
         ibv.Format = shadowGpu->MegaIndexFormat();
         cl->IASetIndexBuffer(&ibv);
+    }
+
+    if (singleDraw)
+    {
+        // ONE ExecuteIndirect over every (page, group) record — the args are already laid out
+        // contiguously as [page][group], so this reads them unchanged with argOffset 0. The per-page
+        // viewport became a clip-space scale/bias in the VS and the per-page scissor became the four
+        // SV_ClipDistance page borders, so a single full-pool viewport serves all 1024 cells.
+        //
+        // Free and clean pages carry InstanceCount = 0, written by the setup CS THIS frame, so they
+        // cost nothing AND cannot be stale — which is exactly what removes the g_residentIterOnly
+        // blink: there is no longer any CPU-side skip for a kFrameCount-old snapshot to get wrong.
+        const float poolTexels = static_cast<float>(vsm::kPoolTexels);
+        D3D12_VIEWPORT vp{ 0.0f, 0.0f, poolTexels, poolTexels, 0.0f, 1.0f };
+        D3D12_RECT     sc{ 0, 0, static_cast<LONG>(vsm::kPoolTexels), static_cast<LONG>(vsm::kPoolTexels) };
+        cl->RSSetViewports(1, &vp);
+        cl->RSSetScissorRects(1, &sc);
+        renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups, pageDrawArgs_.Get(), 0, nullptr, 0);
+        return;
     }
 
     const auto& groupMeshes = shadowGpu->GroupMeshes();
