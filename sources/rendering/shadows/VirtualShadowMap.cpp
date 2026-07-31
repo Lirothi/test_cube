@@ -955,8 +955,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // Resident-set for the draw loop (opt-in, g_residentIterOnly): read this ring slot's
     // kFrameCount-old physOwner snapshot (owner != INVALID was resident; skip the rest — the ~free
     // pages are what make the full-pool loop expensive). Then snapshot THIS frame's physOwner for
-    // kFrameCount frames later. OFF by default → residentSet null → iterate the whole pool (no
-    // snapshot latency, no motion flicker).
+    // kFrameCount frames later. ON by default (the CPU saving is worth the artifact); OFF →
+    // residentSet null → iterate the whole pool (no snapshot latency, no motion flicker).
     const std::uint32_t* residentSet = nullptr;
     if (vsm::g_residentIterOnly && residentReadback_[f])
     {

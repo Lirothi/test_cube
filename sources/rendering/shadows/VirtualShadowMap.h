@@ -123,10 +123,21 @@ namespace vsm
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free
-    // pool pages → far fewer CPU draw calls). DEFAULT OFF: the snapshot latency makes shadows blink
-    // for ~kFrameCount frames when the resident set changes (camera motion / light churn). ON =
-    // cheaper CPU, minor motion flicker; OFF = iterate the whole pool every frame (correct, ~4x CPU).
+    // pool pages → far fewer CPU draw calls). DEFAULT ON: the CPU saving is worth the artifact here.
+    // That artifact is the snapshot latency — a page that just became resident is skipped for
+    // ~kFrameCount frames and, with the pool cleared each frame, reads as UNSHADOWED, so shadows
+    // blink at the edges whenever the resident set changes (camera motion / light churn). OFF =
+    // iterate the whole pool every frame (correct, ~4x the render CPU, all of it on a graph worker).
+    // g_pageDrawSingle below removes the same artifact WITHOUT paying that CPU: one draw over every
+    // page has nothing to skip, so this flag simply stops applying (it still governs the loop path).
     inline bool g_residentIterOnly = true;
+
+    // Single-draw page render: ONE ExecuteIndirect over all (page, group) args instead of the
+    // kPoolPageCount-iteration CPU loop (per-page viewport -> VS clip-space remap + SV_ClipDistance
+    // page borders). Requires the mega buffer (geometry bound once). Default ON; OFF restores the
+    // per-page loop for A/B and for per-page inspection in PIX.
+    // DORMANT (plan Step 0): declared + wired to the dev window, but nothing reads it yet.
+    inline bool g_pageDrawSingle = true;
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net

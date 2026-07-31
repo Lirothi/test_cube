@@ -704,7 +704,16 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"
                                       "draws), but shadows blink for ~3 frames when the set changes (motion/churn).\n"
-                                      "OFF: render the whole pool every frame (correct, ~4x the render CPU).");
+                                      "OFF: render the whole pool every frame (correct, ~4x the render CPU).\n"
+                                      "Ignored while 'Single-draw page render' is on (that path skips nothing).");
+
+                ImGui::Checkbox("Single-draw page render (dormant)", &vsm::g_pageDrawSingle);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: one ExecuteIndirect over every (page, group) arg instead of the 1024-page\n"
+                                      "CPU loop; the per-page viewport becomes a VS clip remap + SV_ClipDistance page\n"
+                                      "borders. Removes the resident-snapshot blink at no CPU cost. Needs the mega\n"
+                                      "buffer. OFF: the per-page loop (A/B, and per-page inspection in PIX).\n"
+                                      "NOT WIRED YET (plan Step 0) - toggling this currently changes nothing.");
 
                 ImGui::Checkbox("Page cache (experimental, off = net loss here)", &vsm::g_pageCaching);
                 if (ImGui::IsItemHovered())
