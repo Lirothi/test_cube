@@ -540,11 +540,15 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "monotonic and caps them at max distance, so out-of-order values are safe.");
 
                 ImGui::SeparatorText("Fit");
-                ImGui::SliderFloat("Overlap (world units)", &csmCfg.overlap, 0.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Overlap (texels)", &csmCfg.overlapInTexels, 0.0f, 8.0f, "%.2f");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Padding added to the fitted sphere radius to absorb the texel-snap shift.\n"
-                                      "The snap moves the centre by at most ONE texel, so metres are the wrong\n"
-                                      "unit here \xE2\x80\x94 watch 'texel' in the readout as you drop this toward 0.");
+                    ImGui::SetTooltip("Padding added to the fitted sphere radius to absorb the texel-snap shift,\n"
+                                      "in CASCADE TEXELS. The snap moves the centre by at most one texel per axis,\n"
+                                      "so 2 already leaves a full texel of slack, and the same number is correct\n"
+                                      "for every cascade. At 2 the measured worst-case slack is 1.2 texels; 1.0 is\n"
+                                      "still positive but thin, and by 0.5 the ortho no longer covers the snapped\n"
+                                      "slice \xE2\x80\x94 the UpdateCascades assert fires in Debug, shadows clip at the\n"
+                                      "cascade edge in Release. Watch 'R fit/pad': the two should nearly coincide.");
                 ImGui::SliderFloat("Z padding (m)", &csmCfg.zPadding, 0.0f, 100.0f, "%.1f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Slack added past the far side of the light-space depth range.");

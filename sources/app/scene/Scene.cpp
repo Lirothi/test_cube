@@ -255,7 +255,14 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         const float3 sphereCenter = sphere.center;
         const float sphereRadius = sphere.radius;
 
-        const float radius = sphereRadius + cascadeConfig_.overlap;
+        // S2: the padding is expressed in texels, but a texel's size depends on radius, which
+        // depends on the padding. One pass is enough: seeding the estimate from the unpadded
+        // radius makes the final texel larger than the estimate by only overlapInTexels*2/tileRes
+        // (~0.2% for cascade 0), and the slack below is a whole texel, so the fixed point is
+        // never needed. Assert safety is structural, not empirical: the snap shifts the centre by
+        // at most one unitsPerTexel per axis, and the padding is two estimated texels.
+        const float texelEstimate = (2.0f * sphereRadius) / static_cast<float>(tileRes);
+        const float radius = sphereRadius + cascadeConfig_.overlapInTexels * texelEstimate;
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
 
         const float3 up(0, 1, 0);
@@ -297,7 +304,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             maxZ = std::max(maxZ, ls.z);
         }
         // The bounding sphere encloses every corner by construction (plus the <=1-texel
-        // snap shift, absorbed by `overlap`), so the ortho square contains every corner.
+        // snap shift, absorbed by `overlapInTexels`), so the ortho square contains every corner.
         assert(radius + 1e-3f >= rLS && "cascade ortho radius under-covers slice corners");
         (void)rLS;
 
