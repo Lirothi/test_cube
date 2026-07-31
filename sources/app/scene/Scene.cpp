@@ -85,6 +85,65 @@ static void BuildFrustumSliceCornersWS(const mat4& invView, const mat4& invProj,
     }
 }
 
+struct CascadeSphere
+{
+    float3 center{};
+    float  radius = 0.0f;
+};
+
+// S1: minimal enclosing sphere of a frustum slice, in world space.
+//
+// The centroid of the 8 corners is NOT the minimal sphere's centre. The minimal sphere of a
+// frustum slice always has its centre ON the view axis, and the offset has a closed form: with
+// a = |far diagonal|, b = |near diagonal| and L = splitFar - splitNear, equating the distance to
+// the near and far corners gives
+//     c = splitFar - [ (b*b - a*a) / (2L) + L/2 ]
+// When the slice is wide relative to its length (large FOV / short slice) the solution runs past
+// the far plane; the centre is then clamped ONTO the far plane, which is still the minimal sphere
+// for that case (the far rectangle's circumcircle already encloses the near corners).
+//
+// Centre depends only on (splitNear, splitFar, FOV) and radius only on the corner geometry, so
+// BOTH are invariant to camera and sun rotation — which is what the light-space texel snap in
+// UpdateCascades relies on. The radius is measured from the real corners rather than derived, so
+// it is self-validating: the "ortho radius under-covers slice corners" assert cannot regress.
+static CascadeSphere ComputeCascadeSphere(const Camera& camera,
+                                          const std::array<float3, 8>& cornersWS,
+                                          float splitNear, float splitFar)
+{
+    // tan(halfFov) straight from the projection: for LH perspective (XMMatrixPerspectiveFovLH)
+    //   m._11 = 1/(aspect*tan(vfov/2)) = 1/tan(hfov/2)
+    //   m._22 = 1/tan(vfov/2)
+    // Non-jittered on purpose — see the corner build in UpdateCascades.
+    const mat4& proj = camera.GetProjMatrixNoJitter();
+    const float tanHalfX = 1.0f / std::max(1e-6f, proj.m._11);
+    const float tanHalfY = 1.0f / std::max(1e-6f, proj.m._22);
+
+    const float farX = tanHalfX * splitFar;
+    const float farY = tanHalfY * splitFar;
+    const float nearX = tanHalfX * splitNear;
+    const float nearY = tanHalfY * splitNear;
+
+    const float diagFarSq = farX * farX + farY * farY;
+    const float diagNearSq = nearX * nearX + nearY * nearY;
+    const float sliceLen = std::max(1e-4f, splitFar - splitNear);
+
+    const float offset = (diagNearSq - diagFarSq) / (2.0f * sliceLen) + sliceLen * 0.5f;
+    const float centreZ = Clamp(splitFar - offset, splitNear, splitFar);
+
+    CascadeSphere out{};
+    out.center = camera.GetPosition() + camera.GetDirection() * centreZ;
+
+    float rSq = 0.0f;
+    for (const float3& c : cornersWS)
+    {
+        const float3 d = c - out.center;
+        rSq = std::max(rSq, d.Dot(d));
+    }
+    // Never 0: a degenerate ortho extent produces INF matrices downstream.
+    out.radius = std::max(std::sqrt(rSq), 1.0f);
+    return out;
+}
+
 void Scene::InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
     sceneRenderer_.InitializeCommonResources(renderer, uploadCmdList, uploadKeepAlive);
@@ -159,7 +218,14 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     }
 
     const mat4& invView = camera.GetInvViewMatrix();
-    const mat4& invProj = camera.GetInvProjMatrix();
+    // S1: fit the cascades to the NON-JITTERED frustum. view_.invProj is the inverse of the
+    // DLSS-jittered projection (Camera.cpp: _31/_32 carry the sub-pixel offset), so building the
+    // slice corners from it made the fitted sphere — and therefore unitsPerTexel and the snap grid
+    // — wobble every frame. The wobble is ~0.5-1 cascade texel (the jitter is +-0.5 px of render
+    // width, which at the slice's far plane is a fraction of a shadow texel of the same order),
+    // i.e. exactly the scale the texel snap exists to pin down. The shadow map has no business
+    // tracking a sub-pixel camera jitter.
+    const mat4& invProj = camera.GetInvProjMatrixNoJitter();
     const float3 sunDirWS = dirLight_.GetDirection();
 
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
@@ -170,7 +236,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         std::array<float3, 8> cornersWS{};
         BuildFrustumSliceCornersWS(invView, invProj, sliceNear, sliceFar, cornersWS);
 
-        // Step 2a: fit each cascade to the rotation-INVARIANT bounding sphere of its
+        // Step 2a / S1: fit each cascade to the rotation-INVARIANT bounding sphere of its
         // slice corners. The sphere center and radius depend only on the slice shape
         // (near/far + FOV), never on camera/light orientation, so unitsPerTexel is
         // constant frame-to-frame and the light-space texel snap below is the ONLY
@@ -180,16 +246,14 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // far-corner radius + coarse world-space snap did NOT enclose the near corners
         // once the snap shifted the center, so the radius had to be clamped to the
         // rotation-dependent corner extent — that clamp was the source of the shimmer.)
-        float3 sphereCenter = float3(0.0f, 0.0f, 0.0f);
-        for (const auto& corner : cornersWS) { sphereCenter = sphereCenter + corner; }
-        sphereCenter = sphereCenter / static_cast<float>(cornersWS.size());
-
-        float sphereRadius = 0.0f;
-        for (const auto& corner : cornersWS)
-        {
-            const float3 d = corner - sphereCenter;
-            sphereRadius = std::max(sphereRadius, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
-        }
+        //
+        // S1 replaces the centroid of the 8 corners with the true MINIMAL enclosing sphere
+        // (centre on the view axis, closed form — see ComputeCascadeSphere). The centroid was
+        // never the minimal sphere: for cascade 0 it gives 12.51 m where 11.47 m suffices, and
+        // every millimetre of radius is millimetres of shadow texel, for free.
+        const CascadeSphere sphere = ComputeCascadeSphere(camera, cornersWS, sliceNear, sliceFar);
+        const float3 sphereCenter = sphere.center;
+        const float sphereRadius = sphere.radius;
 
         const float radius = sphereRadius + cascadeConfig_.overlap;
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
