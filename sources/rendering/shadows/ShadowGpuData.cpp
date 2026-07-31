@@ -333,6 +333,15 @@ Material* ShadowGpuData::IndirectShadowMaterial() const
     return MaskedShadowsActive() ? indirectShadowMaskedMat_.get() : indirectShadowMat_.get();
 }
 
+// Mirrors the rule above for the VSM single-draw permutations. MaskedShadowsActive() keys off the
+// LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
+// both permutation pairs are built from the same source, so they succeed or fail together in
+// practice. A null here is handled by the caller (it keeps the per-page loop).
+Material* ShadowGpuData::IndirectShadowPageMaterial() const
+{
+    return MaskedShadowsActive() ? indirectShadowPageMaskedMat_.get() : indirectShadowPageMat_.get();
+}
+
 bool ShadowGpuData::MaskedShadowsActive() const
 {
     return hasMaskedGroups_ && indirectShadowMaskedMat_ && indirectShadowMaskedMat_->GetPipelineState();
@@ -1106,6 +1115,34 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         {
             OutputDebugStringA("[ShadowGpuData] masked indirect shadow PSO FAILED (masked casters cast solid shadows).\n");
             indirectShadowMaskedMat_.reset();
+        }
+
+        // Single-draw page render: the VSM_PAGE permutations, used only by the VSM per-page pass.
+        // Identical pipeline state to the two above — the whole difference lives in the shader (page
+        // index unpacked from the caster id, projection + wind read from an SRV instead of the b1
+        // root CBV, page borders emitted as SV_ClipDistance instead of a per-page scissor), so the
+        // input layouts are unchanged: the same uint arrives in CASTERID, only reinterpreted.
+        // Optional — on failure IndirectShadowPageMaterial() returns null and RecordPageRender stays
+        // on the per-page loop, so shadows remain correct either way.
+        gd.defines.clear();
+        gd.defines.emplace_back("VSM_PAGE", "1");
+        gd.inputLayoutKey = "PosOnly_InstCasterId";
+        gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+        indirectShadowPageMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowPageMat_ || !indirectShadowPageMat_->GetPipelineState())
+        {
+            OutputDebugStringA("[ShadowGpuData] VSM_PAGE indirect shadow PSO FAILED (single-draw page render off).\n");
+            indirectShadowPageMat_.reset();
+        }
+
+        gd.defines.emplace_back("SHADOW_MASKED", "1");
+        gd.inputLayoutKey = "PosUV_InstCasterId";
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE; // double-sided foliage, as above
+        indirectShadowPageMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowPageMaskedMat_ || !indirectShadowPageMaskedMat_->GetPipelineState())
+        {
+            OutputDebugStringA("[ShadowGpuData] VSM_PAGE masked indirect shadow PSO FAILED (single-draw page render off).\n");
+            indirectShadowPageMaskedMat_.reset();
         }
     }
 

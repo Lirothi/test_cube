@@ -172,7 +172,7 @@ Two notes for whoever repeats this:
   48) and `_pad0` in `ScatterCB` (offset 12, `gClipViewProj` stays at 16). Zero layout drift is what
   makes "byte-identical" provable rather than hopeful; keep it that way if the field ever moves.
 
-### Step 2 — `pageProj_` SRV + the `VSM_PAGE` shader permutations (dormant)
+### Step 2 — `pageProj_` SRV + the `VSM_PAGE` shader permutations (dormant) — **DONE (uncommitted)**
 `VirtualShadowMap::EnsureRenderResources`: add a `pageProjSrv_` descriptor to `renderHeap_` —
 `StructuredBuffer<float4>` over the existing buffer: `NumElements = kPoolPageCount * 16`,
 `StructureByteStride = 16`, `Format = DXGI_FORMAT_UNKNOWN`. (256-byte page stride ÷ 16 = 16
@@ -277,6 +277,29 @@ Log once (DBWIN) when `g_pageDrawSingle` is on but `singleDraw` came out false, 
 
 **Verify:** both 0/0; DBWIN shows no PSO failure; `gPageIdShift` is still passed as `0u` and the
 draw path still binds `IndirectShadowMaterial()`, so shadows are byte-identical in both flag states.
+
+**Result:** Debug + Release `0 Warning(s) 0 Error(s)`. All four shader permutations (opaque / masked
+x VSM_PAGE off / on), VS **and** PS, compile offline under the engine's own flags — which also
+validates each embedded `[RootSignature]`. In-engine DBWIN capture over `--scene-stress=4`:
+`[ShadowGpuData] shaders ready`, **zero** `FAILED` lines, and — the real signal — **no
+`[VSM] single-draw page render OFF` line**, i.e. the predicate evaluated TRUE, so Step 3 will engage
+the moment it is wired. `verdict: CLEAN`.
+
+Notes on how this landed:
+- **The wind function was factored, not forked.** `WindTransformH` became a thin CB-path wrapper over
+  a new `WindTransformCore(..., vp, w0, w1)` that takes every per-view input as a parameter; the
+  VSM_PAGE VS calls the same core with the values `LoadPageVP` pulled from `pageProj_`. There is no
+  second copy of the `WindOffset` call to drift.
+- **The PS got its own input struct** (`PSInD` / `PSInMasked`, no `CD`) in BOTH permutations — a PS
+  input signature may be a subset of the VS output's, and this keeps `SV_ClipDistance0` out of the
+  place where it would only be noise.
+- **`cbuffer PerView : register(b1)` is compiled out entirely under VSM_PAGE**, not merely left
+  unbound. Declaring it while the root signature omits `CBV(b1)` risks a validation failure the
+  moment anything still references it.
+- **DBWIN capture recipe** (there was no listener in the repo): `scratchpad/dbwin_capture.ps1`
+  implements the DBWIN_BUFFER / DBWIN_BUFFER_READY / DBWIN_DATA_READY protocol, launches the exe with
+  the project root as cwd, and tees to a file. Only one system-wide listener may exist — it throws if
+  DebugView is already running. This is the only way to see a soft PSO failure.
 
 ### Step 3 — the flip
 In `RecordPageRender`, when `singleDraw`:

@@ -636,13 +636,14 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
                           pageVisibleListUav_.ptr == 0 || physOwnerPrevSrv_.ptr == 0 ||
                           perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0 ||
                           pageGroupCountUav_.ptr == 0 || pageGroupCountSrv_.ptr == 0 ||
-                          pageScatterDynUav_.ptr == 0 || pageScatterDynSrv_.ptr == 0;
+                          pageScatterDynUav_.ptr == 0 || pageScatterDynSrv_.ptr == 0 ||
+                          pageProjSrv_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 12; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV (scatter cull)
+        hd.NumDescriptors = 13; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV + pageProj SRV
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -665,6 +666,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pageGroupCountSrv_  = { base.ptr + static_cast<SIZE_T>(9) * incr };
     pageScatterDynUav_  = { base.ptr + static_cast<SIZE_T>(10) * incr };
     pageScatterDynSrv_  = { base.ptr + static_cast<SIZE_T>(11) * incr };
+    pageProjSrv_        = { base.ptr + static_cast<SIZE_T>(12) * incr };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -695,6 +697,17 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pUd.Buffer.NumElements = static_cast<UINT>(pageProj_->GetDesc().Width / 4);
     pUd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
     dev->CreateUnorderedAccessView(pageProj_.Get(), nullptr, &pUd, pageProjUav_);
+
+    // Single-draw page render: the same buffer as a StructuredBuffer<float4> for the VSM_PAGE VS.
+    // The setup CS writes each page a 256-byte slot (root-CBV alignment) = 16 float4s, so page p's
+    // matrix rows are elements p*16+0..3 and its wind tail elements p*16+12 and +13.
+    D3D12_SHADER_RESOURCE_VIEW_DESC pSd{};
+    pSd.Format = DXGI_FORMAT_UNKNOWN;
+    pSd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    pSd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    pSd.Buffer.NumElements = vsm::kPoolPageCount * 16u;
+    pSd.Buffer.StructureByteStride = 16u;
+    dev->CreateShaderResourceView(pageProj_.Get(), &pSd, pageProjSrv_);
 
     // Per-page visible list: structured uint UAV (the setup shader appends caster ids). Dormant in
     // Step 1 (created but not bound). Guarded because the buffer alloc can fail independently.
@@ -790,6 +803,42 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // per page instead of a bind + draw per (page, mesh-group).
     const bool useMega = shadowGpu->MegaReady() &&
                          shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
+
+    // Single-draw page render: ONE ExecuteIndirect over every (page, group) arg instead of the
+    // kPoolPageCount-iteration loop below. Decided HERE, above the scatter dispatch, because it
+    // drives gPageIdShift in BOTH the scatter CB and the setup CB — the two writers of
+    // PageVisibleList must agree on the packing within a frame.
+    //   - useMega: without the consolidated VB/IB the loop must re-bind geometry per mesh-group, so
+    //     it cannot collapse to one draw at all.
+    //   - activeCasters bound: the caster slot id has to survive in the low kPageIdShift bits.
+    //   - pageProjSrv_/pageMat: the VS reads the projection from the SRV and needs its own PSO.
+    Material* pageMat = shadowGpu->IndirectShadowPageMaterial();
+    const bool singleDraw = vsm::g_pageDrawSingle && useMega &&
+                            activeCasters < (1u << vsm::kPageIdShift) && pageProjSrv_.ptr != 0 &&
+                            pageMat && pageMat->GetPipelineState();
+    if (vsm::g_pageDrawSingle && !singleDraw)
+    {
+        // Log the reason ONCE per distinct cause — silently falling back to the loop is exactly the
+        // failure mode that makes a "why is this still slow / still blinking" hunt expensive.
+        const int reason = !useMega                                 ? 1
+                         : (activeCasters >= (1u << vsm::kPageIdShift)) ? 2
+                         : (pageProjSrv_.ptr == 0)                  ? 3 : 4;
+        if (reason != singleDrawFallbackLogged_)
+        {
+            singleDrawFallbackLogged_ = reason;
+            static const char* const kReason[5] = { "",
+                "mega buffer unavailable (heterogeneous caster meshes)",
+                "caster count exceeds the packed-id budget",
+                "pageProj SRV missing",
+                "VSM_PAGE PSO unavailable" };
+            char msg[192];
+            std::snprintf(msg, sizeof(msg),
+                          "[VSM] single-draw page render OFF: %s — using the per-page loop.\n",
+                          kReason[reason]);
+            OutputDebugStringA(msg);
+        }
+    }
+    else if (singleDraw) { singleDrawFallbackLogged_ = 0; }
 
     // --- Setup compute: per physical page, build the off-center projection AND cull the caster set
     // to the page's frustum, writing a per-page compacted visible list + per-page draw args. Reads

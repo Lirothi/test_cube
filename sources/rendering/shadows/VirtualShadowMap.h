@@ -342,10 +342,18 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageScatterDynUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageScatterDynSrv_{};
+    // Single-draw page render: pageProj_ as a StructuredBuffer<float4> for the VSM_PAGE vertex
+    // shader (16 elements per page's 256-byte slot). The loop path binds the same buffer as a
+    // per-page root CBV instead, which is why this is an SRV and not a replacement.
+    D3D12_CPU_DESCRIPTOR_HANDLE pageProjSrv_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
     bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
+    // Single-draw page render: last logged reason the path was unavailable while g_pageDrawSingle
+    // was on (0 = available / nothing logged). Dedupes the DBWIN line to one per distinct cause —
+    // a silent fallback to the per-page loop is the expensive thing to diagnose later.
+    int             singleDrawFallbackLogged_ = 0;
     ID3D12Resource* cachedRung0Args_ = nullptr;  // detect a ShadowGpuData rebuild (re-create the SRV)
     void EnsureRenderResources(Renderer* renderer, ShadowGpuData* shadowGpu);
 

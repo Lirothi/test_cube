@@ -173,6 +173,11 @@ public:
     // structure of both consumers (per-view CSM + VSM per-page) is preserved.
     Material* IndirectShadowMaterial() const; // defined in the .cpp (needs Material's definition)
 
+    // Same selection rule, but the VSM_PAGE permutations: ONE ExecuteIndirect over every pool page
+    // instead of the per-page CPU loop. Null when those PSOs failed to build, which is the signal
+    // for VirtualShadowMap::RecordPageRender to stay on the loop. Never used by the Legacy path.
+    Material* IndirectShadowPageMaterial() const;
+
     // C2: masked-shadow bindings for the indirect draw call sites. When active, srvTable[0] must
     // carry {instances, casterGroup, groupMask} and srvTable[3] the masked albedo table.
     static constexpr std::uint32_t kMaxMaskedGroups = 16; // matches gMaskAlbedo[16] in shadow_indirect_csm.hlsl
@@ -300,6 +305,11 @@ private:
     std::shared_ptr<Material> cullMat_;          // shadow_cull_cs.hlsl
     std::shared_ptr<Material> indirectShadowMat_; // shadow_indirect_csm.hlsl (Step 5; used in Step 6)
     std::shared_ptr<Material> indirectShadowMaskedMat_; // C2: SHADOW_MASKED=1 variant (alpha-tested groups)
+    // VSM single-draw page render: VSM_PAGE=1 permutations (page id unpacked from the caster id,
+    // projection from an SRV, page borders via SV_ClipDistance). Optional — a failure just keeps the
+    // per-page loop. Used ONLY by VirtualShadowMap::RecordPageRender, never by the Legacy path.
+    std::shared_ptr<Material> indirectShadowPageMat_;
+    std::shared_ptr<Material> indirectShadowPageMaskedMat_;
     std::shared_ptr<Material> giScatterMat_;     // shadow_gi_scatter_cs.hlsl (Step 4)
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 
