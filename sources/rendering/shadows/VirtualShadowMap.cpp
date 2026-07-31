@@ -829,7 +829,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
 
         struct ScatterCB
         {
-            std::uint32_t numCasters, numGroups, numLevels, pad0;
+            std::uint32_t numCasters, numGroups, numLevels, pageIdShift;
             DirectX::XMFLOAT4X4 clipViewProj[vsm::kNumClipmapLevels];
         };
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
@@ -839,6 +839,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 c.numCasters = activeCasters;
                 c.numGroups = groups;
                 c.numLevels = vsm::kNumClipmapLevels;
+                // Single-draw page render (Step 1): packing is PLUMBED but dormant — 0 = write bare
+                // caster ids, exactly as before. Step 2 introduces the `singleDraw` predicate and
+                // this becomes `singleDraw ? vsm::kPageIdShift : 0u` (same value in both CBs).
+                c.pageIdShift = 0u;
                 // Clipmap views occupy VSM view slots [kNumLocalVirtualViews, kMaxVirtualViews).
                 for (std::uint32_t L = 0; L < vsm::kNumClipmapLevels; ++L)
                 {
@@ -866,7 +870,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
-        std::uint32_t scatterActive, _p3, _p4, _p5;           // 1 = the scatter pass produced clipmap lists
+        std::uint32_t scatterActive, pageIdShift, _p4, _p5;   // 1 = the scatter pass produced clipmap lists
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -897,6 +901,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
             cb.scatterActive = scatterActive ? 1u : 0u;
+            cb.pageIdShift = 0u; // Step 1: plumbed, dormant — must match the scatter CB's value
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);

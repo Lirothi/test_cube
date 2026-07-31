@@ -54,6 +54,14 @@ namespace vsm
     inline constexpr std::uint32_t kPoolPagesPerAxis = kPoolTexels / kPageSize;      // 32
     inline constexpr std::uint32_t kPoolPageCount = kPoolPagesPerAxis * kPoolPagesPerAxis; // 1024
 
+    // Single-draw page render: the per-instance visible-list entry carries the physical page index in
+    // its high bits so ONE ExecuteIndirect can serve every page (the VS reads that page's projection
+    // from pageProj_ instead of a per-page root CBV). Low kPageIdShift bits = caster slot id, high
+    // bits = page. MUST match `kPageIdShift` in shadow_indirect_csm.hlsl's VSM_PAGE permutation, and
+    // the setup/scatter CBs pass it as gPageIdShift (0 = "don't pack", the per-page loop path).
+    inline constexpr std::uint32_t kPageIdShift = 22u;
+    static_assert(kPoolPageCount <= (1u << (32u - kPageIdShift)), "page id must fit above kPageIdShift");
+
     // Step 19b: LOCAL lights only — spots + point-light cube faces, NO CSM cascades (directional
     // stays on Pass_CSM until Step 24). render::kMaxShadowViews (36) = 4 cascades + this set, so
     // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces

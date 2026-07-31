@@ -33,7 +33,12 @@ cbuffer SetupCB : register(b0)
     uint gFlatLod;      // mega-off fallback LOD (uniform across pages; the per-page bind can't know each view)
     uint gNumLods;      // render::kMaxShadowLods (stride into gGroupLodMega)
     uint gScatterActive; // 1 = vsm_page_scatter_cs ran this frame (clipmap pages read its output)
-    uint _pad3, _pad4, _pad5;
+    // Single-draw page render: bits to shift the PHYSICAL page index by when packing it into a
+    // visible-list entry (vsm::kPageIdShift = 22). 0 = do NOT pack — the per-page loop path binds a
+    // per-page root CBV and the entry is a bare caster id. Never shift by 0: `id | (p << 0)` would
+    // corrupt the low bits, which is why both writers branch instead of relying on a shift.
+    uint gPageIdShift;
+    uint _pad4, _pad5;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -269,7 +274,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 uint g = CasterGroup[c2 + s2];
                 if (g < gNumGroups)
                 {
-                    PageVisibleList[pageBase + perGroupBase[g]] = c2 + s2;
+                    const uint vid = c2 + s2;
+                    PageVisibleList[pageBase + perGroupBase[g]] =
+                        (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
                     perGroupBase[g] += 1u;
                 }
             }

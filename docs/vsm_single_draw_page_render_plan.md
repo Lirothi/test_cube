@@ -140,7 +140,7 @@ needed at this step. Also corrected two stale comments that claimed `g_residentI
 OFF (`VirtualShadowMap.h:125-129`, `VirtualShadowMap.cpp:958`); it is `true` deliberately — the user
 wants the CPU saving — which is exactly why the blink is visible today.
 
-### Step 1 — page-id packing plumbed into both list writers (dormant, shift = 0)
+### Step 1 — page-id packing plumbed into both list writers (dormant, shift = 0) — **DONE (uncommitted)**
 Both writers of `PageVisibleList` OR in the physical page index:
 
 - `shaders/vsm_page_setup_cs.hlsl:272` → `PageVisibleList[pageBase + perGroupBase[g]] = (c2 + s2) | (p << gPageIdShift);`
@@ -155,6 +155,22 @@ Add `static_assert(vsm::kPoolPageCount <= (1u << 10), "page id must fit in 10 bi
 **Verify:** both 0/0. This step is pure plumbing: `gPageIdShift` is hard-wired to `0u` at both call
 sites (the `singleDraw` predicate that will drive it lands in Step 2, once the SRV and the PSOs it
 tests actually exist). Nothing is packed yet, so shadows are byte-identical in both flag states.
+
+**Result:** Debug + Release `0 Warning(s) 0 Error(s)`; `--scene-stress=6` (Release, VSM default)
+`verdict: CLEAN`. `vsm::kPageIdShift = 22u` + the static_assert live in `VirtualShadowMap.h` next to
+`kPoolPageCount` so the CPU side has one source of truth (Steps 2-3 would otherwise repeat the
+literal three times); the HLSL `kPageIdShift` in Step 2 must be kept equal to it by hand.
+
+Two notes for whoever repeats this:
+- **MSBuild proves nothing about the shaders** — they compile at runtime, and a broken CS here fails
+  SOFT (`pageSetupMat_` null → `RecordPageRender` returns; scatter PSO null → `scatterActive` false →
+  silent fallback to brute force). Compile them the way the engine does before trusting a green
+  build: `dxc -E CSMain -T cs_6_6 -Zpr -HV 2021 -O3 -I shaders shaders/<file>.hlsl`
+  (`C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe`; the flags mirror
+  `Material.cpp:139-154`). This also validates the embedded `[RootSignature]`.
+- **Both CB fields took an existing pad slot** — `_pad3` in `SetupCB` (offset 36, `gWind0` stays at
+  48) and `_pad0` in `ScatterCB` (offset 12, `gClipViewProj` stays at 16). Zero layout drift is what
+  makes "byte-identical" provable rather than hopeful; keep it that way if the field ever moves.
 
 ### Step 2 — `pageProj_` SRV + the `VSM_PAGE` shader permutations (dormant)
 `VirtualShadowMap::EnsureRenderResources`: add a `pageProjSrv_` descriptor to `renderHeap_` —

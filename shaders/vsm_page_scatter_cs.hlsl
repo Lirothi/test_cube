@@ -32,7 +32,9 @@ cbuffer ScatterCB : register(b0)
     uint gNumCasters;   // active caster SLOT count (also the per-page slice stride)
     uint gNumGroups;    // mesh-group count
     uint gNumLevels;    // active clipmap levels (VSM_NUM_CLIPMAP_LEVELS)
-    uint _pad0;
+    // Single-draw page render: see the identically-named field in vsm_page_setup_cs.hlsl's SetupCB.
+    // Both writers of PageVisibleList must pack identically, so this is fed from the same CPU value.
+    uint gPageIdShift;
     float4x4 gClipViewProj[VSM_NUM_CLIPMAP_LEVELS]; // per clipmap level (VSM view 32+L)
 };
 
@@ -115,7 +117,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 uint rank;
                 InterlockedAdd(PageGroupCount[p * gNumGroups + g], 1u, rank);
                 // Global group base inside this page's slice (see SLICE LAYOUT above).
-                PageVisibleList[p * gNumCasters + PerGroup[g].x + rank] = c + s;
+                const uint vid = c + s;
+                PageVisibleList[p * gNumCasters + PerGroup[g].x + rank] =
+                    (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
             }
             if (isDynamic) { PageScatterDyn[p] = 1u; }
         }
