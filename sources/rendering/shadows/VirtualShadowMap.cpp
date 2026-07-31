@@ -593,6 +593,13 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         if (perPageDirty_) { renderer->SetResourceState(perPageDirty_.Get(), D3D12_RESOURCE_STATE_COMMON); }
         perPageDirtyUav_ = {}; perPageDirtySrv_ = {};
     }
+    // Compacted draw args: the append counter / ExecuteIndirect count buffer (element 0 only).
+    if (!pageArgCount_)
+    {
+        pageArgCount_ = CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCount");
+        if (pageArgCount_) { renderer->SetResourceState(pageArgCount_.Get(), D3D12_RESOURCE_STATE_COMMON); }
+        pageArgCountUav_ = {};
+    }
     // Spatial scatter cull: per (page, mesh-group) count/cursor + per-page dynamic-overlap flag.
     if (!pageGroupCount_ || groups > scatterGroups_)
     {
@@ -637,13 +644,13 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
                           perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0 ||
                           pageGroupCountUav_.ptr == 0 || pageGroupCountSrv_.ptr == 0 ||
                           pageScatterDynUav_.ptr == 0 || pageScatterDynSrv_.ptr == 0 ||
-                          pageProjSrv_.ptr == 0;
+                          pageProjSrv_.ptr == 0 || pageArgCountUav_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 13; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV + pageProj SRV
+        hd.NumDescriptors = 14; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV + pageProj SRV + argCount UAV
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -667,6 +674,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pageScatterDynUav_  = { base.ptr + static_cast<SIZE_T>(10) * incr };
     pageScatterDynSrv_  = { base.ptr + static_cast<SIZE_T>(11) * incr };
     pageProjSrv_        = { base.ptr + static_cast<SIZE_T>(12) * incr };
+    pageArgCountUav_    = { base.ptr + static_cast<SIZE_T>(13) * incr };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -742,6 +750,19 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         // Scatter cull: per-page dynamic-overlap flag (same shape as perPageDirty).
         dev->CreateShaderResourceView(pageScatterDyn_.Get(), &sd, pageScatterDynSrv_);
         dev->CreateUnorderedAccessView(pageScatterDyn_.Get(), nullptr, &ud, pageScatterDynUav_);
+
+        // Compacted-args counter. RAW (like pageDrawArgs_), NOT structured: the CPU zeroes it with
+        // ClearUnorderedAccessViewUint each frame, and that call rejects structured buffers outright
+        // (GBV id=1156). The shader declares it as RWByteAddressBuffer to match.
+        if (pageArgCount_)
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC aud{};
+            aud.Format = DXGI_FORMAT_R32_TYPELESS;
+            aud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            aud.Buffer.NumElements = static_cast<UINT>(pageArgCount_->GetDesc().Width / 4);
+            aud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+            dev->CreateUnorderedAccessView(pageArgCount_.Get(), nullptr, &aud, pageArgCountUav_);
+        }
 
         // Scatter cull: per (page, mesh-group) count/cursor — sized pool-pages x groups.
         const UINT cntElems = static_cast<UINT>(pageGroupCount_->GetDesc().Width / sizeof(std::uint32_t));
@@ -840,6 +861,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     }
     else if (singleDraw) { singleDrawFallbackLogged_ = 0; }
 
+    // Compacted draw args: only meaningful on the single-draw path — the loop derives each page's
+    // argOffset from (page, group), so a compacted buffer would feed it other pages' records.
+    const bool compactArgs = singleDraw && vsm::g_pageDrawCompact &&
+                             pageArgCount_ && pageArgCountUav_.ptr != 0;
+
     // --- Setup compute: per physical page, build the off-center projection AND cull the caster set
     // to the page's frustum, writing a per-page compacted visible list + per-page draw args. Reads
     // Rung0 args (per-group index count) + physOwner + the unified world AABBs + per-caster group. ---
@@ -850,6 +876,17 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (pageArgCount_) { renderer->Transition(cl, pageArgCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    if (compactArgs)
+    {
+        // Zero the append counter before the setup bumps it. ClearUnorderedAccessViewUint needs the
+        // view BOTH in a non-shader-visible heap (renderHeap_) and in the currently bound
+        // shader-visible one, hence the stage — cheaper than a dispatch for four bytes.
+        const UINT zero[4] = { 0u, 0u, 0u, 0u };
+        cl->ClearUnorderedAccessViewUint(renderer->StageSrvUavTable({ pageArgCountUav_ }).gpu,
+                                         pageArgCountUav_, pageArgCount_.Get(), zero, 0, nullptr);
+        renderer->UAVBarrier(cl, pageArgCount_.Get());
+    }
 
     // --- Spatial scatter cull (directional clipmap): clear the per (page, group) counters, then let
     // every caster append itself into the few pages its AABB covers. This replaces the O(pages x
@@ -919,7 +956,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
-        std::uint32_t scatterActive, pageIdShift, _p4, _p5;   // 1 = the scatter pass produced clipmap lists
+        std::uint32_t scatterActive, pageIdShift, compactArgs, _p5; // 1 = the scatter pass produced clipmap lists
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -951,6 +988,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numLods = kLods;
             cb.scatterActive = scatterActive ? 1u : 0u;
             cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
+            cb.compactArgs = compactArgs ? 1u : 0u;
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
@@ -984,7 +1022,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         },
         { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv,
           pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_ },
-        { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_ },
+        // u4 = the compacted-args counter. Its descriptor must be valid even when compaction is off
+        // (the root signature declares the range); the shader only touches it when gCompactArgs != 0,
+        // so a stand-in on the OOM path is never read.
+        { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_,
+          pageArgCountUav_.ptr != 0 ? pageArgCountUav_ : perPageDirtyUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,
         pageDrawArgs_.Get());
@@ -1027,6 +1069,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // -> a VS SRV on the single-draw path (the VSM_PAGE shader reads it as StructuredBuffer<float4>)
     // or a per-page root CBV on the loop path.
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    if (compactArgs) { renderer->Transition(cl, pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); }
     renderer->Transition(cl, pageProj_.Get(), singleDraw ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
                                                          : D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
@@ -1160,7 +1203,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         D3D12_RECT     sc{ 0, 0, static_cast<LONG>(vsm::kPoolTexels), static_cast<LONG>(vsm::kPoolTexels) };
         cl->RSSetViewports(1, &vp);
         cl->RSSetScissorRects(1, &sc);
-        renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups, pageDrawArgs_.Get(), 0, nullptr, 0);
+        // With compaction the counter caps the walk at the records actually appended (a few hundred
+        // instead of pages x groups); maxCount stays the buffer capacity, which is what D3D12 clamps
+        // the counter against. Without it, every fixed-layout record is walked and the empty ones are
+        // zero-instance no-ops.
+        renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups, pageDrawArgs_.Get(), 0,
+                                  compactArgs ? pageArgCount_.Get() : nullptr, 0);
         return;
     }
 

@@ -16,7 +16,7 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
     "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 #define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
@@ -38,7 +38,12 @@ cbuffer SetupCB : register(b0)
     // per-page root CBV and the entry is a bare caster id. Never shift by 0: `id | (p << 0)` would
     // corrupt the low bits, which is why both writers branch instead of relying on a shift.
     uint gPageIdShift;
-    uint _pad4, _pad5;
+    // Compacted draw args: 1 = append only NON-EMPTY (page, group) records at an atomically bumped
+    // slot and let PageArgCount drive ExecuteIndirect's count buffer; 0 = the fixed [page][group]
+    // layout the per-page loop indexes directly. Only ever 1 when the single-draw path is active —
+    // the loop computes its own argOffset from (page, group) and would read garbage otherwise.
+    uint gCompactArgs;
+    uint _pad5;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -67,6 +72,9 @@ RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
 RWStructuredBuffer<uint> PageVisibleList : register(u2); // per (page, slot) visible caster id
 RWStructuredBuffer<uint> PerPageDirty    : register(u3); // per page: 1 = re-render this frame, 0 = cached
+// RAW, not structured: ClearUnorderedAccessViewUint (how the CPU zeroes this each frame) rejects
+// structured buffers outright — GBV id=1156. Same shape as PageDrawArgs above.
+RWByteAddressBuffer      PageArgCount    : register(u4); // byte 0 = appended arg-record count
 
 // Positive-vertex AABB-vs-frustum test (mirrors shadow_cull_cs::Intersects). The planes are
 // unnormalized (extracted straight from the matrix) — the test is scale-invariant per plane.
@@ -96,12 +104,18 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     {
         // Free page: zero-instance args for every group (drawn as a no-op) + not dirty (the clear
         // skips it). pageProj left stale (unread). A page that becomes resident is fully rewritten.
+        // With compacted args there is nothing to write at all — a record that is never appended
+        // cannot be reached, since the count buffer stops the draw short of it. That skip IS the
+        // compaction: free pages are ~45% of the pool.
         PerPageDirty[p] = 0u;
-        for (uint g = 0u; g < gNumGroups; ++g)
+        if (gCompactArgs == 0u)
         {
-            uint off = (p * gNumGroups + g) * 20u;
-            PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u));
-            PageDrawArgs.Store(off + 16u, 0u);
+            for (uint g = 0u; g < gNumGroups; ++g)
+            {
+                uint off = (p * gNumGroups + g) * 20u;
+                PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u));
+                PageDrawArgs.Store(off + 16u, 0u);
+            }
         }
         return;
     }
@@ -202,11 +216,14 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     PerPageDirty[p] = dirty ? 1u : 0u;
     if (!dirty)
     {
-        for (uint gc = 0u; gc < gNumGroups; ++gc)
+        if (gCompactArgs == 0u) // compacted: append nothing (see the free-page branch above)
         {
-            uint off = (p * gNumGroups + gc) * 20u;
-            PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u)); // InstanceCount 0 -> caster draw is a no-op
-            PageDrawArgs.Store(off + 16u, 0u);
+            for (uint gc = 0u; gc < gNumGroups; ++gc)
+            {
+                uint off = (p * gNumGroups + gc) * 20u;
+                PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u)); // InstanceCount 0 -> caster draw is a no-op
+                PageDrawArgs.Store(off + 16u, 0u);
+            }
         }
         return;
     }
@@ -238,6 +255,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
     for (uint g2 = 0u; g2 < gNumGroups; ++g2)
     {
+        // Compacted args: an empty group would only ever be a zero-instance no-op, so don't append
+        // it. This is where the bulk of the 65k-record worst case disappears — even a RESIDENT page
+        // usually touches one or two mesh-groups out of all of them.
+        if (gCompactArgs != 0u && perGroupCount[g2] == 0u) { continue; }
         uint4 a0;
         if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
         {
@@ -253,7 +274,23 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             a0.x = r.x; a0.z = r.z; a0.w = r.w;
         }
         a0.y = perGroupCount[g2];             // OVERRIDE: this page's instance count
-        uint dst = (p * gNumGroups + g2) * 20u;
+        // Record slot. Fixed [page][group] for the loop path (which derives its argOffset from those
+        // two). Compacted: any free slot will do — the VS no longer infers the page from the record
+        // position, it unpacks it from the instance id, which is exactly what Step 1 bought.
+        uint dst;
+        if (gCompactArgs != 0u)
+        {
+            uint slot;
+            PageArgCount.InterlockedAdd(0u, 1u, slot);
+            // Unreachable by construction (appends <= pages x groups = the buffer's capacity), and
+            // ExecuteIndirect clamps the count to maxCount anyway — but never store out of bounds.
+            if (slot >= gNumPages * gNumGroups) { continue; }
+            dst = slot * 20u;
+        }
+        else
+        {
+            dst = (p * gNumGroups + g2) * 20u;
+        }
         PageDrawArgs.Store4(dst, a0);
         PageDrawArgs.Store(dst + 16u, pageBase + perGroupBase[g2]); // StartInstanceLocation -> page slice
     }

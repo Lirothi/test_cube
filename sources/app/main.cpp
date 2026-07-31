@@ -263,6 +263,10 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-singledraw=")) {
             vsm::g_pageDrawSingle = (std::atoi(flag + std::strlen("--vsm-singledraw=")) != 0);
         }
+        // "--vsm-compactargs=0|1": same, for the compacted (page, group) arg records.
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-compactargs=")) {
+            vsm::g_pageDrawCompact = (std::atoi(flag + std::strlen("--vsm-compactargs=")) != 0);
+        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
             render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
         }

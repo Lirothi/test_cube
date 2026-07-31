@@ -144,8 +144,21 @@ namespace vsm
     // kPoolPageCount-iteration CPU loop (per-page viewport -> VS clip-space remap + SV_ClipDistance
     // page borders). Requires the mega buffer (geometry bound once). Default ON; OFF restores the
     // per-page loop for A/B and for per-page inspection in PIX.
-    // DORMANT (plan Step 0): declared + wired to the dev window, but nothing reads it yet.
     inline bool g_pageDrawSingle = true;
+
+    // Compacted draw args (single-draw only): the setup CS appends ONLY non-empty (page, group)
+    // records via an atomic and the draw reads that counter as ExecuteIndirect's count buffer,
+    // instead of walking all kPoolPageCount*groups fixed-layout records. Requires the page id in the
+    // instance stream (record order stops mattering), which is why it cannot precede the flip.
+    // DEFAULT OFF — measured a small net LOSS on this scene (2026-08-01, interleaved A/B/A/B on
+    // matched clocks, ~20.4k frames each): Pass_VsmPageRender GPU 0.401/0.412 ms without vs
+    // 0.425/0.422 with, i.e. ~+0.017 ms (~4% of the pass); CPU identical (0.067 both). The reason is
+    // that the thing it removes was already free — walking 6144 zero-instance records costs nothing
+    // (see g_residentIterOnly's ~2% measurement) — while the atomic it adds lands in the setup CS,
+    // the pass's most expensive sub-scope. Kept because the record count is pages x mesh-groups: a
+    // group-heavy scene (64 groups = 65k records) is where the walk could start to matter. Re-measure
+    // there before turning it on; do not enable it on faith.
+    inline bool g_pageDrawCompact = false;
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net
@@ -346,6 +359,11 @@ private:
     // shader (16 elements per page's 256-byte slot). The loop path binds the same buffer as a
     // per-page root CBV instead, which is why this is an SRV and not a replacement.
     D3D12_CPU_DESCRIPTOR_HANDLE pageProjSrv_{};
+    // Compacted draw args: single uint the setup CS atomically bumps per appended (page, group)
+    // record; consumed as ExecuteIndirect's count buffer. 4 uints so the allocation is comfortably
+    // aligned — only element 0 is used.
+    Microsoft::WRL::ComPtr<ID3D12Resource> pageArgCount_;
+    D3D12_CPU_DESCRIPTOR_HANDLE pageArgCountUav_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for

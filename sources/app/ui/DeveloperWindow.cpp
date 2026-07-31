@@ -713,7 +713,16 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "CPU loop; the per-page viewport becomes a VS clip remap + SV_ClipDistance page\n"
                                       "borders. Removes the resident-snapshot blink at no CPU cost. Needs the mega\n"
                                       "buffer. OFF: the per-page loop (A/B, and per-page inspection in PIX).\n"
-                                      "NOT WIRED YET (plan Step 0) - toggling this currently changes nothing.");
+                                      "Measured: CPU 0.182 -> 0.058 ms, GPU neutral, frame time unchanged\n"
+                                      "(the pass records on a worker, so the CPU saving is off the hot path).");
+
+                ImGui::Checkbox("Compact draw args (off = net loss here)", &vsm::g_pageDrawCompact);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: the setup CS appends only NON-EMPTY (page, group) records and the draw\n"
+                                      "uses that counter as its count buffer, instead of walking all 1024 x groups\n"
+                                      "fixed-layout records. Measured ~+0.017 ms GPU here: the walk it removes was\n"
+                                      "already free, the atomic it adds lands in the setup CS. Kept for group-heavy\n"
+                                      "scenes (records = pages x groups). No effect while single-draw is off.");
 
                 ImGui::Checkbox("Page cache (experimental, off = net loss here)", &vsm::g_pageCaching);
                 if (ImGui::IsItemHovered())

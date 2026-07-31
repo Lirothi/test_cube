@@ -380,7 +380,7 @@ set and nothing naming the `VsmPageRender` command list**, so the folded 20-desc
    motion, and there is no headless camera sweep — so this, the whole point of the plan, is
    unverified by measurement so far.
 
-### Step 4 — compacted args + count buffer (optional, only if a measurement asks for it)
+### Step 4 — compacted args + count buffer — **DONE (uncommitted), MEASURED A NET LOSS → DEFAULT OFF**
 With the page id in the instance stream, record order is free. The setup can `InterlockedAdd` a
 counter and append only non-empty `(page, group)` records; the draw then uses that counter as
 `ExecuteIndirect`'s count buffer (already supported by the wrapper, `Renderer.cpp:983`; the count
@@ -395,6 +395,33 @@ rather than at zero. And because that flag is ON today (see the note in "Honest 
 current baseline only walks ~55 % of the records while the single-draw path walks 100 % of them. So
 the Step 3 A/B can show a GPU regression that Step 4 is the fix for. Measure `Pass_VsmPageRender` GPU
 with `g_residentIterOnly` in BOTH positions on the flag-OFF baseline before judging the flip.
+
+**Result: implemented, correct, and a small net LOSS — shipped behind `vsm::g_pageDrawCompact`,
+DEFAULT OFF.** Interleaved A/B/A/B on matched clocks (~20.4k frames each, `--vsm-compactargs=0|1`):
+
+| `Pass_VsmPageRender` | compact OFF | compact ON |
+|---|---|---|
+| GPU avg | 0.401 / 0.412 ms | 0.425 / 0.422 ms |
+| CPU avg | 0.063 / 0.071 ms | 0.065 / 0.069 ms |
+
+~+0.017 ms GPU (~4 % of the pass), consistent in direction across both pairs though close to the
+run-to-run spread; CPU unchanged. The cause is exactly what Step 3 had already shown: the record walk
+this removes was **already free**, while the `InterlockedAdd` it adds lands in the setup CS — the
+pass's most expensive sub-scope. Same shape as `g_pageCaching`: code kept, default off, because the
+record count is pages x mesh-groups and a group-heavy scene (64 groups = 65k records) is where the
+walk could start to matter. Re-measure there; do not enable on faith.
+
+Correctness was verified before the default was flipped: Debug GBV CLEAN with it ON, and a `--shot`
+A/B against Step 3's single-draw capture shows identical shadows.
+
+**GBV earned its keep here.** The first implementation zeroed the counter with
+`ClearUnorderedAccessViewUint` over a *structured* UAV — id=1156, "ClearUnorderedAccessView* methods
+are not compatible with Structured Buffers", 44 hits. Nothing else caught it: both configs built 0/0,
+the shader compiled, and `--scene-stress` passed. The fix is a RAW UAV
+(`R32_TYPELESS` + `BUFFER_UAV_FLAG_RAW`) with `RWByteAddressBuffer` in the shader, mirroring
+`pageDrawArgs_`. Note the counter is cleared with `ClearUnorderedAccessViewUint` rather than a
+dispatch — it needs the view in both a non-shader-visible heap (`renderHeap_`) and the bound
+shader-visible one, hence the `StageSrvUavTable` call at the clear site.
 
 ---
 
