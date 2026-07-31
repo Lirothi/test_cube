@@ -1936,6 +1936,9 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const bool vsmDir = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
                             frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
         constants.useVsm = vsmDir ? 1u : 0u;
+        // S0.3: cascade-tint debug. Forced off whenever the clipmap is the shadow source — the
+        // tint visualizes CSM cascades, which that path does not sample.
+        constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
         constants.vsmDepthBias = vsm::g_clipmapDepthBias;
         constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
         constants.clipmapNormalBias = vsm::g_clipmapNormalBias;

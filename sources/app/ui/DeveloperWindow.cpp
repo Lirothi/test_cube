@@ -147,7 +147,7 @@ void DeveloperWindow::ToggleTextureInspector()
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
 }
 
-void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
+void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
 #if WITH_EDITOR
     , EditorController& editorController
 #endif
@@ -503,6 +503,125 @@ void DeveloperWindow::Draw(Renderer& renderer, const Scene& scene, const InputMa
                         textStats.uploadRectUs, textStats.uploadTextUs, textStats.drawUs, textStats.beginUs);
                     ImGui::TreePop();
                 }
+
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("CSM"))
+            {
+                // S0: the enabler for the whole CSM improvement plan (docs/csm_improvement_plan.md).
+                // Without a live readout there is nothing to judge the fit/density steps on, and
+                // without live config there is nothing to A/B them against.
+                ImGui::TextWrapped("Legacy cascaded shadow maps \xE2\x80\x94 the fast alternative to VSM. "
+                    "Every number in the readout is what the cascade was actually built with this "
+                    "frame (Scene::UpdateCascades), not a value the UI re-derived.");
+                ImGui::Separator();
+
+                bool legacyMode = !render::VsmActive();
+                if (ImGui::Checkbox("Legacy CSM active [Ctrl+V]", &legacyMode))
+                    render::g_shadowMode = legacyMode ? render::ShadowMode::Legacy : render::ShadowMode::VSM;
+                if (!legacyMode)
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                        "VSM drives directional shadows right now. The cascades below are still\n"
+                        "computed every frame, but nothing samples them \xE2\x80\x94 the readout is live,\n"
+                        "the picture is not. Uncheck the box above before judging any change.");
+
+                CascadeShadowConfig& csmCfg = scene.CascadeConfig();
+
+                ImGui::SeparatorText("Coverage");
+                ImGui::SliderFloat("Max distance (m)", &csmCfg.maxDistance, 20.0f, 1000.0f, "%.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Far edge of cascade 3 \xE2\x80\x94 the hard shadow terminator.\n"
+                                      "Shrinking it is the cheapest way to buy texel density everywhere\n"
+                                      "(no extra memory, no extra rasterization).");
+                ImGui::DragFloat4("Split distances (m)", csmCfg.sliceDistances.data(), 0.25f, 0.5f, 1000.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Far plane of cascades 0..3 in view space. BuildSplitScheme clamps them\n"
+                                      "monotonic and caps them at max distance, so out-of-order values are safe.");
+
+                ImGui::SeparatorText("Fit");
+                ImGui::SliderFloat("Overlap (world units)", &csmCfg.overlap, 0.0f, 8.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Padding added to the fitted sphere radius to absorb the texel-snap shift.\n"
+                                      "The snap moves the centre by at most ONE texel, so metres are the wrong\n"
+                                      "unit here \xE2\x80\x94 watch 'texel' in the readout as you drop this toward 0.");
+                ImGui::SliderFloat("Z padding (m)", &csmCfg.zPadding, 0.0f, 100.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Slack added past the far side of the light-space depth range.");
+                ImGui::SliderFloat("Caster reach (m)", &csmCfg.casterReachWS, 0.0f, 400.0f, "%.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How far TOWARD the light the ortho near plane is pulled back so casters\n"
+                                      "between the sun and the slice still render. This is what inflates zRange\n"
+                                      "(and the D16 step) in the readout. Drop it to 0 and watch tall casters'\n"
+                                      "shadows get clipped \xE2\x80\x94 that is the problem pancaking exists to solve.");
+
+                ImGui::SeparatorText("Bias");
+                ImGui::SliderFloat("Normal bias (texels)", &csmCfg.normalBiasInTexels, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Receiver offset along its normal, in cascade texels (so it scales with\n"
+                                      "each cascade's world texel size). Raise to kill acne, at the cost of\n"
+                                      "detaching contact shadows.");
+                ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels, 0.0f, 8.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Sample-time depth offset, in cascade texels. The readout converts it to\n"
+                                      "millimetres of peter-panning \xE2\x80\x94 that number is the one to minimise.");
+
+                if (ImGui::Button("Reset CSM config to defaults"))
+                    csmCfg = CascadeShadowConfig{};
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Back to the compile-time defaults in SceneRenderConfig.h \xE2\x80\x94 the\n"
+                                      "baseline every plan step is measured against.");
+
+                ImGui::SeparatorText("Debug");
+                bool csmTint = render::g_csmDebugMode == render::CsmDebugMode::CascadeTint;
+                if (ImGui::Checkbox("Cascade tint", &csmTint))
+                    render::g_csmDebugMode = csmTint ? render::CsmDebugMode::CascadeTint
+                                                     : render::CsmDebugMode::Off;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Tint each pixel by the cascade its shadow sample RESOLVED to:\n"
+                                      "c0 red, c1 green, c2 blue, c3 yellow, grey = past the last cascade.\n"
+                                      "Resolved, not selected: where a pixel falls into the tile-border margin\n"
+                                      "it silently drops to a coarser cascade, and the tint is what makes that\n"
+                                      "ring visible. Ignored in VSM mode.\n"
+                                      "It rides the SUN's contribution only — spot/point lights are added by\n"
+                                      "later passes and stay untinted, so read the zones outside their pools.");
+
+                ImGui::SeparatorText("Readout");
+                const SceneFrameData::CascadeData& csm = scene.GetCascadeData();
+                const ImGuiTableFlags csmTableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                      ImGuiTableFlags_SizingFixedFit;
+                if (ImGui::BeginTable("CsmReadout", 8, csmTableFlags))
+                {
+                    ImGui::TableSetupColumn("c");
+                    ImGui::TableSetupColumn("slice (m)");
+                    ImGui::TableSetupColumn("tile");
+                    ImGui::TableSetupColumn("texel (mm)");
+                    ImGui::TableSetupColumn("R fit/pad (m)");
+                    ImGui::TableSetupColumn("zRange (m)");
+                    ImGui::TableSetupColumn("D16 (mm)");
+                    ImGui::TableSetupColumn("bias (mm)");
+                    ImGui::TableHeadersRow();
+
+                    for (int c = 0; c < SceneFrameData::kCascades; ++c)
+                    {
+                        // zRange is what D16 has to resolve; the depth bias is stored in NDC, so
+                        // multiplying it back by the range recovers the world-space peter-panning.
+                        const float range = csm.farLsDbg[c] - csm.nearLsDbg[c];
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::Text("%d", c);
+                        ImGui::TableSetColumnIndex(1); ImGui::Text("%.1f-%.1f", csm.splitsVS[c], csm.splitsVS[c + 1]);
+                        ImGui::TableSetColumnIndex(2); ImGui::Text("%u", csm.tileSizeDbg[c]);
+                        ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f", csm.unitsPerTexelDbg[c] * 1000.0f);
+                        ImGui::TableSetColumnIndex(4); ImGui::Text("%.2f / %.2f", csm.sphereRadiusDbg[c], csm.radiusDbg[c]);
+                        ImGui::TableSetColumnIndex(5); ImGui::Text("%.1f", range);
+                        ImGui::TableSetColumnIndex(6); ImGui::Text("%.2f", (range / 65535.0f) * 1000.0f);
+                        ImGui::TableSetColumnIndex(7); ImGui::Text("%.1f", csm.depthBiasNDC[c] * range * 1000.0f);
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::TextDisabled("texel = world mm per shadow texel (lower is sharper).  R fit/pad = sphere\n"
+                                    "radius before/after overlap.  D16 = quantization step of the 16-bit depth\n"
+                                    "atlas over zRange.  bias = depth bias in world mm (= peter-panning).");
 
                 ImGui::EndTabItem();
             }

@@ -17,6 +17,7 @@
 #include "rendering/rt/RtSmoke.h"
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
 #include "rendering/meshes/LodSelect.h"          // render::g_shadowLodBias (--vsm-lodbias)
+#include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 
@@ -258,6 +259,19 @@ int WINAPI WinMain(
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
             render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
+        }
+        // S0: "--shadow-mode=legacy|vsm" picks the directional shadow method at boot. The build
+        // defaults to VSM, so without this every Legacy CSM measurement would need a Ctrl+V by
+        // hand — i.e. no headless --profdump/--shot A/B between the two methods at all, which is
+        // exactly what the CSM plan is judged on. "--csm-tint" additionally turns the cascade-tint
+        // debug view on from the command line, so the tint can be captured with --shot.
+        if (const char* flag = std::strstr(lpCmdLine, "--shadow-mode=")) {
+            const char* p = flag + std::strlen("--shadow-mode=");
+            render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
+                                                                       : render::ShadowMode::VSM;
+        }
+        if (std::strstr(lpCmdLine, "--csm-tint")) {
+            render::g_csmDebugMode = render::CsmDebugMode::CascadeTint;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

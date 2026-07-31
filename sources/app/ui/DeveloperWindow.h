@@ -26,7 +26,9 @@ public:
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
 
-    void Draw(Renderer& renderer, const Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
+    // Scene is non-const because the CSM tab edits CascadeShadowConfig live (S0.2); everything
+    // else here still reads through const accessors.
+    void Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
 #if WITH_EDITOR
         , EditorController& editorController
 #endif

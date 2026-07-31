@@ -132,4 +132,11 @@ inline bool g_giIndirectShadowsEnabled = true;
 enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
 inline ShadowMode g_shadowMode = ShadowMode::VSM;
 inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
+
+// S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
+// 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the
+// sample RESOLVED to (not the one the split picked): that difference is the point, because it is
+// what makes the tile-border fallback ring visible. Legacy-only; the VSM branch ignores it.
+enum class CsmDebugMode : std::uint32_t { Off = 0, CascadeTint = 1 };
+inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
 } // namespace render

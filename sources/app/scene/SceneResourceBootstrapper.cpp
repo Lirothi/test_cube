@@ -47,6 +47,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     causticsParams0 = material->ComputeCB0FieldHandle("causticsParams0");
     causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
     causticsParams2 = material->ComputeCB0FieldHandle("causticsParams2");
+    csmDebugMode = material->ComputeCB0FieldHandle("csmDebugMode");
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -508,6 +509,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
     matLighting_->UpdateCBField(handles.causticsParams2, data.causticsParams2, dest);
+    matLighting_->UpdateCBField(handles.csmDebugMode, data.csmDebugMode, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));

@@ -55,6 +55,8 @@ public:
     float GetCascadeNormalBias(size_t index) const;
     float GetCascadeDepthBias(size_t index) const;
     const float* GetCascadeSplitsVS() const { return frameData_.cascades.splitsVS; }
+    // S0.1: the whole cascade block, including the *Dbg diagnostics the developer window reads.
+    const SceneFrameData::CascadeData& GetCascadeData() const { return frameData_.cascades; }
     CascadeShadowConfig& CascadeConfig() { return cascadeConfig_; }
     const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
 

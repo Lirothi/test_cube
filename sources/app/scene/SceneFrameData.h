@@ -90,6 +90,17 @@ struct SceneFrameData
         float splitsVS[kCascades + 1] = {}; // near..far in view space
         float normalBiasWS[kCascades] = {};
         float depthBiasNDC[kCascades] = {};
+
+        // S0.1: per-cascade diagnostics for the developer window. Written by Scene::UpdateCascades
+        // straight from the values the cascade was actually built with (NOT recomputed by the UI —
+        // a recomputed estimate would hide exactly the fit bugs this readout exists to catch), and
+        // read only by DeveloperWindow. Nothing here reaches the GPU.
+        float sphereRadiusDbg[kCascades] = {};   // fitted bounding-sphere radius, BEFORE padding
+        float radiusDbg[kCascades] = {};         // radius after padding — drives unitsPerTexel
+        float unitsPerTexelDbg[kCascades] = {};  // world units per shadow texel (the density metric)
+        float nearLsDbg[kCascades] = {};         // light-space ortho near plane
+        float farLsDbg[kCascades] = {};          // light-space ortho far plane
+        std::uint32_t tileSizeDbg[kCascades] = {}; // atlas tile edge in texels
     };
 
     const Camera* camera = nullptr;

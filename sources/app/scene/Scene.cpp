@@ -275,6 +275,16 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascadeView.zFar = sliceFar;
         cascadeView.hfov = 0.0f;
         cascadeView.requiresDepthCheck = true;
+
+        // S0.1: publish the values this cascade was actually built with. Every tuning decision
+        // downstream (sphere fit, texel-space overlap, per-cascade resolution, pancaking) is
+        // judged on these numbers, so they are copied here rather than re-derived in the UI.
+        cascades.sphereRadiusDbg[idx] = sphereRadius;
+        cascades.radiusDbg[idx] = radius;
+        cascades.unitsPerTexelDbg[idx] = unitsPerTexel;
+        cascades.nearLsDbg[idx] = nearLS;
+        cascades.farLsDbg[idx] = farLS;
+        cascades.tileSizeDbg[idx] = tileRes;
     }
 }
 

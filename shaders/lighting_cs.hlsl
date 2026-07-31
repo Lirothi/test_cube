@@ -73,6 +73,9 @@ cbuffer PerFrame : register(b0)
     float4 causticsParams0;       // x: intensity, y: metres per tile, z: frames/sec, w: water level Y
     float4 causticsParams1;       // x: depth fade, y: surface fade, z: up-facing gate, w: bias
     float4 causticsParams2;       // x: dispersion, y: second-layer blend, z: time, w: world metres per pixel
+    // S0.3: Legacy CSM debug visualization. 0 = off, 1 = tint by the RESOLVED cascade.
+    // Always 0 in VSM mode (the CPU side forces it), so the branch below is dead there.
+    uint csmDebugMode;
 }
 
 static const float pcfRadius = 1.0f;
@@ -108,9 +111,13 @@ static const float kBlendFraction = 0.1;
 // cascade-local UV (BEFORE atlas scale+bias) so a neighbour tile is never sampled, and
 // insets by the PCF reach so 3x3 taps never bleed across the gutterless tile border.
 // Returns 1.0 (lit) only when the point is beyond cascade 3 — past the shadow range.
-float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws)
+// outCascade reports which cascade the chain RESOLVED to (4 = fell past cascade 3, no shadow
+// data). That is the cascade the pixel was actually shaded from, which is not always the one
+// ChooseCascadeIndex picked — the difference is exactly the tile-border fallback (S0.3 tints it).
+float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws, out int outCascade)
 {
     const float2 texel = 1.0 / shadowAtlasSize;
+    outCascade = 4;
 
     [unroll]
     for (int c = 0; c < 4; ++c)
@@ -149,16 +156,17 @@ float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws)
         // normalBiasWS[c] is proportional to cascade c's world texel size, so its ratio to
         // cascade 0 is the scale (the normalBiasInTexels factor cancels); c==0 -> 1.0.
         const float pcfR = pcfRadius * pow((normalBiasWS[0] / max(1e-6, normalBiasWS[c])), 0.25);
+        outCascade = c;
         return ShadowPCF3x3(uv, z - b, texel, pcfR);
     }
 
     return 1.0;
 }
 
-float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
+float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws, out int outCascade)
 {
     const int idx = ChooseCascadeIndex(Pws);
-    float shadow = SampleCascadeChain(idx, Pws, NdotL, Nws);
+    float shadow = SampleCascadeChain(idx, Pws, NdotL, Nws, outCascade);
 
     // Step 3: blend band. In a band just before cascade idx's far split, cross-fade into
     // cascade idx+1 so the hard cascade switch (and its bias / texel-density / PCF
@@ -172,7 +180,10 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
         const float t = saturate((zView - (splitNext - band)) / max(1e-4, band));
         if (t > 0.0)
         {
-            const float shadowNext = SampleCascadeChain(idx + 1, Pws, NdotL, Nws);
+            // The blend partner's resolved index is not reported: outCascade stays the primary
+            // cascade, so the debug tint shows zones rather than a striped blend band.
+            int blendCascade;
+            const float shadowNext = SampleCascadeChain(idx + 1, Pws, NdotL, Nws, blendCascade);
             shadow = lerp(shadow, shadowNext, t);
         }
     }
@@ -184,14 +195,17 @@ float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws)
 // the VSM-vs-CSM selection so the front and transmission samples share one code path. For the
 // foliage transmission lobe the caller passes the flipped normal (-N) so the receiver is offset
 // toward the sun-facing side (see CSMain).
-float SampleSunShadow(float3 P, float3 N, float ndl)
+// outCascade: the resolved CSM cascade (S0.3 debug tint). Left untouched in VSM mode — the
+// clipmap has no cascades, and the CPU side forces csmDebugMode to 0 there anyway.
+float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
 {
     if (useVsm != 0u)
     {
+        outCascade = 0;
         return VsmClipmapShadow(P, N, camPosWS, clipmapBaseExtent, clipmapNormalBias, vsmDepthBias,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
-    return SampleShadowCSM(P, ndl, N);
+    return SampleShadowCSM(P, ndl, N, outCascade);
 }
 
 // Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.
@@ -280,6 +294,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float3 color = ambient * lightRgb;
 
+    // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
+    // sample a shadow (facing away from the sun) still show their zone. A real sample below
+    // overwrites it with the cascade the fallback chain resolved to — that difference is what
+    // makes the tile-border ring visible. Costs nothing when the mode is off.
+    int csmCascade = (csmDebugMode != 0u) ? ChooseCascadeIndex(P) : 0;
+
     // Caustics scale the sun's irradiance, so they multiply the direct term rather than being
     // added on top: a surface the sun cannot reach gets none, and the bright filaments ride the
     // same shadow and cosine as the light they come from. Clamped so a negative bias can dim the
@@ -301,7 +321,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // and same shadow as DefaultLit.
         if (fr.NdotL > 0.0)
         {
-            float shadow = SampleSunShadow(P, N, fr.NdotL);
+            float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade);
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -314,7 +334,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // between the sun and the leaf still darkens the sun-facing side and kills transmission.
         if (any(fr.transBRDF > 0.0))
         {
-            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)));
+            // Separate index, discarded: the transmission lobe samples with a flipped normal and
+            // must not decide which cascade the debug tint reports for this pixel.
+            int transCascade;
+            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)), transCascade);
             color += fr.transBRDF * lightRgb * shadowT;
         }
     }
@@ -324,13 +347,27 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
-            float shadow = SampleSunShadow(P, N, br.NdotL);
+            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade);
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             float3 direct = (br.diffBRDF + specSun) * br.NdotL * lightRgb * shadow * causticsGain;
             color += direct;
         }
+    }
+
+    // S0.3: cascade tint. Applied to the whole lit result (not just the direct term) so the zones
+    // read in shadow and ambient too. Index 4 = the sample fell past cascade 3, i.e. no shadow
+    // data at all — grey, which is what makes the hard 300 m terminator visible.
+    if (csmDebugMode == 1u)
+    {
+        const float3 kCascadeTint[5] = {
+            float3(1.00, 0.35, 0.35),   // c0
+            float3(0.35, 1.00, 0.35),   // c1
+            float3(0.35, 0.55, 1.00),   // c2
+            float3(1.00, 1.00, 0.35),   // c3
+            float3(0.45, 0.45, 0.45) }; // beyond the last cascade
+        color *= kCascadeTint[clamp(csmCascade, 0, 4)];
     }
 
     LightTarget[dispatchThreadId.xy] = float4(color * exposure, 1.0);

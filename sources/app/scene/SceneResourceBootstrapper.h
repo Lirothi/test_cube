@@ -45,6 +45,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle causticsParams0;
     Material::CBFieldHandle causticsParams1;
     Material::CBFieldHandle causticsParams2;
+    Material::CBFieldHandle csmDebugMode;      // S0.3: Legacy CSM cascade-tint visualization
 
     void Populate(Material* material);
 };
@@ -175,6 +176,7 @@ struct LightingPassConstants
     float4 causticsParams0{};   // intensity, metres per tile, frames/sec, water level Y
     float4 causticsParams1{};   // depth fade, surface fade, up-facing gate, bias
     float4 causticsParams2{};   // dispersion, second-layer blend, time, world metres per pixel
+    uint32_t csmDebugMode = 0;  // S0.3: 0 = off, 1 = cascade tint (Legacy CSM only)
 };
 
 struct PointLightPassConstants
