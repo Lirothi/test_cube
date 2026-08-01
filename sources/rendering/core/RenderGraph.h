@@ -4,9 +4,13 @@
 #include <string_view>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
+#include <iterator>
+#include <memory>
 #include <utility>
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RendererInvariantFailure.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -23,6 +27,34 @@ struct ResourceStateDecl {
 };
 using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 10>;
 
+// --- Barrier plan, Part A step A.1s (see docs/enhanced_barriers_migration_plan.md) ---
+//
+// A pass may supply a Prepare callback that runs per frame, SERIALLY, before any
+// recording begins, and registers every resource state the pass will need via
+// ctx.Use(). The registrations are ORDERED and repeatable: the same resource appears
+// once per point at which the pass needs it in a different state, which is the normal
+// case (VirtualShadowMap::RecordPageRender moves nine resources through 2-3 states).
+// ctx.NextPoint() closes one barrier point and opens the next; the pass body marks the
+// same boundaries with ctx.Barrier(cl, n).
+//
+// DORMANT at A.1s: nothing consumes the registrations yet (A.2s compiles them and
+// compares against what ResourceStateTracker actually emits), and ctx.Barrier is a
+// no-op. A pass without a Prepare is untouched and keeps using Renderer::Transition,
+// so the two models coexist and A.4s can convert one file at a time.
+struct ResourceUse {
+    ID3D12Resource*       resource = nullptr;
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+    std::uint32_t         point = 0; // barrier point within the pass
+};
+
+// Registrations live in ONE arena per graph, not a list per pass: a per-pass inline
+// list costs sizeof(list) x MaxPasses on the stack (a RenderGraph is a stack local in
+// SceneRenderer::Render), which at 48 entries/pass added ~36 KB and tripped C6262.
+// One append-only arena also matches how the compile reads them — in order.
+// Capacity scales with the pass count; Use() hard-fails on overflow because
+// inl_vector only asserts, i.e. is UNCHECKED in Release.
+inline constexpr std::size_t kResourceUsesPerPassBudget = 8;
+
 struct RenderGraphPassContext {
     // Shared command-list state for a CL group (step 5). Lives on the group
     // task's stack; every member's context points at the same instance so they
@@ -38,6 +70,15 @@ struct RenderGraphPassContext {
     RenderPass  pass{};
     const ResourceStateDeclList* declares = nullptr;
     GroupCL* groupCL = nullptr; // non-null => this pass is a member of a CL group
+
+    // A.1s: the Prepare sink — the owning graph's arena, plus its capacity so Use()
+    // can bounds-check without knowing the graph's template parameter. Non-null ONLY
+    // while a Prepare callback runs; null during Record, which is what makes a stray
+    // Use() there inert instead of appending into another pass's range.
+    ResourceUse*  useArena = nullptr;
+    std::uint32_t* useCount = nullptr;   // live size of the arena
+    std::uint32_t  useCapacity = 0;
+    std::uint32_t* usePoint = nullptr;
 
     // Provision the pass's command list. Ungrouped: a fresh DIRECT list, closed
     // into the batch by EndCL. Grouped: the group's shared list (opened on first
@@ -76,6 +117,41 @@ struct RenderGraphPassContext {
             renderer->Transition(cl, decl.resource, decl.state);
         }
     }
+
+    // --- A.1s: Prepare-side registration (valid only inside a Prepare callback) ---
+
+    // Register that this pass needs `resource` in `state` at the current barrier
+    // point. Call in the order the pass actually needs them; repeats are expected.
+    void Use(ID3D12Resource* resource, D3D12_RESOURCE_STATES state) const
+    {
+        if (!useArena || !useCount || !resource) { return; }
+        if (*useCount >= useCapacity) {
+            // Raising the budget is the fix; silently dropping a Use means a missing
+            // barrier, which corrupts invisibly. Never downgrade this to an assert.
+            RendererInvariantFailure("RenderGraph::Use: resource-use arena exhausted (raise kResourceUsesPerPassBudget)");
+        }
+        useArena[*useCount] = ResourceUse{ resource, state, usePoint ? *usePoint : 0u };
+        ++(*useCount);
+    }
+
+    // Close the current barrier point and open the next. The pass body emits the
+    // matching boundary with Barrier(cl, n) using the same index.
+    void NextPoint() const
+    {
+        if (usePoint) { ++(*usePoint); }
+    }
+
+    // --- A.1s: Record-side emission (DORMANT) ---
+
+    // Will replay the precomputed barrier array compiled for (this pass, point).
+    // A.1s emits nothing: passes still transition through Renderer::Transition, so
+    // adding a call here today changes no behavior. A.2s builds the arrays and
+    // compares them against the tracker; A.6s makes them authoritative.
+    void Barrier(ID3D12GraphicsCommandList* cl, std::uint32_t point) const
+    {
+        (void)cl;
+        (void)point;
+    }
 };
 
 template <std::size_t MaxPasses>
@@ -84,6 +160,8 @@ public:
     using PassContext = RenderGraphPassContext;
 
     using ExecFn = std::function<void(PassContext)>;
+    // A.1s: runs serially before any recording; registers state usage via ctx.Use().
+    using PrepareFn = std::function<void(PassContext&)>;
 
     explicit RenderGraph(size_t submitBatchIndex = (size_t)-1)
         : submitBatchIndex_(submitBatchIndex) {
@@ -115,6 +193,28 @@ public:
         SuccessorList successors;
         ResourceStateDeclList declares; // resource states the pass needs on entry
         size_t groupId = kNoGroup;      // CL group this pass belongs to (kNoGroup = ungrouped)
+    };
+
+    // A.1s: everything the two-phase path needs, kept OFF the Pass array and off the
+    // stack. `SceneRenderer::Render` builds its RenderGraph as a local and already sits
+    // at ~16.2 KB against C6262's 16 KB threshold, so `Pass` has no room left: adding
+    // one std::function per pass (64 B x MaxPasses) plus an inline arena tripped the
+    // warning immediately. This block is heap-allocated lazily by SetPassPrepare, so a
+    // graph with no Prepare (every graph, at A.1s) costs exactly one pointer.
+    //
+    // NOTE for A.4s: the first real conversion makes this allocate once per graph
+    // construction, i.e. once per frame. Move the render graphs off the stack (own them
+    // on SceneRenderer) BEFORE converting passes, or that allocation lands on the hot path.
+    struct PrepareState {
+        struct Slice {
+            std::uint32_t begin = 0;  // into `arena`
+            std::uint32_t count = 0;
+            std::uint32_t points = 0; // barrier points this pass declared
+        };
+        std::array<PrepareFn, MaxPasses> fns{};
+        std::array<Slice, MaxPasses>     slices{};
+        ResourceUse   arena[MaxPasses * kResourceUsesPerPassBudget]{};
+        std::uint32_t arenaSize = 0;
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
@@ -171,6 +271,21 @@ public:
         return AddPassInternal(name, prereqs, mtDeps, {}, std::move(fn));
     }
 
+    // A.1s: attach a Prepare callback to a pass added above. A separate setter rather
+    // than more AddPass overloads — there are already six, and every combination of
+    // (prereqs form, mtDeps, declares) would need one.
+    //
+    //   const size_t p = rg.AddPass(RenderPass::X, { prev }, [..](PassContext ctx) { ... });
+    //   rg.SetPassPrepare(p, [..](PassContext& ctx) { ctx.Use(res, state); ... });
+    //
+    void SetPassPrepare(size_t passIndex, PrepareFn fn)
+    {
+        assert(passIndex < passesNum_ && "SetPassPrepare on an unknown pass");
+        if (passIndex >= passesNum_) { return; }
+        if (!prepare_) { prepare_ = std::make_unique<PrepareState>(); }
+        prepare_->fns[passIndex] = std::move(fn);
+    }
+
     // Command-list group brackets (step 5). Passes added between Begin/End share
     // ONE command list and run as ONE schedulable node (one batch, one task,
     // members executed in declaration order). Members must form a contiguous
@@ -214,6 +329,15 @@ public:
     {
         CPU_SCOPE(ProfilerScopes::kRenderGraphExecute);
         if (renderer == nullptr) { return; }
+        // A.1s: this path runs pass bodies INLINE during the traversal, so there is no
+        // moment at which every Prepare has run but nothing has recorded yet. Wiring it
+        // needs a two-phase Unroll and belongs to A.2s, where registrations first matter.
+        // Fail fast rather than skipping Prepare silently: a pass converted in A.4s that
+        // reached this path would register nothing, get no barriers, and corrupt quietly.
+        // Cannot fire at A.1s — no pass supplies a Prepare, so prepare_ is null.
+        if (prepare_) {
+            RendererInvariantFailure("RenderGraph::Execute (sequential) reached a graph with a Prepare - see plan A.2s");
+        }
         Unroll(renderer, /*executeInplace=*/true, nullptr);
     }
 
@@ -230,6 +354,11 @@ public:
         tc::inl_vector<FlatNode, MaxPasses> schedule;
         Unroll(renderer, /*executeInplace=*/false, &schedule);
         if (schedule.empty()) { return; }
+
+        // A.1s: every Prepare runs here — after the schedule (and therefore the batch
+        // indices) exist, and before a single task is created, i.e. before any
+        // recording. Serial by construction. Dormant until A.2s consumes the result.
+        RunPrepares(renderer, schedule);
 
         const size_t N = passesNum_;
 
@@ -293,6 +422,44 @@ public:
         }
     }
 
+    // Reuse this graph for another frame instead of constructing a new one.
+    //
+    // WHY: a graph is MaxPasses x Pass, and Pass carries a std::function plus several
+    // inline vectors — the main graph is ~16 KB. Built as a local it puts that on the
+    // caller's stack every frame (C6262 fired on SceneRenderer::Render at ~16.2 KB, with
+    // a 16 KB threshold), and rebuilding it also re-constructs every std::function. An
+    // owner keeps one on the heap and calls Reset() per frame instead.
+    //
+    // Clears everything AddPass / BeginCLGroup build up, INCLUDING the pass bodies: they
+    // capture that frame's data, and a reused graph would otherwise hold stale captures
+    // between frames. Call at the START of building a frame's graph.
+    void Reset(size_t submitBatchIndex = (size_t)-1)
+    {
+        for (size_t i = 0; i < passesNum_; ++i) {
+            Pass& p = passes_[i];
+            p.name = RenderPass{};
+            p.prereqs.clear_fast();
+            p.exec = nullptr;      // release the frame captures
+            p.mtDeps.clear_fast();
+            p.successors.clear_fast();
+            p.declares.clear_fast();
+            p.groupId = kNoGroup;
+        }
+        // Pending edges and groups are indexed independently of passesNum_, so clear all.
+        for (auto& pending : pendingSuccessors_) { pending.clear_fast(); }
+        for (auto& group : groups_) { group.clear_fast(); }
+        passesNum_ = 0;
+        groupCount_ = 0;
+        currentGroup_ = kNoGroup;
+        submitBatchIndex_ = submitBatchIndex;
+        if (prepare_) {
+            // Keep the allocation (that is the point of reuse), drop last frame's content.
+            for (auto& fn : prepare_->fns) { fn = nullptr; }
+            for (auto& slice : prepare_->slices) { slice = {}; }
+            prepare_->arenaSize = 0;
+        }
+    }
+
 private:
     // The owner of a pass's node: itself if ungrouped, else its group's first
     // member. Tasks, batches, and dependency edges are keyed by owner.
@@ -300,6 +467,47 @@ private:
     {
         const size_t gid = passes_[passIdx].groupId;
         return (gid == kNoGroup) ? passIdx : groups_[gid][0];
+    }
+
+    // A.1s: run one pass's Prepare into its own registration list. Cleared first, so
+    // a pass whose Prepare early-outs this frame cannot inherit last frame's uses.
+    void RunPrepareOne(Renderer* renderer, size_t passIdx, size_t batch)
+    {
+        PrepareState& ps = *prepare_;
+        auto& slice = ps.slices[passIdx]; // `typename PrepareState::Slice&` here trips MSVC's
+        slice = { ps.arenaSize, 0u, 0u };  // dependent-name parse; auto sidesteps it
+        const PrepareFn& fn = ps.fns[passIdx];
+        if (!fn || !passes_[passIdx].exec) { return; }
+        PassContext ctx;
+        ctx.renderer = renderer;
+        ctx.batchIndex = batch;
+        ctx.pass = passes_[passIdx].name;
+        ctx.declares = &passes_[passIdx].declares;
+        ctx.groupCL = nullptr;   // Prepare records nothing; there is no command list yet
+        ctx.useArena = ps.arena;
+        ctx.useCount = &ps.arenaSize;
+        ctx.useCapacity = static_cast<std::uint32_t>(std::size(ps.arena));
+        ctx.usePoint = &slice.points;
+        fn(ctx);
+        slice.count = ps.arenaSize - slice.begin;
+        ++slice.points; // points = count; NextPoint() only closed the earlier ones
+    }
+
+    // A.1s: all Prepares, serially, in schedule order — group members in declaration
+    // order, mirroring RunNode so registration order matches recording order. No graph
+    // has a Prepare at A.1s, so this returns immediately and costs one null check.
+    void RunPrepares(Renderer* renderer, const tc::inl_vector<FlatNode, MaxPasses>& schedule)
+    {
+        if (!prepare_) { return; }
+        prepare_->arenaSize = 0; // one arena per frame; slices handed out in schedule order
+        for (const FlatNode& n : schedule) {
+            const size_t gid = passes_[n.pass].groupId;
+            if (gid == kNoGroup) {
+                RunPrepareOne(renderer, n.pass, n.batch);
+                continue;
+            }
+            for (size_t m : groups_[gid]) { RunPrepareOne(renderer, m, n.batch); }
+        }
     }
 
     // Run a node into one batch: a singleton pass, or every member of a group in
@@ -505,4 +713,8 @@ private:
     std::array<GroupMemberList, MaxPasses> groups_{};
     size_t groupCount_ = 0;
     size_t currentGroup_ = kNoGroup; // active group during construction
+
+    // A.1s: null unless some pass supplied a Prepare (see PrepareState for why it is
+    // heap-side). One pointer of stack cost when unused, which is every graph today.
+    std::unique_ptr<PrepareState> prepare_;
 };

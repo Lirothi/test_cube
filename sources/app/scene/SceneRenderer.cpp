@@ -424,8 +424,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     constexpr D3D12_RESOURCE_STATES kSrvAll =
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
+    // The main graph is ~16 KB (MaxPasses x Pass, each with a std::function). Built as a
+    // local it put that on Render's stack every frame and left no headroom — C6262 fired
+    // the moment anything was added to Pass. Owned on the heap and Reset() per frame
+    // instead: same semantics (a freshly empty graph), no per-frame stack cost, and no
+    // per-frame allocation either.
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
-    MainRenderGraph rg;
+    if (!mainRenderGraph_) { mainRenderGraph_ = std::make_unique<MainRenderGraph>(); }
+    mainRenderGraph_->Reset();
+    MainRenderGraph& rg = *mainRenderGraph_;
 
     // RT acceleration-structure build (S5): the first pass when RT is enabled.
     // No consumer yet, so it's an independent node (no prereqs/dependents); a

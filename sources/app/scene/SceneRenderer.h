@@ -129,6 +129,12 @@ private:
 
     SceneResourceBootstrapper resources_{};
 
+    // The frame's main render graph, owned rather than built as a local in Render():
+    // it is ~16 KB (MaxPasses x Pass, each holding a std::function), which on the stack
+    // left Render at C6262's 16 KB threshold with no headroom. Reset() per frame gives
+    // the same freshly-empty graph without the stack cost or a per-frame allocation.
+    std::unique_ptr<RenderGraph<kMainRenderGraphPassCount>> mainRenderGraph_;
+
     // RT acceleration structures (S5). Built by Pass_BuildAS when RT is supported
     // and enabled; no consumer yet. asManager_ owns the per-mesh BLAS cache and
     // the per-frame TLAS. asScratchRetireFrame_ defers releasing one-time BLAS
