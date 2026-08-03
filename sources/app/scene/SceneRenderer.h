@@ -127,6 +127,10 @@ private:
     void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
+    // Barrier plan step 4: create/grow everything the pass bodies used to create lazily,
+    // once per frame before the graph is built. See the definition for why.
+    void EnsureFrameResources(Renderer* renderer);
+
     SceneResourceBootstrapper resources_{};
 
     // The frame's main render graph, owned rather than built as a local in Render():

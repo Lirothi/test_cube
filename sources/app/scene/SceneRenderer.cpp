@@ -352,6 +352,37 @@ void SceneRenderer::InvalidateRaytracing()
     rtInstances_.clear();
 }
 
+// Barrier plan step 4: everything the pass bodies used to create lazily, created here instead —
+// once per frame, before the render graph is built and therefore before anything records.
+//
+// Two reasons. A pass's Prepare callback can only register a resource that already exists, which
+// is what the rest of the plan is built on. And a lazy grow inside a recording body FREES the
+// previous allocation while earlier in-flight frames may still be reading it — that is exactly
+// how the spot/point light buffers produced the DXGI_DEVICE_HUNG the --scene-stress harness was
+// written to catch. Growing here, before any command list is open, removes the class of bug
+// rather than working around it per resource.
+//
+// Everything called here is idempotent and cheap when nothing changed.
+void SceneRenderer::EnsureFrameResources(Renderer* renderer)
+{
+    if (!renderer || !frame_) { return; }
+
+    if (frame_->vsm)
+    {
+        frame_->vsm->EnsureFrameResources(renderer, frame_->shadowGpu);
+    }
+
+    if (frame_->lightManager)
+    {
+        // Same counts the passes derive; LightManager's light set does not change during Render.
+        LightManager& lm = *frame_->lightManager;
+        const size_t spots = lm.GetSpotLightCount();
+        if (spots > 0) { lm.EnsureSpotLightBuffer(renderer, spots); }
+        const size_t points = lm.PointLights().size();
+        if (points > 0) { lm.EnsurePointLightBuffer(renderer, points); }
+    }
+}
+
 void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 {
     if (!renderer)
@@ -360,6 +391,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
 
     frame_ = &frame;
+    EnsureFrameResources(renderer);
 
     // Reflection source (S8) + RT debug viz (S6), gated on hardware support. RT
     // reflections fall back to SSR on non-RT hardware (rtReflect stays false, so
@@ -762,6 +794,31 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
           { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } }, // S16: roughness drives glossy blur
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassReflectionBlur); Pass_ReflectionBlur(renderer, ctx); });
+
+    // Barrier plan step 3: the first pass converted to a Prepare, as the comparator's test
+    // subject. Chosen because it exercises the hard cases in one pass — `reflection` and
+    // `reflectionScratch` each take TWO states inside the body (census category C), and the
+    // second pair is behind a predicate the body evaluates (category B).
+    //
+    // The body is UNCHANGED at this step: it still calls ApplyDeclaredStates + Transition, and
+    // the comparator only watches. `ctx.Barrier` starts replacing them at step 5.
+    // Note the predicate is evaluated here AND in the body — that duplication is exactly what
+    // D1.1 forbids once this goes authoritative; step 5 hoists it into pass state.
+    {
+        ID3D12Resource* const blurRefl = D.reflection.Get();
+        ID3D12Resource* const blurScratch = D.reflectionScratch.Get();
+        ID3D12Resource* const blurGb0 = D.gb0.Get();
+        rg.SetPassPrepare(pBlur, [this, blurRefl, blurScratch, blurGb0](RenderGraphPassContext& p) {
+            p.Use(blurRefl, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(blurScratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.Use(blurGb0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            if (resources_.GetBlurMaterial() && resources_.GetBlurCBSizeBytes() != 0) {
+                p.NextPoint(); // the vertical dispatch ping-pongs the two targets
+                p.Use(blurScratch, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                p.Use(blurRefl, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+        });
+    }
 
     // First-use states only; Compose transitions scene back to RENDER_TARGET
     // for the transparent pass at the end of its body.
@@ -1986,7 +2043,9 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         return;
     }
 
-    if (!lightManager.EnsureSpotLightBuffer(renderer, spotLightCount))
+    // Buffer creation/growth moved to EnsureFrameResources (barrier plan step 4) — growing it
+    // here freed the previous allocation while earlier frames were still reading it.
+    if (!lightManager.HasSpotLightBuffer(spotLightCount))
     {
         return;
     }
@@ -2092,7 +2151,8 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     auto& pointLights = lightManager.PointLights();
     if (pointLights.empty()) { return; }
 
-    if (!lightManager.EnsurePointLightBuffer(renderer, pointLights.size()))
+    // Growth moved to EnsureFrameResources (barrier plan step 4); see Pass_SpotLights.
+    if (!lightManager.HasPointLightBuffer(pointLights.size()))
     {
         return;
     }

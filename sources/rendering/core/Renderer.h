@@ -245,6 +245,30 @@ public:
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
     void ClearResourceState(ID3D12Resource* res);
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
+
+    // --- Barrier plan, step 3: transition observation (diagnostic) ---
+    //
+    // While a log is installed on this thread, Transition() also appends what it was
+    // asked to do. The render graph installs one around a converted pass's body so it
+    // can diff what the pass DID against what its Prepare REGISTERED — the check that
+    // makes the conversion in step 5 safe (a pass may declare X and transition to Y,
+    // and nothing else would notice).
+    //
+    // Thread-local because pass bodies record on worker threads. A pass that fans work
+    // out to OTHER threads is not observed there — those transitions are invisible to
+    // this, which is why the comparator reports fan-out passes as unverified rather
+    // than as clean.
+    struct ObservedTransition {
+        ID3D12Resource*       resource = nullptr;
+        D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+    };
+    struct TransitionLog {
+        ObservedTransition* entries = nullptr;
+        std::uint32_t*      count = nullptr;
+        std::uint32_t       capacity = 0;
+        bool                overflowed = false;
+    };
+    static void SetThreadTransitionLog(TransitionLog* log);
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
     // Rung 0 GPU-driven shadows (Step 3): a shared, lazily-created command signature for a

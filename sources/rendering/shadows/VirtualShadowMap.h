@@ -202,6 +202,16 @@ class VirtualShadowMap
 public:
     // Allocate the pool + page table once (idempotent; persistent across level switches).
     void EnsureResources(Renderer* renderer);
+
+    // Barrier plan step 4: create everything the Record* functions below used to create
+    // lazily, at a point where the GPU is not mid-frame and nothing is recording. Call
+    // once per frame BEFORE the render graph runs.
+    //
+    // Two reasons, in order of importance: a pass's Prepare callback can only register a
+    // resource that already exists, and a lazy grow inside a recording body is what freed
+    // the spot/point light buffers mid-render and produced the DXGI_DEVICE_HUNG that the
+    // --scene-stress harness was built to catch. Idempotent and cheap when nothing changed.
+    void EnsureFrameResources(Renderer* renderer, ShadowGpuData* shadowGpu);
     // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
     void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }

@@ -896,8 +896,26 @@ void Renderer::ClearResourceState(ID3D12Resource* res) {
     stateTracker_.ClearResourceState(res);
 }
 
+// Barrier plan step 3: null unless a converted pass's body is running on this thread.
+static thread_local Renderer::TransitionLog* tlTransitionLog = nullptr;
+
+void Renderer::SetThreadTransitionLog(TransitionLog* log) {
+    tlTransitionLog = log;
+}
+
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
     //CPU_SCOPE(ProfilerScopes::kRendererTransition);
+    if (tlTransitionLog != nullptr && res != nullptr) {
+        TransitionLog& log = *tlTransitionLog;
+        if (*log.count < log.capacity) {
+            log.entries[*log.count] = ObservedTransition{ res, after };
+            ++(*log.count);
+        }
+        else {
+            // Truncating would make the comparator report a false "missing" entry.
+            log.overflowed = true;
+        }
+    }
     stateTracker_.Transition(cl, res, after);
 }
 

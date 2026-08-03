@@ -27,10 +27,12 @@ The other order means touching every site twice.
 
 | Step | State |
 |---|---|
-| 1 — two-phase pass plumbing | **DONE** (uncommitted) |
-| 2 — render graphs off the stack | **DONE** (uncommitted) |
-| 3 — the comparator | next |
-| 4..16 | not started |
+| 1 — two-phase pass plumbing | **DONE** (committed `385eb9e`) |
+| 2 — render graphs off the stack | **DONE** (committed `385eb9e`) |
+| 3 — the comparator | **DONE** (uncommitted) |
+| 4 — lazy creation out of record bodies | **DONE** (uncommitted) |
+| 5 — convert passes, file by file | next |
+| 6..16 | not started |
 
 ---
 
@@ -377,7 +379,52 @@ The small sub-graphs (epilogue, gbuffer, transparent) stay local — they are a 
 **Result:** both configs `0/0` (C6262 gone); Debug `--scene-stress-gbv=30` CLEAN, ids
 939/940/1006/1358 only; `--shot` capture matches the previous build.
 
-### Step 3 — the comparator, dormant
+### Step 3 — the comparator, dormant — **DONE (uncommitted)**
+
+**What was built** (not what the step originally described — see "scope correction" below):
+- `Renderer::TransitionLog` + `SetThreadTransitionLog` (`Renderer.h`/`.cpp`): while installed on
+  a thread, `Renderer::Transition` also appends `(resource, state)`. Thread-local, because pass
+  bodies record on workers.
+- `RenderGraph::RunPassBody` installs one around a converted pass's body; `ReportComparator`
+  runs after every task has finished and diffs **registered (Prepare) vs performed (Record)**
+  per pass, logging `[barrier-cmp]` lines to DBWIN.
+- `render::g_barrierComparator`, default OFF, plus `--barrier-cmp`.
+- **`Main_ReflectionBlur` converted** as the test subject — deliberately, because it exercises
+  both hard census cases at once: `reflection` and `reflectionScratch` each take two states
+  inside the body (category C) and the second pair sits behind a predicate (category B).
+  Its body is unchanged; the comparator only watches.
+
+**Compared as multisets, not sequences.** A pass may order its transitions differently from its
+registrations as long as the same work happens; sequence equality only becomes required when the
+compiled arrays go authoritative (Step 7), and that check belongs with the compile.
+
+**Verified both ways** — a comparator that has never fired proves nothing:
+- correct registration → **silent** across `--scene-stress=6`, stress verdict CLEAN;
+- registration deliberately broken (one state changed to `COPY_SOURCE`, one `Use` deleted) →
+  **39 lines**, correctly naming `REGISTERED but not performed state=0x800` and `PERFORMED but
+  not registered state=0x40` for the right resources. Then reverted and re-verified silent.
+- Debug `--scene-stress-gbv=20 --barrier-cmp` CLEAN, ids 939/940/1006/1358 only.
+
+**Trap found while testing:** `--scene-stress` **returns from `wWinMain` before the rest of the
+command line is parsed** (`main.cpp:188-206`). Any diagnostic flag meant to work during the churn
+must be parsed *above* that branch — `--barrier-cmp` now is. The first negative-control run
+looked like a working comparator staying silent; it was simply never enabled.
+
+**Scope correction, deliberate.** The step originally said "build the per-slot barrier arrays in
+gather order and compare them against what the tracker emits". That is not runnable yet: with no
+pass converted, the compile would predict nothing and every real barrier would read as a
+mismatch. Worse, a *global* prediction has to know the incoming state at each slot, which today
+only the tracker knows — seeding the prediction from the tracker would make it compare the
+tracker against itself.
+
+So the check that actually unblocks Step 5 is the **local** one, and that is what exists:
+does each pass DO what it REGISTERED. Ordering/slot-model validation (R3) is a global property
+that can only be checked once every pass is converted; it moves to Step 7's acceptance, where the
+compiled arrays first become authoritative. **Fan-out passes are still a gap**: work dispatched to
+other threads is not observed, so those passes must be treated as unverified rather than clean —
+`SceneRenderer.cpp:937/948/964/1000` is the shape to watch.
+
+### Step 3 (original text, for reference)
 
 Build the per-slot barrier arrays in **gather order** (R3) after `Unroll` and all `Prepare`
 calls, and — behind a flag — *compare* them against what `ResourceStateTracker` actually emits.
@@ -396,7 +443,36 @@ directs, or where several passes share a batch.
 **Acceptance:** both `0/0`; GBV CLEAN; with the flag on, the mismatch log is empty on a
 bundle-using scene across a full `--scene-stress` churn.
 
-### Step 4 — move lazy creation out of record bodies
+### Step 4 — move lazy creation out of record bodies — **DONE (uncommitted)**
+
+One creation point per frame, before the graph is built and therefore before anything records:
+- `SceneRenderer::EnsureFrameResources(renderer)`, called from the top of `Render` right after
+  `frame_` is set.
+- `VirtualShadowMap::EnsureFrameResources(renderer, shadowGpu)` — wraps the former inline
+  `EnsureShaderResources` + `EnsureRenderResources`; the three record bodies now only check
+  whether the resources exist.
+- Light buffers: growth moved to the same point. `LightManager` gained read-only
+  `HasSpotLightBuffer` / `HasPointLightBuffer`, and `Pass_SpotLights` / `Pass_PointLights` use
+  those instead of calling `Ensure*`. The counts are derived identically
+  (`GetSpotLightCount()` / `PointLights().size()`), and the light set does not change during
+  `Render`, so the hoist is exact rather than approximate.
+
+**Result:** both configs `0/0`; Debug `--scene-stress-gbv=30 --barrier-cmp` CLEAN with ids
+939/940/1358 only; comparator silent; `--shot` matches — spot cones, point lights and shadows
+all present.
+
+**Correction to this step's site list:** `DlssHandler.cpp:443` is **not** a live site. It sits
+inside `if (kTagManualExposure)` where `constexpr bool kTagManualExposure = false`, i.e. dead
+code left from the DLSS auto-exposure experiment. Left alone; removing dead code is not this
+plan's business.
+
+Why this matters beyond Prepare's requirement: growing a buffer inside a recording body frees
+the previous allocation while earlier in-flight frames may still reference it. That is exactly
+how the spot/point light buffers produced the `DXGI_DEVICE_HUNG` the `--scene-stress` harness
+was written to catch, which had to be worked around by pre-growing under GPU idle. This removes
+the shape of the bug instead of patching it per resource.
+
+### Step 4 (original text, for reference)
 
 `Prepare` can only register a resource that exists, but several passes create lazily inside the
 record body: `VirtualShadowMap.cpp:401/440/783/786` (`EnsureShaderResources` /

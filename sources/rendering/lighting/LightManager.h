@@ -109,6 +109,17 @@ public:
     bool EnsurePointLightBuffer(Renderer* renderer, size_t requiredLights);
     bool EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLights);
 
+    // Barrier plan step 4: read-only "is the buffer already big enough" for the recording
+    // passes. They used to call Ensure* themselves, which could FREE the previous allocation
+    // while an in-flight frame still referenced it — the DXGI_DEVICE_HUNG the --scene-stress
+    // harness was built for. Growth now happens once per frame, before any recording.
+    bool HasPointLightBuffer(size_t requiredLights) const {
+        return pointLightBuffer_ != nullptr && pointLightCapacity_ >= requiredLights;
+    }
+    bool HasSpotLightBuffer(size_t requiredLights) const {
+        return spotLightBuffer_ != nullptr && spotLightCapacity_ >= requiredLights;
+    }
+
     // The light buffers are ring-buffered per in-flight frame (kFrameCount regions
     // in one resource): the CPU rewrites the buffer every frame while up to
     // kFrameCount frames are still being read by the GPU, so each frame must

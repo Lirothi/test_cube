@@ -393,12 +393,22 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     }
 }
 
+void VirtualShadowMap::EnsureFrameResources(Renderer* renderer, ShadowGpuData* shadowGpu)
+{
+    if (!renderer || !IsAllocated()) { return; }
+    EnsureShaderResources(renderer);
+    // Same guard the render path used to apply inline: without mesh groups / this frame's
+    // Rung 0 args there is nothing to size the per-page buffers against, and the pass
+    // early-outs anyway.
+    if (shadowGpu) { EnsureRenderResources(renderer, shadowGpu); }
+}
+
 void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const vsm::PageRequestConstants& constants, D3D12_CPU_DESCRIPTOR_HANDLE depthSrv,
     UINT screenW, UINT screenH)
 {
     if (!renderer || !cl || !IsAllocated() || depthSrv.ptr == 0 || screenW == 0 || screenH == 0) { return; }
-    EnsureShaderResources(renderer);
+    // Creation happens in EnsureFrameResources, before the graph runs (barrier plan step 4).
     if (!pageRequestClearMat_ || !pageRequestMat_) { return; }
 
     // The request bitfield is UAV-written by both dispatches (this pass owns its state).
@@ -437,7 +447,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
 void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
     if (!renderer || !cl || !IsAllocated() || !allocCounters_ || !allocUavHeap_) { return; }
-    EnsureShaderResources(renderer);
+    // Creation happens in EnsureFrameResources, before the graph runs (barrier plan step 4).
     if (!allocInitMat_ || !allocTouchMat_ || !allocFreeMat_ || !allocMapMat_) { return; }
 
     const std::uint32_t numEntries = vsm::kPageTableEntries;
@@ -780,10 +790,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const vfx::WindState* wind)
 {
     if (!renderer || !cl || !IsAllocated() || !shadowGpu || !views) { return; }
-    EnsureShaderResources(renderer);
+    // Creation happens in EnsureFrameResources, before the graph runs (barrier plan step 4).
     if (!pageSetupMat_) { return; }
     if (!shadowGpu->IndirectDrawReady()) { return; } // needs this frame's Rung 0 cull output
-    EnsureRenderResources(renderer, shadowGpu);
     if (!pageDrawArgs_ || !pageProj_ || !renderHeap_ || !pageVisibleList_) { return; }
 
     Material* indirectMat = shadowGpu->IndirectShadowMaterial();

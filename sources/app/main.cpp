@@ -185,6 +185,14 @@ int WINAPI WinMain(
     // reflection scale, editor spawn/delete) to reproduce the intermittent
     // launch/render crash. Verdict in scene_stress.log; exit 0 = clean through
     // all iterations, nonzero = a fault was caught (the log names the op).
+    // Barrier plan step 3: "--barrier-cmp" turns on the registered-vs-performed comparator
+    // (DBWIN "[barrier-cmp]" lines). Default off — it observes every converted pass body.
+    // Parsed BEFORE the scene-stress branch below, which returns without reading the rest of
+    // the command line: the churn is exactly where this wants to run.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cmp")) {
+        render::g_barrierComparator = true;
+    }
+
     if (lpCmdLine) {
         if (const char* flag = std::strstr(lpCmdLine, "scene-stress")) {
             int iterations = 0; // 0 => driver default
