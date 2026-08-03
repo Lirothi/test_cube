@@ -367,6 +367,14 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
 {
     if (!renderer || !frame_) { return; }
 
+    if (frame_->shadowGpu)
+    {
+        // Was lazy inside RecordCull. Prepare needs the GI-scatter PSO to already exist,
+        // because IsGiIndirectActive() gates on it and decides whether the GI instance
+        // buffers get registered at all.
+        frame_->shadowGpu->EnsureShaderResources(renderer);
+    }
+
     if (frame_->vsm)
     {
         frame_->vsm->EnsureFrameResources(renderer, frame_->shadowGpu);
@@ -479,6 +487,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 CPU_SCOPE(ProfilerScopes::kPassBuildAS);
                 Pass_BuildAS(renderer, ctx);
             });
+        // Measured: performs no transitions (the AS build bypasses the tracker entirely).
+        rg.SetPassPrepare(pBuildAS, [](RenderGraphPassContext&) {});
     }
 
     // CL group (step 5): the prologue clear and the object-compute dispatches are
@@ -493,6 +503,18 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_ObjectCompute(renderer, ctx);
         });
     rg.EndCLGroup();
+    // Measured: the prologue clear performs no transitions.
+    rg.SetPassPrepare(pClear, [](RenderGraphPassContext&) {});
+    // Walks exactly the list the body walks, calling the PrepareCompute mirror of
+    // ExecuteCompute — so an object added later cannot silently skip registration.
+    rg.SetPassPrepare(pCompute, [this](RenderGraphPassContext& p) {
+        if (!frame_->objects) { return; }
+        for (const auto& obj : *frame_->objects)
+        {
+            if (!obj) { continue; }
+            obj->PrepareCompute(p);
+        }
+    });
 
     auto pShoreDepth = rg.AddPass(RenderPass::Main_TerrainDepth, { pCompute },
         [this, renderer](RenderGraphPassContext ctx) {
@@ -501,6 +523,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             const SceneView* shoreView = oceanSim ? &oceanSim->GetShoreDepthView() : nullptr;
             Pass_ShoreDepth(renderer, ctx, shoreView);
         });
+    rg.SetPassPrepare(pShoreDepth, [](RenderGraphPassContext& p) {
+        OceanSimulation* oceanSim = Systems::GetOceanSimulation();
+        ID3D12Resource* shoreDepth = oceanSim ? oceanSim->GetShoreDepthResource() : nullptr;
+        if (!shoreDepth) { return; }
+        p.Use(shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        p.NextPoint();
+        p.Use(shoreDepth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    });
 
     // Rung 0 / Step 4: GPU cull -> indirect shadow args, before the shadow passes (its output
     // is not consumed yet). Manages its own UAV states (declares none). Placed in the chain so
@@ -510,6 +541,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassShadowCull);
             Pass_ShadowCull(renderer, ctx);
         });
+    rg.SetPassPrepare(pShadowCull, [this](RenderGraphPassContext& p) {
+        if (frame_->shadowGpu) { frame_->shadowGpu->PrepareCullPass(p); }
+    });
 
     // Step 24f-2: in VSM mode directional shadows come from the clipmap and the CSM cascade atlas is a
     // 1x1 placeholder — OMIT the Main_CSM pass entirely. (Adding it but skipping its per-cascade
@@ -530,6 +564,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 CPU_SCOPE(ProfilerScopes::kPassCSM);
                 Pass_CSM(renderer, ctx, *frame_->cascadeViews);
             });
+        rg.SetPassPrepare(pShadow, [this](RenderGraphPassContext& p) {
+            p.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
+            p.NextPoint();
+            PrepareOpaqueDrawStates(p);
+        });
     }
 
     // No declarations: the per-light command lists are recorded in parallel with
@@ -540,6 +579,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
             Pass_SpotShadows(renderer, ctx, *frame_->spotShadowViews);
         });
+    // Every per-light list re-registers the atlas itself, so one registration of the state
+    // covers all of them (the comparator matches by state, not by count).
+    rg.SetPassPrepare(pSpotShadow, [this](RenderGraphPassContext& p) {
+        p.Use(p.renderer->GetDeferredForFrame().spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        p.NextPoint();
+        PrepareOpaqueDrawStates(p);
+    });
 
     // B2b: point cube shadows. Same per-CL atlas-state registration story as spot
     // shadows (parallel per-face lists, no declared states). Runs before Pass_PointLights
@@ -549,12 +595,36 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassPointShadow);
             Pass_PointShadows(renderer, ctx, *frame_->pointShadowViews);
         });
+    rg.SetPassPrepare(pPointShadow, [this](RenderGraphPassContext& p) {
+        p.Use(p.renderer->GetDeferredForFrame().pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        p.NextPoint();
+        PrepareOpaqueDrawStates(p);
+    });
 
     auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pPointShadow },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassGBuffer);
             Pass_GBuffer(renderer, ctx, *frame_->camera, *frame_->mainView);
         });
+    // Pass_GBuffer's states live on its INNER graph's driver pass, which applies them itself;
+    // the outer pass owns none. Mirror that declaration here so the outer list is complete.
+    rg.SetPassPrepare(pGbuf, [this](RenderGraphPassContext& p) {
+        const auto& DG = p.renderer->GetDeferredForFrame();
+        p.Use(DG.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DG.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DG.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DG.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
+        p.Use(DG.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
+        p.Use(DG.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DG.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+        // Objects transition their own buffers inside Render, on the fan-out worker (GPU-
+        // instanced clouds flip the instance buffer back to SRV).
+        p.NextPoint();
+        PrepareOpaqueDrawStates(p);
+    });
 
     // Rung 2 / Step 19: VSM page-request pass — reads the camera depth (after GBuffer), marks the
     // virtual pages the frame needs. Independent consumer of depth (its output is unused for now),
@@ -565,6 +635,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassVsmPageRequest);
             Pass_VsmPageRequest(renderer, ctx);
         });
+    rg.SetPassPrepare(pVsmPageRequest, [this](RenderGraphPassContext& p) {
+        p.UseDeclared();
+        // VSM owns the buffers its Record* functions transition, so it registers them itself.
+        if (frame_->vsm) { frame_->vsm->PrepareRequestPass(p); }
+    });
     (void)pVsmPageRequest;
 
     // Rung 2 / Step 22: render shadow casters into the resident physical pages (depth-only into the
@@ -620,6 +695,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 CPU_SCOPE(ProfilerScopes::kPassVsmPageRender);
                 Pass_VsmPageRender(renderer, ctx);
             });
+        rg.SetPassPrepare(pVsmPageRender, [this](RenderGraphPassContext& p) {
+            frame_->vsm->PrepareRenderPass(p, frame_->shadowGpu);
+        });
     }
     (void)pVsmPageRender;
 
@@ -727,6 +805,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             pointFn);
     }
 
+    // The three lighting passes each have several AddPass variants (VSM vs Legacy, with/without
+    // spot or point shadows) but every variant declares its own first-use set, so one Prepare
+    // each covers all of them. All three always create a real pass — none falls back to a
+    // previous index, which would otherwise attach a second Prepare to somebody else's pass.
+    rg.SetPassPrepare(pLight, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+    rg.SetPassPrepare(pSpotLights, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+    rg.SetPassPrepare(pPointLights, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+
     auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -735,6 +821,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassSkybox);
             Pass_Skybox(renderer, ctx, *frame_->camera);
         });
+    rg.SetPassPrepare(pSky, [](RenderGraphPassContext& p) { p.UseDeclared(); });
 
     // CL group (step 5): reflection source -> reflection blur -> compose is a sequential single-dispatch
     // chain with no mtDeps. Grouping collapses its 3 command lists into 1 — the
@@ -786,6 +873,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 Pass_ScreenSpaceReflections(renderer, ctx, *frame_->camera);
             });
     }
+    // Whichever variant was added above (RT / clear / SSR) declares its own first-use set,
+    // so one Prepare covers all three.
+    rg.SetPassPrepare(pReflectionSource, [](RenderGraphPassContext& p) { p.UseDeclared(); });
 
     // First-use states only; the blur ping-pongs reflection<->scratch states between
     // its two dispatches inside the pass body.
@@ -835,6 +925,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassCompose);
             Pass_Compose(renderer, ctx, *frame_->camera);
         });
+    // Compose hands `scene` back to the transparent pass as a render target on EVERY path —
+    // both early-outs and the success tail — so it is a second unconditional point.
+    {
+        ID3D12Resource* const composeScene = D.scene.Get();
+        rg.SetPassPrepare(pCompose, [composeScene](RenderGraphPassContext& p) {
+            p.UseDeclared();
+            p.NextPoint();
+            p.Use(composeScene, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        });
+    }
     rg.EndCLGroup();
 
     // RT debug visualization (S6): runs AFTER the reflection group so it can overwrite
@@ -844,7 +944,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // The TLAS SRV bypasses the state tracker (staged as a plain descriptor).
     if (rtDebugView && pBuildAS != (size_t)-1)
     {
-        rg.AddPassMT(RenderPass::Main_RTDebug, { pCompose }, { pCompose, pBuildAS },
+        const size_t pRtDebug = rg.AddPassMT(RenderPass::Main_RTDebug, { pCompose }, { pCompose, pBuildAS },
             { { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
@@ -852,6 +952,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 CPU_SCOPE(ProfilerScopes::kPassRTDebug);
                 Pass_RTDebug(renderer, ctx, *frame_->camera);
             });
+        // The TLAS SRV is staged as a plain descriptor and never transitioned, so the
+        // declared trio is the whole list.
+        rg.SetPassPrepare(pRtDebug, [](RenderGraphPassContext& p) { p.UseDeclared(); });
     }
 
     // Off-screen glass reflections (S15b): render a glass front-face G-buffer (normal+depth)
@@ -896,6 +999,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                     Pass_GlassReflectionsSSR(renderer, ctx, *frame_->camera);
                 });
         }
+        rg.SetPassPrepare(pGlassGbuf, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+        rg.SetPassPrepare(pGlassReflect, [](RenderGraphPassContext& p) { p.UseDeclared(); });
     }
 
     // No declarations: the driver sequences depth/scene copies (COPY_SOURCE/DEST flips mid-list)
@@ -910,6 +1015,49 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
             Pass_Transparent(renderer, ctx, *frame_->camera, *frame_->mainView);
         });
+    rg.SetPassPrepare(pTransp, [this](RenderGraphPassContext& p) {
+        const auto& DT = p.renderer->GetDeferredForFrame();
+        // 1. Snapshot depth + opaque colour for the refraction/reflection reads.
+        if (DT.depthCopy.Get())
+        {
+            p.Use(DT.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        if (DT.sceneOpaque.Get())
+        {
+            p.Use(DT.scene.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        // 2. RecordOceanReflection's compute. Registered even when it early-outs to
+        // makePixelReadable: the early-out path is chosen inside the body.
+        p.NextPoint();
+        p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // 3. makePixelReadable: all three become PS-readable for the forward draws.
+        p.NextPoint();
+        p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // 4. Rebind the forward targets. The fan-out chunks re-apply the velocity/objectID
+        // pair per chunk; same states, so one registration covers them.
+        p.NextPoint();
+        p.Use(DT.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DT.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        p.Use(DT.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
+        p.Use(DT.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
+        p.Use(DT.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // 5. Per-object reads (ocean displacement, particle sim buffers), on fan-out workers.
+        if (!frame_->objects) { return; }
+        p.NextPoint();
+        for (const auto& obj : *frame_->objects)
+        {
+            if (!obj || !obj->IsTransparent()) { continue; }
+            obj->PrepareRender(p);
+        }
+    });
 
 #if WITH_EDITOR
     size_t pObjectIdReadback = pTransp;
@@ -924,6 +1072,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 renderer->RecordObjectIdPickReadback(t.cl);
                 ctx.EndCL(t);
             });
+        // Inside the `if` on purpose: without a pending pick pObjectIdReadback aliases
+        // pTransp, and a Prepare set here would attach to the transparent pass instead.
+        rg.SetPassPrepare(pObjectIdReadback, [](RenderGraphPassContext& p) { p.UseDeclared(); });
     }
 #else
     const size_t pObjectIdReadback = pTransp;
@@ -936,6 +1087,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
             Pass_DebugDraw(renderer, ctx, *frame_->camera);
         });
+    rg.SetPassPrepare(pDebugDraw, [](RenderGraphPassContext& p) { p.UseDeclared(); });
 
     size_t pSelectionOutline = pDebugDraw;
 #if WITH_EDITOR
@@ -947,6 +1099,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             [this, renderer](RenderGraphPassContext ctx) {
                 Pass_SelectionOutline(renderer, ctx);
             });
+        rg.SetPassPrepare(pSelectionOutline, [](RenderGraphPassContext& p) { p.UseDeclared(); });
     }
 #endif
 
@@ -961,10 +1114,45 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
+    // Tonemap also drives the whole DLSS evaluate and the backbuffer resolve. The resolve
+    // SOURCE (fxaa vs tonemap) and `ranDlss` are both decided inside the body, so BOTH
+    // alternatives are registered — a state the body skips is one redundant barrier, the
+    // one it takes and never registered is a missing barrier.
+    rg.SetPassPrepare(pTone, [](RenderGraphPassContext& p) {
+        constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        p.UseDeclared(); // tonemap + fxaa -> UAV
+        const auto& DTM = p.renderer->GetDeferredForFrame();
+        p.NextPoint();
+        if (p.renderer->IsDlssActive())
+        {
+            // Inside EvaluateDLSS (DlssHandler): the three inputs plus the upscaled output.
+            p.Use(DTM.scene.Get(), kNps);
+            p.Use(DTM.gbVelocity.Get(), kNps);
+            p.Use(DTM.depth.Get(), kNps);
+            p.Use(DTM.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.NextPoint();
+            p.Use(DTM.dlssOutput.Get(), kNps);
+        }
+        p.Use(DTM.scene.Get(), kNps); // the non-DLSS tonemap source
+        p.NextPoint();
+        p.Use(DTM.tonemap.Get(), kNps); // FXAA input
+        // Backbuffer resolve.
+        p.NextPoint();
+        p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        p.Use(DTM.fxaa.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_COPY_DEST);
+        p.NextPoint();
+        p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        p.Use(DTM.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    });
 
-    rg.AddPass(RenderPass::Main_Debug, { pTone },
+    const size_t pDebug = rg.AddPass(RenderPass::Main_Debug, { pTone },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassDebug); Pass_Debug(renderer, ctx); });
     rg.EndCLGroup();
+    // The debug blit binds the backbuffer RTV/DSV and draws a triangle; RecordBindDefaultsNoClear
+    // sets targets and viewport only, so the pass performs no transitions at all.
+    rg.SetPassPrepare(pDebug, [](RenderGraphPassContext&) {});
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     rg.ExecuteParallel(renderer, TaskSystem::Get());
@@ -977,9 +1165,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         TaskSystem::Get().WaitForTrackedAsyncTasks();
     }
 
-    RenderGraph<kEpilogueRenderGraphPassCount> epilogueRG;
-    epilogueRG.AddPass(RenderPass::Epilogue_Overlay, {},
+    using EpilogueRenderGraph = RenderGraph<kEpilogueRenderGraphPassCount>;
+    if (!epilogueRenderGraph_) { epilogueRenderGraph_ = std::make_unique<EpilogueRenderGraph>(); }
+    epilogueRenderGraph_->Reset();
+    EpilogueRenderGraph& epilogueRG = *epilogueRenderGraph_;
+    const size_t pOverlay = epilogueRG.AddPass(RenderPass::Epilogue_Overlay, {},
         [this, renderer, &overlayPrepTask](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassOverlay); Pass_Overlay(renderer, ctx, overlayPrepTask); });
+    // Binds the backbuffer RTV/DSV and draws ImGui + text; comparator-verified to perform
+    // no transitions.
+    epilogueRG.SetPassPrepare(pOverlay, [](RenderGraphPassContext&) {});
     epilogueRG.Execute(renderer);
     renderer->EndFrame();
 #if WITH_EDITOR
@@ -1009,8 +1203,13 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB, localOrderBase](std::size_t jobIndex)
+    // Barrier plan step 5: carry the pass's transition log onto the fan-out workers, so the
+    // comparator observes what they record. Captured HERE, on the pass thread, where the log is
+    // installed; without it these passes look silent because they are unobserved, not correct.
+    Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB, localOrderBase, cmpLog](std::size_t jobIndex)
     {
+        Renderer::TransitionLogScope cmpScope(cmpLog);
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
         const size_t end = std::min(begin + chunkSize, objects.size());
@@ -1322,6 +1521,18 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     ctx.EndCL(t);
 }
 
+void SceneRenderer::PrepareOpaqueDrawStates(RenderGraphPassContext& p)
+{
+    if (!frame_ || !frame_->objects) { return; }
+    // Every opaque object, not just the visible buckets: a culled object's redundant
+    // barrier is free, a visible one's missing barrier is not.
+    for (const auto& obj : *frame_->objects)
+    {
+        if (!obj || obj->IsTransparent()) { continue; }
+        obj->PrepareRender(p);
+    }
+}
+
 void SceneRenderer::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx)
 {
     if (!renderer || !frame_->objects || frame_->objects->empty())
@@ -1453,8 +1664,13 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
     const vfx::WindState* wind = frame_->wind; // W5: shadow casters sway with the gbuffer's params
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind](std::size_t cascadeIndex)
+    // Barrier plan step 5: carry the pass's transition log onto the fan-out workers, so the
+    // comparator observes what they record. Captured HERE, on the pass thread, where the log is
+    // installed; without it these passes look silent because they are unobserved, not correct.
+    Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog](std::size_t cascadeIndex)
     {
+        Renderer::TransitionLogScope cmpScope(cmpLog);
         if (cascadeIndex >= cascadeViews.size())
         {
             return;
@@ -1594,8 +1810,13 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
     const vfx::WindState* wind = frame_->wind; // W5
-    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind](std::size_t lightIndex)
+    // Barrier plan step 5: carry the pass's transition log onto the fan-out workers, so the
+    // comparator observes what they record. Captured HERE, on the pass thread, where the log is
+    // installed; without it these passes look silent because they are unobserved, not correct.
+    Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog](std::size_t lightIndex)
     {
+        Renderer::TransitionLogScope cmpScope(cmpLog);
         if (lightIndex >= spotViews.size())
         {
             return;
@@ -1713,8 +1934,13 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
     const bool indirect = render::g_indirectShadowsEnabled && shadowGpu && shadowGpu->IndirectDrawReady();
     const vfx::WindState* wind = frame_->wind; // W5
-    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind](std::size_t faceIndex)
+    // Barrier plan step 5: carry the pass's transition log onto the fan-out workers, so the
+    // comparator observes what they record. Captured HERE, on the pass thread, where the log is
+    // installed; without it these passes look silent because they are unobserved, not correct.
+    Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog](std::size_t faceIndex)
     {
+        Renderer::TransitionLogScope cmpScope(cmpLog);
         if (faceIndex >= pointViews.size())
         {
             return;

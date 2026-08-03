@@ -29,9 +29,9 @@ The other order means touching every site twice.
 |---|---|
 | 1 — two-phase pass plumbing | **DONE** (committed `385eb9e`) |
 | 2 — render graphs off the stack | **DONE** (committed `385eb9e`) |
-| 3 — the comparator | **DONE** (uncommitted) |
-| 4 — lazy creation out of record bodies | **DONE** (uncommitted) |
-| 5 — convert passes, file by file | next |
+| 3 — the comparator | **DONE** (committed `fed604f`) |
+| 4 — lazy creation out of record bodies | **DONE** (committed `fed604f`) |
+| 5 — convert passes | **DONE (uncommitted)** — every pass converted, zero fatal mismatches in both shadow modes |
 | 6..16 | not started |
 
 ---
@@ -486,7 +486,208 @@ buffers freed mid-render), which had to be worked around by pre-growing under GP
 **Acceptance:** both `0/0`; `--scene-stress` CLEAN (this is the use-after-free-prone area);
 comparator still silent.
 
-### Step 5 — convert passes to Prepare + Record, file by file
+### Step 5 — convert passes to Prepare + Record — **DONE (uncommitted)**
+
+**Final state: every pass in the main graph and the epilogue graph has a Prepare, and the
+comparator reports zero `MISSING` lines.** Gate run twice, Debug `--scene-stress-gbv=20
+--barrier-cmp`, once per shadow mode (the second is the only way `Main_CSM` runs at all):
+`verdict: CLEAN after 20 iterations` both times, zero `MISSING`, zero observation overflow,
+GBV ids only from the known-noise set {939, 940, 1006, 1358}. Both configs build `0/0`.
+
+**The comparator has a third line kind: `SKIPPED (body performed nothing)`.** A pass that
+early-outs registers everything and performs nothing, which otherwise logs one benign "extra"
+per registration *per frame* — `Main_VsmPageRender` produced **31 000 lines** that way in a
+still-camera run. One line instead, and it states the useful fact: that pass's registration is
+**unverified**, which a pile of "extra" lines does not.
+
+That distinction immediately corrected a wrong reading. `Main_VsmPageRender` looked like it never
+ran — in a plain `--shot` run it does not, because a still camera + still content trips
+`vsmSkipUpdate_` (`SceneRenderer.cpp:596-603`) and VSM freezes the pool. Under `--scene-stress`
+the level churn keeps it alive: 1 `SKIPPED`, 70 benign extras, **zero fatal**. So **verify VSM
+passes under the stress harness, not a static capture** — a silent still-camera run proves
+nothing about them.
+
+Converted in the first tranches — **12 passes, zero fatal mismatches**: `Main_ReflectionBlur` (Step 3),
+`Main_Skybox`, `Main_Compose`, `Main_VsmPageRequest`, `Main_ReflectionSource`,
+`Main_DebugDraw`, `Main_SelectionOutline`, `Main_Lighting`, `Main_SpotLights`,
+`Main_PointLights`, `Main_ObjectIdReadback`, `Main_VsmPageRender`. Both configs `0/0`; Debug
+`--scene-stress-gbv=20 --barrier-cmp` CLEAN (939/940/1006/1358 only); `--shot` unchanged.
+
+The three lighting passes added **no** new comparator lines — their bodies do exactly what they
+declare, so `UseDeclared()` alone converted them despite each having several AddPass variants
+(VSM vs Legacy, with/without spot or point shadows).
+
+**Watch for passes whose id can alias another pass.** `pObjectIdReadback` falls back to
+`pTransp` when no pick is pending, and `pSelectionOutline` to `pDebugDraw`; a `SetPassPrepare`
+placed after such an if/else would attach a second Prepare to the *other* pass and double-count
+its registrations. Both are set inside their `if`. `Main_ObjectIdReadback` is also
+`WITH_EDITOR`-only and needs a pending pick, so the stress harness never exercises it —
+count it as written, not verified.
+
+**The comparator now separates two severities — this is the bar, so read it carefully:**
+- **`MISSING (performed, never registered)` is FATAL.** The body needs a transition nothing
+  registered; once the compiled arrays are authoritative it simply would not be emitted.
+  **Silence here is what "converted" means.** Currently: none.
+- **`INFO extra (registered, pass did not perform)` is BENIGN.** Almost always the body
+  early-outed before `ApplyDeclaredStates`. The compiled path emits the barrier anyway, so the
+  running state stays consistent — it just costs one extra transition on frames the pass does
+  nothing. Currently 6, all understood: `Main_VsmPageRequest` early-outs some frames
+  (`Deferred[N].Depth`) and its three `COPY_SOURCE` moves belong to the conditional debug
+  readback; `Main_DebugDraw` early-outs when there is nothing to draw.
+
+**Subsystems register their own resources.** `Main_VsmPageRequest` transitions seven buffers
+private to `VirtualShadowMap`, so VSM gained `PrepareRequestPass(RenderGraphPassContext&)`
+rather than exposing every buffer for `SceneRenderer` to list. `RenderGraphPassContext` is
+forward-declared in `VirtualShadowMap.h` and included only in the `.cpp` — the header already
+pulls in `Renderer.h`, so including `RenderGraph.h` there would be circular. **Use this shape
+for `ShadowGpuData`, `OceanSimulation` and the particle emitters too.**
+
+**The workflow that makes this mechanical — use it, do not read every callee by hand:**
+1. `ctx.UseDeclared()` registers exactly what the pass's `AddPass` declares, which is what
+   its body's opening `ApplyDeclaredStates(cl)` performs. For a pass that transitions nothing
+   beyond its declarations that is the whole conversion (`Main_Skybox` was silent first try).
+2. Run `--barrier-cmp` and read the `PERFORMED but not registered` lines: those name exactly
+   what the body does on top, including through callees. Add a `NextPoint()` + `Use()` for
+   each, re-run, repeat until silent.
+3. The log prints the resource's **debug name** (`WKPDID_D3DDebugObjectNameW`), so a line maps
+   straight back to a `Use` call. Unnamed resources fall back to the address — swapchain
+   backbuffers are the notable ones.
+
+**Two things learned in the first tranche:**
+- `kResourceUsesPerPassBudget` had to go **8 → 24**. `Main_Compose` declares 8 states by itself.
+  The comparator reports `observation buffer overflowed` rather than silently truncating —
+  truncation would have read as a false "registered but not performed". All of it is heap-side,
+  so raising it costs no stack.
+- **`Main_Tonemap` needed a hand-written Prepare** (done in the last tranche). It also drives
+  the whole DLSS evaluate (`scene`/`gbVelocity`/`depth` → NPS, `dlssOutput` → UAV) *and* the
+  backbuffer resolve (`tonemap` → COPY_SOURCE, backbuffer → COPY_DEST → RENDER_TARGET). Both
+  the resolve source and the backbuffer are chosen at runtime — census category D — so a
+  `UseDeclared` one-liner could never cover it.
+
+Later the budget went **24 → 48**: `Main_Transparent`'s driver alone performs 15 and each
+fan-out chunk adds two more.
+
+### Step 5 worklist for the remaining ~13 passes
+
+**Discovery result (measured, not guessed).** Temporarily giving an undeclared pass an *empty*
+Prepare makes the comparator print everything it performs as `MISSING` — that is the exact list
+to register. Run once, write the registrations, remove the empty Prepare. Do not leave empty
+Prepares in the tree: they keep the log noisy and break the "no MISSING lines" bar.
+
+What the probe found (states: `0x8` UAV, `0xC0` all-SRV, `0x40` non-pixel SRV, `0x10`
+DEPTH_WRITE, `0x400` COPY_DEST, `0x800` COPY_SOURCE, `0x200` INDIRECT_ARGUMENT, `0x1` VB/CB):
+
+| Pass | Performs | Owner that should register it |
+|---|---|---|
+| `Main_BuildAS` | nothing | — (AS bypasses the tracker) |
+| `Main_PrologueClear` | nothing | — |
+| `Main_ObjectCompute` | ~9 buffers: UAV / all-SRV / COPY_DEST / COPY_SOURCE | `GpuInstancedModels` + `ParticleEmitterObject`, per object |
+| `Main_TerrainDepth` | 3 shore-depth textures: DEPTH_WRITE + all-SRV | `OceanSimulation` |
+| `Main_ShadowCull` | `InstancesUnified`, `BoundsUnified`, `IndirectArgs`, `IndirectCounts`, `VisibleList` (UAV / SRV / COPY_DEST / INDIRECT_ARGUMENT / VB) + 5 GI instance buffers | `ShadowGpuData` |
+
+Give each subsystem a `Prepare…Pass(RenderGraphPassContext&)` the way `VirtualShadowMap` has
+(forward-declare the context in the header, include `RenderGraph.h` only in the `.cpp`).
+`Main_ObjectCompute` and the GI half of `Main_ShadowCull` iterate per-object resources — census
+category D — so they register by walking the same lists the bodies walk.
+
+**Converted from that table:** `Main_BuildAS` and `Main_PrologueClear` (an *empty* Prepare is
+their correct final registration — measured to perform no transitions), `Main_TerrainDepth`
+(shore depth: DEPTH_WRITE then shader-readable), `Main_ShadowCull` (via the new
+`ShadowGpuData::PrepareCullPass`, which walks `giCasters_` itself for the per-object GI buffers).
+
+**That work found a Step 4 miss, and the comparator is what caught it.** `RecordCull` also called
+`EnsureShaderResources` from inside the record body. `IsGiIndirectActive()` gates on the
+GI-scatter PSO that call creates, so `PrepareCullPass` ran while it did not exist yet, read the GI
+path as inactive, registered nothing for it — and then the body created the PSO and transitioned
+the buffers anyway. Two `MISSING` lines, no other symptom. Fixed properly by hoisting
+`ShadowGpuData::EnsureShaderResources` into `SceneRenderer::EnsureFrameResources` (it is now
+public with that rationale on it), not by loosening the registration.
+
+**How the rest were converted:**
+
+| Pass | Registration |
+|---|---|
+| `Main_ObjectCompute` | `PrepareCompute(RenderGraphPassContext&)` on `RenderableObjectBase` (default no-op) mirroring `ExecuteCompute`, overridden in the three implementers of `RecordCompute`. `OceanRenderable` forwards to a new `OceanSimulation::PrepareUpdate`, which mirrors `Update`'s 5-point sequence over `displacement_` / `prevDisplacement_` / `foamTurbulence_`. The pass walks `frame_->objects` exactly as the body does. |
+| `Main_GBuffer` | The RT/depth set the inner graph's driver declares, plus `PrepareOpaqueDrawStates`. Exact match, zero comparator lines. |
+| `Main_CSM` / `Main_SpotShadows` / `Main_PointShadows` | Atlas → DEPTH_WRITE (declared for CSM, hand-registered for the other two) + `PrepareOpaqueDrawStates`. |
+| `Main_RTDebug`, glass ×2 | `UseDeclared()` — the TLAS SRV is a plain descriptor and never transitions. |
+| `Main_Transparent` | Hand-written, 5 points: depth/scene snapshot copies → `RecordOceanReflection`'s compute → `makePixelReadable` → forward-target rebind → per-object reads. Exact match. |
+| `Main_Tonemap` | Hand-written; registers **both** branches of `ranDlss` and **both** resolve sources, since each is decided inside the body. |
+| `Main_Debug`, `Epilogue_Overlay` | Empty Prepare — `RecordBindDefaultsNoClear` only sets targets and viewport, and ImGui/text perform no transitions. Comparator-verified, not assumed. |
+
+**A second per-object hook, `PrepareRender`, mirrors `Render`.** `SceneRenderer::PrepareOpaqueDrawStates`
+walks every **opaque** object calling it (G-buffer + all three shadow passes); `Main_Transparent`
+walks the transparent half. Shadow passes share `PrepareRender` because `RecordShadow` reads the
+same buffers in the same states as `Render` — and if that ever diverges the comparator says
+`MISSING` rather than letting it pass. Walking every object instead of the visible buckets is
+deliberate: a culled object's redundant barrier is free, a visible one's missing barrier is not.
+
+**`--shadow-mode=` had to move up in `main.cpp`.** It was parsed *after* the `--scene-stress`
+branch returns, so every stress run silently took the VSM path and `Main_CSM` was never even added
+to the graph. Same fix as `--barrier-cmp` earlier. Without it the CSM/spot/point conversions could
+not have been verified at all.
+
+**Before Step 7, sweep for `Ensure*` still called from record bodies — DONE.** Swept: the only
+ones left inside a record body are `ShadowGpuData::RecordCull` → `EnsureShaderResources` (now
+idempotent — `SceneRenderer::EnsureFrameResources` runs first, so this is a guard for non-graph
+callers) and `→ EnsureReadback` (debug-gated, creates a COPY_DEST readback and transitions
+nothing), plus `TextManager::Draw` → `EnsureTextIndexCapacity` (`TextManager.cpp` contains no
+`Transition` call at all). The `EnsureRing`/`EnsureUavRing` growth paths run from the caster-set
+rebuild, not from a body. The 2 × 20 GBV iterations of reload/switch/resize/DLSS churn — which do
+fire those growth paths — produced zero `MISSING`, which is the empirical form of the same check:
+a resource freed and reallocated between Prepare and Record would show up as `MISSING` on the new
+pointer.
+
+**Fan-out observation — DONE (uncommitted).** The four passes that dispatch recording to worker
+threads were invisible to the comparator, so a silent result there meant *unobserved*, not
+correct. Now:
+- `TransitionLog::count` is a `std::atomic<uint32_t>` and `Renderer::Transition` claims its slot
+  with `fetch_add` — several workers append to one pass's buffer concurrently.
+- `Renderer::CurrentThreadTransitionLog()` + the RAII `Renderer::TransitionLogScope` carry the
+  pass thread's log onto a worker. Each of the four dispatch sites captures the log **on the pass
+  thread** (`Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();`)
+  and the job installs it for its own duration: `SceneRenderer.cpp` object batches, CSM cascades,
+  spot faces, point faces.
+- **That last bullet used to say "every dispatch site joins its jobs before returning". It was
+  wrong, and it was a use-after-free.** `RenderObjectBatch` uses `DispatchTrack`, which is
+  fire-and-*track*: the jobs are joined only at the frame's `WaitForTrackedAsyncTasks`, long
+  after the body returns. The `TransitionLog` was a local in `RunPassBody`, so the first time
+  `Main_GBuffer` got a Prepare the run died with an access violation writing a dead stack frame
+  (`GpuInstancedModels::Render`, `0xC0000005`). Two fixes, both required:
+  - the log now lives in the heap-side `PrepareState::Observed`, so a straggler writes into a
+    live object;
+  - `ExecuteParallel` calls `tasks.WaitForTrackedAsyncTasks()` before `ReportComparator()` **when
+    the comparator is on**, so the diff sees a complete buffer. Costs nothing with the flag off,
+    and the frame's own wait then returns immediately.
+
+  Worth noting how this failed: the comparator's own instrumentation was the bug, and it only
+  fired on the one pass whose fan-out is not joined. Any future observation hook must assume the
+  body can outlive its own stack frame.
+
+**Proven, not assumed:** with a temporary empty Prepare, `Main_GBuffer` — pure fan-out — now
+reports what its workers do: `GB0`/`GB1`/`GB2`/`GBAux`/`GBVelocity` → RENDER_TARGET, `Depth` →
+DEPTH_WRITE, plus two unnamed all-SRV buffers (per-object GI instance buffers, census category D,
+so `GpuInstancedModels` should register them). Before the change the same probe printed nothing.
+`Main_SpotShadows` / `Main_PointShadows` still print nothing — their bodies genuinely perform no
+transitions in the stress levels, which is a different fact from being unobserved and is now
+distinguishable. (Cause found later: both return immediately under `render::VsmActive()`, so only
+a `--shadow-mode=legacy` run exercises them. `demo.json` does have spot lights with
+`shadowsEnabled: true`.)
+
+**The sequential `Execute()` now supports Prepare too.** It used to hard-fail on a graph with one,
+which left `Epilogue_Overlay` unconvertible. It now takes the same two-phase shape as
+`ExecuteParallel` (`Unroll` → `RunPrepares` → run nodes → `ReportComparator`) when `prepare_` is
+set, and keeps the old one-walk inline path when it is not — which is what the inner G-buffer and
+transparent graphs use, so they are untouched. The epilogue graph moved to a member
+(`epilogueRenderGraph_`) for the same reason the main one did: a local would heap-allocate its
+`PrepareState` every frame.
+
+**One `/analyze` trap:** `ReportComparator`'s loop over `passesNum_` fires C28020 on the array
+index when instantiated for a one-pass graph (the epilogue), and `std::min` is not enough to
+convince it — the bound has to be stated in the loop condition (`i < passesNum_ && i < MaxPasses`).
+Debug is the only config that runs `/analyze`, so this is invisible in Release.
+
+### Step 5 (original text, for reference)
 
 Order: `DlssHandler`, `GpuInstancedModels`, `ParticleEmitterObject`, `OceanSimulation`,
 `ShadowGpuData`, `VirtualShadowMap`, `SceneRenderer` — easiest first, worst last.

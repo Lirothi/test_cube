@@ -10,6 +10,7 @@
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderGraph.h" // PrepareCullPass takes a RenderGraphPassContext&
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
@@ -337,6 +338,57 @@ Material* ShadowGpuData::IndirectShadowMaterial() const
 // LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
 // both permutation pairs are built from the same source, so they succeed or fail together in
 // practice. A null here is handled by the caller (it keeps the per-page loop).
+void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
+{
+    // Mirrors RecordCull in body order. Several groups are conditional (the unified-buffer
+    // upload, the GI scatter, the validation readback), so this registers the union: the
+    // untaken ones surface as benign "extra" lines, never as a missing barrier.
+    if (!indirectArgs_.Valid()) { return; }
+
+    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Unified instance/bounds: uploaded, then scattered into, then read by the cull.
+    if (instancesUnified_.Valid() && boundsUnified_.Valid())
+    {
+        ctx.NextPoint();
+        ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        ctx.NextPoint();
+        ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    // GI scatter reads each folded object's own instance buffer — resource identity is
+    // per-object (census category D), so walk the same list the body walks.
+    if (IsGiIndirectActive())
+    {
+        ctx.NextPoint();
+        for (const GiCaster& gc : giCasters_)
+        {
+            if (!gc.obj) { continue; }
+            if (ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource())
+            {
+                ctx.Use(giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+        }
+    }
+
+    if (instancesUnified_.Valid() && boundsUnified_.Valid())
+    {
+        ctx.NextPoint();
+        ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    ctx.NextPoint();
+    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE); // validation readback
+    ctx.NextPoint();
+    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+}
+
 Material* ShadowGpuData::IndirectShadowPageMaterial() const
 {
     return MaskedShadowsActive() ? indirectShadowPageMaskedMat_.get() : indirectShadowPageMat_.get();

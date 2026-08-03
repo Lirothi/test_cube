@@ -9,6 +9,7 @@
 #include "core/Helpers.h"
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/UploadManager.h"
@@ -1060,6 +1061,37 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     }
 
     hasDisplacementHistory_ = true;
+}
+
+void OceanSimulation::PrepareUpdate(RenderGraphPassContext& ctx)
+{
+    const D3D12_RESOURCE_STATES srvState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    if (displacement_ && prevDisplacement_)
+    {
+        // The copy pair only runs once history exists (frame 2 onward). Registered every
+        // frame anyway: hasDisplacementHistory_ flips inside Update, so gating on it here
+        // would under-register exactly on the frame the copy first happens.
+        ctx.Use(displacement_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ctx.Use(prevDisplacement_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        ctx.NextPoint();
+        ctx.Use(prevDisplacement_.Get(), srvState);
+    }
+
+    // Spectrum -> FFT -> FFT post -> mip chain all write displacement as a UAV.
+    ctx.NextPoint();
+    ctx.Use(displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Foam sim reads the finished displacement and writes the turbulence map.
+    ctx.NextPoint();
+    if (foamTurbulence_) { ctx.Use(foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    ctx.Use(displacement_.Get(), srvState);
+
+    // Both maps end the pass readable by the ocean surface draw.
+    ctx.NextPoint();
+    if (foamTurbulence_) { ctx.Use(foamTurbulence_.Get(), srvState); }
 }
 
 void OceanSimulation::DispatchSpectrum(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds)

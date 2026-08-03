@@ -47,6 +47,9 @@ public:
     const vfx::EmitterDesc& Desc() const { return desc_; }
     vfx::EmitterDesc& DescRef() { return desc_; } // live tweaks: consumed at the next CB fill
 
+    void PrepareCompute(RenderGraphPassContext& ctx) override;
+    void PrepareRender(RenderGraphPassContext& ctx) override;
+
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
 

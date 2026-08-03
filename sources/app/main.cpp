@@ -193,6 +193,17 @@ int WINAPI WinMain(
         render::g_barrierComparator = true;
     }
 
+    // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
+    // because the scene-stress branch returns first. Without it the stress run always takes the
+    // VSM path and Main_CSM is never even added to the graph, so nothing exercises it.
+    if (lpCmdLine) {
+        if (const char* flag = std::strstr(lpCmdLine, "--shadow-mode=")) {
+            const char* p = flag + std::strlen("--shadow-mode=");
+            render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
+                                                                       : render::ShadowMode::VSM;
+        }
+    }
+
     if (lpCmdLine) {
         if (const char* flag = std::strstr(lpCmdLine, "scene-stress")) {
             int iterations = 0; // 0 => driver default
@@ -301,13 +312,9 @@ int WINAPI WinMain(
         // S0: "--shadow-mode=legacy|vsm" picks the directional shadow method at boot. The build
         // defaults to VSM, so without this every Legacy CSM measurement would need a Ctrl+V by
         // hand — i.e. no headless --profdump/--shot A/B between the two methods at all, which is
-        // exactly what the CSM plan is judged on. "--csm-tint" additionally turns the cascade-tint
-        // debug view on from the command line, so the tint can be captured with --shot.
-        if (const char* flag = std::strstr(lpCmdLine, "--shadow-mode=")) {
-            const char* p = flag + std::strlen("--shadow-mode=");
-            render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
-                                                                       : render::ShadowMode::VSM;
-        }
+        // exactly what the CSM plan is judged on. (Parsed above too, so it also reaches the
+        // scene-stress path.) "--csm-tint" additionally turns the cascade-tint debug view on
+        // from the command line, so the tint can be captured with --shot.
         if (std::strstr(lpCmdLine, "--csm-tint")) {
             render::g_csmDebugMode = render::CsmDebugMode::CascadeTint;
         }

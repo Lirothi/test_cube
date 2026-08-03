@@ -903,17 +903,22 @@ void Renderer::SetThreadTransitionLog(TransitionLog* log) {
     tlTransitionLog = log;
 }
 
+Renderer::TransitionLog* Renderer::CurrentThreadTransitionLog() {
+    return tlTransitionLog;
+}
+
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
     //CPU_SCOPE(ProfilerScopes::kRendererTransition);
     if (tlTransitionLog != nullptr && res != nullptr) {
         TransitionLog& log = *tlTransitionLog;
-        if (*log.count < log.capacity) {
-            log.entries[*log.count] = ObservedTransition{ res, after };
-            ++(*log.count);
+        // Claim a slot atomically: a fan-out pass appends from several worker threads at once.
+        const std::uint32_t slot = log.count->fetch_add(1, std::memory_order_relaxed);
+        if (slot < log.capacity) {
+            log.entries[slot] = ObservedTransition{ res, after };
         }
         else {
             // Truncating would make the comparator report a false "missing" entry.
-            log.overflowed = true;
+            log.overflowed.store(true, std::memory_order_relaxed);
         }
     }
     stateTracker_.Transition(cl, res, after);

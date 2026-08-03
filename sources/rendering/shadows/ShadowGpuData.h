@@ -11,6 +11,7 @@
 #include "rendering/renderables/InstanceTypes.h"
 
 class Renderer;
+struct RenderGraphPassContext;
 class RenderableObjectBase;
 class Frustum;
 class Material;
@@ -178,6 +179,18 @@ public:
     // for VirtualShadowMap::RecordPageRender to stay on the loop. Never used by the Legacy path.
     Material* IndirectShadowPageMaterial() const;
 
+    // Barrier plan step 5: what RecordCull transitions, registered by the owner rather than
+    // exposed buffer by buffer. Same shape as VirtualShadowMap::PrepareRequestPass — the
+    // context is forward-declared, RenderGraph.h is included only in the .cpp.
+    void PrepareCullPass(RenderGraphPassContext& ctx) const;
+
+    // Barrier plan step 4/5: create the cull + indirect-draw PSOs once per frame BEFORE the
+    // graph runs. RecordCull used to do this itself, which meant PrepareCullPass ran while
+    // giScatterMat_ still did not exist: IsGiIndirectActive() read false, the GI buffers went
+    // unregistered, and then the body created the material and transitioned them anyway.
+    // The comparator caught exactly that as two MISSING lines.
+    void EnsureShaderResources(Renderer* renderer);
+
     // C2: masked-shadow bindings for the indirect draw call sites. When active, srvTable[0] must
     // carry {instances, casterGroup, groupMask} and srvTable[3] the masked albedo table.
     static constexpr std::uint32_t kMaxMaskedGroups = 16; // matches gMaskAlbedo[16] in shadow_indirect_csm.hlsl
@@ -268,7 +281,6 @@ private:
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out,
                            float windStrength = 0.0f);
 
-    void EnsureShaderResources(Renderer* renderer);         // lazily create cull compute + indirect-draw PSOs
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
     void RebuildUnifiedDescriptors(Renderer* renderer);     // per-region SRVs for the unified instance/bounds buffers
     void EnsureReadback(Renderer* renderer, size_t bytes);  // validation readback buffer (READBACK heap)

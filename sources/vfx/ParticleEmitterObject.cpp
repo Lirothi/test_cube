@@ -374,6 +374,41 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     }
 }
 
+void ParticleEmitterObject::PrepareCompute(RenderGraphPassContext& ctx)
+{
+    if (!updateCs_ || !spawnCs_ || !particles_) { return; }
+
+    // Deliberately NOT mirroring the body's g_freeze / dt_ / spawnCount gates: those flip
+    // between frames, and a frame that registers nothing but then records would be a missing
+    // barrier. A registered state the body never reaches is only a redundant transition.
+    ctx.Use(particles_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(deadList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(deadCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (sortEnabled_ && sortCs_ && sorted_)
+    {
+        ctx.Use(sorted_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    // Debug readback: dead-count round trip to COPY_SOURCE and back, each its own point.
+    if (vfx::g_debugAliveLog && readbackPtr_)
+    {
+        ctx.NextPoint();
+        ctx.Use(deadCount_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ctx.NextPoint();
+        ctx.Use(deadCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+}
+
+void ParticleEmitterObject::PrepareRender(RenderGraphPassContext& ctx)
+{
+    if (!particles_) { return; }
+    ctx.Use(particles_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (sortEnabled_ && sorted_)
+    {
+        ctx.Use(sorted_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+}
+
 void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
 {

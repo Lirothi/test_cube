@@ -54,6 +54,9 @@ public:
     // LOD from a single instance's size (not the whole-cloud bound), at the cloud's distance.
     float GetLodRadius() const override { return GetMesh() ? GetMesh()->GetBoundingBox().GetRadius() : 0.0f; }
 
+    void PrepareCompute(RenderGraphPassContext& ctx) override;
+    void PrepareRender(RenderGraphPassContext& ctx) override;
+
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx) override;

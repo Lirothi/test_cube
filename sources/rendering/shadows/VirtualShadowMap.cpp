@@ -7,6 +7,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h" // GPU_SCOPE(kVsmPageSetup): per-page cull sub-scope
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderGraph.h" // PrepareRequestPass takes a RenderGraphPassContext&
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
@@ -391,6 +392,79 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         OutputDebugStringA("[VSM] page-clear PSO creation FAILED (page cache off -> whole-pool clear).\n");
         pageClearMat_.reset();
     }
+}
+
+void VirtualShadowMap::PrepareRequestPass(RenderGraphPassContext& ctx) const
+{
+    // Mirrors what RecordPageRequest + RecordPageAllocate transition, in body order. The
+    // debug readback's COPY_SOURCE moves are conditional (RecordDebugReadback), which the
+    // comparator reports as benign "extra" on frames it does not run — the compiled path
+    // emits them regardless, which keeps the state consistent.
+    if (!IsAllocated()) { return; }
+    ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.NextPoint();
+    ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(physLastFrame_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.NextPoint();
+    ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+}
+
+void VirtualShadowMap::PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu) const
+{
+    // RecordPageRender is the worst case in the whole engine: nine resources through 2-3 states
+    // each, most of them behind a runtime predicate (scatterActive, caching, singleDraw,
+    // compactArgs, g_residentIterOnly).
+    //
+    // This registers the UNION of the reachable states, in body order. That covers the fatal
+    // direction completely — nothing the body performs is unregistered — and the branches not
+    // taken on a given frame surface as benign "INFO extra" lines, which is exactly what they
+    // are: the compiled path emits them anyway and the running state stays consistent.
+    //
+    // Step 7 must tighten this. Duplicating the predicates here would violate D1.1 (compute
+    // once, read in Record); the correct end state is RecordPageRender READING decisions this
+    // function made, which is a VSM refactor of its own.
+    if (!IsAllocated() || !shadowGpu) { return; }
+
+    ctx.Use(shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    // Spatial scatter cull (directional clipmap views only).
+    ctx.NextPoint();
+    ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.NextPoint();
+    ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // Page cache snapshot + the resident-set readback (both opt-in).
+    ctx.NextPoint();
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+    ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // Consume: args + per-instance stream + projection, then the pool as the depth target.
+    ctx.NextPoint();
+    ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    // pageProj goes to an SRV on the single-draw path and to a per-page root CBV on the loop.
+    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 }
 
 void VirtualShadowMap::EnsureFrameResources(Renderer* renderer, ShadowGpuData* shadowGpu)

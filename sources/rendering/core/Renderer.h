@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
@@ -263,12 +264,27 @@ public:
         D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
     };
     struct TransitionLog {
-        ObservedTransition* entries = nullptr;
-        std::uint32_t*      count = nullptr;
-        std::uint32_t       capacity = 0;
-        bool                overflowed = false;
+        ObservedTransition*         entries = nullptr;
+        std::atomic<std::uint32_t>* count = nullptr;  // atomic: fan-out workers append concurrently
+        std::uint32_t               capacity = 0;
+        std::atomic<bool>           overflowed{ false };
     };
     static void SetThreadTransitionLog(TransitionLog* log);
+    static TransitionLog* CurrentThreadTransitionLog();
+
+    // Carries the dispatching thread's log onto a fan-out worker for the duration of a job.
+    // Without this a pass that spreads its recording over several threads is invisible to the
+    // comparator, and "no complaints" would mean "not observed" rather than "correct".
+    //
+    // Usage at a dispatch site — capture on the PASS thread, install inside the job:
+    //   auto* log = Renderer::CurrentThreadTransitionLog();
+    //   auto job = [log, ...](std::size_t i) { Renderer::TransitionLogScope s(log); ... };
+    struct TransitionLogScope {
+        explicit TransitionLogScope(TransitionLog* log) { SetThreadTransitionLog(log); }
+        ~TransitionLogScope() { SetThreadTransitionLog(nullptr); }
+        TransitionLogScope(const TransitionLogScope&) = delete;
+        TransitionLogScope& operator=(const TransitionLogScope&) = delete;
+    };
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
     // Rung 0 GPU-driven shadows (Step 3): a shared, lazily-created command signature for a

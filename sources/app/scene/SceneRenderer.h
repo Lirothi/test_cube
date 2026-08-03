@@ -72,6 +72,12 @@ private:
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize,
         D3D12_GPU_VIRTUAL_ADDRESS viewCB, uint32_t localOrderBase = 0);
 
+    // Barrier plan step 5: register the draw-time resource states of every OPAQUE object.
+    // Shared by the G-buffer and the three shadow passes: RecordShadow reads the same
+    // buffers in the same states as Render, and if that ever diverges the comparator
+    // reports it as MISSING rather than letting it pass silently.
+    void PrepareOpaqueDrawStates(RenderGraphPassContext& p);
+
     void Pass_BuildAS(Renderer* r, RenderGraphPassContext ctx);
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
@@ -138,6 +144,9 @@ private:
     // left Render at C6262's 16 KB threshold with no headroom. Reset() per frame gives
     // the same freshly-empty graph without the stack cost or a per-frame allocation.
     std::unique_ptr<RenderGraph<kMainRenderGraphPassCount>> mainRenderGraph_;
+    // Same reason as the main graph: once it carries a Prepare, building it as a local
+    // would heap-allocate the PrepareState every frame.
+    std::unique_ptr<RenderGraph<kEpilogueRenderGraphPassCount>> epilogueRenderGraph_;
 
     // RT acceleration structures (S5). Built by Pass_BuildAS when RT is supported
     // and enabled; no consumer yet. asManager_ owns the per-mesh BLAS cache and

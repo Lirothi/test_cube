@@ -578,6 +578,22 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     UpdateFoamTrailState();
 }
 
+void OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
+{
+    if (!simulation_) { return; }
+    simulation_->PrepareUpdate(ctx);
+}
+
+void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
+{
+    if (!simulation_) { return; }
+    const D3D12_RESOURCE_STATES srvState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    ctx.Use(simulation_->GetDisplacementResource(), srvState);
+    ctx.Use(simulation_->GetPreviousDisplacementResource(), srvState);
+}
+
 void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer || !simulation_)

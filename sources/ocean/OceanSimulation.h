@@ -19,6 +19,7 @@
 class Renderer;
 class Material;
 class Camera;
+struct RenderGraphPassContext;
 
 class OceanSimulation
 {
@@ -32,6 +33,9 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
 
     void Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds);
+    // Barrier plan step 5: Update's transition sequence, registered ahead of recording.
+    // Keep in step with Update / DispatchSpectrum / DispatchFFT* / GenerateMips / DispatchFoam.
+    void PrepareUpdate(RenderGraphPassContext& ctx);
     void OnHotReload(Renderer* renderer);
 
     void SetSettings(Renderer* renderer, const OceanSimulationSettings& settings);

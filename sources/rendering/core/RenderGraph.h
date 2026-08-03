@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <array>
 #include <functional>
 #include <string_view>
@@ -54,7 +55,12 @@ struct ResourceUse {
 // One append-only arena also matches how the compile reads them — in order.
 // Capacity scales with the pass count; Use() hard-fails on overflow because
 // inl_vector only asserts, i.e. is UNCHECKED in Release.
-inline constexpr std::size_t kResourceUsesPerPassBudget = 8;
+// Per-pass budget for both registered uses and observed transitions. 8 was too small —
+// Compose declares 8 states alone and its body adds more. Lives entirely in the heap-side
+// PrepareState, so raising it costs no stack (see the C6262 note in the plan's Executor Guide).
+// 24 in turn was too small for Main_Transparent, whose driver alone performs 15 and whose
+// fan-out chunks each add two more.
+inline constexpr std::size_t kResourceUsesPerPassBudget = 48;
 
 namespace render {
 // Barrier plan step 3: diff every converted pass's registered state usage against what
@@ -145,6 +151,16 @@ struct RenderGraphPassContext {
         ++(*useCount);
     }
 
+    // Register everything the pass already lists in its AddPass `declares`. Most bodies
+    // open with ApplyDeclaredStates(cl), so this reproduces exactly that — the right
+    // starting point when converting a pass. Anything the body transitions BEYOND its
+    // declarations still needs its own Use() call; the comparator names those.
+    void UseDeclared() const
+    {
+        if (!declares) { return; }
+        for (const ResourceStateDecl& decl : *declares) { Use(decl.resource, decl.state); }
+    }
+
     // Close the current barrier point and open the next. The pass body emits the
     // matching boundary with Barrier(cl, n) using the same index.
     void NextPoint() const
@@ -232,9 +248,14 @@ public:
         // each pass writes only its own slot, so no synchronisation is needed.
         struct Observed {
             Renderer::ObservedTransition entries[kResourceUsesPerPassBudget]{};
-            std::uint32_t count = 0;
-            bool overflowed = false;
+            std::atomic<std::uint32_t> count{ 0 }; // fan-out workers append concurrently
             bool ran = false; // the body executed (an early-out pass registers but does nothing)
+            // The thread log the body installs. Lives HERE, not on RunPassBody's stack:
+            // RenderObjectBatch fans out with DispatchTrack (fire-and-track, joined only at
+            // the frame's WaitForTrackedAsyncTasks), so a worker can still be appending long
+            // after the body returned. A stack-local log was a use-after-free that crashed
+            // inside GpuInstancedModels::Render the moment Main_GBuffer got a Prepare.
+            Renderer::TransitionLog log{};
         };
         std::array<Observed, MaxPasses> observed{};
     };
@@ -351,16 +372,23 @@ public:
     {
         CPU_SCOPE(ProfilerScopes::kRenderGraphExecute);
         if (renderer == nullptr) { return; }
-        // A.1s: this path runs pass bodies INLINE during the traversal, so there is no
-        // moment at which every Prepare has run but nothing has recorded yet. Wiring it
-        // needs a two-phase Unroll and belongs to A.2s, where registrations first matter.
-        // Fail fast rather than skipping Prepare silently: a pass converted in A.4s that
-        // reached this path would register nothing, get no barriers, and corrupt quietly.
-        // Cannot fire at A.1s — no pass supplies a Prepare, so prepare_ is null.
-        if (prepare_) {
-            RendererInvariantFailure("RenderGraph::Execute (sequential) reached a graph with a Prepare - see plan A.2s");
+        // Without Prepares this path runs pass bodies INLINE during the traversal — one
+        // walk, nothing to order. That is what the inner G-buffer/transparent graphs use.
+        if (!prepare_) {
+            Unroll(renderer, /*executeInplace=*/true, nullptr);
+            return;
         }
-        Unroll(renderer, /*executeInplace=*/true, nullptr);
+        // With Prepares it must be two-phase for the same reason ExecuteParallel is: every
+        // registration has to land before the first body records, or a pass's barriers would
+        // be compiled from a half-built list. Same Unroll, just not in place.
+        tc::inl_vector<FlatNode, MaxPasses> schedule;
+        Unroll(renderer, /*executeInplace=*/false, &schedule);
+        if (schedule.empty()) { return; }
+        RunPrepares(renderer, schedule);
+        for (const FlatNode& n : schedule) {
+            RunNode(renderer, n.pass, n.batch);
+        }
+        ReportComparator();
     }
 
     // Parallel path: create batches in topological order, then
@@ -435,7 +463,12 @@ public:
             tasks.Release(passDone[schedule[i].pass]);
         }
 
-        // Every body has finished, so the observations are complete and single-threaded again.
+        // Every body has finished — but bodies that fan out with DispatchTrack may still have
+        // workers appending observations, and those are joined only at the frame's
+        // WaitForTrackedAsyncTasks. Pull that wait forward when the comparator is on so the
+        // diff sees a complete buffer; the frame's own wait then returns immediately. Costs
+        // nothing with the flag off, which is the default.
+        if (render::g_barrierComparator) { tasks.WaitForTrackedAsyncTasks(); }
         ReportComparator();
     }
 
@@ -548,15 +581,31 @@ private:
     void ReportComparator()
     {
         if (!prepare_ || !render::g_barrierComparator) { return; }
-        for (size_t i = 0; i < passesNum_; ++i) {
+        // The `i < MaxPasses` half is redundant at runtime (passesNum_ never exceeds it) but
+        // /analyze cannot prove that and fires C28020 on the array index for a one-pass graph
+        // (the epilogue). Stated in the loop condition, which it does follow.
+        for (size_t i = 0; i < passesNum_ && i < MaxPasses; ++i) {
             if (!prepare_->fns[i]) { continue; }
             auto& obs = prepare_->observed[i];
             if (!obs.ran) { continue; } // pass early-outed before its body ran
             const auto& slice = prepare_->slices[i];
 
-            if (obs.overflowed) {
+            if (obs.log.overflowed.load(std::memory_order_relaxed)) {
                 LogComparator(passes_[i].name, "observation buffer overflowed - raise kResourceUsesPerPassBudget",
                               nullptr, D3D12_RESOURCE_STATE_COMMON);
+                continue;
+            }
+
+            // The body performed NOTHING — it early-outed. One line instead of one per
+            // registration: the useful fact is "this pass did not run", and a pass that skips
+            // every frame would otherwise bury the log (VsmPageRender emitted 31k lines this
+            // way). It also says plainly that the pass's registration is UNVERIFIED, which a
+            // pile of benign "extra" lines does not.
+            const std::uint32_t observedCount = obs.count.load(std::memory_order_relaxed);
+            if (observedCount == 0 && slice.count > 0) {
+                LogComparator(passes_[i].name, "SKIPPED (body performed nothing - registration unverified)",
+                              nullptr, D3D12_RESOURCE_STATE_COMMON);
+                obs.ran = false;
                 continue;
             }
 
@@ -564,32 +613,54 @@ private:
             for (std::uint32_t u = 0; u < slice.count; ++u) {
                 const ResourceUse& want = prepare_->arena[slice.begin + u];
                 bool found = false;
-                for (std::uint32_t o = 0; o < obs.count && !found; ++o) {
+                for (std::uint32_t o = 0; o < observedCount && !found; ++o) {
                     found = (obs.entries[o].resource == want.resource && obs.entries[o].state == want.state);
                 }
-                if (!found) { LogComparator(passes_[i].name, "REGISTERED but not performed", want.resource, want.state); }
+                // BENIGN. Almost always means the body early-outed before applying its
+                // declared states. Once the compiled arrays are authoritative the barrier is
+                // emitted anyway, so the running state stays consistent — it just costs one
+                // extra transition on frames the pass does nothing. Reported, not fatal.
+                if (!found) { LogComparator(passes_[i].name, "INFO extra (registered, pass did not perform)", want.resource, want.state); }
             }
-            // Done but never registered — the dangerous direction: after step 7 this
-            // transition would simply not happen.
-            for (std::uint32_t o = 0; o < obs.count; ++o) {
+            // FATAL direction: the body needs this transition and nothing registered it, so
+            // after step 7 it would simply not be emitted. Silence HERE is the bar for
+            // calling a pass converted.
+            for (std::uint32_t o = 0; o < observedCount; ++o) {
                 const Renderer::ObservedTransition& did = obs.entries[o];
                 bool found = false;
                 for (std::uint32_t u = 0; u < slice.count && !found; ++u) {
                     const ResourceUse& want = prepare_->arena[slice.begin + u];
                     found = (want.resource == did.resource && want.state == did.state);
                 }
-                if (!found) { LogComparator(passes_[i].name, "PERFORMED but not registered", did.resource, did.state); }
+                if (!found) { LogComparator(passes_[i].name, "MISSING (performed, never registered)", did.resource, did.state); }
             }
             obs.ran = false;
         }
     }
 
+    // Resource DEBUG NAME, not just the pointer: converting passes means reading these lines
+    // and mapping them back to a `Use` call, and a bare address makes that guesswork. Most
+    // engine resources get SetName() at creation; unnamed ones fall back to the address.
+    static void ResourceLabel(ID3D12Resource* res, char* out, size_t outSize)
+    {
+        out[0] = '\0';
+        if (!res) { std::snprintf(out, outSize, "<null>"); return; }
+        wchar_t wide[128] = {};
+        UINT bytes = sizeof(wide) - sizeof(wchar_t);
+        if (SUCCEEDED(res->GetPrivateData(WKPDID_D3DDebugObjectNameW, &bytes, wide)) && wide[0]) {
+            std::snprintf(out, outSize, "%ls", wide);
+            return;
+        }
+        std::snprintf(out, outSize, "%p", static_cast<const void*>(res));
+    }
+
     static void LogComparator(RenderPass pass, const char* what, ID3D12Resource* res, D3D12_RESOURCE_STATES state)
     {
-        char msg[256];
-        std::snprintf(msg, sizeof(msg), "[barrier-cmp] pass=%d %s res=%p state=0x%X\n",
-                      static_cast<int>(pass), what, static_cast<const void*>(res),
-                      static_cast<unsigned>(state));
+        char label[160];
+        ResourceLabel(res, label, sizeof(label));
+        char msg[320];
+        std::snprintf(msg, sizeof(msg), "[barrier-cmp] pass=%d %s res=%s state=0x%X\n",
+                      static_cast<int>(pass), what, label, static_cast<unsigned>(state));
         OutputDebugStringA(msg);
     }
 
@@ -603,17 +674,17 @@ private:
             return;
         }
         auto& obs = prepare_->observed[passIdx];
-        obs.count = 0;
-        obs.overflowed = false;
+        obs.count.store(0, std::memory_order_relaxed);
         obs.ran = true;
-        Renderer::TransitionLog log;
-        log.entries = obs.entries;
-        log.count = &obs.count;
-        log.capacity = static_cast<std::uint32_t>(std::size(obs.entries));
-        Renderer::SetThreadTransitionLog(&log);
+        obs.log.entries = obs.entries;
+        obs.log.count = &obs.count;
+        obs.log.capacity = static_cast<std::uint32_t>(std::size(obs.entries));
+        obs.log.overflowed.store(false, std::memory_order_relaxed);
+        Renderer::SetThreadTransitionLog(&obs.log);
         passes_[passIdx].exec(ctx);
         Renderer::SetThreadTransitionLog(nullptr);
-        obs.overflowed = log.overflowed;
+        // Fan-out appends may still be in flight here; ExecuteParallel joins them before
+        // ReportComparator reads the buffer.
     }
 
     // Run a node into one batch: a singleton pass, or every member of a group in

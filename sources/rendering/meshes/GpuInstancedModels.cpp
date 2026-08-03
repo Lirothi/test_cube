@@ -122,6 +122,19 @@ void GpuInstancedModels::RecordCompute(Renderer* renderer, ID3D12GraphicsCommand
     renderer->UAVBarrier(cl, instanceBuffer_.GetResource());
 }
 
+void GpuInstancedModels::PrepareCompute(RenderGraphPassContext& ctx)
+{
+    // The rotation compute writes the instance buffer; the SRV flip back happens in Render,
+    // which belongs to a later pass and registers there.
+    ctx.Use(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+
+void GpuInstancedModels::PrepareRender(RenderGraphPassContext& ctx)
+{
+    ctx.Use(instanceBuffer_.GetResource(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
+
 void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
 {
     tierBase_.fill(0u);

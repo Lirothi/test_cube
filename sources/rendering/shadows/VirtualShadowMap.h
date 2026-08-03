@@ -14,6 +14,7 @@ class Renderer;
 class Material;
 class Camera;
 class ShadowGpuData;
+struct RenderGraphPassContext;
 namespace vfx { struct WindState; } // W5: global wind, folded into the per-page shadow view CB
 
 // Rung 2 (VSM-lite) addressing constants. A virtual shadow map is a conceptually huge
@@ -212,6 +213,14 @@ public:
     // the spot/point light buffers mid-render and produced the DXGI_DEVICE_HUNG that the
     // --scene-stress harness was built to catch. Idempotent and cheap when nothing changed.
     void EnsureFrameResources(Renderer* renderer, ShadowGpuData* shadowGpu);
+
+    // Barrier plan step 5: VSM's own contribution to the page-request pass's Prepare. The
+    // resources the Record* functions transition are private to VSM, so VSM registers them
+    // rather than exposing every buffer just so SceneRenderer can list them. The context type
+    // is forward-declared — the definition lives in the .cpp, which keeps RenderGraph.h out of
+    // this header (it already includes Renderer.h, so including it here would be circular).
+    void PrepareRequestPass(RenderGraphPassContext& ctx) const;
+    void PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu) const;
     // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
     void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }

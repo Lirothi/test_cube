@@ -93,6 +93,15 @@ public:
     }
 #endif
     virtual void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) { (void)renderer; (void)cl; }
+    // Barrier plan step 5: register the states ExecuteCompute will transition to, in body
+    // order. Pass_ObjectCompute's Prepare walks the same object list calling this, so the
+    // two stay in step by construction. Default no-op — an object whose compute records
+    // nothing transitions nothing. Over-registering costs a redundant barrier; MISSING one
+    // is a silent corruption, so mirror the union of reachable branches, not the exact path.
+    virtual void PrepareCompute(RenderGraphPassContext& ctx) { (void)ctx; }
+    // Same contract for the graphics side: the states Render transitions to. Each pass that
+    // draws objects walks its own half of the scene (opaque vs transparent) calling this.
+    virtual void PrepareRender(RenderGraphPassContext& ctx) { (void)ctx; }
     // lod: per-pass LOD floor (Step 6 — e.g. the shadow cascade index); clamped to available LODs.
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0) = 0;
     virtual bool IsTransparent() const = 0;
