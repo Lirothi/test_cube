@@ -50,22 +50,19 @@ void Camera::UpdateFromInput(InputManager& input, float dt) {
 
 void Camera::CalcMatrices(Renderer* r)
 {
-    mat4 lastView = view_.view;
-    mat4 lastProj = view_.proj;
-    mat4 lastViewProj = viewProj_;
-    mat4 lastNonJitteredProj = nonJitteredProj_;
-    mat4 lastNonJitteredViewProj = nonJitteredViewProj_;
-
+    // Snapshot last frame's matrices BEFORE anything below overwrites them. Copied straight across
+    // rather than through `last*` locals: nothing here reads view_ again until it is rebuilt below,
+    // so the locals were a second copy of all five matrices for no one's benefit.
     if (hasPrevViewProj_)
     {
-        prevView_ = lastView;
-        prevProj_ = lastProj;
-        prevViewProj_ = lastViewProj;
-        prevNonJitteredProj_ = lastNonJitteredProj;
-        prevNonJitteredViewProj_ = lastNonJitteredViewProj;
+        prevView_ = view_.view;
+        prevProj_ = view_.proj;
+        prevViewProj_ = viewProj_;
+        prevNonJitteredProj_ = nonJitteredProj_;
+        prevNonJitteredViewProj_ = nonJitteredViewProj_;
     }
 
-    mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
+    mat4 rot = GetRotationMatrix();
     float3 look = rot.TransformPoint({ 0, 0, 1 }); // forward
     float3 up = rot.TransformPoint({ 0, 1, 0 }); // up
     mat4 newView = mat4::LookAtLH(position_, position_ + look, up);
@@ -98,8 +95,8 @@ void Camera::CalcMatrices(Renderer* r)
 
     viewProj_ = view_.view * view_.proj;
     nonJitteredViewProj_ = view_.view * nonJitteredProj_;
-    prevViewProj_ = prevView_ * prevProj_;
-    prevNonJitteredViewProj_ = prevView_ * prevNonJitteredProj_;
+    // The prev COMBINED matrices are not recomputed: prevView_ * prevProj_ multiplies exactly the
+    // operands last frame already multiplied, so it reproduces the value copied above bit for bit.
 
     if (!hasPrevViewProj_)
     {

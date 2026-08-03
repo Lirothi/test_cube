@@ -191,7 +191,20 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
     tb->AddTextfShadow(8, 8, 32.0f, float4(1, 1, 1, 0.6f), true, L"FPS:%.0f MS:%0.2f Scale:%0.2f", fps, frameMs, renderer.GetRenderResolutionScale());
     const Camera& camera = scene.CameraRef();
     const auto& camPos = camera.GetPosition();
-    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true, L"Cam: %0.2f %0.2f %0.2f, speed: %0.2f, DLSS: %i, SSR: %i, FXAA: %i", camPos.x, camPos.y, camPos.z, camera.GetMoveSpeedMult(),
+    // Orientation as a QUATERNION next to the position: the pair is everything needed to reproduce
+    // the exact shot from the command line (a level's freeCameraStart, or --cam-pos/--cam-rot), so
+    // a screenshot carries its own camera. Degrees would need the reader to know this camera's
+    // rotation order and sign conventions; a quaternion does not.
+    const mat4 camRot = camera.GetRotationMatrix(); // same builder the view matrix uses (roll included)
+    const DirectX::XMFLOAT4 camRotF = [&]
+    {
+        DirectX::XMFLOAT4 q{};
+        DirectX::XMStoreFloat4(&q, DirectX::XMQuaternionRotationMatrix(DirectX::XMLoadFloat4x4(&camRot.m)));
+        return q;
+    }();
+    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true,
+        L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, FXAA: %i",
+        camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
         renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique, (int)settings_.doFxaa);
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");

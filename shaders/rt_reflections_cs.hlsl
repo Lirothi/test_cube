@@ -84,7 +84,9 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
     uint3 tri = LoadTriangle(ib, g.firstTri + q.CommittedPrimitiveIndex(), g.indexIs32);
     float2 bary = q.CommittedTriangleBarycentrics();
     float  bw = 1.0f - bary.x - bary.y;
-    float3 nObj = normalize(LoadNormal(vb, tri.x) * bw + LoadNormal(vb, tri.y) * bary.x + LoadNormal(vb, tri.z) * bary.y);
+    float3 nObj = normalize(LoadNormal(vb, tri.x, g.vertexStride) * bw +
+                            LoadNormal(vb, tri.y, g.vertexStride) * bary.x +
+                            LoadNormal(vb, tri.z, g.vertexStride) * bary.y);
     float3x4 o2w = q.CommittedObjectToWorld3x4();
     float3 N = normalize(mul((float3x3)o2w, nObj));
 
@@ -93,7 +95,9 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
     float3 V = normalize(camPos - hitWS);
     if (dot(N, V) < 0.0f) { N = -N; } // orient toward the camera (base-pass front-face)
 
-    float2 uvHit = LoadUV(vb, tri.x) * bw + LoadUV(vb, tri.y) * bary.x + LoadUV(vb, tri.z) * bary.y;
+    float2 uvHit = LoadUV(vb, tri.x, g.vertexStride) * bw +
+                   LoadUV(vb, tri.y, g.vertexStride) * bary.x +
+                   LoadUV(vb, tri.z, g.vertexStride) * bary.y;
     float3 albedo = g.baseColor.rgb;
     if (g.albedoTexIndex != 0xFFFFFFFFu)
     {

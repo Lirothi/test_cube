@@ -82,6 +82,7 @@ namespace
         Math::float3 position{ 0.0f, 0.0f, 0.0f };
         float yaw = 0.0f;
         float pitch = 0.0f;
+        float roll = 0.0f;
     };
 
     struct CameraBookmark
@@ -473,7 +474,8 @@ namespace
             std::fabs(cameraState.position.y) <= kMaxCameraDistance &&
             std::fabs(cameraState.position.z) <= kMaxCameraDistance &&
             std::fabs(cameraState.yaw) <= kMaxStoredYawPitch &&
-            std::fabs(cameraState.pitch) <= kMaxStoredYawPitch;
+            std::fabs(cameraState.pitch) <= kMaxStoredYawPitch &&
+            std::fabs(cameraState.roll) <= kMaxStoredYawPitch;
     }
 
     LevelCameraState CaptureLevelCameraState(const Camera& camera)
@@ -482,6 +484,7 @@ namespace
         state.position = camera.GetPosition();
         state.yaw = camera.GetYaw();
         state.pitch = camera.GetPitch();
+        state.roll = camera.GetRoll();
         return state;
     }
 
@@ -492,7 +495,8 @@ namespace
             std::fabs(lhs.position.y - rhs.position.y) <= kEpsilon &&
             std::fabs(lhs.position.z - rhs.position.z) <= kEpsilon &&
             std::fabs(lhs.yaw - rhs.yaw) <= kEpsilon &&
-            std::fabs(lhs.pitch - rhs.pitch) <= kEpsilon;
+            std::fabs(lhs.pitch - rhs.pitch) <= kEpsilon &&
+            std::fabs(lhs.roll - rhs.roll) <= kEpsilon;
     }
 
     nlohmann::json CameraPoseToJson(const CameraPose& cameraState)
@@ -504,7 +508,8 @@ namespace
                 cameraState.position.z }) },
             { "orientation", {
                 { "yawRad", cameraState.yaw },
-                { "pitchRad", cameraState.pitch }
+                { "pitchRad", cameraState.pitch },
+                { "rollRad", cameraState.roll }
             } }
         };
     }
@@ -534,8 +539,18 @@ namespace
         if (yawIt == orientationIt->end() ||
             pitchIt == orientationIt->end() ||
             !TryReadFloat(*yawIt, parsed.yaw) ||
-            !TryReadFloat(*pitchIt, parsed.pitch) ||
-            !IsReasonableCameraPose(parsed))
+            !TryReadFloat(*pitchIt, parsed.pitch))
+        {
+            return false;
+        }
+        // Roll is OPTIONAL: state files written before the camera could bank have no rollRad, and
+        // rejecting them would silently discard everyone's saved camera positions and bookmarks.
+        const auto rollIt = orientationIt->find("rollRad");
+        if (rollIt != orientationIt->end() && !TryReadFloat(*rollIt, parsed.roll))
+        {
+            return false;
+        }
+        if (!IsReasonableCameraPose(parsed))
         {
             return false;
         }
@@ -1549,7 +1564,7 @@ namespace
 
         Camera& camera = scene.CameraRef();
         camera.SetPosition(bookmark.pose.position);
-        camera.SetYawPitch(bookmark.pose.yaw, bookmark.pose.pitch);
+        camera.SetYawPitchRoll(bookmark.pose.yaw, bookmark.pose.pitch, bookmark.pose.roll);
         camera.CalcMatrices(&renderer);
         camera.ResetHistory();
         return true;
@@ -1565,7 +1580,7 @@ namespace
 
         Camera& camera = scene.CameraRef();
         camera.SetPosition(cameraState.position);
-        camera.SetYawPitch(cameraState.yaw, cameraState.pitch);
+        camera.SetYawPitchRoll(cameraState.yaw, cameraState.pitch, cameraState.roll);
         camera.CalcMatrices(&renderer);
         camera.ResetHistory();
         return true;
@@ -1579,7 +1594,8 @@ namespace
             return false;
         }
 
-        options.cameraOverride = LevelCameraOverride{ cameraState.position, cameraState.yaw, cameraState.pitch };
+        options.cameraOverride =
+            LevelCameraOverride{ cameraState.position, cameraState.yaw, cameraState.pitch, cameraState.roll };
         return true;
     }
 

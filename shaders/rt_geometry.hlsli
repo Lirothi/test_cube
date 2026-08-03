@@ -15,7 +15,8 @@ struct GeometryInfo
     uint   firstTri;       // B3: first triangle of this record's submesh range in the IB
     float4 baseColor;
     uint   mrMultiply;     // 0 = texture overrides values, 1 = texture * values
-    uint3  _pad;
+    uint   vertexStride;   // bytes per vertex, from Mesh::GetVertexStride()
+    uint2  _pad;
 };
 
 // B3: records are per (instance, submesh) — the BLAS carries one geometry per submesh, so the
@@ -23,7 +24,12 @@ struct GeometryInfo
 // PrimitiveIndex is LOCAL to the geometry (offset by the record's firstTri when loading).
 uint GeometryRecordIndex(uint instanceId, uint geometryIndex) { return instanceId + geometryIndex; }
 
-static const uint kRtVertexStride = 48u; // VertexPNTUV
+// The vertex STRIDE now travels per-record in GeometryInfo (see vertexStride). It used to be a
+// hardcoded 48 here, a fifth mirror of sizeof(VertexPNTUV) that nothing checked — when W7.1 appended
+// COLOR_0 and the vertex became 52 bytes, every vertex except #0 decoded at the wrong offset and RT
+// reflections shaded off garbage normals and UVs. Do NOT reintroduce a literal stride.
+// The two OFFSETS are safe to keep here: they are positions of fields at the FRONT of the vertex,
+// which the layout presets pin (COLOR_0 was deliberately appended at the end for exactly this reason).
 static const uint kRtNormalOffset = 12u;
 static const uint kRtUVOffset     = 40u;
 
@@ -39,7 +45,7 @@ uint3 LoadTriangle(ByteAddressBuffer ib, uint prim, uint is32)
     const uint b = prim * 3u;
     return uint3(LoadIndex16(ib, b), LoadIndex16(ib, b + 1u), LoadIndex16(ib, b + 2u));
 }
-float3 LoadNormal(ByteAddressBuffer vb, uint vertex) { return asfloat(vb.Load3(vertex * kRtVertexStride + kRtNormalOffset)); }
-float2 LoadUV(ByteAddressBuffer vb, uint vertex)     { return asfloat(vb.Load2(vertex * kRtVertexStride + kRtUVOffset)); }
+float3 LoadNormal(ByteAddressBuffer vb, uint vertex, uint stride) { return asfloat(vb.Load3(vertex * stride + kRtNormalOffset)); }
+float2 LoadUV(ByteAddressBuffer vb, uint vertex, uint stride)     { return asfloat(vb.Load2(vertex * stride + kRtUVOffset)); }
 
 #endif // RT_GEOMETRY_HLSLI

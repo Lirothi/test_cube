@@ -16,6 +16,7 @@ struct LevelCameraOverride
     Math::float3 position{ 0.0f, 0.0f, 0.0f };
     float yaw = 0.0f;
     float pitch = 0.0f;
+    float roll = 0.0f;
 };
 
 struct LevelLoadOptions

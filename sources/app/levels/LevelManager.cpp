@@ -13,22 +13,23 @@ struct CameraTransformSnapshot
     Math::float3 position;
     float yaw = 0.0f;
     float pitch = 0.0f;
+    float roll = 0.0f;
 };
 
 CameraTransformSnapshot CaptureCameraTransform(const Camera& camera)
 {
-    return { camera.GetPosition(), camera.GetYaw(), camera.GetPitch() };
+    return { camera.GetPosition(), camera.GetYaw(), camera.GetPitch(), camera.GetRoll() };
 }
 
 CameraTransformSnapshot ToSnapshot(const LevelCameraOverride& cameraOverride)
 {
-    return { cameraOverride.position, cameraOverride.yaw, cameraOverride.pitch };
+    return { cameraOverride.position, cameraOverride.yaw, cameraOverride.pitch, cameraOverride.roll };
 }
 
 void RestoreCameraTransform(Camera& camera, const CameraTransformSnapshot& snapshot)
 {
     camera.SetPosition(snapshot.position);
-    camera.SetYawPitch(snapshot.yaw, snapshot.pitch);
+    camera.SetYawPitchRoll(snapshot.yaw, snapshot.pitch, snapshot.roll);
 }
 } // namespace
 

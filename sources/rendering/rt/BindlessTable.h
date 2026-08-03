@@ -32,7 +32,13 @@ struct GeometryInfoGPU
     float    baseColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f }; // material tint / fallback
     // Row 3 (16B)
     uint32_t mrMultiply = 0u; // 0 = texture overrides values, 1 = texture * values
-    uint32_t _pad[3]{};
+    // Byte stride of this record's vertex buffer, taken from Mesh::GetVertexStride(). The RT hit
+    // shaders fetch normals/UVs out of a raw ByteAddressBuffer, so they need the stride; it used to
+    // be a hardcoded 48 in rt_geometry.hlsli, which silently became WRONG the day VertexPNTUV grew
+    // to 52 (W7.1's COLOR_0). Every vertex but #0 then decoded at the wrong offset and RT
+    // reflections shaded off garbage normals/UVs. Sourcing it from the mesh removes the mirror.
+    uint32_t vertexStride = 0u;
+    uint32_t _pad[2]{};
 };
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that

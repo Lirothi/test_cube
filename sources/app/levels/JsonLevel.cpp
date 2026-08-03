@@ -78,12 +78,14 @@ void ApplyFreeCameraStart(const json& o, Camera& camera)
 {
     camera.SetPosition(ToFloat3(o.value("position", json::array()), camera.GetPosition()));
 
+    // rotationDeg is (pitch, yaw, roll) to match every other object's transform. The Z component
+    // used to be parsed and then dropped on the floor; the camera can bank now, so it is applied.
     const float3 currentRotationDeg(
         camera.GetPitch() * RAD2DEG,
         camera.GetYaw() * RAD2DEG,
-        0.0f);
+        camera.GetRoll() * RAD2DEG);
     const float3 rotationDeg = ToFloat3(o.value("rotationDeg", json::array()), currentRotationDeg);
-    camera.SetYawPitch(rotationDeg.y * DEG2RAD, rotationDeg.x * DEG2RAD);
+    camera.SetYawPitchRoll(rotationDeg.y * DEG2RAD, rotationDeg.x * DEG2RAD, rotationDeg.z * DEG2RAD);
 }
 
 #if WITH_EDITOR

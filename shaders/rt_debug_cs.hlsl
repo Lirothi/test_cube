@@ -79,9 +79,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             ByteAddressBuffer ib = ResourceDescriptorHeap[g.ibIndex];
 
             uint3 tri = LoadTriangle(ib, g.firstTri + q.CommittedPrimitiveIndex(), g.indexIs32);
-            float3 n0 = LoadNormal(vb, tri.x);
-            float3 n1 = LoadNormal(vb, tri.y);
-            float3 n2 = LoadNormal(vb, tri.z);
+            float3 n0 = LoadNormal(vb, tri.x, g.vertexStride);
+            float3 n1 = LoadNormal(vb, tri.y, g.vertexStride);
+            float3 n2 = LoadNormal(vb, tri.z, g.vertexStride);
 
             float2 bary = q.CommittedTriangleBarycentrics();
             float  w = 1.0f - bary.x - bary.y;

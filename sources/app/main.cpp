@@ -233,6 +233,26 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
         }
+        // "--cam-pos=x,y,z --cam-rot=x,y,z,w": reproduce the exact view a screenshot was taken
+        // from. Both are printed verbatim by the on-screen HUD, so a shot round-trips into a
+        // headless repro instead of being re-guessed by hand (see AGENTS.md).
+        {
+            const auto readFloats = [lpCmdLine](const char* key, float* out, int n) -> bool {
+                const char* flag = std::strstr(lpCmdLine, key);
+                if (!flag) { return false; }
+                const char* p = flag + std::strlen(key);
+                for (int i = 0; i < n; ++i) {
+                    out[i] = static_cast<float>(std::atof(p));
+                    const char* comma = std::strchr(p, ',');
+                    if (!comma) { return i == n - 1; }
+                    p = comma + 1;
+                }
+                return true;
+            };
+            const bool hasPos = readFloats("--cam-pos=", g_camPos, 3);
+            const bool hasRot = readFloats("--cam-rot=", g_camRot, 4);
+            g_camOverride = hasPos || hasRot;
+        }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must
         // be byte-identical; two runs at DIFFERENT values differ by exactly that much wind time.

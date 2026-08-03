@@ -13,9 +13,10 @@ class Camera {
 public:
     Camera(
         float3 pos = { 0, 0, -4 },
-        float pitch = 0, float yaw = 0)
-        : position_(pos), pitch_(pitch), yaw_(yaw)
+        float pitch = 0, float yaw = 0, float roll = 0)
+        : position_(pos), pitch_(pitch), yaw_(yaw), roll_(roll)
     {
+        UpdateRotation();
         view_.type = SceneView::Type::Camera;
         view_.renderLayerMask = kRenderLayerAll;
         view_.hfov = XMConvertToRadians(90.0f);
@@ -31,16 +32,30 @@ public:
     void MoveUp(float d)        { MoveRelative(0, d, 0); }
 
     // Angle controls (in radians)
-    void AddPitch(float dp) { pitch_ += dp; ClampPitch(); }
-    void AddYaw(float dy)   { yaw_   += dy; WrapYaw();    }
+    // EVERY mutation of pitch/yaw/roll must end in UpdateRotation() — the matrix is cached, and a
+    // path that skips it leaves the view, movement and the HUD reading a stale orientation.
+    void AddPitch(float dp) { pitch_ += dp; ClampPitch(); UpdateRotation(); }
+    void AddYaw(float dy)   { yaw_   += dy; WrapYaw();    UpdateRotation(); }
+    void AddRoll(float dr)  { roll_  += dr; WrapRoll();   UpdateRotation(); }
 
     // Setters
     void SetPosition(const float3& pos) { position_ = pos; }
     void SetYawPitch(float yaw, float pitch) {
-        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw();
+        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw(); UpdateRotation();
     }
+    // Roll is deliberately NOT clamped the way pitch is: banking past vertical is a legitimate
+    // pose, and the gimbal-lock reason for clamping pitch does not apply to the last angle.
+    void SetYawPitchRoll(float yaw, float pitch, float roll) {
+        yaw_ = yaw; pitch_ = pitch; roll_ = roll; ClampPitch(); WrapYaw(); WrapRoll(); UpdateRotation();
+    }
+    void SetRoll(float roll) { roll_ = roll; WrapRoll(); UpdateRotation(); }
     float GetYaw() const { return yaw_; }
     float GetPitch() const { return pitch_; }
+    float GetRoll() const { return roll_; }
+    // THE camera orientation. Cached (rebuilt only when an angle changes) and shared, so the view
+    // matrix, movement, the HUD readout and --cam-rot can never disagree about the rotation order
+    // and none of them pays for a matrix build per call.
+    const mat4& GetRotationMatrix() const { return rotation_; }
 
     void SetHFov(float fov) { view_.hfov = fov; }
     float GetHFov() const { return view_.hfov; }
@@ -114,6 +129,8 @@ private:
     float3 position_;
     float pitch_; // Up/down, clamp to [-pi/2+eps, pi/2-eps]
     float yaw_;   // Left/right, can wrap freely
+    float roll_ = 0.0f; // Bank about the view axis; wraps freely, never clamped
+    mat4 rotation_ = mat4::Identity(); // cache of RotationRollPitchYaw(pitch_, yaw_, roll_)
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
@@ -128,11 +145,16 @@ private:
         while (yaw_ > XM_PI) { yaw_ -= XM_2PI; }
         while (yaw_ < -XM_PI) { yaw_ += XM_2PI; }
     }
+    void WrapRoll() {
+        while (roll_ > XM_PI) { roll_ -= XM_2PI; }
+        while (roll_ < -XM_PI) { roll_ += XM_2PI; }
+    }
+    void UpdateRotation() { rotation_ = mat4::RotationRollPitchYaw(pitch_, yaw_, roll_); }
 
     // Local offset (forward/right/up in camera space)
     void MoveRelative(float dx, float dy, float dz) {
 		float3 move = { dx, dy, dz };
-		mat4 rot = mat4::RotationRollPitchYaw(pitch_, yaw_, 0);
+		mat4 rot = GetRotationMatrix(); // rolled too, so "right"/"up" follow a banked camera
         move = rot.TransformPoint(move);
         position_ = position_ + move;
     }

@@ -143,6 +143,7 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
             rec.baseColor[2] = sm.baseColor4[2]; rec.baseColor[3] = sm.baseColor4[3];
         }
         rec.firstTri = (s < subs.size()) ? subs[s].indexOffset / 3u : 0u;
+        rec.vertexStride = mesh ? mesh->GetVertexStride() : 0u;
 
         makeRawSrv(vb, rec.vbIndex);
         makeRawSrv(ib, rec.ibIndex);

@@ -12,6 +12,9 @@
 
 // Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
 std::string g_bootLevelPath;
+bool  g_camOverride = false;
+float g_camPos[3] = { 0.0f, 0.0f, 0.0f };
+float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
 double g_shotDelaySec = 7.0;
@@ -332,6 +335,38 @@ void App::InitScene()
 
     const bool levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);
     assert(levelLoaded && "Failed to load initial level");
+
+    // Applied after the level so it beats the level's own freeCameraStart.
+    if (g_camOverride)
+    {
+        Camera& cam = scene.CameraRef();
+        cam.SetPosition(float3(g_camPos[0], g_camPos[1], g_camPos[2]));
+
+        // Quaternion -> the camera's yaw/pitch/roll. Recovered GEOMETRICALLY rather than by an
+        // Euler-extraction formula: yaw/pitch come from where the quaternion points the forward
+        // axis, then roll is the leftover twist about that axis, measured as the signed angle
+        // between the un-rolled up vector and the real one. This is independent of the rotation
+        // ORDER the camera happens to use, so it cannot silently break if that order is ever
+        // changed - and it degrades sanely at the poles instead of producing NaNs.
+        const DirectX::XMVECTOR q = DirectX::XMQuaternionNormalize(
+            DirectX::XMVectorSet(g_camRot[0], g_camRot[1], g_camRot[2], g_camRot[3]));
+        const DirectX::XMVECTOR fwd = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), q);
+        const DirectX::XMVECTOR upQ = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 1, 0, 0), q);
+        DirectX::XMFLOAT3 f{};
+        DirectX::XMStoreFloat3(&f, fwd);
+        const float yaw = std::atan2(f.x, f.z);
+        const float pitch = std::atan2(-f.y, std::sqrt(f.x * f.x + f.z * f.z));
+
+        // The up vector this yaw/pitch alone would produce; the angle from it to the real up,
+        // measured about forward, IS the roll.
+        const mat4 noRoll = mat4::RotationRollPitchYaw(pitch, yaw, 0.0f);
+        const float3 upNr3 = noRoll.TransformPoint(float3(0.0f, 1.0f, 0.0f));
+        const DirectX::XMVECTOR upNr = DirectX::XMVectorSet(upNr3.x, upNr3.y, upNr3.z, 0.0f);
+        const DirectX::XMVECTOR cross = DirectX::XMVector3Cross(upNr, upQ);
+        const float sinR = DirectX::XMVectorGetX(DirectX::XMVector3Dot(cross, fwd));
+        const float cosR = DirectX::XMVectorGetX(DirectX::XMVector3Dot(upNr, upQ));
+        cam.SetYawPitchRoll(yaw, pitch, std::atan2(sinR, cosR));
+    }
 
     uploadBatch.SubmitAndWait(&renderer);
     HideLoadingScreen();

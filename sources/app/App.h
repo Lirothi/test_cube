@@ -19,6 +19,12 @@
 // Optional boot-level override (set from the "--level=<path>" command line). Empty = the default
 // demo level. Used for headless verification of specific levels (see docs atoll plan A2+).
 extern std::string g_bootLevelPath;
+// "--cam-pos=x,y,z" / "--cam-rot=x,y,z,w": override the boot camera AFTER the level's
+// freeCameraStart. Both values are exactly what the on-screen HUD prints, so a screenshot round-trips
+// into a headless repro of the same view (see AGENTS.md).
+extern bool  g_camOverride;
+extern float g_camPos[3];
+extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 
 // "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented
 // backbuffer to a PNG (reliable on the flip-model swapchain, unlike GDI/PrintWindow) and exit.
