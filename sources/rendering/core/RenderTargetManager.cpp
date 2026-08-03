@@ -45,10 +45,10 @@ D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredPointShadowDsvCPU(UINT 
     return DeferredDsvAt(base + faceIndex);
 }
 
-void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceStateTracker& tracker)
+void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls)
 {
     // Just in case: release old resources/heaps
-    Destroy(tracker);
+    Destroy(decls);
 
     if (!dev) { return; }
     localShadowFull_ = true; // Create always builds full-res spot/point atlases (Step 24c)
@@ -113,7 +113,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         DeferredSrvSlot srvSlot,
         DeferredSrvSlot uavSlot,
         UINT f,
-        ComPtr<ID3D12Resource>& outRes,
+        GpuResource& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outRTV,
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
         float4 clear = float4(0, 0, 0, 0))
@@ -130,7 +130,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&outRes)));
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             // RTV/SRV — ONLY for frame f
             outRTV = DeferredRtvCPU(f, rtvSlot);
@@ -192,7 +192,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 }
             }
 
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
         };
 
 #if WITH_EDITOR
@@ -210,7 +210,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             auto& D = deferred_[f];
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(&D.objectID)));
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(D.objectID.GetAddressOfForCreate())));
 
             D.objectIDRTV = DeferredRtvCPU(f, DeferredRtvSlot::ObjectID);
             D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
@@ -218,14 +218,14 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
             dev->CreateRenderTargetView(D.objectID.Get(), &rtvDesc, D.objectIDRTV);
 
-            tracker.SetResourceState(D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            D.objectID.DeclareCreated(decls, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
         };
 #endif
 
     auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
         UINT f,
-        ComPtr<ID3D12Resource>& outRes,
+        GpuResource& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
         DXGI_FORMAT srvFormat = DXGI_FORMAT_UNKNOWN)
         {
@@ -233,7 +233,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&outRes)));
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = srvFormat == DXGI_FORMAT_UNKNOWN ? fmt : srvFormat;
@@ -244,25 +244,28 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             outSRV = DeferredSrvCPU(f, srvSlot);
             dev->CreateShaderResourceView(outRes.Get(), &sd, outSRV);
 
+            // Declare BEFORE handing ownership over: a moved-from wrapper is empty, so declaring
+            // after the move would silently register nothing.
+            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
+
             auto& D = deferred_[f];
             if (srvSlot == DeferredSrvSlot::SceneOpaque)
             {
-                D.sceneOpaque = outRes;
+                D.sceneOpaque = std::move(outRes);
                 D.sceneOpaqueSRV = outSRV;
             }
             else if (srvSlot == DeferredSrvSlot::DepthCopy)
             {
-                D.depthCopy = outRes;
+                D.depthCopy = std::move(outRes);
                 D.depthCopySRV = outSRV;
             }
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         };
 
     auto CreateSrvUavTexture = [&](DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
         DeferredSrvSlot uavSlot,
         UINT f,
-        ComPtr<ID3D12Resource>& outRes,
+        GpuResource& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outSRV,
         D3D12_CPU_DESCRIPTOR_HANDLE& outUAV,
         UINT overrideWidth,
@@ -274,7 +277,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&outRes)));
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = fmt;
@@ -319,14 +322,14 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 D.fxaaUAV = outUAV;
             }
 
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         };
 
     auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
         DeferredDsvSlot dsvSlot,
         DeferredSrvSlot srvSlot,
         UINT f,
-        ComPtr<ID3D12Resource>& outRes,
+        GpuResource& outRes,
         D3D12_CPU_DESCRIPTOR_HANDLE& outDSV,
         D3D12_CPU_DESCRIPTOR_HANDLE& outDepthSRV,
         float clearDepth = 0.0f,
@@ -340,7 +343,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = clearDepth; cv.DepthStencil.Stencil = 0;
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&outRes)));
+                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             // DSV
             outDSV = DeferredDsvCPU(f, dsvSlot);
@@ -371,7 +374,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 dev->CreateShaderResourceView(outRes.Get(), &stencilDesc, *outStencilSRV);
             }
 
-            tracker.SetResourceState(outRes.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr);
         };
 
     // Step 24f-2: CSM cascade atlas creation lives in CreateShadowResource (below) so the shadow-mode
@@ -402,13 +405,13 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
         D.shadowRes = 4096; // could be driven by config/parameter
-        CreateShadowResource(dev, tracker, f, D.shadowRes);
+        CreateShadowResource(dev, decls, f, D.shadowRes);
 
         D.spotShadowRes = 512;
-        CreateSpotShadowResource(dev, tracker, f, D.spotShadowRes);
+        CreateSpotShadowResource(dev, decls, f, D.spotShadowRes);
 
         D.pointShadowRes = 256;
-        CreatePointShadowResource(dev, tracker, f, D.pointShadowRes);
+        CreatePointShadowResource(dev, decls, f, D.pointShadowRes);
 
         CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
@@ -434,44 +437,62 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // Debug names so DRED / the debug layer print readable resource names in
         // page-fault reports (these are the prime use-after-free suspects during
         // the deferred-target recreate races the --scene-stress harness hunts).
-        auto nameRes = [f](ID3D12Resource* res, const wchar_t* base) {
+        // Step 6b: name AND declare the resting state in one list. The four generic creators
+        // above seeded the tracker with each target's CREATION state, which is where it actually
+        // is; `resting` is where the frame LEAVES it, measured with --canonical-check. The two
+        // differ for most targets — a G-buffer is created RENDER_TARGET and ends the frame
+        // shader-readable — and it is the resting state that Step 7's compile seeds from.
+        constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        constexpr D3D12_RESOURCE_STATES kPs = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        auto nameRes = [f, decls](ID3D12Resource* res, const wchar_t* base,
+                                  D3D12_RESOURCE_STATES resting) {
             if (res) {
                 wchar_t nm[96];
                 swprintf_s(nm, L"Deferred[%u].%s", f, base);
                 res->SetName(nm);
+                // The registry captured a name at declaration time, which is BEFORE this block,
+                // so every deferred target was logged as a raw pointer. Safe to re-read here —
+                // they were all just created.
+                decls.RefreshName(res);
+                decls.SetCanonical(res, resting);
             }
         };
-        nameRes(D.gb0.Get(), L"GB0");
-        nameRes(D.gb1.Get(), L"GB1");
-        nameRes(D.gb2.Get(), L"GB2");
-        nameRes(D.gbVelocity.Get(), L"GBVelocity");
-        nameRes(D.gbAux.Get(), L"GBAux");
+        nameRes(D.gb0.Get(), L"GB0", kNps);
+        nameRes(D.gb1.Get(), L"GB1", kNps);
+        nameRes(D.gb2.Get(), L"GB2", kNps);
+        nameRes(D.gbVelocity.Get(), L"GBVelocity", kNps);
+        nameRes(D.gbAux.Get(), L"GBAux", kNps);
 #if WITH_EDITOR
-        nameRes(D.objectID.Get(), L"ObjectID");
+        // Never read as an SRV in a normal frame; the pick readback copies from it and puts it
+        // back, so it rests where it was created.
+        nameRes(D.objectID.Get(), L"ObjectID", D3D12_RESOURCE_STATE_RENDER_TARGET);
 #endif
-        nameRes(D.depth.Get(), L"Depth");
-        nameRes(D.depthCopy.Get(), L"DepthCopy");
-        nameRes(D.shadow.Get(), L"CascadeShadow");
-        nameRes(D.spotShadow.Get(), L"SpotShadow");
-        nameRes(D.pointShadow.Get(), L"PointShadow");
-        nameRes(D.light.Get(), L"Light");
-        nameRes(D.scene.Get(), L"Scene");
-        nameRes(D.sceneOpaque.Get(), L"SceneOpaque");
-        nameRes(D.dlssOutput.Get(), L"DlssOutput");
-        nameRes(D.reflection.Get(), L"Reflection");
-        nameRes(D.reflectionScratch.Get(), L"ReflectionScratch");
-        nameRes(D.oceanReflection.Get(), L"OceanReflection");
-        nameRes(D.glassReflNormal.Get(), L"GlassReflNormal");
-        nameRes(D.glassReflDepth.Get(), L"GlassReflDepth");
-        nameRes(D.glassReflection.Get(), L"GlassReflection");
-        nameRes(D.tonemap.Get(), L"Tonemap");
-        nameRes(D.fxaa.Get(), L"Fxaa");
+        nameRes(D.depth.Get(), L"Depth", kNps);
+        nameRes(D.depthCopy.Get(), L"DepthCopy", kPs);
+        // Legacy shadow atlases: written every frame, never sampled after the last light pass.
+        nameRes(D.shadow.Get(), L"CascadeShadow", kNps);
+        nameRes(D.spotShadow.Get(), L"SpotShadow", kNps);
+        nameRes(D.pointShadow.Get(), L"PointShadow", kNps | kPs);
+        nameRes(D.light.Get(), L"Light", kNps);
+        nameRes(D.scene.Get(), L"Scene", kNps);
+        nameRes(D.sceneOpaque.Get(), L"SceneOpaque", kPs);
+        nameRes(D.dlssOutput.Get(), L"DlssOutput", kNps);
+        nameRes(D.reflection.Get(), L"Reflection", kNps);
+        nameRes(D.reflectionScratch.Get(), L"ReflectionScratch", kNps);
+        // Sampled by the forward ocean/glass draws, so they rest PIXEL-readable, not NPS.
+        nameRes(D.oceanReflection.Get(), L"OceanReflection", kPs);
+        nameRes(D.glassReflNormal.Get(), L"GlassReflNormal", kNps);
+        nameRes(D.glassReflDepth.Get(), L"GlassReflDepth", kNps);
+        nameRes(D.glassReflection.Get(), L"GlassReflection", kPs);
+        // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
+        nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        nameRes(D.fxaa.Get(), L"Fxaa", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 }
 
 // Step 24f-2: CSM cascade atlas (R16_TYPELESS 2D, DSV=D16, SRV=R16). Writes deferred_[f].shadow + its
 // views. `resolution` = full-res (Legacy) or 1 (VSM: tiny, directional comes from the clipmap).
-void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 4096; }
@@ -500,7 +521,7 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceStateT
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(D.shadow.ReleaseAndGetAddressOf())));
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(D.shadow.GetAddressOfForCreate())));
 
     D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
@@ -516,12 +537,13 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceStateT
     sd.Texture2D.MipLevels = 1;
     dev->CreateShaderResourceView(D.shadow.Get(), &sd, D.shadowSRV);
 
-    tracker.SetResourceState(D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    D.shadow->SetName(L"CascadeShadow"); // also created by SetLocalShadowResidency, after Create's naming block
+    D.shadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
 }
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
 // Writes deferred_[f].spotShadow + its views. `resolution` = full-res (Legacy) or 1 (VSM: tiny).
-void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
@@ -552,7 +574,7 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceSt
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.spotShadow.ReleaseAndGetAddressOf())));
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.spotShadow.GetAddressOfForCreate())));
 
     D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -580,12 +602,13 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceSt
         dev->CreateDepthStencilView(D.spotShadow.Get(), &dsv, D.spotShadowDSV[i]);
     }
 
-    tracker.SetResourceState(D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    D.spotShadow->SetName(L"SpotShadow");
+    D.spotShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
 }
 
 // Step 24c: point shadow cube-array (6*N slices of R16_TYPELESS; DSV=D16 per face, SRV=R16 cube
 // array). Mirrors CreateSpotShadowResource, cube-ified. `resolution` = full-res (Legacy) or 1 (VSM).
-void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution)
+void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
@@ -615,7 +638,7 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceS
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.pointShadow.ReleaseAndGetAddressOf())));
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.pointShadow.GetAddressOfForCreate())));
 
     D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -642,10 +665,11 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceS
         dev->CreateDepthStencilView(D.pointShadow.Get(), &dsv, D.pointShadowDSV[face]);
     }
 
-    tracker.SetResourceState(D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    D.pointShadow->SetName(L"PointShadow");
+    D.pointShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
 }
 
-void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceStateTracker& tracker, bool full)
+void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full)
 {
     if (full == localShadowFull_ || !dev) { return; }
     for (UINT f = 0; f < render::kFrameCount; ++f)
@@ -653,26 +677,28 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceSta
         auto& D = deferred_[f];
         // Untrack the outgoing resources (ReleaseAndGetAddressOf inside the create calls frees them),
         // so a re-used address can't inherit a stale tracked state.
-        if (D.shadow) { tracker.ClearResourceState(D.shadow.Get()); }          // Step 24f-2: CSM cascade atlas
-        if (D.spotShadow) { tracker.ClearResourceState(D.spotShadow.Get()); }
-        if (D.pointShadow) { tracker.ClearResourceState(D.pointShadow.Get()); }
+        if (D.shadow) { decls.Forget(D.shadow.Get()); }          // Step 24f-2: CSM cascade atlas
+        if (D.spotShadow) { decls.Forget(D.spotShadow.Get()); }
+        if (D.pointShadow) { decls.Forget(D.pointShadow.Get()); }
         // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). VSM mode
         // retires the CSM cascade atlas (~96 MB across frames) as well: the render graph omits the
         // Main_CSM pass in VSM mode, so nothing renders into this 1x1 placeholder.
-        CreateShadowResource(dev, tracker, f, full ? D.shadowRes : 1u);
-        CreateSpotShadowResource(dev, tracker, f, full ? D.spotShadowRes : 1u);
-        CreatePointShadowResource(dev, tracker, f, full ? D.pointShadowRes : 1u);
+        CreateShadowResource(dev, decls, f, full ? D.shadowRes : 1u);
+        CreateSpotShadowResource(dev, decls, f, full ? D.spotShadowRes : 1u);
+        CreatePointShadowResource(dev, decls, f, full ? D.pointShadowRes : 1u);
     }
     localShadowFull_ = full;
 }
 
-void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
+void RenderTargetManager::Destroy(ResourceDeclarations decls)
 {
     deferredRtvHeap_.Reset(); deferredDsvHeap_.Reset(); deferredSrvCpuHeap_.Reset();
     std::vector<ID3D12Resource*> released;
     released.reserve(render::kFrameCount * DeferredTargets::kResourceCount);
 
-    auto collect = [&released](ComPtr<ID3D12Resource>& res) {
+    // The wrapper unregisters on Reset, so `released` is now only the ForgetMany safety net for
+    // anything declared outside a wrapper — kept, and harmless for the rest.
+    auto collect = [&released](GpuResource& res) {
         if (ID3D12Resource* ptr = res.Get()) {
             released.push_back(ptr);
             res.Reset();
@@ -708,7 +734,7 @@ void RenderTargetManager::Destroy(ResourceStateTracker& tracker)
         collect(D.glassReflection);
     }
 
-    tracker.ForgetResources(released);
+    decls.ForgetMany(released);
 
     for (DeferredTargets& D : deferred_) {
         D = DeferredTargets{};

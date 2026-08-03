@@ -93,8 +93,11 @@ void Renderer::Shutdown()
     // 3) Back buffers and RTV/DSV heaps
     swapchain_.ReleaseBuffers();
 
-    // 4) Safety measure: clear resource state tracking
+    // 4) Safety measure: clear resource state tracking. The canonical declarations go with it —
+    // every resource they describe has just been destroyed, and a surviving entry would hand a
+    // recycled address someone else's resting state.
     stateTracker_.ClearAllKnownStates();
+    canonicalStates_.Clear();
 
     // 5) SwapChain — exit fullscreen (if needed) and release it
     swapchain_.ReleaseSwapchain();
@@ -817,7 +820,9 @@ void Renderer::ExecuteTimelineAndPresent() {
         presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         epilogueCmd->ResourceBarrier(1, &presentBarrier);
-        SetResourceState(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
+        // The engine's one existing return-to-canonical transition (D2's frame epilogue). Same
+        // value the declaration carries, so it only needs to reach the tracker.
+        SetTrackedStateOnly(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
 #if PROF_GPU_ENABLED
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
@@ -826,6 +831,10 @@ void Renderer::ExecuteTimelineAndPresent() {
 
         stateTracker_.SetKnownStateDirect(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
     }
+
+    // Step 6: every command list's final states have been folded into the tracker by here, so
+    // this is the frame's true end state. Default off.
+    ReportOffCanonicalStates();
 
     {
         CPU_SCOPE(ProfilerScopes::kService3);
@@ -889,11 +898,106 @@ void Renderer::OnResize(UINT width, UINT height) {
 }
 
 void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
-    stateTracker_.SetResourceState(res, state);
+    // Step 6: this IS the canonical declaration (see the header).
+    Declarations().Declare(res, state);
+}
+
+void Renderer::SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES creationState,
+                                D3D12_RESOURCE_STATES canonicalState) {
+    Declarations().Declare(res, creationState, canonicalState);
 }
 
 void Renderer::ClearResourceState(ID3D12Resource* res) {
-    stateTracker_.ClearResourceState(res);
+    Declarations().Forget(res);
+}
+
+void Renderer::SetTrackedStateOnly(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
+    stateTracker_.SetResourceState(res, state);
+}
+
+D3D12_RESOURCE_STATES Renderer::GetCanonicalState(ID3D12Resource* res) const {
+    return canonicalStates_.Get(res);
+}
+
+void Renderer::ReportOffCanonicalStates() {
+    if (!render::g_canonicalCheck) { return; }
+
+    // Snapshot first: GetGlobalKnownState takes the tracker's lock, and holding the canonical
+    // lock across it would nest two locks on the frame's critical path.
+    canonicalStates_.Snapshot(canonicalScratch_);
+
+    unsigned drifted = 0;
+    for (const auto& [res, entry] : canonicalScratch_) {
+        // NEVER dereference `res` here. Not every release path unregisters, so this table can
+        // hold dangling keys; the name was captured at declaration time for exactly that reason,
+        // and GetGlobalKnownState only uses the pointer as a hash key.
+        const D3D12_RESOURCE_STATES actual = stateTracker_.GetGlobalKnownState(res);
+        if (actual == entry.state) { continue; }
+        ++drifted;
+        char msg[320];
+        std::snprintf(msg, sizeof(msg), "[canonical] off-canonical res=%s canonical=0x%X actual=0x%X\n",
+                      entry.name, static_cast<unsigned>(entry.state), static_cast<unsigned>(actual));
+        OutputDebugStringA(msg);
+    }
+
+    // Step 6b part 2: name the LEAK. Every resource has a unique debug name, so two live entries
+    // sharing one name means an earlier resource was never unregistered — the dangling keys that
+    // crashed the reporter and that let a recycled address inherit a stale canonical. Printing
+    // the duplicated names says exactly which owners fail to unregister, instead of guessing at
+    // ~60 declaration sites. Throttled: this walks the table twice.
+    // Triggered by the table CHANGING SIZE, which is precisely when something was declared or
+    // failed to be forgotten. A fixed frame-count throttle was wrong: the stress harness runs
+    // only a handful of frames per churn op, so a 240-frame tick never fired.
+    if (canonicalScratch_.size() != canonicalLastDeclared_) {
+        // A steady count is NOT a leak: two GPU-instanced clouds, or one texture legitimately
+        // loaded twice, sit at a constant 2 forever. Only a count that keeps CLIMBING past every
+        // value it has held before means declares are outrunning forgets. Reporting bare
+        // duplicates cannot tell those apart and twice made me call a steady x2 a leak.
+        canonicalStates_.NetByName(canonicalNetScratch_);
+        for (const auto& [name, net] : canonicalNetScratch_) {
+            // Skip pointer-"named" entries. Their identity is an ADDRESS, which the allocator
+            // reuses, so a per-name net count means nothing for them — the answer for an unnamed
+            // resource is to give it a debug name, not to count it.
+            if (name.find('.') == std::string::npos && name.find(':') == std::string::npos) { continue; }
+            auto it = canonicalNetPeak_.find(name);
+            const int peak = (it == canonicalNetPeak_.end()) ? 0 : it->second;
+            if (net <= peak) { continue; }
+            canonicalNetPeak_[name] = net;
+            // Growing past a previous high-water mark. The first sighting of a name is not
+            // interesting (every resource declares once), so only report from the second on.
+            if (net < 2) { continue; }
+            char dup[240];
+            std::snprintf(dup, sizeof(dup), "[canonical] LEAK %s: live entries grew to %d\n",
+                          name.c_str(), net);
+            OutputDebugStringA(dup);
+        }
+
+        unsigned anonymous = 0;
+        for (const auto& [res, entry] : canonicalScratch_) {
+            (void)res;
+            // A resource with no debug name falls back to its address, unique by construction, so
+            // it can never pair up with anything. Counted separately or the leak hides in them.
+            if (std::strchr(entry.name, '.') == nullptr && std::strchr(entry.name, ':') == nullptr) { ++anonymous; }
+        }
+        char anon[160];
+        std::snprintf(anon, sizeof(anon), "[canonical] %u named + %u UNNAMED entries declared\n",
+                      static_cast<unsigned>(canonicalNetScratch_.size()), anonymous);
+        OutputDebugStringA(anon);
+    }
+
+    // One summary line so an empty log is distinguishable from a check that never ran — the same
+    // mistake the comparator's SKIPPED line exists to prevent. Printed only when the numbers
+    // CHANGE: at one line per frame it floods DBWIN's single shared buffer and the listener drops
+    // the leak lines above, which is exactly how the first leak measurement came back empty.
+    const unsigned declaredCount = static_cast<unsigned>(canonicalScratch_.size());
+    if (drifted != canonicalLastDrift_ || declaredCount != canonicalLastDeclared_) {
+        canonicalLastDrift_ = drifted;
+        canonicalLastDeclared_ = declaredCount;
+        char summary[160];
+        std::snprintf(summary, sizeof(summary), "[canonical] frame end: %u of %u declared resources off-canonical\n",
+                      drifted, declaredCount);
+        OutputDebugStringA(summary);
+    }
 }
 
 // Barrier plan step 3: null unless a converted pass's body is running on this thread.
@@ -1021,7 +1125,10 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
-    SetResourceState(swapchain_.Backbuffer(currentFrameIndex_), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // Step 6: a mid-frame flip, NOT the backbuffer's resting state — its canonical is PRESENT,
+    // declared once in CreateSwapChainAndRTVs. Declaring RENDER_TARGET here would redefine
+    // canonical every single frame and make the frame-end check vacuous.
+    SetTrackedStateOnly(swapchain_.Backbuffer(currentFrameIndex_), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // RTV/DSV
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapchain_.BackbufferRTV(currentFrameIndex_);
@@ -1103,11 +1210,11 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.oceanReflectionWidth = oceanReflectionTextureWidth_;
     sizes.oceanReflectionHeight = oceanReflectionTextureHeight_;
 
-    rtManager_.Create(GetDevice(), formats, sizes, stateTracker_);
+    rtManager_.Create(GetDevice(), formats, sizes, Declarations());
 }
 
 void Renderer::DestroyDeferredTargets() {
-    rtManager_.Destroy(stateTracker_);
+    rtManager_.Destroy(Declarations());
 #if WITH_EDITOR
     ResetObjectIdPickState();
 #endif

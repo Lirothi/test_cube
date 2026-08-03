@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "rendering/core/SwapchainManager.h"
 #include "rendering/core/FrameScheduler.h"
 #include "rendering/core/ResourceStateTracker.h"
+#include "rendering/core/ResourceDeclarations.h"
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/SubmitTimeline.h"
 #include "rendering/core/RenderConstants.h"
@@ -43,6 +45,15 @@ using Microsoft::WRL::ComPtr;
 class Camera;
 
 class DlssHandler;
+
+namespace render {
+// Barrier plan step 6: at the end of every frame, diff each resource's tracked state against
+// the canonical state it declared, and log the ones that drifted. DEFAULT OFF (`--canonical-check`)
+// — it walks the whole declaration table once per frame under the tracker's lock. This is the
+// measurement that says whether D2's "every frame ends at canonical" invariant is real, and
+// exactly which resources need an epilogue transition before Step 7 makes it load-bearing.
+inline bool g_canonicalCheck = false;
+} // namespace render
 
 class Renderer {
 public:
@@ -132,7 +143,7 @@ public:
 
     // Step 24c: full-res (Legacy) vs 1x1 (VSM) legacy spot/point shadow atlases — the shadow-mode
     // reconcile calls this at GPU idle so only the active mode's shadow memory is resident.
-    void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), stateTracker_, full); } }
+    void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), Declarations(), full); } }
     bool IsLocalShadowFull() const { return rtManager_.IsLocalShadowFull(); }
 
     // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
@@ -243,8 +254,32 @@ public:
     void SetWireframeMode(bool w) { wireframeMode_ = w; }
     bool GetWireframeMode() const { return wireframeMode_; }
 
+    // --- Barrier plan, step 6: canonical (resting) states ---
+    //
+    // D2: every graph resource declares the state it RESTS in, once, at creation — which is
+    // exactly what these ~45 call sites already pass (R2: SetResourceState was never tracking,
+    // it was always a creation-time seed). The invariant Step 7 needs is that every frame
+    // begins AND ends with each resource at its canonical state, so the compiled barriers can
+    // seed from this static table instead of a live cross-frame map. Written at create/destroy
+    // only, read-only during a frame — it is the tracker's `knownStates_` that dies, not this.
+    //
+    // So `SetResourceState` IS the declaration. Mid-frame pokes that are not a resting state
+    // must use SetTrackedStateOnly, or they would redefine canonical every frame.
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
+    // Step 6b: creation state and resting state are different facts. The first seeds the
+    // tracker (where the resource IS); the second is what the frame must leave it in.
+    void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES creationState,
+                          D3D12_RESOURCE_STATES canonicalState);
     void ClearResourceState(ID3D12Resource* res);
+    void SetTrackedStateOnly(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
+    D3D12_RESOURCE_STATES GetCanonicalState(ID3D12Resource* res) const; // COMMON if undeclared
+    // For subsystems that create resources without a Renderer& (RenderTargetManager).
+    ResourceDeclarations Declarations() { return ResourceDeclarations{ &stateTracker_, &canonicalStates_ }; }
+    // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
+    // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
+    // needs an epilogue transition, and this is the step that finds them all.
+    void ReportOffCanonicalStates();
+
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
 
     // --- Barrier plan, step 3: transition observation (diagnostic) ---
@@ -467,6 +502,16 @@ private:
 
     // Resource-state tracking across parallel command-list recording
     ResourceStateTracker stateTracker_;
+
+    // Step 6: resource -> canonical (resting) state. Outlives stateTracker_ by design.
+    CanonicalStateRegistry canonicalStates_;
+    // Reused by the frame-end check so the diagnostic does not allocate per frame.
+    std::vector<std::pair<ID3D12Resource*, CanonicalStateRegistry::Entry>> canonicalScratch_;
+    // Per-name high-water mark of live entries: a leak is growth PAST it, not a steady count.
+    std::vector<std::pair<std::string, int>> canonicalNetScratch_;
+    robin_hood::unordered_map<std::string, int> canonicalNetPeak_;
+    unsigned canonicalLastDrift_ = ~0u;    // summary prints on change only — see the note there
+    unsigned canonicalLastDeclared_ = ~0u;
 
     // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
     ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;

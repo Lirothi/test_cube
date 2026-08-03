@@ -5,7 +5,7 @@
 #include <wrl/client.h>
 
 #include "rendering/lighting/LightManager.h"
-#include "rendering/core/ResourceStateTracker.h"
+#include "rendering/core/ResourceDeclarations.h"
 #include "rendering/core/RenderConstants.h"
 #include "core/math/Math.h"
 
@@ -24,33 +24,33 @@ public:
             22;
 #endif
         // Resources
-        Microsoft::WRL::ComPtr<ID3D12Resource> gb0;   // albedo+metal
-        Microsoft::WRL::ComPtr<ID3D12Resource> gb1;   // encoded normal RGB; A2 remains unused
-        Microsoft::WRL::ComPtr<ID3D12Resource> gb2;   // emissive
-        Microsoft::WRL::ComPtr<ID3D12Resource> gbVelocity; // motion vectors
-        Microsoft::WRL::ComPtr<ID3D12Resource> gbAux; // AO, indirect specular scale, shading model
+        GpuResource gb0;   // albedo+metal
+        GpuResource gb1;   // encoded normal RGB; A2 remains unused
+        GpuResource gb2;   // emissive
+        GpuResource gbVelocity; // motion vectors
+        GpuResource gbAux; // AO, indirect specular scale, shading model
 #if WITH_EDITOR
-        Microsoft::WRL::ComPtr<ID3D12Resource> objectID; // editor object id (0 = none)
+        GpuResource objectID; // editor object id (0 = none)
 #endif
-        Microsoft::WRL::ComPtr<ID3D12Resource> depth;
-        Microsoft::WRL::ComPtr<ID3D12Resource> depthCopy; // Copy of depth before transparent pass
-        Microsoft::WRL::ComPtr<ID3D12Resource> light;
-        Microsoft::WRL::ComPtr<ID3D12Resource> scene;
-        Microsoft::WRL::ComPtr<ID3D12Resource> sceneOpaque; // Copy of opaque scene color for refraction
-        Microsoft::WRL::ComPtr<ID3D12Resource> tonemap; // Tonemap output (R8G8B8A8)
-        Microsoft::WRL::ComPtr<ID3D12Resource> fxaa;    // FXAA output (R8G8B8A8)
-        Microsoft::WRL::ComPtr<ID3D12Resource> reflection;        // premultiplied; compose samples this after blur
-        Microsoft::WRL::ComPtr<ID3D12Resource> reflectionScratch; // ping-pong/scratch target for reflection filtering
-        Microsoft::WRL::ComPtr<ID3D12Resource> oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
-        Microsoft::WRL::ComPtr<ID3D12Resource> shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
-        Microsoft::WRL::ComPtr<ID3D12Resource> spotShadow; // R16_TYPELESS array for spot lights
-        Microsoft::WRL::ComPtr<ID3D12Resource> pointShadow; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
-        Microsoft::WRL::ComPtr<ID3D12Resource> dlssOutput; // scene color format, upscaled
+        GpuResource depth;
+        GpuResource depthCopy; // Copy of depth before transparent pass
+        GpuResource light;
+        GpuResource scene;
+        GpuResource sceneOpaque; // Copy of opaque scene color for refraction
+        GpuResource tonemap; // Tonemap output (R8G8B8A8)
+        GpuResource fxaa;    // FXAA output (R8G8B8A8)
+        GpuResource reflection;        // premultiplied; compose samples this after blur
+        GpuResource reflectionScratch; // ping-pong/scratch target for reflection filtering
+        GpuResource oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
+        GpuResource shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
+        GpuResource spotShadow; // R16_TYPELESS array for spot lights
+        GpuResource pointShadow; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
+        GpuResource dlssOutput; // scene color format, upscaled
         // S15 off-screen glass reflections: a reflection-res glass G-buffer (front-face
         // normal + depth) feeding a second rt_reflections_cs dispatch into glassReflection.
-        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflNormal; // glass front-face world normal
-        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflDepth;  // glass front-face depth (R32 SRV)
-        Microsoft::WRL::ComPtr<ID3D12Resource> glassReflection; // premultiplied glass reflection
+        GpuResource glassReflNormal; // glass front-face world normal
+        GpuResource glassReflDepth;  // glass front-face depth (R32 SRV)
+        GpuResource glassReflection; // premultiplied glass reflection
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
@@ -115,8 +115,8 @@ public:
         UINT oceanReflectionWidth = 1, oceanReflectionHeight = 1;
     };
 
-    void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceStateTracker& tracker);
-    void Destroy(ResourceStateTracker& tracker);
+    void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
+    void Destroy(ResourceDeclarations decls);
 
     bool IsCreated() const { return deferredRtvHeap_ != nullptr; }
     DeferredTargets& Deferred(UINT frame) { return deferred_[frame]; }
@@ -126,7 +126,7 @@ public:
     // Legacy mode, 1x1 (negligible memory) in VSM mode, where local shadows come from the VSM pool.
     // The resources stay VALID (just tiny), so every render-graph declaration / SRV bind keeps
     // working with no null handling. MUST be called at GPU idle (the shadow-mode reconcile waits).
-    void SetLocalShadowResidency(ID3D12Device* dev, ResourceStateTracker& tracker, bool full);
+    void SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full);
     bool IsLocalShadowFull() const { return localShadowFull_; }
 
 private:
@@ -160,9 +160,9 @@ private:
     // Step 24c: (re)create the spot / point shadow atlas resource + its SRV/DSV views at `resolution`
     // for frame `f` (operates on deferred_[f]). Extracted from Create()'s lambdas so the residency
     // toggle can rebuild them at 1x1 / full res.
-    void CreateShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution); // Step 24f-2: CSM atlas
-    void CreateSpotShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
-    void CreatePointShadowResource(ID3D12Device* dev, ResourceStateTracker& tracker, UINT f, UINT resolution);
+    void CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution); // Step 24f-2: CSM atlas
+    void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
+    void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
 
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames

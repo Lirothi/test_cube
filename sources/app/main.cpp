@@ -193,6 +193,13 @@ int WINAPI WinMain(
         render::g_barrierComparator = true;
     }
 
+    // Barrier plan step 6: "--canonical-check" logs every resource that did not END the frame in
+    // its declared canonical state (DBWIN "[canonical]" lines). Parsed above the scene-stress
+    // branch for the same reason as --barrier-cmp: the churn is where drift shows up.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--canonical-check")) {
+        render::g_canonicalCheck = true;
+    }
+
     // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
     // because the scene-stress branch returns first. Without it the stress run always takes the
     // VSM path and Main_CSM is never even added to the graph, so nothing exercises it.

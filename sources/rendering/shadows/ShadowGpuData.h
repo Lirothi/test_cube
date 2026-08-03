@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 
 #include "rendering/core/RenderConstants.h"
+#include "rendering/core/ResourceDeclarations.h"
 #include "rendering/renderables/InstanceTypes.h"
 
 class Renderer;
@@ -234,7 +235,7 @@ private:
     // behind all three logical buffers above.
     struct Ring
     {
-        Microsoft::WRL::ComPtr<ID3D12Resource>        buffer;
+        GpuResource                                   buffer; // step 6b: self-unregistering
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>  srvHeap;
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> srvHandles{};
         std::uint8_t* mapped = nullptr; // persistent map, region f at mapped + f*capacity*stride
@@ -257,15 +258,18 @@ private:
     // here — the cull (Step 4) creates the UAVs, ExecuteIndirect (Step 6) reads by address.
     struct UavRing
     {
-        Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+        GpuResource buffer; // step 6b: self-unregistering
         size_t regionBytes = 0; // bytes per region; region f base offset = f * regionBytes
 
-        bool Valid() const { return buffer != nullptr; }
+        bool Valid() const { return static_cast<bool>(buffer); } // GpuResource: explicit operator bool
     };
 
     // Ensure `ring` holds >= `regionBytes` per region; (re)allocate on growth. Registers the
     // resource state (COMMON) with the tracker. Returns false on allocation failure.
+    // `canonical` = the state the FRAME LEAVES this buffer in (barrier plan step 6b). It differs
+    // per buffer even though one helper creates them all, so the caller states it.
     static bool EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regionBytes,
+                              D3D12_RESOURCE_STATES canonical,
                               const wchar_t* name);
     static void ReleaseUavRing(Renderer* renderer, UavRing& ring);
 
@@ -363,8 +367,10 @@ private:
     // Rung 2 mega-buffer: all group meshes concatenated into one VB/IB (see EnsureMegaBuffer).
     // megaWanted_ = layout is uniform + within limits (set in Rebuild); megaBuilt_ = the one-time
     // GPU copy has run (one-shot, success or fail); megaReady_ = built + usable.
-    Microsoft::WRL::ComPtr<ID3D12Resource> megaVB_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> megaIB_;
+    // Step 6b part 2: on the wrapper. The old ComPtr was Reset() on a level change, which
+    // freed the buffer WITHOUT unregistering it — a measured leak (net climbed 2->5).
+    GpuResource megaVB_;
+    GpuResource megaIB_;
     std::vector<std::uint32_t> baseVertex_;   // per group: its MESH's vertex offset into megaVB_ (B3: submesh groups share it)
     std::vector<std::uint32_t> startIndex_;   // per group: its MESH's index offset into megaIB_ (the group's submesh range rides in the args)
     // Per-view shadow LOD (cull-view layout: [cascades | spots | point-faces | clipmap]); = the view's

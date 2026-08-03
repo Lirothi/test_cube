@@ -118,7 +118,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     ThrowIfFailed(r->GetDevice()->CreateCommittedResource(
         &hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
 
     // 4) Prepare the upload buffer and subresource layout
     const UINT subresources = mips * arr;
@@ -202,7 +202,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         keepAlive->push_back(upload);
     }
 
-    r->SetResourceState(tex_.Get(), kShaderReadStates);
+    tex_.DeclareCreated(r->Declarations(), kShaderReadStates, L"TextureCube_RESOURCE");
 
     // 8) Create the CPU SRV (TextureCube or TextureCubeArray, same format as the resource)
     CreateSrvCPU_(r, format_, mips, arr);

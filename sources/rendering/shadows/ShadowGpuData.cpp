@@ -39,7 +39,7 @@ void ShadowGpuData::ReleaseRing(Renderer* renderer, Ring& ring)
 {
     if (ring.buffer)
     {
-        if (renderer) { renderer->ClearResourceState(ring.buffer.Get()); }
+        (void)renderer; // the wrapper unregisters itself
         ring.buffer->Unmap(0, nullptr);
         ring.buffer.Reset();
     }
@@ -137,12 +137,11 @@ bool ShadowGpuData::EnsureRing(Renderer* renderer, Ring& ring, size_t elements, 
         ring.srvHandles[f] = h;
     }
 
-    renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
-    buffer->SetName(name);
+    // Upload-heap rings never leave GENERIC_READ, so creation and resting state match.
 
     ring.capacity = newCapacity;
     ring.stride = stride;
-    ring.buffer = buffer;
+    ring.buffer.Attach(renderer->Declarations(), buffer, D3D12_RESOURCE_STATE_GENERIC_READ, name);
     ring.mapped = static_cast<std::uint8_t*>(mapped);
     ring.srvHeap = srvHeap;
     return true;
@@ -154,13 +153,14 @@ void ShadowGpuData::ReleaseUavRing(Renderer* renderer, UavRing& ring)
 {
     if (ring.buffer)
     {
-        if (renderer) { renderer->ClearResourceState(ring.buffer.Get()); }
+        (void)renderer; // the wrapper unregisters itself
         ring.buffer.Reset();
     }
     ring.regionBytes = 0;
 }
 
 bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regionBytes,
+                                  D3D12_RESOURCE_STATES canonical,
                                   const wchar_t* name)
 {
     if (!renderer || !renderer->GetDevice())
@@ -200,9 +200,8 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
         return false;
     }
 
-    renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_COMMON);
-    buffer->SetName(name);
-    ring.buffer = buffer;
+    ring.buffer.Attach(renderer->Declarations(), buffer,
+        D3D12_RESOURCE_STATE_COMMON, canonical, name);
     ring.regionBytes = regionBytes;
     return true;
 }
@@ -913,14 +912,14 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const size_t numViews = render::kMaxShadowViews;
     const size_t groups = std::max<size_t>(numMeshGroups_, 1);
     const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
-    EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), L"ShadowGpuData.IndirectArgs");
-    EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), L"ShadowGpuData.VisibleList");
-    EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), L"ShadowGpuData.IndirectCounts");
+    EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.IndirectArgs");
+    EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.VisibleList");
+    EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.IndirectCounts");
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
     // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
     // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
-    EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), L"ShadowGpuData.InstancesUnified");
-    EnsureUavRing(renderer, boundsUnified_, casters * sizeof(render::CasterBounds), L"ShadowGpuData.BoundsUnified");
+    EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.InstancesUnified");
+    EnsureUavRing(renderer, boundsUnified_, casters * sizeof(render::CasterBounds), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.BoundsUnified");
     // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
     renderer->GetDrawIndexedCommandSignature();
     // Step 4: per-region UAVs for the cull outputs (depend on the just-decided sizes).
@@ -1665,9 +1664,11 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
     if (!renderer || !renderer->GetDevice() || !cl || megaBuilt_ || !megaWanted_) { return; }
     megaBuilt_ = true; // one-shot: never re-attempt (a failed alloc falls back to per-group binding)
 
-    auto makeBuf = [&](UINT bytes, Microsoft::WRL::ComPtr<ID3D12Resource>& out, const wchar_t* name) -> bool
+    auto makeBuf = [&](UINT bytes, GpuResource& out, const wchar_t* name) -> bool
     {
-        out.Reset(); // free any prior-level mega buffer (safe: EnsureMegaBuffer runs GPU-idle at load)
+        // Reset now unregisters as well as frees — the previous ComPtr::Reset() dropped the
+        // prior level's buffer while leaving its registry entry behind (measured: net 2 -> 5).
+        out.Reset(); // safe: EnsureMegaBuffer runs GPU-idle at load
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC desc{};
@@ -1678,12 +1679,13 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        Microsoft::WRL::ComPtr<ID3D12Resource> buf;
         HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(out.GetAddressOf()));
-        if (FAILED(hr) || !out) { return false; }
-        renderer->SetResourceState(out.Get(), D3D12_RESOURCE_STATE_COMMON);
-        out->SetName(name);
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(buf.GetAddressOf()));
+        if (FAILED(hr) || !buf) { return false; }
+        // Geometry is never transitioned, so it rests where it is created.
+        out.Attach(renderer->Declarations(), std::move(buf), D3D12_RESOURCE_STATE_COMMON, name);
         return true;
     };
     if (!makeBuf(megaVBBytes_, megaVB_, L"ShadowGpuData.MegaVB") ||

@@ -6,6 +6,7 @@
 #include "core/math/AABB.h"
 #include "materials/Texture2D.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/core/ResourceDeclarations.h"
 #include "vfx/ParticleTypes.h"
 
 // Part E: a GPU-simulated particle emitter. E1 = the sim core: per-emitter DEFAULT-heap
@@ -66,10 +67,12 @@ private:
     float logAccum_ = 0.0f;
     uint32_t frameCounter_ = 0;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> particles_; // GpuParticle[maxParticles], UAV+SRV
-    Microsoft::WRL::ComPtr<ID3D12Resource> deadList_;  // uint[maxParticles], UAV
-    Microsoft::WRL::ComPtr<ID3D12Resource> deadCount_; // uint[4] ([0] used), UAV
-    Microsoft::WRL::ComPtr<ID3D12Resource> sorted_;    // E2c: uint[maxParticles] back-to-front order
+    // Step 6b part 2: on the wrapper. These four had NO unregister path at all — an emitter
+    // destroyed on a level switch left four dangling registry entries behind.
+    GpuResource particles_; // GpuParticle[maxParticles], UAV+SRV
+    GpuResource deadList_;  // uint[maxParticles], UAV
+    GpuResource deadCount_; // uint[4] ([0] used), UAV
+    GpuResource sorted_;    // E2c: uint[maxParticles] back-to-front order
     Microsoft::WRL::ComPtr<ID3D12Resource> readback_;  // 4-slot ring of the dead counter
     const uint32_t* readbackPtr_ = nullptr;            // persistently mapped
 

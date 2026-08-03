@@ -136,11 +136,11 @@ void OceanSimulation::RetireGpuResources(Renderer* renderer)
         }
     };
 
+    // displacement_/prevDisplacement_/foamTurbulence_ are GpuResource now: their registration
+    // dies with the retired copy, which is LATER and more correct than clearing at retire time.
+    // This hand-written list is exactly what used to forget shoreDepth_.
     clearState(h0Buffer_);
     clearState(waveDataBuffer_);
-    clearState(displacement_);
-    clearState(prevDisplacement_);
-    clearState(foamTurbulence_);
 
     retired.h0Buffer = std::move(h0Buffer_);
     retired.waveDataBuffer = std::move(waveDataBuffer_);
@@ -547,22 +547,30 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+    ComPtr<ID3D12Resource> dispRes;
     ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
         &texDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&displacement_)));
+        IID_PPV_ARGS(&dispRes)));
 
-    renderer->SetResourceState(displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Created as the FFT's UAV, but the frame leaves it shader-readable for the surface draw
+    // (see PrepareUpdate). Measured with --canonical-check.
+    displacement_.Attach(renderer->Declarations(), std::move(dispRes),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        L"Ocean.Displacement");
 
     D3D12_RESOURCE_DESC prevDesc = texDesc;
     prevDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    ComPtr<ID3D12Resource> prevRes;
     ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
         &prevDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-        IID_PPV_ARGS(&prevDisplacement_)));
+        IID_PPV_ARGS(&prevRes)));
 
     const D3D12_RESOURCE_STATES prevSrvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    renderer->SetResourceState(prevDisplacement_.Get(), prevSrvState);
+    prevDisplacement_.Attach(renderer->Declarations(), std::move(prevRes),
+        D3D12_RESOURCE_STATE_COMMON, prevSrvState, L"Ocean.PrevDisplacement");
     hasDisplacementHistory_ = false;
     prevDisplacementValid_ = false;
 
@@ -571,10 +579,14 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         D3D12_RESOURCE_DESC foamDesc = texDesc;
         foamDesc.DepthOrArraySize = static_cast<UINT16>(cascadeCount_);
         foamDesc.MipLevels = static_cast<UINT16>(mipCount_);
+        ComPtr<ID3D12Resource> foamRes;
         ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
             &foamDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-            IID_PPV_ARGS(&foamTurbulence_)));
-        renderer->SetResourceState(foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            IID_PPV_ARGS(&foamRes)));
+        foamTurbulence_.Attach(renderer->Declarations(), std::move(foamRes),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            L"Ocean.FoamTurbulence");
         foamNeedsInit_ = true;
         lastFoamSimTime_ = 0.0f;
     }
@@ -622,9 +634,15 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     clear.DepthStencil.Depth = 1.0f;
     clear.DepthStencil.Stencil = 0;
 
+    Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepthRes;
     ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&shoreDepth_)));
-    renderer->SetResourceState(shoreDepth_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&shoreDepthRes)));
+    // Naming, declaring and unregistering are now one thing the wrapper owns; rasterized as
+    // depth, then sampled, so the frame leaves it shader-readable.
+    shoreDepth_.Attach(renderer->Declarations(), std::move(shoreDepthRes),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        L"Ocean.ShoreDepth");
 
     shoreDepthWidth_ = static_cast<UINT>(depthDesc.Width);
     shoreDepthHeight_ = static_cast<UINT>(depthDesc.Height);

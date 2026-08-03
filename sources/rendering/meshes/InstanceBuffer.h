@@ -5,6 +5,8 @@
 #include <DirectXMath.h>
 #include <vector>
 
+#include "rendering/core/ResourceDeclarations.h"
+
 class Renderer;
 
 #pragma pack(push, 16)
@@ -20,7 +22,10 @@ class InstanceBuffer {
 public:
     InstanceBuffer() = default;
 
-    void Create(ID3D12Device* device, UINT numInstances, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+    // Step 6b part 2: `decls` is what lets the buffer declare AND unregister itself. It was
+    // the worst measured leaker (5 live registry entries for one buffer) precisely because
+    // the declaration lived in GpuInstancedModels::Init while the resource died in here.
+    void Create(ID3D12Device* device, ResourceDeclarations decls, UINT numInstances, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
 
     ID3D12Resource* GetResource() const { return buffer_.Get(); }
     UINT GetInstanceCount() const { return instanceCount_; }
@@ -32,7 +37,7 @@ public:
 private:
     void CreateCpuDescriptors_(ID3D12Device* device);
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> buffer_;
+    GpuResource buffer_;
     UINT instanceCount_ = 0;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap_;

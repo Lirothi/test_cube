@@ -31,8 +31,9 @@ The other order means touching every site twice.
 | 2 — render graphs off the stack | **DONE** (committed `385eb9e`) |
 | 3 — the comparator | **DONE** (committed `fed604f`) |
 | 4 — lazy creation out of record bodies | **DONE** (committed `fed604f`) |
-| 5 — convert passes | **DONE (uncommitted)** — every pass converted, zero fatal mismatches in both shadow modes |
-| 6..16 | not started |
+| 5 — convert passes | **DONE** (committed `58cde73`) — every pass converted, zero fatal mismatches in both shadow modes |
+| 6 + 6b — canonical registry | **DONE (uncommitted)** — 0 off-canonical on a steady frame; declared-resource table no longer ratchets; every owner on `GpuResource`. **The measurement refuted D2's "canonical = creation state" — read Step 6 before Step 7.** |
+| 7..16 | not started — Step 7 has three prerequisites listed below |
 
 ---
 
@@ -282,6 +283,17 @@ graph resource in its canonical state.** Therefore:
 transition it themselves — the before-state is known by construction. AS already bypasses the
 tracker. `Renderer::MarkImGuiTextureShaderReadable` (`Renderer.cpp:537-550`) exists *only* to
 paper over the global map, and is deleted with it.
+
+> **DECIDED at Step 6 (2026-08-03), both by measurement:**
+> 1. **Canonical is the state a resource RESTS IN AT FRAME END, not the state it is created in.**
+>    The paragraph above ("exactly what `SetResourceState` already passes") is wrong and is kept
+>    only to show what was refuted: 85 of 160 resources drift under it, so its epilogue costs ~85
+>    transitions per frame. 95 of the 97 drifting resources have a *stable* end state, so
+>    declaring that instead makes the epilogue ~2 transitions.
+> 2. **Lifetime goes to the resource wrapper** (the second bullet below), not to a hand-maintained
+>    unregister at every release site. The registry leaked 143 → 169 entries over 20 churn
+>    iterations and crashed the frame-end check on a released resource; a manual unregister leaves
+>    that failure one new release path away, and it fails silently.
 
 **Where canonical state lives — decide at Step 6, do not pre-commit:**
 - *(cheaper)* a `resource → canonical` registry owned by the render graph, written at creation,
@@ -699,7 +711,7 @@ file before starting the next** — that is the whole point of Step 3.
 
 **Acceptance per file:** both `0/0`; GBV CLEAN; comparator silent; `--shot` unchanged.
 
-### Step 6 — canonical registry, logging mode
+### Step 6 — canonical registry, logging mode — **MECHANISM DONE (uncommitted); RESULT REFUTES D2**
 
 Turn every `SetResourceState` site into a canonical declaration (D2) and every
 `ClearResourceState`/`ForgetResources` into an unregister. Behind the flag, have the compile
@@ -707,12 +719,260 @@ Turn every `SetResourceState` site into a canonical declaration (D2) and every
 Every failure is either a mis-declaration or a resource that genuinely needs an epilogue
 transition; this step finds them all before the invariant is load-bearing.
 
-Choose registry-vs-wrapper here (D2), informed by how many resources actually showed up.
+**Registry-vs-wrapper: registry.** New `sources/rendering/core/ResourceDeclarations.h` holds
+`CanonicalStateRegistry` (the `resource → {canonical state, debug name}` table) plus a
+`ResourceDeclarations` sink with `Declare` / `Forget` / `ForgetMany`. Every creation site already
+funnelled through `Renderer::SetResourceState`, so that method simply *became* the declaration —
+zero call-site churn for the ~45 owners. The two exceptions are the backbuffer's mid-frame
+`PRESENT ↔ RENDER_TARGET` flips, which moved to a new `SetTrackedStateOnly`; declaring
+`RENDER_TARGET` there every frame would have redefined canonical continuously and made the check
+vacuous. `RenderTargetManager` took the sink by value in place of its `ResourceStateTracker&`
+(9 declaration sites), which is the shape Step 7 wants: the sink's `tracker` member disappears and
+not one call site changes.
 
-**Acceptance:** both `0/0`; GBV CLEAN; the off-canonical log is empty (or every entry is
-understood and has an epilogue transition).
+The wrapper option stays rejected for now — ~60 declaration sites — but see the lifetime finding
+below, which is the strongest argument yet *for* it.
+
+**Result (Release, `--canonical-check --scene-stress=4`): 85 of 160 declared resources end the
+frame off-canonical.** Not a handful. Classified:
+
+| Class | Example | Reading |
+|---|---|---|
+| declared `COMMON`, rests in a working state | `VSM.PageDrawArgs` COMMON → `INDIRECT_ARGUMENT`; `VSM.PhysOwner` COMMON → non-pixel SRV; all of `ShadowGpuData.*` | **mis-declaration** — the site passed the *creation* state |
+| declared `RENDER_TARGET`/`UAV`/`DEPTH_WRITE`, rests shader-readable | every `Deferred[N].GB*`, `.Light`, `.Scene`, `.Depth`, `.Reflection*` | genuine end-of-frame drift: the frame ends with them consumed |
+
+**So D2's premise — "canonical = what `SetResourceState` already passes, i.e. the creation
+state" — is refuted by measurement.** Under D2 as written the epilogue would have to emit ~85
+transitions every frame, which is precisely the cost Step 8 warns "could eat the win" (the whole
+prize is 0.102 ms).
+
+**But the invariant itself is nearly free if canonical is redefined as the frame-END resting
+state: of the 97 resources that ever drift, 95 have a single stable end state.** Only two vary —
+`VSM.PageRequest` and `VSM.AllocCounters`, `UNORDERED_ACCESS` on 14 frames of 15 and `COPY_SOURCE`
+on the one frame the conditional debug readback runs. Declare the measured end state and the
+steady-state epilogue is ~2 transitions, both behind a debug flag.
+
+**Open question that redefinition creates, and Step 7 must answer:** `SetResourceState` currently
+does double duty — declare canonical *and* seed the tracker with the true creation state. Split
+them and frame 1 after a resource is created still needs a creation→canonical transition, because
+the compile would seed from a state the resource is not yet in. Options: create resources directly
+in their canonical state (`InitialResourceState` allows it for most), or emit a one-shot
+transition at declaration. **Do not start Step 7 before choosing.**
+
+**Lifetime finding — the check crashed, and that is a Step 7 blocker.** First run died with
+`0xC0000005` on `ReloadLevel`, dereferencing a released resource inside the reporter. Not every
+release path unregisters, so the table accumulates dangling keys; the tracker's own map has had
+the same stale entries all along and never showed it, because it only ever uses the pointer as a
+hash key. Two consequences:
+- the reporter now captures the debug name at **declaration** time and never dereferences a key
+  (`GetGlobalKnownState` is a hash lookup, which is safe);
+- measured leak: the table ratchets **143 → 169 entries over 20 churn iterations** (with dips, so
+  it is a leak, not level-to-level variation). A recycled `ID3D12Resource*` inheriting a stale
+  canonical would seed a wrong before-state — silently. Either every release path gets an
+  unregister, or D2's wrapper option (automatic lifetime) wins after all.
+
+**Acceptance:** both `0/0` ✔; Debug `--scene-stress-gbv=20 --barrier-cmp --canonical-check`
+CLEAN after 20 iterations, 0 `MISSING`, GBV ids only {939, 940, 1006, 1358} ✔; the off-canonical
+log is **not** empty — but every entry is now classified and understood ✔.
+
+### Step 6b — act on the two decisions — **PART 1 DONE (uncommitted): 85 → 0 on a steady frame**
+
+Both forks were decided on Step 6's measurements; see the boxed note in D2.
+
+**The split is done.** `SetResourceState` gained a three-argument form
+`(res, creationState, canonicalState)`: the first still seeds the tracker (where the resource
+actually *is*, so first-barrier before-states are unchanged), the second records the resting state.
+`ResourceDeclarations` gained `SetCanonical` (canonical only, for owners whose shared creation
+helper serves targets that rest in different states) and `RefreshName`.
+
+**Deliberately NOT done here: aligning the creation state with canonical.** Changing
+`InitialResourceState` alters real frame-1 GPU behaviour, and nothing before Step 7 reads the
+canonical table for barrier generation — so it buys nothing yet and risks something now. See the
+frames-in-flight finding below, which is the argument for doing it *at* Step 7.
+
+**Converted so far, from the measured log (never guessed):**
+- **Deferred targets** — the resting state now sits next to the debug name in one reviewable list
+  in `RenderTargetManager::Create`, because the four generic creators serve targets that rest in
+  five different states. That block also had to call `RefreshName`: it names the whole set *after*
+  the creators declare, so every deferred target had been logging as a raw pointer.
+- **All 16 VSM buffers** — every one was declared `COMMON` (the creation state) while resting in
+  UAV / non-pixel-SRV / `INDIRECT_ARGUMENT` / `VERTEX_AND_CONSTANT_BUFFER`.
+
+- **All 5 `ShadowGpuData` UAV rings** — `EnsureUavRing` gained a `canonical` parameter, because one
+  helper creates buffers that rest in three different states (non-pixel SRV, `VERTEX_AND_CONSTANT_BUFFER`,
+  UAV).
+- **Ocean** (`Displacement`, `PrevDisplacement`, `FoamTurbulence`, `ShoreDepth`) and the
+  **GPU-instanced instance buffer** — all created for writing, all resting shader-readable.
+- **The three shadow atlases** — declared `DEPTH_WRITE`, but the light passes *sample* them, so the
+  frame leaves them shader-readable (point shadows from both compute and pixel stages).
+
+**Naming was a prerequisite, not a nicety.** `OceanSimulation` and `GpuInstancedModels` set no
+debug names at all, and three owners (`RenderTargetManager`, `ShadowGpuData::EnsureRing` /
+`EnsureUavRing`) named their resources *one line after* declaring them — so with the declaration-time
+name capture every one of them logged as a raw pointer and could not be traced to a declaration
+site. Names now precede declarations everywhere, and the shadow atlases are named inside
+`Create*ShadowResource` as well, because `SetLocalShadowResidency` recreates them *after* `Create`'s
+naming block has run.
+
+**Result: 85 → 0 off-canonical on a steady frame** (`frame end: 0 of 140`). Everything still
+reported comes from non-steady frames:
+
+| Still reported | Reading |
+|---|---|
+| `VSM.PageRequest`, `VSM.AllocCounters` → `COPY_SOURCE` | the two genuinely-varying resources predicted at Step 6, only on the frame the debug readback runs |
+| `Deferred[1].*`, `Deferred[2].*` at their **creation** state | untouched frames-in-flight — **see the finding below** |
+| the shadow atlases at `DEPTH_WRITE` | the frame right after `SetLocalShadowResidency` recreates them, before anything samples them |
+
+**Finding: per-frame-in-flight resource sets break the invariant as stated.** There are three
+`Deferred[N]` sets and a frame touches exactly one, so the other two end the frame wherever they
+were left. Once a set has been rendered into once it rests at canonical and stays there — so the
+only mismatch is **the first frame after creation**, which is precisely the seeding question. The
+report shows it as drift in the *opposite* direction (`canonical=0x40 actual=0x4`, i.e. still
+RENDER_TARGET). This makes the answer concrete: **create resources directly in their canonical
+state at Step 7**, and an untouched set is trivially at canonical too. A one-shot transition at
+declaration would not fix it as cleanly, because the set is untouched for whole frames at a time.
+
+### Step 6b Part 2 — the leak, measured before it is fixed
+
+Rather than convert ~60 declaration sites blind, the registry was made to **name the leak**: every
+resource has a unique debug name, so two live entries sharing one name means an earlier resource
+was never unregistered. Two diagnostics, both on `--canonical-check`:
+- duplicated-name lines (`[canonical] LEAK <n> live entries named <name>`), and
+- a `<n> named + <n> UNNAMED entries declared` breakdown, because an unnamed entry falls back to
+  its address, is unique by construction, and can therefore never show up as a duplicate — the
+  first measurement came back empty for exactly that reason.
+
+Both are triggered by the **table changing size**, not by a frame tick: the stress harness runs only
+a handful of frames per churn op, so a 240-frame throttle never fired. The per-frame summary line
+also had to become print-on-change — at one line per frame it floods DBWIN's single shared buffer
+and the listener drops the lines that matter. (Two consecutive empty measurements were caused by
+these two mistakes, not by the absence of a leak.)
+
+**Result over 12 churn iterations:**
+
+| | start | end | reading |
+|---|---|---|---|
+| named entries | 91 | 91 | **flat — every named owner unregisters correctly, except those below** |
+| unnamed entries | 48 | 62 | **the bulk of the ratchet**; these have no debug name, so they cannot yet be attributed to an owner |
+| duplicated names | — | `GpuInstanced.Instances` ×5, `Ocean.Displacement` / `PrevDisplacement` / `FoamTurbulence` / `ShoreDepth` ×2 each | named leakers |
+
+Note `OceanSimulation::RetireGpuResources` *does* call `ClearResourceState` — but only for five of
+its resources, and `shoreDepth_` is not one of them. That is the whole argument for the wrapper in
+one example: the unregister list is hand-maintained and silently incomplete.
+
+**The wrapper exists: `GpuResource` in `ResourceDeclarations.h`.** It owns the resource *and* its
+registration — names, declares on `Attach`, forgets in the destructor. It holds a
+`ResourceDeclarations` (two pointers), **not** a `Renderer*`, because `Renderer.h` includes this
+header and the reverse dependency would be circular. Move-only. Shaped so the ~60 existing sites
+barely change: create into a local `ComPtr` exactly as today, then `Attach`; everything else keeps
+calling `Get()`.
+
+**First owner converted, and it was picked for a reason: `OceanSimulation::shoreDepth_`** — the one
+ocean resource `RetireGpuResources`' hand-written clear list forgets, which is why it leaked.
+Verified: its `LEAK` lines are gone, `GpuInstanced.Instances` and `Ocean.PrevDisplacement` still
+leak (not yet converted), and the steady-frame drift is still `0 of 140`. That is the wrapper's
+shape proven end-to-end on a case the hand-written path provably got wrong.
+
+**Second owner converted: `InstanceBuffer`.** Naming *and* declaring moved out of
+`GpuInstancedModels::Init` and into `InstanceBuffer::Create` (which gained a `ResourceDeclarations`
+parameter) — the declaration used to live in the caller while the resource died in the callee,
+which is exactly why it was the worst leaker. `GpuInstanced.Instances` went ×5 → ×3.
+
+**Caveat found while reading that number: the duplicate-name diagnostic assumes unique names, and
+`InstanceBuffer` names every buffer identically.** The scene has two GPU-instanced objects, so ×2 is
+legitimate and only ×3+ is a leak. Either give each instance buffer a distinct name or subtract the
+expected count before trusting the line.
+
+**Remaining:**
+1. The ocean's retire-managed trio (`displacement_`, `prevDisplacement_`, `foamTurbulence_`). A
+   first attempt was reverted rather than left half-applied: the header members had been switched to
+   `GpuResource` but the matching `.cpp` edits silently no-ops'd — **the file is CRLF and the
+   multi-line search patterns used `\n`**. Single-line edits in these files work; multi-line ones
+   must use `\r\n` or the Edit tool.
+2. Then the rest of the ~60 sites.
+
+**A naming pass ran, and it immediately paid for itself.** Four owners were declaring *before*
+naming, so the registry captured a pointer and their growth was unattributable:
+`LightManager` (both light buffers), `ParticleEmitterObject` (all four sim buffers),
+`ShadowGpuData::EnsureMegaBuffer`, and `TextureCube` — which set no debug name at all. Names now
+precede declarations in every one. The particle buffers also got their measured resting states
+while the block was open (`particles_`/`sorted_` rest shader-readable; the dead list and counter
+never leave UAV).
+
+**Result: two previously invisible leakers now have names — `ShadowGpuData.MegaVB` and
+`MegaIB`, ×4 each.** That is exactly what the pass was for: growth that was a featureless
+pointer count is now an owner and a line of code.
+
+**Naming is now complete, and the unnamed ratchet is gone.** Two more gaps closed: the mesh
+vertex/index buffers (`GpuInstancedModels::Init` declared them straight off
+`mesh_->Get*BufferResource()` and never named them), and `Texture2D`, which called *every* texture
+`Tex2D_RESOURCE` — it now carries a `debugName_` of `L"Tex2D:" + desc.path`, set at both public
+entry points.
+
+| | before | after |
+|---|---|---|
+| unnamed entries over 12 churn iterations | 45 → 61 (growing) | **flat 20** |
+| named entries | ~90 | 112 → 111 (flat) |
+
+### Step 6b Part 2 — result: the ratchet is closed
+
+**The duplicate-name check had to be replaced before any of this could be judged.** Counting bare
+duplicates cannot tell a leak from legitimate sharing — two GPU-instanced clouds, or one texture
+used by four cached materials, sit at a steady count forever, and I called that a leak twice. The
+registry now keeps a per-name **net** (declares minus forgets; `Declare` over an existing key
+decrements the old name first) and the report prints only names whose net grows **past every value
+it has held before**. No liveness knowledge is required, which is the point: a correct owner's net
+returns to baseline after identical churn cycles, a leaking one's climbs. Pointer-"named" entries
+are excluded — their identity is an address the allocator reuses, so a per-name count is
+meaningless for them.
+
+**Converted to `GpuResource`:** `OceanSimulation::shoreDepth_`, `InstanceBuffer`'s buffer,
+`ShadowGpuData::megaVB_`/`megaIB_`, and the ocean's retire-managed trio (`displacement_`,
+`prevDisplacement_`, `foamTurbulence_` — the retired copies hold wrappers too, so registration now
+dies with the resource instead of at retire time, and the hand-written clear list that forgot
+`shoreDepth_` is gone). `Texture2D` got a destructor-based unregister plus a forget-before-overwrite
+at its three creation sites (creating over an existing `tex_` released the old resource while
+leaving its entry behind).
+
+**Measured over 12 churn iterations:**
+- declared-resource count **140 → 135** — it no longer ratchets; that is the acceptance criterion.
+- `ShadowGpuData.MegaVB`/`MegaIB`, which climbed 2 → 3 → 4 → 5, are gone from the report.
+- every name still listed produces **exactly one** growth event and then stops:
+  `GpuInstanced.Instances` → 2 (two GI objects), `Tex2D:textures/damaged_plaster_normal.dds` → 4
+  (four cached materials share that normal map). Under the corrected criterion those are shared
+  live copies, **not** leaks — `MaterialDataManager::cache_` deliberately outlives a level reload.
+
+So the texture "leak" was a misreading of the old diagnostic, not a defect. The remaining
+declaration sites can be moved onto `GpuResource` for tidiness, but the dangling-key class that
+crashed the reporter and blocked Step 7 is closed.
+
+**Acceptance:**
+- ✔ `--canonical-check` reports **0 off-canonical** on a steady frame.
+- ✔ both `0/0`; Debug `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN, 0 `MISSING`.
+- ✘ the declared-resource count still ratchets instead of returning to baseline — that is Part 2.
+
+One caveat to carry into Step 7: a few resting states are **configuration-dependent**, and the
+values here were measured with the shipping defaults. `VSM.PageProj` rests in non-pixel-SRV only
+while `g_pageDrawSingle` is on; `VSM.PageArgCount` would rest in `INDIRECT_ARGUMENT` if
+`g_pageDrawCompact` were re-enabled; `ShadowGpuData.IndirectArgs` was measured under VSM. Re-run
+`--canonical-check` after flipping any of those flags rather than trusting the constants.
 
 ### Step 7 — the flip: delete the tracker
+
+**Three prerequisites from Step 6, all deliberate deferrals — settle them before writing code:**
+1. **Align creation state with canonical.** The declaration is split today (`SetResourceState(res,
+   creation, canonical)`): the tracker is still seeded with where the resource actually *is*, and
+   nothing reads the canonical table for barrier generation yet. The moment the compile seeds from
+   canonical, the first frame after a resource is created is wrong — the frames-in-flight finding
+   makes this concrete (`Deferred[1]`/`[2]` sit at their creation state for whole frames). Answer:
+   create resources directly in their canonical state (`InitialResourceState`).
+2. **Re-measure the config-dependent resting states.** `VSM.PageProj` depends on
+   `g_pageDrawSingle`, `VSM.PageArgCount` would be `INDIRECT_ARGUMENT` with `g_pageDrawCompact`
+   back on, `ShadowGpuData.IndirectArgs` was measured under VSM. Re-run `--canonical-check` with
+   those flags flipped; do not trust the constants.
+3. **Give the two genuinely-varying resources an epilogue transition.** `VSM.PageRequest` and
+   `VSM.AllocCounters` end in `COPY_SOURCE` on the frame the debug readback runs. Both are behind
+   a debug flag, so a normal frame's epilogue stays empty.
 
 Compiled barriers become authoritative.
 

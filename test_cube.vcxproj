@@ -514,6 +514,7 @@
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />
     <ClInclude Include="sources/rendering/core/ResourceStateTracker.h" />
+    <ClInclude Include="sources/rendering/core/ResourceDeclarations.h" />
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h" />
     <ClInclude Include="sources/rendering/core/SwapchainManager.h" />
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />

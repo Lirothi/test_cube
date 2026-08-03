@@ -4,7 +4,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
 
-void InstanceBuffer::Create(ID3D12Device* device, UINT numInstances,
+void InstanceBuffer::Create(ID3D12Device* device, ResourceDeclarations decls, UINT numInstances,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
@@ -22,10 +22,15 @@ void InstanceBuffer::Create(ID3D12Device* device, UINT numInstances,
 
     // Use UploadManager to create the Default buffer with a UAV flag and transition it to UAV state immediately
     UploadManager up(device, uploadCmdList);
-    buffer_ = up.CreateBufferWithData(
+    Microsoft::WRL::ComPtr<ID3D12Resource> buf = up.CreateBufferWithData(
         init.data(), byteSize,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Written as a UAV by the rotation compute, but every draw that follows flips it back to
+    // shader-readable, which is where the frame leaves it.
+    buffer_.Attach(decls, std::move(buf), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        L"GpuInstanced.Instances");
 
     // Take ownership of the upload resources so they survive until the copy executes
     up.StealKeepAlive(uploadKeepAlive);

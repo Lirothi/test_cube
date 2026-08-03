@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 
 #include "rendering/core/RenderConstants.h"
+#include "rendering/core/ResourceDeclarations.h"
 
 class Renderer;
 class Material;
@@ -297,8 +298,8 @@ public:
     const std::vector<std::uint32_t>& PhysOwnerSnapshot() const { return physOwnerSnapshot_; }
 
 private:
-    Microsoft::WRL::ComPtr<ID3D12Resource>       pagePool_;   // R16_TYPELESS depth atlas (kPoolTexels²)
-    Microsoft::WRL::ComPtr<ID3D12Resource>       pageTable_;  // StructuredBuffer<uint>[kPageTableEntries]
+    GpuResource pagePool_;   // R16_TYPELESS depth atlas (kPoolTexels²)
+    GpuResource pageTable_;  // StructuredBuffer<uint>[kPageTableEntries]
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;    // pool DSV
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvUavHeap_; // pool SRV + page-table SRV/UAV
 
@@ -309,17 +310,17 @@ private:
 
     // Step 19: page-request bitfield (1 bit / virtual page) + its UAV. DEFAULT-heap; written +
     // consumed in-frame (single buffer, cleared each frame).
-    Microsoft::WRL::ComPtr<ID3D12Resource> requestBuffer_;
+    GpuResource requestBuffer_;
     D3D12_CPU_DESCRIPTOR_HANDLE           requestUav_{};
 
     // Step 20: persistent (cross-frame — this IS the cache) page-allocation state. All DEFAULT-heap
     // RWStructuredBuffer<uint>, kept in UNORDERED_ACCESS. physOwner/physLastFrame/free-list/LRU
     // survive level switches with the pool + page table.
-    Microsoft::WRL::ComPtr<ID3D12Resource> physOwner_;     // [kPoolPageCount] physical -> virtual owner / INVALID
-    Microsoft::WRL::ComPtr<ID3D12Resource> physLastFrame_; // [kPoolPageCount] physical -> last requested frame
-    Microsoft::WRL::ComPtr<ID3D12Resource> freeList_;      // [kPoolPageCount] free physical indices (rebuilt per frame)
-    Microsoft::WRL::ComPtr<ID3D12Resource> needsRender_;   // [kPoolPageCount] pages allocated this frame (Step 22 input)
-    Microsoft::WRL::ComPtr<ID3D12Resource> allocCounters_; // [4] free / needs / fail / resident
+    GpuResource physOwner_;     // [kPoolPageCount] physical -> virtual owner / INVALID
+    GpuResource physLastFrame_; // [kPoolPageCount] physical -> last requested frame
+    GpuResource freeList_;      // [kPoolPageCount] free physical indices (rebuilt per frame)
+    GpuResource needsRender_;   // [kPoolPageCount] pages allocated this frame (Step 22 input)
+    GpuResource allocCounters_; // [4] free / needs / fail / resident
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> allocUavHeap_; // the 5 alloc-state UAVs
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE physLastFrameUav_{};
@@ -344,23 +345,23 @@ private:
     // Step 22: per-page render state. pageProj_ = off-center viewProj per physical page (256-byte
     // stride for root-CBV alignment); pageDrawArgs_ = per (page, mesh-group) indirect args copied
     // from Rung 0's per-view cull. DEFAULT-heap, persistent.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageProj_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageDrawArgs_;
+    GpuResource pageProj_;
+    GpuResource pageDrawArgs_;
     // Per-page-cull plan (Step 1): per (page, caster-slot) visible-list. The setup shader culls the
     // caster set to each page's frustum and writes that page's compacted, mesh-group-grouped caster
     // ids into its [p*casters, (p+1)*casters) slice; the page draw binds this as the slot-1 stream.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageVisibleList_;
+    GpuResource pageVisibleList_;
     // Page-caching plan (Rung 1): physOwnerPrev_ = last frame's physOwner (new-page detection);
     // perPageDirty_ = per-page dirty bit the setup computes + the gated depth-clear reads.
-    Microsoft::WRL::ComPtr<ID3D12Resource> physOwnerPrev_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> perPageDirty_;
+    GpuResource physOwnerPrev_;
+    GpuResource perPageDirty_;
     // Spatial scatter cull (directional clipmap only): instead of every page testing every caster
     // (O(pages x casters)), each caster projects its AABB into each clipmap level's page grid and
     // writes itself into the few pages it actually covers. pageGroupCount_ = per (page, mesh-group)
     // instance count, doubling as the append cursor (a caster's rank within its group's run);
     // pageScatterDyn_ = per-page "a dynamic caster landed here" flag for the page cache.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageGroupCount_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageScatterDyn_;
+    GpuResource pageGroupCount_;
+    GpuResource pageScatterDyn_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> renderHeap_; // physOwnerSrv, rung0ArgsSrv, pageDrawArgsUav, pageProjUav, pageVisibleListUav, physOwnerPrevSrv, perPageDirtyUav, perPageDirtySrv
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE rung0ArgsSrv_{};
@@ -381,7 +382,7 @@ private:
     // Compacted draw args: single uint the setup CS atomically bumps per appended (page, group)
     // record; consumed as ExecuteIndirect's count buffer. 4 uints so the allocation is comfortably
     // aligned — only element 0 is used.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pageArgCount_;
+    GpuResource pageArgCount_;
     D3D12_CPU_DESCRIPTOR_HANDLE pageArgCountUav_{};
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for

@@ -79,19 +79,25 @@ void GpuInstancedModels::Init(Renderer* renderer,
         return;
     }
     {   // Resource states for VB/IB
+        // Step 6b: named before declaring. Mesh geometry buffers had no debug name at all, which
+        // is why the canonical registry's growth in unnamed entries could not be attributed to
+        // any owner. They rest where they are created — geometry is never transitioned.
         if (ID3D12Resource* vb = mesh_->GetVertexBufferResource()) {
+            vb->SetName(L"Mesh.VertexBuffer");
             renderer->SetResourceState(vb, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
         }
         if (ID3D12Resource* ib = mesh_->GetIndexBufferResource()) {
+            ib->SetName(L"Mesh.IndexBuffer");
             renderer->SetResourceState(ib, D3D12_RESOURCE_STATE_INDEX_BUFFER);
         }
     }
 
     // Instance buffer (DEFAULT, UAV)
-    instanceBuffer_.Create(renderer->GetDevice(), instanceCount_, uploadCmdList, uploadKeepAlive);
-
-    // Register the current state (after Create — UAV)
-    renderer->SetResourceState(instanceBuffer_.GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Naming and declaring moved INTO InstanceBuffer::Create — they belong with the resource's
+    // lifetime, not here. Leaving them out here is what stops the registry entry outliving the
+    // buffer (this was the worst measured leak: 5 live entries for one buffer).
+    instanceBuffer_.Create(renderer->GetDevice(), renderer->Declarations(), instanceCount_,
+        uploadCmdList, uploadKeepAlive);
 
     instanceRotations_.assign(instanceCount_, 0.0f);
     MarkInstanceBoundsDirty();

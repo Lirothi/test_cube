@@ -9,6 +9,7 @@
 
 #include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
+#include "rendering/core/ResourceDeclarations.h"
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/SpotLight.h"
 
@@ -114,10 +115,10 @@ public:
     // while an in-flight frame still referenced it — the DXGI_DEVICE_HUNG the --scene-stress
     // harness was built for. Growth now happens once per frame, before any recording.
     bool HasPointLightBuffer(size_t requiredLights) const {
-        return pointLightBuffer_ != nullptr && pointLightCapacity_ >= requiredLights;
+        return static_cast<bool>(pointLightBuffer_) && pointLightCapacity_ >= requiredLights;
     }
     bool HasSpotLightBuffer(size_t requiredLights) const {
-        return spotLightBuffer_ != nullptr && spotLightCapacity_ >= requiredLights;
+        return static_cast<bool>(spotLightBuffer_) && spotLightCapacity_ >= requiredLights;
     }
 
     // The light buffers are ring-buffered per in-flight frame (kFrameCount regions
@@ -157,13 +158,15 @@ private:
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
     // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
     // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.
-    Microsoft::WRL::ComPtr<ID3D12Resource> pointLightBuffer_;
+    // Step 6b part 2: on the wrapper — the explicit ClearResourceState in
+    // Release*LightBuffer is no longer needed and was removed.
+    GpuResource pointLightBuffer_;
     PointLightGpu* pointLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pointLightSrvHeap_;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> pointLightSrvHandles_{};
     size_t pointLightCapacity_ = 0;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> spotLightBuffer_;
+    GpuResource spotLightBuffer_;
     SpotLightGpu* spotLightBufferCPU_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> spotLightSrvHeap_;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kFrameCount> spotLightSrvHandles_{};

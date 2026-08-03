@@ -995,6 +995,9 @@
     <ClInclude Include="sources/rendering/core/ResourceStateTracker.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/ResourceDeclarations.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>

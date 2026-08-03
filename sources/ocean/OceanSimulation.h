@@ -15,6 +15,7 @@
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
 #include "app/scene/SceneView.h"
+#include "rendering/core/ResourceDeclarations.h"
 
 class Renderer;
 class Material;
@@ -170,9 +171,9 @@ private:
         uint64_t retireFrame = 0;
         Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> displacement;
-        Microsoft::WRL::ComPtr<ID3D12Resource> prevDisplacement;
-        Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence;
+        GpuResource displacement;
+        GpuResource prevDisplacement;
+        GpuResource foamTurbulence;
     };
 
     struct RetiredUploadResources
@@ -183,10 +184,13 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> displacement_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> prevDisplacement_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> foamTurbulence_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepth_;
+    GpuResource displacement_;
+    GpuResource prevDisplacement_;
+    GpuResource foamTurbulence_;
+    // Step 6b part 2: first owner on the wrapper. Chosen because it was a MEASURED leaker for a
+    // telling reason — it is the one ocean resource RetireGpuResources' hand-written clear list
+    // forgets. The wrapper makes that impossible: registration dies with the resource.
+    GpuResource shoreDepth_;
     SceneView shoreDepthView_{};
     UINT shoreDepthWidth_ = 0u;
     UINT shoreDepthHeight_ = 0u;

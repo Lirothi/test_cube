@@ -182,10 +182,7 @@ void LightManager::ReleasePointLightBuffer(Renderer* renderer)
 {
     if (pointLightBuffer_)
     {
-        if (renderer)
-        {
-            renderer->ClearResourceState(pointLightBuffer_.Get());
-        }
+        (void)renderer; // the wrapper unregisters itself
         pointLightBuffer_->Unmap(0, nullptr);
         pointLightBuffer_.Reset();
     }
@@ -199,10 +196,7 @@ void LightManager::ReleaseSpotLightBuffer(Renderer* renderer)
 {
     if (spotLightBuffer_)
     {
-        if (renderer)
-        {
-            renderer->ClearResourceState(spotLightBuffer_.Get());
-        }
+        (void)renderer; // the wrapper unregisters itself
         spotLightBuffer_->Unmap(0, nullptr);
         spotLightBuffer_.Reset();
     }
@@ -296,10 +290,10 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
         pointLightSrvHandles_[f] = h;
     }
 
-    renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (buffer) { buffer->SetName(L"LightManager.PointLightBuffer"); }
+    // Upload-heap buffer: never transitioned, so it rests where it is created.
+    pointLightBuffer_.Attach(renderer->Declarations(), buffer,
+        D3D12_RESOURCE_STATE_GENERIC_READ, L"LightManager.PointLightBuffer");
     pointLightCapacity_ = newCapacity;
-    pointLightBuffer_ = buffer;
     pointLightBufferCPU_ = static_cast<PointLightGpu*>(mapped);
     pointLightSrvHeap_ = srvHeap;
     return true;
@@ -389,10 +383,10 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
         spotLightSrvHandles_[f] = h;
     }
 
-    renderer->SetResourceState(buffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (buffer) { buffer->SetName(L"LightManager.SpotLightBuffer"); }
+    // Upload-heap buffer: never transitioned, so it rests where it is created.
+    spotLightBuffer_.Attach(renderer->Declarations(), buffer,
+        D3D12_RESOURCE_STATE_GENERIC_READ, L"LightManager.SpotLightBuffer");
     spotLightCapacity_ = newCapacity;
-    spotLightBuffer_ = buffer;
     spotLightBufferCPU_ = static_cast<SpotLightGpu*>(mapped);
     spotLightSrvHeap_ = srvHeap;
     return true;

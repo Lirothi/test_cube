@@ -1,0 +1,5 @@
+==== DRED dump (fault op=ReloadLevel iter=0) ====
+GetDeviceRemovedReason=0x00000000
+breadcrumbs: GetAutoBreadcrumbsOutput1 failed
+page-fault: GetPageFaultAllocationOutput1 failed (no page fault recorded — likely pure TDR)
+==== end DRED dump ====

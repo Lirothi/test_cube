@@ -291,9 +291,12 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+    // Step 6b: creating over an existing tex_ RELEASES the old resource, and until now nothing
+    // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
+    // DDS first and falls back to WIC on the same object, so the fallback textures were declared
+    // twice and forgotten once.
     ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
-    tex_->SetName(L"Tex2D_RESOURCE_DDS");
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
 
     // 4) Compute footprints for every mip
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(mipCount);
@@ -381,7 +384,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     if (keepAlive) {
         keepAlive->push_back(upload);
     }
-    r->SetResourceState(tex_.Get(), kShaderReadStates);
+    tex_.DeclareCreated(r->Declarations(), kShaderReadStates, debugName_.c_str());
 
     // 9) Select the SRV format based on usage (sRGB for Albedo)
     DXGI_FORMAT srvFmt = fp.srvUnorm;
@@ -404,6 +407,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     const CreateDesc& desc,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    debugName_ = L"Tex2D:" + desc.path; // distinct per texture — see the header
     // H2: prefer a sibling ".dds" next to the requested source (the H1 importer writes mipped BC DDS
     // beside the original PNG/JPG). This keeps glTF material URIs and preset paths byte-identical —
     // the DDS simply "appears" and is picked up here. Falls back to the source (WIC) with a one-time
@@ -471,6 +475,7 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
     const void* rgba8, UINT width, UINT height,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    debugName_ = L"Tex2D:<rgba8>";
     // Default to a linear UNORM SRV (suitable for normal/MR/linear data)
     DXGI_FORMAT resFmt = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     DXGI_FORMAT srvFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -629,9 +634,12 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+    // Step 6b: creating over an existing tex_ RELEASES the old resource, and until now nothing
+    // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
+    // DDS first and falls back to WIC on the same object, so the fallback textures were declared
+    // twice and forgotten once.
     ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
-    tex_->SetName(L"Tex2D_RESOURCE");
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
 
     // Footprint
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
@@ -698,7 +706,7 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     }
 
     // Record the state in the tracker
-    r->SetResourceState(tex_.Get(), kShaderReadStates);
+    tex_.DeclareCreated(r->Declarations(), kShaderReadStates, debugName_.c_str());
 }
 
 void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
@@ -722,9 +730,12 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+    // Step 6b: creating over an existing tex_ RELEASES the old resource, and until now nothing
+    // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
+    // DDS first and falls back to WIC on the same object, so the fallback textures were declared
+    // twice and forgotten once.
     ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex_)));
-    tex_->SetName(L"Tex2D_RESOURCE");
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(n);
     std::vector<UINT> numRows(n);
@@ -787,7 +798,7 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     uploadCmd->ResourceBarrier(1, &b);
 
     if (keepAlive) { keepAlive->push_back(upload); }
-    r->SetResourceState(tex_.Get(), kShaderReadStates);
+    tex_.DeclareCreated(r->Declarations(), kShaderReadStates, debugName_.c_str());
 }
 
 void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels)

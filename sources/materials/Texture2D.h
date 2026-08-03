@@ -5,11 +5,23 @@
 #include <vector>
 #include <string>
 
+#include "rendering/core/ResourceDeclarations.h"
+
 class Renderer;
 
 
 class Texture2D {
 public:
+        // Step 6b part 2: registration dies with the texture. Textures were the largest remaining
+        // leak once naming made them visible — nothing unregistered them on a level reload, so the
+        // canonical table kept dangling keys and a recycled address could inherit a stale state.
+        // This is the GpuResource guarantee applied in place; swapping tex_ for a GpuResource
+        // outright is the tidier end state but has to thread through the upload path, which still
+        // uses tex_ between creation and declaration.
+        ~Texture2D() = default; // the wrapper unregisters
+        Texture2D() = default;
+        Texture2D(const Texture2D&) = delete;
+        Texture2D& operator=(const Texture2D&) = delete;
         enum class Usage : uint32_t {
                 AlbedoSRGB, // SRV will be *_SRGB
                 NormalMap, // linear sampling; supports RGB or RG via a flag
@@ -78,7 +90,12 @@ private:
         // Create the CPU SRV
         void CreateCpuSrv_(Renderer* renderer, DXGI_FORMAT srvFmt, UINT mipLevels);
 private:
-        Microsoft::WRL::ComPtr<ID3D12Resource> tex_;
+        GpuResource tex_;
+        // Step 6b: a DISTINCT debug name per texture. Every texture used to be called
+        // "Tex2D_RESOURCE", which made them indistinguishable in DRED/the debug layer and made
+        // the canonical registry's duplicate-name leak check report one giant false positive.
+        std::wstring debugName_ = L"Tex2D";
+
 
         // CPU-only heap for the SRV (single descriptor)
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeapCPU_;

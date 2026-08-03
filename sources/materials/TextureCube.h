@@ -1,6 +1,8 @@
 #pragma once
 #include <wrl.h>
 #include <d3d12.h>
+
+#include "rendering/core/ResourceDeclarations.h"
 #include <string>
 #include <vector>
 
@@ -41,7 +43,7 @@ private:
     void  CreateSrvCPU_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels, UINT arraySize);
 
 private:
-    Microsoft::WRL::ComPtr<ID3D12Resource> tex_;
+    GpuResource tex_;
 
     // CPU-only heap with one descriptor (SRV)
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeapCPU_;

@@ -146,33 +146,41 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     const uint32_t initCount[4] = { n, 0u, 0u, 0u };
 
     UploadManager up(renderer->GetDevice(), uploadCmdList);
-    particles_ = up.CreateBufferWithData(initParticles.data(), sizeof(vfx::GpuParticle) * n,
+    Microsoft::WRL::ComPtr<ID3D12Resource> particlesRes = up.CreateBufferWithData(
+        initParticles.data(), sizeof(vfx::GpuParticle) * n,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    deadList_ = up.CreateBufferWithData(initDead.data(), sizeof(uint32_t) * n,
+    Microsoft::WRL::ComPtr<ID3D12Resource> deadListRes = up.CreateBufferWithData(
+        initDead.data(), sizeof(uint32_t) * n,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    deadCount_ = up.CreateBufferWithData(initCount, sizeof(initCount),
+    Microsoft::WRL::ComPtr<ID3D12Resource> deadCountRes = up.CreateBufferWithData(
+        initCount, sizeof(initCount),
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    Microsoft::WRL::ComPtr<ID3D12Resource> sortedRes;
     if (sortEnabled_)
     {
         std::vector<uint32_t> initSorted(n);
         for (uint32_t i = 0; i < n; ++i) { initSorted[i] = i; }
-        sorted_ = up.CreateBufferWithData(initSorted.data(), sizeof(uint32_t) * n,
+        sortedRes = up.CreateBufferWithData(initSorted.data(), sizeof(uint32_t) * n,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
     up.StealKeepAlive(uploadKeepAlive);
 
-    renderer->SetResourceState(particles_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->SetResourceState(deadList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->SetResourceState(deadCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-    particles_->SetName(L"vfx.particles");
-    deadList_->SetName(L"vfx.deadList");
-    deadCount_->SetName(L"vfx.deadCount");
-    if (sorted_)
+    // Attach names, declares and unregistration in one step. All four are written as UAVs by the
+    // sim; the particle and sort buffers are then read by the billboard draw, which is where the
+    // frame leaves them, while the dead list and counter never leave the sim.
+    constexpr D3D12_RESOURCE_STATES kParticleRest = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const ResourceDeclarations decls = renderer->Declarations();
+    particles_.Attach(decls, std::move(particlesRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        kParticleRest, L"vfx.particles");
+    deadList_.Attach(decls, std::move(deadListRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        L"vfx.deadList");
+    deadCount_.Attach(decls, std::move(deadCountRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        L"vfx.deadCount");
+    if (sortedRes)
     {
-        renderer->SetResourceState(sorted_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        sorted_->SetName(L"vfx.sorted");
+        sorted_.Attach(decls, std::move(sortedRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            kParticleRest, L"vfx.sorted");
     }
 
     // Debug alive-count readback ring (tiny, persistently mapped).
