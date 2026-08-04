@@ -1323,7 +1323,39 @@ atlas), swapchain buffers/depth, `Texture2D`, `TextureCube`, RT targets. Buffers
 **Acceptance:** both `0/0`; unchanged with the flag off; with the flag *temporarily* forced on,
 textures still create — then revert the force.
 
-### Step 12 — enhanced emission (gated)
+### Step 12 — enhanced emission — **DONE (uncommitted), NOT YET EXERCISED**
+
+`barriers::EmitEnhanced(cl7, entries, count, isBuffer, ctx)` turns an already-COMPILED legacy
+transition array into `D3D12_TEXTURE_BARRIER` / `D3D12_BUFFER_BARRIER` groups and calls
+`ID3D12GraphicsCommandList7::Barrier`. Hooked into the ONE place compiled barriers reach the GPU —
+`Renderer::Transition`'s point emission — which is exactly the payoff the plan predicted: steps 1-7
+collapsed emission to a single site, so the enhanced branch is a dozen lines rather than a second
+compiler. The compile is untouched and still produces `{resource, before, after}`.
+
+Design points worth keeping:
+- **Textures and buffers go into SEPARATE groups** — D3D12 requires a group to be homogeneous.
+- **A refusal is never a lost barrier.** EmitEnhanced returns false (unexpressible state, a
+  non-transition, more entries than its fixed scratch) and the caller falls straight through to
+  `ResourceBarrier`. A gap in the translation degrades to legacy instead of vanishing.
+- A texture transition must name BOTH layouts; if either side resolves to `LAYOUT_UNDEFINED` the
+  state was buffer-only and mis-declared for that resource, so it refuses rather than inventing one.
+- `Subresources.IndexOrFirstMipLevel = 0xffffffff` is the enhanced spelling of
+  `D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES`.
+
+**Honest status: the enhanced path still cannot run a frame, so this code has compiled but not
+executed.** With `--enhanced-barriers` the app dies in `App::InitScene` at `UploadBatch::Submit` —
+asset upload records DIRECT legacy barriers (`Texture2D`'s COPY_DEST → shader-readable), and those
+are step 13's scope, not this one. The failure is one step further along than at step 11 (creation,
+then upload), which is the expected progression.
+
+To make step 13 provable rather than assumed, the emission now counts itself: the
+`--barrier-compile-log` line carries `emit enhanced=N legacy=M`. `legacy` counting up is a
+translation gap made visible.
+
+**Acceptance met (flag off):** both `0/0`; `--barrier-cmp --canonical-check --scene-stress-gbv=12`
+= `CLEAN after 12 iterations`, 0 non-noise GBV; `--renderer-submission-stress` `failures: 0`.
+
+### (original spec) Step 12 — enhanced emission (gated)
 
 Branch the barrier emission on `enhancedBarriers_`: build `D3D12_TEXTURE_BARRIER` /
 `D3D12_BUFFER_BARRIER` from the translation, wrap in a `D3D12_BARRIER_GROUP`, call

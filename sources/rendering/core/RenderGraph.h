@@ -13,6 +13,7 @@
 #include <utility>
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RendererInvariantFailure.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -783,12 +784,18 @@ private:
         // level-reload and resize traffic.)
         if (render::g_barrierCompileLog &&
             ((prepare_->cacheHits + prepare_->cacheMisses) % 512u) == 0u) {
-            char msg[280];
+            // Step 12: the emit split says whether the ENHANCED path actually ran, as opposed to
+            // merely compiling. `legacy` counts points that fell back — a translation gap must be
+            // visible, never silent.
+            std::uint32_t emitEnhanced = 0, emitLegacy = 0;
+            barriers::EmitStats(emitEnhanced, emitLegacy);
+            char msg[344];
             std::snprintf(msg, sizeof(msg),
                           "[barrier-compile] %u barriers over %zu resources; return-to-canonical would add %u; "
-                          "cache hits=%u misses=%u not-fixed-point=%u\n",
+                          "cache hits=%u misses=%u not-fixed-point=%u; emit enhanced=%u legacy=%u\n",
                           prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_,
-                          prepare_->cacheHits, prepare_->cacheMisses, prepare_->cacheNotFixedPoint);
+                          prepare_->cacheHits, prepare_->cacheMisses, prepare_->cacheNotFixedPoint,
+                          emitEnhanced, emitLegacy);
             Renderer::DiagLog(msg);
         }
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <d3d12.h>
 
 // Barrier plan step 10 (design D4) — legacy state -> enhanced barrier triple.
@@ -36,5 +37,29 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer);
 // states (index/vertex buffer, indirect argument, acceleration structure) have no texture layout,
 // so asking for one is a bug in the caller rather than something to guess at.
 bool IsTextureCompatible(D3D12_RESOURCE_STATES state);
+
+// Step 12 — emit an already-COMPILED legacy transition array as enhanced barriers.
+//
+// The compile still produces `{resource, before, after}` triples; only the EMISSION changes. That
+// is deliberate: steps 1-7 collapsed barrier emission to this single place, so the enhanced path
+// is a translation at the very end rather than a second compiler.
+//
+// `isBuffer` answers per resource (Renderer holds that bit from step 10). Textures and buffers go
+// into SEPARATE groups because D3D12 requires it — one group has one type.
+//
+// Returns false and emits NOTHING when `cl7` is null or a barrier cannot be expressed; the caller
+// then falls back to ResourceBarrier, which keeps a gap in this table from becoming a lost barrier.
+// How many compiled points went out as enhanced barriers vs fell back to ResourceBarrier. The
+// enhanced emission is written at step 12 but only becomes REACHABLE at step 13 (the direct
+// upload/present sites still record legacy barriers, and mixing kills the run before a frame
+// renders), so these exist to prove it actually executed rather than merely compiled.
+void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy);
+void NoteLegacyEmit();
+
+bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
+                  const D3D12_RESOURCE_BARRIER* entries,
+                  std::uint32_t count,
+                  bool (*isBuffer)(void* ctx, ID3D12Resource* res),
+                  void* ctx);
 
 } // namespace barriers

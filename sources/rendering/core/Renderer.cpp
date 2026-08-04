@@ -1,6 +1,7 @@
 #include "rendering/core/Renderer.h"
 #include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/RendererInvariantFailure.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/CommandListBindState.h"
 #include "core/Helpers.h"
 #include <cassert>
@@ -1088,7 +1089,23 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
             if (!names) { break; } // current point is not this request -> nothing to emit
             bool notYet = false;
             if (pt.emitted.compare_exchange_strong(notYet, true, std::memory_order_relaxed)) {
-                cl->ResourceBarrier(pt.count, pt.entries);
+                // Step 12: the ONE place compiled barriers reach the GPU, which is exactly why the
+                // enhanced branch is this small — steps 1-7 collapsed every emission site into it.
+                // A refusal from EmitEnhanced (a state it cannot express, too many entries, a
+                // non-transition) falls through to ResourceBarrier: a gap in the translation must
+                // never become a LOST barrier.
+                bool emitted = false;
+                if (graphicsDevice_.UseEnhancedBarriers()) {
+                    const auto isBufferFn = [](void* ctx, ID3D12Resource* r) {
+                        return static_cast<Renderer*>(ctx)->IsResourceBuffer(r);
+                    };
+                    emitted = barriers::EmitEnhanced(AsCmdList7(cl), pt.entries, pt.count,
+                                                     isBufferFn, this);
+                }
+                if (!emitted) {
+                    cl->ResourceBarrier(pt.count, pt.entries);
+                    barriers::NoteLegacyEmit();
+                }
                 if (render::g_barrierFlipTrace) {
                     char label[96];
                     canonicalStates_.NameOf(res, label, sizeof(label));

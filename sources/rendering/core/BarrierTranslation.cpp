@@ -1,5 +1,7 @@
 #include "rendering/core/BarrierTranslation.h"
 
+#include <atomic>
+
 namespace barriers {
 namespace {
 
@@ -135,6 +137,106 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer)
     else if (allLayoutsRead) { out.layout = D3D12_BARRIER_LAYOUT_GENERIC_READ; }
     else { out.layout = D3D12_BARRIER_LAYOUT_COMMON; }
     return out;
+}
+
+namespace {
+std::atomic<std::uint32_t> gEnhancedEmits{ 0 };
+std::atomic<std::uint32_t> gLegacyEmits{ 0 };
+} // namespace
+
+void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
+{
+    enhanced = gEnhancedEmits.load(std::memory_order_relaxed);
+    legacy = gLegacyEmits.load(std::memory_order_relaxed);
+}
+
+void NoteLegacyEmit() { gLegacyEmits.fetch_add(1, std::memory_order_relaxed); }
+
+bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
+                  const D3D12_RESOURCE_BARRIER* entries,
+                  std::uint32_t count,
+                  bool (*isBuffer)(void* ctx, ID3D12Resource* res),
+                  void* ctx)
+{
+    if (cl7 == nullptr || entries == nullptr || count == 0 || isBuffer == nullptr) { return false; }
+    // Bounded by the compile: a point holds at most one barrier per registered use, and the use
+    // budget per pass is kResourceUsesPerPassBudget (48). Sized to that with a hard refusal rather
+    // than a silent truncation — a dropped barrier is a race, and falling back to the legacy call
+    // is always correct.
+    constexpr std::uint32_t kMax = 64;
+    if (count > kMax) { return false; }
+
+    D3D12_TEXTURE_BARRIER tex[kMax]{};
+    D3D12_BUFFER_BARRIER buf[kMax]{};
+    std::uint32_t texCount = 0;
+    std::uint32_t bufCount = 0;
+
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const D3D12_RESOURCE_BARRIER& b = entries[i];
+        // Only TRANSITIONs are compiled today. Anything else (UAV, aliasing) belongs to step 13.
+        if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) { return false; }
+        ID3D12Resource* res = b.Transition.pResource;
+        if (res == nullptr) { return false; }
+
+        const bool asBuffer = isBuffer(ctx, res);
+        const Translated before = LegacyStateToBarrier(b.Transition.StateBefore, asBuffer);
+        const Translated after = LegacyStateToBarrier(b.Transition.StateAfter, asBuffer);
+
+        if (asBuffer) {
+            D3D12_BUFFER_BARRIER& out = buf[bufCount++];
+            out.SyncBefore = before.sync;
+            out.SyncAfter = after.sync;
+            out.AccessBefore = before.access;
+            out.AccessAfter = after.access;
+            out.pResource = res;
+            out.Offset = 0;
+            out.Size = UINT64_MAX; // whole resource, mirroring the legacy all-subresources barrier
+        }
+        else {
+            // A texture transition MUST name both layouts. If either side has none the state is
+            // buffer-only and was mis-declared for this resource — refuse rather than invent one.
+            if (before.layout == D3D12_BARRIER_LAYOUT_UNDEFINED ||
+                after.layout == D3D12_BARRIER_LAYOUT_UNDEFINED) {
+                return false;
+            }
+            D3D12_TEXTURE_BARRIER& out = tex[texCount++];
+            out.SyncBefore = before.sync;
+            out.SyncAfter = after.sync;
+            out.AccessBefore = before.access;
+            out.AccessAfter = after.access;
+            out.LayoutBefore = before.layout;
+            out.LayoutAfter = after.layout;
+            out.pResource = res;
+            // All subresources, matching D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES.
+            out.Subresources.IndexOrFirstMipLevel = 0xffffffff;
+            out.Subresources.NumMipLevels = 0;
+            out.Subresources.FirstArraySlice = 0;
+            out.Subresources.NumArraySlices = 0;
+            out.Subresources.FirstPlane = 0;
+            out.Subresources.NumPlanes = 0;
+            out.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+        }
+    }
+
+    // One group per TYPE — D3D12 requires a group to be homogeneous.
+    D3D12_BARRIER_GROUP groups[2]{};
+    UINT32 groupCount = 0;
+    if (texCount > 0) {
+        D3D12_BARRIER_GROUP& g = groups[groupCount++];
+        g.Type = D3D12_BARRIER_TYPE_TEXTURE;
+        g.NumBarriers = texCount;
+        g.pTextureBarriers = tex;
+    }
+    if (bufCount > 0) {
+        D3D12_BARRIER_GROUP& g = groups[groupCount++];
+        g.Type = D3D12_BARRIER_TYPE_BUFFER;
+        g.NumBarriers = bufCount;
+        g.pBufferBarriers = buf;
+    }
+    if (groupCount == 0) { return false; }
+
+    cl7->Barrier(groupCount, groups);
+    return true;
 }
 
 bool IsTextureCompatible(D3D12_RESOURCE_STATES state)

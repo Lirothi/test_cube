@@ -208,6 +208,8 @@ public:
     // IsRaytracingSupported() is false; all ray-tracing paths gate on the latter.
     bool IsRaytracingSupported() const { return graphicsDevice_.IsRaytracingSupported(); }
     ID3D12Device5* GetDevice5() const { return graphicsDevice_.Device5(); }
+    // Step 12: the EFFECTIVE enhanced switch (supported AND opted in).
+    bool UseEnhancedBarriers() const { return graphicsDevice_.UseEnhancedBarriers(); }
     // QI a recorded command list to CommandList4 (cheap). The returned pointer
     // borrows the passed list's lifetime — use it within the same scope, do not
     // store it. Null if the list is null or the interface is unavailable.
